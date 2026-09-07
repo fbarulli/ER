@@ -1,0 +1,8 @@
+exclude = ["models", "data", "results", "embeddings", "logs"]
+
+[lint.per-file-ignores]
+"DATA_PIPE/**" = ["N999"]  # owner-named packages (uppercase by directive)
+"TRAIN/**" = ["N999", "BLE001"]
+"EDA/**" = ["N999"]  # numbered EDA modules (runnable, not imported)
+"lib/training.py" = ["BLE001"]
+

@@ -1,0 +1,14 @@
+__pycache__/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+nohup.out
+# regenerated at runtime — raw export + number reference are COMMITTED
+artifacts/results/
+artifacts/models/
+artifacts/embeddings/
+artifacts/mlruns/
+artifacts/data/dataset_deduped.csv
+artifacts/data/sku_to_rep.csv
+artifacts/data/clean_sku_gtin.csv
+artifacts/data/embeddings_cache/
