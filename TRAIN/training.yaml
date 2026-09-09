@@ -47,6 +47,18 @@ split:
   fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
   cv_folds: 5           # cv mode only
 
+# ── zero-shot evaluation protocol (TRAIN/evaluate_models.py) ────────────────
+# HOLDOUT DISCIPLINE for the zero-shot lane (self-fit leak closed 2026-09-14):
+# labeled pairs are split into DEV/TEST halves by CONNECTED COMPONENT
+# (component_folds, same seed SSOT as the training lane). The Youden
+# threshold is FIT ON DEV and applied verbatim to TEST — never fitted on
+# the scores it rates. Every reported metric is test-side; the CSV keeps
+# youden_thr_test_descriptive as the leak diagnostic only.
+evaluation:
+  component_split_k: 2   # component folds over the labeled-pair barcode graph
+  dev_fold: 0             # fold index used as DEV  (threshold-fit half)
+  test_fold: 1            # fold index used as TEST (reported half)
+
 # ── training ────────────────────────────────────────────────────────────────
 training:
   # loss: contrastive = OnlineContrastiveLoss over labeled (pos=1/neg=0)

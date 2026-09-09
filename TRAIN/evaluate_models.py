@@ -1,8 +1,20 @@
 """Owner's model-evaluation script (bundle-adapted paths).
 
-Needs embedding_similarities.csv (zero_shot_similarities.py) and
+Needs embedding_similarities.csv (zero_shot_sims.py) and
 labeled_pairs.csv (true_label per pair — generate from the gate's
 auto_duplicate rule or a manual review round).
+
+HOLDOUT DISCIPLINE (self-fit leak closed 2026-09-14): this lane used to
+pick its Youden threshold via roc_curve ON THE VERY LABELED SET IT THEN
+SCORED accuracy/F1 on — every zero-shot operating metric was inflated.
+Now the labeled pairs are split into DEV/TEST halves along connected
+components of the positive-pair barcode graph (TRAIN/folds.
+component_folds; k / dev_fold / test_fold from TRAIN/training.yaml
+evaluation:), the Youden threshold is fit on DEV ONLY and applied
+verbatim to TEST, and ALL reported metrics — ROC-AUC included — are
+TEST-half numbers. youden_thr_test_descriptive refits the argmax ON
+TEST as the leak diagnostic only (same convention as TRAIN/training.py
+line 1070); it is never applied.
 """
 
 import sys
@@ -20,14 +32,17 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from lib.common import RESULTS, SEED, F, plot_dpi
+from lib.common import RESULTS, SEED, F, load_config, plot_dpi
+from lib.schemas import EVAL_SUMMARY_COLUMNS, check_eval_summary_frame
+from TRAIN.folds import component_folds
 
 LABELED_PAIRS_CSV = RESULTS / F["labeled_pairs"]
 EMBED_SIM_CSV = RESULTS / F["embedding_similarities"]
 CANON_CSV = RESULTS / F["canonical_records"]
-from lib.common import load_config
 
-MODEL_COLUMNS = dict(load_config()["sim_columns"])
+_CFG = load_config()  # pydantic-validated (TrainingConfig) before merge
+MODEL_COLUMNS = dict(_CFG["sim_columns"])
+_EV = _CFG["evaluation"]  # EvaluationSpec-validated: k, dev_fold, test_fold
 
 labeled = pd.read_csv(LABELED_PAIRS_CSV, dtype={"gtin1": str, "gtin2": str})
 if not EMBED_SIM_CSV.exists():
@@ -59,30 +74,164 @@ gtin_to_canon = dict(zip(canon["gtin"].astype(str), canon["canonical"].astype(st
 df["canon1"] = df["gtin1"].map(gtin_to_canon)
 df["canon2"] = df["gtin2"].map(gtin_to_canon)
 
+# ── DEV/TEST component split (holdout discipline) ─────────────────────────
+# Leakage travels along the POSITIVE-pair edges, so the split is taken on
+# connected components of that graph (TRAIN/folds.component_folds): every
+# positive pair stays whole inside one fold, no barcode sits in two folds.
+# The Youden threshold is fit on the DEV fold below; TEST is never touched
+# until scoring. Hard-negative pairs whose endpoints land in different
+# folds STRADDLE the split — they are dropped from both halves, counted
+# and printed here (transparency contract: no silent data loss).
+_universe = sorted(set(df["gtin1"]) | set(df["gtin2"]))
+_bc_idx = {bc: i for i, bc in enumerate(_universe)}
+_pos_edges = df.loc[df["true_label"] == 1, ["gtin1", "gtin2"]].to_numpy()
+pos = (
+    np.array([[_bc_idx[a], _bc_idx[b]] for a, b in _pos_edges], dtype=np.int64)
+    if len(_pos_edges)
+    else np.empty((0, 2), dtype=np.int64)
+)
+row_bc = np.array(_universe, dtype=object)
+folds = component_folds(
+    pos, row_bc, k=int(_EV["component_split_k"]), seed=SEED
+)  # FoldSets-validated: folds pairwise disjoint
+dev_bc = set(folds[int(_EV["dev_fold"])])
+test_bc = set(folds[int(_EV["test_fold"])])
+
+_fold_id = {bc: i for i, f in enumerate(folds) for bc in f}
+_f1 = df["gtin1"].map(_fold_id)
+_f2 = df["gtin2"].map(_fold_id)
+in_dev = df["gtin1"].isin(dev_bc) & df["gtin2"].isin(dev_bc)
+in_test = df["gtin1"].isin(test_bc) & df["gtin2"].isin(test_bc)
+straddle = _f1 != _f2  # endpoints in different folds — unassignable
+parked = (_f1 == _f2) & ~in_dev & ~in_test  # whole pair in an unused fold (k>2)
+
+_pos_straddle = int((straddle & (df["true_label"] == 1)).sum())
+if _pos_straddle:
+    raise AssertionError(
+        f"{_pos_straddle} POSITIVE pairs straddle the fold split — the "
+        f"component guarantee is broken (TRAIN/folds.component_folds)"
+    )
+_pos_parked = int((parked & (df["true_label"] == 1)).sum())
+_neg_dev = int((df.loc[in_dev, "true_label"] == 0).sum())
+_pos_dev = int((df.loc[in_dev, "true_label"] == 1).sum())
+_neg_test = int((df.loc[in_test, "true_label"] == 0).sum())
+_pos_test = int((df.loc[in_test, "true_label"] == 1).sum())
+if _pos_dev == 0 or _neg_dev == 0:
+    raise ValueError(
+        f"DEV half must contain BOTH classes for the Youden fit — "
+        f"got pos={_pos_dev:,} / hard-neg={_neg_dev:,} (adjust evaluation: "
+        f"dev_fold or component_split_k in TRAIN/training.yaml)"
+    )
+if _pos_test == 0 or _neg_test == 0:
+    raise ValueError(
+        f"TEST half must contain BOTH classes for honest metrics — "
+        f"got pos={_pos_test:,} / hard-neg={_neg_test:,} (adjust evaluation: "
+        f"test_fold or component_split_k in TRAIN/training.yaml)"
+    )
+
+print(
+    f"[split] component_folds(k={int(_EV['component_split_k'])}, seed={SEED}) "
+    f"over the labeled-pair barcode graph: {len(_universe):,} barcodes "
+    f"-> fold sizes (barcodes): {' / '.join(f'{len(f):,}' for f in folds)}"
+)
+print(
+    f"[split] DEV  = evaluation.dev_fold  {int(_EV['dev_fold'])}: "
+    f"{int(in_dev.sum()):,} pairs ({_pos_dev:,} pos / {_neg_dev:,} hard-neg)"
+)
+print(
+    f"[split] TEST = evaluation.test_fold {int(_EV['test_fold'])}: "
+    f"{int(in_test.sum()):,} pairs ({_pos_test:,} pos / {_neg_test:,} hard-neg)"
+)
+print(
+    f"[split] straddling pairs dropped (endpoints in different folds): "
+    f"{int(straddle.sum()):,} — ALL hard-negatives, 0 positives "
+    f"(component guarantee asserted above)"
+)
+if int(parked.sum()):
+    print(
+        f"[split] pairs parked whole in unused folds (k > 2): "
+        f"{int(parked.sum()):,} ({_pos_parked:,} pos / "
+        f"{int((parked & (df['true_label'] == 0)).sum()):,} hard-neg)"
+    )
+_accounted = int(in_dev.sum()) + int(in_test.sum()) + int(straddle.sum()) + int(parked.sum())
+assert _accounted == len(df), (
+    f"split accounting {_accounted:,} != merged rows {len(df):,} — rows "
+    f"vanished or doubled in the DEV/TEST split"
+)
+print(
+    f"[split] accounting: {int(in_dev.sum()):,} dev + {int(in_test.sum()):,} test "
+    f"+ {int(straddle.sum()):,} straddling + {int(parked.sum()):,} parked "
+    f"= {_accounted:,} = merged rows — nothing dropped silently"
+)
+
+df_dev = df.loc[in_dev]
+df_test = df.loc[in_test]
+
+
+def _youden_thr(scores: np.ndarray, labels: np.ndarray) -> float:
+    """Youden-optimal threshold (J = TPR - FPR) over a labeled score set.
+
+    LOCAL COPY of TRAIN.training._youden_thr (rerank.py precedent):
+    importing TRAIN.training would drag transformers + the mlflow context
+    into a reporting script, so the 11-line function is copied verbatim.
+    HOLDOUT DISCIPLINE: fit this on DEV scores only, then apply the
+    returned threshold verbatim to TEST — never on the scores it rates.
+    """
+    order = np.argsort(-scores)
+    tps = np.cumsum(labels[order])
+    fps = np.cumsum(1 - labels[order])
+    tpr = tps / max(int((labels == 1).sum()), 1)
+    fpr = fps / max(int((labels == 0).sum()), 1)
+    j = tpr - fpr
+    k = int(np.argmax(j))
+    return float(scores[order][k])
+
 
 def evaluate_model(
-    df: pd.DataFrame,
+    df_half: pd.DataFrame,
     sim_col: str,
-    true_col: str = "true_label",
     threshold: float | None = None,
+    true_col: str = "true_label",
 ) -> dict:
-    y_true = df[true_col].values
-    y_scores = df[sim_col].values
-    roc_auc = roc_auc_score(y_true, y_scores)
+    """Score ONE model on ONE half at an EXTERNALLY-SUPPLIED threshold.
+
+    SELF-FIT HAZARD (closed 2026-09-14): threshold=None used to fit the
+    Youden threshold via roc_curve on these very scores, then report
+    accuracy/F1 on the same set — inflating every operating metric. None
+    now raises: the caller must pass a threshold fit on a DIFFERENT half
+    (dev-fit Youden, test-scored — see the [split] block above).
+    """
     if threshold is None:
-        fpr, tpr, thresholds = roc_curve(y_true, y_scores)
-        j_scores = tpr - fpr
-        threshold = thresholds[np.argmax(j_scores)]
-        print(f"  Optimal threshold (Youden): {threshold:.4f}")
+        raise ValueError(
+            "evaluate_model(threshold=None) is the closed self-fit leak: "
+            "it would pick the Youden threshold on the SAME labeled set it "
+            "scores and inflate accuracy/F1. Fit the threshold on the DEV "
+            "component fold (_youden_thr on df_dev) and pass it in — the "
+            "scored half must never choose its own threshold."
+        )
+    y_true = df_half[true_col].values
+    y_scores = df_half[sim_col].values
+    roc_auc = roc_auc_score(y_true, y_scores)
     y_pred = (y_scores >= threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    # zero_division=0 keeps sklearn from crashing on an empty side; the
+    # counter below keeps that substitution LOUD instead of silent.
     precision, recall, f1, _ = precision_recall_fscore_support(
         y_true, y_pred, average="binary", zero_division=0
     )
+    if tp + fp == 0:
+        print(
+            f"  [warn] {sim_col}: 0 predicted positives at thr={threshold:.4f} "
+            f"— precision is undefined (0/0), reported as 0 (zero_division=0)"
+        )
+    if tp + fn == 0:
+        print(
+            f"  [warn] {sim_col}: 0 actual positives in this half at "
+            f"thr={threshold:.4f} — recall is undefined (0/0), reported as 0"
+        )
     accuracy = (tp + tn) / (tp + tn + fp + fn)
     return {
         "roc_auc": roc_auc,
-        "threshold": threshold,
         "accuracy": accuracy,
         "precision": precision,
         "recall": recall,
@@ -105,10 +254,32 @@ for model_name, sim_col in MODEL_COLUMNS.items():
         print(f"\nMODEL: {model_name} — skipped (no {sim_col} in sweep csv)")
         continue
     print(f"\n{'=' * 70}\nMODEL: {model_name}\n{'=' * 70}")
-    metrics = evaluate_model(df, sim_col)
-    summary_rows.append({"model": model_name, **metrics})
-    print(f"  ROC AUC      : {metrics['roc_auc']:.4f}")
-    print(f"  Threshold    : {metrics['threshold']:.4f}")
+    # HOLDOUT DISCIPLINE: threshold fit on DEV, applied verbatim to TEST.
+    thr = _youden_thr(
+        df_dev[sim_col].to_numpy(), df_dev["true_label"].to_numpy()
+    )
+    thr_test_descriptive = _youden_thr(
+        df_test[sim_col].to_numpy(), df_test["true_label"].to_numpy()
+    )
+    metrics = evaluate_model(df_test, sim_col, threshold=thr)
+    summary_rows.append(
+        {
+            "model": model_name,
+            "eval_half": "test",
+            "threshold_source": "dev_youden",
+            "youden_thr_dev": thr,
+            **metrics,
+            "n_dev": int(in_dev.sum()),
+            "n_test": int(in_test.sum()),
+            "youden_thr_test_descriptive": thr_test_descriptive,
+        }
+    )
+    print(f"  ROC AUC      : {metrics['roc_auc']:.4f}  (TEST half)")
+    print(f"  Threshold    : {thr:.4f}  (Youden fit on DEV — applied verbatim to TEST)")
+    print(
+        f"  [diag] Youden refit ON TEST (leak diagnostic, never applied): "
+        f"{thr_test_descriptive:.4f}"
+    )
     print(f"  Accuracy     : {metrics['accuracy']:.4f}")
     print(f"  Precision    : {metrics['precision']:.4f}")
     print(f"  Recall       : {metrics['recall']:.4f}")
@@ -116,8 +287,8 @@ for model_name, sim_col in MODEL_COLUMNS.items():
     print(
         f"  TP: {metrics['tp']}  TN: {metrics['tn']}  FP: {metrics['fp']}  FN: {metrics['fn']}"
     )
-    df_model = df.copy()
-    df_model["pred"] = (df_model[sim_col] >= metrics["threshold"]).astype(int)
+    df_model = df_test.copy()
+    df_model["pred"] = (df_model[sim_col] >= thr).astype(int)
     for kind, m in (
         ("False Positives", (df_model.true_label == 0) & (df_model.pred == 1)),
         ("False Negatives", (df_model.true_label == 1) & (df_model.pred == 0)),
@@ -137,32 +308,43 @@ for model_name, sim_col in MODEL_COLUMNS.items():
             print(f"      GTIN1 {row['gtin1']}: {str(row['canon1'])[:80]}")
             print(f"      GTIN2 {row['gtin2']}: {str(row['canon2'])[:80]}")
 
-summary_df = pd.DataFrame(summary_rows)
-print("\nSUMMARY TABLE:")
+summary_df = pd.DataFrame(summary_rows)[list(EVAL_SUMMARY_COLUMNS)]
+# boundary contract: exact columns, every row an EvalSummaryRow (provenance
+# + confusion-counts consistency), and NO NaN/inf anywhere — all loud.
+check_eval_summary_frame(summary_df)
+print(
+    f"[contract] eval summary: {len(summary_df)} rows "
+    f"× {len(EVAL_SUMMARY_COLUMNS)} cols — EvalSummaryRow-valid, all values finite"
+)
+print("\nSUMMARY TABLE (TEST component half; thresholds fit on DEV):")
 print(summary_df.to_string(index=False))
 summary_df.to_csv(RESULTS / F["model_evaluation_summary"], index=False)
 print(f"\nSaved summary to {RESULTS / F['model_evaluation_summary']}")
 
-# ── per-model result plots (zero-shot embedding similarity) ──────────────
+# ── per-model result plots (zero-shot embedding similarity, TEST half) ────
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-models = [c for c in MODEL_COLUMNS.values() if c in df.columns]
+models_present = [
+    (name, col) for name, col in MODEL_COLUMNS.items() if col in df.columns
+]
 fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-# (a) ROC curves — all models overlaid
-for m in models:
-    y = df["true_label"].values
-    s = df[m].values
+# (a) ROC curves — all models overlaid, scored half only
+for name, col in models_present:
+    y = df_test["true_label"].values
+    s = df_test[col].values
     fpr, tpr, _ = roc_curve(y, s)
-    axes[0].plot(fpr, tpr, lw=1.8, label=f"{m} (AUC {roc_auc_score(y, s):.3f})")
+    axes[0].plot(fpr, tpr, lw=1.8, label=f"{name} (AUC {roc_auc_score(y, s):.3f})")
 axes[0].plot([0, 1], [0, 1], color="gray", ls="--", lw=0.8)
 axes[0].set_xlabel("false-positive rate")
 axes[0].set_ylabel("true-positive rate")
-_n_pos = int((df["true_label"] == 1).sum())
-_n_neg = int((df["true_label"] == 0).sum())
-axes[0].set_title(f"ROC — zero-shot gate pairs (n: pos={_n_pos:,} / neg={_n_neg:,})")
+_n_pos = int((df_test["true_label"] == 1).sum())
+_n_neg = int((df_test["true_label"] == 0).sum())
+axes[0].set_title(
+    f"ROC — TEST component half (n: pos={_n_pos:,} / neg={_n_neg:,})"
+)
 axes[0].legend(fontsize=9)
 # (b) per-model metric bars
 x = np.arange(len(summary_df))
@@ -183,7 +365,7 @@ for _i, _r in summary_df.iterrows():
 axes[1].set_xticks(x)
 axes[1].set_xticklabels(summary_df["model"], fontsize=9)
 axes[1].set_ylim(0, 1)
-axes[1].set_title("precision / recall / F1 at Youden threshold")
+axes[1].set_title("P/R/F1 at DEV-fit Youden threshold (TEST half)")
 axes[1].legend(fontsize=9)
 fig.tight_layout()
 out1 = RESULTS / "model_comparison_roc.png"
@@ -191,25 +373,34 @@ fig.savefig(out1, dpi=plot_dpi())  # SSOT (audit round 2 F03)
 plt.close(fig)
 print(f"[plot] {out1}")
 
-# score distributions by class — one panel per model
-fig, axes = plt.subplots(1, len(models), figsize=(4.6 * len(models), 4), squeeze=False)
-for i, m in enumerate(models):
+# score distributions by class — one panel per model, TEST half
+fig, axes = plt.subplots(1, len(models_present), figsize=(4.6 * len(models_present), 4), squeeze=False)
+for i, (name, col) in enumerate(models_present):
     ax = axes[0][i]
-    pos_s = df.loc[df.true_label == 1, m]
-    neg_s = df.loc[df.true_label == 0, m]
+    pos_s = df_test.loc[df_test.true_label == 1, col]
+    neg_s = df_test.loc[df_test.true_label == 0, col]
     ax.hist(pos_s, bins=50, alpha=0.6, color="#55a868", label=f"pos (n={len(pos_s):,})")
     ax.hist(
         neg_s, bins=50, alpha=0.6, color="#c44e52", label=f"hard-neg (n={len(neg_s):,})"
     )
-    thr = summary_df.loc[summary_df.model == m, "threshold"]
-    if len(thr):
+    # FIXED (2026-09-14): this lookup used to match sim-column names against
+    # summary model KEYS — the axvline never fired. Match on model key.
+    thr_row = summary_df.loc[summary_df.model == name, "youden_thr_dev"]
+    if len(thr_row):
         ax.axvline(
-            float(thr.iloc[0]), color="black", ls="--", lw=1.2, label="Youden thr"
+            float(thr_row.iloc[0]),
+            color="black",
+            ls="--",
+            lw=1.2,
+            label="dev-Youden thr",
         )
-    ax.set_title(m, fontsize=10)
+    ax.set_title(name, fontsize=10)
     ax.set_xlabel("cosine similarity")
     ax.legend(fontsize=8)
-fig.suptitle("zero-shot similarity by class (canonical texts)", fontsize=11)
+fig.suptitle(
+    "zero-shot similarity by class — TEST component half (canonical texts)",
+    fontsize=11,
+)
 fig.tight_layout()
 out2 = RESULTS / "model_score_distributions.png"
 fig.savefig(out2, dpi=plot_dpi())  # SSOT (audit round 2 F03)

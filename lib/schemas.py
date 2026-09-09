@@ -25,10 +25,13 @@ TWO jobs:
                              train_one_config
        TrainConfig           the per-config dict train_one_config receives
        FoldSets              TRAIN.folds.component_folds output
+       EvalSummaryRow        one model_evaluation_summary.csv row (the
+                             zero-shot lane's report boundary)
 
      Frame checks (DataFrame column/domain contracts) live in
      check_canonical_records_frame / check_gate_results_frame /
-     check_labeled_pairs_frame — used at CSV write/read boundaries.
+     check_labeled_pairs_frame / check_eval_summary_frame — used at CSV
+     write/read boundaries.
 
 Doctrine (owner Q27): NO FALLBACKS. Optional-with-default means
 "config may omit it" ONLY where the model declares a default and the
@@ -157,6 +160,42 @@ class SplitSpec(BaseModel):
                 f"split fractions must sum to 1.0, got {s} "
                 f"({self.train_fraction}+{self.dev_fraction}+"
                 f"{self.test_fraction})"
+            )
+        return self
+
+
+class EvaluationSpec(BaseModel):
+    """Zero-shot evaluation protocol (TRAIN/training.yaml evaluation:) —
+    the component dev/test split behind evaluate_models.
+
+    HOLDOUT DISCIPLINE (self-fit leak closed 2026-09-14): the Youden
+    threshold is fit on the DEV fold and applied verbatim to TEST — the
+    old lane fitted it on the very set it scored. These knobs only steer
+    WHICH component folds play which role; they can not re-couple the
+    threshold to the scored half."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    component_split_k: int = Field(ge=2)
+    dev_fold: int = Field(ge=0)
+    test_fold: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _folds_distinct_and_in_range(self) -> EvaluationSpec:
+        if self.dev_fold >= self.component_split_k:
+            raise ValueError(
+                f"evaluation.dev_fold {self.dev_fold} >= component_split_k "
+                f"{self.component_split_k}"
+            )
+        if self.test_fold >= self.component_split_k:
+            raise ValueError(
+                f"evaluation.test_fold {self.test_fold} >= component_split_k "
+                f"{self.component_split_k}"
+            )
+        if self.dev_fold == self.test_fold:
+            raise ValueError(
+                f"evaluation.dev_fold == test_fold ({self.dev_fold}) — the "
+                f"threshold-fit half and the scored half must be DISJOINT"
             )
         return self
 
@@ -446,6 +485,7 @@ class TrainingConfig(BaseModel):
     sim_columns: dict[str, str] = Field(min_length=1)
     masking: MaskingSpec
     split: SplitSpec
+    evaluation: EvaluationSpec
     gate: GateSpec
     training: TrainingSpec
     pairs: PairsSpec
@@ -982,6 +1022,101 @@ def check_labeled_pairs_frame(df: pd.DataFrame) -> pd.DataFrame:
     dups = df.duplicated(subset=["gtin1", "gtin2"]).sum()
     if dups:
         raise ValueError(f"{int(dups)} duplicate (gtin1, gtin2) rows")
+    return df
+
+
+# ── zero-shot evaluation summary (model_evaluation_summary.csv) ────────────
+
+# cosine similarity lives in [-1, 1] but float32 dot products overshoot
+# by rounding noise (measured max 1.0000004 on the real sweep CSV); the
+# Youden thresholds are picked FROM those scores, so their bounds admit
+# exactly this epsilon and nothing more.
+_COSINE_EPS = 1e-6
+
+EVAL_SUMMARY_COLUMNS: tuple[str, ...] = (
+    "model",
+    "eval_half",
+    "threshold_source",
+    "youden_thr_dev",
+    "roc_auc",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "tp",
+    "tn",
+    "fp",
+    "fn",
+    "n_dev",
+    "n_test",
+    "youden_thr_test_descriptive",
+)
+
+
+class EvalSummaryRow(BaseModel):
+    """One model_evaluation_summary.csv row — written by
+    TRAIN/evaluate_models.py, validated BEFORE the CSV write.
+
+    HOLDOUT DISCIPLINE: youden_thr_dev is fit on the DEV component fold
+    and applied verbatim to TEST; every metric is computed on TEST only.
+    eval_half pins the scored half; threshold_source records where the
+    threshold came from, so a row can not silently claim a different
+    provenance. youden_thr_test_descriptive is the leak diagnostic
+    (threshold argmax ON test — report-only, never applied)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1)
+    eval_half: Literal["test"] = Field()
+    threshold_source: Literal["dev_youden"]
+    youden_thr_dev: float = Field(ge=0.0, le=1.0 + _COSINE_EPS)
+    roc_auc: float = Field(ge=0.0, le=1.0)
+    accuracy: float = Field(ge=0.0, le=1.0)
+    precision: float = Field(ge=0.0, le=1.0)
+    recall: float = Field(ge=0.0, le=1.0)
+    f1: float = Field(ge=0.0, le=1.0)
+    tp: int = Field(ge=0)
+    tn: int = Field(ge=0)
+    fp: int = Field(ge=0)
+    fn: int = Field(ge=0)
+    n_dev: int = Field(ge=1)
+    n_test: int = Field(ge=1)
+    youden_thr_test_descriptive: float = Field(ge=0.0, le=1.0 + _COSINE_EPS)
+
+    @model_validator(mode="after")
+    def _counts_match_totals(self) -> EvalSummaryRow:
+        total = self.tp + self.tn + self.fp + self.fn
+        if total != self.n_test:
+            raise ValueError(
+                f"confusion counts (tp+tn+fp+fn={total}) != n_test "
+                f"({self.n_test}) — the row mixes halves or halves disagree"
+            )
+        return self
+
+
+def check_eval_summary_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """model_evaluation_summary.csv contract: exact columns (order
+    included — the CSV is a documented report artifact), every row a
+    valid EvalSummaryRow, no NaN/inf anywhere in the frame."""
+    cols = tuple(df.columns)
+    if cols != EVAL_SUMMARY_COLUMNS:
+        raise ValueError(
+            f"eval summary frame columns {cols} != contract "
+            f"{EVAL_SUMMARY_COLUMNS}"
+        )
+    rows = [EvalSummaryRow.model_validate(r) for r in df.to_dict("records")]
+    if len(rows) != len(df):
+        raise ValueError(
+            f"validated {len(rows)} rows but frame has {len(df)} — "
+            f"rows were dropped or duplicated in validation"
+        )
+    num = df.select_dtypes(include=[np.number])
+    if not np.isfinite(num.to_numpy(dtype=float)).all():
+        bad = ~np.isfinite(num.to_numpy(dtype=float))
+        raise ValueError(
+            f"eval summary has non-finite values: {int(bad.sum())} cells "
+            f"(columns {list(num.columns)})"
+        )
     return df
 
 

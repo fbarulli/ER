@@ -205,6 +205,19 @@ Pinned by `TRAIN/selftest.py` oracle 6b on the real split: 7,488 train /
 3,743 dev / 3,743 test barcodes — pairwise disjoint, zero straddling
 positive pairs.
 
+The zero-shot evaluation lane (`TRAIN/evaluate_models.py`, self-fit leak
+closed 2026-09-14) follows the SAME discipline: labeled pairs are split
+into DEV/TEST by `TRAIN/folds.component_folds` over the positive-pair
+barcode graph (knobs `evaluation.component_split_k` / `dev_fold` /
+`test_fold` in TRAIN/training.yaml — measured on the real pair set:
+6,183 dev / 7,633 test pairs, 6,100 straddling hard-negs dropped loudly
+in both directions, 0 positives lost to straddle by construction); the
+Youden threshold is fit on DEV and applied verbatim to TEST, ALL
+reported metrics are TEST-half numbers, and every summary row carries
+`threshold_source=dev_youden` + the leak diagnostic
+`youden_thr_test_descriptive`. `evaluate_model(threshold=None)` raises —
+fitting the threshold on the scored set is the closed defect.
+
 Fold line example:
 ```
 fold 0: loss=1.35 acc@dev-youden0.71=0.60 AUC=0.62 cross=0.62 PR-AUC=0.28 F1@0.55=0.29 P@0.55=0.17 R@0.55=0.94 | best_dev_ap=0.31
@@ -365,8 +378,12 @@ hard-negatives in labeled_pairs.csv.
   columns, incremental per-model writes, resumable).
 - **TRAIN/labeled_pairs.py** — gate decisions + sim≥0.8 (SSOT
   `pairs.*_sim_threshold`) → auditable `labeled_pairs.csv`.
-- **TRAIN/evaluate_models.py** — per model: ROC-AUC + Youden + P/R/F1,
-  per-model plots with absolute n → `model_evaluation_summary.csv`.
+- **TRAIN/evaluate_models.py** — per model: ROC-AUC + P/R/F1 on the TEST
+  component half, Youden threshold fit on the DEV half (self-fit leak
+  closed 2026-09-14; knobs `evaluation.*` in TRAIN/training.yaml),
+  per-model plots with absolute n → `model_evaluation_summary.csv`
+  (provenance columns `eval_half` / `threshold_source` /
+  `youden_thr_dev`, leak diagnostic `youden_thr_test_descriptive`).
 - **TRAIN/train.py** — the training entry (masking, holdout/cv folds,
   MNRL, early stopping, plots, mlflow, rerank). ALSO emits the 07-series
   CSVs (owner ruling): 07c/07d per run (payload / train-frac variants,
@@ -402,7 +419,7 @@ hard-negatives in labeled_pairs.csv.
 | `results/gate_results.csv` | `TRAIN/data_prep.py` | regenerated |
 | `results/labeled_pairs.csv` | `TRAIN/labeled_pairs.py` | regenerated |
 | `results/embedding_similarities.csv` | `TRAIN/zero_shot_sims.py` | regenerated |
-| `results/model_evaluation_summary.csv` | `TRAIN/evaluate_models.py` | regenerated |
+| `results/model_evaluation_summary.csv` | `TRAIN/evaluate_models.py` | regenerated (TEST component half, dev-fit Youden — provenance columns, §3 holdout note) |
 | `results/train_fold_metrics.csv` | `TRAIN/train.py` | regenerated (per-run suffixed copies kept) |
 | `results/hpo_grid.csv` | `TRAIN/train.py --grid/--quick` | regenerated |
 | `results/train_<model><era>_hpo_best.json` (+ `_hpo_trials.csv`) | `TRAIN/train.py --hpo` (TPE lane, run-tagged names) | regenerated |
