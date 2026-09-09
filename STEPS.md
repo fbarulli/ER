@@ -8,7 +8,7 @@ file + field named, never mid-run:
 | file | model (lib/schemas.py) | owns |
 |---|---|---|
 | `00_config.yaml` | `DataConfig` | paths, file names, column mapping, seed, model registry |
-| `TRAIN/training.yaml` | `TrainingConfig` | loss, split, masking, **gate thresholds**, training knobs, pair thresholds + eval-pair caps, bands, mining, HPO spaces, rerank rule, ablation sweep, plots (dpi), audit (strip-audit sample + blocking-audit budget/min-recall) |
+| `TRAIN/training.yaml` | `TrainingConfig` | loss, split, masking, **gate thresholds**, training knobs, pair thresholds + eval-pair caps, bands, mining, HPO spaces + selection protocol (`hpo.objective` / `hpo.selection_skip_test_eval`), rerank rule, ablation sweep, plots (dpi), audit (strip-audit sample + blocking-audit budget/min-recall) |
 
 (The EDA dir and its eda.yaml were deleted 2026-09-10 — the lane is
 training-only. The five TRAIN-consumed EDA keys — plots.dpi,
@@ -232,7 +232,49 @@ protocol's F1/P/R are always at the fixed config threshold:
    otherwise the cross-encoder is not worth its latency; drop it. The rule
    is fixed in config BEFORE any test-side comparison runs.
 
-## 5 — (reserved for numbering alignment)
+## 5 — Hyperparameter sweeps: grid + TPE (selection protocol, 2026-09-12)
+
+The `--grid` (second07's 11-config epochs×lr×warmup sweep, `--quick` =
+3-config smoke) and `--hpo` (second08 optuna TPE) lanes tune optimizer
+knobs — and the signal they select on is owned by the split mode
+(`hpo.objective` / `hpo.selection_skip_test_eval`, TRAIN/training.yaml):
+
+| mode | each config trains on | ranked on | per-config test eval |
+|---|---|---|---|
+| **holdout** (default) | q0+q1 (the 50% train side) | **dev quarter q2 `best_dev_ap`** | **SKIPPED** (`test_eval=skipped_selection_mode`) |
+| cv | all-but-one component folds | **mean fold `auc`** (fold test sides are validation folds there) | runs (it IS the validation metric) |
+
+The holdout rule closes the test-side leak: sweeps used to rebuild folds
+over ALL barcodes and read a per-config test metric, so the sweep itself
+fitted hyperparameters on the test quarter — the test set was read N
+times, once per config, by the very lane that was supposed to be blind to
+it. Now the test quarter is read exactly once, by the main train lane;
+no per-config test number exists to select on, even by accident.
+
+Wiring (TRAIN/train.py passes the SAME component split the main lane
+built): holdout sweeps get `folds_override=` q3 (single test fold) +
+`dev_override=` q2; cv sweeps get the component-fold list. Loud asserts,
+no fallback (owner Q27): `TRAIN/hpo.py` `run_grid`/`run_tpe` assert BOTH
+boundaries are present in holdout mode — a missing boundary dies with
+`[hpo-grid]`/`[hpo-tpe] holdout split requires the component split's
+folds_override (test quarter) + dev_override (dev quarter)` instead of
+quietly rebuilding folds over all barcodes. `TRAIN/training.py`
+`train_one_config(selection_mode=True)` asserts the boundary again per
+fold: dev_override required (no rng carve), dev∩test=∅, no test barcode
+in train/dev, and dev == dev_override ∩ train side — a violated boundary
+kills the fold with a `[hpo] LEAK:` traceback, never a silent leak.
+
+Console contract (holdout grid):
+```
+[hpo-grid] holdout selection: 1 test fold(s), dev_override=3,743 barcodes — per-config test eval SKIPPED (test read exactly once)
+e1_lr2e-05_w0: devAP 0.3092 (sd 0.0000)
+  [hpo] fold 0: test-side eval SKIPPED (selection mode — test read exactly once)
+```
+`results/hpo_grid.csv` fold rows carry `test_eval=skipped_selection_mode`
++ `objective=best_dev_ap`; the `config_mean` summary row carries
+`objective=best_dev_ap` in holdout (`auc` in cv). The TPE lane's
+`train_<model><era>_hpo_best.json` names the same signal in its
+`selection` field (`best_dev_ap` holdout / `mean_fold_auc` cv).
 
 ## 6 — Flavor semantics (transparency contract)
 
@@ -334,7 +376,8 @@ hard-negatives in labeled_pairs.csv.
   at `split.cv_folds`; N <= CV_FOLDS behavior unchanged), and the
   fold-metrics row carries `lr_groups` ("discriminative" / "single") so a
   discriminative-LR fallback fold is queryable downstream, not just
-  visible in stdout.
+  visible in stdout. The `--grid`/`--hpo` lanes ride the SAME component
+  split as the main lane and follow the section-5 selection protocol.
 - **TRAIN/report_plots.py** — the 07_report figure family, per model.
 - **TRAIN/composition_plot.py** — training-data composition with absolute n.
 - **run_all.py** — orchestrator: embeddings → sweep-sample sweep → full-data

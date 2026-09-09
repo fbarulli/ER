@@ -97,6 +97,18 @@ from lib.common import hpo_cfg as _hpo_cfg_load
 
 HPO_SPACE = {k: (lo, hi) for k, (lo, hi) in _hpo_cfg_load()["tpe_space"].items()}
 
+# selection protocol (test-leak fix, 2026-09-12), SSOT: hpo.objective /
+# hpo.selection_skip_test_eval (validated by HpoSpec/ObjectiveSpec at
+# load). The table is PINNED per split mode — holdout sweeps select on the
+# dev quarter's best_dev_ap (the test quarter's eval is skipped entirely);
+# cv sweeps select on mean fold auc (fold test sides are validation folds
+# there). selection_mode=True in train_one_config means the holdout rule
+# is in force, so the selection row carries the holdout entry.
+_HPO_OBJ_TABLE = _hpo_cfg_load()["objective"]
+HPO_OBJECTIVE_HOLDOUT = _HPO_OBJ_TABLE["holdout"]
+HPO_OBJECTIVE_CV = _HPO_OBJ_TABLE["cv"]
+HPO_SKIP_TEST_EVAL = bool(_hpo_cfg_load()["selection_skip_test_eval"])
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MLflow — SSOT lib/mlflow_ctx (audit 2026-09-09: this module used to carry
@@ -369,6 +381,14 @@ def train_one_config(
     # run-tag dir but never move the shared latest-pointer (same
     # discipline as the fold-metrics pointer in train.py)
     sample: bool = False,
+    # selection mode (test-leak fix, 2026-09-12): HPO/grid lanes in
+    # HOLDOUT split call with True — the fold trains on q0+q1, early-stops
+    # and is SELECTED on dev (q2, best_dev_ap), and the test quarter's
+    # eval block (pair_auc/PR-AUC/Youden/pair dump) is SKIPPED entirely:
+    # the test quarter is read exactly once, by the main train lane, so
+    # hyperparameters can never be fitted on it. Skipped rows carry
+    # test_eval="skipped_selection_mode" — loud, never a silent NaN.
+    selection_mode: bool = False,
 ) -> list[dict]:
     """Train cfg across the group-aware folds. Returns fold metric rows
     (failures included, with traceback)."""
@@ -478,6 +498,46 @@ def train_one_config(
                 n_dev = max(1, int(len(train_bcs) * dev_frac))
                 dev_bc = set(train_bcs[perm[:n_dev]])
                 tr_bc = set(train_bcs[perm[n_dev:]])
+
+            # ── HOLDOUT-SELECTION DISCIPLINE (test-leak fix, 2026-09-12) ──
+            # In selection mode the fold's job is to RANK hyperparameters,
+            # and the ranking signal must come from DEV only. Hard asserts
+            # (fold dies loudly — FAILED row + traceback, never a silent
+            # leak) when the boundary is wrong: test barcodes in
+            # train/dev, or dev barcodes in the test fold, would leak the
+            # holdout into the very signal that picks the config.
+            if selection_mode:
+                assert dev_override is not None, (
+                    "[hpo] selection mode requires an explicit component-"
+                    "aware dev boundary (dev_override) — an rng carve cannot "
+                    "guarantee the selection signal is dev-only"
+                )
+                _dev_o = set(dev_override)
+                _dev_in_test = _dev_o & test_bc
+                assert not _dev_in_test, (
+                    f"[hpo] LEAK: {len(_dev_in_test)} dev_override barcodes "
+                    f"are in the test fold (e.g. {sorted(_dev_in_test)[:3]}) "
+                    "— they would be silently dropped from dev while the "
+                    "split claims to be clean"
+                )
+                _leak = test_bc & (tr_bc | dev_bc)
+                assert not _leak, (
+                    f"[hpo] LEAK: {len(_leak)} test barcodes in train/dev "
+                    f"(e.g. {sorted(_leak)[:3]})"
+                )
+                assert dev_bc, (
+                    "[hpo] LEAK: empty dev set — nothing to select on"
+                )
+                assert dev_bc == _dev_o & train_bc, (
+                    "[hpo] LEAK: dev boundary != dev_override ∩ train side"
+                )
+                print(
+                    f"[hpo] objective={HPO_OBJECTIVE_HOLDOUT} | "
+                    f"train={len(tr_bc):,} dev={len(dev_bc):,} "
+                    f"test={len(test_bc):,} barcodes | test quarter "
+                    f"excluded from training+selection",
+                    flush=True,
+                )
 
             test_pos = pos[pairs_in_set(pos, row_bc, test_bc)]
             train_pos = pos[pairs_in_set(pos, row_bc, tr_bc)]
@@ -830,6 +890,64 @@ def train_one_config(
             final_train_loss = train_losses[-1] if train_losses else float("nan")
             best_dev_ap = max(dev_aps) if dev_aps else float("nan")
 
+            # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────
+            # Holdout HPO/grid folds STOP HERE: the config is ranked on
+            # best_dev_ap and the test quarter's eval block is never
+            # entered — no pair_auc, no PR-AUC, no Youden, no pair dump,
+            # not even an encode. The test quarter is read exactly once, by
+            # the main train lane, so no per-config test metric can ever
+            # exist to select on. Recorded LOUDLY (explicit field + print),
+            # never as a silent NaN.
+            if selection_mode and HPO_SKIP_TEST_EVAL:
+                print(
+                    f"  [hpo] fold {fold_i}: test-side eval SKIPPED "
+                    f"(selection mode — test read exactly once)",
+                    flush=True,
+                )
+                # fold-local latency (no test encode ran: fold time IS
+                # train time; same formulas as the main path's latency
+                # block, minus the encode terms)
+                _steps_run = trainer.state.global_step
+                _steps_full = n_steps_per_epoch * cfg["epochs"]
+                rows.append(
+                    {
+                        "fold": fold_i,
+                        "status": "ok",
+                        "test_eval": "skipped_selection_mode",
+                        "objective": HPO_OBJECTIVE_HOLDOUT,
+                        "best_dev_ap": best_dev_ap,
+                        "final_train_loss": final_train_loss,
+                        "train_loss_hist": json.dumps(
+                            [round(x, 4) for x in train_losses]
+                        ),
+                        "dev_ap_hist": json.dumps([round(x, 4) for x in dev_aps]),
+                        "dev_loss_hist": json.dumps(
+                            [round(x, 4) for x in dev_losses]
+                        ),
+                        "n_dev_pos": len(dev_pos),
+                        "n_dev_neg": len(hard_dev),
+                        "n_train": (
+                            len(train_ds)
+                            if loss in ("mnrl", "contrastive")
+                            else len(examples or [])
+                        ),
+                        "s_per_step": round(
+                            (time.perf_counter() - t_fold) / _steps_run
+                            if _steps_run
+                            else float("nan"),
+                            3,
+                        ),
+                        "es_saved_pct": round(
+                            100 * (1 - _steps_run / _steps_full)
+                            if _steps_full
+                            else float("nan"),
+                            1,
+                        ),
+                        "fold_s": round(time.perf_counter() - t_fold, 1),
+                    }
+                )
+                continue
+
             # eval on test (timed: encode latency is a first-class metric)
             t_encode = time.perf_counter()
             eval_rows = np.unique(np.r_[test_pos.ravel(), hard_test.ravel()])
@@ -1125,9 +1243,14 @@ def run_hpo(
     data,
     mlf: MlflowCtx,
     cv_folds: int | None = None,
-    folds_override: list[set[str]] | None = None,
+    folds_override: list[set[str]] | set[str] | None = None,
     dev_fraction: float | None = None,
     dev_override: set[str] | None = None,
+    selection_mode: bool = False,
+    # gate hard-no pairs — the contrastive SSOT loss needs labeled
+    # negatives; the sweep lanes pass them exactly like the main lane
+    # (train_one_config filters them to the fold's train side itself)
+    neg_pairs: np.ndarray | None = None,
 ) -> None:
     import optuna
     import torch
@@ -1172,7 +1295,39 @@ def run_hpo(
                 folds_override=folds_override,
                 dev_fraction=dev_fraction,
                 dev_override=dev_override,
+                selection_mode=selection_mode,
+                neg_pairs=neg_pairs,
             )
+            ok_rows = [r for r in rows if r.get("status") == "ok"]
+            if not ok_rows:
+                raise optuna.TrialPruned("no fold completed")
+            if selection_mode:
+                # HOLDOUT RULE (test-leak fix, 2026-09-12): rank the trial
+                # on the dev quarter's best_dev_ap ONLY. Selection-mode
+                # folds carry NO test metric (test_eval=
+                # skipped_selection_mode) — the test quarter is read
+                # exactly once, by the main train lane, so there is no
+                # per-trial test number to select on even by accident.
+                dev_aps = [
+                    r["best_dev_ap"]
+                    for r in ok_rows
+                    if np.isfinite(r.get("best_dev_ap", float("nan")))
+                ]
+                if not dev_aps:
+                    raise optuna.TrialPruned("no fold produced a finite dev AP")
+                value = float(np.mean(dev_aps))
+                mlf.log_metrics(
+                    {
+                        "mean_dev_ap": value,
+                        **{
+                            f"fold_{r['fold']}_best_dev_ap": r["best_dev_ap"]
+                            for r in ok_rows
+                        },
+                    }
+                )
+                return value
+            # CV RULE: fold test sides are validation folds — mean fold auc
+            # is the legitimate selection signal there (HPO_OBJECTIVE_CV).
             aucs = [
                 r["auc"]
                 for r in rows
@@ -1239,11 +1394,17 @@ def run_hpo(
         "n_trials": len(study.trials),
         "model": args.model,
         "objective": f"discriminative-LR ({_runtime('layer_decay')}^k per-layer groups)",
+        # which signal ranked the trials (test-leak fix, 2026-09-12):
+        # best_dev_ap in holdout selection mode, mean fold auc in cv
+        "selection": (
+            HPO_OBJECTIVE_HOLDOUT if selection_mode else HPO_OBJECTIVE_CV
+        ),
     }
     out_path = RESULTS / f"train_{model_tag}{era}_hpo_best.json"
     with open(out_path, "w") as f:
         json.dump(best, f, indent=2)
-    print(f"\nBEST: {study.best_params} -> mean AUC {study.best_value:.4f}", flush=True)
+    _sel = best["selection"]
+    print(f"\nBEST: {study.best_params} -> {_sel} {study.best_value:.4f}", flush=True)
     # AUDIT FIX (round 2, F02): print the path ACTUALLY written — the old
     # line named train_hpo_best.json, a file never written by this lane.
     print(f"wrote {out_path}", flush=True)

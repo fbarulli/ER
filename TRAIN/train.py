@@ -509,10 +509,29 @@ def _main_inner(_mlf) -> None:
     if args.grid or args.hpo:
         from TRAIN.hpo import run_grid, run_tpe
 
+        # TEST-LEAK WIRING (2026-09-12): both sweep lanes ride the SAME
+        # component split the main lane just built — holdout mode passes
+        # the test quarter (folds_override) + dev quarter (dev_override)
+        # so the sweep trains q0+q1 and selects on q2; cv mode passes the
+        # fold list. Never let a sweep rebuild its own folds over ALL
+        # barcodes: that put the dev/test quarters into the sweep's train
+        # side — the leak the previous fix closed (asserts in hpo.py).
+        # MASKING: the entry already augmented (pre-encode, emb0-aligned);
+        # the sweep lanes inherit it — len(mask_audit) is the applied
+        # count they print for provenance (they must NOT re-augment:
+        # that extended payload past emb0 and died at DataTuple).
+        # NEGATIVES: the gate hard-no pairs ride the same neg channel the
+        # main lane uses (below) — the contrastive SSOT loss needs them.
         if args.grid:
-            run_grid(args, data, mask_cfg)
+            run_grid(
+                args, data, mask_cfg, folds_override, dev_override,
+                n_masked=len(mask_audit), neg_pairs=neg,
+            )
         else:
-            run_tpe(args, data, mask_cfg)
+            run_tpe(
+                args, data, mask_cfg, folds_override, dev_override,
+                n_masked=len(mask_audit), neg_pairs=neg,
+            )
         return
 
     # TRAIN/training's DEFAULT_CFG key set (train_one_config reads these)

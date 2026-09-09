@@ -359,6 +359,19 @@ class HpoSpaceSpec(BaseModel):
         return self
 
 
+class ObjectiveSpec(BaseModel):
+    """HPO selection signal per split mode (hpo.objective — test-leak fix
+    2026-09-12). The keys are pinned to the sanctioned rule per mode:
+    holdout selects on the dev quarter's best_dev_ap (never the test
+    quarter); cv selects on mean fold auc (fold test sides are validation
+    folds there). A config typo changing either key dies at load."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    holdout: Literal["best_dev_ap"]
+    cv: Literal["mean_fold_auc"]
+
+
 class HpoSpec(BaseModel):
     """HPO lane knobs (TRAIN/training.yaml hpo:) — the fixed grid, the
     --quick smoke subset, the TPE space, and trial budgets. Formerly
@@ -371,6 +384,16 @@ class HpoSpec(BaseModel):
     tpe_space: HpoSpaceSpec
     n_trials: int = Field(ge=1)
     n_jobs: int = Field(ge=1)
+    # selection protocol (test-leak fix, 2026-09-12): WHICH signal a sweep
+    # ranks configs on, pinned PER SPLIT MODE so a config typo can never
+    # re-couple the holdout objective to the test quarter. holdout MUST
+    # stay best_dev_ap (the only sanctioned rule); cv folds' test sides
+    # are validation folds, so mean_fold_auc is legitimate there.
+    objective: ObjectiveSpec
+    # selection-mode folds skip the test-side eval + pair dump (recorded as
+    # test_eval=skipped_selection_mode). MUST stay true: computing a
+    # per-config test metric re-opens the leak this closed.
+    selection_skip_test_eval: bool = Field()
 
 
 class RerankSpec(BaseModel):

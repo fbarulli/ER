@@ -155,6 +155,19 @@ hpo:
     weight_decay: [0.0, 0.1]  # float
   n_trials: 20                # default TPE trial budget (was --n-trials 20)
   n_jobs: 1                   # default parallel workers (was --n-jobs 1)
+  # ── selection protocol (test-leak fix, 2026-09-12) ─────────────────────
+  # WHICH signal a sweep ranks configs on, per split mode. Holdout sweeps
+  # train q0+q1, early-stop + select on the dev quarter q2 (best_dev_ap)
+  # and NEVER compute a per-config test metric — the test quarter is read
+  # exactly once, by the main train lane. CV fold test sides are
+  # validation folds, so mean fold auc is legitimate there.
+  objective:
+    holdout: best_dev_ap     # q2 dev AP — the only sanctioned holdout rule
+    cv: mean_fold_auc        # fold test sides are validation folds in cv
+  # selection-mode folds skip the test-side eval block + pair dump and
+  # record test_eval=skipped_selection_mode instead. MUST stay true:
+  # computing a per-config test metric re-opens the leak this closed.
+  selection_skip_test_eval: true
 
 # ── ablation sweep (run_all step 4 / colab smoke) ──────────────────────────
 # The 07-series axes run_all sweeps: payload variants (07c, 'full' is
