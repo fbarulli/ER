@@ -1,11 +1,31 @@
-"""lib/common.py — the ONLY file that reads 00_config.yaml.
+"""lib/common.py — the ONLY module that reads the config files.
 
-Everything else in the tree gets paths, file names, the column mapping, the
-seed, and shared helpers through this module. No hardcoded paths or file
-names exist anywhere else (owner SSOT directive 2026-09-06).
+Split-SSOT (2026-09-08; EDA removed 2026-09-10): the monolithic
+00_config.yaml was broken into domain configs, each in its owning
+directory:
+
+  00_config.yaml        DataConfig      — paths/files/column_mapping/seed/models
+  TRAIN/training.yaml   TrainingConfig  — the training lane's knobs
+
+(The EDA dir and its eda.yaml were deleted 2026-09-10 — the lane is
+training-only. The five TRAIN-consumed EDA keys — plots.dpi,
+pairs.max_pos_per_group/n_neg/neg_oversample, strip_audit_sample —
+migrated into TRAIN/training.yaml blocks of the same names.)
+
+lib/common deep-merges them into ONE view (load_config()) and VALIDATES each
+file against its pydantic model in lib/schemas at load — a bad value
+crashes at import with a named field error, never mid-run. No script reads
+YAML directly (unchanged SSOT doctrine), and every accessor below reads the
+merged view, so consumers don't care which physical file a knob lives in.
+
+New accessors:
+  training_cfg()  the validated TrainingConfig (typed)
+  data_cfg()      the validated DataConfig (typed)
+  resolve_model(key)  registry key -> local bundle dir first, hub id fallback
 """
 
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -14,27 +34,166 @@ matplotlib.use("Agg")  # headless; set before pyplot import
 import pandas as pd
 import yaml
 
+from lib.schemas import DataConfig, TrainingConfig
 from lib.text import extract_volume_ml
 
+# require_keys REMOVED (audit 2026-09-09): zero consumers — the pydantic
+# validation at load (DataConfig/TrainingConfig) already fails
+# loudly on missing keys, with named field errors. This helper duplicated
+# that guarantee and was never called.
 
-def require_keys(config: dict, keys: list[str], context: str) -> None:
-    """Fail loudly when config is missing keys (no silent defaults)."""
-    missing = [k for k in keys if k not in config]
-    if missing:
-        raise ValueError(f"{context}: config missing required key(s): {missing}")
+
+TRAIN_ROOT = Path(__file__).resolve().parent.parent  # repo root
+CONFIG_PATH = TRAIN_ROOT / "00_config.yaml"
+TRAINING_CONFIG_PATH = TRAIN_ROOT / "TRAIN" / "training.yaml"
+
+
+def _read_yaml(path: Path) -> dict:
+    if not path.exists():
+        raise SystemExit(f"config missing: {path}")
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def load_config() -> dict:
-    """Load 00_config.yaml (the SSOT). Hard error when missing."""
-    if not CONFIG_PATH.exists():
-        raise SystemExit(f"config missing: {CONFIG_PATH}")
-    return yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    """Load + validate the split-SSOT and deep-merge into ONE view.
+
+    Order: root data contract (00_config.yaml) is the base; TRAIN/training.yaml
+    overlays it (the domain file wins on conflicts — a conflict
+    is a config bug and the domain file is the authority for its keys).
+    Every file is validated against its pydantic model BEFORE merging, so an
+    invalid knob crashes here with the file + field named.
+    """
+    base = dict(_read_yaml(CONFIG_PATH))
+    DataConfig.model_validate(base)  # root contract — fail before merge
+    merged = dict(base)
+    for path, model in (
+        (TRAINING_CONFIG_PATH, TrainingConfig),
+    ):
+        if path.exists():
+            overlay = dict(_read_yaml(path))
+            model.model_validate(overlay)
+            for key, block in overlay.items():
+                if (
+                    key in merged
+                    and isinstance(merged[key], dict)
+                    and isinstance(block, dict)
+                ):
+                    merged[key] = {**merged[key], **block}
+                else:
+                    merged[key] = block
+        else:
+            raise SystemExit(f"config missing: {path}")
+    return merged
 
 
-TRAIN_ROOT = Path(__file__).resolve().parent.parent  # TRAIN_GPU/
-CONFIG_PATH = TRAIN_ROOT / "00_config.yaml"
+# ── validated singletons (read once at import; the merge order above) ───────
 _CFG = load_config()
-require_keys(_CFG, ["paths", "files", "column_mapping", "seed"], "00_config.yaml")
+_DATA_CFG = DataConfig.model_validate(_read_yaml(CONFIG_PATH))
+_TRAIN_CFG = TrainingConfig.model_validate(_read_yaml(TRAINING_CONFIG_PATH))
+
+
+def data_cfg() -> DataConfig:
+    """The validated root data contract (00_config.yaml)."""
+    return _DATA_CFG
+
+
+def training_cfg() -> TrainingConfig:
+    """The validated training-lane config (TRAIN/training.yaml)."""
+    return _TRAIN_CFG
+
+
+def runtime(key: str, default: Any = None) -> Any:
+    """SSOT accessor for every training runtime knob (TRAIN/training.yaml
+    training: block — validated by TrainingSpec at load).
+
+    ONE place to read batch sizes, seq length, eval cadence, dev fraction,
+    band edges. Scripts call runtime("batch_size_cpu") etc. — the literal
+    lives in TRAIN/training.yaml only, never in a script.
+
+    The return is typed `Any` deliberately (audit round 2 F17): the
+    training: block holds ints, floats, bools and strings; a narrower lie
+    would be worse than the honest open type.
+
+    NO FALLBACKS (owner Q27, audit 2026-09-09): the `default` escape hatch
+    (silently returning a caller literal when the key was MISSING) is
+    CLOSED. A default may only supply a value when the SSOT defines the
+    key as an explicit YAML null (opt-in "use my default"). A truly
+    missing key always raises — the literal can never diverge from SSOT.
+    """
+    tr = _CFG.get("training", {})
+    if key in tr:
+        val = tr[key]
+        if val is not None:
+            return val
+        if default is not None:
+            return default  # explicit null in YAML = caller's default, opt-in
+        raise KeyError(
+            f"training.{key} is explicitly null in TRAIN/training.yaml — "
+            f"either set a value or have the caller pass a default"
+        )
+    raise KeyError(
+        f"training.{key} missing from TRAIN/training.yaml — the SSOT must "
+        f"define it (no per-script literals allowed)"
+    )
+
+
+# no-fallback SSOT scalars (owner directive Q27: NO FALLBACKS — a missing
+# config key must crash, never silently default). Consumers import these
+# instead of chaining .get(...) with inline literals.
+SSOT_LOSS = runtime("loss")
+SSOT_CONTRASTIVE_MARGIN = runtime("contrastive_margin")
+
+
+def plot_dpi() -> int:
+    """SSOT accessor for figure DPI (TRAIN/training.yaml plots.dpi).
+
+    Every fig.savefig in the tree renders at THIS value — dpi=150 was
+    inlined at 29 call sites across the plot scripts, a
+    second declaration the config could not steer (audit, owner Q27).
+    """
+    return int(_CFG["plots"]["dpi"])
+
+
+# ── HPO / rerank / sweep accessors (validated by lib.schemas at load) ───────
+# These expose the hpo:, rerank:, sweep: blocks as PLAIN JSON-able data
+# (lists of dicts / tuples) so callers never re-declare the sweep spaces.
+def hpo_cfg() -> dict:
+    """The hpo: block (grid/quick/tpe_space/n_trials/n_jobs) as plain data.
+
+    grid/quick rows come back as dicts ({epochs, lr, warmup}); tpe_space as
+    {knob: (lo, hi)}. Validated by HpoSpec at load — no re-validation here.
+    """
+    h = dict(_CFG["hpo"])
+    h["grid"] = [dict(r) for r in h["grid"]]
+    h["quick"] = [dict(r) for r in h["quick"]]
+    return h
+
+
+def rerank_cfg() -> dict:
+    """The rerank: block (07e decision rule) as plain data."""
+    return dict(_CFG["rerank"])
+
+
+def sweep_cfg() -> dict:
+    """The sweep: block (run_all ablation axes) as plain data."""
+    return dict(_CFG["sweep"])
+
+
+def band(name: str) -> tuple[float, float]:
+    """SSOT accessor for cosine bands (TRAIN/training.yaml bands:).
+
+    name: 'eval_mining' (train_one_config's eval-pool mining band) or
+    'rerank_band' (cross-encoder). 'mining_band' was REMOVED (audit
+    round 2 F21): it had zero callers — the live in-batch mining band is
+    mining.band "lo-hi" (the string form, mined via _band_tuple).
+    """
+    b = _CFG.get("bands", {}).get(name)
+    if not b or len(b) != 2:
+        raise KeyError(f"bands.{name} missing/malformed in TRAIN/training.yaml")
+    lo, hi = float(b[0]), float(b[1])
+    if not lo < hi:
+        raise ValueError(f"bands.{name}: lo must be < hi, got [{lo}, {hi}]")
+    return lo, hi
 
 
 def _path(cfg_value: str) -> Path:
@@ -56,6 +215,52 @@ F = _CFG["files"]
 COLUMN_MAPPING = dict(_CFG["column_mapping"])
 SEED = int(_CFG["seed"])
 
+# ── model registry + resolution (shared TRAIN/run_all) ──────────────────────
+MODELS = dict(_CFG["models"])
+_MODEL_DIRS = [
+    _path(_CFG["paths"]["models_dir"]),
+    _path(_CFG["paths"]["models_dir_sibling"]),
+]
+
+
+def resolve_model(key_or_sub: str) -> str:
+    """Registry key OR subdir name -> a model id the encoder can load.
+
+    Local bundle dirs (paths.models_dir / models_dir_sibling) win first so
+    offline GPU runs never hit the hub; the hub id is the fallback. A key
+    not in the registry and not on disk resolves like the old run_all
+    helper (sentence-transformers/<sub>, deberta special-cased). Every
+    caller must come through here — never a hardcoded hub string.
+    """
+    sub = MODELS.get(key_or_sub, key_or_sub)
+    for d in _MODEL_DIRS:
+        cand = d / sub
+        if cand.exists():
+            return str(cand.resolve())
+    if "deberta" in sub:
+        return f"microsoft/{sub}"
+    return f"sentence-transformers/{sub}"
+
+
+# ── visibility-log writes (owner directive 2026-09-07) ─────────────────────
+# Visibility dumps must survive run collisions: a --sample chain check used
+# to overwrite a 3h full run's logs (same name, no run axis). Every dump
+# writes BOTH:
+#   results/logs/<name>.csv          — the "latest NON-SAMPLE run" copy
+#                                      (sample runs never touch it, mirroring
+#                                      the fold-metrics pointer discipline)
+#   results/logs/<run_tag>/<name>.csv — the run's own copy (every run,
+#                                      sample or not)
+def write_visibility_log(
+    df: pd.DataFrame, name: str, run_tag: str, sample: bool
+) -> None:
+    """Write a visibility dump under the run-tag dir + latest pointer."""
+    logs = RESULTS / "logs"
+    (logs / run_tag).mkdir(parents=True, exist_ok=True)
+    df.to_csv(logs / run_tag / name, index=False)
+    if not sample:
+        df.to_csv(logs / name, index=False)
+
 
 def load_dataset() -> pd.DataFrame:
     """Load the ACTIVE dataset as raw strings (no silent coercion).
@@ -71,7 +276,7 @@ def load_dataset() -> pd.DataFrame:
 
 def load_raw_export() -> pd.DataFrame:
     """The raw export WITHOUT column renames — the data-prep pipeline
-    (01_data_prep) works in raw-export column names (gtin, sku_name_eng,
+    (TRAIN/data_prep) works in raw-export column names (gtin, sku_name_eng,
     attribute); the training/eval lane works in canonical ones."""
     if not DATA_PATH.exists():
         raise FileNotFoundError(f"{DATA_PATH} missing")
@@ -87,13 +292,12 @@ def load_dataset_deduped() -> pd.DataFrame:
     """
     path = DATA_DIR / F["dataset_deduped"]
     if not path.exists():
-        raise FileNotFoundError(f"{path} missing — run 06_dedupe.py first")
+        raise FileNotFoundError(f"{path} missing — run TRAIN/dedupe.py first")
     return pd.read_csv(path, dtype=str)
 
 
-# Backward-compatible alias for existing steps; prefer load_dataset going
-# forward (single active-dataset entry point).
-load_euromonitor = load_dataset
+# load_euromonitor alias REMOVED (audit 2026-09-09): zero importers —
+# every step already used load_dataset (verified by grep before removal).
 
 
 # ---------------------------------------------------------------------------
@@ -106,11 +310,9 @@ def has_barcode(df: pd.DataFrame) -> pd.Series:
     return df["barcode"].fillna("").astype(str).str.len() > 0
 
 
-def multi_retailer_mask(df: pd.DataFrame) -> pd.Series:
-    """Boolean mask: known barcode that appears under more than one retailer."""
-    return has_barcode(df) & (
-        df.groupby("barcode")["retailer"].transform("nunique") > 1
-    )
+# multi_retailer_mask REMOVED (audit round 2 F18, round 3): defined, never
+# called — zero consumers (grep-verified). The same mask is derived inline
+# where actually needed (kfold_barcodes, report_plots' country slice).
 
 
 def column_profile(df: pd.DataFrame) -> pd.DataFrame:
@@ -158,37 +360,6 @@ def canonical_volume(series: pd.Series) -> pd.DataFrame:
     )
 
 
-def barcode_agreement_table(
-    df: pd.DataFrame,
-    columns: list[tuple[str, str]],
-    *,
-    sample: bool = False,
-) -> pd.DataFrame:
-    """Per-barcode volume-agreement table over multi-retailer barcode groups.
-
-    `columns` is a list of (column_name, label) pairs. For each pair the result
-    has `{label}_volumes` (sorted unique non-null values) and `{label}_agree`
-    (True when the group's detected values collapse to one unique value, None
-    when none are detected). Empty groups are NOT dropped here — callers
-    dropna() the column they validate (the honest denominator: empty groups are
-    excluded, never counted as trivially agreeing). `sample=True` adds
-    sample_names/sample_retailers (first 5 unique).
-    """
-    multi = df[multi_retailer_mask(df)]
-
-    def _agg(x: pd.DataFrame) -> pd.Series:
-        row: dict = {"retailers": x["retailer"].nunique(), "skus": len(x)}
-        for col, label in columns:
-            vols = sorted(x[col].dropna().unique().tolist())
-            row[f"{label}_volumes"] = vols
-            row[f"{label}_agree"] = (len(vols) <= 1) if vols else None
-        if sample:
-            row["sample_names"] = x["title"].dropna().unique().tolist()[:5]
-            row["sample_retailers"] = x["retailer"].unique().tolist()[:5]
-        return pd.Series(row)
-
-    return multi.groupby("barcode").apply(_agg, include_groups=False).reset_index()
-
 
 # ===========================================================================
 # SSOT: shared metrics, tokenizers, and split helpers (GATES_MAP.md owner).
@@ -209,21 +380,6 @@ TOKEN_RE = _re.compile(
     r"[a-zàâäáéèêëïîôöùûüçñåäöøæé0-9]+(?:[-\'][a-zàâäáéèêëïîôöùûüçñåäöøæé0-9]+)*",
     _re.IGNORECASE,
 )
-
-
-def title_tokens(text: str) -> list[str]:
-    """Tokenize with the series' ONE scheme (see TOKEN_RE)."""
-    return [w for w in TOKEN_RE.findall(str(text).lower()) if not w.isdigit()]
-
-
-def jaccard(a: set, b: set) -> float:
-    """Jaccard overlap of two token sets; 0.0 on empty input.
-
-    Prior homes: second01e._jaccard, second03._jaccard.
-    """
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
 
 
 def pair_auc(pos_scores: "_np.ndarray", neg_scores: "_np.ndarray") -> float:
@@ -252,47 +408,6 @@ def pair_similarity(emb: "_np.ndarray", pairs_idx: "_np.ndarray") -> "_np.ndarra
     return _np.sum(a * b, axis=1)
 
 
-def bootstrap_auc_ci(
-    y_true, scores, n: int = 1000, alpha: float = 0.05, seed: int | None = None
-) -> tuple[float, float]:
-    """Bootstrap percentile CI for AUC.
-
-    Prior home: second03.bootstrap_auc_ci (was nested in main).
-    """
-    y_true = _np.asarray(y_true)
-    scores = _np.asarray(scores)
-    pos_mask = y_true == 1
-    neg_mask = ~pos_mask
-    rng = _np.random.default_rng(seed if seed is not None else SEED)
-    n_rows = len(y_true)
-    aucs = []
-    for _ in range(n):
-        idx = rng.integers(0, n_rows, n_rows)
-        aucs.append(pair_auc(scores[idx][pos_mask[idx]], scores[idx][neg_mask[idx]]))
-    aucs = _np.array([a for a in aucs if _np.isfinite(a)])
-    if len(aucs) == 0:
-        return float("nan"), float("nan")
-    lo = float(_np.percentile(aucs, 100 * (alpha / 2)))
-    hi = float(_np.percentile(aucs, 100 * (1 - alpha / 2)))
-    return lo, hi
-
-
-def kfold_groups(groups: list, k: int, seed: int | None = None) -> list[list[int]]:
-    """Group-aware K-fold: same group never straddles folds; returns row-index
-    lists per fold. The disjoint-group guard (G8 in GATES_MAP.md) is inherent.
-
-    Prior homes: second06.make_folds, second10.make_folds (brand-grouped),
-    07b/second06.kfold_barcodes (barcode-grouped).
-    """
-    uniq = sorted(set(groups))
-    rng = _np.random.RandomState(seed if seed is not None else SEED)
-    rng.shuffle(uniq)
-    fold_of: dict = {g: i % k for i, g in enumerate(uniq)}
-    folds: list[list[int]] = [[] for _ in range(k)]
-    for i, g in enumerate(groups):
-        folds[fold_of[g]].append(i)
-    return folds
-
 
 def kfold_barcodes(df: pd.DataFrame, k: int, seed: int | None = None) -> list[set[str]]:
     """K barcode sets over multi-retailer barcodes, shuffled and split ~evenly.
@@ -301,6 +416,16 @@ def kfold_barcodes(df: pd.DataFrame, k: int, seed: int | None = None) -> list[se
     Prior homes: 07b.kfold_barcodes, second06.kfold_barcodes — this is the
     exact strided-permutation implementation both used, so fold membership
     is unchanged for existing callers.
+
+    AUDIT 2026-09-09 (DATA DROP, now loud): only MULTI-RETAILER barcodes
+    are dealt into folds. Single-retailer barcodes appear in NO fold, so
+    under the CV path their positives are silently dropped from every
+    test pool by pairs_in_set (measured on test data: a singleton
+    barcode's pair vanishes from all k folds). This is a KNOWN, PRINTED
+    limitation of the legacy CV mode — the production holdout lane
+    (component_folds, TRAIN/folds.py) does NOT share it: it folds EVERY
+    barcode including singletons. Callers must treat the returned folds
+    as test-pool keysets, not as dataset coverage.
     """
     barcodes = df["barcode"].fillna("").astype(str)
     known = df[barcodes.str.len() > 0]
@@ -309,4 +434,14 @@ def kfold_barcodes(df: pd.DataFrame, k: int, seed: int | None = None) -> list[se
     perm = _np.random.default_rng(seed if seed is not None else SEED).permutation(
         len(bcs)
     )
-    return [set(bcs[perm[i::k]]) for i in range(k)]
+    folds = [set(bcs[perm[i::k]]) for i in range(k)]
+    n_single = int(
+        known.groupby("barcode")["retailer"].nunique().eq(1).sum()
+    )
+    print(
+        f"[kfold_barcodes] {len(bcs):,} multi-retailer barcodes in {k} folds; "
+        f"{n_single:,} single-retailer barcodes are in NO fold "
+        f"(legacy CV semantics — use component_folds for full coverage)",
+        flush=True,
+    )
+    return folds

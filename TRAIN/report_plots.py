@@ -25,14 +25,31 @@ from scipy.stats import binomtest, fisher_exact
 from sklearn.metrics import average_precision_score, precision_recall_curve
 
 from lib.blocking import build_pairs
-from lib.common import DATA_DIR, RESULTS, SEED, load_config, load_dataset_deduped
-from lib.nlp import _cosine, encode_corpus
+from lib.common import (
+    DATA_DIR,
+    RESULTS,
+    SEED,
+    F,
+    load_config,
+    load_dataset_deduped,
+    pair_similarity,
+    plot_dpi,
+    runtime,
+    training_cfg,
+)
+from lib.nlp import encode_corpus
 from lib.text import MACRO_MAP, extract_volume_ml
 
 _cfg = load_config()
 # ALL models from the config SSOT — the report is per-model, not
-# minilm-only (each gets its own panels; embeddings are npy-cached)
-MODELS = {k: "sentence-transformers/" + sub for k, sub in _cfg["models"].items()}
+# minilm-only (each gets its own panels; embeddings are npy-cached).
+# AUDIT 2026-09-09: was "sentence-transformers/" + sub, which FABRICATED a
+# nonexistent hub id for deberta_v3_base (microsoft/deberta-v3-base via
+# resolve_model) — that panel crashed at load. resolve_model is the one
+# registry (local bundle dir first, hub id fallback, deberta special-case).
+from lib.common import resolve_model as _resolve_model
+
+MODELS = {k: _resolve_model(k) for k in _cfg["models"]}
 CACHE = str(DATA_DIR / "embeddings_cache")
 
 
@@ -60,17 +77,29 @@ def main() -> None:
         + " | "
         + df["category"].fillna("")
     ).tolist()
-    pos, neg = build_pairs(df, SEED, 4, 10_000)
+    # eval pair caps from the SSOT pairs block (TRAIN/training.yaml) — were
+    # hardcoded 4 / 10_000 inline
+    _pairs_cfg = _cfg["pairs"]
+    pos, neg = build_pairs(
+        df, SEED, int(_pairs_cfg["max_pos_per_group"]), int(_pairs_cfg["n_neg"])
+    )
 
     shared = _shared_frames(df, pos)
     for mkey, mid in models.items():
         print(f"\n=== model: {mkey} ({mid}) ===", flush=True)
         emb, _ = encode_corpus(
-            mid, payload, batch_size=256, max_seq_length=128, cache_dir=CACHE
+            mid,
+            payload,
+            batch_size=runtime("batch_size_embed"),
+            max_seq_length=runtime("max_seq_length"),
+            cache_dir=CACHE,
         )
         _per_model_block(df, mkey, emb, pos, neg, shared)
     # ---- 5. field-ablation bars (if CSV exists) ----
-    fab = RESULTS / "07c_field_ablation.csv"
+    # AUDIT FIX (round 2 F05, round 3): 07-series CSV names read via the
+    # F map (00_config.yaml files:) — a rename through config now reaches
+    # this consumer instead of silently desynchronizing it.
+    fab = RESULTS / F["field_ablation"]
     if fab.exists():
         fdf = pd.read_csv(fab).set_index("variant")
         fig, ax = plt.subplots(figsize=(8, 4.5), constrained_layout=True)
@@ -80,7 +109,7 @@ def main() -> None:
         ax.set_ylabel("score")
         ax.set_xlabel("payload variant")
         ax.set_title("Field ablation — AP and precision@90%recall per variant")
-        fig.savefig(RESULTS / "07_report_field_ablation.png", dpi=150)
+        fig.savefig(RESULTS / "07_report_field_ablation.png", dpi=plot_dpi())
         plt.close(fig)
         print(f"field ablation plot written (n={len(fdf)})", flush=True)
         print("field ablation TP/FP/threshold (audit):", flush=True)
@@ -95,7 +124,7 @@ def main() -> None:
         print("field ablation CSV not ready yet", flush=True)
 
     # ---- 6. data-scaling curve (if CSV exists) ----
-    dsc = RESULTS / "07d_data_scaling.csv"
+    dsc = RESULTS / F["data_scaling"]  # SSOT name (audit round 2 F05)
     if dsc.exists():
         ddf = pd.read_csv(dsc).sort_values("n_triples")
         fig, ax = plt.subplots(figsize=(7, 4.5), constrained_layout=True)
@@ -118,7 +147,7 @@ def main() -> None:
         ax.set_ylabel("score")
         ax.set_title("Data-scaling curve — hard-band performance vs train size")
         ax.legend()
-        fig.savefig(RESULTS / "07_report_data_scaling.png", dpi=150)
+        fig.savefig(RESULTS / "07_report_data_scaling.png", dpi=plot_dpi())
         plt.close(fig)
         print(f"data-scaling plot written (n={len(ddf)})", flush=True)
         print("data-scaling TP/FP/threshold (audit):", flush=True)
@@ -136,7 +165,7 @@ def main() -> None:
     # 01h's "cross-country proxy" (silver, brand+category) is NOT the same as
     # 07b's "cross-country positives" (true same-barcode ground truth); keep the
     # two population names distinct so the artifacts are not confused.
-    four = RESULTS / "07b_four_pop_scores.csv"
+    four = RESULTS / F["four_pop_scores"]  # SSOT name (audit round 2 F05)
     if four.exists():
         fdf = pd.read_csv(four)
         fig, ax = plt.subplots(figsize=(9, 4.5), constrained_layout=True)
@@ -155,12 +184,21 @@ def main() -> None:
                 color=colors.get(name, "#999"),
                 label=f"{name} (n={len(grp):,})",
             )
-        ax.axvline(0.55, color="k", ls="--", lw=1, label="operating threshold 0.55")
+        # AUDIT FIX (round 2 F04, round 3): the operating threshold is
+        # split.fixed_threshold (the SSOT) — the 0.55 was re-declared
+        # inline, so a config change would leave the plot's line stale.
+        ax.axvline(
+            training_cfg().split.fixed_threshold,
+            color="k",
+            ls="--",
+            lw=1,
+            label=f"operating threshold {training_cfg().split.fixed_threshold}",
+        )
         ax.set_xlabel("cosine similarity")
         ax.set_ylabel("pairs")
         ax.set_title("Fine-tuned four-population score distribution (07b)")
         ax.legend(fontsize=7)
-        fig.savefig(RESULTS / "07_report_four_pop_dist.png", dpi=150)
+        fig.savefig(RESULTS / "07_report_four_pop_dist.png", dpi=plot_dpi())
         plt.close(fig)
         print("four-population distribution plot written", flush=True)
     else:
@@ -184,8 +222,11 @@ def _shared_frames(df, pos):
 def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
     tag = mkey  # file suffix per model
     brand, cat, macro, vol, title_len, country, bc_arr = shared
-    pos_s = _cosine(emb, pos)
-    neg_s = _cosine(emb, neg)
+    # AUDIT FIX (round 2 F19, round 3): pair_similarity (lib.common, the
+    # SSOT module) is the canonical row-pair cosine — was a duplicate
+    # import of lib.nlp._cosine, the same function re-implemented.
+    pos_s = pair_similarity(emb, pos)
+    neg_s = pair_similarity(emb, neg)
     y = np.r_[np.ones(len(pos_s)), np.zeros(len(neg_s))]
     scores = np.r_[pos_s, neg_s]
     thr = float(np.quantile(neg_s, 0.95))
@@ -215,7 +256,7 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
         f"Score distribution — zero-shot {tag} "
         f"(n: pos={len(pos_s):,} / neg={len(neg_s):,})"
     )
-    fig.savefig(RESULTS / f"07_report_score_dist_{tag}.png", dpi=150)
+    fig.savefig(RESULTS / f"07_report_score_dist_{tag}.png", dpi=plot_dpi())
     plt.close(fig)
 
     # ---- 2. precision-recall curve ----
@@ -230,7 +271,7 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
         f"Precision-Recall — {tag} (n: pos={len(pos_s):,} / neg={len(neg_s):,})"
     )
     ax.legend(loc="lower left")
-    fig.savefig(RESULTS / f"07_report_pr_curve_{tag}.png", dpi=150)
+    fig.savefig(RESULTS / f"07_report_pr_curve_{tag}.png", dpi=plot_dpi())
     plt.close(fig)
 
     # ---- 3. threshold sweep: precision / recall / F1 ----
@@ -252,7 +293,7 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
     ax.set_ylabel("rate")
     ax.set_title(f"Precision / recall / F1 vs threshold — {tag}")
     ax.legend()
-    fig.savefig(RESULTS / f"07_report_threshold_sweep_{tag}.png", dpi=150)
+    fig.savefig(RESULTS / f"07_report_threshold_sweep_{tag}.png", dpi=plot_dpi())
     plt.close(fig)
 
     # ---- 4. error breakdown by attribute ----
@@ -303,7 +344,7 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
     ax.set_title(
         f"Error breakdown by attribute — {tag} (n: FN={n_fn:,} / FP={n_fp:,})"
     )
-    fig.savefig(RESULTS / f"07_report_error_breakdown_{tag}.png", dpi=150)
+    fig.savefig(RESULTS / f"07_report_error_breakdown_{tag}.png", dpi=plot_dpi())
     plt.close(fig)
 
     # ---- 4b. FN characterization (missed true matches) + country slice ----
@@ -499,7 +540,7 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
         f"(n: FN={int(fn.sum()):,} / TP={len(pos):,})"
     )
     ax.legend()
-    fig.savefig(RESULTS / f"07_report_fn_breakdown_{tag}.png", dpi=150)
+    fig.savefig(RESULTS / f"07_report_fn_breakdown_{tag}.png", dpi=plot_dpi())
     plt.close(fig)
 
 

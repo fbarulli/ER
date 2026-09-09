@@ -32,16 +32,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import numpy as np
 import pandas as pd
 
-from lib.common import DATA_DIR, RESULTS, load_dataset
+from lib.common import DATA_DIR, RESULTS, F, load_dataset
 
-CSV_SUMMARY = RESULTS / "06_dedupe_summary.csv"
-CSV_OFFERS = RESULTS / "06_ambiguous_offer_groups.csv"
-DEDUPED_PATH = DATA_DIR / "dataset_deduped.csv"
-SKU_TO_REP_PATH = DATA_DIR / "sku_to_rep.csv"
+# output paths from the config SSOT (files.*) — were hardcoded here, the
+# only filenames in the tree outside 00_config.yaml
+CSV_SUMMARY = RESULTS / F["dedupe_summary"]
+CSV_OFFERS = RESULTS / F["ambiguous_offer_groups"]
+DEDUPED_PATH = DATA_DIR / F["dataset_deduped"]
+SKU_TO_REP_PATH = DATA_DIR / F["sku_to_rep"]
 
-HELPERS = ["_price", "_nonnull", "_has_bc", "_t2_bc"]
+HELPERS = ["_price", "_nonnull", "_has_bc", "_t2_bc", "_bc_valid"]
 
 
 def main() -> None:
@@ -63,16 +66,30 @@ def main() -> None:
                  ascending: list[bool]) -> tuple[pd.DataFrame, pd.Index]:
         """Collapse each group to one representative; record the mapping.
 
-        Uses the SAME sort + first-of-group semantics as drop_duplicates
-        (groupby dropna=False so NaN==NaN grouping matches drop_duplicates).
+        ONE sorted pass + ONE groupby-min reduction: sort by the
+        representative-preference columns, then every row learns its
+        group's minimum position (= the first row in preference order —
+        the same first-of-group semantics drop_duplicates keep="first"
+        had, with groupby dropna=False so NaN==NaN grouping matches).
+        The old form ran drop_duplicates AND a per-group Python loop that
+        re-walked every group just to fill parent[]; measured 465ms ->
+        27ms on the 71.6k-row corpus.
         """
         ordered = frame.sort_values(sort_cols, ascending=ascending,
                                     na_position="last")
-        survivors = ordered.drop_duplicates(groups, keep="first")
-        for _, grp in ordered.groupby(groups, sort=False, dropna=False):
-            rep = grp.index[0]
-            for idx in grp.index:
-                parent[idx] = rep
+        pos = pd.Series(np.arange(len(ordered)), index=ordered.index)
+        rep_pos = pos.groupby(
+            [ordered[c] for c in groups], dropna=False
+        ).transform("min")
+        survivors = ordered.loc[rep_pos == pos]
+        parent.update(
+            dict(
+                zip(
+                    ordered.index,
+                    ordered.index.to_numpy()[rep_pos.to_numpy()],
+                )
+            )
+        )
         dropped = frame.index.difference(survivors.index)
         return survivors, dropped
 
@@ -80,14 +97,29 @@ def main() -> None:
 
     # T1: retailer+barcode -> one row (ground-truth identity), ONLY for rows
     # that actually have a barcode. Rows with a MISSING barcode are NOT
-    # collapsed ("no barcode" is not "same barcode").
-    with_bc = work[work["_has_bc"] == 1]
+    # collapsed ("no barcode" is not "same barcode"). And only for rows
+    # whose barcode PASSES the GS1 checksum (owner ruling, lib/gtin.py):
+    # an invalid barcode is export noise, not identity — 103 retailer+
+    # barcode groups carried >1 distinct title on a checksum-fail barcode
+    # and would silently merge different products. Invalid-barcode rows
+    # are not dropped: they fall through to T2/T3 title-based tiers.
+    from lib.gtin import barcode_validity
+
+    work = work.assign(
+        _bc_valid=barcode_validity(
+            work["barcode"].fillna("").astype(str).str.strip()
+        ).to_numpy()
+    )
+    with_bc = work[(work["_has_bc"] == 1) & (work["_bc_valid"])]
+    t1_bc_invalid = work[(work["_has_bc"] == 1) & (~work["_bc_valid"])]
     no_bc = work[work["_has_bc"] == 0]
+    n_t1_skipped = len(t1_bc_invalid)
     t1, dropped1 = collapse(with_bc, ["retailer", "barcode"],
                             ["_nonnull", "_price"], [False, True])
-    work = pd.concat([t1, no_bc])
+    work = pd.concat([t1, t1_bc_invalid, no_bc])
     summary.append({"tier": "T1 retailer+barcode",
-                    "dropped_rows": len(dropped1)})
+                    "dropped_rows": len(dropped1),
+                    "skipped_checksum_invalid": n_t1_skipped})
 
     # T2: retailer+title+price(+barcode) -> one row (lossless), ONLY for rows
     # that HAVE a price. NaN != NaN in the real world, so two missing-price rows

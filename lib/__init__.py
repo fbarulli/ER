@@ -1,7 +1,7 @@
-"""TRAIN — the training internals (folds, loss machinery, masking, rerank,
-plots) behind the 05_train.py entry point."""
+"""lib — shared, import-light utilities (config SSOT, loaders, NLP).
 
-from TRAIN.folds import component_folds
-from TRAIN.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
-
-__all__ = ["ES_PATIENCE", "ES_THRESHOLD", "component_folds", "train_one_config"]
+Package marker only. lib/__init__ stays deliberately empty of imports: a
+module-level `from TRAIN... import` here would make EVERY `import lib.*`
+drag in TRAIN.training → torch plus a full 53MB dataset sha256 at import
+time (the dataset-tag print was the live symptom of exactly that bug).
+"""

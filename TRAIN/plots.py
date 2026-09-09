@@ -1,9 +1,12 @@
-"""plots.py — 07f report plots (pulled out of 05_train.py verbatim:
-per-fold AUC bar + score distributions + PR curve) + training loss curve."""
+"""plots.py — 07f report plots (pulled out of train.py verbatim:
+per-fold AUC bar + score distributions + PR curve) + the train-vs-val
+loss curve (owner directive 2026-09-10)."""
 
 from __future__ import annotations
 
+import argparse
 import json
+from pathlib import Path
 
 import matplotlib
 
@@ -12,10 +15,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from lib.common import RESULTS
+from lib.common import RESULTS, plot_dpi
 
 
-def report_plots(metrics_csv, args) -> None:
+def report_plots(metrics_csv: str | Path, args: argparse.Namespace) -> None:
     """per-run score-distribution + fold-AUC bar chart."""
     m = pd.read_csv(metrics_csv)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
@@ -33,14 +36,20 @@ def report_plots(metrics_csv, args) -> None:
         ax.set_xlabel("fold")
     fig.tight_layout()
     out_png = RESULTS / f"train_{args.split}_payload-{args.payload}.png"
-    fig.savefig(out_png, dpi=150)
+    fig.savefig(out_png, dpi=plot_dpi())
     plt.close(fig)
     print(f"[plot] {out_png}", flush=True)
 
 
-def training_loss_plot(metrics_csv, args) -> None:
-    """training loss curve per fold (train loss per logged step, best dev
-    AP annotated) — reads the json history columns the trainer now emits."""
+def training_loss_plot(
+    metrics_csv: str | Path, args: argparse.Namespace
+) -> None:
+    """training vs validation loss curves per fold (train loss + dev
+    eval_loss per logged step, best dev AP annotated) — reads the json
+    history columns the trainer emits. Owner directive 2026-09-10: the
+    plot we keep is train-vs-val loss; the dev-AP vline stays."""
+    from lib.common import SSOT_LOSS
+
     m = pd.read_csv(metrics_csv)
     ok = m[m["status"] == "ok"].reset_index(drop=True)
     if "train_loss_hist" not in ok.columns or not len(ok):
@@ -53,32 +62,58 @@ def training_loss_plot(metrics_csv, args) -> None:
         losses = (
             json.loads(r["train_loss_hist"]) if pd.notna(r["train_loss_hist"]) else []
         )
+        val_losses = (
+            json.loads(r["dev_loss_hist"])
+            if "dev_loss_hist" in r and pd.notna(r.get("dev_loss_hist"))
+            else []
+        )
         aps = json.loads(r["dev_ap_hist"]) if pd.notna(r.get("dev_ap_hist")) else []
         if losses:
             ax.plot(
                 range(len(losses)), losses, color="#c44e52", lw=1.6, label="train loss"
+            )
+        if val_losses:
+            ax.plot(
+                range(len(val_losses)),
+                val_losses,
+                color="#4c72b0",
+                lw=1.6,
+                ls="--",
+                label="val loss",
+            )
+        elif losses:
+            # no eval_loss column (triplet lane / older metrics CSV) — say so
+            # instead of implying the flat line is the validation curve
+            ax.text(
+                0.98,
+                0.02,
+                "no val-loss history",
+                transform=ax.transAxes,
+                ha="right",
+                fontsize=8,
+                color="grey",
             )
         if aps:
             best = int(np.argmax(aps))
             ax.axvline(
                 best,
                 color="#55a868",
-                ls="--",
+                ls=":",
                 lw=1.2,
                 label=f"best dev AP {aps[best]:.3f}",
             )
         auc = r.get("auc", float("nan"))
         ax.set_title(f"fold {r['fold']}  (test AUC {auc:.3f})", fontsize=10)
         ax.set_xlabel("logged step")
-        ax.set_ylabel("MNRL loss" if i == 0 else "")
+        ax.set_ylabel(f"{SSOT_LOSS} loss" if i == 0 else "")
         ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
     fig.suptitle(
-        f"training loss — {args.model} ({args.split}/{args.payload})",
+        f"training vs validation loss — {args.model} ({args.split}/{args.payload})",
         fontsize=11,
     )
     fig.tight_layout()
     out_png = RESULTS / f"training_loss_{args.split}_payload-{args.payload}.png"
-    fig.savefig(out_png, dpi=150)
+    fig.savefig(out_png, dpi=plot_dpi())
     plt.close(fig)
     print(f"[plot] {out_png}", flush=True)

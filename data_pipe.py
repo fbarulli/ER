@@ -4,7 +4,8 @@ module (owner directive: smash the DATA_PIPE folder into one file).
 Sections (in dependency order):
   1. extraction    — normalize_text, volume/pack/flavor extractors, extract_all
   2. gating        — three_way_gate (owner's second_gating.py, verbatim)
-  3. similarity    — jaccard / embedding similarity
+  3. similarity    — jaccard (the old embedding-similarity stub was dead:
+                     zero consumers; the zero-shot lane is TRAIN/zero_shot_sims)
   4. canonical     — per-GTIN canonical generation + clean_sku_text +
                      load_canonical_map (owner's second_canonical.py)
   5. numbers       — number-token reference + strip (95.2% coverage)
@@ -13,7 +14,7 @@ Sections (in dependency order):
 
 Public surface (old DATA_PIPE imports keep working):
   normalize_text, extract_all, three_way_gate, jaccard_similarity,
-  embedding_similarity, generate_canonical, clean_sku_text,
+  generate_canonical, clean_sku_text,
   load_canonical_map, run_within_brand_pipeline, build_training_data,
   strip_number_tokens, build_reference, census_texts, token_verdict
 """
@@ -24,11 +25,26 @@ import json as _json
 import math
 import re
 from collections import Counter
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from lib.common import DATA_DIR, RESULTS, TRAIN_ROOT, F, load_config
+from lib.common import DATA_DIR, RESULTS, TRAIN_ROOT, F, load_config, training_cfg
+from lib.schemas import (
+    CanonicalRecord,
+    ExtractedAttributes,
+    GateResult,
+    check_canonical_records_frame,
+    check_gate_results_frame,
+    check_verdict_map,
+)
+
+# lib/ dir — the file-name SSOT (00_config files.stopwords / sklearn_stopwords)
+# resolves the word-list files RELATIVE TO lib/, not the repo root (2026-09-08
+# move: data_pipe's lists live in lib/pipe_stopwords.json beside the pipeline
+# code; matching.py's sklearn list in lib/sklearn_stopwords.json).
+LIB_DIR = TRAIN_ROOT / "lib"
 
 # ============================================================================
 # EXTRACTION
@@ -36,11 +52,28 @@ from lib.common import DATA_DIR, RESULTS, TRAIN_ROOT, F, load_config
 
 
 def _load_stopwords(key: str) -> set:
-    """STOPWORDS / MINIMAL_STOPWORDS from stopwords.json (SSOT via 00_config)."""
-    path = TRAIN_ROOT / F["stopwords"]
+    """STOPWORDS / MINIMAL_STOPWORDS from lib/pipe_stopwords.json
+    (SSOT via 00_config files.stopwords)."""
+    path = LIB_DIR / F["stopwords"]
     if not path.exists():
         raise SystemExit(f"stopwords file missing: {path}")
     return set(_json.loads(path.read_text(encoding="utf-8"))[key])
+
+
+def _load_concept_folds() -> dict[str, str]:
+    """CONCEPT_FOLDS from lib/pipe_stopwords.json — SAME SSOT file as the
+    word lists (owner directive 2026-09-08: folds belong with the stopwords,
+    NOT in a config yaml). KEY wins; VALUE folds into it."""
+    path = LIB_DIR / F["stopwords"]
+    if not path.exists():
+        raise SystemExit(f"stopwords file missing: {path}")
+    folds = _json.loads(path.read_text(encoding="utf-8")).get("CONCEPT_FOLDS")
+    if folds is None:
+        raise SystemExit(
+            f"CONCEPT_FOLDS missing from {path} — the concept-folding "
+            "discipline requires it (no silent fallback to identity)"
+        )
+    return dict(folds)
 
 
 STOPWORDS = _load_stopwords("STOPWORDS")
@@ -63,7 +96,16 @@ VOLUME_PATTERN_US_EXT = re.compile(
 
 
 def normalize_text(text: str) -> str:
-    text = str(text).lower().strip()
+    # NaN-guard (bug fix): missing titles arrive as float NaN; str(NaN) is
+    # the string "nan", which leaked into 6 canonicals as a "nan_volume_946"
+    # token. Coerce missing input to ""; other non-strings stringify.
+    if text is None:
+        return ""
+    if isinstance(text, float) and text != text:  # NaN without pandas  # noqa: PLR0124
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    text = text.lower().strip()
     text = text.replace("×", "x")
     text = re.sub(r"[^a-z0-9.\s]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -147,17 +189,22 @@ def extract_pack_from_title(title: str) -> tuple:
     m = re.search(r"\b(?:pack|case)\s+of\s+(\d+)\b", t, re.IGNORECASE)
     if m:
         return int(m.group(1)), 0.90
-    # "N pack" / "N pk" / "N ct" / "N count"
+    # "N pack" / "N pk" / "N ct" / "N count". ZERO-GUARD (found by the
+    # ExtractedAttributes schema, 2026-09-08): a captured 0 is never a
+    # pack COUNT — it is a percent-zero ("0% sugar ... pack") or a
+    # decimal-volume fragment ("pack 0.5 l" -> "0 5"). Those rows poisoned
+    # pack_set with an impossible 0 (nothing can overlap it except another
+    # 0). Skip zero captures and keep scanning for the real count.
     m = re.search(
         r"\b(\d+)\s*(?:pcs?|pieces?|pack|packs|pk|case|cases|units?|ct|count)\b",
         t,
         re.IGNORECASE,
     )
-    if m:
+    if m and int(m.group(1)) > 0:
         return int(m.group(1)), 0.85
     # Concatenated "pack23"
     m = re.search(r"\bpack\s*(\d+)\b", t)
-    if m:
+    if m and int(m.group(1)) > 0:
         return int(m.group(1)), 0.75
     # Number followed by container words: "24 Glass Bottles", "12 cans", "6 bottles"
     m = re.search(
@@ -165,17 +212,19 @@ def extract_pack_from_title(title: str) -> tuple:
         t,
         re.IGNORECASE,
     )
-    if m:
+    if m and int(m.group(1)) > 0:
         return int(m.group(1)), 0.90
     # Number followed by "count" or "ct"
     m = re.search(r"(\d+)\s*(?:count|ct)\b", t, re.IGNORECASE)
-    if m:
+    if m and int(m.group(1)) > 0:
         return int(m.group(1)), 0.85
     # Default single
     return 1, 0.95
 
 
-def parse_attribute_volume_pack(attr_str: str):
+def parse_attribute_volume_pack(
+    attr_str: str,
+) -> tuple[float, float, int, float]:  # (vol_ml, vol_conf, pack_qty, pack_conf)
     vol_ml = 0.0
     vol_conf = 0.0
     pack_qty = 1
@@ -187,55 +236,18 @@ def parse_attribute_volume_pack(attr_str: str):
         vol_ml = float(m_vol.group(1))
         vol_conf = 0.9
     m_pack = re.search(r"Count per Unit:\s*(\d+)", attr_str, re.IGNORECASE)
-    if m_pack:
+    if m_pack and int(m_pack.group(1)) > 0:
+        # zero-guard: same contract as extract_pack_from_title — a 0 here is
+        # export noise, not a pack count (default 1 with conf 0 below)
         pack_qty = int(m_pack.group(1))
         pack_conf = 0.9
     return vol_ml, vol_conf, pack_qty, pack_conf
 
 
-def extract_salient_tokens(titles: list) -> list:
-    """
-    Extract tokens that are consistent across titles and are not generic.
-    We count tokens after removing stopwords, brand tokens, volume/pack patterns,
-    and then select tokens that appear in at least 2 titles or have high frequency.
-    """
-    token_counter = Counter()
-    title_count = len(titles)
-    for title in titles:
-        t = normalize_text(title)
-        # Remove volume/pack patterns
-        t = re.sub(
-            r"\b\d+(\.\d+)?\s*(ml|l|lt|ltr|liter|litre|cl|centiliter|oz|fl oz|qt|gal|ounce|fluid ounce|pack|case|pcs?|pieces?|units?|x)\b",
-            " ",
-            t,
-            flags=re.IGNORECASE,
-        )
-        # Remove brand? We'll handle brand separately outside; here we just split
-        tokens = t.split()
-        # Filter stopwords and short/meaningless tokens
-        tokens = [tok for tok in tokens if tok not in STOPWORDS and len(tok) > 1]
-        token_counter.update(tokens)
-    # Keep tokens that appear in at least 2 titles, or frequency >= 2
-    salient = [tok for tok, cnt in token_counter.items() if cnt >= 2]
-    # Also include tokens that appear in all titles if title_count > 1
-    if title_count > 1:
-        all_titles_tokens = set()
-        for i, title in enumerate(titles):
-            t = normalize_text(title)
-            t = re.sub(
-                r"\b\d+(\.\d+)?\s*(ml|l|lt|ltr|liter|litre|cl|centiliter|oz|fl oz|qt|gal|ounce|fluid ounce|pack|case|pcs?|pieces?|units?|x)\b",
-                " ",
-                t,
-                flags=re.IGNORECASE,
-            )
-            tokens = set(t.split())
-            tokens = {tok for tok in tokens if tok not in STOPWORDS and len(tok) > 1}
-            if i == 0:
-                all_titles_tokens = tokens
-            else:
-                all_titles_tokens &= tokens
-        salient = list(set(salient) | all_titles_tokens)
-    return sorted(salient)
+# extract_salient_tokens REMOVED (audit 2026-09-09): zero callers across
+# the repo (verified by grep). Its "salient token" job is done by the
+# NgramIDF discriminative extractor; this legacy variant duplicated a
+# volume/pack regex inline (a second declaration the config cannot steer).
 
 
 def extract_all(sku_name: str, attribute: str) -> dict:
@@ -290,39 +302,69 @@ def extract_all(sku_name: str, attribute: str) -> dict:
         pack_qty = pack_title
         pack_conf = pack_conf_title
 
-    return {
-        "flavor": flavor,
-        "type": ptype,
-        "volume_ml": volume_ml,
-        "volume_confidence": volume_conf,
-        "volume_raw": volume_raw,
-        "volume_status": volume_status,
-        "pack_qty": pack_qty,
-        "pack_confidence": pack_conf,
-    }
+    # BOUNDARY CONTRACT (lib.schemas): the extracted-attribute dict is the
+    # input to BOTH the canonical build and the gate — validate the shape
+    # once here so a confidence out of [0,1] or a pack_qty < 1 crashes at
+    # the transform, not downstream in the gate's comparisons.
+    return ExtractedAttributes(
+        flavor=flavor,
+        type=ptype,
+        volume_ml=volume_ml,
+        volume_confidence=volume_conf,
+        volume_raw=volume_raw,
+        volume_status=volume_status,
+        pack_qty=pack_qty,
+        pack_confidence=pack_conf,
+    ).model_dump()
 
 
 # ============================================================================
 # GATING
 # ============================================================================
 def three_way_gate(
-    attrs1,
-    attrs2,
-    vol_tolerance=0.05,
-    raw_conf_threshold=0.85,
-    consistency_fallback_threshold=0.3,
-):
+    attrs1: dict,
+    attrs2: dict,
+    vol_tolerance: float | None = None,
+    raw_conf_threshold: float | None = None,
+    consistency_fallback_threshold: float | None = None,
+) -> dict:
+    """Deterministic volume/pack/flavor gate.
+
+    NO-FALLBACK SSOT (audit round 2, F01): the three decision thresholds
+    live in TRAIN/training.yaml `gate:` and are read through training_cfg()
+    — the old signature defaults (0.05/0.85/0.3) were a second declaration
+    the config could not steer. Passing a value explicitly still wins
+    (selftest pins known-good gate behavior with explicit values).
+    """
+    if (
+        vol_tolerance is None
+        or raw_conf_threshold is None
+        or consistency_fallback_threshold is None
+    ):
+        _g = training_cfg().gate
+        if vol_tolerance is None:
+            vol_tolerance = float(_g.vol_tolerance)
+        if raw_conf_threshold is None:
+            raw_conf_threshold = float(_g.raw_conf_threshold)
+        if consistency_fallback_threshold is None:
+            consistency_fallback_threshold = float(
+                _g.consistency_fallback_threshold
+            )
     # raw confidence check
     if (
         attrs1["volume_confidence"] < raw_conf_threshold
         or attrs2["volume_confidence"] < raw_conf_threshold
     ):
-        return {"decision": "fallback", "reason": "Low raw volume confidence"}
+        return GateResult(
+            decision="fallback", reason="Low raw volume confidence"
+        ).model_dump()
     if (
         attrs1["pack_confidence"] < raw_conf_threshold
         or attrs2["pack_confidence"] < raw_conf_threshold
     ):
-        return {"decision": "fallback", "reason": "Low raw pack confidence"}
+        return GateResult(
+            decision="fallback", reason="Low raw pack confidence"
+        ).model_dump()
 
     # volume overlap
     vol_overlap = False
@@ -336,12 +378,12 @@ def three_way_gate(
         if vol_overlap:
             break
     if not vol_overlap:
-        return {"decision": "hard_no", "reason": "No volume overlap"}
+        return GateResult(decision="hard_no", reason="No volume overlap").model_dump()
 
     # pack overlap
     pack_overlap = attrs1["pack_set"] & attrs2["pack_set"]
     if not pack_overlap:
-        return {"decision": "hard_no", "reason": "No pack overlap"}
+        return GateResult(decision="hard_no", reason="No pack overlap").model_dump()
 
     # flavor check (only if both have a non-empty flavor): kills the
     # flavor-blind proceed tail (ZUMOSOL apple vs orange nectar at the
@@ -349,10 +391,10 @@ def three_way_gate(
     flavor1 = attrs1.get("mode_flavor", "")
     flavor2 = attrs2.get("mode_flavor", "")
     if flavor1 and flavor2 and flavor1 != flavor2:
-        return {
-            "decision": "hard_no",
-            "reason": f"Flavor mismatch: {flavor1} vs {flavor2}",
-        }
+        return GateResult(
+            decision="hard_no",
+            reason=f"Flavor mismatch: {flavor1} vs {flavor2}",
+        ).model_dump()
 
     # consistency check
     if (
@@ -361,26 +403,25 @@ def three_way_gate(
         or attrs1["pack_consistency"] < consistency_fallback_threshold
         or attrs2["pack_consistency"] < consistency_fallback_threshold
     ):
-        return {"decision": "fallback", "reason": "Overlap but low consistency"}
+        return GateResult(
+            decision="fallback", reason="Overlap but low consistency"
+        ).model_dump()
 
-    return {"decision": "proceed", "reason": "Volume, pack, flavor all compatible"}
+    return GateResult(
+        decision="proceed", reason="Volume, pack, flavor all compatible"
+    ).model_dump()
 
 
 # ============================================================================
 # SIMILARITY
 # ============================================================================
-def jaccard_similarity(str1, str2):
+def jaccard_similarity(str1: str, str2: str) -> float:
+    """Word-set Jaccard overlap (0.0 when either side is empty)."""
     set1 = set(str1.split())
     set2 = set(str2.split())
     if not set1 or not set2:
         return 0.0
     return len(set1 & set2) / len(set1 | set2)
-
-
-# Placeholder for embeddings
-def embedding_similarity(text1, text2):
-    # to be implemented with sentence-transformers later
-    pass
 
 
 # ============================================================================
@@ -389,6 +430,20 @@ def embedding_similarity(text1, text2):
 
 
 MINIMAL_STOPWORDS = _load_stopwords("MINIMAL_STOPWORDS")
+
+# CONCEPT FOLDS (owner directive 2026-09-08: "only one instance of each
+# concept"): synonym/singular-plural pairs that are THE SAME product
+# concept — 'sparkling'+'carbonated' co-occurred in 836 canonicals,
+# singular+plural ('mineral'+'minerals') in 196. The KEY is the canonical
+# representative; every VALUE folds into it before the word-once passes.
+# SSOT: stopwords.json CONCEPT_FOLDS. Keep-tokens stay atomic (no_sugar
+# never folds).
+_CONCEPT_FOLDS: dict[str, str] = _load_concept_folds()
+
+
+def _fold_concept(word: str) -> str:
+    """Fold a word to its canonical concept representative (SSOT map)."""
+    return _CONCEPT_FOLDS.get(word, word)
 
 
 # -----------------------------------------------------------------------------
@@ -411,6 +466,56 @@ KEEP_TOKENS = {
     "added_sugar",
     "with_pulp",
     "no_pulp",
+}
+
+# PHRASE VARIATIONS (owner ruling 2026-09-07): one diet-variant concept,
+# many retail phrasings. A keep-token matches when ANY variant regex fires
+# on the normalized doc text — hyphenated ("sugar-free"), fused
+# ("sugarfree"), reversed ("free sugar"), of-linked ("free of sugar"),
+# sweetener-synonym ("sugarless", "without sugar", "zero sugar") all map
+# to the SAME canonical token so the diet variant stays identity-bearing
+# in the canonical. Census on the deduped corpus: "sugar free" 1,589 /
+# "sugarfree" 124 / "sugarless" 13 / "free sugar" 9 (all are "…calorie
+# free SUGAR FREE…" — two adjacent compounds) / "free of sugar" 0 (not in
+# this export but covered by the ruling) / "no sugar" 7,123 / "no added
+# sugar" 4,039 / "without added sugar" 39.
+# NOTE: "no sugar" is ALSO sugar-free (a no-sugar product IS sugar-free),
+# so it fires both keep-tokens — both are true statements about the
+# product. "added sugar" (positive, "with added sugar") stays its own
+# token: the OPPOSITE claim of "no added sugar".
+PHRASE_VARIANTS = {
+    "sugar_free": [
+        re.compile(r"\bsugar\s*[- ]?\s*free\b"),          # sugar free / sugar-free / sugarfree
+        re.compile(r"\bsugarfree\b"),                     # fused (no separator survived)
+        re.compile(r"\bsugarless\b"),                     # sweetener synonym
+        re.compile(r"\bfree\s+(?:of\s+)?sugar\b"),        # free sugar / free of sugar
+        re.compile(r"\bwithout\s+sugar\b"),               # without sugar
+        re.compile(r"\bzero\s+sugar\b"),                  # zero sugar
+        re.compile(r"\bno\s+sugar\b"),                    # no sugar IS sugar-free
+        re.compile(r"\bno\s+added\s+sugar\b"),            # no added sugar IS sugar-free
+        re.compile(r"\bwithout\s+added\s+sugar\b"),       # without added sugar
+    ],
+    "no_sugar": [
+        re.compile(r"\bno\s+sugar\b"),
+        re.compile(r"\bno\s+added\s+sugar\b"),
+        re.compile(r"\bwithout\s+added\s+sugar\b"),
+        re.compile(r"\bzero\s+sugar\b"),
+    ],
+    "added_sugar": [
+        re.compile(r"\bwith\s+added\s+sugar\b"),          # the POSITIVE claim only
+    ],
+    # pulp variants: 'with' and 'no' are stopworded before the bigram forms,
+    # so with_pulp/no_pulp NEVER fired (dead keep-tokens) — and raw bigram
+    # 'cola_pulp' is IDENTICAL for both claims, so only the phrase layer can
+    # keep them distinct.
+    "with_pulp": [
+        re.compile(r"\bwith\s+(?:extra\s+)?pulp\b"),      # with pulp / with extra pulp
+    ],
+    "no_pulp": [
+        re.compile(r"\b(?:no|without)\s+pulp\b"),          # no pulp / without pulp
+        re.compile(r"\bpulp\s*[- ]?\s*free\b"),            # pulp free / pulp-free
+        re.compile(r"\bfree\s+(?:of\s+)?pulp\b"),          # free pulp / free of pulp
+    ],
 }
 
 
@@ -459,7 +564,8 @@ class NgramIDF:
 # -----------------------------------------------------------------------------
 # N‑gram generation
 # -----------------------------------------------------------------------------
-def generate_ngrams(tokens, n):
+def generate_ngrams(tokens: list[str], n: int) -> list[str]:
+    """Contiguous n-gram strings (space-joined) over a token list."""
     return [" ".join(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
 
 
@@ -467,13 +573,21 @@ def generate_ngrams(tokens, n):
 # Discriminative n‑gram extraction
 # -----------------------------------------------------------------------------
 def extract_discriminative_ngrams(
-    titles, attributes, brand_tokens, global_idf, brand_idf, top_k=5
-):
+    titles: list[str],
+    attributes: list[str],
+    brand_tokens: set[str],
+    global_idf: NgramIDF,
+    brand_idf: NgramIDF,
+    top_k: int = 5,
+) -> list[str]:
     """
     Select n‑grams (1‑4) with highest TF‑IDF, considering global and within‑brand IDF.
     """
     # Combine all text into token list
     tokens = []
+    phrase_parts = []  # PRE-stopword text: phrase regexes must see 'no',
+    # 'with', 'of' — MINIMAL_STOPWORDS deletes them before the keep-token
+    # check could ever fire (the live miss on "no sugar"/"free of sugar")
     for title, attr in zip(titles, attributes):
         text = normalize_text(title) + " " + normalize_text(attr)
         text = re.sub(
@@ -483,6 +597,7 @@ def extract_discriminative_ngrams(
             flags=re.IGNORECASE,
         )
         toks = text.split()
+        phrase_parts.append(text)
         toks = [tok for tok in toks if tok not in MINIMAL_STOPWORDS and len(tok) > 1]
         tokens.extend(toks)
 
@@ -533,8 +648,25 @@ def extract_discriminative_ngrams(
     bigrams = {
         f"{doc_tokens[i]}_{doc_tokens[i + 1]}" for i in range(len(doc_tokens) - 1)
     }
-    for keep in KEEP_TOKENS:
-        hit = (keep in doc_tokens) if "_" not in keep else (keep in bigrams)
+    # PRE-stopword text: 'no sugar'/'free of sugar'/'with added sugar' die
+    # in the MINIMAL_STOPWORDS filter before the keep check — the phrase
+    # regexes see the raw normalized text, the token/bigram checks keep
+    # using the filtered stream (unchanged behavior for plain keepers).
+    doc_text = " ".join(phrase_parts)
+    # DETERMINISM (reproducibility contract): iterating a SET of strings is
+    # process-random (PYTHONHASHSEED) — keep-tokens appended in a different
+    # order per run and canonical_records.csv drifted. sorted() pins it.
+    for keep in sorted(KEEP_TOKENS):
+        # PHRASE VARIATIONS (owner ruling 2026-09-07): one concept, many
+        # phrasings — a keep-token matches when ANY of its regex variants
+        # fires on the doc text (hyphens/fused/reversed/of-linked word
+        # orders all map to the SAME canonical token; census: sugar free
+        # 1,589 / sugarfree 124 / sugarless 13 / free sugar 9 / free of
+        # sugar 0-but-covered / no sugar 7,123 / no added sugar 4,039).
+        if keep in PHRASE_VARIANTS:
+            hit = any(p.search(doc_text) for p in PHRASE_VARIANTS[keep])
+        else:
+            hit = (keep in doc_tokens) if "_" not in keep else (keep in bigrams)
         if hit and keep not in selected:
             selected.append(keep)
             if len(selected) >= top_k + 3:
@@ -546,7 +678,13 @@ def extract_discriminative_ngrams(
 # -----------------------------------------------------------------------------
 # Canonical generation (now uses n‑grams)
 # -----------------------------------------------------------------------------
-def generate_canonical(gtin, brand, rows, global_idf, brand_idf):
+def generate_canonical(
+    gtin: str,
+    brand: str,
+    rows: list[tuple[str, str]],
+    global_idf: NgramIDF,
+    brand_idf: NgramIDF | None,
+) -> dict:  # CanonicalRecord.model_dump() — validated shape, plain dict
     titles = [sku for sku, attr in rows]
     attributes = [attr for sku, attr in rows]
     extracted = [extract_all(sku, attr) for sku, attr in rows]
@@ -587,29 +725,139 @@ def generate_canonical(gtin, brand, rows, global_idf, brand_idf):
     pack_consistency = (pack_mode.most_common(1)[0][1] / n) if n else 1.0
 
     # Build canonical string
+    # TOKEN-ONCE DISCIPLINE (owner directive 2026-09-08): a canonical must
+    # carry each WORD at most once — the concatenation of brand + flavor +
+    # type + salient n-grams used to repeat 'water' up to 5x (unigram from
+    # mode_type AND inside 4 different IDF compounds) in 1,489 canonicals;
+    # pure noise for both Jaccard and the embedding payload. Dedup works
+    # on UNDERSCORE-PARTS across ALL parts: an n-gram compound is dropped
+    # when EVERY word in it already appeared earlier (fully redundant);
+    # a compound carrying at least one new word stays (partial novelty —
+    # dropping only the repeated words would mutate the compound into a
+    # string that no longer corresponds to any real n-gram). First
+    # occurrence wins; deterministic by construction order.
     parts = [brand_norm]
     if mode_flavor:
         parts.append(mode_flavor)
     if mode_type:
         parts.append(mode_type)
+    # token-once: filter the salient n-grams against every word already
+    # spoken (brand/flavor/type parts + earlier n-grams). STRICT novelty
+    # (owner directive 2026-09-08: 'we cant have repeated strings'): the
+    # IDF top-5 are a sliding-window ladder (kr_white_grape_flavored,
+    # white_grape_flavored_sparkling, grape_flavored_sparkling_bottled —
+    # one phrase, three compounds, words repeated 3x) — an n-gram is kept
+    # only when EVERY word it carries is new; the highest-IDF member of
+    # each phrase family wins and the ladder's redundant echo dies.
+    spoken: set[str] = set()
+    for p in parts:
+        if p:
+            spoken.update(
+                _fold_concept(w) for t in p.split() for w in t.split("_")
+            )
+    kept_ngrams: list[str] = []
+    for ng in salient_ngrams:
+        # concept-fold each word before novelty: a compound carrying only
+        # folded echoes of already-spoken concepts ('sparkling' after
+        # 'carbonated') is redundant, not new
+        words = [w for w in ng.split("_") if w]
+        folded = [_fold_concept(w) for w in words]
+        if folded and all(f not in spoken for f in folded):
+            kept_ngrams.append("_".join(folded))
+            spoken.update(folded)
+    # fallback: if strict novelty dropped EVERYTHING (top-5 all one family
+    # and mode parts already spoke the words), keep the first n-gram that
+    # carries ANY new word — but contribute ONLY its new words (owner
+    # directive: no repeated strings; 'berry_acai' after mode 'berry'
+    # contributes 'acai', not the echo). If truly nothing is new, keep the
+    # single top n-gram (canonical never ends up bare brand+flavor+type).
+    if not kept_ngrams and salient_ngrams:
+        for ng in salient_ngrams:
+            new_words = [
+                _fold_concept(w)
+                for w in ng.split("_")
+                if w and _fold_concept(w) not in spoken
+            ]
+            if new_words:
+                kept_ngrams = ["_".join(new_words)]
+                spoken.update(new_words)
+                break
+        else:
+            kept_ngrams = [salient_ngrams[0]]
+            spoken.update(
+                w for w in salient_ngrams[0].split("_") if w
+            )
+    # raw list kept for the strip-audit visibility (what token-once removed)
+    raw_salient_ngrams = list(salient_ngrams)
+    salient_ngrams = kept_ngrams
     parts.extend(salient_ngrams)
-    canonical = " ".join(parts)
+    # FINAL WORD-ONCE PASS (owner directive: 'it should have only a single
+    # instance of each word'): the strict novelty pass runs on COMPOUND
+    # granularity (an n-gram survives or dies whole), so a kept compound
+    # can still repeat a word internally (source text 'Vitamin B12 Vitamin
+    # 6' -> vitamin_b12_vitamin_b6) or against a later keep-token
+    # (sugar_sugar_calories_water then no_sugar). This pass rewrites the
+    # compounds themselves: every compound keeps only its first-seen
+    # CONCEPT-folded words (sparkling==carbonated, minerals==mineral —
+    # SSOT stopwords.json CONCEPT_FOLDS). Keep-tokens are ALWAYS atomic
+    # (no_sugar never folds or fragments). A compound reduced to zero
+    # words drops; unigrams follow the same rule. First occurrence wins;
+    # deterministic.
+    seen_words: set[str] = set()
+    final_tokens: list[str] = []
+    for t in " ".join(parts).split():
+        # keep-tokens are ATOMIC: no_sugar / with_pulp never fold or
+        # fragment — they carry the phrase-variant concept as one unit
+        is_keep = t in KEEP_TOKENS  # atomic — never folded, never split
+        if "_" in t and not is_keep:
+            kept = []
+            for w in t.split("_"):
+                fw = _fold_concept(w)
+                if fw and fw not in seen_words:
+                    seen_words.add(fw)
+                    kept.append(fw)
+            if kept:
+                final_tokens.append("_".join(kept))
+        elif is_keep:
+            if t not in seen_words:
+                # atomic: mark the whole token, not its parts
+                seen_words.add(t)
+                final_tokens.append(t)
+        else:
+            ft = _fold_concept(t)
+            if ft and ft not in seen_words:
+                seen_words.add(ft)
+                final_tokens.append(ft)
+    canonical = " ".join(final_tokens)
 
-    return {
-        "gtin": gtin,
-        "canonical": canonical,
-        "mode_brand": brand,
-        "mode_flavor": mode_flavor,
-        "mode_type": mode_type,
-        "salient_ngrams": salient_ngrams,
-        "volume_set": volume_set,
-        "pack_set": pack_set,
-        "volume_confidence": round(vol_conf, 3),
-        "pack_confidence": round(pack_conf, 3),
-        "volume_consistency": round(volume_consistency, 3),
-        "pack_consistency": round(pack_consistency, 3),
-        "n_titles": n,
-    }
+    # BOUNDARY CONTRACT (lib.schemas): one validated record per canonical.
+    # brand NaN-guard: a group whose brand column is all-NaN would carry a
+    # float NaN into mode_brand (pandas would write ""), which pydantic's
+    # str field would coerce to "nan" — the exact title-poisoning bug class
+    # the lane fixed for titles. Clean it here so the RECORD is honest.
+    brand_clean = brand if isinstance(brand, str) else ""
+    rec = CanonicalRecord(
+        gtin=gtin,
+        canonical=canonical,
+        mode_brand=brand_clean,
+        mode_flavor=mode_flavor,
+        mode_type=mode_type,
+        salient_ngrams=salient_ngrams,
+        dropped_redundant_ngrams=[
+            ng for ng in raw_salient_ngrams if ng not in set(kept_ngrams)
+        ],
+        # NOTE: kept as SETS here — gate logic intersects them (pack_set &
+        # pack_set). data_prep sorts them AT THE CSV WRITE so the display
+        # is deterministic (PYTHONHASHSEED-proof) without touching logic.
+        volume_set=volume_set,
+        pack_set=pack_set,
+        volume_confidence=round(vol_conf, 3),
+        pack_confidence=round(pack_conf, 3),
+        volume_consistency=round(volume_consistency, 3),
+        pack_consistency=round(pack_consistency, 3),
+        n_titles=n,
+    )
+    return rec.model_dump()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -684,6 +932,71 @@ def canonical_model_text(canonical: str) -> str:
             out.append("_".join(parts))
         # else: pure numeric/short residue dies (volume_591, 24, 100...)
     return " ".join(out)
+
+
+# ── attribute-schema boilerplate (stage-2 of the residual n-gram census) ────
+# These label words come from the attributes blob's structure (type/content/
+# material/...) and repeat on nearly every row — zero pairwise discriminative
+# signal, a constant offset diluting cosine differences. SSOT for the model
+# payload cleaning; the GATE canonical keeps them (its CSV is unchanged).
+SCHEMA_WORDS = frozenset(
+    {
+        # attribute-blob column labels
+        "type", "content", "material", "carbonization", "health", "claims",
+        "features", "ingredients", "sourcing", "geographic", "flavours",
+        "fragrances", "flavour", "flavor", "volume", "pack",
+        "format", "feature",
+        # doubled-label artifacts seen in the census
+        "artificial",
+        # NOTE: "sweetener" REMOVED (owner ruling, stage-3): it is a
+        # diet-variant signal, not a schema label.
+    }
+)
+
+# ── curated soft stop list (owner ruling, stage-3) ──────────────────────────
+# Stage-2 left a residual constant offset (top-20 tokens ≈ 36% of payload
+# mass). Curated ruling: strip packaging materials (rarely change product
+# identity), marketing/greenwashing boilerplate, and product-type words
+# redundant after type extraction (juice/drink/beverage/water).
+# KEPT as variant-defining signals: still/carbonated/sparkling (carbonation),
+# sugar/sweetener (diet variants), concentrate/powder/syrup (format),
+# vitamins/mineral/calories/antioxidants (fortification). "concentrate"
+# deliberately NOT here — it is a format-variant signal (owner ruling).
+# Applied at the same composition point as SCHEMA_WORDS: model payload ONLY.
+# The gate canonical and the number-token reference census are untouched.
+MODEL_PAYLOAD_SOFT_STOP = frozenset(
+    {
+        # attribute schema labels
+        "type", "volume", "content", "material", "carbonization",
+        "flavour", "flavours", "ingredients", "health", "claims",
+        "features", "packtype", "packmaterial",
+        # packaging materials (rarely distinguish SKU variants)
+        "plastic", "metal", "paper", "carton", "glass", "aluminum",
+        # greenwashing / marketing boilerplate
+        "naturally", "derived", "artificial", "immune", "sustainable",
+        "support", "sourcing", "environmentally", "friendly",
+        "additives", "preservatives", "natural", "organic",
+        # redundant after type extraction
+        "juice", "drink", "beverage", "water",
+    }
+)
+
+# one union, one composition point — no asymmetry between sku and canonical
+_MODEL_STOP = SCHEMA_WORDS | MODEL_PAYLOAD_SOFT_STOP
+
+
+def strip_schema_words(text: str) -> str:
+    """Remove schema boilerplate + curated soft stops from a MODEL-side text.
+
+    Strips SCHEMA_WORDS | MODEL_PAYLOAD_SOFT_STOP (stage-2 census list +
+    stage-3 curated ruling). Kept ON PURPOSE (discriminative, owner
+    ruling): carbonation words (still/carbonated/sparkling), diet/format
+    variants (sugar/sweetener/concentrate/powder/syrup), fortification
+    terms (vitamins/mineral/calories/antioxidants), brand names, flavor
+    words. Model payload ONLY — gate canonicals and the number-token
+    reference keep every token (their CSVs are unchanged).
+    """
+    return " ".join(t for t in text.split() if t not in _MODEL_STOP)
 
 
 # ============================================================================
@@ -819,12 +1132,30 @@ def build_reference(texts: list[str], brand_vocab: set[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def reference_path():
+def reference_path() -> Path:
+    """DATA_DIR / F["number_reference"] — the token-verdict CSV (SSOT)."""
     return DATA_DIR / F["number_reference"]
 
 
+_VERDICTS_CACHE: dict[str, str] | None = None
+_VERDICTS_LOADED = False
+# AUDIT 2026-09-09: process-lifetime count of digit tokens that fell through
+# to the regex fallback because the reference CSV did not carry them —
+# printed at data-prep exit so the degradation is visible, not silent.
+_UNSEEN_TOKEN_TOTAL = 0
+
+
 def load_verdicts() -> dict[str, str] | None:
-    """token -> verdict map from the reference CSV (None if not built yet)."""
+    """token -> verdict map from the reference CSV (None if not built yet).
+
+    Cached at module level: strip_number_tokens calls this once PER TOKEN
+    (up to 41k digit-texts × 2.7ms CSV re-read ≈ 112s of pure re-read per
+    full-corpus pass). One read, memoized for the process lifetime — the
+    CSV is written by TRAIN/build_reference.py, not mutated mid-run.
+    """
+    global _VERDICTS_CACHE, _VERDICTS_LOADED
+    if _VERDICTS_LOADED:
+        return _VERDICTS_CACHE
     p = reference_path()
     if not p.exists():
         # SSOT missing: SAY IT — the caller falls back to regex rules only
@@ -833,9 +1164,15 @@ def load_verdicts() -> dict[str, str] | None:
             f"[numbers] reference CSV missing ({p}) — regex-rule fallback only",
             flush=True,
         )
+        _VERDICTS_LOADED = True
         return None
     df = pd.read_csv(p, dtype={"token": str})
-    return dict(zip(df["token"], df["verdict"]))
+    # BOUNDARY CONTRACT (lib.schemas): every verdict must be in the
+    # strip/keep_* vocabulary — a typo'd CSV value would silently never
+    # match the startswith("keep") branch in strip_number_tokens.
+    _VERDICTS_CACHE = check_verdict_map(dict(zip(df["token"], df["verdict"])))
+    _VERDICTS_LOADED = True
+    return _VERDICTS_CACHE
 
 
 # Pure-numeric BRAND values are year-styled names ("1642", "1724") — the
@@ -875,12 +1212,18 @@ def strip_number_tokens(text: str, brand: str = "") -> str:
     digit_key = next((k for k, w in NUMERIC_BRAND_WORDS.items() if w == brand_l), "")
     spelled = NUMERIC_BRAND_WORDS.get(digit_key, "")
     out = []
+    # AUDIT 2026-09-09 (visibility): tokens missing from the reference CSV
+    # fall through to regex rules with an EMPTY brand vocab — correct by
+    # design (the CSV is the SSOT for seen tokens), but the count of
+    # unseen-token resolutions was invisible. Count them per call.
+    n_unseen = 0
     for t in text.split():
         if not re.search(r"\d", t):
             out.append(t)
             continue
         v = (verdicts or {}).get(t)
         if v is None:
+            n_unseen += 1
             _, v = token_verdict(t, set())
         if v == "keep_brand":
             # numeric brand token: keep only if THIS row's brand carries it.
@@ -893,6 +1236,9 @@ def strip_number_tokens(text: str, brand: str = "") -> str:
                 out.append(t)
         elif v.startswith("keep"):
             out.append(t)
+    if n_unseen:
+        global _UNSEEN_TOKEN_TOTAL
+        _UNSEEN_TOKEN_TOTAL += n_unseen
     return " ".join(out)
 
 
@@ -902,7 +1248,9 @@ def strip_number_tokens(text: str, brand: str = "") -> str:
 from collections import defaultdict
 
 
-def run_within_brand_pipeline(df_full):
+def run_within_brand_pipeline(
+    df_full: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
     # NaN/empty GTINs must NOT form a group: 41,545 rows (58% of the corpus)
     # share gtin=NaN and used to collapse into ONE canonical record with an
     # arbitrary mode-brand — poisoning canonical_records.csv AND the global
@@ -913,11 +1261,30 @@ def run_within_brand_pipeline(df_full):
         & (df_full["gtin"].astype(str).str.strip() != "")
         & (df_full["gtin"].astype(str).str.lower() != "nan")
     )
-    df_full = df_full[gtin_valid]
+    # Checksum enforcement (owner ruling): 1,747 of 14,997 distinct barcodes
+    # (3,715 rows) FAIL the GS1 check digit — retailer-export noise. An
+    # invalid barcode must not assert product identity: no canonical forms
+    # on it, so no (sku, canonical) positive pairs and no false labels leak
+    # into training/eval. The ROWS survive (corpus unchanged); only the
+    # identity claim dies. Loud per lane doctrine — never silent.
+    from lib.gtin import barcode_validity
+
+    bc_valid = barcode_validity(df_full["gtin"].fillna("").astype(str).str.strip())
+    checksum_bad = gtin_valid & ~bc_valid
+    n_checksum_dropped = int(checksum_bad.sum())
+    df_full = df_full[gtin_valid & bc_valid]
+    if n_checksum_dropped:
+        print(
+            f"[gtin-guard] dropped {n_checksum_dropped:,} rows whose gtin "
+            f"FAILS the GS1 check digit (no canonical/labels form on a "
+            f"barcode that cannot be trusted as identity)",
+            flush=True,
+        )
     if n_before != len(df_full):
         print(
-            f"[gtin-guard] dropped {n_before - len(df_full):,} rows with "
-            f"missing/NaN gtin (they cannot be grouped by product)",
+            f"[gtin-guard] total dropped {n_before - len(df_full):,} rows "
+            f"(missing/NaN gtin or failed checksum) — they cannot be "
+            f"grouped by product",
             flush=True,
         )
 
@@ -976,6 +1343,11 @@ def run_within_brand_pipeline(df_full):
     # Gate and similarity
     gtin_to_canon = {row["gtin"]: row for _, row in df_canon.iterrows()}
     results = []
+    # GATE VISIBILITY (owner directive 2026-09-07): every gate call logs
+    # exactly what it SAW (both sides' volume/pack/flavor + confidences)
+    # next to what it DECIDED — auditable inputs→outputs, rewritten every
+    # run. Full census, not a sample: the whole point is no invisibility.
+    gate_vis = []
     for g1, g2 in candidate_pairs:
         a1 = gtin_to_canon[g1]
         a2 = gtin_to_canon[g2]
@@ -1001,13 +1373,62 @@ def run_within_brand_pipeline(df_full):
                 "similarity": sim,
             }
         )
+        gate_vis.append(
+            {
+                "gtin1": g1,
+                "gtin2": g2,
+                "vol_set1": sorted(a1["volume_set"]),
+                "vol_set2": sorted(a2["volume_set"]),
+                "vol_conf1": a1["volume_confidence"],
+                "vol_conf2": a2["volume_confidence"],
+                "vol_consist1": a1["volume_consistency"],
+                "vol_consist2": a2["volume_consistency"],
+                "pack_set1": sorted(a1["pack_set"]),
+                "pack_set2": sorted(a2["pack_set"]),
+                "pack_conf1": a1["pack_confidence"],
+                "pack_conf2": a2["pack_confidence"],
+                "flavor1": a1.get("mode_flavor", ""),
+                "flavor2": a2.get("mode_flavor", ""),
+                "decision": gate["decision"],
+                "reason": gate["reason"],
+                "jaccard_short_tokens": sim,
+            }
+        )
     results_df = pd.DataFrame(results)
 
     # TRAIN_GPU writes ONLY inside its own tree (lib.common RESULTS —
     # the repo's results dir must never be touched by the standalone lane).
+    # DETERMINISM: set->display columns (volume_set/pack_set) render in
+    # PYTHONHASHSEED-random order otherwise; sort the DISPLAY (after all
+    # gate logic consumed the real sets) so the CSV is byte-reproducible.
+    for _col in ("volume_set", "pack_set"):
+        df_canon[_col] = df_canon[_col].map(lambda s: sorted(s))
+    # Same for the pair ROW ORDER: candidate_pairs is a SET, so iteration
+    # order is process-random. Gate decisions themselves are order-free —
+    # only the CSV row sequence drifted. Sort on the identity columns.
+    results_df = results_df.sort_values(
+        ["gtin1", "gtin2"], kind="stable"
+    ).reset_index(drop=True)
     RESULTS.mkdir(parents=True, exist_ok=True)
+    # FRAME CONTRACTS (lib.schemas): column sets, decision domain, similarity
+    # bounds, GTIN endpoints — asserted at the WRITE boundary so a corrupted
+    # transform can never land in the CSVs every downstream step reads.
+    check_canonical_records_frame(df_canon)
+    check_gate_results_frame(results_df)
     df_canon.to_csv(RESULTS / F["canonical_records"], index=False)
     results_df.to_csv(RESULTS / F["gate_results"], index=False)
+    # gate visibility: rewritten EVERY run (single source, full census)
+    vis_dir = RESULTS / "logs"
+    vis_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(gate_vis).sort_values(
+        ["gtin1", "gtin2"], kind="stable"
+    ).to_csv(vis_dir / "gate_visibility.csv", index=False)
+    vis_counts = pd.DataFrame(gate_vis)["decision"].value_counts().to_dict()
+    print(
+        f"[gate-visibility] {len(gate_vis):,} gate calls logged -> "
+        f"results/logs/gate_visibility.csv | decisions: {vis_counts}",
+        flush=True,
+    )
 
     return results_df, df_canon
 
@@ -1047,10 +1468,14 @@ def build_training_data(
     attrs = df["attributes"].fillna("")
 
     # ── clean sku text per row (variant: full = title+attr, title_only) ──
+    # schema words (type/content/material/...) die on the MODEL side only —
+    # the gate's inputs are untouched (owner 2026-09-07: stage-2 strip)
     if payload_variant == "full":
-        sku_texts = [clean_sku_text(t, a) for t, a in zip(title, attrs)]
+        sku_texts = [
+            strip_schema_words(clean_sku_text(t, a)) for t, a in zip(title, attrs)
+        ]
     elif payload_variant == "title_only":
-        sku_texts = [clean_sku_text(t) for t in title]
+        sku_texts = [strip_schema_words(clean_sku_text(t)) for t in title]
     else:
         raise SystemExit(f"unknown payload variant: {payload_variant}")
 
@@ -1060,16 +1485,36 @@ def build_training_data(
     canon_gtins = sorted(canon_map)
     canon_start = len(payload)
     gtin_to_canon_idx = {g: canon_start + i for i, g in enumerate(canon_gtins)}
-    # MODEL payload: number-free canonical variant — the gate's CSV keeps
-    # numbers (hard_no volume/pack decisions), the model never sees them
-    payload.extend(canonical_model_text(canon_map[g]) for g in canon_gtins)
+    # MODEL payload: number-free + schema-free canonical variant — the gate's
+    # CSV keeps numbers AND schema labels (hard_no decisions), the model sees
+    # neither (owner spec: no numbers; schema strip = stage-2 census)
+    canon_texts = [
+        strip_schema_words(canonical_model_text(canon_map[g])) for g in canon_gtins
+    ]
+    payload.extend(canon_texts)
     row_bc.extend(canon_gtins)
 
+    # ── empty-text guard (stage-3 soft stop) ──────────────────────────
+    # Low-signal rows ("Single 2 Liter Bottle", "water 1.5 lt pack of 6")
+    # strip to "". An empty string must not train as a positive — it pulls
+    # a garbage vector onto its canonical. Counted in stats (lane doctrine:
+    # nothing drops silently). Negatives keep empty texts: a weak
+    # in-batch negative is harmless, a positive is not.
+    empty_sku = {i for i, s in enumerate(sku_texts) if not s}
+    empty_canon_idx = {
+        gtin_to_canon_idx[g] for g, s in zip(canon_gtins, canon_texts) if not s
+    }
+
     # ── positives: every row whose barcode has a canonical ──
-    pos = np.array(
-        [(i, gtin_to_canon_idx[g]) for i, g in enumerate(bc) if g in gtin_to_canon_idx],
-        dtype=int,
-    ).reshape(-1, 2)
+    cand_pos = [
+        (i, gtin_to_canon_idx[g]) for i, g in enumerate(bc) if g in gtin_to_canon_idx
+    ]
+    pos_pairs = [
+        (i, j)
+        for i, j in cand_pos
+        if i not in empty_sku and j not in empty_canon_idx
+    ]
+    pos = np.array(pos_pairs, dtype=int).reshape(-1, 2)
 
     # ── representative row per GTIN (longest title — most signal) ──
     # UNEXPECTED-BEHAVIOR FIX: the old code sorted titles
@@ -1102,7 +1547,10 @@ def build_training_data(
 
     stats = {
         "n_rows": len(df),
-        "n_sku_with_canonical": len(pos),
+        "n_sku_with_canonical": len(cand_pos),
+        "n_pos_empty_dropped": len(cand_pos) - len(pos_pairs),
+        "n_empty_sku_texts": len(empty_sku),
+        "n_empty_canon_texts": len(empty_canon_idx),
         "n_canonicals": len(canon_gtins),
         "n_pos_gate_rows": int(
             (
@@ -1113,11 +1561,58 @@ def build_training_data(
         "n_neg_resolved": len(neg),
         "n_neg_dropped": int(neg_mask.sum() * 2 - len(neg)),
     }
-    return {
-        "payload": payload,
-        "row_bc": np.array(row_bc),
-        "pos": pos,
-        "neg": neg,
-        "gtin_to_row": gtin_to_row,
-        "stats": stats,
-    }
+    # ── EXACT MODEL PAYLOAD DUMP (owner directive 2026-09-07) ──────────
+    # Every pair the model trains on, with the LITERAL texts it ingests —
+    # no sampling, no summarization: the full payload is auditable. Written
+    # to results/logs/payload_pairs.csv, rewritten on every call.
+    _vis_dir = RESULTS / "logs"
+    _vis_dir.mkdir(parents=True, exist_ok=True)
+    _rows = []
+    for i, j in pos:
+        _rows.append(
+            {
+                "kind": "pos",
+                "payload_idx_a": int(i),
+                "payload_idx_b": int(j),
+                "barcode_a": row_bc[i],
+                "barcode_b": row_bc[j],
+                "text_a": payload[i],
+                "text_b": payload[j],
+            }
+        )
+    for i, j in neg:
+        _rows.append(
+            {
+                "kind": "neg_hard",
+                "payload_idx_a": int(i),
+                "payload_idx_b": int(j),
+                "barcode_a": row_bc[i],
+                "barcode_b": row_bc[j],
+                "text_a": payload[i],
+                "text_b": payload[j],
+            }
+        )
+    pd.DataFrame(_rows).to_csv(_vis_dir / "payload_pairs.csv", index=False)
+    _kinds = {}
+    for _r in _rows:
+        _kinds[_r["kind"]] = _kinds.get(_r["kind"], 0) + 1
+    print(
+        f"[payload-visibility] {len(_rows):,} pairs dumped -> "
+        f"results/logs/payload_pairs.csv | {_kinds}",
+        flush=True,
+    )
+    # BOUNDARY CONTRACT (lib.schemas.TrainingData): payload/row_bc locked,
+    # every pos/neg index in range, gtin_to_row targets valid — the bundle
+    # crosses into TRAIN/train + TRAIN/training; a shape break must die
+    # HERE with a named field, not as an IndexError in a fold.
+    from lib.schemas import TrainingData as _TrainingData
+
+    _bundle = _TrainingData(
+        payload=payload,
+        row_bc=np.array(row_bc),
+        pos=pos,
+        neg=neg,
+        gtin_to_row=gtin_to_row,
+        stats=stats,
+    )
+    return _bundle.model_dump()

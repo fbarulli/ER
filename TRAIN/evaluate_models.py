@@ -20,7 +20,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from lib.common import RESULTS, F
+from lib.common import RESULTS, SEED, F, plot_dpi
 
 LABELED_PAIRS_CSV = RESULTS / F["labeled_pairs"]
 EMBED_SIM_CSV = RESULTS / F["embedding_similarities"]
@@ -32,18 +32,40 @@ MODEL_COLUMNS = dict(load_config()["sim_columns"])
 labeled = pd.read_csv(LABELED_PAIRS_CSV, dtype={"gtin1": str, "gtin2": str})
 if not EMBED_SIM_CSV.exists():
     raise SystemExit(
-        f"{EMBED_SIM_CSV.name} missing — run TRAIN/02_zero_shot_similarities.py first"
+        f"{EMBED_SIM_CSV.name} missing — run TRAIN/zero_shot_sims.py first"
     )
 emb_sim = pd.read_csv(EMBED_SIM_CSV, dtype={"gtin1": str, "gtin2": str})
-canon = pd.read_csv(CANON_CSV)
+# gtin as str: a UPC-12 canonical (leading zero) read as int64 NaNs out the
+# canon map join — latent dtype bug (0 rows affected TODAY, but any
+# leading-zero GTIN would silently lose its canonical)
+canon = pd.read_csv(CANON_CSV, dtype={"gtin": str})
+# AUDIT FIX (round 2 F14, round 3): inner-merge drop accounting — nothing
+# may drop silently (transparency contract). Measured on the real CSVs:
+# 19,916 -> 19,916, zero rows lost TODAY; this print keeps any drift loud,
+# and an empty merge is a hard stop (upstream sims are missing entirely).
+_n_before = len(labeled)
 df = labeled.merge(emb_sim, on=["gtin1", "gtin2"], how="inner")
-print(f"Merged labeled pairs with similarities: {len(df)} rows")
+_n_after = len(df)
+print(
+    f"[merge] labeled x embedding_similarities (inner on gtin1/gtin2): "
+    f"{_n_before:,} -> {_n_after:,} rows ({_n_before - _n_after:,} dropped)"
+)
+if _n_after == 0:
+    raise SystemExit(
+        "[merge] inner join lost ALL rows — embedding_similarities.csv "
+        "does not cover labeled_pairs (rerun TRAIN/zero_shot_sims.py)"
+    )
 gtin_to_canon = dict(zip(canon["gtin"].astype(str), canon["canonical"].astype(str)))
 df["canon1"] = df["gtin1"].map(gtin_to_canon)
 df["canon2"] = df["gtin2"].map(gtin_to_canon)
 
 
-def evaluate_model(df, sim_col, true_col="true_label", threshold=None):
+def evaluate_model(
+    df: pd.DataFrame,
+    sim_col: str,
+    true_col: str = "true_label",
+    threshold: float | None = None,
+) -> dict:
     y_true = df[true_col].values
     y_scores = df[sim_col].values
     roc_auc = roc_auc_score(y_true, y_scores)
@@ -107,7 +129,9 @@ for model_name, sim_col in MODEL_COLUMNS.items():
             else f"\n  {kind} (actual duplicate but missed): {len(sub)}"
         )
         for _, row in (
-            sub.sample(min(3, len(sub)), random_state=42).iterrows() if len(sub) else []
+            sub.sample(min(3, len(sub)), random_state=SEED).iterrows()
+            if len(sub)
+            else []
         ):
             print(f"    sim={row[sim_col]:.3f}")
             print(f"      GTIN1 {row['gtin1']}: {str(row['canon1'])[:80]}")
@@ -163,7 +187,7 @@ axes[1].set_title("precision / recall / F1 at Youden threshold")
 axes[1].legend(fontsize=9)
 fig.tight_layout()
 out1 = RESULTS / "model_comparison_roc.png"
-fig.savefig(out1, dpi=150)
+fig.savefig(out1, dpi=plot_dpi())  # SSOT (audit round 2 F03)
 plt.close(fig)
 print(f"[plot] {out1}")
 
@@ -188,6 +212,6 @@ for i, m in enumerate(models):
 fig.suptitle("zero-shot similarity by class (canonical texts)", fontsize=11)
 fig.tight_layout()
 out2 = RESULTS / "model_score_distributions.png"
-fig.savefig(out2, dpi=150)
+fig.savefig(out2, dpi=plot_dpi())  # SSOT (audit round 2 F03)
 plt.close(fig)
 print(f"[plot] {out2}")

@@ -78,15 +78,28 @@ def build_triplets(
     hard_train: np.ndarray,
     payload: list[str],
     *,
-    seed: int = 42,
-    max_triples: int = 5_000,
+    seed: int | None = None,
+    max_triples: int | None = None,
 ) -> list:
     """Build (anchor, positive, hard-negative) triples for TripletLoss.
 
     Each hard-negative partner is drawn from the anchor's mined hard negatives
     (falling back to the positive partner's). Capped at max_triples so the
     fine-tune stays tractable.
+
+    CONFIG SSOT (owner directive: read from configs, not declared): seed
+    defaults to lib.common.SEED (root 00_config seed) and max_triples
+    defaults to training.max_triples (TRAIN/training.yaml) when None;
+    explicit values still win (training.py passes per-fold seed offsets).
+    No inline literals in this signature.
     """
+    from lib.common import SEED, runtime
+
+    if seed is None:
+        seed = SEED
+    if max_triples is None:
+        max_triples = int(runtime("max_triples"))
+
     from sentence_transformers import InputExample
 
     hn_map: dict[int, list[int]] = defaultdict(list)
@@ -114,12 +127,12 @@ def mine_hard_negatives(
     df: pd.DataFrame,
     emb: np.ndarray,
     *,
-    seed: int = 42,
-    n_target: int = 10_000,
-    cosine_lo: float = 0.45,
-    cosine_hi: float = 0.80,
+    seed: int | None = None,
+    n_target: int | None = None,
+    cosine_lo: float | None = None,
+    cosine_hi: float | None = None,
     exclude_conflicting: bool = True,
-    k: int = 40,
+    k: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mine hard negatives: cross-barcode, different-brand, same-macro, mid-cosine.
 
@@ -128,10 +141,34 @@ def mine_hard_negatives(
     of the champion's false positives), a different non-empty barcode, and no
     conflicting-barcode label error. Returns (pairs, cosine) as an (N,2) int
     array and an (N,) float array, hardest-first.
+
+    CONFIG SSOT (owner directive: read from configs, not declared): every
+    numeric default resolves from TRAIN/training.yaml when None — seed
+    from the root seed, n_target from training.n_target_mining, the cosine
+    band from mining.band ("lo-hi"), and k (ANN block size) from mining.k.
+    Explicit values still win (training.py passes its eval band).
     """
+    from lib.common import SEED, training_cfg
+
+    if seed is None:
+        seed = SEED
+    if n_target is None:
+        n_target = int(training_cfg().training.n_target_mining)
+    if k is None:
+        k = int(training_cfg().mining.k)
+    if cosine_lo is None or cosine_hi is None:
+        lo, hi = training_cfg().mining.band.split("-")
+        cosine_lo = float(lo) if cosine_lo is None else cosine_lo
+        cosine_hi = float(hi) if cosine_hi is None else cosine_hi
     barcodes = df["barcode"].fillna("").astype(str).to_numpy()
     brands = df["brand"].fillna("").astype(str).to_numpy()
     macro = df["category"].fillna("").map(lambda c: MACRO_MAP.get(c, "?")).to_numpy()
+    # Barcode trust (owner ruling, see lib/gtin.py): a checksum-fail barcode
+    # cannot certify "known different" any more than a missing one can —
+    # exclude from the negative population exactly like empty barcodes.
+    from lib.gtin import barcode_validity
+
+    bc_valid = barcode_validity(df["barcode"].fillna("").astype(str)).to_numpy()
     excluded = conflicting_barcode_pairs(df) if exclude_conflicting else set()
 
     found: list[tuple[int, int, float]] = []
@@ -146,47 +183,68 @@ def mine_hard_negatives(
         # verified on the deduped corpus: block CONCENTRATES 7,881 rows, top-5
         # neighbor identities match exactly). Emb rows are L2-normalized so the
         # dot product IS cosine similarity.
-        sims = emb[idx] @ emb[idx].T
-        # keep only each row's top-k neighbors (same candidate set as the old
-        # kneighbors(k) call — a superset would silently change band census)
+        #
+        # CHUNKED over block rows (OOM fix, owner audit 2026-09-07): the old
+        # full-grid version materialized N x N arrays (sims + meshgrid + cand
+        # + topk mask ~= 11-16 GB for JUICE's N=18,251) and the kernel OOM-
+        # killed the full-corpus run (rc=137 after the zero-shot encode).
+        # Chunking is candidate-IDENTICAL: np.argpartition(axis=1) is
+        # row-independent, so per-row top-k over a (chunk, N) slice equals
+        # the full matrix's, and the a<b order filter then selects the same
+        # (i, j) pairs the grid's top-k membership mask did. Peak memory per
+        # chunk = chunk x N float64 (~300 MB at chunk=2048, N=18k).
         k_eff = min(k, len(idx))
-        top = np.argpartition(-sims, kth=k_eff - 1, axis=1)[:, :k_eff]
-        # VECTOR pair construction: candidate (row, neighbor) grid -> flat
-        # unique (a, b) pairs, then ALL filters as boolean array ops (the
-        # per-pair Python loop was the last scalar bottleneck)
-        ii, jj = np.meshgrid(np.arange(len(idx)), np.arange(len(idx)), indexing="ij")
-        cand = np.stack([ii.ravel(), jj.ravel()], axis=1)
-        # top-k membership mask over the same grid
-        in_topk = np.zeros((len(idx), len(idx)), dtype=bool)
-        in_topk[np.repeat(np.arange(len(idx)), k_eff), top.ravel()] = True
-        keep = in_topk.ravel().copy()
-        keep &= cand[:, 0] < cand[:, 1]  # a < b (dedup order)
-        s = sims.ravel()
-        keep &= (s >= cosine_lo) & (s <= cosine_hi)  # band
-        bc_a = barcodes[idx][cand[:, 0]]
-        bc_b = barcodes[idx][cand[:, 1]]
-        br_a = brands[idx][cand[:, 0]]
-        br_b = brands[idx][cand[:, 1]]
-        keep &= (bc_a != "") & (bc_b != "") & (bc_a != bc_b)  # real, distinct
-        keep &= br_a != br_b  # different brand
-        sel = cand[keep]
-        sels = s[keep]
-        # map block-local rows to global row ids
-        ga = idx[sel[:, 0]]
-        gb = idx[sel[:, 1]]
-        n_band_seen += len(sel)
-        if excluded:
-            # only check membership for pairs; keep the loop off the hot path
-            # unless exclusions exist for this block's rows
-            ex_rows = excluded  # set of (min,max) global pairs
-            for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist()):
-                if (min(a_, b_), max(a_, b_)) in ex_rows:
-                    n_excluded_in_band += 1
-                else:
+        n = len(idx)
+        # rows of this block, reindexed 0..n-1 (local), global = idx[local]
+        bc_blk = barcodes[idx]
+        br_blk = brands[idx]
+        bcv_blk = bc_valid[idx]
+        for c0 in range(0, n, 2048):
+            c1 = min(c0 + 2048, n)
+            sims_chunk = emb[idx[c0:c1]] @ emb[idx].T  # (c, n) cosine
+            top = np.argpartition(-sims_chunk, kth=k_eff - 1, axis=1)[:, :k_eff]
+            # candidate pairs from top-k membership: (local_i, local_j)
+            li = np.repeat(np.arange(c0, c1), k_eff)
+            lj = top.ravel()
+            # same order filter as the full grid: a < b in LOCAL indices
+            keep = li < lj
+            # flat candidate scores over the SAME (li, lj) arrays — filtered
+            # in lockstep with keep below so index spaces never mix
+            s_flat = sims_chunk[li - c0, lj]
+            keep &= (s_flat >= cosine_lo) & (s_flat <= cosine_hi)  # band
+            bc_a = bc_blk[li[keep]]
+            bc_b = bc_blk[lj[keep]]
+            br_a = br_blk[li[keep]]
+            br_b = br_blk[lj[keep]]
+            # real, distinct, and BOTH trusted (GS1 checksum) — an invalid
+            # barcode has unknown identity, not "known different"
+            valid = (
+                (bc_a != "")
+                & (bc_b != "")
+                & (bc_a != bc_b)
+                & (br_a != br_b)  # different brand
+                & bcv_blk[li[keep]]
+                & bcv_blk[lj[keep]]
+            )
+            sel_local = np.flatnonzero(keep)[valid]
+            li_sel = li[keep][valid]
+            lj_sel = lj[keep][valid]
+            sels = s_flat[keep][valid]
+            ga = idx[li_sel]
+            gb = idx[lj_sel]
+            n_band_seen += len(sel_local)
+            if excluded:
+                # only check membership for pairs; keep the loop off the hot path
+                # unless exclusions exist for this block's rows
+                ex_rows = excluded  # set of (min,max) global pairs
+                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist()):
+                    if (min(a_, b_), max(a_, b_)) in ex_rows:
+                        n_excluded_in_band += 1
+                    else:
+                        found.append((a_, b_, s_))
+            else:
+                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist()):
                     found.append((a_, b_, s_))
-        else:
-            for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist()):
-                found.append((a_, b_, s_))
 
     if exclude_conflicting:
         # the exclusion is auditable, never hidden: the count is part of the

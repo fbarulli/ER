@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from lib.schemas import FoldSets
+
 
 def component_folds(
     pos: np.ndarray, row_bc: np.ndarray, k: int, seed: int
@@ -45,6 +47,10 @@ def component_folds(
 
     Unlinked barcodes become singleton components — still fold members so
     their mined negatives split group-aware.
+
+    BOUNDARY CONTRACT (lib.schemas.FoldSets): the returned folds are
+    pairwise DISJOINT — a barcode in two folds would put one product in
+    train and test at once. Validated on return.
     """
     parent: dict[str, str] = {}
 
@@ -81,7 +87,6 @@ def component_folds(
     folds: list[set[str]] = [set() for _ in range(k)]
     for i, comp_idx in enumerate(order):
         folds[i % k] |= comp_list[comp_idx]
-    return folds
-
-
-HARDNEG_SIM_THRESHOLD = 0.80  
+    return FoldSets(folds=folds).folds
+# (trailing HARDNEG_SIM_THRESHOLD removed — dead constant, no readers; the
+# threshold lives in TRAIN/training.yaml pairs.hardneg_sim_threshold)

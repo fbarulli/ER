@@ -18,6 +18,8 @@ import math
 import re
 from collections import Counter
 
+import pandas as pd  # pd.Series annotation in attributes_keys (F17)
+
 # ---------------------------------------------------------------------------
 # Volume extraction (v2: broader units + decimal-comma + boundaries)
 # ---------------------------------------------------------------------------
@@ -83,54 +85,10 @@ NUTRITION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Flavor vocabulary (light touch) for the flavor-from-name signal.
-FLAVOR_VOCAB = [
-    "peach",
-    "raspberry",
-    "lemon",
-    "orange",
-    "strawberry",
-    "grape",
-    "apple",
-    "cherry",
-    "mango",
-    "lime",
-    "mixed berry",
-    "berry",
-    "cola",
-    "ginger",
-    "vanilla",
-    "chocolate",
-    "coffee",
-    "tea",
-    "root beer",
-    "pineapple",
-    "cranberry",
-    "blueberry",
-    "watermelon",
-    "coconut",
-    "kiwi",
-    "caramel",
-    "original",
-    "unflavored",
-    "plain",
-    "lemonade",
-    "fruit punch",
-]
-FLAVOR_RE = re.compile(
-    r"("
-    + "|".join(re.escape(f) for f in sorted(FLAVOR_VOCAB, key=len, reverse=True))
-    + r")",
-    re.IGNORECASE,
-)
-
-# Dry-mix / powder products where bare oz is weight, not fluid volume.
-DRY_MIX_HINTS = re.compile(
-    r"mix|powder|packet|drink mix|smoothie mix|shake|concentrate", re.IGNORECASE
-)
-
-# Round numbers that signal a possible pack ratio when a count is missing.
-SUSPECT_ROUND = (2, 4, 5, 6, 8, 10, 12, 20, 24, 48)
+# Flavor vocabulary + FLAVOR_RE REMOVED (audit round 2 F18, round 3): zero
+# consumers — the live flavor signal is data_pipe.FLAVOR_PATTERN (its own
+# near-duplicate list, deliberately untouched). Same for DRY_MIX_HINTS and
+# SUSPECT_ROUND below.
 
 # Bare oz/ounce could mean weight (chips, protein powder) rather than fluid
 # volume. Flag rather than silently trusting it.
@@ -264,43 +222,10 @@ def extract_volume_ml(text: str) -> tuple[int | None, bool]:
     return bucket_ml(value * _TO_ML[unit]), ambiguous
 
 
-# Liter-family unit keys (1 unit == 1000 ml): the "single bottle > 10 L" rule.
-_LITER_UNITS = frozenset(k for k, v in _TO_ML.items() if v == 1000.0)
-
-
-# Category -> measurement type. Explicit taxonomy generated from the
-# dataset's 24 categories: every liquid product validates in volume (ml/L);
-# only powder/dry-mix products are sold by weight. "dose" is reserved for
-# supplement-style products (none in this catalog). Unknown categories
-# default to "volume" — the SAFE assumption for a beverage catalog: flag by
-# default, silence only explicitly-mapped weight/dose categories.
-CATEGORY_MEASUREMENT_TYPE = {
-    "not_from_concentrate_100_juice": "volume",
-    "other_non_cola_carbonates": "volume",
-    "liquid_concentrates": "volume",
-    "energy_drinks": "volume",
-    "juice_drinks_up_to_24_juice": "volume",
-    "functional_bottled_water": "volume",
-    "rtd_coffee": "volume",
-    "powder_concentrates": "weight",
-    "still_bottled_water": "volume",
-    "still_rtd_tea": "volume",
-    "nectars": "volume",
-    "sparkling_flavoured_bottled_water": "volume",
-    "coconut_and_other_plant_waters": "volume",
-    "carbonated_bottled_water": "volume",
-    "carbonated_rtd_tea_and_kombucha": "volume",
-    "tonic_water_mixers_other_bitters": "volume",
-    "sports_drinks": "volume",
-    "reconstituted_100_juice": "volume",
-    "lemonade_lime": "volume",
-    "still_flavoured_bottled_water": "volume",
-    "orange_carbonates": "volume",
-    "reduced_sugar_cola_carbonates": "volume",
-    "regular_cola_carbonates": "volume",
-    "asian_speciality_drinks": "volume",
-}
-DEFAULT_MEASUREMENT_TYPE = "volume"
+# _LITER_UNITS, CATEGORY_MEASUREMENT_TYPE, DEFAULT_MEASUREMENT_TYPE and
+# get_measurement_type REMOVED (audit round 2 F18, round 3): zero consumers
+# anywhere (exhaustive grep) — the category->measurement-type taxonomy and
+# the "single bottle > 10 L" rule that used the liter set are retired.
 
 
 # Category -> macro bucket for BLOCKING (coarse, recall-first). Built from the
@@ -336,18 +261,6 @@ MACRO_MAP = {
 }
 
 
-def get_measurement_type(category) -> str:
-    """Volume / weight / dose for a category (auditable taxonomy).
-
-    Normalizes punctuation/spacing ("Lemonade/Lime" -> "lemonade_lime") and
-    defaults unknown categories to "volume".
-    """
-    if category is None:
-        return DEFAULT_MEASUREMENT_TYPE
-    key = re.sub(r"[^a-z0-9]+", "_", str(category).lower()).strip("_")
-    return CATEGORY_MEASUREMENT_TYPE.get(key, DEFAULT_MEASUREMENT_TYPE)
-
-
 def extract_pack_counts(text: str) -> set[int]:
     """All plausible pack sizes mentioned in one product title."""
     counts = set()
@@ -362,22 +275,11 @@ def extract_pack_counts(text: str) -> set[int]:
     return counts
 
 
-def is_pack_multiple(
-    vol_ratio: float, sample_names: list[str], tol: float = 0.08
-) -> int | None:
-    """Return the pack count matching vol_ratio (within tol), else None."""
-    if vol_ratio is None or math.isnan(vol_ratio):  # NaN guard
-        return None
-    all_counts: set[int] = set()
-    for name in sample_names:
-        all_counts |= extract_pack_counts(name)
-    for n in sorted(all_counts):
-        if abs(vol_ratio - n) <= tol * n:
-            return n
-    return None
+# is_pack_multiple REMOVED (audit round 2 F18, round 3): zero consumers
+# (grep-verified) — nothing in the tree calls it.
 
 
-def attributes_keys(series, limit: int = 5000) -> Counter:
+def attributes_keys(series: pd.Series, limit: int = 5000) -> Counter:
     """Extract `Key:` names from the ';'-delimited attributes strings."""
     keys: Counter = Counter()
     for value in series.fillna("").head(limit):
@@ -404,10 +306,9 @@ WEIGHT_UNIT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Multipack structure: "10 x 0,20l", "12x700ml". A multipack TOTAL can exceed
-# the single-bottle >10 L threshold while every per-unit volume is valid —
-# flagged rows matching this are documented as known false positives.
-MULTIPACK_RE = re.compile(r"\d+\s*[x×]\s*\d", re.IGNORECASE)
+# MULTIPACK_RE REMOVED (audit round 2 F18, round 3): zero consumers —
+# the "single bottle > 10 L" multipack false-positive rule that used it is
+# retired with the rule above.
 
 # Raw-HTML / entity artifacts from scraping.
 NOISE_HTML_RE = re.compile(r"<[^>]+>|&nbsp;|&amp;|&quot;|&#\d+;", re.IGNORECASE)

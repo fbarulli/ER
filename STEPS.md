@@ -1,8 +1,65 @@
 # STEPS — every step of the lane, fully defined
 
-One standalone folder for GPU training. `00_config.yaml` is the SSOT: every
-path, file name, threshold, model name, and split lives there; the numbered
-scripts and `lib/` read it through `lib.common` — nothing is hardcoded.
+One standalone folder for GPU training. The config SSOT is SPLIT into
+domain files, each in its owning directory and validated by a pydantic
+model (lib/schemas.py) at load — a bad value crashes at import with the
+file + field named, never mid-run:
+
+| file | model (lib/schemas.py) | owns |
+|---|---|---|
+| `00_config.yaml` | `DataConfig` | paths, file names, column mapping, seed, model registry |
+| `TRAIN/training.yaml` | `TrainingConfig` | loss, split, masking, **gate thresholds**, training knobs, pair thresholds + eval-pair caps, bands, mining, HPO spaces, rerank rule, ablation sweep, plots (dpi), audit (strip-audit sample + blocking-audit budget/min-recall) |
+
+(The EDA dir and its eda.yaml were deleted 2026-09-10 — the lane is
+training-only. The five TRAIN-consumed EDA keys — plots.dpi,
+pairs.max_pos_per_group/n_neg/neg_oversample, strip_audit_sample —
+migrated into TRAIN/training.yaml blocks of the same names.)
+
+Every path, file name, threshold, model name, and split lives in ONE of
+these two; the numbered scripts and `lib/` read them through
+`lib.common` (deep-merged view + typed accessors `data_cfg()` /
+`training_cfg()` / `resolve_model()` / `hpo_cfg()` /
+`rerank_cfg()` / `sweep_cfg()` / `plot_dpi()`) — nothing is
+hardcoded. Word lists: `lib/pipe_stopwords.json` (data_pipe's
+STOPWORDS/MINIMAL_STOPWORDS/CONCEPT_FOLDS) and
+`lib/sklearn_stopwords.json` (matching.py's frozen sklearn set) — both in
+`lib/` beside their consumers, two files two names (the shared basename
+was split 2026-09-08).
+
+### No-fallback completion (audit 2026-09-09, owner Q27)
+
+The LAST inline literals that duplicated config values are gone; every
+one below moved to a validated config block, and `TRAIN/selftest.py`
+oracle 12b pins their absence from the code (comment-documented history
+excepted — the scan matches executable lines only):
+
+| was (file: literal) | now (config) |
+|---|---|
+| `TRAIN/hpo.py: GRID/QUICK` dict lists | `hpo.grid` / `hpo.quick` |
+| `TRAIN/training.py: HPO_SPACE` dict | `hpo.tpe_space` |
+| `TRAIN/train.py: --n-trials 20 / --n-jobs 1` | `hpo.n_trials` / `hpo.n_jobs` |
+| `TRAIN/training.py: layer_decay=0.9` | `training.layer_decay` |
+| `TRAIN/training.py: save_total_limit=2` | `training.save_total_limit` |
+| `TRAIN/rerank.py: max_length=512` | `training.rerank_max_length` |
+| `TRAIN/rerank.py: > 0.005` A/B margins | `rerank.min_delta_pr_auc` / `min_delta_f1` |
+| `TRAIN/train.py: cfg dict 0.05/0.01/linear/1.0` | `training.*` via `runtime()` |
+| `TRAIN/train.py + zero_shot_sims.py: batch_size=128` | `training.batch_size_embed` |
+| `TRAIN/train.py: mask midpoint 0.10` | derived: `(mask_lo+mask_hi)/2` |
+| `TRAIN/plots* 29× dpi=150` | `plot_dpi()` ← `TRAIN/training.yaml plots.dpi` |
+| `run_all.py: ("title_only",)/("0.25","0.50","0.75")/2000/CE id` | `sweep.payload_variants` / `train_fracs` / `sweep_sample` / `rerank_model` |
+| `colab_backend.py: sample=1000, epochs 2` | `sweep.smoke_sample`, `training.epochs` |
+| `lib/blocking.py: n_neg*60` | `pairs.neg_oversample` (TRAIN/training.yaml) |
+| `TRAIN/strip_audit.py: or 200` | `audit.strip_audit_sample` (TRAIN/training.yaml) |
+| `TRAIN/blocking_audit.py: BUDGET=5M / MIN_RECALL=0.95` | `audit.blocking_budget` / `audit.blocking_min_recall` (round 3) |
+| `data_pipe.three_way_gate: 0.05/0.85/0.3` defaults | `gate:` block in TRAIN/training.yaml (round 2 F01) |
+| `TRAIN/evaluate_models.py: 2× dpi=150` | `plot_dpi()` (round 3; drift-scan pinned) |
+| `TRAIN/hpo.py: tcfg 0.01/linear/1.0` | `training.*` via `runtime()` (round 3; drift-scan pinned) |
+| `colab_backend.py: train-frac 0.25` | `sweep.train_fracs[0]` (round 3) |
+| `colab_backend.py: artifacts/results + artifacts/data inline` | `RESULTS` / `DATA_DIR` from `lib.common` (round 3) |
+| `lib/volume_verified.py: second04_pairs_positive.csv inline` | `files.second04_pairs_positive` via `F[...]` (round 3) |
+| `lib/nlp._cosine` (duplicate of pair_similarity) | `lib.common.pair_similarity` — `_cosine` re-exports it (round 3) |
+| `lib/nlp.encode_corpus: batch=256/seq=128 defaults` | required keyword-only params — callers pass `runtime()` values (round 3) |
+| fixed-threshold metric names `f1_at_0.55` | `f"f1_at_{fixed_threshold:g}"` (config-derived) |
 
 This is the contract. Each step states exactly what enters, what happens,
 what leaves. Nothing undefined is allowed to run.
@@ -26,8 +83,12 @@ valid, and semantic matching where GTIN is missing or unreliable.
 
 ## Our approach
 
-1. **Validate GTINs** (length, check digit) to separate clean from noisy
-   barcodes.
+1. **Validate GTINs** (length, GS1 check digit — `lib/gtin.py`) to separate
+   clean from noisy barcodes. Checksum-invalid barcodes assert NO identity
+   anywhere: no canonical forms on them (01), no eval positives/negatives
+   certified by them (blocking/hard_negatives), no T1 collapse on them
+   (TRAIN/dedupe.py — they fall through to title tiers). Trust-only: grouping
+   keys stay RAW gtin strings.
 2. **Extract product attributes** (volume, pack count, flavor, type) from
    titles and structured fields.
 3. **Use a deterministic three-way gate** on volume/pack/flavor to block
@@ -50,21 +111,25 @@ never split across boundaries):
 | **dev** | 25% (q2) | early stopping / metric selection (dev AP) | weights chosen here, never gradient-updated |
 | **test** | 25% (q3) | HOLDOUT — final reported metrics only | **NEVER — not in training, not in early stopping, not in any tuning** |
 
-Config SSOT (`00_config.yaml` → `split:`): `train_fraction: 0.50`,
-`dev_fraction: 0.25`, `test_fraction: 0.25` (asserted to sum to 1.0),
-`fixed_threshold: 0.55` (the operating threshold for F1/P/R).
+Config SSOT (split, 2026-09-08 — `TRAIN/training.yaml` `split:`):
+`train_fraction: 0.50`, `dev_fraction: 0.25`, `test_fraction: 0.25`
+(asserted to sum to 1.0 by `SplitSpec`), `fixed_threshold: 0.55` (the
+operating threshold for F1/P/R), `cv_folds: 5`.
 
 ---
 
 ## 1 — Data the model sees: original + augmented, NO NUMBERS
 
-**Sku side** (`clean_sku_text`): title + attributes → normalized, volume/pack
-tokens stripped, minimal stopwords dropped, then the **number-token strip**
-driven by `artifacts/data/number_tokens_reference.csv` (1,742 tokens,
-95.16% occurrence coverage; verdicts: strip / keep_brand / keep_nutrient /
-keep_name). Kept digits are semantic only (b12, o2, b6, alkaline88,
-good2grow, 12shots). Pure-numeric brands are spelled out (1724 → seventeen,
-1642 → sixteen forty two).
+**Sku side** (`clean_sku_text`): title + attributes → normalized (NaN-safe),
+volume/pack tokens stripped, minimal stopwords dropped, then the
+**number-token strip** driven by `artifacts/data/number_tokens_reference.csv`
+(1,745 tokens, ~95.2% occurrence coverage; verdicts: strip / keep_brand /
+keep_nutrient / keep_name). Kept digits are semantic only (b12, o2, b6,
+alkaline88, good2grow, 12shots). Pure-numeric brands are spelled out
+(1724 → seventeen, 1642 → sixteen forty two). Model payload additionally
+filters SCHEMA_WORDS ∪ MODEL_PAYLOAD_SOFT_STOP (owner-curated soft-stop
+list — format words like packtype/carton/sweetener-class drops; variant
+signals like concentrate/powder/sugar deliberately KEPT).
 
 **Canonical side** (`canonical_model_text` — NEW): the model payload gets a
 **number-free canonical**. The gate's `canonical_records.csv` KEEPS numbers
@@ -80,19 +145,36 @@ text gets random token masking at an extent drawn per-copy from U(5%, 15%),
 appended as an EXTRA positive (mask token "`", same barcode → same
 component, no fold contamination). +4,015 pairs at current settings.
 
-**Pair scheme**: positive = (sku_text, own-GTIN canonical) 26,767; negative =
-(sku_text, other-GTIN canonical) 28,436 from gate hard_no ∩ sim≥0.80 both
-directions (now includes flavor-mismatch hard-nos).
+**Pair scheme** (contrastive): positive rows = (sku_text, own-GTIN
+canonical) — every row whose barcode has a canonical and both sides
+survive the empty-text guard; negative rows = (sku_text, other-GTIN
+canonical) from gate hard_no ∩ sim≥0.80 both directions (includes
+flavor-mismatch hard-nos). Exact counts print at run time
+(`build_training_data` stats: nothing drops silently — empty-text drops
+are counted per side).
 
 ## 2 — First step of training: the objective function
 
-**Loss: MultipleNegativesRankingLoss (MNRL)** — the standard bi-encoder
-ranking objective. For each positive pair (anchor a, positive b) in a batch,
-the score matrix S = cos(a_i, b_j) over all pairs in-batch is optimized with
-cross-entropy: the diagonal (true pairs) maximized against every off-diagonal
-(in-batch negatives, batch_size−1 per anchor). No explicit negative labels —
-MNRL ignores them, which is exactly why negatives are only mined/hard-pairs
-evaluated, never fed as `label=0` training rows.
+**Loss: OnlineContrastiveLoss (owner ruling 2026-09-07, config
+`training.loss: contrastive`)** — a labeled-pair margin loss over
+`(sentence1, sentence2, label)` rows:
+
+- **positives (label 1)** = gate proceed-pairs (sku, own canonical) —
+  volume/pack/flavor-verified same product — plus the volume-verified
+  cross-country lane when the second04 manifest is present (loud notice
+  when absent);
+- **negatives (label 0)** = the gate hard-no pairs — same-brand,
+  text-similar, gate-proven DIFFERENT size/pack/flavor;
+- **hard-pair selection is native to the loss**: per batch it computes
+  cosine distances, then optimizes ONLY the hard positives (the farthest
+  positive pairs) and hard negatives (the closest negative pairs, hinge
+  `margin − d` with `training.contrastive_margin: 0.5`). Hard-pair
+  training happens at BOTH layers: the data is hard by construction
+  (gate-verified), and the loss mines the hardest subset per batch.
+
+Legacy lanes remain available: `--loss mnrl` (MultipleNegativesRankingLoss,
+in-batch ranking, negatives as a 3rd column) and `--loss triplet`
+(mined triplets).
 
 - optimizer: AdamW, discriminative LRs (8 layer groups, decay 0.9 bottom→top)
 - schedule: linear warmup (5% of steps) + linear decay
@@ -106,20 +188,35 @@ rare relative to the pair pool, so PR-AUC is the honest ranking metric.
 
 Reported per fold/run (all on the 25% holdout, never on train/dev):
 - **PR-AUC** (primary)
-- Precision / Recall / **F1 at the fixed threshold 0.55** (config
-  `split.fixed_threshold`)
+- Precision / Recall / **F1 at the fixed operating threshold** (config
+  `split.fixed_threshold`, currently 0.55). The metric column NAMES are
+  config-derived (`f1_at_0.55` today follows `fixed_threshold` verbatim —
+  a threshold change renames the columns, never lies in them).
 - ROC-AUC (secondary sanity)
 - accuracy at the Youden point + the Youden threshold itself
 
+**Holdout discipline (owner audit 2026-09-07)**: the Youden threshold is
+PICKED ON DEV and APPLIED TO TEST — never fitted on the scores it rates.
+The fold rows keep `youden_thr_test_descriptive` purely as the leak
+diagnostic (how much a test-fitted threshold would have flattered the
+numbers). The same discipline applies to the 07e rerank A/B: thresholds
+for both arms (bi-only, hybrid) come from dev, absolutes are test-side.
+Pinned by `TRAIN/selftest.py` oracle 6b on the real split: 7,488 train /
+3,743 dev / 3,743 test barcodes — pairwise disjoint, zero straddling
+positive pairs.
+
 Fold line example:
 ```
-fold 0: loss=1.35 acc@0.71=0.60 AUC=0.62 cross=0.62 PR-AUC=0.28 F1@0.55=0.29 P@0.55=0.17 R@0.55=0.94 | best_dev_ap=0.31
+fold 0: loss=1.35 acc@dev-youden0.71=0.60 AUC=0.62 cross=0.62 PR-AUC=0.28 F1@0.55=0.29 P@0.55=0.17 R@0.55=0.94 | best_dev_ap=0.31
 ```
 
 ## 4 — Cross-encoder evaluation (stage 2) — the A/B protocol
 
 The cross-encoder (rerank) must PROVE itself against the bi-encoder on the
-SAME held-out component folds:
+SAME held-out component folds. Threshold EXCEPTION: this A/B uses a
+dev-SELECTED Youden threshold for both arms (the fixed 0.55 is the
+fallback only when no dev pool exists — CV mode), while the main
+protocol's F1/P/R are always at the fixed config threshold:
 
 1. Same holdout: no barcode in validation was seen in training (component
    split guarantees this for both stages).
@@ -129,9 +226,11 @@ SAME held-out component folds:
      (0.35–0.90 cosine), else the bi-encoder score
 3. Compare on the holdout: **PR-AUC** (primary), **Precision/Recall/F1 at a
    threshold chosen on validation**, ROC-AUC (secondary).
-4. **Decision rule: the hybrid must clearly improve PR-AUC / F1 over the
-   bi-encoder alone.** If not, the cross-encoder is not worth its latency —
-   drop it.
+4. **Decision rule (quantitative, `rerank:` block in TRAIN/training.yaml)**:
+   the hybrid ships only when ΔPR-AUC > `rerank.min_delta_pr_auc` OR
+   ΔF1 > `rerank.min_delta_f1` (both 0.005 today) on the holdout —
+   otherwise the cross-encoder is not worth its latency; drop it. The rule
+   is fixed in config BEFORE any test-side comparison runs.
 
 ## 5 — (reserved for numbering alignment)
 
@@ -146,6 +245,12 @@ SAME held-out component folds:
   flavor-EXTRACTION coverage gap (Finnish/Dutch compounds), not gate logic.
 
 ## The three-way gate — decision table
+
+The gate's three policy thresholds (volume tolerance ±5%, raw-confidence
+cut 0.85, consistency cut 0.3) live in the `gate:` block of
+TRAIN/training.yaml (round 2, F01) — `three_way_gate` reads them through
+`training_cfg()`; passing a value explicitly still wins (the selftest
+does). The decision table below documents the semantics of those knobs:
 
 | Decision | Meaning | Criteria |
 |---|---|---|
@@ -164,41 +269,160 @@ SAME held-out component folds:
 | | | • Flavors are compatible (same, or one/both missing) |
 | | | • Consistency ≥0.3 on both sides |
 
-## Pipeline steps (numbered scripts)
+## Pydantic boundary contracts (lib/schemas.py, 2026-09-08)
 
-- **TRAIN/01_data_prep.py** — within-brand pipeline: extract volume/pack/flavor
-  per row → canonical per GTIN → three-way gate (with flavor check) every
-  candidate pair → `canonical_records.csv` (14,997) + `gate_results.csv`
-  (153,901 pairs: hard_no 104,522 / proceed 32,128 / fallback 17,251).
-- **TRAIN/02_zero_shot_similarities.py** — encode canonical texts with each
+Every transform boundary in the training pipeline crosses a validated
+contract — small objects at STAGE edges, never per-row hot loops:
+
+| boundary | model | asserts |
+|---|---|---|
+| `extract_all` output | `ExtractedAttributes` | confidences in [0,1], pack_qty >= 1, volume >= 0 |
+| `three_way_gate` output | `GateResult` | decision in {hard_no, fallback, proceed}, non-empty reason |
+| `generate_canonical` output | `CanonicalRecord` | positive volume/pack sets, confidences/consistencies in [0,1], n_titles >= 1 |
+| `build_training_data` output | `TrainingData` | payload/row_bc length-locked, every pos/neg index in range, stats complete |
+| `augment_positives` output | `MaskingResult` | extended payload locked to row_bc, pos' in range, n_added == audit rows |
+| train data tuple | `DataTuple` | country covers payload, emb0 rows == payload, pos/hp in range |
+| per-config dict | `TrainConfig` | epochs >= 1, lr > 0, warmup [0,1] — dies BEFORE a fold runs |
+| `component_folds` output | `FoldSets` | folds pairwise disjoint (anti-leak) |
+| CSV frames | `check_*_frame` | exact columns, decision/label domains, similarity in [0,1], unique GTINs |
+
+Config files are validated the same way: each of the two split files has
+a pydantic model (`DataConfig` / `TrainingConfig`) checked at
+load in `lib/common.py`. The FIRST live win: `pack_qty >= 1` caught
+`extract_pack_from_title` producing pack 0 from "pack 0.5 l" / "0% sugar
+… pack" title forms (3 canonicals carried an impossible 0 in pack_set) —
+fixed with a zero-guard, 26 gate decisions corrected, +10 honest
+hard-negatives in labeled_pairs.csv.
+
+## Pipeline steps (importable modules — renamed from numbered scripts 2026-09-07)
+
+- **TRAIN/dedupe.py** — RUNS FIRST (historically `06_dedupe.py`, hence the
+  `06_*` result filenames): tiered
+  exact-duplicate dedupe of the raw export BEFORE canonical formation
+  (T1 retailer+barcode — GS1-checksum-VALID barcodes only, invalid ones
+  defer to title tiers / T2 retailer+title+price / T3 retailer+title
+  price-aggregation with flags) → `dataset_deduped.csv` (61,529 rows;
+  T1: 1,943 collapsed + 3,715 checksum-invalid deferred) +
+  `sku_to_rep.csv` (audit-only pointer) + `06_dedupe_summary.csv` +
+  `06_ambiguous_offer_groups.csv`. Everything downstream reads the
+  DEDUPED dataset, never the raw export.
+- **TRAIN/build_reference.py** — reproduces the committed
+  `number_tokens_reference.csv` (the number-token verdict census; 1,745
+  rows, 95.2% coverage). `--verify` asserts byte-equality against the
+  committed CSV and exits nonzero on drift. Run order: after 06 (census
+  reads dataset_deduped).
+- **TRAIN/data_prep.py** — within-brand pipeline: extract volume/pack/flavor
+  per row → canonical per GTIN (GS1-checksum-invalid barcodes form NO
+  canonical — 1,747 invalid groups dropped loudly; NaN titles now clean to
+  "" instead of poisoning canonicals with literal "nan") → three-way gate
+  (with flavor check) every candidate pair → `canonical_records.csv`
+  (13,250) + `gate_results.csv` (135,769 pairs: hard_no 92,650 /
+  proceed 29,351 / fallback 13,768).
+- **TRAIN/zero_shot_sims.py** — encode canonical texts with each
   model, score gate pairs → `embedding_similarities.csv` (per-model sim
   columns, incremental per-model writes, resumable).
-- **TRAIN/03_labeled_pairs.py** — gate decisions + sim≥0.8 → auditable
-  `labeled_pairs.csv` (7,912 pos / 14,675 hard-neg).
-- **TRAIN/04_evaluate_models.py** — per model: ROC-AUC + Youden + P/R/F1,
+- **TRAIN/labeled_pairs.py** — gate decisions + sim≥0.8 (SSOT
+  `pairs.*_sim_threshold`) → auditable `labeled_pairs.csv`.
+- **TRAIN/evaluate_models.py** — per model: ROC-AUC + Youden + P/R/F1,
   per-model plots with absolute n → `model_evaluation_summary.csv`.
-- **TRAIN/05_train.py** — the training entry (masking, holdout/cv folds,
-  MNRL, early stopping, plots, mlflow, rerank).
+- **TRAIN/train.py** — the training entry (masking, holdout/cv folds,
+  MNRL, early stopping, plots, mlflow, rerank). ALSO emits the 07-series
+  CSVs (owner ruling): 07c/07d per run (payload / train-frac variants,
+  append-with-replace), 07b from the `--rerank` lane. Run-tag carries
+  model+payload+frac so the ablation series can no longer overwrite each
+  other's artifacts. Round 3: `--folds N` builds N folds (no silent cap
+  at `split.cv_folds`; N <= CV_FOLDS behavior unchanged), and the
+  fold-metrics row carries `lr_groups` ("discriminative" / "single") so a
+  discriminative-LR fallback fold is queryable downstream, not just
+  visible in stdout.
 - **TRAIN/report_plots.py** — the 07_report figure family, per model.
 - **TRAIN/composition_plot.py** — training-data composition with absolute n.
-- **06_run_all.py** — orchestrator: embeddings → 2k-sample sweep → full-data
-  run → ablation suite.
+- **run_all.py** — orchestrator: embeddings → sweep-sample sweep → full-data
+  run → ablation suite. Every axis of the ablation suite (payload
+  variants, train-frac curve, sweep/smoke sample sizes, rerank
+  cross-encoder id) reads the `sweep:` block of TRAIN/training.yaml via
+  `lib.common.sweep_cfg()` — no inline sweep lists. Step logs APPEND
+  (run-separator line, never truncate a previous run — round 3 F16);
+  `--stop-on-fail` halts the chain at the first failed step (default
+  off: record `failed:` in the manifest and continue, the historical
+  resumable behavior).
 
-## Transparency guarantees (every step)
+## CSV reproducibility map — every .csv and its producer
+
+| CSV | Producer | Committed? |
+|---|---|---|
+| `data/dataset.csv` | raw export (input) | YES — never regenerated |
+| `data/number_tokens_reference.csv` | `TRAIN/build_reference.py` | YES (reproducible; `--verify` pins it) |
+| `data/dataset_deduped.csv` | `TRAIN/dedupe.py` | regenerated |
+| `data/sku_to_rep.csv` | `TRAIN/dedupe.py` | regenerated (audit-only, zero consumers) |
+| `results/canonical_records.csv` | `TRAIN/data_prep.py` | regenerated |
+| `results/gate_results.csv` | `TRAIN/data_prep.py` | regenerated |
+| `results/labeled_pairs.csv` | `TRAIN/labeled_pairs.py` | regenerated |
+| `results/embedding_similarities.csv` | `TRAIN/zero_shot_sims.py` | regenerated |
+| `results/model_evaluation_summary.csv` | `TRAIN/evaluate_models.py` | regenerated |
+| `results/train_fold_metrics.csv` | `TRAIN/train.py` | regenerated (per-run suffixed copies kept) |
+| `results/hpo_grid.csv` | `TRAIN/train.py --grid/--quick` | regenerated |
+| `results/train_<model><era>_hpo_best.json` (+ `_hpo_trials.csv`) | `TRAIN/train.py --hpo` (TPE lane, run-tagged names) | regenerated |
+| `results/06_dedupe_summary.csv` | `TRAIN/dedupe.py` | regenerated |
+| `results/06_ambiguous_offer_groups.csv` | `TRAIN/dedupe.py` | regenerated |
+| `results/07b_four_pop_scores.csv` | `TRAIN/train.py --rerank` | regenerated |
+| `results/07c_field_ablation.csv` | `TRAIN/train.py --payload <v>` | regenerated (append) |
+| `results/07d_data_scaling.csv` | `TRAIN/train.py --train-frac <f>` | regenerated (append) |
+| `results/blocking_feature_audit.csv` | `TRAIN/blocking_audit.py` | regenerated (measured: brand 0.981 recall @ 2.15M cands) |
+
+Full-chain reproduction: `dedupe → build_reference --verify → data_prep →
+zero_shot_sims → labeled_pairs → evaluate_models → selftest → train
+(--payload full → variants) → blocking_audit → report_plots`.
+
+## Transparency guarantees
 
 - Every count printed at run time: pairs, canonicals, dropped endpoints,
   masked additions, per-fold n_pos/n_neg.
-- Every file name and path from `00_config.yaml` only.
+- Every file name and path from the split config SSOT only
+  (`00_config.yaml` + `TRAIN/training.yaml`, all through
+  `lib.common`).
 - Every plot carries absolute n (titles + per-bar annotations).
 - `gate_results.csv` = GATE input (numbers kept). Model payload = NUMBER-FREE
   variant (derived at pair-construction time, never persisted as a second
   CSV — one canonical SSOT, no drift).
 - Loss/acc/AUC/PR-AUC/F1 in console + `train_fold_metrics.csv` + mlflow
   (local sqlite backend, `artifacts/mlruns/`).
+- **Byte-determinism**: every regenerated CSV is reproducible byte-for-byte
+  (PYTHONHASHSEED-proof — set displays sorted at write, keep-token iteration
+  sorted, gate pair rows sorted on identity columns). Verified by running
+  data_prep twice and cmp-ing.
+- **Oracle selftest**: `python TRAIN/selftest.py` — pinned known-good GTIN
+  checksums (GS1/Wikipedia entries), cleaning oracles, soft-stop
+  keep/strip oracles, reference verdicts, invalid-GTIN exclusion in eval
+  pairs and mining, fold component integrity, P@R hand-computed cases,
+  config-split oracles (three files, three pydantic models, merged view),
+  pydantic boundary-contract oracles (reject the exact shape breaks the
+  audits found: unlocked payload/row_bc, out-of-range indices, impossible
+  pack/volume values, overlapping folds), the zero-pack guard, the pinned
+  real-data counts below, AND the no-fallback SSOT oracle (12b: hpo/rerank/
+  sweep blocks load, the module-level sweep lists match the config, the
+  drift scan proves the retired inline literals stayed retired, and a
+  missing runtime key raises). Round 3 added oracle 12c — the round-3 fix
+  pins: gate thresholds == config values (three-way gate behavior pinned on
+  proceed/hard_no/fallback cases), `hpo_tpe_best` and `bands.mining_band`
+  stay deleted from the config, the F18 dead symbols stay deleted from the
+  import surface, colab's train-frac default == `sweep.train_fracs[0]`,
+  blocking_audit knobs == the `audit:` block, and
+  `lib.nlp._cosine is lib.common.pair_similarity`. Exit 0 = green.
+
+Pinned real-data counts (update ONLY alongside an intentional contract
+change; `TRAIN/selftest.py` fails loudly on drift):
+- canonical_records.csv: 13,250 rows
+- gate_results.csv: 135,769 pairs (hard_no 92,650 / proceed 29,351 /
+  fallback 13,768)
+- number_tokens_reference.csv: 1,745 rows
+- labeled_pairs.csv: 19,916 rows (7,409 pos / 12,507 hard-neg; the
+  2026-09-08 zero-pack guard — found by the ExtractedAttributes schema —
+  moved 10 pairs from proceed to hard_no)
 
 ## MLflow (local backend + artifact store)
 
-Every `05_train` invocation = one parent run + nested run per fold. Default
+Every `TRAIN/train.py` invocation = one parent run + nested run per fold. Default
 backend LOCAL: `sqlite:///artifacts/mlruns/mlflow.db`, artifacts under
 `artifacts/mlruns/artifacts/`. Browse:
 `mlflow ui --backend-store-uri sqlite:///artifacts/mlruns/mlflow.db`.
@@ -206,8 +430,14 @@ backend LOCAL: `sqlite:///artifacts/mlruns/mlflow.db`, artifacts under
 
 ## Training loss plot
 
-`training_loss_<split>_payload-<variant>.png` — per-fold loss curve with the
-best-dev-AP step marked; history persisted in `train_fold_metrics.csv`.
+`training_loss_<split>_payload-<variant>.png` — per-fold TRAIN vs
+VALIDATION loss curves (train loss + dev eval_loss per logged step, best
+dev-AP step marked); history persisted in `train_fold_metrics.csv`
+(`train_loss_hist` / `dev_loss_hist` / `dev_ap_hist`). The validation loss
+is computed by the HF Trainer on the dev pair dataset (`eval_dataset`,
+same population as the dev evaluator — pos dev pairs + dev hard
+negatives); the triplet lane emits train-only (the plot says so on the
+axis instead of implying a missing curve).
 
 ## Report plots — per model
 
@@ -217,9 +447,9 @@ panels fill in on the GPU pass (CPU: ~2000× slower on this torch build).
 
 ## Docker (reproducibility)
 
-`Dockerfile` builds `broadway-train-gpu` from the repo root:
+`Dockerfile` builds `euromonitor-train-gpu` from the repo root:
 ```
-docker build -t broadway-train-gpu \
+docker build -t euromonitor-train-gpu \
   -f project/experiments/euromonitor/TRAIN_GPU/Dockerfile .
 ```
 deps pinned via `uv export --extra nlp` from `uv.lock`; run the lane with

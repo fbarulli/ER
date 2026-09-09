@@ -12,3 +12,4 @@ artifacts/data/dataset_deduped.csv
 artifacts/data/sku_to_rep.csv
 artifacts/data/clean_sku_gtin.csv
 artifacts/data/embeddings_cache/
+.venv/

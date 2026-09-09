@@ -1,4 +1,4 @@
-"""encode_corpus — inlined from broadway.training.nlp for the standalone
+"""encode_corpus — inlined from the monorepo training.nlp for the standalone
 TRAIN_GPU folder (no external package imports). Loads one bi-encoder,
 encodes the payload, L2-normalizes, returns (embeddings, seconds)."""
 
@@ -15,14 +15,24 @@ def encode_corpus(
     payload: list[str],
     *,
     device: str = "cpu",
-    batch_size: int = 256,
-    max_seq_length: int = 128,
+    batch_size: int,
+    max_seq_length: int,
     cache_dir: str | None = None,
-    prompt: str | None = None,
 ) -> tuple[np.ndarray, float]:
     """Encode a corpus once. When cache_dir is given, reuse the cached
     embeddings keyed by (model, payload hash) — same convention as the
-    repo lane (embeddings_cache/)."""
+    repo lane (embeddings_cache/).
+
+    `prompt` param REMOVED (audit 2026-09-09): it was accepted but never
+    used in the body — a silent no-op knob (callers passing it got no
+    prompt and no error).
+
+    AUDIT FIX (round 2 F12, round 3): batch_size / max_seq_length are now
+    REQUIRED keyword-only params. The old `= 256` / `= 128` defaults
+    duplicated training.batch_size_embed / max_seq_length — unreachable
+    fallback literals (every caller passes runtime() values), and a
+    future caller could silently get the default instead of the SSOT.
+    """
     from sentence_transformers import SentenceTransformer
 
     if cache_dir:
@@ -59,6 +69,11 @@ def encode_corpus(
     return emb, secs
 
 
-def _cosine(emb: np.ndarray, pairs: np.ndarray) -> np.ndarray:
-    """Cosine similarity for index-aligned pair arrays (rows of a matrix)."""
-    return (emb[pairs[:, 0]] * emb[pairs[:, 1]]).sum(axis=1)
+# AUDIT FIX (round 2 F19, round 3): _cosine was a byte-for-byte duplicate
+# of lib.common.pair_similarity. lib.common is the SSOT module, so
+# pair_similarity is canonical; this alias keeps the historical
+# `from lib.nlp import _cosine` import surface working with ONE
+# implementation behind it (zero churn for any importer).
+from lib.common import pair_similarity as _cosine
+
+__all__ = ["_cosine", "encode_corpus"]

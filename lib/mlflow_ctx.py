@@ -20,7 +20,9 @@ from pathlib import Path
 from lib.common import _path, load_config
 
 _cfg = load_config()
-_MLRUNS = _path(_cfg["paths"].get("mlruns_dir", "artifacts/mlruns"))
+# NO FALLBACK (owner Q27): paths.mlruns_dir is hard-required — a missing
+# key must crash, not silently scatter runs into a default directory.
+_MLRUNS = _path(_cfg["paths"]["mlruns_dir"])
 
 
 class MlflowCtx:

@@ -18,10 +18,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from lib.common import RESULTS, load_config, load_dataset_deduped
+from lib.common import RESULTS, load_config, load_dataset_deduped, plot_dpi
 
 _cfg = load_config()
-_mask_cfg = _cfg.get("masking", {})
+# NO FALLBACKS (owner Q27): masking + training sections hard-indexed —
+# missing keys crash; the old .get(0.15) silently contradicted masking.frac=1.00.
+_mask_cfg = _cfg["masking"]
 
 
 def main() -> None:
@@ -30,8 +32,10 @@ def main() -> None:
     d = dp.build_training_data(load_dataset_deduped())
     pos, neg = d["pos"], d["neg"]
     n_pos, n_neg = len(pos), len(neg)
-    n_masked = int(n_pos * float(_mask_cfg.get("frac", 0.15)))
-    silver = 20_000  # mined in-band (sku,sku) eval pool — see 05_train lane
+    n_masked = int(n_pos * float(_mask_cfg["frac"]))
+    # mined in-band (sku,sku) eval pool — TRAIN/train lane's mining target
+    # (SSOT: training.n_target_mining; was a hardcoded 20_000 duplicate)
+    silver = int(_cfg["training"]["n_target_mining"])
 
     bars = [
         ("hard positives\n(golden, same-GTIN)", n_pos, "#4C72B0"),
@@ -55,7 +59,7 @@ def main() -> None:
     ax.set_title("Training data composition — counts per population")
     ax.grid(axis="y", alpha=0.3)
     out = RESULTS / "training_data_composition.png"
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=plot_dpi())
     plt.close(fig)
     print(f"[plot] {out}", flush=True)
 

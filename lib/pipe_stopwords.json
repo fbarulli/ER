@@ -1,5 +1,5 @@
 {
-  "_doc": "STOPWORDS: title-token filter (extraction). MINIMAL: n-gram IDF filter (canonical). SSOT for 01_data_prep.",
+  "_doc": "SSOT word lists for data_pipe.py. STOPWORDS: dropped at s4. MINIMAL_STOPWORDS: non-semantic tokens only. CONCEPT_FOLDS: word pairs that are THE SAME product concept (owner directive 2026-09-08: a canonical carries each concept ONCE; measured 836 canonicals held both sparkling AND carbonated, 196 held singular+plural). KEY wins; VALUE folds into it. The mineral==carbonated standardization is PENDING an owner-reviewed payload review (.md, 20 examples) before it lands here.",
   "STOPWORDS": [
     "100",
     "1000",
@@ -228,5 +228,20 @@
     "with",
     "x",
     "yes"
-  ]
+  ],
+  "CONCEPT_FOLDS": {
+    "sparkling": "carbonated",
+    "sugars": "sugar",
+    "sweeteners": "sweetener",
+    "waters": "water",
+    "flavours": "flavour",
+    "vitamins": "vitamin",
+    "electrolytes": "electrolyte",
+    "calories": "calorie",
+    "fruits": "fruit",
+    "juices": "juice",
+    "bottles": "bottle",
+    "packs": "pack",
+    "minerals": "mineral"
+  }
 }

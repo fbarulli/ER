@@ -1,10 +1,21 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# TRAIN_GPU — THE single source of truth (SSOT).
-# Every path, file name, and knob lives HERE. No file hardcodes any of them;
-# all files load values via lib/common.load_config() ONLY.
+# 00_config.yaml — the SHARED DATA contract (split-SSOT, 2026-09-08).
+#
+# This file holds ONLY what every lane shares: artifact paths, file names,
+# the raw-export column mapping, the seed, and the model registry.
+# Domain knobs live in their OWN dir, validated by a pydantic model
+# in lib/schemas.py at load time (fail-loud at import, never mid-run):
+#
+#   TRAIN/training.yaml  → TrainingConfig  (loss/split/masking/bands/pairs/
+#                        plots/audit — absorbed the EDA config keys when
+#                        the EDA dir was deleted 2026-09-10)
+#
+# lib/common.py is still the ONLY reader: it deep-merges these files into
+# one view (load_config()) and validates each against its schema. No script
+# reads YAML directly (unchanged SSOT doctrine).
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ── folder layout (relative to TRAIN_GPU/ unless absolute) ──────────────────
+# ── folder layout (relative to the repo root unless absolute) ──────────────
 # ALL data, results, model tensors and embeddings live under artifacts/ —
 # one place at the root of the lane.
 paths:
@@ -17,10 +28,16 @@ paths:
   mlruns_dir: "artifacts/mlruns"          # mlflow backend + artifact store (local)
   logs_dir: "logs"                      # run_all per-step logs
 
-# ── file names (SSOT — nothing else in the tree spells these) ─────────────────
+# ── file names (SSOT — nothing else in the tree spells these) ───────────────
+# stopwords = data_pipe's word lists (STOPWORDS / MINIMAL_STOPWORDS /
+#   CONCEPT_FOLDS), living in lib/ beside the pipeline code.
+# sklearn_stopwords = lib/matching.py's frozen sklearn ENGLISH_STOP_WORDS
+#   (n=318). Two lists, two files — renamed 2026-09-08 so they stop sharing
+#   a basename, each resolved relative to lib/.
 files:
   dataset: "dataset.csv"
   dataset_deduped: "dataset_deduped.csv"
+  sku_to_rep: "sku_to_rep.csv"
   canonical_records: "canonical_records.csv"
   gate_results: "gate_results.csv"
   labeled_pairs: "labeled_pairs.csv"
@@ -28,11 +45,30 @@ files:
   model_evaluation_summary: "model_evaluation_summary.csv"
   fold_metrics: "train_fold_metrics.csv"
   hpo_grid_csv: "hpo_grid.csv"
-  hpo_tpe_best: "hpo_tpe_best.json"
-  cache_dir: "cache_v2"
-  stopwords: "stopwords.json"
+  # hpo_tpe_best REMOVED (audit round 2 F02, finished round 3): dead key —
+  # F["hpo_tpe_best"] had zero readers. The TPE lane writes its best-config
+  # JSON under a run-tagged name (train_<model><era>_hpo_best.json) built
+  # inline in TRAIN/training.run_hpo, which prints the actual out_path.
+  dedupe_summary: "06_dedupe_summary.csv"
+  ambiguous_offer_groups: "06_ambiguous_offer_groups.csv"
+  four_pop_scores: "07b_four_pop_scores.csv"
+  field_ablation: "07c_field_ablation.csv"
+  data_scaling: "07d_data_scaling.csv"
+  # cache_dir REMOVED (audit 2026-09-09): dead knob — zero readers; the
+  # embeddings cache path is constructed inline (DATA_DIR/embeddings_cache)
+  # by its three consumers.
+  stopwords: "pipe_stopwords.json"          # lib/ (data_pipe word lists)
+  sklearn_stopwords: "sklearn_stopwords.json"  # lib/ (matching.py TF-IDF list)
   number_reference: "number_tokens_reference.csv"
-  clean_sku_gtin: "clean_sku_gtin.csv"
+  # second04_pairs_positive (audit round 2 F13): the repo-side cross-country
+  # gold-pair manifest read by lib/volume_verified — ABSENT in this lane
+  # (the loader prints a loud notice and runs gate-only). Declared here so
+  # the name is SSOT-side, not an inline literal.
+  second04_pairs_positive: "second04_pairs_positive.csv"
+  results_pointer: "latest_results.json"  # the ONE file consumers read to
+  # find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
+  # TRAIN/train.py rewrites it on every non-sample run; sample runs never
+  # touch it
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
 column_mapping:
@@ -53,59 +89,10 @@ column_mapping:
 # ── seed (whole tree uses this one value) ───────────────────────────────────
 seed: 42
 
-# ── models ───────────────────────────────────────────────────────────────────
+# ── model registry (shared: TRAIN lane + run_all all resolve
+#    through lib.common.resolve_model — local bundle dir first, hub id as
+#    fallback; no script may hardcode a model string) ────────────────────────
 models:
   minilm_l6: "all-MiniLM-L6-v2"
   multilingual_l12: "paraphrase-multilingual-MiniLM-L12-v2"   # trainer base
   deberta_v3_base: "deberta-v3-base"
-
-# similarity column names 
-sim_columns:
-  minilm_l6: "sim_minilm_l6"
-  multilingual_l12: "sim_multilingual_l12"
-  deberta_v3_base: "sim_deberta_v3_base"
-
-# ── masking augmentation 
-masking:
-  enabled: true
-  frac: 1.00          # fraction of positive anchors masked when enabled
-  mask_prob: null     # null: per-pair extent drawn from mask_lo..mask_hi
-  mask_lo: 0.05       # variable extent band (owner spec: 5-15%)
-  mask_hi: 0.15
-
-# ── split (component-aware; no pair ever straddles a boundary) ──────────────
-split:
-  mode: "holdout"      # holdout = train 50% / dev 25% / test 25%
-  # ── the three sets (component-aware: no barcode straddles any boundary) ──
-  # train  = 50% of connected components — the ONLY data the model trains on
-  # dev    = 25% — early-stopping target; weights are picked here, never trained on
-  # test   = 25% — HOLDOUT: the model NEVER trains on it, directly or via
-  #          early stopping. Every reported test metric (AUC, PR-AUC, F1)
-  #          comes from this set and nothing else.
-  train_fraction: 0.50
-  dev_fraction: 0.25    # carved OUT OF THE TRAIN SIDE in cv mode; in holdout
-                       # mode it is the q2 component quarter (q0+q1=train)
-  test_fraction: 0.25
-  fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
-  cv_folds: 5         # cv mode only
-
-# ── training ─────────────────────────────────────────────────────────────────
-training:
-  epochs: 3
-  lr: 0.00002
-  warmup_ratio: 0.05
-  weight_decay: 0.01
-  lr_scheduler: "linear"
-  max_grad_norm: 1.0
-  es_patience: 3
-  es_threshold: 0.001
-
-# ── pair-selection thresholds (owner's label semantics) ──────────────────────
-pairs:
-  proceed_sim_threshold: 0.80    # positives: proceed & sim>=0.80
-  hardneg_sim_threshold: 0.80    # hard negatives: hard_no & sim>=0.80
-
-# ── mining band for in-batch negatives ───────────────────────────────────────
-mining:
-  band: "0.45-0.80"
-  n_target: 20000

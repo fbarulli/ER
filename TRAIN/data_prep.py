@@ -1,4 +1,4 @@
-"""01_data_prep.py — run the OFFICIAL data-prep pipeline (data_pipe.run_within_brand_pipeline).
+"""data_prep.py — run the OFFICIAL data-prep pipeline (data_pipe.run_within_brand_pipeline).
 
 Loads the raw export (raw column names, dtype=str), runs the within-brand
 pipeline (extraction → canonical → gating → similarity), writes
@@ -21,6 +21,15 @@ def main() -> None:
     df = load_raw_export()
     pairs, canon = run_within_brand_pipeline(df)
     print(f"pairs: {len(pairs):,} | canonical records: {len(canon):,}")
+    # AUDIT 2026-09-09: digit tokens resolved by the regex fallback (not in
+    # the reference CSV) — the one degradation the numbers lane allows;
+    # printed so it can never be silent.
+    import data_pipe as _dp
+
+    print(
+        f"[numbers] {_dp._UNSEEN_TOKEN_TOTAL:,} digit-token resolutions "
+        f"via regex fallback (not in reference CSV)"
+    )
 
 
 if __name__ == "__main__":

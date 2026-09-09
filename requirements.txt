@@ -1,0 +1,36 @@
+# EuromonitoR lane — pinned third-party deps (verified 2026-09-08 on the
+# working venv: python 3.12, torch 2.14.0+cu130 / CPU wheels also run).
+# The lane's own code is COPYed into the image, never installed as a wheel.
+#
+# The Dockerfile installs EXACTLY this file. Bump pins only alongside a
+# verified full-chain run (dedupe → data_prep → labeled_pairs → selftest).
+
+# ── core data ──────────────────────────────────────────────────────────────
+pandas==3.0.5
+numpy==2.5.3
+scikit-learn==1.9.0
+scipy==1.18.1          # AUDIT 2026-09-09: was MISSING despite hard imports —
+                       # report_plots (binomtest/fisher_exact) and
+                       # EDA/03 (entropy) crashed the Docker image CMD paths
+pyarrow>=19            # pandas engine compat
+pyyaml==6.0.3
+pydantic==2.13.5       # lib/schemas.py boundary + config contracts
+
+# ── NLP / training lane ────────────────────────────────────────────────────
+torch==2.14.0
+transformers==5.16.1
+sentence-transformers==6.0.1
+datasets>=2.16
+accelerate>=1.1.0
+sentencepiece==0.2.2
+
+# ── experiment tracking / HPO (lazy-imported; both optional at runtime) ─────
+mlflow==3.15.1
+optuna==4.4.0
+
+# ── plots ──────────────────────────────────────────────────────────────────
+matplotlib==3.11.1
+seaborn>=0.13
+
+# ── dev tooling (same pin the lane lints with) ─────────────────────────────
+ruff==0.16.3
