@@ -54,6 +54,7 @@ from lib.common import (
     load_dataset_deduped,
     resolve_model,
     runtime,
+    strip_ladder_bands,
 )
 from lib.nlp import encode_corpus
 
@@ -185,7 +186,11 @@ def main() -> None:
             c = canon_map.get(e["barcode"])
             if c and e["final"]:
                 entries.append((e, c, jaccard(e["final"], c)))
-        bands = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)]
+        # AUDIT (SSOT move, this round): the ladder's band edges were an
+        # inline literal list here — now audit.strip_ladder_bands in
+        # TRAIN/training.yaml (validated by AuditSpec: contiguous ascending
+        # cover of [0, 1+eps]), read via lib.common.strip_ladder_bands.
+        bands = strip_ladder_bands()
         rng = random.Random(SEED)
         sims = None
         if args.semantic:

@@ -48,8 +48,18 @@ import numpy as np
 import pandas as pd
 
 from lib.blocking import build_true_pairs, eval_blocking
-from lib.common import RESULTS, load_dataset_deduped, plot_dpi, training_cfg
-from lib.text import MACRO_MAP, extract_pack_counts, extract_volume_ml
+from lib.common import (
+    RESULTS,
+    category_macros,
+    load_dataset_deduped,
+    plot_dpi,
+    training_cfg,
+)
+from lib.text import extract_pack_counts, extract_volume_ml
+
+# MACRO_MAP moved to config (SSOT): 00_config.yaml category_macros —
+# read via lib.common.category_macros(), never a module-level copy.
+MACRO_MAP = category_macros()
 
 CSV_AUDIT = RESULTS / "blocking_feature_audit.csv"
 PNG_AUDIT = RESULTS / "blocking_feature_audit.png"

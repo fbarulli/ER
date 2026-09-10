@@ -120,8 +120,13 @@ plots:
 # blocking_audit knobs (audit round 2 F18, moved round 3): the blocking-
 # feature audit's candidate-pair budget and greedy min-recall floor (were
 # inline BUDGET = 5_000_000 / MIN_RECALL = 0.95 in TRAIN/blocking_audit.py).
+# strip_ladder_bands (SSOT move, this round): the strip-audit similarity
+# ladder's Jaccard band edges — were an inline literal list in
+# TRAIN/strip_audit.py (~:186). Same values, new home; read via
+# lib.common.strip_ladder_bands().
 audit:
   strip_audit_sample: 200
+  strip_ladder_bands: [[0.0, 0.2], [0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.01]]
   blocking_budget: 5_000_000      # candidate pairs the classifier can afford
   blocking_min_recall: 0.95      # greedy forward-selection recall floor
 

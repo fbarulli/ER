@@ -693,12 +693,28 @@ def oracle_no_fallback_ssot() -> None:
     root = _lc.TRAIN_ROOT
 
     def _code_only(text: str) -> str:
-        """Strip comments so the drift scan matches EXECUTABLE literals,
-        not the audit notes that document their removal."""
+        """Strip comments and DOCSTRINGS so the drift scan matches
+        EXECUTABLE literals — not the audit notes that document their
+        removal, nor the docstrings that merely describe bands in prose
+        (e.g. masking.py's "U(0.05,0.15)" historical note). Docstring
+        removal is required by the widened band scan below: prose quotes
+        band-shaped decimals that are NOT code.
+
+        LINE-NUMBER PRESERVING: every removed line/docstring line is
+        replaced by an EMPTY line of the same count, so the widened scan
+        can report the drift's position in the REAL file.
+        """
+        import re as _dre
+
+        def _blank_docstring(m: _dre.Match) -> str:
+            return '""' + "\n" * m.group(0).count("\n")
+
+        text = _dre.sub(r'("""|\'\'\')[\s\S]*?\1', _blank_docstring, text)
         out = []
         for ln in text.splitlines():
             s = ln.lstrip()
             if s.startswith("#"):
+                out.append("")  # keep the line, drop the comment
                 continue
             # trailing full-line comments (crude but sufficient: a '#'
             # outside a string literal after code — only strip when the
@@ -740,6 +756,79 @@ def oracle_no_fallback_ssot() -> None:
                 f"no inline literal {pat!r} in {rel}",
                 _re.search(pat, text) is None,
             )
+
+    # ── WIDENED band-drift scan (this round): the banned-literal pins above
+    #    only guard the EXACT literals past audits removed. This scan is
+    #    SHAPE-based — it catches NEW config-drift, not just old
+    #    regressions: any inline numeric-literal band/threshold shape in
+    #    the tracked TRAIN/*.py + lib/*.py + data_pipe.py + run_all.py +
+    #    colab_backend.py executable lines (docstrings/comments stripped).
+    #
+    #    Patterns (bands/thresholds ONLY — deliberately narrow):
+    #      pair    — a (lo, hi) decimal pair inside () or []: the cosine/
+    #                jaccard band shape, e.g. (0.35, 0.90) / [0.50, 0.75]
+    #      declist — a [] list of 2+ bare decimals: the band-EDGE shape,
+    #                e.g. [0.25, 0.50, 0.75]
+    #      band3x  — a 0.3x decimal in comma/list context (the task's
+    #                example drift shape: "0.31," cosine-band edges)
+    #
+    #    EXEMPTIONS (line-context, listed so nobody "fixes" a false
+    #    positive by deleting the scan): plot cosmetics (set_ylim/set_xlim/
+    #    figsize/fontsize/alpha/lw/linewidth/zorder/ha/va/color/ls/dpi and
+    #    the axhline/axvline/hlines/vlines reference-line family), histogram
+    #    grid constants (np.linspace / np.arange / bins=), quantile cuts
+    #    (np.quantile), and float ARITHMETIC factors (a decimal directly
+    #    after an operator — 29.5735 * x, (row_i - 0.5) * 0.38 — never a
+    #    band). NOT numeric but structurally exempt: integer seeds/dpis/
+    #    versions/batch sizes never match the decimal-only patterns by
+    #    construction.
+    _wide_files = sorted(
+        str(p.relative_to(root))
+        for p in [
+            *(root / "TRAIN").glob("*.py"),
+            *(root / "lib").glob("*.py"),
+            root / "data_pipe.py",
+            root / "run_all.py",
+            root / "colab_backend.py",
+        ]
+        if p.name not in ("selftest.py", "__init__.py")
+    )
+    _wide_pats = {
+        "pair": _re.compile(
+            r"[\(\[]\s*[01]?\.\d+\s*,\s*[01]?\.\d+\s*[\)\]]"
+        ),
+        "declist": _re.compile(
+            r"\[\s*[01]?\.\d+\s*(?:,\s*[01]?\.\d+\s*)+\]"
+        ),
+        "band3x": _re.compile(r"0\.3[0-9]?\s*[,\]]"),
+    }
+    _wide_exempt = _re.compile(
+        r"set_ylim|set_xlim|ylim|xlim|figsize|fontsize|alpha|linewidth"
+        r"|\blw\b|zorder|axhline|axvline|hlines|vlines|linspace|arange"
+        r"|bins|quantile|dpi|color|marker|\bls\b|ha=|va=|\*|\+|/|-"
+    )
+    for rel in _wide_files:
+        for _ln_no, _ln in enumerate(
+            _code_only((root / rel).read_text(encoding="utf-8")).splitlines(), 1
+        ):
+            if _wide_exempt.search(_ln):
+                continue  # plot cosmetics / grid constants / arithmetic
+            for _tag, _p in _wide_pats.items():
+                if _p.search(_ln):
+                    print(
+                        f"  [DRIFT] {_tag} shape at {rel}:{_ln_no}: "
+                        f"{_ln.strip()[:100]}"
+                    )
+                    check(
+                        f"widened scan: no inline band literal in {rel}",
+                        False,
+                        f"{_tag} shape at line {_ln_no}: {_ln.strip()[:100]}",
+                    )
+    check(
+        "widened band-drift scan ran (files covered)",
+        len(_wide_files) >= 29,
+        f"{len(_wide_files)} files",
+    )
 
     # ── deterministic-derivation pin: the mask extent midpoint is derived
     #    from the config band, not hardcoded
@@ -892,6 +981,67 @@ def oracle_round3_pins() -> None:
         "TRAIN/blocking_audit.MIN_RECALL == audit.blocking_min_recall",
         _ba.MIN_RECALL == a.blocking_min_recall,
         f"got {_ba.MIN_RECALL}",
+    )
+
+    # ── strip-audit ladder bands pin (SSOT move, this round): the band
+    #    edges moved from an inline list in TRAIN/strip_audit.py into
+    #    audit.strip_ladder_bands — SAME VALUES, new home, so the pin
+    #    proves neither the values nor the move drifted
+    from lib.common import strip_ladder_bands
+
+    check(
+        "strip ladder bands == (0.0,0.2)...(0.8,1.01) from audit: block",
+        strip_ladder_bands()
+        == [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)],
+        f"got {strip_ladder_bands()}",
+    )
+    check(
+        "strip ladder bands contiguous ascending (schema-validated)",
+        all(
+            float(lo) < float(hi)
+            for lo, hi in strip_ladder_bands()
+        )
+        and all(
+            a.strip_ladder_bands[i].hi == a.strip_ladder_bands[i + 1].lo
+            for i in range(len(a.strip_ladder_bands) - 1)
+        ),
+        f"got {a.strip_ladder_bands}",
+    )
+
+    # ── MACRO_MAP pin (SSOT move, this round): the category->macro
+    #    taxonomy is DOMAIN DATA moved from lib/text.py into 00_config.yaml
+    #    category_macros: — pin the exact 24-category shape + the module
+    #    copy stays deleted
+    from lib.common import category_macros, load_dataset_deduped
+
+    _mm = category_macros()
+    check(
+        "category_macros: 24 categories -> 6 macro buckets",
+        len(_mm) == 24 and set(_mm.values()) == {
+            "JUICE", "CARBONATES", "ENERGY_SPORTS", "WATER", "TEA_COFFEE",
+            "CONCENTRATES",
+        },
+        f"got {len(_mm)} cats -> {sorted(set(_mm.values()))}",
+    )
+    check(
+        "category_macros covers every strict category in the dataset",
+        all(
+            c in _mm
+            for c in sorted(
+                load_dataset_deduped()["category"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .unique()
+            )
+        ),
+        "some dataset category has no macro bucket",
+    )
+    import lib.text as _lt
+
+    check(
+        "lib.text.MACRO_MAP stays deleted (config is the SSOT)",
+        not hasattr(_lt, "MACRO_MAP"),
     )
 
     # ── F19 pin: lib.nlp._cosine IS lib.common.pair_similarity (one impl)

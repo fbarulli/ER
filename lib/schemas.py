@@ -41,6 +41,7 @@ defaults to an inline literal at the call site.
 
 from __future__ import annotations
 
+import itertools
 import math
 from typing import Any, Literal
 
@@ -113,8 +114,8 @@ class DataPathsSpec(BaseModel):
 
 class DataConfig(BaseModel):
     """00_config.yaml — the SHARED data contract (paths, file names, column
-    mapping, seed, model registry). Domain knobs live in their own dir:
-    TRAIN/training.yaml."""
+    mapping, seed, category-macro taxonomy, model registry). Domain knobs
+    live in their own dir: TRAIN/training.yaml."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -122,6 +123,10 @@ class DataConfig(BaseModel):
     files: DataFilesSpec
     column_mapping: dict[str, str] = Field(min_length=1)
     seed: int
+    # category -> macro bucket taxonomy (SSOT move: was the inline
+    # MACRO_MAP dict in lib/text.py — domain data the owner may tune,
+    # hence config; consumers read lib.common.category_macros()).
+    category_macros: dict[str, str] = Field(min_length=1)
     models: dict[str, str] = Field(min_length=1)
 
     @field_validator("models")
@@ -132,6 +137,26 @@ class DataConfig(BaseModel):
                 "models.multilingual_l12 missing — the trainer base resolves "
                 "from it (train.py --model default; no-fallback doctrine)"
             )
+        return v
+
+    @field_validator("category_macros")
+    @classmethod
+    def _macros_shape(cls, v: dict[str, str]) -> dict[str, str]:
+        """Shape contract for the category taxonomy: category keys and
+        macro-bucket values must be non-empty stripped strings, and no
+        category may map to itself (a macro bucket is a STRICT coarsening).
+        Catching this at load keeps a malformed taxonomy from silently
+        degrading blocking recall mid-run."""
+        for cat, bucket in v.items():
+            if not str(cat).strip() or not str(bucket).strip():
+                raise ValueError(
+                    f"category_macros: empty key/bucket for {cat!r} -> {bucket!r}"
+                )
+            if str(cat).strip() == str(bucket).strip():
+                raise ValueError(
+                    f"category_macros: {cat!r} maps to itself — a macro "
+                    "bucket must coarsen, not echo"
+                )
         return v
 
 
@@ -284,13 +309,37 @@ class AuditSpec(BaseModel):
     """Audit-lane knobs (TRAIN/training.yaml audit:) — strip-audit sample
     size (was EDA/eda.yaml strip_audit_sample) + the blocking-feature
     audit's policy knobs (were inline BUDGET/MIN_RECALL literals in
-    TRAIN/blocking_audit.py; audit round 2 F18, moved round 3)."""
+    TRAIN/blocking_audit.py; audit round 2 F18, moved round 3) + the
+    strip-audit similarity ladder's Jaccard band edges
+    strip_ladder_bands (were an inline literal list in
+    TRAIN/strip_audit.py; SSOT move — contiguous, ascending, each
+    lo < hi)."""
 
     model_config = ConfigDict(extra="forbid")
 
     strip_audit_sample: int = Field(ge=1)
+    strip_ladder_bands: list[BandSpec] = Field(min_length=1)
     blocking_budget: int = Field(ge=1)
     blocking_min_recall: float = Field(gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _contiguous_ascending(self) -> AuditSpec:
+        """The ladder must be a contiguous ascending cover of [0, 1+eps]:
+        band i's hi == band i+1's lo, and the first lo is 0.0. That is
+        the shape strip_audit's `for lo, hi in bands` loop depends on —
+        every SKU lands in exactly one bucket."""
+        bs = self.strip_ladder_bands
+        if float(bs[0].lo) != 0.0:
+            raise ValueError(
+                f"strip_ladder_bands must start at lo=0.0, got {bs[0].lo}"
+            )
+        for a, b in itertools.pairwise(bs):
+            if float(a.hi) != float(b.lo):
+                raise ValueError(
+                    "strip_ladder_bands must be contiguous (band hi == "
+                    f"next lo), got {a.hi} then {b.lo}"
+                )
+        return self
 
 
 class GateSpec(BaseModel):

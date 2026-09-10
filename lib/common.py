@@ -99,6 +99,19 @@ def data_cfg() -> DataConfig:
     return _DATA_CFG
 
 
+def category_macros() -> dict[str, str]:
+    """SSOT accessor for the category -> macro bucket taxonomy
+    (00_config.yaml category_macros:).
+
+    Was the inline MACRO_MAP dict in lib/text.py — domain data the owner
+    may tune (the blocking layer's recall-first rollup of the dataset's
+    strict categories), hence config-owned. Validated by DataConfig at
+    load; consumers (blocking_audit / report_plots / hard_negatives)
+    read THIS, never a module-level copy.
+    """
+    return dict(_CFG["category_macros"])
+
+
 def training_cfg() -> TrainingConfig:
     """The validated training-lane config (TRAIN/training.yaml)."""
     return _TRAIN_CFG
@@ -154,6 +167,18 @@ def plot_dpi() -> int:
     second declaration the config could not steer (audit, owner Q27).
     """
     return int(_CFG["plots"]["dpi"])
+
+
+def strip_ladder_bands() -> list[tuple[float, float]]:
+    """SSOT accessor for the strip-audit similarity ladder's Jaccard band
+    edges (TRAIN/training.yaml audit.strip_ladder_bands).
+
+    Was an inline literal list in TRAIN/strip_audit.py (~:186) — a second
+    declaration the config could not steer (same doctrine as plot_dpi).
+    Validated by AuditSpec at load (contiguous ascending cover of
+    [0, 1+eps]); returns plain (lo, hi) tuples for the ladder loop.
+    """
+    return [(float(b[0]), float(b[1])) for b in _CFG["audit"]["strip_ladder_bands"]]
 
 
 # ── HPO / rerank / sweep accessors (validated by lib.schemas at load) ───────

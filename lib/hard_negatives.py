@@ -15,8 +15,6 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 
-from lib.text import MACRO_MAP
-
 
 def conflicting_barcode_pairs(df: pd.DataFrame) -> set[tuple[int, int]]:
     """Row-index pairs with the same title but conflicting barcodes.
@@ -148,7 +146,7 @@ def mine_hard_negatives(
     band from mining.band ("lo-hi"), and k (ANN block size) from mining.k.
     Explicit values still win (training.py passes its eval band).
     """
-    from lib.common import SEED, training_cfg
+    from lib.common import SEED, category_macros, training_cfg
 
     if seed is None:
         seed = SEED
@@ -162,7 +160,10 @@ def mine_hard_negatives(
         cosine_hi = float(hi) if cosine_hi is None else cosine_hi
     barcodes = df["barcode"].fillna("").astype(str).to_numpy()
     brands = df["brand"].fillna("").astype(str).to_numpy()
-    macro = df["category"].fillna("").map(lambda c: MACRO_MAP.get(c, "?")).to_numpy()
+    # MACRO_MAP moved to config (SSOT): 00_config.yaml category_macros,
+    # read via lib.common.category_macros() — no module-level copy.
+    macro_map = category_macros()
+    macro = df["category"].fillna("").map(lambda c: macro_map.get(c, "?")).to_numpy()
     # Barcode trust (owner ruling, see lib/gtin.py): a checksum-fail barcode
     # cannot certify "known different" any more than a missing one can —
     # exclude from the negative population exactly like empty barcodes.

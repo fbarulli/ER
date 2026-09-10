@@ -30,6 +30,7 @@ from lib.common import (
     RESULTS,
     SEED,
     F,
+    category_macros,
     load_config,
     load_dataset_deduped,
     pair_similarity,
@@ -38,7 +39,11 @@ from lib.common import (
     training_cfg,
 )
 from lib.nlp import encode_corpus
-from lib.text import MACRO_MAP, extract_volume_ml
+from lib.text import extract_volume_ml
+
+# MACRO_MAP moved to config (SSOT): 00_config.yaml category_macros —
+# read via lib.common.category_macros(), never a module-level copy.
+MACRO_MAP = category_macros()
 
 _cfg = load_config()
 # ALL models from the config SSOT — the report is per-model, not

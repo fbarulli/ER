@@ -228,37 +228,18 @@ def extract_volume_ml(text: str) -> tuple[int | None, bool]:
 # the "single bottle > 10 L" rule that used the liter set are retired.
 
 
-# Category -> macro bucket for BLOCKING (coarse, recall-first). Built from the
-# dataset's 24 real categories: retailers categorize the same product
-# consistently ~94% at the strict level, so the blocking layer rolls up to
-# macro to avoid rejecting true matches (see 04b/04c). Scoring still uses the
-# strict category (higher mutual information).
-MACRO_MAP = {
-    "Not from Concentrate 100% Juice": "JUICE",
-    "Reconstituted 100% Juice": "JUICE",
-    "Juice Drinks (up to 24% Juice)": "JUICE",
-    "Nectars": "JUICE",
-    "Coconut and Other Plant Waters": "JUICE",
-    "Other Non-Cola Carbonates": "CARBONATES",
-    "Orange Carbonates": "CARBONATES",
-    "Regular Cola Carbonates": "CARBONATES",
-    "Reduced Sugar Cola Carbonates": "CARBONATES",
-    "Tonic Water/Mixers/Other Bitters": "CARBONATES",
-    "Lemonade/Lime": "CARBONATES",
-    "Energy Drinks": "ENERGY_SPORTS",
-    "Sports Drinks": "ENERGY_SPORTS",
-    "Still Bottled Water": "WATER",
-    "Carbonated Bottled Water": "WATER",
-    "Sparkling Flavoured Bottled Water": "WATER",
-    "Still Flavoured Bottled Water": "WATER",
-    "Functional Bottled Water": "WATER",
-    "Still RTD Tea": "TEA_COFFEE",
-    "Carbonated RTD Tea and Kombucha": "TEA_COFFEE",
-    "RTD Coffee": "TEA_COFFEE",
-    "Asian Speciality Drinks": "TEA_COFFEE",
-    "Liquid Concentrates": "CONCENTRATES",
-    "Powder Concentrates": "CONCENTRATES",
-}
+# MACRO_MAP REMOVED (SSOT move, this round): the category -> macro bucket
+# taxonomy was judged DOMAIN DATA, not code — a curated mapping of the
+# dataset's 24 strict categories to coarse macro buckets (the blocking
+# layer's recall-first rollup; see 04b/04c) that the owner may tune
+# without touching an import. It now lives in 00_config.yaml
+# category_macros: (validated by DataConfig at load) and is read via
+# lib.common.category_macros(). Rationale: it maps DATA values (category
+# names) to canonical forms — the same shape as column_mapping — rather
+# than being regex-adjacent normalization logic that changes only
+# alongside code. Consumers: TRAIN/blocking_audit.py, TRAIN/report_plots.py,
+# lib/hard_negatives.py. Scoring still uses the strict category (higher
+# mutual information); only blocking rolls up to macro.
 
 
 def extract_pack_counts(text: str) -> set[int]:
