@@ -29,7 +29,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from lib.common import RESULTS, SEED, F
+from lib.common import RESULTS, SEED, F, set_determinism
 from lib.common import SSOT_LOSS as _SSOT_LOSS  # no-fallback SSOT
 
 # second07's grid semantics (epochs x lr x warmup%), SSOT: TRAIN/training.yaml
@@ -75,6 +75,9 @@ def run_grid(
     inherits the entry's augmentation; n_masked is the entry's count
     for the summary row.
     """
+    # determinism at LANE entry (2026-10-06): see run_tpe — pin before
+    # any per-config training randomness (the entry lane already did).
+    set_determinism(SEED)
     import torch
 
     grid = QUICK if args.quick else GRID
@@ -259,6 +262,11 @@ def run_tpe(
     """
     from TRAIN.training import run_hpo
 
+    # determinism at LANE entry (2026-10-06): both sweep lanes get the
+    # same pin even when invoked directly — the entry lane (TRAIN/train
+    # .py _main_inner) already seeds; this makes a standalone run_tpe
+    # call identical, before any optuna/trial randomness.
+    set_determinism(SEED)
     df, payload, row_bc, country, pos, hp_pairs, emb0 = data
     _holdout = getattr(args, "split", None) == "holdout"
     if _holdout:

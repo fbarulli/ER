@@ -32,9 +32,15 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from lib.common import RESULTS, SEED, F, load_config, plot_dpi
+from lib.common import RESULTS, SEED, F, load_config, plot_dpi, set_determinism
 from lib.schemas import EVAL_SUMMARY_COLUMNS, check_eval_summary_frame
 from TRAIN.folds import component_folds
+
+# determinism (2026-10-06): this lane re-fits the Youden threshold and
+# reads embeddings — pin the global RNGs before any of that. The
+# component split below keeps passing seed=SEED explicitly (its own
+# deterministic contract, unchanged).
+set_determinism(SEED)
 
 LABELED_PAIRS_CSV = RESULTS / F["labeled_pairs"]
 EMBED_SIM_CSV = RESULTS / F["embedding_similarities"]

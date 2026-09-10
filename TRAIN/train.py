@@ -22,7 +22,15 @@ import time
 import numpy as np
 import pandas as pd
 
-from lib.common import RESULTS, SEED, F, load_config, load_dataset_deduped, runtime
+from lib.common import (
+    RESULTS,
+    SEED,
+    F,
+    load_config,
+    load_dataset_deduped,
+    runtime,
+    set_determinism,
+)
 from lib.common import SSOT_LOSS as _SSOT_LOSS
 from TRAIN.folds import component_folds
 from TRAIN.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
@@ -141,6 +149,13 @@ def main() -> None:
 
 
 def _main_inner(_mlf) -> None:
+    # determinism FIRST (2026-10-06): one call before any model/data
+    # randomness — masking augmentation, zero-shot encode, fold carving
+    # and the grid/tpe sweep lanes (dispatched below, same entry) all
+    # ride this seed. The component split keeps passing SEED explicitly
+    # (its own contract); the GLOBAL RNGs (random/numpy/torch/cudnn)
+    # are pinned here, once, at entry.
+    set_determinism(SEED)
     cfg = load_config()
     # NO FALLBACKS (owner Q27): every section/key below is read with hard
     # indexing — a missing key crashes at startup, never a silent default.

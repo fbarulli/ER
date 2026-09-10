@@ -31,6 +31,8 @@ import matplotlib
 
 matplotlib.use("Agg")  # headless; set before pyplot import
 
+import os
+
 import pandas as pd
 import yaml
 
@@ -214,6 +216,52 @@ F = _CFG["files"]
 # ── column mapping + seed (SSOT, read once) ──────────────────────────────────
 COLUMN_MAPPING = dict(_CFG["column_mapping"])
 SEED = int(_CFG["seed"])
+
+
+def set_determinism(seed: int) -> None:
+    """Seed EVERYTHING the training lane touches, loudly and unconditionally.
+
+    One call at each training entrypoint (before any model/data randomness)
+    pins: random, numpy, torch (CPU + all CUDA devices) and the cudnn
+    flags. The EXISTING SSOT seed is the only source — 00_config.yaml
+    `seed:` (read once into lib.common.SEED); no second knob exists or is
+    needed, so callers pass exactly that value.
+
+    PYTHONHASHSEED: os.environ is set here for the CURRENT process, but
+    hash() randomization is fixed only when the variable is present
+    BEFORE the interpreter starts — setting it here cannot retro-fit an
+    already-running CPython. It is still exported (harmless, and it makes
+    child processes spawned after this call inherit the value). For full
+    hash determinism the SAME seed must ALSO be exported at container
+    start (Dockerfile `ENV PYTHONHASHSEED=42` — documented here, NOT
+    changed by that task; align it with 00_config.yaml `seed:` when the
+    Dockerfile is next touched).
+
+    No new config key: cudnn.deterministic=True / benchmark=False are
+    unconditional by design (the point of the helper is "always
+    reproducible", not "reproducible when configured").
+    """
+    import random
+
+    random.seed(seed)
+    _np.random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    # torch is imported LOCALLY: lib/common is imported by data/plot/audit
+    # scripts that never touch torch — a module-level import would make
+    # every one of them pay torch's multi-second import + CUDA init.
+    import torch
+
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print(
+        f"[determinism] seed={seed} cudnn.deterministic=True "
+        f"(PYTHONHASHSEED note: effective only if set before interpreter "
+        f"start)",
+        flush=True,
+    )
 
 # ── model registry + resolution (shared TRAIN/run_all) ──────────────────────
 MODELS = dict(_CFG["models"])
