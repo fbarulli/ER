@@ -37,15 +37,22 @@ COPY --from=deps /usr/local/bin /usr/local/bin
 RUN useradd -m -u 1000 trainer \
     && mkdir -p /home/trainer/.cache \
     && chown -R trainer:trainer /home/trainer
-# docker HOME = the lane root itself: the three config files (00_config.yaml,
-# TRAIN/training.yaml, EDA/eda.yaml), run_all.py, data_pipe.py, STEPS.md,
-# TRAIN/, EDA/, lib/ (with pipe_stopwords.json + sklearn_stopwords.json),
+# docker HOME = the lane root itself: the two config files (00_config.yaml,
+# TRAIN/training.yaml), run_all.py, data_pipe.py, STEPS.md,
+# TRAIN/, lib/ (with pipe_stopwords.json + sklearn_stopwords.json),
 # artifacts/ — all at $PWD, the same layout as running in the repo.
 WORKDIR /app
+
+# COPY-source guard: every src below must exist at the repo root — docker
+# only fails on a missing COPY after the apt layers have baked, so check
+# before building (from the repo root; EDA/ left this list 2026-09-10 when
+# the dir was deleted):
+#   for s in requirements.txt STEPS.md README.md 00_config.yaml run_all.py \
+#            data_pipe.py colab_backend.py TRAIN lib; do
+#     [ -e "$s" ] || echo "MISSING COPY source: $s"; done
 COPY --chown=trainer:trainer requirements.txt STEPS.md README.md /app/
 COPY --chown=trainer:trainer 00_config.yaml run_all.py data_pipe.py colab_backend.py /app/
 COPY --chown=trainer:trainer TRAIN /app/TRAIN
-COPY --chown=trainer:trainer EDA /app/EDA
 COPY --chown=trainer:trainer lib /app/lib
 RUN chown trainer:trainer /app
 # /app must be trainer-owned: the lane mkdirs artifacts/ + logs/ at runtime,
@@ -62,7 +69,7 @@ ENV MLFLOW_TRACKING_URI="" \
 # oracle before it is usable (byte-determinism of the lane depends on it)
 RUN python -c "import lib.common; import data_pipe; import TRAIN.masking; \
     import TRAIN.folds; import lib.schemas; print('config SSOT + schemas import OK')" \
-    && ruff check lib/ TRAIN/ EDA/ data_pipe.py run_all.py colab_backend.py
+    && ruff check lib/ TRAIN/ data_pipe.py run_all.py colab_backend.py
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "TRAIN/selftest.py"]
