@@ -1348,6 +1348,19 @@ def run_within_brand_pipeline(
     # next to what it DECIDED — auditable inputs→outputs, rewritten every
     # run. Full census, not a sample: the whole point is no invisibility.
     gate_vis = []
+    # VECTORIZATION RULING (audit close, 2026-09-10): this per-pair Python
+    # loop is deliberately kept scalar. "Optimize and vectorize wherever
+    # possible" reaches HOT paths; this is not one — it runs ONCE per
+    # data-prep regeneration (TRAIN/data_prep.py is the sole caller) and
+    # no training/eval step executes it (they consume the CSVs it writes).
+    # three_way_gate is the label source — every training label flows
+    # through its decision table — so an equivalent-but-restructured
+    # rewrite puts all pinned counts (135,769 / 92,650 / 29,351 / 13,768)
+    # at risk for seconds saved on a one-time run. Two vectorization
+    # attempts were abandoned for exactly this risk/benefit. If this ever
+    # becomes a hot path, vectorize with the equivalence protocol:
+    # pinned counts + diagonal crosstab vs the previous CSV + 0-tolerance
+    # confidence match, revert on ANY divergence.
     for g1, g2 in candidate_pairs:
         a1 = gtin_to_canon[g1]
         a2 = gtin_to_canon[g2]
