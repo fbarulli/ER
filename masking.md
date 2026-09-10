@@ -1,13 +1,15 @@
 # What the model sees — training pairs (masking.md)
 
 Generated from the OFFICIAL chain: `clean_sku_text` (number-token reference strip included)
-→ `DATA_PIPE.pairs.build_training_data` → masking augmentation (extent varies 5–15%).
+→ `DATA_PIPE.pairs.build_training_data` → masking augmentation (per the `masking:` block in TRAIN/training.yaml: `enabled: true`, `frac: 1.00` — every positive anchor masked; `mask_prob: null` — extent drawn per pair, U(`mask_lo: 0.20`, `mask_hi: 0.35`)).
 
-**Pair counts** — positives: 26,767 · masked positives: +4,015 · hard negatives: 28,465 · total training pairs: 59,247
+**Pair counts** — positives: 26,767 · masked positives: +26,767 (`masking.frac: 1.00` — every positive anchor) · hard negatives: 28,465 · total training pairs: 81,999
 
 Mask token: `` ` `` — the anchor is noised, the pair target (canonical) stays clean.
 
 ## Positive pairs — (clean sku, canonical of SAME gtin)
+
+**Identity caveat** — components are built from valid-gtin identity + the deterministic gate rules; a checksum-invalid gtin never certifies identity, so barcode reuse alone does not imply same-component.
 
 | # | anchor — clean sku | positive — canonical (own gtin) |
 |---|---|---|
@@ -37,7 +39,7 @@ Mask token: `` ` `` — the anchor is noised, the pair target (canonical) stays 
 | 9 | cock bull diet ginger beer soda ideal mixer cocktails mocktails bartenders premium quality perfect mixed drinks refreshing fla vor profile type free c | cock n bull ginger soda diet_ginger_beer_soda states_health_claims_sugar cock_bull_diet_ginger bull_diet_ginger_beer derived_natural_type_geographic c |
 | 10 | zagori go green mineral water water type mineral volume caffeine sustainable packaging recycled materials carbonization still juice content contains m | zagori water zagori_natural_mineral_water zagori_natural_mineral mineral_material_type_glass carbonization_still_zagori_natural still_zagori_natural_m |
 
-## Masked positives — anchor noised at a random 5–15% extent
+## Masked positives — anchor noised at a per-pair extent drawn U(`masking.mask_lo: 0.20`, `masking.mask_hi: 0.35`)
 
 | # | anchor — masked clean sku (extent) | positive — canonical (own gtin) |
 |---|---|---|
