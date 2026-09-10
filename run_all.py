@@ -170,8 +170,14 @@ def step4_ablation() -> None:
     """07-series mirrors across ALL 3 models.
 
     Per model: 07c payload variants, 07d train-frac curve, then the
-    base full run's --plot. Rerank (07e) runs on the best base model
-    afterwards (needs a trained checkpoint).
+    base full run's --plot. Rerank (07e) runs afterwards on the FIXED
+    paraphrase-multilingual-MiniLM-L12-v2 base — config key
+    models.multilingual_l12 in 00_config.yaml, resolved through
+    lib.common.resolve_model — NOT on a "best base model": no artifact
+    at this point in the pipeline ranks base models by best_dev_ap
+    (step 3 trains the L12 base only; every train_*_fold_metrics.csv
+    holds L12 alone), so there is nothing to select a best from. The
+    rerank lane needs that one base's trained holdout checkpoint.
     """
     _sw = sweep_cfg()
     for key, sub in MODELS.items():
@@ -210,11 +216,15 @@ def step4_ablation() -> None:
                 ],
                 LOGS / f"step4_{key}_07d_frac{frac}.log",
             )
-    # 07e rerank + 07b four-population CSV: the docstring promised this
-    # "runs on the best base model afterwards (needs a trained checkpoint)"
-    # but the invocation was never wired — 07b_four_pop_scores.csv had no
-    # producer in this repo until now. Runs on the L12 base (the lane's
-    # default trainer) after step3's checkpoint exists.
+    # 07e rerank + 07b four-population CSV: the original docstring
+    # promised "runs on the best base model afterwards" but the
+    # invocation was never wired — 07b_four_pop_scores.csv had no
+    # producer in this repo until now. Runs on the FIXED L12 base
+    # (models.multilingual_l12 in 00_config.yaml, the lane's default
+    # trainer and the only base step 3 trains) after step3's checkpoint
+    # exists. No best-model selection: no per-model ranking artifact
+    # exists at this pipeline point (all train_*_fold_metrics.csv rows
+    # are L12), so a "best" would be fabricated, not measured.
     model = resolve_model(MODELS["multilingual_l12"])
     _sh(
         [
