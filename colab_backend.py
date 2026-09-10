@@ -326,10 +326,25 @@ def download_results(skip_checkpoints: bool = True) -> None:
         local = RESULTS / rel
         local.parent.mkdir(parents=True, exist_ok=True)
         print(f"[download] {rel}")
+        # RULING 2026-09-10 (silent-degradation audit): LOUD-RAISE.
+        # This runs after the lane and before stop() destroys the VM: a
+        # swallowed failure here is a silent data drop — main() would
+        # tear down the only remaining copy and print "[done] artifacts
+        # saved" over a partial results dir. Re-raise instead (colab()
+        # already printed the command + stderr tail; stop() still runs
+        # via main()'s finally unless --keep-alive, so the remote copy
+        # survives for a re-pull).
         try:
             colab("download", "-s", SESSION, name, str(local), timeout=600)
         except subprocess.CalledProcessError:
-            print(f"[warn] failed to download {rel}", file=sys.stderr)
+            print(
+                f"[error] results download failed for {rel} — local copy "
+                f"at {local} is absent/partial; refusing to continue "
+                f"because teardown would delete the only remote copy "
+                f"(re-run the lane, or re-pull from a --keep-alive VM)",
+                file=sys.stderr,
+            )
+            raise
 
 
 def download_checkpoints() -> None:
@@ -345,18 +360,47 @@ def download_checkpoints() -> None:
         local = HERE / "artifacts" / rel
         local.parent.mkdir(parents=True, exist_ok=True)
         print(f"[download] {rel}")
+        # RULING 2026-09-10 (silent-degradation audit): LOUD-RAISE.
+        # The trained model weights ARE the deliverable of --what train
+        # (results CSVs alone don't carry it, see docstring); a swallowed
+        # download here leaves the lane's only artifact on a VM that
+        # stop() is about to destroy. Re-raise so the operator can
+        # re-pull before teardown (--keep-alive keeps the VM up).
         try:
             colab("download", "-s", SESSION, name, str(local), timeout=1200)
         except subprocess.CalledProcessError:
-            print(f"[warn] failed to download {rel}", file=sys.stderr)
+            print(
+                f"[error] checkpoint download failed for {rel} — the "
+                f"trained weights were NOT pulled local; continuing would "
+                f"let stop() destroy the only copy. Re-run the lane or "
+                f"re-pull manually before the VM is gone (--keep-alive "
+                f"keeps it up)",
+                file=sys.stderr,
+            )
+            raise
 
 
 def stop() -> None:
     print(f"[stop] tearing down '{SESSION}'")
+    # RULING 2026-09-10 (silent-degradation audit): JUSTIFIED-KEEP.
+    # stop() runs in main()'s finally — if the lane itself raised, the
+    # lane's exception is the root cause and must stay the error the
+    # operator sees; raising here would MASK it with a teardown failure
+    # and abort nothing (no local data or pipeline state depends on the
+    # VM being gone). But it must not be silent: an unreleased VM burns
+    # Colab GPU quota until manually reaped, so warn loudly with the
+    # consequence + the exact recovery command.
     try:
         colab("stop", "-s", SESSION, check=False)
     except subprocess.SubprocessError as exc:
-        print(f"[warn] stop request failed (VM may still be live): {exc}", file=sys.stderr)
+        print(
+            f"[warn] VM release request failed — the VM '{SESSION}' may "
+            f"STILL BE LIVE and burning Colab GPU quota until it times "
+            f"out or is reaped. After handling the failure above, reclaim "
+            f"it with: colab stop -s {SESSION}   (or 'colab sessions' "
+            f"to check). Original error: {exc}",
+            file=sys.stderr,
+        )
     print("[stop] VM release requested")
 
 
