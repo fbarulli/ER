@@ -1,8 +1,9 @@
 """training-data composition plot — the owner's single overview figure.
 
 One bar per population with ABSOLUTE counts on top (the % share alone
-means little): golden hard positives (canonical-anchored), golden hard
-negatives (gate hard_no ∩ sim≥0.8), augmented positives (masked-anchor
+means little): gate-confirmed hard positives (canonical-anchored),
+gate-labeled hard negatives (gate hard_no ∩ sim≥0.8 — deterministic
+gate rules, not human-verified), augmented positives (masked-anchor
 copies), silver eval pool (mined in-band eval-only pairs) and TOTAL.
 """
 
@@ -37,9 +38,13 @@ def main() -> None:
     # (SSOT: training.n_target_mining; was a hardcoded 20_000 duplicate)
     silver = int(_cfg["training"]["n_target_mining"])
 
+    # Label-semantics honesty (2026-09-12): these labels are derived from
+    # deterministic gate rules over the transductive census, NOT human-
+    # verified ground truth — worded "gate-confirmed"/"gate-labeled"
+    # accordingly, never as human-verified claims.
     bars = [
-        ("hard positives\n(golden, same-GTIN)", n_pos, "#4C72B0"),
-        ("hard negatives\n(golden, gate hard-no)", n_neg, "#C44E52"),
+        ("hard positives\n(gate-confirmed, same-GTIN)", n_pos, "#4C72B0"),
+        ("hard negatives\n(gate-labeled, gate hard-no)", n_neg, "#C44E52"),
         ("augmented positives\n(masked anchors)", n_masked, "#8172B2"),
         ("silver eval pool\n(mined in-band, eval-only)", silver, "#937860"),
         (

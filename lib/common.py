@@ -217,6 +217,18 @@ F = _CFG["files"]
 COLUMN_MAPPING = dict(_CFG["column_mapping"])
 SEED = int(_CFG["seed"])
 
+# ── pinned census counts (2026-09-12; mirrors TRAIN/selftest.py's
+# oracle_pinned_counts hard pin) ─────────────────────────────────────────────
+# The transductive-census gate_results.csv is the universe BOTH
+# TRAIN/labeled_pairs.py and the selftest oracle read. fallback pairs are
+# excluded from the labeled set BY CONSTRUCTION (uncertain tier, would
+# inject label noise) — this pin makes that exclusion LOUD and COUNTED
+# instead of silent. Same audit lineage as the selftest pin (2026-09-08:
+# the pack_qty >= 1 zero-guard fixed 26 gate decisions).
+# NOT recomputed here: a pinned constant, updated alongside any
+# intentional census drift (paired with the selftest oracle update).
+PINNED_GATE_FALLBACK_PAIRS = 13_768
+
 
 def set_determinism(seed: int) -> None:
     """Seed EVERYTHING the training lane touches, loudly and unconditionally.
