@@ -223,6 +223,10 @@ Fold line example:
 fold 0: loss=1.35 acc@dev-youden0.71=0.60 AUC=0.62 cross=0.62 PR-AUC=0.28 F1@0.55=0.29 P@0.55=0.17 R@0.55=0.94 | best_dev_ap=0.31
 ```
 
+(`cross` = `auc_cross`: ROC-AUC restricted to cross-country positive pairs —
+positives masked to `country[a] != country[b]` per `cross_mask` in TRAIN/train_one_config,
+scored against the same hard negatives; see `auc_cross` in TRAIN/training.py.)
+
 ## 4 — Cross-encoder evaluation (stage 2) — the A/B protocol
 
 The cross-encoder (rerank) must PROVE itself against the bi-encoder on the
