@@ -236,7 +236,8 @@ protocol's F1/P/R are always at the fixed config threshold:
 2. For every validation pair, compute:
    - **bi-encoder similarity** (stage 1, cosine)
    - **hybrid score** = cross-encoder score for pairs in the confusion band
-     (0.35–0.90 cosine), else the bi-encoder score
+     ([0.50, 0.75] cosine, per `bands.rerank_band` in TRAIN/training.yaml),
+     else the bi-encoder score
 3. Compare on the holdout: **PR-AUC** (primary), **Precision/Recall/F1 at a
    threshold chosen on validation**, ROC-AUC (secondary).
 4. **Decision rule (quantitative, `rerank:` block in TRAIN/training.yaml)**:
@@ -512,12 +513,14 @@ panels fill in on the GPU pass (CPU: ~2000× slower on this torch build).
 docker build -t euromonitor-train-gpu \
   -f project/experiments/euromonitor/TRAIN_GPU/Dockerfile .
 ```
-deps pinned via `uv export --extra nlp` from `uv.lock`; run the lane with
+deps pinned in `requirements.txt` with fully pinned `==` versions (no uv — no
+`uv.lock` exists in this repo; the image installs `pip install -r requirements.txt`,
+per Dockerfile line 22); run the lane with
 `--workdir /app/project/experiments/euromonitor/TRAIN_GPU`; mount
 `artifacts/` to persist. Verified in-image: lint clean, config SSOT + data
-pipe import, exact version pins (torch 2.13.0, transformers 5.16.1,
+pipe import, exact version pins (torch==2.14.0, transformers 5.16.1,
 sentence-transformers 6.0.1, mlflow 3.15.1, optuna 4.4.0, sentencepiece
-0.2.2, ruff 0.16.3). 10.6GB.
+0.2.2, ruff 0.16.3), all per `requirements.txt`. 10.6GB.
 
 ## Deberta CPU warning
 
