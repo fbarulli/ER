@@ -1,6 +1,6 @@
 """Publish one worker's output through an isolated DVC project."""
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, tempfile, time
+import argparse, fcntl, json, os, shutil, subprocess, tempfile, time
 from pathlib import Path
 from core.common import training_cfg
 
@@ -102,7 +102,14 @@ def publish(source: Path, run_id: str, worker: int) -> None:
         )
     if paths:
         _run(["dvc", "add", *paths], source)
-    _run(["dvc", "push", "--jobs", "1"], source)
+    lock_path = source.parent / ".dvc-push.lock"
+    with lock_path.open("w", encoding="utf-8") as lock:
+        print(f"[dvc] waiting for shared push lock: {lock_path}", flush=True)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            _run(["dvc", "push", "--jobs", "1"], source)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     outputs = _verify_clean_pull(source, token, remote)
     manifest = {
         "run_id": run_id,
