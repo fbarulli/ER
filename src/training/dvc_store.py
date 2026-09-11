@@ -52,6 +52,8 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
         _run(["dvc", "remote", "modify", "dagshub", "--local", "user", "fbarulli"], verify)
         _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], verify)
         for pointer in source.glob("*.dvc"):
+            if not pointer.is_file():
+                continue
             shutil.copy2(pointer, verify / pointer.name)
         _run(["dvc", "pull", "--force"], verify)
         result = []
