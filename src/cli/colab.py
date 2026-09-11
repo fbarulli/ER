@@ -568,16 +568,16 @@ print(json.dumps(payload), flush=True)
             for key, label in (("train_loss", "train_loss"), ("dev_average_precision", "dev_ap"),
                                ("dev_accuracy", "dev_acc")):
                 if live.get(key) is not None:
-                    metrics.append(f"{{label}}={{float(live[key]):.4f}}")
+                    metrics.append(f"{label}={float(live[key]):.4f}")
             position = f"step {live.get('step', 0)}/{live.get('max_steps', '?')}"
-            print(f"[worker {{worker}}] {{live.get('event', 'running')}} | {{position}}" +
+            print(f"[worker {worker}] {live.get('event', 'running')} | {position}" +
                   (" | " + " | ".join(metrics) if metrics else "") +
-                  (f" | W&B {{live['wandb_url']}}" if live.get("wandb_url") else ""), flush=True)
+                  (f" | W&B {live['wandb_url']}" if live.get("wandb_url") else ""), flush=True)
         for worker, chunk in payload["chunks"].items():
             # Forward the complete worker log. Detached workers write to the
             # remote file, so filtering here would hide normal training output.
             for line in str(chunk).splitlines():
-                print(f"[worker {{worker}}] {{line}}", flush=True)
+                print(f"[worker {worker}] {line}", flush=True)
         if payload["done"]:
             failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
             if failed:
