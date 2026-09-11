@@ -47,6 +47,7 @@ from pathlib import Path
 # re-derived inline (HERE / "artifacts" / "results"), a second declaration
 # that happened to match today.
 from core.common import (
+    F,
     RESULTS,
     TRAIN_ROOT,
     sweep_cfg,
@@ -75,6 +76,28 @@ _HPO_MODE = _COLAB.hpo_mode
 _HPO_WORKERS = _COLAB.hpo_workers
 LIVE_LOG_PATH: Path | None = None
 _live_log = None
+_original_stdout = None
+_original_stderr = None
+
+
+class _Tee:
+    """Mirror launcher output to the terminal and the root live log."""
+
+    def __init__(self, stream, log_file) -> None:
+        self._stream = stream
+        self._log_file = log_file
+
+    def write(self, text: str) -> int:
+        self._stream.write(text)
+        self._log_file.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+        self._log_file.flush()
+
+    def isatty(self) -> bool:
+        return self._stream.isatty()
 
 # The clone contains the committed raw export and number-token reference;
 # data_prep regenerates deduped data and all downstream CSVs on the VM.
@@ -109,21 +132,16 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
 def run_colab_exec_stream(session: str, script: str, timeout: int | None = None, log_name: str | None = None) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
 
-    log_name labels a stage in one UTC-timestamped Colab log. The file is
+    log_name labels a stage in the root training.log transcript. The file is
     opened once per invocation, line-flushed, and survives VM teardown so
     every Colab stage is inspectable in one chronological log.
     """
-    log_file = _live_log
-    if log_file and log_name:
-        log_file.write(f"\n===== {log_name} =====\n")
-        log_file.flush()
+    if _live_log and log_name:
+        print(f"\n===== {log_name} =====", flush=True)
 
     def stream_output(pipe, prefix):
         for line in iter(pipe.readline, ''):
-            print(f"{prefix} {line.rstrip()}")
-            if log_file:
-                log_file.write(f"{prefix} {line}")
-                log_file.flush()
+            print(f"{prefix} {line.rstrip()}", flush=True)
         pipe.close()
 
     process = subprocess.Popen(
@@ -163,22 +181,28 @@ def run_colab_exec_stream(session: str, script: str, timeout: int | None = None,
 
 
 def start_live_log() -> None:
-    """Start a fresh single-file log for one Colab invocation."""
-    global LIVE_LOG_PATH, _live_log
+    """Start the root-level live Colab log, replacing the prior run's log."""
+    global LIVE_LOG_PATH, _live_log, _original_stdout, _original_stderr
     if _live_log is not None:
         _live_log.close()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    LIVE_LOG_PATH = RESULTS / "logs" / f"colab_training_{stamp}.log"
-    LIVE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LIVE_LOG_PATH = TRAIN_ROOT / F["colab_live_log"]
     _live_log = LIVE_LOG_PATH.open("w", encoding="utf-8")
+    _original_stdout = sys.stdout
+    _original_stderr = sys.stderr
+    sys.stdout = _Tee(_original_stdout, _live_log)
+    sys.stderr = _Tee(_original_stderr, _live_log)
     print(f"[log] capturing Colab output -> {LIVE_LOG_PATH}", flush=True)
 
 
 def close_live_log() -> None:
-    global _live_log
+    global _live_log, _original_stdout, _original_stderr
     if _live_log is not None:
+        sys.stdout = _original_stdout or sys.stdout
+        sys.stderr = _original_stderr or sys.stderr
         _live_log.close()
         _live_log = None
+        _original_stdout = None
+        _original_stderr = None
 
 
 def ensure_session() -> None:

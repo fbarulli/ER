@@ -75,6 +75,7 @@ files:
   # find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
   # src/training/train.py rewrites it on every non-sample run; sample runs never
   # touch it
+  colab_live_log: "training.log"          # root-level, overwritten per Colab run
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
 column_mapping:

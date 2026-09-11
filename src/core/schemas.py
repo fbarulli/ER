@@ -105,6 +105,7 @@ class DataFilesSpec(BaseModel):
     # gold-pair manifest (src/core/volume_verified); declared SSOT-side.
     second04_pairs_positive: str
     results_pointer: str
+    colab_live_log: str
 
 
 class DataPathsSpec(BaseModel):
