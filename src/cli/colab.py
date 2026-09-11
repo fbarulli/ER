@@ -661,8 +661,9 @@ def ensure_session() -> None:
     if SESSION in (r.stdout or ""):
         print(f"[session] '{SESSION}' already active")
         return
-    print(f"[session] provisioning {SESSION} (gpu={GPU}) ...")
-    colab("new", "-s", SESSION, "--gpu", GPU, timeout=300)
+    accelerator = [] if GPU.upper() == "CPU" else ["--gpu", GPU]
+    print(f"[session] provisioning {SESSION} ({'cpu' if not accelerator else f'gpu={GPU}'}) ...")
+    colab("new", "-s", SESSION, *accelerator, timeout=300)
     print("[session] up")
 
 
@@ -707,15 +708,16 @@ def install_deps() -> None:
 
 
 def log_gpu_profile() -> None:
-    """Record the exact accelerator and memory budget before training."""
+    """Record the runtime hardware before training, including CPU smoke runs."""
     script = """import torch
-if not torch.cuda.is_available():
-    raise RuntimeError('CUDA unavailable: refusing a CPU HPO run')
-p = torch.cuda.get_device_properties(0)
-free, total = torch.cuda.mem_get_info(0)
-print({'name': p.name, 'total_gb': round(total / 1e9, 2), 'free_gb': round(free / 1e9, 2), 'torch': torch.__version__}, flush=True)
+if torch.cuda.is_available():
+    p = torch.cuda.get_device_properties(0)
+    free, total = torch.cuda.mem_get_info(0)
+    print({'hardware': 'gpu', 'name': p.name, 'total_gb': round(total / 1e9, 2), 'free_gb': round(free / 1e9, 2), 'torch': torch.__version__}, flush=True)
+else:
+    print({'hardware': 'cpu', 'threads': torch.get_num_threads(), 'torch': torch.__version__}, flush=True)
 """
-    run_colab_exec_stream(SESSION, script, timeout=120, log_name="gpu_profile")
+    run_colab_exec_stream(SESSION, script, timeout=120, log_name="runtime_profile")
 
 
 _BOOTSTRAP = f"""
