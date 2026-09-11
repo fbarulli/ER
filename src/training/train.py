@@ -641,6 +641,7 @@ def _main_inner(_mlf, _wandb) -> None:
         train_frac=args.train_frac if args.train_frac < 1.0 else None,
         run_tag=run_tag,
         sample=bool(args.sample),
+        wandb_ctx=_wandb,
     )
     elapsed = time.perf_counter() - t0
 
@@ -659,7 +660,7 @@ def _main_inner(_mlf, _wandb) -> None:
         if getattr(args, "mask_frac", 0) > 0 and mask_audit and _ok:
             from sentence_transformers import SentenceTransformer as _ST
 
-            _best = RESULTS / f"_checkpoints/r{run_tag}_f{_ok[0]['fold']}"
+            _best = RESULTS / "_checkpoints" / model_tag / f"r{run_tag}_f{_ok[0]['fold']}"
             # pick the BEST checkpoint (dev-AP), not the highest-numbered
             # one: with save_total_limit=2 the dir holds [best, last] and
             # the last step is NOT the shipped model when early stopping

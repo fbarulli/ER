@@ -23,7 +23,8 @@ class WandbCtx:
             print("[wandb] disabled: WANDB_API_KEY absent; local MLflow remains active", flush=True)
             return self
         import wandb
-        self._run = wandb.init(project=self._project, name=self._name, mode=self._mode)
+        run_name = os.environ.get("WANDB_RUN_NAME", self._name)
+        self._run = wandb.init(project=self._project, name=run_name, mode=self._mode)
         print(f"[wandb] run started: project={self._project} mode={self._mode}", flush=True)
         return self
 

@@ -213,15 +213,21 @@ class ProgressCallback(TrainerCallback):
     early-stopper is actually watching.
     """
 
+    def __init__(self, wandb_ctx=None):
+        self.wandb_ctx = wandb_ctx
+
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not logs or not state.is_world_process_zero:
             return
         if "loss" in logs:
+            loss = float(logs["loss"])
             print(
                 f"    [epoch {state.epoch:>5.2f} | step {state.global_step:>4}/"
-                f"{state.max_steps:<4}] train_loss {float(logs['loss']):.4f}",
+                f"{state.max_steps:<4}] train_loss {loss:.4f}",
                 flush=True,
             )
+            if self.wandb_ctx is not None:
+                self.wandb_ctx.log_metrics({"live/train_loss": loss, "live/epoch": float(state.epoch or 0.0)})
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if not metrics or not state.is_world_process_zero:
@@ -247,6 +253,20 @@ class ProgressCallback(TrainerCallback):
             pass
         if parts:
             print(f"    [step {state.global_step:>4}] " + " | ".join(parts), flush=True)
+        if self.wandb_ctx is not None:
+            self.wandb_ctx.log_metrics(
+                {
+                    "live/dev_loss": float(metrics["eval_loss"])
+                    if metrics.get("eval_loss") is not None else None,
+                    "live/dev_accuracy": float(metrics[acc_key])
+                    if acc_key is not None else None,
+                    "live/dev_average_precision": float(ap)
+                    if ap is not None else None,
+                    "live/dev_auc": float(metrics[auc_key])
+                    if auc_key is not None else None,
+                    "live/epoch": float(state.epoch or 0.0),
+                }
+            )
 
 
 def _discriminative_groups(
@@ -390,6 +410,7 @@ def train_one_config(
     # hyperparameters can never be fitted on it. Skipped rows carry
     # test_eval="skipped_selection_mode" — loud, never a silent NaN.
     selection_mode: bool = False,
+    wandb_ctx=None,
 ) -> list[dict]:
     """Train cfg across the group-aware folds. Returns fold metric rows
     (failures included, with traceback)."""
@@ -797,8 +818,9 @@ def train_one_config(
                 SentenceTransformerTrainingArguments as STArgs,
             )
 
+            model_tag = str(model_id).rstrip("/").rsplit("/", 1)[-1]
             args_hf = STArgs(
-                output_dir=str(RESULTS / f"_checkpoints/r{run_tag}_f{fold_i}"),
+                output_dir=str(RESULTS / "_checkpoints" / model_tag / f"r{run_tag}_f{fold_i}"),
                 per_device_train_batch_size=batch_size,
                 num_train_epochs=cfg["epochs"],
                 learning_rate=cfg["lr"],
@@ -874,7 +896,7 @@ def train_one_config(
                 # discriminative LRs; scheduler=None -> HF builds warmup+linear
                 # from args, scaling our per-group LRs
                 callbacks=[
-                    ProgressCallback(),
+                    ProgressCallback(wandb_ctx),
                     EarlyStoppingCallback(
                         early_stopping_patience=cfg["patience"],
                         early_stopping_threshold=cfg["es_threshold"],
@@ -1305,12 +1327,13 @@ def run_hpo(
                 seed=SEED,
                 on_cuda=torch.cuda.is_available(),
                 cv_folds=cv_folds,
-                run_tag=f"t{trial.number}",
+                run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
                 folds_override=folds_override,
                 dev_fraction=dev_fraction,
                 dev_override=dev_override,
                 selection_mode=selection_mode,
                 neg_pairs=neg_pairs,
+                wandb_ctx=wandb_ctx,
             )
             ok_rows = [r for r in rows if r.get("status") == "ok"]
             if not ok_rows:

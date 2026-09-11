@@ -36,6 +36,8 @@ colab:
   remote_root: "/content/EuromonitoR"
   session: "EuromonitoR"
   gpu: "T4"
+  hpo_mode: "sequential"
+  hpo_workers: 3
 
 # ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
 # The gate's decision table, formerly signature defaults in

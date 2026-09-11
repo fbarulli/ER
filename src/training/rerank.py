@@ -48,7 +48,8 @@ def rerank_stage(
     if not ok_rows:
         print("[rerank] no trained fold to rerank — skipping", flush=True)
         return
-    ckpt = RESULTS / f"_checkpoints/r{run_tag}_f{ok_rows[0]['fold']}"
+    model_tag = args.model.rstrip("/").rsplit("/", 1)[-1]
+    ckpt = RESULTS / "_checkpoints" / model_tag / f"r{run_tag}_f{ok_rows[0]['fold']}"
     if not ckpt.exists():
         # HF Trainer keeps the final/best model in the checkpoint dir root
         # only with save_only_model; else look one level up for best dir

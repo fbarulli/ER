@@ -22,7 +22,11 @@ from core.common import _path, load_config
 _cfg = load_config()
 # NO FALLBACK (owner Q27): paths.mlruns_dir is hard-required — a missing
 # key must crash, not silently scatter runs into a default directory.
-_MLRUNS = _path(_cfg["paths"]["mlruns_dir"])
+_MLRUNS = (
+    Path(os.environ["EUROMONITOR_MLRUNS_DIR"]).expanduser().resolve()
+    if os.environ.get("EUROMONITOR_MLRUNS_DIR")
+    else _path(_cfg["paths"]["mlruns_dir"])
+)
 
 
 class MlflowCtx:

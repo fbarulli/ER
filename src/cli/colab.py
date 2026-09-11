@@ -71,6 +71,8 @@ BRANCH = _COLAB.branch
 SESSION = _COLAB.session
 GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
+_HPO_MODE = _COLAB.hpo_mode
+_HPO_WORKERS = _COLAB.hpo_workers
 LIVE_LOG_PATH: Path | None = None
 _live_log = None
 
@@ -339,24 +341,29 @@ if rc != 0:
     run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="02_train")
 
 
-def run_hpo() -> None:
+def run_hpo(mode: str | None = None) -> None:
     """Sweep every configured backbone, then evaluate and rerank each winner."""
-    print("[run] round-robin HPO -> held-out evaluation -> CrossEncoder rerank ...")
+    mode = mode or _HPO_MODE
+    print(f"[run] round-robin HPO (mode={mode}, workers={_HPO_WORKERS}) ...")
     script = _BOOTSTRAP + _wandb_env_script() + f"""
-import json, os, pathlib, subprocess, sys
+import concurrent.futures, json, os, pathlib, shutil, subprocess, sys
 from datetime import datetime, timezone
-from core.common import hpo_cfg, resolve_model
+from core.common import F, hpo_cfg, resolve_model
 root = pathlib.Path("{REMOTE_ROOT}")
 base = [sys.executable, "-u", "-m", "training.train", "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot"]
 model_keys = hpo_cfg()["models"]
 required = {{"epochs", "lr", "warmup_ratio", "weight_decay"}}
-summary = []
+mode = "{mode}"
+workers = {_HPO_WORKERS}
 
-def run_logged(args, label):
+def run_logged(args, label, extra_env=None):
     log_path = root / "results" / "logs" / (
         f"colab_{{label}}_{{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}}.log"
     )
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = {{**os.environ, "PYTHONUNBUFFERED": "1"}}
+    if extra_env:
+        env.update(extra_env)
     print(f"[subprocess] {{' '.join(args)}} -> {{log_path}}", flush=True)
     with log_path.open("w", encoding="utf-8") as log:
         proc = subprocess.Popen(
@@ -366,7 +373,7 @@ def run_logged(args, label):
             text=True,
             bufsize=1,
             cwd=root,
-            env={{**os.environ, "PYTHONUNBUFFERED": "1"}},
+            env=env,
         )
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -381,12 +388,29 @@ def run_logged(args, label):
         )
     return log_path
 
-for model_key in model_keys:
+def worker_setup(model_key):
+    if mode != "parallel_same_vm":
+        return root / "results", {{}}
+    out = root / "results" / "hpo_workers" / model_key
+    out.mkdir(parents=True, exist_ok=True)
+    for name in (F["canonical_records"], F["gate_results"]):
+        source, target = root / "results" / name, out / name
+        if not source.is_file():
+            raise FileNotFoundError(f"worker input missing: {{source}}")
+        shutil.copy2(source, target)
+    return out, {{
+        "EUROMONITOR_RESULTS_DIR": str(out),
+        "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
+        "WANDB_RUN_NAME": f"hpo_{{model_key}}",
+    }}
+
+def run_model(model_key):
     model = resolve_model(model_key)
+    out, env = worker_setup(model_key)
     model_tag = str(model).rstrip("/").rsplit("/", 1)[-1]
-    best_path = root / "results" / f"train_{{model_tag}}-dlr_hpo_best.json"
+    best_path = out / f"train_{{model_tag}}-dlr_hpo_best.json"
     print(f"== HPO {{model_key}}: {{model}} (dev-selected; test withheld)", flush=True)
-    run_logged(base + ["--model", str(model), "--hpo"], f"hpo_{{model_key}}")
+    run_logged(base + ["--model", str(model), "--hpo"], f"hpo_{{model_key}}", env)
     if not best_path.is_file():
         raise RuntimeError(f"missing HPO winner for {{model_key}}: {{best_path}}")
     best = json.loads(best_path.read_text())
@@ -403,8 +427,19 @@ for model_key in model_keys:
         "--rerank", "{_RERANK_MODEL}",
     ]
     print(f"== FINAL {{model_key}}: selected dev config -> held-out test + rerank", flush=True)
-    run_logged(final, f"final_{{model_key}}")
-    summary.append({{"model_key": model_key, "model": str(model), "best": params}})
+    final_env = dict(env)
+    if final_env:
+        final_env["WANDB_RUN_NAME"] = f"final_{{model_key}}"
+    run_logged(final, f"final_{{model_key}}", final_env)
+    return {{"model_key": model_key, "model": str(model), "best": params,
+            "results_dir": str(out.relative_to(root / "results"))
+            if mode == "parallel_same_vm" else "results"}}
+
+if mode == "parallel_same_vm":
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(model_keys))) as pool:
+        summary = [future.result() for future in [pool.submit(run_model, key) for key in model_keys]]
+else:
+    summary = [run_model(key) for key in model_keys]
 (root / "results" / "hpo_round_robin_summary.json").write_text(
     json.dumps({{"models": summary, "rerank_model": "{_RERANK_MODEL}"}}, indent=2),
     encoding="utf-8",
@@ -662,6 +697,12 @@ def main() -> None:
         help=f"Colab accelerator request (default {GPU}; e.g. A100 when available)",
     )
     ap.add_argument(
+        "--hpo-mode",
+        choices=["sequential", "parallel_same_vm"],
+        default=_HPO_MODE,
+        help="HPO scheduling mode (default from config/training.yaml)",
+    )
+    ap.add_argument(
         "--refresh-data",
         action="store_true",
         help="explicitly regenerate frozen CSV inputs before training",
@@ -696,7 +737,7 @@ def main() -> None:
         elif args.what == "smoke":
             run_train(args.train_frac, args.epochs, sample=_SMOKE_SAMPLE)
         elif args.what == "hpo":
-            run_hpo()
+            run_hpo(args.hpo_mode)
         else:
             run_train(args.train_frac, args.epochs, sample=None)
         manifests = download_results(require_manifests=args.refresh_data)

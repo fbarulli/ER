@@ -325,7 +325,12 @@ def _path(cfg_value: str) -> Path:
 
 # ── paths (SSOT) ────────────────────────────────────────────────────────────
 DATA_DIR = _path(_CFG["paths"]["data_dir"])
-RESULTS = _path(_CFG["paths"]["results_dir"])
+_results_override = os.environ.get("EUROMONITOR_RESULTS_DIR")
+RESULTS = (
+    Path(_results_override).expanduser().resolve()
+    if _results_override
+    else _path(_CFG["paths"]["results_dir"])
+)
 RESULTS.mkdir(parents=True, exist_ok=True)
 DATA_PATH = DATA_DIR / _CFG["files"]["dataset"]
 
