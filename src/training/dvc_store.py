@@ -55,6 +55,18 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _dvc_status_is_clean(output: str) -> bool:
+    """Interpret DVC's human-readable clean status without hiding dirtiness."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return True
+    return all(
+        line.endswith("are in sync.")
+        and ("remote" in line or "data" in line.lower())
+        for line in lines
+    )
+
+
 def _tracked_outputs(source: Path) -> list[Path]:
     import yaml
     outputs: list[Path] = []
@@ -186,7 +198,7 @@ def publish_checkpoint(
             # own. Require DVC's cloud comparison to report this exact
             # pointer in sync before making the resume metadata visible.
             cloud_status = _run(["dvc", "status", "--cloud", str(native_relative)], source)
-            if cloud_status.strip():
+            if not _dvc_status_is_clean(cloud_status):
                 raise RuntimeError(
                     f"DVC cloud status is not clean for {native_relative}: "
                     f"{cloud_status.strip()}"
