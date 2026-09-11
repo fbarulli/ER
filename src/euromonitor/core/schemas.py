@@ -323,7 +323,18 @@ class AuditSpec(BaseModel):
     strip-audit similarity ladder's Jaccard band edges
     strip_ladder_bands (were an inline literal list in
     src/euromonitor/training/strip_audit.py; SSOT move — contiguous, ascending, each
-    lo < hi)."""
+    lo < hi) + the silent-drop guardrail's manifest knobs (SILENT_DROPS
+    task 2): manifest_dir — where per-stage manifests live (a manifest
+    written LAST is the stage's completion marker; consumers resolve it
+    relative to the repo root via lib.common._path);
+    source_export_expected_rows — the approved raw-export census
+    (dataset.csv row count) the source-drift gate checks every loaded
+    export against; source_drift_threshold_pct — relative row-count
+    drift allowed on that census before the gate fails (0.0 = exact
+    match required); manifest_stages — the registry of stages that MUST
+    produce a manifest (run_all steps may append their own). All four
+    are optional-with-default; the defaults are mirrored explicitly in
+    the yaml so the SSOT stays self-documenting."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -331,6 +342,28 @@ class AuditSpec(BaseModel):
     strip_ladder_bands: list[BandSpec] = Field(min_length=1)
     blocking_budget: int = Field(ge=1)
     blocking_min_recall: float = Field(gt=0.0, le=1.0)
+    # ── silent-drop guardrail knobs (SILENT_DROPS task 2; tasks 3+ consume) ──
+    # manifest_dir: per-stage manifests live here, one <stage>.json per
+    #   stage, written LAST — a manifest's presence with status "complete"
+    #   IS the stage's completion marker. Consumers resolve it relative
+    #   to the repo root via lib.common._path.
+    manifest_dir: str = Field(default="results/manifests", min_length=1)
+    # source_export_expected_rows: the approved raw-export census — the
+    #   current dataset.csv row count. The source-drift gate (task 9)
+    #   compares every loaded export against this number so a changed
+    #   source export is loud, never silent.
+    source_export_expected_rows: int = Field(default=71_623, ge=0)
+    # source_drift_threshold_pct: relative row-count drift allowed on the
+    #   source export before that gate fails. 0.0 = exact match required
+    #   (any row-count change trips the gate).
+    source_drift_threshold_pct: float = Field(default=0.0, ge=0.0)
+    # manifest_stages: stages that MUST produce a manifest, in pipeline
+    #   order. run_all steps may append their own later; this list is
+    #   the required-minimum registry the verify pass walks.
+    manifest_stages: list[str] = Field(
+        default=["dedupe", "data_prep", "labeled_pairs", "evaluate_models", "zero_shot_sims"],
+        min_length=0,
+    )
 
     @model_validator(mode="after")
     def _contiguous_ascending(self) -> AuditSpec:

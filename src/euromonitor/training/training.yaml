@@ -133,11 +133,26 @@ plots:
 # ladder's Jaccard band edges — were an inline literal list in
 # TRAIN/strip_audit.py (~:186). Same values, new home; read via
 # lib.common.strip_ladder_bands().
+# The four manifest_* / source_* knobs below (SILENT_DROPS task 2) feed the
+# silent-drop guardrail layer: per-stage manifests, the raw-export census,
+# and the source-drift gate that enforces it. Defaults live in
+# AuditSpec (lib/schemas.py) and are mirrored here explicitly so the SSOT
+# stays self-documenting; tasks 3+ consume them via training_cfg().audit.
 audit:
   strip_audit_sample: 200
   strip_ladder_bands: [[0.0, 0.2], [0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.01]]
   blocking_budget: 5_000_000      # candidate pairs the classifier can afford
   blocking_min_recall: 0.95      # greedy forward-selection recall floor
+  manifest_dir: "results/manifests"   # per-stage <stage>.json, written LAST;
+                               # presence w/ status "complete" = stage ran
+  source_export_expected_rows: 71_623 # approved dataset.csv census (drift gate)
+  source_drift_threshold_pct: 0.0     # allowed row-count drift; 0.0 = exact
+  manifest_stages:                    # stages that MUST produce a manifest,
+    - "dedupe"                        # in pipeline order (run_all steps may
+    - "data_prep"                     # append their own later)
+    - "labeled_pairs"
+    - "evaluate_models"
+    - "zero_shot_sims"
 
 
 # ── confusion / rerank bands (bi-encoder cosine) ────────────────────────────

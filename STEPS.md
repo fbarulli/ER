@@ -8,7 +8,7 @@ file + field named, never mid-run:
 | file | model (lib/schemas.py) | owns |
 |---|---|---|
 | `00_config.yaml` | `DataConfig` | paths, file names, column mapping, seed, model registry |
-| `TRAIN/training.yaml` | `TrainingConfig` | loss, split, masking, **gate thresholds**, training knobs, pair thresholds + eval-pair caps, bands, mining, HPO spaces + selection protocol (`hpo.objective` / `hpo.selection_skip_test_eval`), rerank rule, ablation sweep, plots (dpi), audit (strip-audit sample + blocking-audit budget/min-recall) |
+| `TRAIN/training.yaml` | `TrainingConfig` | loss, split, masking, **gate thresholds**, training knobs, pair thresholds + eval-pair caps, bands, mining, HPO spaces + selection protocol (`hpo.objective` / `hpo.selection_skip_test_eval`), rerank rule, ablation sweep, plots (dpi), audit (strip-audit sample + blocking-audit budget/min-recall + manifest knobs: `manifest_dir` / `source_export_expected_rows` / `source_drift_threshold_pct` / `manifest_stages`) |
 
 (The EDA dir and its eda.yaml were deleted 2026-09-10 — the lane is
 training-only. The five TRAIN-consumed EDA keys — plots.dpi,
