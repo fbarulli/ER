@@ -412,7 +412,7 @@ def _list_remote(pattern_dir: str) -> list[str]:
     raise SystemExit(f"remote listing returned no marker; out={out[-500:]}")
 
 
-def _download_remote_manifests() -> list[StageManifest]:
+def _download_remote_manifests(*, required: bool = True) -> list[StageManifest]:
     """Pull and validate the completion records produced by remote stages.
 
     The manifests live outside the normal results-download tree, so they
@@ -422,6 +422,9 @@ def _download_remote_manifests() -> list[StageManifest]:
     """
     remote_dir = f"{REMOTE_ROOT}/results/manifests"
     names = _list_remote(remote_dir)
+    if not names and not required:
+        print("[download] no stage manifests (frozen CSV lane)")
+        return []
     if not names:
         raise RuntimeError(
             f"remote manifest directory is empty: {remote_dir}; refusing "
@@ -496,7 +499,9 @@ def _verify_manifest_downloads(manifests: list[StageManifest]) -> None:
         )
 
 
-def download_results(skip_checkpoints: bool = True) -> None:
+def download_results(
+    skip_checkpoints: bool = True, *, require_manifests: bool = False
+) -> list[StageManifest]:
     """Pull the result artifacts back to the repo results dir.
 
     AUDIT FIX 2026-09-08: the generic rglob included _checkpoints (~1.9 GB
@@ -504,7 +509,7 @@ def download_results(skip_checkpoints: bool = True) -> None:
     download_checkpoints() only when --what train asks for them.
     """
     RESULTS.mkdir(parents=True, exist_ok=True)
-    manifests = _download_remote_manifests()
+    manifests = _download_remote_manifests(required=require_manifests)
     files = _list_remote(f"{REMOTE_ROOT}/results")
     for name in files:
         rel = Path(name).relative_to(f"{REMOTE_ROOT}/results")
@@ -533,9 +538,10 @@ def download_results(skip_checkpoints: bool = True) -> None:
             )
             raise
     _verify_manifest_downloads(manifests)
+    return manifests
 
 
-def download_checkpoints() -> None:
+def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
     """Pull the trained checkpoints (model weights) back.
 
     Called after --what train: the trained model IS the deliverable of the
@@ -544,7 +550,8 @@ def download_checkpoints() -> None:
     # Re-fetch and re-verify after this separately downloaded tree too.  A
     # future stage may list a checkpoint as an output; then it receives the
     # same hash gate as ordinary results instead of becoming a blind spot.
-    manifests = _download_remote_manifests()
+    if manifests is None:
+        manifests = _download_remote_manifests(required=False)
     print("[download] checkpoints ...")
     files = _list_remote(f"{REMOTE_ROOT}/results/_checkpoints")
     for name in files:
@@ -652,9 +659,9 @@ def main() -> None:
             run_hpo()
         else:
             run_train(args.train_frac, args.epochs, sample=None)
-        download_results()
+        manifests = download_results(require_manifests=args.refresh_data)
         if args.what == "train":
-            download_checkpoints()
+            download_checkpoints(manifests)
     finally:
         # Default behavior is to aggressively teardown to prevent quota burning.
         if not args.keep_alive:
