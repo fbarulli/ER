@@ -594,6 +594,7 @@ class ColabSpec(BaseModel):
     artifact_repo_id: str = Field(min_length=1)
     artifact_repo_private: bool
     mask_effect_after_train: bool
+    smoke_epochs: int = Field(ge=1)
 
 
 class TrainingConfig(BaseModel):

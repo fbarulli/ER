@@ -79,6 +79,7 @@ _HPO_WORKERS = _COLAB.hpo_workers
 _TRAIN_WORKERS = _COLAB.train_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _MASK_EFFECT_AFTER_TRAIN = _COLAB.mask_effect_after_train
+_SMOKE_EPOCHS = _COLAB.smoke_epochs
 LIVE_LOG_PATH: Path | None = None
 _live_log = None
 _original_stdout = None
@@ -969,7 +970,7 @@ def main() -> None:
         if args.what == "sims":
             run_sims_deberta()
         elif args.what == "smoke":
-            run_train(args.train_frac, args.epochs, sample=_SMOKE_SAMPLE, workers=1)
+            run_train(args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE, workers=1)
         elif args.what == "hpo":
             run_hpo(args.hpo_mode)
         else:
