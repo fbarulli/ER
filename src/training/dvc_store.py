@@ -27,6 +27,8 @@ def _tracked_outputs(source: Path) -> list[Path]:
     import yaml
     outputs: list[Path] = []
     for pointer in sorted(source.glob("*.dvc")):
+        if not pointer.is_file():
+            continue
         data = yaml.safe_load(pointer.read_text(encoding="utf-8")) or {}
         for entry in data.get("outs", []):
             path = source / str(entry["path"])
@@ -68,13 +70,14 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     if not token:
         raise RuntimeError("DVC_API_KEY is required for DagsHub persistence")
     os.environ["DVC_SITE_CACHE_DIR"] = str(source / ".dvc-site-cache")
-    _run(["dvc", "init", "--no-scm"], source)
-    _run(["dvc", "config", "cache.dir", str(source / ".dvc-cache")], source)
     remote = training_cfg().colab.dvc_remote_url
-    _run(["dvc", "remote", "add", "--default", "dagshub", remote], source)
-    _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], source)
-    _run(["dvc", "remote", "modify", "dagshub", "--local", "user", "fbarulli"], source)
-    _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], source)
+    if not (source / ".dvc").is_dir():
+        _run(["dvc", "init", "--no-scm"], source)
+        _run(["dvc", "config", "cache.dir", str(source / ".dvc-cache")], source)
+        _run(["dvc", "remote", "add", "--default", "dagshub", remote], source)
+        _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], source)
+        _run(["dvc", "remote", "modify", "dagshub", "--local", "user", "fbarulli"], source)
+        _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], source)
     paths = [
         p.name for p in source.iterdir()
         if p.is_file() and p.suffix == ".csv"
