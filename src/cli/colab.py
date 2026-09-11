@@ -76,6 +76,7 @@ GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
 _HPO_WORKERS = _COLAB.hpo_workers
+_TRAIN_WORKERS = _COLAB.train_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 LIVE_LOG_PATH: Path | None = None
 _live_log = None
@@ -280,6 +281,77 @@ print(json.dumps(payload), flush=True)
         time.sleep(_LOG_POLL_SECONDS)
 
 
+def run_parallel_train_and_tail(args: list[str], workers: int) -> None:
+    """Run isolated full-data trainers concurrently and mirror worker logs."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
+    launch = _BOOTSTRAP + f"""
+import json, os, pathlib, shutil, shlex, subprocess, sys
+from core.common import F
+root = pathlib.Path({REMOTE_ROOT!r})
+base = pathlib.Path({remote_base!r})
+base.mkdir(parents=True, exist_ok=False)
+command = " ".join(shlex.quote(part) for part in [sys.executable, *{args!r}])
+started = []
+for number in range(1, {workers} + 1):
+    out = base / f"worker_{{number}}"
+    out.mkdir()
+    for name in (F["canonical_records"], F["gate_results"]):
+        source = root / "results" / name
+        if not source.is_file():
+            raise FileNotFoundError(f"worker input missing: {{source}}")
+        shutil.copy2(source, out / name)
+    log_path, status_path = out / "training.log", out / "training.status"
+    env = {{**os.environ, "PYTHONUNBUFFERED": "1", "EUROMONITOR_RESULTS_DIR": str(out),
+           "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
+    wrapped = f"{{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+    with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+        child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
+            stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
+            start_new_session=True)
+    started.append({{"worker": number, "pid": child.pid}})
+print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
+"""
+    print(f"[run] starting {workers} isolated full-data trainers; streaming all worker logs ...", flush=True)
+    launched = _parse_remote_json(run_colab_exec_capture(SESSION, launch, timeout=120))
+    print(f"[train] remote workers={launched['workers']} base={launched['base']}", flush=True)
+    offsets = {str(item["worker"]): 0 for item in launched["workers"]}
+    while True:
+        probe = _BOOTSTRAP + f"""
+import json, pathlib
+base = pathlib.Path({remote_base!r})
+offsets = {offsets!r}
+payload = {{"offsets": {{}}, "chunks": {{}}, "status": {{}}}}
+for number in range(1, {workers} + 1):
+    key = str(number)
+    out = base / f"worker_{{number}}"
+    log_path, status_path = out / "training.log", out / "training.status"
+    offset = int(offsets.get(key, 0))
+    data = b""
+    if log_path.is_file():
+        with log_path.open("rb") as handle:
+            handle.seek(offset)
+            data = handle.read()
+    payload["offsets"][key] = offset + len(data)
+    payload["chunks"][key] = data.decode("utf-8", errors="replace")
+    payload["status"][key] = status_path.read_text(encoding="utf-8").strip() if status_path.is_file() else None
+payload["done"] = all(value is not None for value in payload["status"].values())
+print(json.dumps(payload), flush=True)
+"""
+        payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=120))
+        offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
+        for worker, chunk in payload["chunks"].items():
+            for line in str(chunk).splitlines():
+                print(f"[worker {worker}] {line}", flush=True)
+        if payload["done"]:
+            failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
+            if failed:
+                raise RuntimeError(f"parallel trainers failed: {failed}")
+            print(f"[train] all {workers} remote workers completed successfully", flush=True)
+            return
+        time.sleep(_LOG_POLL_SECONDS)
+
+
 def start_live_log() -> None:
     """Start the root-level live Colab log, replacing the prior run's log."""
     global LIVE_LOG_PATH, _live_log, _original_stdout, _original_stderr
@@ -440,7 +512,7 @@ for path in required:
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check")
 
 
-def run_train(frac: float, epochs: int, sample: int | None) -> None:
+def run_train(frac: float, epochs: int, sample: int | None, workers: int = 1) -> None:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the VM (GPU) ...")
     # AUDIT 2026-09-09: --mask-frac 0.15 REMOVED — it hardcoded a value that
@@ -455,7 +527,10 @@ def run_train(frac: float, epochs: int, sample: int | None) -> None:
         "--no-plot"]
     if sample is not None:
         args.extend(["--sample", str(sample)])
-    run_detached_train_and_tail(args)
+    if workers == 1:
+        run_detached_train_and_tail(args)
+    else:
+        run_parallel_train_and_tail(args, workers)
 
 
 def run_hpo(mode: str | None = None) -> None:
@@ -809,6 +884,11 @@ def main() -> None:
                     help=f"epochs for --what train (default {_EPOCHS_DEFAULT} = "
                     "config/training.yaml training.epochs)")
     ap.add_argument(
+        "--workers", type=int, default=_TRAIN_WORKERS,
+        help=f"concurrent full-data trainers for --what train (default {_TRAIN_WORKERS} = "
+        "config/training.yaml colab.train_workers; use 1 for a single run)",
+    )
+    ap.add_argument(
         "--gpu",
         default=GPU,
         help=f"Colab accelerator request (default {GPU}; e.g. A100 when available)",
@@ -852,11 +932,11 @@ def main() -> None:
         if args.what == "sims":
             run_sims_deberta()
         elif args.what == "smoke":
-            run_train(args.train_frac, args.epochs, sample=_SMOKE_SAMPLE)
+            run_train(args.train_frac, args.epochs, sample=_SMOKE_SAMPLE, workers=1)
         elif args.what == "hpo":
             run_hpo(args.hpo_mode)
         else:
-            run_train(args.train_frac, args.epochs, sample=None)
+            run_train(args.train_frac, args.epochs, sample=None, workers=args.workers)
         manifests = download_results(require_manifests=args.refresh_data)
         if args.what == "train":
             download_checkpoints(manifests)

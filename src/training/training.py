@@ -221,8 +221,9 @@ class ProgressCallback(TrainerCallback):
             return
         if "loss" in logs:
             loss = float(logs["loss"])
+            total_epochs = float(args.num_train_epochs)
             print(
-                f"    [epoch {state.epoch:>5.2f} | step {state.global_step:>4}/"
+                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
                 f"{state.max_steps:<4}] train_loss {loss:.4f}",
                 flush=True,
             )

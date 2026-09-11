@@ -38,6 +38,7 @@ colab:
   gpu: "T4"
   hpo_mode: "sequential"
   hpo_workers: 3
+  train_workers: 6
   log_poll_seconds: 2
 
 # ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
