@@ -51,6 +51,7 @@ from pathlib import Path
 from core.common import (
     F,
     RESULTS,
+    TRAINING_RESULTS,
     TRAIN_ROOT,
     sweep_cfg,
     training_cfg,
@@ -354,9 +355,28 @@ print(json.dumps(payload), flush=True)
             failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
             if failed:
                 raise RuntimeError(f"parallel trainers failed: {failed}")
+            download_verified_training_results(remote_base, workers)
             print(f"[train] all {workers} remote workers completed successfully", flush=True)
             return
         time.sleep(_LOG_POLL_SECONDS)
+
+
+def download_verified_training_results(remote_base: str, workers: int) -> None:
+    """Materialize only DVC-verified smoke outputs under training_results/."""
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    local_base = TRAINING_RESULTS / run_id
+    for number in range(1, workers + 1):
+        remote_dir = f"{remote_base}/worker_{number}"
+        local_dir = local_base / f"worker_{number}"
+        for name in _list_remote(remote_dir):
+            remote = Path(name)
+            if remote.suffix not in {".csv", ".json", ".log"}:
+                continue
+            rel = remote.relative_to(remote_dir)
+            local = local_dir / rel
+            local.parent.mkdir(parents=True, exist_ok=True)
+            colab("download", "-s", SESSION, name, str(local), timeout=600)
+    print(f"[download] DVC-verified training outputs -> {local_base}", flush=True)
 
 
 def start_live_log() -> None:
