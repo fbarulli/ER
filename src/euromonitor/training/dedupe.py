@@ -21,8 +21,14 @@ stays the source of truth (load_dataset unchanged).
 Writes:
   artifacts/data/dataset_deduped.csv   deduped dataset (pipeline input)
   artifacts/data/sku_to_rep.csv        raw SKU (product_id) -> rep_id
-  artifacts/results/06_dedupe_summary.csv          per-tier counts
-  artifacts/results/06_ambiguous_offer_groups.csv  retailer+title >1 price
+  results/06_dedupe_summary.csv        per-tier counts
+  results/06_ambiguous_offer_groups.csv  retailer+title >1 price
+  results/manifests/dedupe.json        per-stage manifest, written LAST
+                                        (SILENT_DROPS task 4 — the stage's
+                                        completion marker: closure
+                                        input_rows == output_rows + dropped,
+                                        every output sha256-pinned, all
+                                        writes atomic)
 """
 
 from __future__ import annotations
@@ -35,7 +41,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import pandas as pd
 
-from euromonitor.core.common import DATA_DIR, RESULTS, F, load_dataset
+from euromonitor.core.common import DATA_DIR, DATA_PATH, RESULTS, SEED, F, load_dataset
+from euromonitor.core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 
 # output paths from the config SSOT (files.*) — were hardcoded here, the
 # only filenames in the tree outside 00_config.yaml
@@ -49,6 +56,11 @@ HELPERS = ["_price", "_nonnull", "_has_bc", "_t2_bc", "_bc_valid"]
 
 def main() -> None:
     RESULTS.mkdir(parents=True, exist_ok=True)
+    # Stage manifest (SILENT_DROPS task 4) — begin BEFORE the work: the
+    # raw export is hashed now (53MB, chunked) so the record pins exactly
+    # what this stage read. Seed = the SSOT seed (lib.common.SEED); the
+    # tiered collapse below is deterministic, no RNG is consumed.
+    manifest = begin_manifest("dedupe", inputs=[DATA_PATH], seed=SEED)
     df = load_dataset()
     n0 = len(df)
     work = df.assign(
@@ -173,7 +185,7 @@ def main() -> None:
     # errors="ignore": _t2_bc exists only on T2 survivors; a tier upstream may
     # legitimately not produce it.
     deduped = work.drop(columns=HELPERS, errors="ignore").reset_index(drop=True)
-    deduped.to_csv(DEDUPED_PATH, index=False)
+    atomic_write_csv(deduped, DEDUPED_PATH, index=False)
     print(f"wrote {DEDUPED_PATH} ({len(deduped):,} rows)")
 
     rep_pos = {idx: pos for pos, idx in enumerate(work.index)}
@@ -181,7 +193,7 @@ def main() -> None:
         "product_id": df["product_id"].to_numpy(),
         "rep_id": [rep_pos[parent[i]] for i in df.index],
     })
-    sku_to_rep.to_csv(SKU_TO_REP_PATH, index=False)
+    atomic_write_csv(sku_to_rep, SKU_TO_REP_PATH, index=False)
     print(f"wrote {SKU_TO_REP_PATH} ({len(sku_to_rep):,} rows)")
 
     # sanity: no (retailer,title) duplicates may remain, and every raw SKU
@@ -197,14 +209,56 @@ def main() -> None:
 
     summary.append({"tier": "TOTAL dropped", "dropped_rows": n0 - len(deduped)})
     summary.append({"tier": "TOTAL remaining", "dropped_rows": len(deduped)})
-    pd.DataFrame(summary).to_csv(CSV_SUMMARY, index=False)
+    summary_df = pd.DataFrame(summary)
+    atomic_write_csv(summary_df, CSV_SUMMARY, index=False)
     print(f"wrote {CSV_SUMMARY} (display table, {len(summary)} rows)")
 
     ambiguous_out = ambiguous.rename(
         columns={"count": "rows", "nunique": "distinct_prices"}).reset_index()
-    ambiguous_out.to_csv(CSV_OFFERS, index=False)
+    atomic_write_csv(ambiguous_out, CSV_OFFERS, index=False)
     print(f"wrote {CSV_OFFERS} (display table, {len(ambiguous_out)} rows) "
           f"— {len(ambiguous_out):,} ambiguous-offer groups flagged")
+
+    # ---- row accounting (SILENT_DROPS task 4; capture-only) ────────────────
+    # The three tier counters partition the frame at each step, so the
+    # closure input_rows == output_rows + sum(dropped) holds by
+    # construction (finish_manifest asserts it before publishing):
+    # 71,623 == 61,529 + (1,943 + 2,245 + 5,906).
+    #
+    # The two "deferred" populations are NOT drops and deliberately
+    # excluded from `dropped`:
+    #   skipped_checksum_invalid (T1) — 3,715 checksum-fail barcode rows
+    #     are concatenated BACK into the work frame (fall through to the
+    #     title tiers), so they stay in play; any collapse they later
+    #     suffer is already counted inside the T3 tier counter.
+    #   deferred_to_t3 (T2) — 465 barcode-conflicting rows likewise
+    #     re-enter the frame and are settled by T3's counter.
+    # Recording them under their own keys (outside `dropped`) keeps the
+    # audit trail complete without breaking the closure invariant.
+    row_accounting = {
+        "input_rows": n0,
+        "output_rows": len(deduped),
+        "dropped": {
+            "t1_retailer_barcode": len(dropped1),
+            "t2_retailer_title_price_barcode": len(dropped2),
+            "t3_retailer_title_price_aggregation": len(dropped3),
+        },
+        "skipped_checksum_invalid": n_t1_skipped,
+        "deferred_to_t3": len(t2_conflict),
+        "ambiguous_offer_groups": len(ambiguous_out),
+    }
+    manifest_path = finish_manifest(
+        manifest,
+        outputs=[DEDUPED_PATH, SKU_TO_REP_PATH, CSV_SUMMARY, CSV_OFFERS],
+        row_accounting=row_accounting,
+        expected_outputs=[
+            F["dataset_deduped"], F["sku_to_rep"],
+            F["dedupe_summary"], F["ambiguous_offer_groups"],
+        ],
+    )
+    print(f"wrote {manifest_path} — stage manifest (closure "
+          f"{row_accounting['input_rows']:,} == {row_accounting['output_rows']:,} "
+          f"+ {sum(row_accounting['dropped'].values()):,} dropped)")
 
     print(f"\n{len(df):,} rows -> {len(deduped):,} after tiered dedupe "
           f"(dropped {n0 - len(deduped):,}); "
