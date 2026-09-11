@@ -44,7 +44,13 @@ def _run(command: list[str], cwd: Path) -> None:
             )
             print(f"[processes] started pid={process.pid} command={command[0]}", flush=True)
             _process_snapshot(f"running dvc attempt {attempt}: pid={process.pid}")
-            output, _ = process.communicate()
+            output_lines = []
+            assert process.stdout is not None
+            for line in process.stdout:
+                output_lines.append(line)
+                print(f"[dvc-out] {line.rstrip()}", flush=True)
+            process.wait()
+            output = "".join(output_lines)
         except BaseException:
             print(
                 f"[dvc] traceback while running attempt {attempt}: {' '.join(shown)}",

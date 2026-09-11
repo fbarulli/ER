@@ -197,18 +197,38 @@ def run_colab_exec_stream(session: str, script: str, timeout: int | None = None,
 
 
 def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
-    """Execute a short remote probe and return its stdout for the live tailer."""
+    """Execute a remote probe, streaming its output while retaining stdout."""
     last_error = ""
     for attempt in range(1, _PROBE_RETRIES + 1):
         try:
-            process = subprocess.run(
+            process = subprocess.Popen(
                 ["colab", "exec", "-s", session, "--timeout", str(timeout)],
-                input=script,
-                capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=timeout + 30,
+                bufsize=1,
             )
+            captured: list[str] = []
+
+            def stream_probe_output() -> None:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    captured.append(line)
+                    print(f"[probe-out] {line.rstrip()}", flush=True)
+
+            reader = threading.Thread(target=stream_probe_output, daemon=True)
+            reader.start()
+            assert process.stdin is not None
+            process.stdin.write(script)
+            process.stdin.close()
+            process.wait(timeout=timeout + 30)
+            reader.join()
+            output = "".join(captured)
         except subprocess.TimeoutExpired as exc:
+            process.kill()
+            process.wait()
+            reader.join()
             last_error = f"probe timeout: {exc}"
             print(
                 f"[probe] timeout after {timeout}s on attempt {attempt}/{_PROBE_RETRIES}",
@@ -217,13 +237,13 @@ def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
             traceback.print_exc()
         else:
             if process.returncode == 0:
-                return process.stdout
-            last_error = f"rc={process.returncode}: {process.stderr[-2000:]}"
+                return output
+            last_error = f"rc={process.returncode}: {output[-2000:]}"
             print(
                 f"[probe] remote command rc={process.returncode}; stderr tail:",
                 flush=True,
             )
-            print(process.stderr[-2000:], flush=True)
+            print(output[-2000:], flush=True)
         if attempt < _PROBE_RETRIES:
             delay = _PROBE_RETRY_BACKOFF_SECONDS * attempt
             print(f"[probe] transient remote failure ({attempt}/{_PROBE_RETRIES}); retrying in {delay}s", flush=True)
@@ -394,12 +414,14 @@ resume_pointers = {resume_pointers!r}
 started = []
 for number in range(1, {workers} + 1):
     out = base / f"worker_{{number}}"
+    print(f"[resume-preflight] worker {{number}}: preparing {{out}}", flush=True)
     if {bool(resume_run)!r}:
         out.mkdir(exist_ok=True)
         pointer_dir = out / ".resume"
         pointer_dir.mkdir(exist_ok=True)
         for name, encoded in resume_pointers[str(number)].items():
             (pointer_dir / name).write_bytes(base64.b64decode(encoded))
+        print(f"[resume-preflight] worker {{number}}: pointer files written", flush=True)
         for name in (F["canonical_records"], F["gate_results"]):
             source = root / "results" / name
             if not (out / name).is_file():
@@ -416,7 +438,9 @@ for number in range(1, {workers} + 1):
                 )
             restored_checkpoint = False
             for pointer in pointers:
+                print(f"[resume-preflight] worker {{number}}: restoring {{pointer.name}}", flush=True)
                 outputs = restore_pointer(out, pointer)
+                print(f"[resume-preflight] worker {{number}}: DVC pull complete", flush=True)
                 checkpoint_outputs = [
                     path for path in outputs
                     if "_checkpoints" in path.relative_to(out).parts
@@ -476,6 +500,7 @@ for number in range(1, {workers} + 1):
         child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
             start_new_session=True)
+    print(f"[train-launch] worker {{number}} started pid={{child.pid}}", flush=True)
     started.append({{"worker": number, "pid": child.pid}})
 print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
 """
