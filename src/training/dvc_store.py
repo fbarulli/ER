@@ -4,36 +4,12 @@ import argparse, fcntl, json, os, shutil, subprocess, tempfile, time, traceback
 from pathlib import Path
 from core.common import training_cfg
 
-def _process_snapshot(label: str) -> None:
-    """Put the local process table in the live training/DVC log."""
-    result = subprocess.run(
-        ["ps", "-eo", "pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    output = result.stdout
-    for name in (
-        "DVC_API_KEY",
-        "DAGSHUB_USER_TOKEN",
-        "HF_TOKEN",
-        "HUGGINGFACE_HUB_TOKEN",
-        "WANDB_API_KEY",
-    ):
-        secret = os.environ.get(name)
-        if secret:
-            output = output.replace(secret, "<redacted>")
-    print(f"[processes:{label}]\n{output.rstrip()}", flush=True)
-
-
-def _run(command: list[str], cwd: Path) -> None:
+def _run(command: list[str], cwd: Path) -> str:
     shown = ["<redacted>" if command[i - 1:i] == ["password"] else part for i, part in enumerate(command)]
     print(f"[dvc] running: {' '.join(shown)}", flush=True)
     cfg = training_cfg().colab
     attempts = cfg.dvc_push_retries if command[:2] == ["dvc", "push"] else 1
     for attempt in range(1, attempts + 1):
-        _process_snapshot(f"before dvc attempt {attempt}: {command[0]}")
         try:
             process = subprocess.Popen(
                 command,
@@ -42,8 +18,7 @@ def _run(command: list[str], cwd: Path) -> None:
                 stderr=subprocess.STDOUT,
                 text=True,
             )
-            print(f"[processes] started pid={process.pid} command={command[0]}", flush=True)
-            _process_snapshot(f"running dvc attempt {attempt}: pid={process.pid}")
+            print(f"[dvc] started pid={process.pid}", flush=True)
             output_lines = []
             assert process.stdout is not None
             for line in process.stdout:
@@ -61,9 +36,9 @@ def _run(command: list[str], cwd: Path) -> None:
         result = subprocess.CompletedProcess(command, process.returncode, output)
         if result.stdout:
             print(result.stdout.rstrip(), flush=True)
-        _process_snapshot(f"after dvc attempt {attempt}: rc={result.returncode}")
+        print(f"[dvc] finished rc={result.returncode}", flush=True)
         if result.returncode == 0:
-            return
+            return result.stdout or ""
         if attempt < attempts:
             delay = cfg.dvc_push_backoff_seconds * (2 ** (attempt - 1))
             print(f"[dvc] command failed; retry {attempt}/{attempts - 1} in {delay}s", flush=True)
@@ -139,7 +114,13 @@ def _configure(source: Path, token: str) -> str:
     return remote
 
 
-def publish_checkpoint(source: Path, checkpoint_root: Path) -> Path:
+def publish_checkpoint(
+    source: Path,
+    checkpoint_root: Path,
+    *,
+    resume_name: str | None = None,
+    restore_root: Path | None = None,
+) -> Path:
     """DVC-push a complete Trainer checkpoint tree after a save event.
 
     The pointer lives beneath the worker directory and names the tree using a
@@ -151,9 +132,11 @@ def publish_checkpoint(source: Path, checkpoint_root: Path) -> Path:
         raise RuntimeError("DVC_API_KEY is required to persist a checkpoint")
     source = source.resolve()
     checkpoint_root = checkpoint_root.resolve()
+    restore_root = (restore_root or checkpoint_root).resolve()
     relative_root = checkpoint_root.relative_to(source)
+    restore_root.relative_to(source)
     _configure(source, token)
-    pointer = source / ".resume" / f"{checkpoint_root.name}.dvc"
+    pointer = source / ".resume" / f"{resume_name or checkpoint_root.name}.dvc"
     # DVC recursively discovers existing .dvc files.  The durable resume
     # pointers are intentionally kept under source/.resume, but they must not
     # participate in discovery while a new output is added.  Temporarily
@@ -183,7 +166,10 @@ def publish_checkpoint(source: Path, checkpoint_root: Path) -> Path:
     for entry in pointer_data.get("outs", []):
         native_output = (native_pointer.parent / str(entry["path"])).resolve()
         native_output.relative_to(source)
-        entry["path"] = os.path.relpath(native_output, pointer.parent)
+        # The upload workspace can be a hard-linked snapshot that is removed
+        # once the asynchronous push completes.  The durable pointer must
+        # restore to the Trainer's original checkpoint location instead.
+        entry["path"] = os.path.relpath(restore_root, pointer.parent)
     native_relative = native_pointer.relative_to(source)
     lock_path = source.parent / ".dvc-push.lock"
     with lock_path.open("w", encoding="utf-8") as lock:
@@ -199,10 +185,12 @@ def publish_checkpoint(source: Path, checkpoint_root: Path) -> Path:
             # A successful push process is not sufficient evidence on its
             # own. Require DVC's cloud comparison to report this exact
             # pointer in sync before making the resume metadata visible.
-            _run(
-                ["dvc", "status", "--cloud", "--quiet", str(native_relative)],
-                source,
-            )
+            cloud_status = _run(["dvc", "status", "--cloud", str(native_relative)], source)
+            if cloud_status.strip():
+                raise RuntimeError(
+                    f"DVC cloud status is not clean for {native_relative}: "
+                    f"{cloud_status.strip()}"
+                )
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     # Expose the durable resume pointer only after the exact target push has
@@ -280,7 +268,28 @@ def restore_checkpoint(source: Path, checkpoint_root: Path) -> Path:
     checkpoint_root.relative_to(source)
     pointer = source / ".resume" / f"{checkpoint_root.name}.dvc"
     if not pointer.is_file():
-        raise FileNotFoundError(f"DVC resume pointer is missing: {pointer}")
+        # New asynchronous publishing writes one durable pointer per immutable
+        # ``checkpoint-N`` directory.  Restore the newest published checkpoint
+        # beneath this Trainer output root; an unfinished upload has no pointer
+        # and therefore can never be selected for resume.
+        candidates: list[tuple[int, Path]] = []
+        for candidate in sorted((source / ".resume").glob("checkpoint-*.dvc")):
+            try:
+                outputs = _pointer_outputs(source, candidate)
+            except (OSError, ValueError):
+                continue
+            if len(outputs) != 1 or outputs[0].parent != checkpoint_root:
+                continue
+            try:
+                step = int(outputs[0].name.removeprefix("checkpoint-"))
+            except ValueError:
+                continue
+            candidates.append((step, candidate))
+        if not candidates:
+            raise FileNotFoundError(
+                f"DVC resume pointer is missing for {checkpoint_root}"
+            )
+        _, pointer = max(candidates)
     restore_pointer(source, pointer)
     if not checkpoint_root.is_dir() and not checkpoint_root.is_file():
         raise RuntimeError(f"DVC restore did not materialize {checkpoint_root}")
