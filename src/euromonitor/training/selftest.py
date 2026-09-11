@@ -1255,6 +1255,204 @@ def oracle_zero_pack_guard() -> None:
         check(f"pack regression {title!r} == {want}", got == want, f"got {got}")
 
 
+def oracle_manifest() -> None:
+    """Silent-drop guardrail layer (SILENT_DROPS tasks 1-4; this oracle
+    is task 5): pins the per-stage manifest machinery — the artifact
+    schema, the atomic-publish primitives, and the LIVE dedupe
+    manifest that is the pilot stage's completion marker.
+
+    WHAT truth is pinned:
+      * schema contract — a minimal synthetic StageManifest (one
+        input, one output) validates, and extra="forbid" rejects an
+        unknown key: the artifact shape cannot drift silently;
+      * atomic_write publish discipline — a successful write fully
+        replaces an existing file and leaves zero `.tmp-*` residue;
+        a forced os.replace failure leaves the OLD target intact,
+        unlinks the temp sibling, and re-raises (manifest.py's
+        `except BaseException` cleanup — the exact behavior that
+        makes "manifest present with status complete == stage
+        finished" a sound marker);
+      * the LIVE results/manifests/dedupe.json — read_manifest parses
+        it against StageManifest, status is "complete", row
+        accounting closes (input == output + Σ dropped), the census
+        is pinned tolerance-free (oracle_pinned_counts convention),
+        and verify_manifest("dedupe") re-hashes every output on disk
+        and passes.
+
+    Three-state live-manifest semantics (results/ is a gitignored
+    runtime tree — a fresh clone runs the selftest only after a
+    pipeline run):
+      1. results/ absent or EMPTY (euromonitor.core.common mkdirs it
+         at import, so an empty tree IS the pre-run state) -> the
+         live pins SKIP with an info note: no pipeline has run, there
+         is no marker to hold anyone to yet. Deliberate deviation from
+         oracle_pinned_counts, which fails on missing runtime CSVs
+         unconditionally — the manifest is a completion MARKER, so
+         its absence before any run is legitimate;
+      2. results/ populated but manifests/dedupe.json missing -> FAIL
+         LOUD with the remedy: a populated tree proves a pipeline ran,
+         so a missing marker means the dedupe stage never finished or
+         bypassed the manifest layer — never silent;
+      3. manifest present -> every live pin runs against it.
+    """
+    from pydantic import ValidationError
+    from unittest.mock import patch
+
+    from euromonitor.core.common import RESULTS, _path, training_cfg
+    from euromonitor.core.manifest import atomic_write, read_manifest, verify_manifest
+    from euromonitor.core.schemas import ManifestFile, StageManifest
+
+    # ── pin 1: the StageManifest schema contract (synthetic, in-memory) ──
+    synthetic = StageManifest(
+        schema_version="1",
+        stage="selftest-synthetic",
+        started="2026-09-12T00:00:00+00:00",
+        finished="2026-09-12T00:00:01+00:00",
+        status="complete",
+        inputs=[ManifestFile(path="dataset.csv", sha256="a" * 64, rows=10, cols=3)],
+        outputs=[ManifestFile(
+            path="dataset_deduped.csv", sha256="b" * 64, rows=7, cols=3, expected=True,
+        )],
+        row_accounting={"input_rows": 10, "output_rows": 7, "dropped": {"t1": 3}},
+        environment={
+            "git_sha": "0" * 40, "config_sha256": "c" * 64,
+            "seed": "42", "host": "selftest",
+        },
+        expected_outputs=["dataset_deduped.csv"],
+    )
+    check(
+        "StageManifest accepts minimal valid manifest (1 in / 1 out)",
+        synthetic.stage == "selftest-synthetic"
+        and len(synthetic.inputs) == 1
+        and len(synthetic.outputs) == 1,
+    )
+    try:
+        StageManifest.model_validate({**synthetic.model_dump(), "surprise_key": 1})
+        check("StageManifest rejects unknown key (extra=forbid)", False)
+    except ValidationError:
+        check("StageManifest rejects unknown key (extra=forbid)", True)
+
+    # ── pin 2: atomic_write publish discipline (tempdir, never results/) ──
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d)
+        target = work / "target.bin"
+        target.write_bytes(b"stale-bytes")
+        returned = atomic_write(target, b"fresh-bytes-published")
+        check(
+            "atomic_write replaces an existing file fully",
+            target.read_bytes() == b"fresh-bytes-published" and returned == target,
+            f"got {target.read_bytes()!r}, returned {returned}",
+        )
+        residue = [p.name for p in work.glob("*.tmp-*")]
+        check(
+            "atomic_write success leaves no .tmp-* residue",
+            not residue,
+            f"residue: {residue}",
+        )
+        # forced publish failure: os.replace dies mid-publish — the
+        # helper must unlink its temp sibling, leave the OLD target
+        # untouched, and re-raise (no swallowed error, no residue).
+        target.write_bytes(b"must-survive")
+        caught: BaseException | None = None
+        with patch(
+            "euromonitor.core.manifest.os.replace",
+            side_effect=OSError("simulated interrupt mid-publish"),
+        ):
+            try:
+                atomic_write(target, b"never-published")
+            except BaseException as err:  # observing, not swallowing
+                caught = err
+        residue = [p.name for p in work.glob("*.tmp-*")]
+        check(
+            "failed publish: target untouched + temp cleaned + error raised",
+            isinstance(caught, OSError)
+            and target.read_bytes() == b"must-survive"
+            and not residue,
+            f"raised={caught!r} target={target.read_bytes()!r} residue={residue}",
+        )
+
+    # ── pins 3-5: the LIVE dedupe manifest (three-state gate) ─────────────
+    manifest_path = _path(training_cfg().audit.manifest_dir) / "dedupe.json"
+    if not (RESULTS.exists() and any(RESULTS.iterdir())):
+        print(
+            "    [info] results/ tree absent/empty — pre-run state; live "
+            f"manifest pins skipped (run the pipeline to produce {manifest_path})"
+        )
+        return
+    if not manifest_path.exists():
+        check(
+            "dedupe manifest present (results/ populated)",
+            False,
+            f"{manifest_path} missing — results/ has content (a pipeline ran) "
+            "but the dedupe stage left no completion marker; produce it with: "
+            "PYTHONPATH=src python3 -m euromonitor.training.dedupe",
+        )
+        return
+    try:
+        m = read_manifest("dedupe")
+        check(
+            "read_manifest('dedupe') parses against StageManifest",
+            isinstance(m, StageManifest) and m.stage == "dedupe",
+        )
+    except Exception as e:  # noqa: BLE001
+        check(
+            "read_manifest('dedupe') parses against StageManifest", False, repr(e)
+        )
+        return
+    ra = m.row_accounting
+    dropped = ra.get("dropped") or {}
+    check(
+        "dedupe manifest status == 'complete'",
+        m.status == "complete",
+        f"got {m.status!r}",
+    )
+    closes = (
+        isinstance(ra.get("input_rows"), int)
+        and isinstance(ra.get("output_rows"), int)
+        and ra["input_rows"] == ra["output_rows"] + sum(int(v) for v in dropped.values())
+    )
+    check(
+        "dedupe row accounting closes (input == output + Σ dropped)",
+        closes,
+        f"got {ra}",
+    )
+    expected_dropped = {
+        "t1_retailer_barcode": 1943,
+        "t2_retailer_title_price_barcode": 2245,
+        "t3_retailer_title_price_aggregation": 5906,
+    }
+    check(
+        "dedupe census pinned: input 71,623 / output 61,529 / "
+        "dropped 10,094 (T1 1,943 / T2 2,245 / T3 5,906)",
+        # what current code + committed export reproducibly yields; a
+        # silent upstream export change that shifts row counts fails
+        # here (same discipline as oracle_pinned_counts)
+        ra.get("input_rows") == 71623
+        and ra.get("output_rows") == 61529
+        and dropped == expected_dropped
+        and sum(dropped.values()) == 10094,
+        f"got {ra}",
+    )
+    check(
+        "dedupe deferred keys pinned: skipped_checksum_invalid 3,715 / "
+        "deferred_to_t3 465 / ambiguous groups 3,469",
+        # deferred populations are recorded OUTSIDE dropped (they
+        # re-enter later tiers; see dedupe.py's accounting note) —
+        # pin them so the audit trail can't silently thin out
+        ra.get("skipped_checksum_invalid") == 3715
+        and ra.get("deferred_to_t3") == 465
+        and ra.get("ambiguous_offer_groups") == 3469,
+        f"got {ra}",
+    )
+    try:
+        verify_manifest("dedupe")
+        check("verify_manifest('dedupe') passes on the live manifest", True)
+    except Exception as e:  # noqa: BLE001
+        check(
+            "verify_manifest('dedupe') passes on the live manifest", False, str(e)
+        )
+
+
 def main() -> None:
     print("== 1. GS1 checksum ==")
     oracle_gtin()
@@ -1292,6 +1490,8 @@ def main() -> None:
     oracle_zero_pack_guard()
     print("== 9. pinned real-data counts ==")
     oracle_pinned_counts()
+    print("== 9b. per-stage manifest guardrail (silent-drop layer) ==")
+    oracle_manifest()
     print()
     if FAILED:
         print(f"SELFTEST FAILED: {len(FAILED)} oracle(s):")
