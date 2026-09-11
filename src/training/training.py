@@ -395,7 +395,14 @@ class ProgressCallback(TrainerCallback):
                 flush=True,
             )
             if self.wandb_ctx is not None:
-                self.wandb_ctx.log_metrics({"live/train_loss": loss, "live/epoch": float(state.epoch or 0.0)})
+                self.wandb_ctx.log_metrics(
+                    {
+                        "live/train_loss": loss,
+                        "live/epoch": float(state.epoch or 0.0),
+                        "trainer/global_step": state.global_step,
+                    },
+                    step=state.global_step,
+                )
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if not metrics or not state.is_world_process_zero:
@@ -445,7 +452,9 @@ class ProgressCallback(TrainerCallback):
                     "live/dev_auc": float(metrics[auc_key])
                     if auc_key is not None else None,
                     "live/epoch": float(state.epoch or 0.0),
-                }
+                    "trainer/global_step": state.global_step,
+                },
+                step=state.global_step,
             )
 
 

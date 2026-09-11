@@ -491,8 +491,12 @@ for number in range(1, {workers} + 1):
                 raise FileNotFoundError(f"worker input missing: {{source}}")
             shutil.copy2(source, out / name)
     log_path, status_path = out / "training.log", out / "training.status"
+    wandb_dir = out / "wandb"
+    wandb_dir.mkdir(parents=True, exist_ok=True)
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
-           "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
+           "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_DIR": str(wandb_dir),
+           "WANDB_RUN_ID": f"{run_id}-w{{number}}", "WANDB_RESUME": "allow",
+           "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
     process_log = out / "processes.log"
     ps_command = f"ps -eo pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args >> {{shlex.quote(str(process_log))}} 2>&1"
     wrapped = f"{{ps_command}}; timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; {{ps_command}}; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
