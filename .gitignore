@@ -29,3 +29,5 @@ dataset_model_input.csv
 *.parquet
 *.zip
 training.log
+# Unrelated local artifact tree (contains node_modules, archives, and media).
+archify/
