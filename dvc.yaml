@@ -1,0 +1,9 @@
+stages:
+  train:
+    cmd: python colab_backend.py --what train
+    deps:
+    - config
+    - src
+    outs:
+    - artifacts/models
+    - results

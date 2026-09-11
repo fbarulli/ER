@@ -41,8 +41,10 @@ Artifacts (results/, SSOT via config/paths.yaml):
 from __future__ import annotations
 
 import json
+import os
 import time
 import traceback
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -124,6 +126,171 @@ from core.ranking_metrics import ranking_at_k
 # ═══════════════════════════════════════════════════════════════════════════
 # Training (ST 6 modern Trainer path with HF early stopping)
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+def _align_model_token_ids(model: SentenceTransformer) -> None:
+    """Make tokenizer special-token IDs the single source of truth.
+
+    Transformers can load a tokenizer whose PAD/BOS/EOS IDs differ from the
+    IDs serialized in the base model config.  It repairs that mismatch in
+    memory, but relying on that implicit repair leaves checkpoint contents
+    dependent on the loader version.  Align both configs explicitly before
+    the trainer starts; the model config is then serialized with each saved
+    checkpoint.  Sentence-transformers models are encoder-only, so the
+    generation config is normally unused, but align it when Transformers
+    exposes one as well.
+    """
+    tokenizer = model.tokenizer
+    auto_model = model[0].auto_model
+
+    token_ids = {
+        "pad_token_id": tokenizer.pad_token_id,
+        "bos_token_id": tokenizer.bos_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+    }
+    changed: dict[str, tuple[object, int]] = {}
+    for name, token_id in token_ids.items():
+        if token_id is None:
+            continue
+        old_value = getattr(auto_model.config, name, None)
+        if old_value != token_id:
+            changed[name] = (old_value, token_id)
+        setattr(auto_model.config, name, token_id)
+
+        generation_config = getattr(auto_model, "generation_config", None)
+        if generation_config is not None:
+            setattr(generation_config, name, token_id)
+
+    if changed:
+        details = ", ".join(
+            f"{name}={old!r}->{new!r}" for name, (old, new) in changed.items()
+        )
+        print(f"    [tokens] aligned tokenizer IDs in model config: {details}", flush=True)
+
+    unresolved = {
+        name: (getattr(auto_model.config, name, None), token_id)
+        for name, token_id in token_ids.items()
+        if token_id is not None and getattr(auto_model.config, name, None) != token_id
+    }
+    if unresolved:
+        raise RuntimeError(f"tokenizer/model token-ID alignment failed: {unresolved}")
+
+
+def _make_checkpoint_tokenizer_portable(checkpoint: Path) -> None:
+    """Keep Transformers 5 tokenizer saves loadable by older HF runtimes.
+
+    Transformers 5 may serialize the fast tokenizer as ``TokenizersBackend``.
+    That name is not an AutoTokenizer class in the older runtime used by some
+    Colab images, even though the accompanying ``tokenizer.json`` is valid.
+    The generic fast-tokenizer class reads the same file and preserves the
+    already aligned special-token IDs.
+    """
+    config_path = checkpoint / "tokenizer_config.json"
+    tokenizer_path = checkpoint / "tokenizer.json"
+    if not config_path.is_file() or not tokenizer_path.is_file():
+        raise RuntimeError(
+            f"checkpoint is missing tokenizer assets: {checkpoint}"
+        )
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if config.get("tokenizer_class") == "TokenizersBackend":
+        config["tokenizer_class"] = "PreTrainedTokenizerFast"
+        config_path.write_text(
+            json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    special_tokens = {
+        name: config[name]
+        for name in ("bos_token", "eos_token", "unk_token", "sep_token", "pad_token", "cls_token", "mask_token")
+        if name in config
+    }
+    special_map_path = checkpoint / "special_tokens_map.json"
+    if special_tokens and not special_map_path.exists():
+        special_map_path.write_text(
+            json.dumps(special_tokens, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+
+def _checkpoint_state_value(value):
+    """Move tensor leaves to CPU so a consolidated checkpoint is portable."""
+    import torch
+
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().clone()
+    if isinstance(value, dict):
+        return {key: _checkpoint_state_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_checkpoint_state_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_checkpoint_state_value(item) for item in value)
+    return value
+
+
+def _write_consolidated_checkpoint_state(
+    checkpoint: Path,
+    *,
+    epoch,
+    global_step: int,
+    model,
+    optimizer,
+    scheduler,
+    scaler,
+    trainer_state,
+    trainer_control,
+    training_args,
+) -> None:
+    """Write one complete, portable resume snapshot beside HF's files."""
+    import random
+
+    import torch
+
+    log_history = getattr(trainer_state, "log_history", []) or []
+    losses = [entry["eval_loss"] for entry in log_history if "eval_loss" in entry]
+    tokenizer = getattr(model, "tokenizer", None)
+    auto_model = model[0].auto_model
+    token_names = ("pad_token_id", "bos_token_id", "eos_token_id")
+    checkpoint_state = {
+        "epoch": epoch,
+        "global_step": global_step,
+        "model_state_dict": _checkpoint_state_value(model.state_dict()),
+        "optimizer_state_dict": _checkpoint_state_value(optimizer.state_dict())
+        if optimizer is not None
+        else None,
+        "scheduler_state_dict": _checkpoint_state_value(scheduler.state_dict())
+        if scheduler is not None
+        else None,
+        "scaler_state_dict": _checkpoint_state_value(scaler.state_dict())
+        if scaler is not None and hasattr(scaler, "state_dict")
+        else None,
+        "best_loss": min(losses) if losses else None,
+        "rng_state": torch.get_rng_state(),
+        "cuda_rng_state": torch.cuda.get_rng_state()
+        if torch.cuda.is_available()
+        else None,
+        "cuda_rng_state_all": torch.cuda.get_rng_state_all()
+        if torch.cuda.is_available()
+        else None,
+        "numpy_rng_state": np.random.get_state(),
+        "python_rng_state": random.getstate(),
+        "tokenizer_token_ids": {
+            name: getattr(tokenizer, name, None) for name in token_names
+        },
+        "model_config_token_ids": {
+            name: getattr(auto_model.config, name, None) for name in token_names
+        },
+        "generation_config_token_ids": {
+            name: getattr(getattr(auto_model, "generation_config", None), name, None)
+            for name in token_names
+        },
+        # HF uses these to restore the exact position, best checkpoint, and
+        # callback decisions; keep them in the same atomic snapshot too.
+        "trainer_state": dict(vars(trainer_state)),
+        "trainer_control": dict(vars(trainer_control)),
+        "training_args": training_args.to_dict(),
+    }
+    torch.save(checkpoint_state, checkpoint / "checkpoint_state.pt")
 
 
 # _auc/_cos -> _common SSOT (see GATES_MAP.md)
@@ -215,15 +382,24 @@ class ProgressCallback(TrainerCallback):
 
     def __init__(self, wandb_ctx=None):
         self.wandb_ctx = wandb_ctx
+        self.latest_train_loss: float | None = None
+        self.latest_dev_accuracy: float | None = None
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not logs or not state.is_world_process_zero:
             return
         if "loss" in logs:
             loss = float(logs["loss"])
+            self.latest_train_loss = loss
+            total_epochs = float(args.num_train_epochs)
+            accuracy = (
+                f" | dev_acc {self.latest_dev_accuracy:.4f}"
+                if self.latest_dev_accuracy is not None
+                else ""
+            )
             print(
-                f"    [epoch {state.epoch:>5.2f} | step {state.global_step:>4}/"
-                f"{state.max_steps:<4}] train_loss {loss:.4f}",
+                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
+                f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy}",
                 flush=True,
             )
             if self.wandb_ctx is not None:
@@ -235,6 +411,8 @@ class ProgressCallback(TrainerCallback):
         ap = metrics.get("eval_dev_cosine_ap")
         auc_key = next((k for k in metrics if k.endswith("_auc")), None)
         acc_key = next((k for k in metrics if k.endswith("_cosine_accuracy")), None)
+        if acc_key is not None:
+            self.latest_dev_accuracy = float(metrics[acc_key])
         parts = [f"dev_ap {float(ap):.4f}"] if ap is not None else []
         if auc_key is not None:
             parts.append(f"dev_auc {float(metrics[auc_key]):.4f}")
@@ -252,7 +430,17 @@ class ProgressCallback(TrainerCallback):
         except ImportError:  # display only, never kill training
             pass
         if parts:
-            print(f"    [step {state.global_step:>4}] " + " | ".join(parts), flush=True)
+            total_epochs = float(args.num_train_epochs)
+            loss = (
+                f"train_loss {self.latest_train_loss:.4f} | "
+                if self.latest_train_loss is not None
+                else ""
+            )
+            print(
+                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step "
+                f"{state.global_step:>4}/{state.max_steps:<4}] {loss}" + " | ".join(parts),
+                flush=True,
+            )
         if self.wandb_ctx is not None:
             self.wandb_ctx.log_metrics(
                 {
@@ -267,6 +455,43 @@ class ProgressCallback(TrainerCallback):
                     "live/epoch": float(state.epoch or 0.0),
                 }
             )
+
+
+class DvcCheckpointCallback(TrainerCallback):
+    """Persist a complete checkpoint tree through the configured DVC remote."""
+
+    def on_save(self, args, state, control, **kwargs):
+        import os
+
+        if not state.is_world_process_zero:
+            return control
+        if not os.environ.get("DVC_API_KEY"):
+            print("    [checkpoint-dvc] skipped: DVC_API_KEY absent", flush=True)
+            return control
+        from training.dvc_store import publish_checkpoint
+
+        checkpoint_root = Path(args.output_dir)
+        checkpoint = checkpoint_root / f"checkpoint-{state.global_step}"
+        _make_checkpoint_tokenizer_portable(checkpoint)
+        required = (
+            "optimizer.pt",
+            "scheduler.pt",
+            "rng_state.pth",
+            "checkpoint_state.pt",
+            "trainer_state.json",
+        )
+        missing = [name for name in required if not (checkpoint / name).is_file()]
+        if missing:
+            raise RuntimeError(
+                f"checkpoint is not resumable: {checkpoint}; "
+                f"missing {', '.join(missing)}"
+            )
+        pointer = publish_checkpoint(RESULTS, checkpoint_root)
+        print(
+            f"    [checkpoint-dvc] step {state.global_step} -> {pointer.relative_to(RESULTS)}",
+            flush=True,
+        )
+        return control
 
 
 def _discriminative_groups(
@@ -402,6 +627,7 @@ def train_one_config(
     # run-tag dir but never move the shared latest-pointer (same
     # discipline as the fold-metrics pointer in train.py)
     sample: bool = False,
+    resume: bool = False,
     # selection mode (test-leak fix, 2026-09-12): HPO/grid lanes in
     # HOLDOUT split call with True — the fold trains on q0+q1, early-stops
     # and is SELECTED on dev (q2, best_dev_ap), and the test quarter's
@@ -648,11 +874,22 @@ def train_one_config(
                 )
                 continue
 
+            checkpoint_dir = (
+                RESULTS / "_checkpoints" / model_id.rstrip("/").rsplit("/", 1)[-1]
+                / f"r{run_tag}_f{fold_i}"
+            )
+            if resume:
+                from training.dvc_store import restore_checkpoint
+
+                restore_checkpoint(RESULTS, checkpoint_dir)
+                print(f"    [resume] restored {checkpoint_dir} from DVC", flush=True)
+
             # Tied-weight two-tower retrieval model: the trainer receives
             # (SKU text, canonical text) pairs; each side is encoded on its
             # own before cosine/loss comparison.  CrossEncoder is optional
             # only in rerank.py after retrieval, never this default path.
             model = SentenceTransformer(model_id, device="cuda" if on_cuda else "cpu")
+            _align_model_token_ids(model)
             model.max_seq_length = runtime("max_seq_length")  # SSOT, no literal
 
             # ── build the training dataset FIRST (steps derive from it) ──
@@ -818,9 +1055,32 @@ def train_one_config(
                 SentenceTransformerTrainingArguments as STArgs,
             )
 
+            class ResumableSentenceTransformerTrainer(SentenceTransformerTrainer):
+                """HF Trainer plus one explicit all-state checkpoint snapshot."""
+
+                def _save_checkpoint(self, model, trial):
+                    super()._save_checkpoint(model, trial)
+                    checkpoint = (
+                        Path(self._get_output_dir(trial=trial))
+                        / f"checkpoint-{self.state.global_step}"
+                    )
+                    _make_checkpoint_tokenizer_portable(checkpoint)
+                    _write_consolidated_checkpoint_state(
+                        checkpoint,
+                        epoch=self.state.epoch,
+                        global_step=self.state.global_step,
+                        model=model,
+                        optimizer=self.optimizer,
+                        scheduler=self.lr_scheduler,
+                        scaler=getattr(self.accelerator, "scaler", None),
+                        trainer_state=self.state,
+                        trainer_control=self.control,
+                        training_args=self.args,
+                    )
+
             model_tag = str(model_id).rstrip("/").rsplit("/", 1)[-1]
             args_hf = STArgs(
-                output_dir=str(RESULTS / "_checkpoints" / model_tag / f"r{run_tag}_f{fold_i}"),
+                output_dir=str(checkpoint_dir),
                 per_device_train_batch_size=batch_size,
                 num_train_epochs=cfg["epochs"],
                 learning_rate=cfg["lr"],
@@ -842,7 +1102,10 @@ def train_one_config(
                 save_strategy="steps",
                 save_steps=eval_steps,
                 save_total_limit=int(runtime("save_total_limit")),  # SSOT
-                save_only_model=True,
+                # A resumable checkpoint must retain optimizer, scheduler,
+                # RNG, and trainer state.  Model-only snapshots cannot pick
+                # up a stopped run faithfully.
+                save_only_model=False,
                 logging_strategy="steps",
                 logging_steps=eval_steps,
                 report_to=[],
@@ -885,7 +1148,7 @@ def train_one_config(
                 groups, weight_decay=cfg["weight_decay"], lr=base_lr
             )
 
-            trainer = SentenceTransformerTrainer(
+            trainer = ResumableSentenceTransformerTrainer(
                 model=model,
                 args=args_hf,
                 train_dataset=train_ds,
@@ -897,13 +1160,40 @@ def train_one_config(
                 # from args, scaling our per-group LRs
                 callbacks=[
                     ProgressCallback(wandb_ctx),
+                    DvcCheckpointCallback(),
                     EarlyStoppingCallback(
                         early_stopping_patience=cfg["patience"],
                         early_stopping_threshold=cfg["es_threshold"],
                     ),
                 ],
             )
-            trainer.train()
+            resume_checkpoint = None
+            if resume:
+                candidates = sorted(
+                    checkpoint_dir.glob("checkpoint-*"),
+                    key=lambda path: int(path.name.removeprefix("checkpoint-")),
+                )
+                if candidates:
+                    latest = candidates[-1]
+                    required = (
+                        "optimizer.pt",
+                        "scheduler.pt",
+                        "rng_state.pth",
+                        "checkpoint_state.pt",
+                        "trainer_state.json",
+                    )
+                    missing = [name for name in required if not (latest / name).is_file()]
+                    if missing:
+                        raise RuntimeError(
+                            f"cannot resume {latest}: checkpoint lacks trainer state; "
+                            f"missing {', '.join(missing)}. Start a new run once "
+                            "to create resumable checkpoints."
+                        )
+                    resume_checkpoint = str(latest)
+                    print(f"    [resume] fold {fold_i}: {resume_checkpoint}", flush=True)
+                else:
+                    print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
+            trainer.train(resume_from_checkpoint=resume_checkpoint)
 
             # final training loss + best dev AP from the trainer's own log
             # history (the source the early-stopper actually used)
@@ -1399,7 +1689,13 @@ def run_hpo(
     # never mixed into the pre-dlr TPE history (its surrogate would be poisoned
     # by trials whose values came from single-LR training)
     study_name = f"second08-{args.model.split('/')[-1]}-dlr"
-    storage = f"sqlite:///{RESULTS / (study_name + '.optuna.db')}"
+    study_db = RESULTS / f"{study_name}.optuna.db"
+    if args.resume:
+        from training.dvc_store import restore_checkpoint
+
+        restore_checkpoint(RESULTS, study_db)
+        print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
+    storage = f"sqlite:///{study_db}"
     study = optuna.create_study(
         direction="maximize",
         sampler=sampler,
@@ -1417,11 +1713,18 @@ def run_hpo(
         flush=True,
     )
     if remaining:
+        def _persist_study(*_args) -> None:
+            if not os.environ.get("DVC_API_KEY"):
+                return
+            from training.dvc_store import publish_checkpoint
+
+            publish_checkpoint(RESULTS, study_db)
+
         study.optimize(
             objective,
             n_trials=remaining,
             n_jobs=args.n_jobs,
-            callbacks=[_optuna_tracking_cb(mlf, wandb_ctx)],
+            callbacks=[_optuna_tracking_cb(mlf, wandb_ctx), _persist_study],
         )
 
     # every trial's params + value, on disk (optuna keeps them in the study;

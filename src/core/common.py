@@ -332,6 +332,8 @@ RESULTS = (
     else _path(_CFG["paths"]["results_dir"])
 )
 RESULTS.mkdir(parents=True, exist_ok=True)
+TRAINING_RESULTS = _path(_CFG["paths"]["training_results_dir"])
+TRAINING_RESULTS.mkdir(parents=True, exist_ok=True)
 DATA_PATH = DATA_DIR / _CFG["files"]["dataset"]
 
 # ── file names (SSOT) ────────────────────────────────────────────────────────

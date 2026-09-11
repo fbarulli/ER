@@ -22,6 +22,7 @@ paths:
   artifacts_dir: "artifacts"            # ONE root: everything lives under it
   data_dir: "artifacts/data"            # raw + deduped dataset live here
   results_dir: "results"                # ALL generated outputs at repository root
+  training_results_dir: "training_results" # verified Colab smoke outputs
   models_dir: "artifacts/models"        # local model tensors (bundle)
   models_dir_sibling: "../models"       # bundle layout: models/ beside folder
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
@@ -75,6 +76,7 @@ files:
   # find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
   # src/training/train.py rewrites it on every non-sample run; sample runs never
   # touch it
+  colab_live_log: "training.log"          # root-level, overwritten per Colab run
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
 column_mapping:

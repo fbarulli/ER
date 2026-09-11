@@ -27,19 +27,24 @@ Usage:
   python colab_backend.py --what train
   python colab_backend.py --what train --train-frac 0.25 --epochs 2
   python colab_backend.py --what hpo
+  python colab_backend.py --what hpo --resume-hpo
   er-colab --what hpo --gpu A100
   python colab_backend.py --what sims
   python colab_backend.py --what smoke
   python colab_backend.py --what stop
   python ... --keep-alive   # keep VM alive for debugging on failure
+  python ... --what train --resume-run <run-id>
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import json
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 # AUDIT FIX (round 2 F15, round 3): RESULTS/DATA come from the config SSOT
@@ -47,7 +52,9 @@ from pathlib import Path
 # re-derived inline (HERE / "artifacts" / "results"), a second declaration
 # that happened to match today.
 from core.common import (
+    F,
     RESULTS,
+    TRAINING_RESULTS,
     TRAIN_ROOT,
     sweep_cfg,
     training_cfg,
@@ -73,8 +80,39 @@ GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
 _HPO_WORKERS = _COLAB.hpo_workers
+_TRAIN_WORKERS = _COLAB.train_workers
+_LOG_POLL_SECONDS = _COLAB.log_poll_seconds
+_PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
+_PROBE_RETRIES = _COLAB.probe_retries
+_PROBE_RETRY_BACKOFF_SECONDS = _COLAB.probe_retry_backoff_seconds
+_MASK_EFFECT_AFTER_TRAIN = _COLAB.mask_effect_after_train
+_SMOKE_EPOCHS = _COLAB.smoke_epochs
+_WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
+_HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 LIVE_LOG_PATH: Path | None = None
 _live_log = None
+_original_stdout = None
+_original_stderr = None
+
+
+class _Tee:
+    """Mirror launcher output to the terminal and the root live log."""
+
+    def __init__(self, stream, log_file) -> None:
+        self._stream = stream
+        self._log_file = log_file
+
+    def write(self, text: str) -> int:
+        self._stream.write(text)
+        self._log_file.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+        self._log_file.flush()
+
+    def isatty(self) -> bool:
+        return self._stream.isatty()
 
 # The clone contains the committed raw export and number-token reference;
 # data_prep regenerates deduped data and all downstream CSVs on the VM.
@@ -109,21 +147,16 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
 def run_colab_exec_stream(session: str, script: str, timeout: int | None = None, log_name: str | None = None) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
 
-    log_name labels a stage in one UTC-timestamped Colab log. The file is
+    log_name labels a stage in the root training.log transcript. The file is
     opened once per invocation, line-flushed, and survives VM teardown so
     every Colab stage is inspectable in one chronological log.
     """
-    log_file = _live_log
-    if log_file and log_name:
-        log_file.write(f"\n===== {log_name} =====\n")
-        log_file.flush()
+    if _live_log and log_name:
+        print(f"\n===== {log_name} =====", flush=True)
 
     def stream_output(pipe, prefix):
         for line in iter(pipe.readline, ''):
-            print(f"{prefix} {line.rstrip()}")
-            if log_file:
-                log_file.write(f"{prefix} {line}")
-                log_file.flush()
+            print(f"{prefix} {line.rstrip()}", flush=True)
         pipe.close()
 
     process = subprocess.Popen(
@@ -162,23 +195,376 @@ def run_colab_exec_stream(session: str, script: str, timeout: int | None = None,
         )
 
 
+def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
+    """Execute a short remote probe and return its stdout for the live tailer."""
+    last_error = ""
+    for attempt in range(1, _PROBE_RETRIES + 1):
+        try:
+            process = subprocess.run(
+                ["colab", "exec", "-s", session, "--timeout", str(timeout)],
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=timeout + 30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            last_error = f"probe timeout: {exc}"
+        else:
+            if process.returncode == 0:
+                return process.stdout
+            last_error = f"rc={process.returncode}: {process.stderr[-2000:]}"
+        if attempt < _PROBE_RETRIES:
+            delay = _PROBE_RETRY_BACKOFF_SECONDS * attempt
+            print(f"[probe] transient remote failure ({attempt}/{_PROBE_RETRIES}); retrying in {delay}s", flush=True)
+            time.sleep(delay)
+    raise RuntimeError(f"remote log probe failed after {_PROBE_RETRIES} attempts: {last_error}")
+
+
+def _parse_remote_json(output: str) -> dict:
+    """Read the last JSON object from a Colab probe without trusting banners."""
+    for line in reversed(output.splitlines()):
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    raise RuntimeError(f"remote log probe returned no JSON: {output[-1000:]}")
+
+
+def _resume_pointer_payload(run_id: str, workers: int) -> dict[str, dict[str, str]]:
+    """Load locally mirrored DVC pointers without exposing cache internals."""
+    payload: dict[str, dict[str, str]] = {}
+    for number in range(1, workers + 1):
+        pointer_dir = TRAINING_RESULTS / run_id / f"worker_{number}" / ".resume"
+        pointers = {
+            path.name: base64.b64encode(path.read_bytes()).decode("ascii")
+            for path in pointer_dir.glob("*.dvc")
+        } if pointer_dir.is_dir() else {}
+        if not pointers:
+            raise FileNotFoundError(
+                f"no locally mirrored DVC resume pointer for {run_id} worker {number}"
+            )
+        payload[str(number)] = pointers
+    return payload
+
+
+def _mirror_resume_pointers(run_id: str, pointers: dict[str, dict[str, str]]) -> None:
+    """Persist DVC pointers locally as the launcher tails remote workers."""
+    for worker, entries in pointers.items():
+        pointer_dir = TRAINING_RESULTS / run_id / f"worker_{worker}" / ".resume"
+        pointer_dir.mkdir(parents=True, exist_ok=True)
+        for name, encoded in entries.items():
+            (pointer_dir / name).write_bytes(base64.b64decode(encoded))
+
+
+def _hpo_resume_pointer_payload() -> dict[str, str]:
+    """Load locally mirrored HPO pointers for a fresh Colab VM."""
+    if not _HPO_RESUME_DIR.is_dir():
+        return {}
+    return {
+        path.relative_to(_HPO_RESUME_DIR).as_posix(): base64.b64encode(
+            path.read_bytes()
+        ).decode("ascii")
+        for path in sorted(_HPO_RESUME_DIR.rglob("*.dvc"))
+        if path.is_file()
+    }
+
+
+def _mirror_hpo_resume_pointers() -> None:
+    """Mirror HPO DVC pointers before the VM is torn down, even on failure."""
+    remote_dir = f"{REMOTE_ROOT}/results"
+    names = [name for name in _list_remote(remote_dir) if "/.resume/" in name]
+    for name in names:
+        rel = Path(name).relative_to(remote_dir)
+        local = _HPO_RESUME_DIR / rel
+        local.parent.mkdir(parents=True, exist_ok=True)
+        colab("download", "-s", SESSION, name, str(local), timeout=600)
+    if names:
+        print(f"[resume] mirrored {len(names)} HPO DVC pointer(s) -> {_HPO_RESUME_DIR}", flush=True)
+
+
+def run_detached_train_and_tail(args: list[str]) -> None:
+    """Start training outside the Jupyter cell and mirror its remote log live.
+
+    The process has its own session and status file, so a transient notebook
+    client disconnect cannot kill training or swallow its traceback.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    remote_log = f"{REMOTE_ROOT}/results/logs/colab_train_{stamp}.log"
+    remote_status = f"{remote_log}.status"
+    launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
+import json, os, pathlib, shlex, subprocess, sys
+log_path = pathlib.Path({remote_log!r})
+status_path = pathlib.Path({remote_status!r})
+log_path.parent.mkdir(parents=True, exist_ok=True)
+status_path.unlink(missing_ok=True)
+train_args = [sys.executable, *{args!r}]
+command = " ".join(shlex.quote(part) for part in train_args)
+wrapped = f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+    child = subprocess.Popen(
+        ["/bin/bash", "-lc", wrapped],
+        cwd={REMOTE_ROOT!r},
+        env={{**os.environ, "PYTHONUNBUFFERED": "1"}},
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+print(json.dumps({{"pid": child.pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
+"""
+    print("[run] starting detached train.py on the VM; streaming its remote log ...", flush=True)
+    launched = _parse_remote_json(run_colab_exec_capture(SESSION, launch, timeout=120))
+    print(f"[train] remote pid={launched['pid']} log={launched['log']}", flush=True)
+
+    offset = 0
+    while True:
+        probe = _BOOTSTRAP + f"""
+import json, pathlib
+log_path = pathlib.Path({remote_log!r})
+status_path = pathlib.Path({remote_status!r})
+offset = {offset}
+data = b""
+if log_path.is_file():
+    with log_path.open("rb") as handle:
+        handle.seek(offset)
+        data = handle.read()
+payload = {{
+    "offset": offset + len(data),
+    "chunk": data.decode("utf-8", errors="replace"),
+    "done": status_path.is_file(),
+    "returncode": status_path.read_text(encoding="utf-8").strip() if status_path.is_file() else None,
+}}
+print(json.dumps(payload), flush=True)
+"""
+        payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS))
+        offset = int(payload["offset"])
+        if payload["chunk"]:
+            for line in str(payload["chunk"]).splitlines():
+                print(f"[out] {line}", flush=True)
+        if payload["done"]:
+            returncode = int(payload["returncode"])
+            if returncode:
+                raise RuntimeError(
+                    f"remote training failed (rc={returncode}); "
+                    f"full remote log was streamed above"
+                )
+            print("[train] remote process completed successfully", flush=True)
+            return
+        time.sleep(_LOG_POLL_SECONDS)
+
+
+def run_parallel_train_and_tail(
+    args: list[str], workers: int, *, resume_run: str | None = None
+) -> None:
+    """Run isolated full-data trainers concurrently and mirror worker logs."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    remote_base = (
+        f"{REMOTE_ROOT}/results/concurrent_train_{resume_run}"
+        if resume_run
+        else f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
+    )
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    resume_pointers = _resume_pointer_payload(run_id, workers) if resume_run else {}
+    launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
+import base64, json, os, pathlib, shutil, shlex, subprocess, sys
+from core.common import F
+root = pathlib.Path({REMOTE_ROOT!r})
+base = pathlib.Path({remote_base!r})
+base.mkdir(parents=True, exist_ok={bool(resume_run)!r})
+command = " ".join(shlex.quote(part) for part in [sys.executable, *{args!r}])
+resume_pointers = {resume_pointers!r}
+started = []
+for number in range(1, {workers} + 1):
+    out = base / f"worker_{{number}}"
+    if {bool(resume_run)!r}:
+        out.mkdir(exist_ok=True)
+        pointer_dir = out / ".resume"
+        pointer_dir.mkdir(exist_ok=True)
+        for name, encoded in resume_pointers[str(number)].items():
+            (pointer_dir / name).write_bytes(base64.b64decode(encoded))
+        for name in (F["canonical_records"], F["gate_results"]):
+            source = root / "results" / name
+            if not (out / name).is_file():
+                if not source.is_file():
+                    raise FileNotFoundError(f"resume worker input missing: {{source}}")
+                shutil.copy2(source, out / name)
+        from training.dvc_store import restore_pointer
+        pointers = sorted(pointer_dir.glob("*.dvc"))
+        if not pointers:
+            raise RuntimeError(
+                f"[resume-preflight] worker {number} has no DVC resume pointer; "
+                "the previous checkpoint cannot be restored"
+            )
+        restored_checkpoint = False
+        for pointer in pointers:
+            outputs = restore_pointer(out, pointer)
+            checkpoint_outputs = [
+                path for path in outputs
+                if "_checkpoints" in path.relative_to(out).parts
+            ]
+            if checkpoint_outputs:
+                restored_checkpoint = True
+                for checkpoint_root in checkpoint_outputs:
+                    candidates = sorted(
+                        checkpoint_root.glob("checkpoint-*"),
+                        key=lambda path: int(path.name.removeprefix("checkpoint-")),
+                    )
+                    if not candidates:
+                        raise RuntimeError(
+                            f"[resume-preflight] restored checkpoint root is empty: "
+                            f"{checkpoint_root}"
+                        )
+                    latest = candidates[-1]
+                    required = (
+                        "optimizer.pt",
+                        "scheduler.pt",
+                        "rng_state.pth",
+                        "checkpoint_state.pt",
+                        "trainer_state.json",
+                    )
+                    missing = [
+                        name for name in required if not (latest / name).is_file()
+                    ]
+                    if missing:
+                        raise RuntimeError(
+                            f"[resume-preflight] {latest} is not resumable; "
+                            f"missing {', '.join(missing)}"
+                        )
+        if not restored_checkpoint:
+            raise RuntimeError(
+                f"[resume-preflight] worker {number} restored no checkpoint "
+                "pointer; refusing to start training"
+            )
+        print(f"[resume-preflight] worker {number}: restored {len(pointers)} pointer(s)", flush=True)
+    else:
+        out.mkdir()
+        for name in (F["canonical_records"], F["gate_results"]):
+            source = root / "results" / name
+            if not source.is_file():
+                raise FileNotFoundError(f"worker input missing: {{source}}")
+            shutil.copy2(source, out / name)
+    log_path, status_path = out / "training.log", out / "training.status"
+    env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
+           "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
+    wrapped = f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+    with log_path.open("a" if {bool(resume_run)!r} else "w", encoding="utf-8", buffering=1) as log_file:
+        child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
+            stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
+            start_new_session=True)
+    started.append({{"worker": number, "pid": child.pid}})
+print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
+"""
+    print(f"[run] starting {workers} isolated full-data trainers; streaming all worker logs ...", flush=True)
+    launched = _parse_remote_json(run_colab_exec_capture(SESSION, launch, timeout=120))
+    print(f"[train] remote workers={launched['workers']} base={launched['base']}", flush=True)
+    offsets = {str(item["worker"]): 0 for item in launched["workers"]}
+    while True:
+        probe = _BOOTSTRAP + f"""
+import json, pathlib
+base = pathlib.Path({remote_base!r})
+offsets = {offsets!r}
+payload = {{"offsets": {{}}, "chunks": {{}}, "status": {{}}, "resume": {{}}}}
+for number in range(1, {workers} + 1):
+    key = str(number)
+    out = base / f"worker_{{number}}"
+    log_path, status_path = out / "training.log", out / "training.status"
+    offset = int(offsets.get(key, 0))
+    data = b""
+    if log_path.is_file():
+        with log_path.open("rb") as handle:
+            handle.seek(offset)
+            data = handle.read()
+    payload["offsets"][key] = offset + len(data)
+    payload["chunks"][key] = data.decode("utf-8", errors="replace")
+    payload["status"][key] = status_path.read_text(encoding="utf-8").strip() if status_path.is_file() else None
+    pointer_dir = out / ".resume"
+    payload["resume"][key] = {{
+        path.name: base64.b64encode(path.read_bytes()).decode("ascii")
+        for path in pointer_dir.glob("*.dvc")
+    }} if pointer_dir.is_dir() else {{}}
+payload["done"] = all(value is not None for value in payload["status"].values())
+print(json.dumps(payload), flush=True)
+"""
+        payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS))
+        offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
+        _mirror_resume_pointers(run_id, payload["resume"])
+        for worker, chunk in payload["chunks"].items():
+            for line in str(chunk).splitlines():
+                print(f"[worker {worker}] {line}", flush=True)
+        if payload["done"]:
+            failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
+            if failed:
+                raise RuntimeError(f"parallel trainers failed: {failed}")
+            publish_parallel_results(remote_base, workers)
+            download_verified_training_results(remote_base, workers)
+            print(f"[train] all {workers} remote workers completed successfully", flush=True)
+            return
+        time.sleep(_LOG_POLL_SECONDS)
+
+
+def publish_parallel_results(remote_base: str, workers: int) -> None:
+    """Publish completed workers sequentially through one remote process."""
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
+import pathlib, subprocess, sys, os
+root = pathlib.Path({REMOTE_ROOT!r})
+base = pathlib.Path({remote_base!r})
+for number in range(1, {workers} + 1):
+    source = base / f"worker_{{number}}"
+    print(f"[dvc] central publish worker {{number}}/{{workers}}", flush=True)
+    subprocess.run([
+        sys.executable, "-u", "-m", "training.dvc_store",
+        "--source", str(source), "--run-id", {run_id!r}, "--worker", str(number),
+    ], cwd=root, env={{**os.environ, "PYTHONPATH": str(root / "src")}}, check=True)
+print("[dvc] central publisher completed all workers", flush=True)
+"""
+    run_colab_exec_stream(
+        SESSION, script,
+        timeout=_WORKER_TIMEOUT_SECONDS * max(1, workers),
+        log_name="03_dvc_publish",
+    )
+
+
+def download_verified_training_results(remote_base: str, workers: int) -> None:
+    """Materialize only DVC-verified smoke outputs under training_results/."""
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    local_base = TRAINING_RESULTS / run_id
+    for number in range(1, workers + 1):
+        remote_dir = f"{remote_base}/worker_{number}"
+        local_dir = local_base / f"worker_{number}"
+        for name in _list_remote(remote_dir):
+            remote = Path(name)
+            if remote.suffix not in {".csv", ".json", ".log"}:
+                continue
+            rel = remote.relative_to(remote_dir)
+            local = local_dir / rel
+            local.parent.mkdir(parents=True, exist_ok=True)
+            colab("download", "-s", SESSION, name, str(local), timeout=600)
+    print(f"[download] DVC-verified training outputs -> {local_base}", flush=True)
+
+
 def start_live_log() -> None:
-    """Start a fresh single-file log for one Colab invocation."""
-    global LIVE_LOG_PATH, _live_log
+    """Start the root-level live Colab log, replacing the prior run's log."""
+    global LIVE_LOG_PATH, _live_log, _original_stdout, _original_stderr
     if _live_log is not None:
         _live_log.close()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    LIVE_LOG_PATH = RESULTS / "logs" / f"colab_training_{stamp}.log"
-    LIVE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LIVE_LOG_PATH = TRAIN_ROOT / F["colab_live_log"]
     _live_log = LIVE_LOG_PATH.open("w", encoding="utf-8")
+    _original_stdout = sys.stdout
+    _original_stderr = sys.stderr
+    sys.stdout = _Tee(_original_stdout, _live_log)
+    sys.stderr = _Tee(_original_stderr, _live_log)
     print(f"[log] capturing Colab output -> {LIVE_LOG_PATH}", flush=True)
 
 
 def close_live_log() -> None:
-    global _live_log
+    global _live_log, _original_stdout, _original_stderr
     if _live_log is not None:
+        sys.stdout = _original_stdout or sys.stdout
+        sys.stderr = _original_stderr or sys.stderr
         _live_log.close()
         _live_log = None
+        _original_stdout = None
+        _original_stderr = None
 
 
 def ensure_session() -> None:
@@ -226,7 +612,7 @@ def install_deps() -> None:
         "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q',\n"
         "                'sentence-transformers', 'datasets', 'accelerate',\n"
         "                'evaluate', 'scikit-learn', 'pandas', 'numpy',\n"
-        "                'mlflow', 'optuna', 'wandb'], check=True)\n"
+        "                'mlflow', 'optuna', 'wandb', 'dvc', 'dagshub'], check=True)\n"
         "print('deps installed')"
     )
     run_colab_exec_stream(SESSION, install_script, timeout=900, log_name="00_deps")
@@ -275,6 +661,29 @@ def _wandb_env_script() -> str:
     return f"os.environ['WANDB_API_KEY'] = {key!r}\n"
 
 
+def _hf_env_script() -> str:
+    """Pass a local HF token into the VM process without persisting it."""
+    for name in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        key = _env_value(name)
+        if key:
+            print(f"[huggingface] {name} loaded from local .env and injected into VM process")
+            return f"os.environ['HF_TOKEN'] = {key!r}\n"
+    print("[huggingface] HF_TOKEN absent from .env; Hub requests will be anonymous")
+    return ""
+
+
+def _remote_auth_env_script() -> str:
+    """Credential exports used by remote subprocess launch cells only."""
+    key = _env_value("DVC_API_KEY")
+    if key:
+        print("[dvc] DVC_API_KEY loaded from local .env and injected into VM process")
+        dvc = f"os.environ['DVC_API_KEY'] = {key!r}\nos.environ['DAGSHUB_USER_TOKEN'] = {key!r}\n"
+    else:
+        print("[dvc] DVC_API_KEY absent from .env; durable DVC upload will fail")
+        dvc = ""
+    return _wandb_env_script() + _hf_env_script() + dvc
+
+
 def run_data_prep() -> None:
     """Regenerate the derived CSVs on the VM (byte-deterministic replay).
 
@@ -316,45 +725,81 @@ for path in required:
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check")
 
 
-def run_train(frac: float, epochs: int, sample: int | None) -> None:
+def run_train(
+    frac: float, epochs: int, sample: int | None, workers: int = 1,
+    *, resume_run: str | None = None,
+) -> None:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the VM (GPU) ...")
     # AUDIT 2026-09-09: --mask-frac 0.15 REMOVED — it hardcoded a value that
     # silently contradicted the SSOT (masking.frac: 1.00 in
     # config/training.yaml). train.py's own default resolves from the config
     # now; the CLI flag remains for explicit overrides.
-    script = _BOOTSTRAP + _wandb_env_script() + f"""
-import subprocess, sys
-args = [sys.executable, "-u", "-m", "training.train",
+    args = ["-u", "-m", "training.train",
         "--split", "holdout",
         "--loss", "contrastive",
-        "--train-frac", "{frac}",
-        "--epochs", "{epochs}",
+        "--train-frac", str(frac),
+        "--epochs", str(epochs),
         "--no-plot"]
-if {sample is not None!r}:
-    args.extend(["--sample", {str(sample)!r}])
-rc = subprocess.run(args, cwd="{REMOTE_ROOT}").returncode
-if rc != 0:
-    raise RuntimeError(f"training subprocess failed (rc={{rc}})")
-"""
-    # T4 full chain: encode ~1min + 740 steps at ~1.5-2s + eval — allow 4h
-    run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="02_train")
+    if sample is not None:
+        args.extend(["--sample", str(sample)])
+    if not _MASK_EFFECT_AFTER_TRAIN:
+        args.append("--no-mask-effect")
+    if resume_run:
+        args.append("--resume")
+    run_parallel_train_and_tail(args, workers, resume_run=resume_run)
 
 
-def run_hpo(mode: str | None = None) -> None:
+def run_hpo(mode: str | None = None, *, resume: bool = False) -> None:
     """Sweep every configured backbone, then evaluate and rerank each winner."""
     mode = mode or _HPO_MODE
-    print(f"[run] round-robin HPO (mode={mode}, workers={_HPO_WORKERS}) ...")
-    script = _BOOTSTRAP + _wandb_env_script() + f"""
+    print(
+        f"[run] round-robin HPO (mode={mode}, workers={_HPO_WORKERS}, "
+        f"resume={resume}) ..."
+    )
+    resume_pointers = _hpo_resume_pointer_payload() if resume else {}
+    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import concurrent.futures, json, os, pathlib, shutil, subprocess, sys
 from datetime import datetime, timezone
 from core.common import F, hpo_cfg, resolve_model
 root = pathlib.Path("{REMOTE_ROOT}")
 base = [sys.executable, "-u", "-m", "training.train", "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot"]
+hpo_base = list(base)
+if {resume!r}:
+    hpo_base.append("--resume")
+resume_pointers = {resume_pointers!r}
 model_keys = hpo_cfg()["models"]
 required = {{"epochs", "lr", "warmup_ratio", "weight_decay"}}
 mode = "{mode}"
 workers = {_HPO_WORKERS}
+
+for relative, encoded in resume_pointers.items():
+    target = root / "results" / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(__import__("base64").b64decode(encoded))
+
+if {resume!r}:
+    from training.dvc_store import restore_pointer
+    pointers = sorted(
+        path for path in (root / "results").rglob("*.dvc")
+        if path.parent.name == ".resume"
+    )
+    if not pointers:
+        raise RuntimeError(
+            "[resume-preflight] no HPO DVC resume pointers are available; "
+            "the previous Optuna database/checkpoints cannot be restored"
+        )
+    restored_db = False
+    for pointer in pointers:
+        source = pointer.parent.parent
+        restore_pointer(source, pointer)
+        restored_db = restored_db or pointer.name.endswith(".optuna.db.dvc")
+    if not restored_db:
+        raise RuntimeError(
+            "[resume-preflight] restored HPO pointers but no Optuna database "
+            "pointer was found; refusing to start the sweep"
+        )
+    print(f"[resume-preflight] restored {{len(pointers)}} HPO pointer(s)", flush=True)
 
 def run_logged(args, label, extra_env=None):
     log_path = root / "results" / "logs" / (
@@ -410,7 +855,7 @@ def run_model(model_key):
     model_tag = str(model).rstrip("/").rsplit("/", 1)[-1]
     best_path = out / f"train_{{model_tag}}-dlr_hpo_best.json"
     print(f"== HPO {{model_key}}: {{model}} (dev-selected; test withheld)", flush=True)
-    run_logged(base + ["--model", str(model), "--hpo"], f"hpo_{{model_key}}", env)
+    run_logged(hpo_base + ["--model", str(model), "--hpo"], f"hpo_{{model_key}}", env)
     if not best_path.is_file():
         raise RuntimeError(f"missing HPO winner for {{model_key}}: {{best_path}}")
     best = json.loads(best_path.read_text())
@@ -446,7 +891,16 @@ else:
 )
 print(json.dumps({{"hpo_round_robin": summary, "rerank_model": "{_RERANK_MODEL}"}}, sort_keys=True), flush=True)
 """
-    run_colab_exec_stream(SESSION, script, timeout=8 * 3600 * 3, log_name="training_hpo")
+    try:
+        run_colab_exec_stream(SESSION, script, timeout=8 * 3600 * 3, log_name="training_hpo")
+    finally:
+        # The VM is normally stopped by main() immediately after this
+        # returns/raises. Keep the pointer files locally so a later
+        # --resume-hpo can restore the DVC objects on a fresh VM.
+        try:
+            _mirror_hpo_resume_pointers()
+        except Exception as exc:
+            print(f"[warn] could not mirror HPO resume pointers: {exc}", file=sys.stderr, flush=True)
 
 
 def run_sims_deberta() -> None:
@@ -692,6 +1146,25 @@ def main() -> None:
                     help=f"epochs for --what train (default {_EPOCHS_DEFAULT} = "
                     "config/training.yaml training.epochs)")
     ap.add_argument(
+        "--workers", type=int, default=_TRAIN_WORKERS,
+        help=f"concurrent full-data trainers for --what train (default {_TRAIN_WORKERS} = "
+        "config/training.yaml colab.train_workers; use 1 for a single run)",
+    )
+    ap.add_argument(
+        "--sample", type=int, default=None,
+        help="optional smoke cap for --what train; full data when omitted",
+    )
+    ap.add_argument(
+        "--resume-run",
+        default=None,
+        help="resume this existing concurrent_train_<id> run on the VM",
+    )
+    ap.add_argument(
+        "--resume-hpo",
+        action="store_true",
+        help="restore the previous HPO Optuna database/checkpoints before the sweep",
+    )
+    ap.add_argument(
         "--gpu",
         default=GPU,
         help=f"Colab accelerator request (default {GPU}; e.g. A100 when available)",
@@ -735,14 +1208,15 @@ def main() -> None:
         if args.what == "sims":
             run_sims_deberta()
         elif args.what == "smoke":
-            run_train(args.train_frac, args.epochs, sample=_SMOKE_SAMPLE)
+            run_train(args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE, workers=_TRAIN_WORKERS)
         elif args.what == "hpo":
-            run_hpo(args.hpo_mode)
+            run_hpo(args.hpo_mode, resume=args.resume_hpo)
         else:
-            run_train(args.train_frac, args.epochs, sample=None)
-        manifests = download_results(require_manifests=args.refresh_data)
-        if args.what == "train":
-            download_checkpoints(manifests)
+            run_train(
+                args.train_frac, args.epochs, sample=args.sample, workers=args.workers,
+                resume_run=args.resume_run,
+            )
+        print("[dvc] remote artifacts are authoritative; local download disabled", flush=True)
     finally:
         # Default behavior is to aggressively teardown to prevent quota burning.
         if not args.keep_alive:
@@ -751,7 +1225,7 @@ def main() -> None:
             print("\n[info] --keep-alive specified. VM is still running.")
         close_live_log()
 
-    print(f"\n[done] artifacts saved to {RESULTS}")
+    print("\n[done] artifacts persisted to the configured DVC remote")
 
 
 if __name__ == "__main__":

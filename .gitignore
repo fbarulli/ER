@@ -35,6 +35,7 @@ dataset_model_input.csv
 *.parquet
 *.zip
 training.log
+training_results/
 # Unrelated local artifact tree (contains node_modules, archives, and media).
 archify/
 src/ner/results/

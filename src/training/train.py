@@ -240,6 +240,17 @@ def _main_inner(_mlf, _wandb) -> None:
         default=None,
         help="debug: cap dataset rows (full chain, tiny data)",
     )
+    ap.add_argument(
+        "--mask-effect",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="run the optional post-training masking robustness audit",
+    )
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume each fold from its newest compatible checkpoint in this run directory",
+    )
     # ── 07-series mirrors (all GPU-only experiments) ──────────────────────
     ap.add_argument(
         "--payload",
@@ -641,6 +652,7 @@ def _main_inner(_mlf, _wandb) -> None:
         train_frac=args.train_frac if args.train_frac < 1.0 else None,
         run_tag=run_tag,
         sample=bool(args.sample),
+        resume=args.resume,
         wandb_ctx=_wandb,
     )
     elapsed = time.perf_counter() - t0
@@ -657,7 +669,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # on tokens that got masked).
     try:
         _ok = [r for r in rows if r.get("status") == "ok"]
-        if getattr(args, "mask_frac", 0) > 0 and mask_audit and _ok:
+        if args.mask_effect and getattr(args, "mask_frac", 0) > 0 and mask_audit and _ok:
             from sentence_transformers import SentenceTransformer as _ST
 
             _best = RESULTS / "_checkpoints" / model_tag / f"r{run_tag}_f{_ok[0]['fold']}"

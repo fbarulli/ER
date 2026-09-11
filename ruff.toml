@@ -1,7 +1,0 @@
-exclude = ["models", "data", "results", "embeddings", "logs"]
-
-[lint.per-file-ignores]
-"DATA_PIPE/**" = ["N999"]  # owner-named packages (uppercase by directive)
-"src/training/**" = ["N999", "BLE001"]
-"src/core/training.py" = ["BLE001"]
-

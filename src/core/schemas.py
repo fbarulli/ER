@@ -105,6 +105,7 @@ class DataFilesSpec(BaseModel):
     # gold-pair manifest (src/core/volume_verified); declared SSOT-side.
     second04_pairs_positive: str
     results_pointer: str
+    colab_live_log: str
 
 
 class DataPathsSpec(BaseModel):
@@ -113,6 +114,7 @@ class DataPathsSpec(BaseModel):
     artifacts_dir: str
     data_dir: str
     results_dir: str
+    training_results_dir: str
     models_dir: str
     models_dir_sibling: str
     embeddings_dir: str
@@ -588,6 +590,20 @@ class ColabSpec(BaseModel):
     gpu: str = Field(min_length=1)
     hpo_mode: Literal["sequential", "parallel_same_vm"]
     hpo_workers: int = Field(ge=1, le=3)
+    train_workers: int = Field(ge=1, le=12)
+    log_poll_seconds: int = Field(ge=1, le=30)
+    probe_timeout_seconds: int = Field(ge=60, le=1800)
+    probe_retries: int = Field(ge=1, le=10)
+    probe_retry_backoff_seconds: int = Field(ge=1, le=120)
+    artifact_repo_id: str = Field(min_length=1)
+    artifact_repo_private: bool
+    mask_effect_after_train: bool
+    smoke_epochs: int = Field(ge=1)
+    dvc_remote_url: str = Field(min_length=1)
+    dagshub_repo: str = Field(min_length=1)
+    worker_timeout_seconds: int = Field(ge=60)
+    dvc_push_retries: int = Field(ge=1, le=10)
+    dvc_push_backoff_seconds: int = Field(ge=1, le=120)
 
 
 class TrainingConfig(BaseModel):
