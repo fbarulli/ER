@@ -5,7 +5,13 @@ from pathlib import Path
 from core.common import training_cfg
 
 def _run(command: list[str], cwd: Path) -> None:
-    subprocess.run(command, cwd=cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    shown = ["<redacted>" if command[i - 1:i] == ["password"] else part for i, part in enumerate(command)]
+    print(f"[dvc] running: {' '.join(shown)}", flush=True)
+    result = subprocess.run(command, cwd=cwd, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.stdout:
+        print(result.stdout.rstrip(), flush=True)
+    if result.returncode:
+        raise RuntimeError(f"DVC command failed ({result.returncode}): {' '.join(shown)}")
 
 
 def _sha256(path: Path) -> str:
@@ -92,6 +98,6 @@ def publish(source: Path, run_id: str, worker: int) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(); p.add_argument("--source", type=Path, required=True); p.add_argument("--run-id", required=True); p.add_argument("--worker", type=int, required=True)
-    a = p.parse_args(); publish(a.source, a.run_id, a.worker); print(f"[dvc] published worker {a.worker}", flush=True)
+    a = p.parse_args(); print(f"[dvc] publishing worker {a.worker} from {a.source}", flush=True); publish(a.source, a.run_id, a.worker); print(f"[dvc] published worker {a.worker}", flush=True)
 
 if __name__ == "__main__": main()
