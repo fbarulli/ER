@@ -80,6 +80,7 @@ _TRAIN_WORKERS = _COLAB.train_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _MASK_EFFECT_AFTER_TRAIN = _COLAB.mask_effect_after_train
 _SMOKE_EPOCHS = _COLAB.smoke_epochs
+_WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
 LIVE_LOG_PATH: Path | None = None
 _live_log = None
 _original_stdout = None
@@ -310,7 +311,7 @@ for number in range(1, {workers} + 1):
         sys.executable, "-u", "-m", "training.dvc_store",
         "--source", str(out), "--run-id", {stamp!r}, "--worker", str(number),
     ])
-    wrapped = f"{{command}}; rc=$?; if [ \\"$rc\\" -eq 0 ]; then {{publish}}; rc=$?; fi; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+    wrapped = f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; if [ \\"$rc\\" -eq 0 ]; then {{publish}}; rc=$?; fi; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
     with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
         child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,

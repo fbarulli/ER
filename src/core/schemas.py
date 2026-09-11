@@ -597,6 +597,7 @@ class ColabSpec(BaseModel):
     smoke_epochs: int = Field(ge=1)
     dvc_remote_url: str = Field(min_length=1)
     dagshub_repo: str = Field(min_length=1)
+    worker_timeout_seconds: int = Field(ge=60)
 
 
 class TrainingConfig(BaseModel):
