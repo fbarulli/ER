@@ -307,7 +307,7 @@ for number in range(1, {workers} + 1):
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
     publish = " ".join(shlex.quote(part) for part in [
-        sys.executable, "-u", "-m", "training.artifact_store",
+        sys.executable, "-u", "-m", "training.dvc_store",
         "--source", str(out), "--run-id", {stamp!r}, "--worker", str(number),
     ])
     wrapped = f"{{command}}; rc=$?; if [ \\"$rc\\" -eq 0 ]; then {{publish}}; rc=$?; fi; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
@@ -428,7 +428,7 @@ def install_deps() -> None:
         "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q',\n"
         "                'sentence-transformers', 'datasets', 'accelerate',\n"
         "                'evaluate', 'scikit-learn', 'pandas', 'numpy',\n"
-        "                'mlflow', 'optuna', 'wandb'], check=True)\n"
+        "                'mlflow', 'optuna', 'wandb', 'dvc'], check=True)\n"
         "print('deps installed')"
     )
     run_colab_exec_stream(SESSION, install_script, timeout=900, log_name="00_deps")
@@ -490,7 +490,14 @@ def _hf_env_script() -> str:
 
 def _remote_auth_env_script() -> str:
     """Credential exports used by remote subprocess launch cells only."""
-    return _wandb_env_script() + _hf_env_script()
+    key = _env_value("DVC_API_KEY")
+    if key:
+        print("[dvc] DVC_API_KEY loaded from local .env and injected into VM process")
+        dvc = f"os.environ['DVC_API_KEY'] = {key!r}\n"
+    else:
+        print("[dvc] DVC_API_KEY absent from .env; durable DVC upload will fail")
+        dvc = ""
+    return _wandb_env_script() + _hf_env_script() + dvc
 
 
 def run_data_prep() -> None:
