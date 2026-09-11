@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import logging
 import os
@@ -20,7 +21,6 @@ from pydantic import BaseModel
 from spacy.training import Example
 from spacy.util import minibatch
 
-
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.yaml"
 RESULTS_DIR = HERE / "results"
@@ -28,6 +28,7 @@ LOG_DIR = RESULTS_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 LOG_FILE = LOG_DIR / "ner_training.log"
+ARTIFACT_MANIFEST_NAME = "ner_artifacts_manifest.json"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -480,6 +481,44 @@ def _make_model_zip(
     return destination
 
 
+def _sha256_file(path: Path) -> str:
+    """Return a streaming content hash for a final NER artifact."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_artifact_manifest(artifacts: list[Path]) -> Path:
+    """Publish the final-artifact hashes last for Colab transfer validation."""
+    entries: dict[str, dict[str, int | str]] = {}
+    for artifact in artifacts:
+        if not artifact.is_file():
+            raise RuntimeError(
+                f"Cannot publish NER artifact manifest; missing {artifact}"
+            )
+        entries[artifact.name] = {
+            "sha256": _sha256_file(artifact),
+            "bytes": artifact.stat().st_size,
+        }
+
+    manifest_path = RESULTS_DIR / ARTIFACT_MANIFEST_NAME
+    temporary = manifest_path.with_name(
+        f"{manifest_path.name}.tmp-{os.getpid()}"
+    )
+    temporary.write_text(
+        json.dumps(
+            {"schema_version": "1", "artifacts": entries},
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(manifest_path)
+    return manifest_path
+
+
 def _hf_settings():
     token = os.getenv("HF_TOKEN")
     repo_id = os.getenv("HF_NER_REPO")
@@ -504,7 +543,7 @@ def _hf_settings():
 
 
 def prepare_hf_repo():
-    token, repo_id, required = (
+    token, repo_id, _required = (
         _hf_settings()
     )
 
@@ -676,6 +715,7 @@ def upload_final_artifacts_to_hf(
     final_model_zip: Path,
     metadata_path: Path,
     errors_path: Path,
+    artifact_manifest_path: Path,
 ):
     if api is None:
         return
@@ -694,6 +734,10 @@ def upload_final_artifacts_to_hf(
         (
             errors_path,
             "final/ner_errors.csv",
+        ),
+        (
+            artifact_manifest_path,
+            "final/ner_artifacts_manifest.json",
         ),
     ]
 
@@ -1130,14 +1174,6 @@ def main():
         / "training_metadata.json"
     )
 
-    metadata_path.write_text(
-        json.dumps(
-            metadata,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
     final_model_zip = (
         RESULTS_DIR
         / "ner_model_final.zip"
@@ -1148,11 +1184,30 @@ def main():
         final_model_zip,
     )
 
+    # Hash the two payload artifacts in metadata for human inspection.  The
+    # small manifest below additionally hashes this metadata file itself and
+    # is written LAST, making it the remote completion/integrity marker.
+    metadata["artifact_hashes"] = {
+        errors_path.name: _sha256_file(errors_path),
+        final_model_zip.name: _sha256_file(final_model_zip),
+    }
+    metadata_path.write_text(
+        json.dumps(
+            metadata,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    artifact_manifest_path = _write_artifact_manifest(
+        [errors_path, metadata_path, final_model_zip]
+    )
+
     upload_final_artifacts_to_hf(
         hf_api,
         final_model_zip,
         metadata_path,
         errors_path,
+        artifact_manifest_path,
     )
 
     logger.info(

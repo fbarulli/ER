@@ -49,7 +49,15 @@ HERE = Path(__file__).resolve().parents[3]
 # via lib.common (00_config.yaml paths.results_dir/data_dir) — were
 # re-derived inline (HERE / "artifacts" / "results"), a second declaration
 # that happened to match today.
-from euromonitor.core.common import DATA_DIR, RESULTS, load_config, sweep_cfg, training_cfg
+from euromonitor.core.common import (
+    DATA_DIR,
+    RESULTS,
+    load_config,
+    sweep_cfg,
+    training_cfg,
+)
+from euromonitor.core.manifest import sha256_file
+from euromonitor.core.schemas import StageManifest
 
 DATA = DATA_DIR
 
@@ -359,7 +367,7 @@ base = [sys.executable, str(train), "--split", "holdout", "--loss", "contrastive
 print("== HPO (dev-selected; test withheld)", flush=True)
 if subprocess.run(base + ["--hpo"]).returncode:
     sys.exit(1)
-best_paths = sorted((root / "artifacts/results").glob("train_*_hpo_best.json"))
+best_paths = sorted((root / "results").glob("train_*_hpo_best.json"))
 if len(best_paths) != 1:
     raise RuntimeError(f"expected one HPO best-config artifact, found {{best_paths}}")
 best = json.loads(best_paths[0].read_text())
@@ -419,6 +427,90 @@ def _list_remote(pattern_dir: str) -> list[str]:
     raise SystemExit(f"remote listing returned no marker; out={out[-500:]}")
 
 
+def _download_remote_manifests() -> list[StageManifest]:
+    """Pull and validate the completion records produced by remote stages.
+
+    The manifests live outside the normal results-download tree, so they
+    must be fetched explicitly before any artifact can be
+    trusted.  A lane that produced no completion records is incomplete by
+    definition: do not tear down its only copy while claiming success.
+    """
+    remote_dir = f"{REMOTE_ROOT}/results/manifests"
+    names = _list_remote(remote_dir)
+    if not names:
+        raise RuntimeError(
+            f"remote manifest directory is empty: {remote_dir}; refusing "
+            "to download unverifiable lane results"
+        )
+
+    local_dir = RESULTS / "manifests"
+    local_dir.mkdir(parents=True, exist_ok=True)
+    manifests: list[StageManifest] = []
+    for name in names:
+        remote = Path(name)
+        try:
+            rel = remote.relative_to(remote_dir)
+        except ValueError as exc:
+            raise RuntimeError(f"remote manifest escaped manifest dir: {name}") from exc
+        if rel.parent != Path(".") or remote.suffix != ".json":
+            raise RuntimeError(f"unexpected remote manifest path: {name}")
+        local = local_dir / rel
+        print(f"[download] manifest {rel}")
+        colab("download", "-s", SESSION, name, str(local), timeout=600)
+        try:
+            manifest = StageManifest.model_validate_json(
+                local.read_text(encoding="utf-8")
+            )
+        except Exception as exc:
+            raise RuntimeError(f"invalid remote manifest {name}: {exc}") from exc
+        if manifest.status != "complete":
+            raise RuntimeError(
+                f"remote manifest {name} has status {manifest.status!r}; "
+                "stage did not complete"
+            )
+        manifests.append(manifest)
+    return manifests
+
+
+def _local_path_for_remote(remote_path: str) -> Path:
+    """Map an absolute path in the mirrored remote repo back to this repo."""
+    try:
+        rel = Path(remote_path).relative_to(REMOTE_ROOT)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"manifest output is outside remote project root: {remote_path}"
+        ) from exc
+    return HERE / rel
+
+
+def _verify_manifest_downloads(manifests: list[StageManifest]) -> None:
+    """Fail if a manifest-listed expected output is absent or byte-different."""
+    problems: list[str] = []
+    for manifest in manifests:
+        output_names = {Path(entry.path).name for entry in manifest.outputs}
+        for expected in manifest.expected_outputs:
+            if expected not in output_names:
+                problems.append(
+                    f"{manifest.stage}: expected output absent from manifest: {expected}"
+                )
+        for entry in manifest.outputs:
+            local = _local_path_for_remote(entry.path)
+            if not local.is_file():
+                problems.append(f"{manifest.stage}: missing local output: {local}")
+                continue
+            actual = sha256_file(local)
+            if actual != entry.sha256:
+                problems.append(
+                    f"{manifest.stage}: sha256 mismatch for {local} "
+                    f"(remote {entry.sha256[:12]}, local {actual[:12]})"
+                )
+    if problems:
+        raise RuntimeError(
+            "Colab download integrity verification failed:\n  - "
+            + "\n  - ".join(problems)
+        )
+
+
 def download_results(skip_checkpoints: bool = True) -> None:
     """Pull the result artifacts back to the repo results dir.
 
@@ -427,9 +519,10 @@ def download_results(skip_checkpoints: bool = True) -> None:
     download_checkpoints() only when --what train asks for them.
     """
     RESULTS.mkdir(parents=True, exist_ok=True)
-    files = _list_remote(f"{REMOTE_ROOT}/artifacts/results")
+    manifests = _download_remote_manifests()
+    files = _list_remote(f"{REMOTE_ROOT}/results")
     for name in files:
-        rel = Path(name).relative_to(f"{REMOTE_ROOT}/artifacts/results")
+        rel = Path(name).relative_to(f"{REMOTE_ROOT}/results")
         if skip_checkpoints and rel.parts[0] == "_checkpoints":
             continue
         local = RESULTS / rel
@@ -454,6 +547,7 @@ def download_results(skip_checkpoints: bool = True) -> None:
                 file=sys.stderr,
             )
             raise
+    _verify_manifest_downloads(manifests)
 
 
 def download_checkpoints() -> None:
@@ -462,11 +556,15 @@ def download_checkpoints() -> None:
     Called after --what train: the trained model IS the deliverable of the
     production run; results CSVs alone don't carry it.
     """
+    # Re-fetch and re-verify after this separately downloaded tree too.  A
+    # future stage may list a checkpoint as an output; then it receives the
+    # same hash gate as ordinary results instead of becoming a blind spot.
+    manifests = _download_remote_manifests()
     print("[download] checkpoints ...")
-    files = _list_remote(f"{REMOTE_ROOT}/artifacts/results/_checkpoints")
+    files = _list_remote(f"{REMOTE_ROOT}/results/_checkpoints")
     for name in files:
-        rel = Path(name).relative_to(f"{REMOTE_ROOT}/artifacts")
-        local = HERE / "artifacts" / rel
+        rel = Path(name).relative_to(f"{REMOTE_ROOT}/results")
+        local = RESULTS / rel
         local.parent.mkdir(parents=True, exist_ok=True)
         print(f"[download] {rel}")
         # RULING 2026-09-10 (silent-degradation audit): LOUD-RAISE.
@@ -487,6 +585,7 @@ def download_checkpoints() -> None:
                 file=sys.stderr,
             )
             raise
+    _verify_manifest_downloads(manifests)
 
 
 def stop() -> None:

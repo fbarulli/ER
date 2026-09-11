@@ -81,6 +81,7 @@ to read the Hugging Face settings from ``config.yaml``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -91,9 +92,14 @@ from pathlib import Path
 
 import yaml
 
-
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.yaml"
+ARTIFACT_MANIFEST_NAME = "ner_artifacts_manifest.json"
+EXPECTED_FINAL_ARTIFACTS = (
+    "ner_errors.csv",
+    "training_metadata.json",
+    "ner_model_final.zip",
+)
 
 
 def log(message: str) -> None:
@@ -570,7 +576,48 @@ def monitor_training(settings: dict) -> None:
     log("[train] remote process finished")
 
 
-def download_if_exists(settings: dict, remote_path: str, local_path: Path) -> None:
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_artifact_manifest(path: Path) -> dict[str, dict]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"Invalid downloaded NER artifact manifest {path}: {exc}")
+    if payload.get("schema_version") != "1" or not isinstance(
+        payload.get("artifacts"), dict
+    ):
+        fail(f"Invalid NER artifact manifest structure: {path}")
+    artifacts = payload["artifacts"]
+    missing = [name for name in EXPECTED_FINAL_ARTIFACTS if name not in artifacts]
+    if missing:
+        fail(
+            "NER artifact manifest omits required final artifact(s): "
+            + ", ".join(missing)
+        )
+    for name in EXPECTED_FINAL_ARTIFACTS:
+        entry = artifacts[name]
+        digest = entry.get("sha256") if isinstance(entry, dict) else None
+        if not isinstance(digest, str) or len(digest) != 64 or any(
+            char not in "0123456789abcdef" for char in digest
+        ):
+            fail(f"NER artifact manifest has invalid sha256 for {name}")
+    return artifacts
+
+
+def download_if_exists(
+    settings: dict,
+    remote_path: str,
+    local_path: Path,
+    *,
+    required: bool = True,
+) -> None:
+    """Download an artifact, failing loudly when a required one is absent."""
     local_path.parent.mkdir(parents=True, exist_ok=True)
 
     result = run(
@@ -589,32 +636,51 @@ def download_if_exists(settings: dict, remote_path: str, local_path: Path) -> No
     if result.returncode == 0:
         log(f"[download] saved: {local_path}")
     else:
-        log(f"[download] unavailable: {remote_path}")
+        detail = (result.stderr or result.stdout or "unknown colab error").strip()
+        message = f"[download] unavailable: {remote_path} ({detail[-500:]})"
+        if required:
+            fail(message + "; refusing an incomplete NER result set")
+        log(message)
+
+
+def _verify_download(path: Path, expected_sha256: str) -> None:
+    if not path.is_file():
+        fail(f"Downloaded NER artifact is missing locally: {path}")
+    actual = _sha256_file(path)
+    if actual != expected_sha256:
+        fail(
+            f"NER download hash mismatch for {path}: "
+            f"remote={expected_sha256[:12]} local={actual[:12]}"
+        )
 
 
 def download_results(settings: dict) -> None:
     remote = settings["remote_results_dir"]
     local = settings["results_dir"]
 
+    # The manifest is created by ner.py only after all three final artifacts
+    # are complete.  Fetch it first, then accept each transfer only if it
+    # matches the remote-generated digest.
+    manifest_path = local / ARTIFACT_MANIFEST_NAME
     download_if_exists(
         settings,
-        f"{remote}/ner_errors.csv",
-        local / "ner_errors.csv",
+        f"{remote}/{ARTIFACT_MANIFEST_NAME}",
+        manifest_path,
     )
-    download_if_exists(
-        settings,
-        f"{remote}/training_metadata.json",
-        local / "training_metadata.json",
-    )
-    download_if_exists(
-        settings,
-        f"{remote}/ner_model_final.zip",
-        local / "ner_model_final.zip",
-    )
+    manifest = _read_artifact_manifest(manifest_path)
+
+    for name in EXPECTED_FINAL_ARTIFACTS:
+        local_path = local / name
+        download_if_exists(settings, f"{remote}/{name}", local_path)
+        _verify_download(local_path, manifest[name]["sha256"])
+
+    # This diagnostic is useful but is not a final deliverable, so a missing
+    # log cannot be treated as a successful substitute for model artifacts.
     download_if_exists(
         settings,
         f"{remote}/ner_train.log",
         local / "logs" / "ner" / "training.log",
+        required=False,
     )
 
 
