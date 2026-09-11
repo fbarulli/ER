@@ -309,11 +309,7 @@ for number in range(1, {workers} + 1):
     log_path, status_path = out / "training.log", out / "training.status"
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
-    publish = " ".join(shlex.quote(part) for part in [
-        sys.executable, "-u", "-m", "training.dvc_store",
-        "--source", str(out), "--run-id", {stamp!r}, "--worker", str(number),
-    ])
-    wrapped = f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; if [ \\"$rc\\" -eq 0 ]; then {{publish}}; rc=$?; fi; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+    wrapped = f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
     with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
         child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
@@ -356,10 +352,34 @@ print(json.dumps(payload), flush=True)
             failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
             if failed:
                 raise RuntimeError(f"parallel trainers failed: {failed}")
+            publish_parallel_results(remote_base, workers)
             download_verified_training_results(remote_base, workers)
             print(f"[train] all {workers} remote workers completed successfully", flush=True)
             return
         time.sleep(_LOG_POLL_SECONDS)
+
+
+def publish_parallel_results(remote_base: str, workers: int) -> None:
+    """Publish completed workers sequentially through one remote process."""
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
+import pathlib, subprocess, sys, os
+root = pathlib.Path({REMOTE_ROOT!r})
+base = pathlib.Path({remote_base!r})
+for number in range(1, {workers} + 1):
+    source = base / f"worker_{{number}}"
+    print(f"[dvc] central publish worker {{number}}/{{workers}}", flush=True)
+    subprocess.run([
+        sys.executable, "-u", "-m", "training.dvc_store",
+        "--source", str(source), "--run-id", {run_id!r}, "--worker", str(number),
+    ], cwd=root, env={{**os.environ, "PYTHONPATH": str(root / "src")}}, check=True)
+print("[dvc] central publisher completed all workers", flush=True)
+"""
+    run_colab_exec_stream(
+        SESSION, script,
+        timeout=_WORKER_TIMEOUT_SECONDS * max(1, workers),
+        log_name="03_dvc_publish",
+    )
 
 
 def download_verified_training_results(remote_base: str, workers: int) -> None:
