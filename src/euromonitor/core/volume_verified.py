@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from euromonitor.core.common import RESULTS, F, canonical_volume
+from euromonitor.core.manifest import count_drop
 
 
 def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
@@ -35,7 +36,17 @@ def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
         )
         return np.empty((0, 2), dtype=int)
     manifest = pd.read_csv(pairs_csv, dtype={"sku_id_a": str, "sku_id_b": str})
-    manifest = manifest[manifest["cross_country"]]
+    cross_country = manifest[manifest["cross_country"]]
+    cross_country_drop = count_drop(
+        len(manifest), len(cross_country), "volume_verified_not_cross_country"
+    )
+    print(
+        f"[volume_verified] {cross_country_drop['reason']}: "
+        f"{cross_country_drop['dropped']:,} removed "
+        f"({cross_country_drop['before']:,} -> {cross_country_drop['after']:,})",
+        flush=True,
+    )
+    manifest = cross_country
 
     pid_to_idx = {str(pid): i for i, pid in enumerate(df["product_id"].astype(str))}
     a_idx = manifest["sku_id_a"].map(pid_to_idx)
@@ -55,4 +66,14 @@ def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
         & (vol[pairs[:, 1]] > 0)
         & (vol[pairs[:, 0]] == vol[pairs[:, 1]])
     )
-    return pairs[agrees]
+    agreed = pairs[agrees]
+    agreement_drop = count_drop(
+        len(pairs), len(agreed), "volume_verified_volume_disagreement"
+    )
+    print(
+        f"[volume_verified] {agreement_drop['reason']}: "
+        f"{agreement_drop['dropped']:,} removed "
+        f"({agreement_drop['before']:,} -> {agreement_drop['after']:,})",
+        flush=True,
+    )
+    return agreed

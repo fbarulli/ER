@@ -23,6 +23,7 @@ import pandas as pd
 from euromonitor.pipeline import extract_all, normalize_text
 from euromonitor.core.common import COLUMN_MAPPING, DATA_PATH, F, RESULTS, column_profile
 from euromonitor.core.gtin import normalize_and_validate_gtin
+from euromonitor.core.manifest import count_drop
 
 
 def _sha256(path: Path) -> str:
@@ -140,14 +141,25 @@ def audit(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             "value": int(groups["review_reasons"].ne("").sum()),
             "detail": "groups with title, brand, category, volume, pack, or source-coverage variation",
         }
-        for reason, count in (
-            groups.loc[groups["review_reasons"].ne(""), "review_reasons"]
-            .str.split(" | ", regex=False)
-            .explode()
-            .value_counts()
-            .sort_index()
-            .items()
-        ):
+        review_reasons = groups.loc[
+            groups["review_reasons"].ne(""), "review_reasons"
+        ]
+        exploded_reasons = review_reasons.str.split(" | ", regex=False).explode()
+        explode_accounting = count_drop(
+            len(review_reasons), len(exploded_reasons), "quality_audit_review_reason_explode"
+        )
+        if int(explode_accounting["dropped"]) > 0:
+            raise AssertionError(
+                "review-reason explode lost rows: "
+                f"{explode_accounting['before']} -> {explode_accounting['after']}"
+            )
+        print(
+            "[quality] quality_audit_review_reason_explode: "
+            f"net {-int(explode_accounting['dropped']):+,} rows "
+            f"({explode_accounting['before']:,} -> {explode_accounting['after']:,})",
+            flush=True,
+        )
+        for reason, count in exploded_reasons.value_counts().sort_index().items():
             summary.loc[len(summary)] = {
                 "metric": f"review_reason_{reason}",
                 "value": int(count),

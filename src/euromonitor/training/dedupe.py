@@ -23,6 +23,7 @@ Writes:
   artifacts/data/sku_to_rep.csv        raw SKU (product_id) -> rep_id
   results/06_dedupe_summary.csv        per-tier counts
   results/06_ambiguous_offer_groups.csv  retailer+title >1 price
+  results/06_dedupe_removals.csv       one review row per removed raw SKU
   results/manifests/dedupe.json        per-stage manifest, written LAST
                                         (SILENT_DROPS task 4 — the stage's
                                         completion marker: closure
@@ -48,6 +49,7 @@ from euromonitor.core.manifest import atomic_write_csv, begin_manifest, finish_m
 # only filenames in the tree outside 00_config.yaml
 CSV_SUMMARY = RESULTS / F["dedupe_summary"]
 CSV_OFFERS = RESULTS / F["ambiguous_offer_groups"]
+CSV_REMOVALS = RESULTS / F["removals"]
 DEDUPED_PATH = DATA_DIR / F["dataset_deduped"]
 SKU_TO_REP_PATH = DATA_DIR / F["sku_to_rep"]
 
@@ -207,6 +209,26 @@ def main() -> None:
         raise AssertionError("sanity FAILED: rep_id coverage is not 0..n-1")
     print("  [PASS] no retailer+title duplicates remain; SKU->rep mapping complete")
 
+    # One review row for every raw SKU deliberately collapsed by a tier.
+    # Capture the tier at its direct parent update, before transitive
+    # representative resolution obscures where the removal happened.
+    removal_tier = {
+        **{idx: "T1 retailer+barcode" for idx in dropped1},
+        **{idx: "T2 retailer+title+price+barcode" for idx in dropped2},
+        **{idx: "T3 retailer+title (price-aggregation)" for idx in dropped3},
+    }
+    removals = sku_to_rep.loc[list(removal_tier)].copy()
+    removals["tier"] = [removal_tier[idx] for idx in removals.index]
+    removals = removals[["product_id", "rep_id", "tier"]].reset_index(drop=True)
+    expected_removals = n0 - len(deduped)
+    if len(removals) != expected_removals:
+        raise AssertionError(
+            f"sanity FAILED: removals has {len(removals):,} rows, expected "
+            f"{expected_removals:,}"
+        )
+    atomic_write_csv(removals, CSV_REMOVALS, index=False)
+    print(f"wrote {CSV_REMOVALS} ({len(removals):,} review rows)")
+
     summary.append({"tier": "TOTAL dropped", "dropped_rows": n0 - len(deduped)})
     summary.append({"tier": "TOTAL remaining", "dropped_rows": len(deduped)})
     summary_df = pd.DataFrame(summary)
@@ -249,11 +271,11 @@ def main() -> None:
     }
     manifest_path = finish_manifest(
         manifest,
-        outputs=[DEDUPED_PATH, SKU_TO_REP_PATH, CSV_SUMMARY, CSV_OFFERS],
+        outputs=[DEDUPED_PATH, SKU_TO_REP_PATH, CSV_SUMMARY, CSV_OFFERS, CSV_REMOVALS],
         row_accounting=row_accounting,
         expected_outputs=[
             F["dataset_deduped"], F["sku_to_rep"],
-            F["dedupe_summary"], F["ambiguous_offer_groups"],
+            F["dedupe_summary"], F["ambiguous_offer_groups"], F["removals"],
         ],
     )
     print(f"wrote {manifest_path} — stage manifest (closure "

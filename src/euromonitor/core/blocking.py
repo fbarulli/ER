@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from euromonitor.core.gtin import barcode_validity
+from euromonitor.core.manifest import count_drop
 
 
 def build_pairs(
@@ -56,9 +57,15 @@ def build_pairs(
     multi = known[known.groupby(barcode_col)[retailer_col].transform("nunique") > 1]
     pos_i: list[int] = []
     pos_j: list[int] = []
+    title_drops = 0
     for _, g in multi.groupby(barcode_col):
         sub = g.assign(_t=titles.loc[g.index])
-        rows = sub[sub["_t"] != ""].drop_duplicates("_t").index.tolist()
+        titled = sub[sub["_t"] != ""]
+        unique_titles = titled.drop_duplicates("_t")
+        title_drops += int(count_drop(
+            len(titled), len(unique_titles), "blocking_duplicate_title"
+        )["dropped"])
+        rows = unique_titles.index.tolist()
         combos = list(combinations(rows, 2))
         if len(combos) > max_pos_per_group:
             chosen = rng.choice(len(combos), max_pos_per_group, replace=False)
@@ -66,6 +73,11 @@ def build_pairs(
         for a, b in combos:
             pos_i.append(a)
             pos_j.append(b)
+    if title_drops:
+        print(
+            f"[blocking] duplicate-title representatives removed: {title_drops:,}",
+            flush=True,
+        )
 
     # neg_oversample SSOT: src/euromonitor/training/training.yaml pairs.neg_oversample when
     # None — the bulk-draw multiplier (was inline 60). Validated by

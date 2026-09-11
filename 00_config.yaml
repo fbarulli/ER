@@ -53,6 +53,7 @@ files:
   # inline in TRAIN/training.run_hpo, which prints the actual out_path.
   dedupe_summary: "06_dedupe_summary.csv"
   ambiguous_offer_groups: "06_ambiguous_offer_groups.csv"
+  removals: "06_dedupe_removals.csv"
   four_pop_scores: "07b_four_pop_scores.csv"
   field_ablation: "07c_field_ablation.csv"
   data_scaling: "07d_data_scaling.csv"
