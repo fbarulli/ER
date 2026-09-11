@@ -220,7 +220,7 @@ def run_detached_train_and_tail(args: list[str]) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     remote_log = f"{REMOTE_ROOT}/results/logs/colab_train_{stamp}.log"
     remote_status = f"{remote_log}.status"
-    launch = _BOOTSTRAP + _wandb_env_script() + f"""
+    launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import json, os, pathlib, shlex, subprocess, sys
 log_path = pathlib.Path({remote_log!r})
 status_path = pathlib.Path({remote_status!r})
@@ -285,7 +285,7 @@ def run_parallel_train_and_tail(args: list[str], workers: int) -> None:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
-    launch = _BOOTSTRAP + f"""
+    launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import json, os, pathlib, shutil, shlex, subprocess, sys
 from core.common import F
 root = pathlib.Path({REMOTE_ROOT!r})
@@ -471,6 +471,22 @@ def _wandb_env_script() -> str:
     return f"os.environ['WANDB_API_KEY'] = {key!r}\n"
 
 
+def _hf_env_script() -> str:
+    """Pass a local HF token into the VM process without persisting it."""
+    for name in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        key = _env_value(name)
+        if key:
+            print(f"[huggingface] {name} loaded from local .env and injected into VM process")
+            return f"os.environ['HF_TOKEN'] = {key!r}\n"
+    print("[huggingface] HF_TOKEN absent from .env; Hub requests will be anonymous")
+    return ""
+
+
+def _remote_auth_env_script() -> str:
+    """Credential exports used by remote subprocess launch cells only."""
+    return _wandb_env_script() + _hf_env_script()
+
+
 def run_data_prep() -> None:
     """Regenerate the derived CSVs on the VM (byte-deterministic replay).
 
@@ -537,7 +553,7 @@ def run_hpo(mode: str | None = None) -> None:
     """Sweep every configured backbone, then evaluate and rerank each winner."""
     mode = mode or _HPO_MODE
     print(f"[run] round-robin HPO (mode={mode}, workers={_HPO_WORKERS}) ...")
-    script = _BOOTSTRAP + _wandb_env_script() + f"""
+    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import concurrent.futures, json, os, pathlib, shutil, subprocess, sys
 from datetime import datetime, timezone
 from core.common import F, hpo_cfg, resolve_model
