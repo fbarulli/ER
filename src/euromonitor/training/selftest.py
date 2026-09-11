@@ -22,10 +22,8 @@ Covers:
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
-
 
 import numpy as np
 import pandas as pd
@@ -88,7 +86,11 @@ def oracle_gtin() -> None:
 
 
 def oracle_cleaning() -> None:
-    from euromonitor.pipeline import MODEL_PAYLOAD_SOFT_STOP, normalize_text, strip_schema_words
+    from euromonitor.pipeline import (
+        MODEL_PAYLOAD_SOFT_STOP,
+        normalize_text,
+        strip_schema_words,
+    )
 
     check("NaN -> empty", normalize_text(float("nan")) == "")
     check("None -> empty", normalize_text(None) == "")
@@ -554,7 +556,6 @@ def oracle_config_split() -> None:
         "files.stopwords points at the core package word list",
         data_cfg().files.stopwords == "pipe_stopwords.json",
     )
-    from pathlib import Path as _P
 
     check(
         "core/pipe_stopwords.json exists",
@@ -865,8 +866,8 @@ def oracle_round3_pins() -> None:
     SSOT-derived defaults (colab train-frac) stay derived; blocking-audit
     knobs read the audit: block. A regression here means a round-3 fix
     was silently reverted."""
-    from euromonitor.pipeline import three_way_gate
     from euromonitor.core.common import F, sweep_cfg, training_cfg
+    from euromonitor.pipeline import three_way_gate
 
     # ── F01 pin: the gate's decision table == the config values, and
     #    three_way_gate with no explicit args uses exactly them
@@ -1295,8 +1296,9 @@ def oracle_manifest() -> None:
          bypassed the manifest layer — never silent;
       3. manifest present -> every live pin runs against it.
     """
-    from pydantic import ValidationError
     from unittest.mock import patch
+
+    from pydantic import ValidationError
 
     from euromonitor.core.common import RESULTS, _path, training_cfg
     from euromonitor.core.manifest import atomic_write, read_manifest, verify_manifest
