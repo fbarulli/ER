@@ -79,6 +79,7 @@ _HPO_MODE = _COLAB.hpo_mode
 _HPO_WORKERS = _COLAB.hpo_workers
 _TRAIN_WORKERS = _COLAB.train_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
+_PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
 _MASK_EFFECT_AFTER_TRAIN = _COLAB.mask_effect_after_train
 _SMOKE_EPOCHS = _COLAB.smoke_epochs
 _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
@@ -268,7 +269,7 @@ payload = {{
 }}
 print(json.dumps(payload), flush=True)
 """
-        payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=120))
+        payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS))
         offset = int(payload["offset"])
         if payload["chunk"]:
             for line in str(payload["chunk"]).splitlines():
@@ -346,7 +347,7 @@ for number in range(1, {workers} + 1):
 payload["done"] = all(value is not None for value in payload["status"].values())
 print(json.dumps(payload), flush=True)
 """
-        payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=120))
+        payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS))
         offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
         for worker, chunk in payload["chunks"].items():
             for line in str(chunk).splitlines():

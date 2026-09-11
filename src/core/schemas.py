@@ -592,6 +592,7 @@ class ColabSpec(BaseModel):
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)
     log_poll_seconds: int = Field(ge=1, le=30)
+    probe_timeout_seconds: int = Field(ge=60, le=1800)
     artifact_repo_id: str = Field(min_length=1)
     artifact_repo_private: bool
     mask_effect_after_train: bool
