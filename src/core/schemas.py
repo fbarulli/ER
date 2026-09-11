@@ -576,6 +576,18 @@ class TrackingSpec(BaseModel):
     wandb: WandbTrackingSpec
 
 
+class ColabSpec(BaseModel):
+    """Remote checkout/runtime settings for the Colab training lane."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    repository: str = Field(min_length=1)
+    branch: str = Field(min_length=1)
+    remote_root: str = Field(min_length=1)
+    session: str = Field(min_length=1)
+    gpu: str = Field(min_length=1)
+
+
 class TrainingConfig(BaseModel):
     """config/training.yaml — the training lane's OWN config (in its dir).
 
@@ -603,6 +615,7 @@ class TrainingConfig(BaseModel):
     rerank: RerankSpec
     sweep: SweepSpec
     tracking: TrackingSpec
+    colab: ColabSpec
     # The NER lane's legacy settings live under the training SSOT too. Their
     # shape is intentionally open while the older standalone scripts are
     # retired; core.common owns parsing/path expansion for every consumer.

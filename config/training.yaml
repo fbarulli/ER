@@ -27,6 +27,16 @@ tracking:
     project: "e-r"
     mode: "online"
 
+# ── Colab checkout/runtime ─────────────────────────────────────────────────
+# The launcher clones this public training branch instead of uploading a
+# local working tree or data snapshot.
+colab:
+  repository: "https://github.com/fbarulli/ER.git"
+  branch: "training"
+  remote_root: "/content/EuromonitoR"
+  session: "EuromonitoR"
+  gpu: "T4"
+
 # ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
 # The gate's decision table, formerly signature defaults in
 # data_pipe.three_way_gate (vol_tolerance=0.05 / raw_conf_threshold=0.85 /

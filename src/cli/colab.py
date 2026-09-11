@@ -19,11 +19,9 @@ now the src/training/ module chain):
   smoke  — the 1k chain check on GPU (fast verification the remote
            environment reproduces the local results contract).
 
-Every lane reuses the shared bootstrap: upload the full code tree (src/training/,
-src/core/, data_pipe.py, config files) + the raw export; regenerate
-all derived CSVs on the VM (byte-deterministic: canonicals/gates reproduce
-identically — verified in the local worktree replay); run the lane; pull
-the results CSVs + per-model stamps back.
+Every lane reuses the shared bootstrap: the VM clones the configured public
+training branch, regenerates all derived CSVs (byte-deterministic: canonicals
+and gates reproduce identically), runs the lane, and pulls results back.
 
 Usage:
   python colab_backend.py --what train
@@ -48,17 +46,13 @@ from pathlib import Path
 # re-derived inline (HERE / "artifacts" / "results"), a second declaration
 # that happened to match today.
 from core.common import (
-    DATA_DIR,
     RESULTS,
     TRAIN_ROOT,
-    load_config,
     sweep_cfg,
     training_cfg,
 )
 from core.manifest import sha256_file
 from core.schemas import StageManifest
-
-DATA = DATA_DIR
 
 # smoke sample size + train defaults: the config SSOT (config/training.yaml
 # sweep: block via lib.common.sweep_cfg / training_cfg) — were inline
@@ -70,41 +64,17 @@ _TRAIN_FRAC_DEFAULT = float(sweep_cfg()["train_fracs"][0])
 _EPOCHS_DEFAULT = int(training_cfg().training.epochs)
 _RERANK_MODEL = str(sweep_cfg()["rerank_model"])
 
-SESSION = "EuromonitoR"
-GPU = "T4"
-REMOTE_ROOT = "/content/EuromonitoR"
+_COLAB = training_cfg().colab
+REPOSITORY = _COLAB.repository
+BRANCH = _COLAB.branch
+SESSION = _COLAB.session
+GPU = _COLAB.gpu
+REMOTE_ROOT = _COLAB.remote_root
 LIVE_LOG_PATH = TRAIN_ROOT / "training.log"
 _live_log = None
 
-# code tree every lane needs (the TRAIN chain imports lib.* and data_pipe)
-# NOTE (config split 2026-09-08, EDA removed 2026-09-10): the monolith
-# became config/paths.yaml (root data contract) + config/training.yaml (the
-# EDA dir is gone — its TRAIN-consumed keys migrated into training.yaml);
-# the root stopwords moved to config/vocabulary.json (matching.py's
-# sklearn list renamed to config/vocabulary.json) — whole-dir uploads
-# carry every config file.
-CODE_TARGETS = [
-    (TRAIN_ROOT / "src", f"{REMOTE_ROOT}/src"),
-    (TRAIN_ROOT / "pyproject.toml", f"{REMOTE_ROOT}/pyproject.toml"),
-    (TRAIN_ROOT / "config/paths.yaml", f"{REMOTE_ROOT}/config/paths.yaml"),
-    (TRAIN_ROOT / "config/training.yaml", f"{REMOTE_ROOT}/config/training.yaml"),
-    (TRAIN_ROOT / "config/vocabulary.json", f"{REMOTE_ROOT}/config/vocabulary.json"),
-]
-# derived-data lanes regenerate ON the VM (byte-deterministic) — the ONLY
-# uploads are committed SSOT inputs. AUDIT FIX 2026-09-08: the old set
-# shipped dataset_deduped.csv alone, but data_prep's chain reads
-# artifacts/data/dataset.csv (raw export) and dedupe/build_reference
-# regenerate from it; shipping the deduped file without the raw export
-# meant the VM lane died at the first loader. number_tokens_reference.csv
-# is a COMMITTED input (build_reference --verify reproduces it; without it
-# strip_number_tokens degrades to regex-only and the payload drifts).
-_RAW_EXPORT = (DATA / load_config()["files"]["dataset"]).resolve()
-INPUT_TARGETS = [
-    # The source is explicitly configured relative to DATA. Preserve the same
-    # resolution remotely rather than create a shadow dataset copy.
-    (_RAW_EXPORT, f"{REMOTE_ROOT}/dataset.csv"),
-    (DATA / "number_tokens_reference.csv", f"{REMOTE_ROOT}/artifacts/data/number_tokens_reference.csv"),
-]
+# The clone contains the committed raw export and number-token reference;
+# data_prep regenerates deduped data and all downstream CSVs on the VM.
 
 
 def check_colab_cli() -> None:
@@ -212,47 +182,27 @@ def ensure_session() -> None:
     print("[session] up")
 
 
-def _upload_dir(local_dir: Path, remote_dir: str) -> None:
-    """Upload a directory tree via per-file colab upload (no tar on VM)."""
-    files = sorted(p for p in local_dir.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
-    for f in files:
-        rel = f.relative_to(local_dir).as_posix()
-        colab("upload", "-s", SESSION, str(f), f"{remote_dir}/{rel}", timeout=600)
-    print(f"[upload] {local_dir.name}/ -> {remote_dir} ({len(files)} files)")
-
-
-def upload_inputs() -> None:
-    """Ship code tree + SSOT inputs to the VM."""
-    for local_dir, remote_dir in [(t[0], t[1]) for t in CODE_TARGETS if t[0].is_dir()]:
-        _upload_dir(local_dir, remote_dir)
-    for local, remote in CODE_TARGETS + INPUT_TARGETS:
-        if local.is_dir():
-            continue
-        if not local.exists():
-            raise FileNotFoundError(f"Local file not found: {local}")
-        print(f"[upload] {local.name} -> {remote}")
-        colab("upload", "-s", SESSION, str(local), remote, timeout=600)
-
-
 def prepare_remote_layout() -> None:
-    """Create upload parents before the first file transfer.
+    """Clone/update the configured training branch and create runtime dirs."""
+    script = f"""
+import pathlib, shutil, subprocess
 
-    Colab's contents API does not consistently create nested parents on an
-    upload request.  Make the layout explicitly, so a 500 cannot masquerade
-    as a failed data or training operation.
-    """
-    paths = [
-        REMOTE_ROOT,
-        f"{REMOTE_ROOT}/src/training",
-        f"{REMOTE_ROOT}/src/core",
-        f"{REMOTE_ROOT}/src/ner",
-        f"{REMOTE_ROOT}/artifacts/data",
-        f"{REMOTE_ROOT}/artifacts/results",
-    ]
-    script = "import pathlib\n" + "\n".join(
-        f"pathlib.Path({path!r}).mkdir(parents=True, exist_ok=True)" for path in paths
-    ) + "\nprint('remote upload layout ready')\n"
-    run_colab_exec_stream(SESSION, script, timeout=120)
+root = pathlib.Path({REMOTE_ROOT!r})
+if root.exists() and not (root / ".git").is_dir():
+    shutil.rmtree(root)
+if (root / ".git").is_dir():
+    subprocess.run(["git", "pull", "--ff-only", "origin", {BRANCH!r}], cwd=root, check=True)
+else:
+    root.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([
+        "git", "clone", "--depth", "1", "--branch", {BRANCH!r},
+        {REPOSITORY!r}, str(root),
+    ], check=True)
+for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
+    path.mkdir(parents=True, exist_ok=True)
+print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r}, "at", root)
+"""
+    run_colab_exec_stream(SESSION, script, timeout=600, log_name="00_checkout")
 
 
 def install_deps() -> None:
@@ -294,7 +244,7 @@ os.environ["PYTHONPATH"] = "{REMOTE_ROOT}/src" + os.pathsep + os.environ.get("PY
 
 
 def _env_value(name: str) -> str | None:
-    """Read a simple KEY=VALUE entry without printing or uploading .env."""
+    """Read a simple KEY=VALUE entry without printing or cloning secrets."""
     env_path = TRAIN_ROOT / ".env"
     if not env_path.exists():
         return None
@@ -657,19 +607,9 @@ def main() -> None:
     start_live_log()
     check_colab_cli()
 
-    # Pre-flight check — gate on the files the lane actually UPLOADS
-    # (INPUT_TARGETS), not dataset_deduped.csv: that file is regenerated on
-    # the VM by run_data_prep (never uploaded), so requiring it locally was
-    # both unnecessary and incomplete — a stale local copy passing the
-    # gate while the real inputs (raw export, reference) were missing.
-    for local, _ in INPUT_TARGETS:
-        if not local.exists():
-            raise FileNotFoundError(f"Missing required input: {local}")
-
     try:
         ensure_session()
         prepare_remote_layout()
-        upload_inputs()
         install_deps()
         log_gpu_profile()
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
