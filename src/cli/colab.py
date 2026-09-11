@@ -58,6 +58,7 @@ from core.common import (
     TRAINING_RESULTS,
     TRAIN_ROOT,
     sweep_cfg,
+    hpo_cfg,
     training_cfg,
 )
 from core.manifest import sha256_file
@@ -81,6 +82,7 @@ GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
 _HPO_WORKERS = _COLAB.hpo_workers
+_HPO_TRIAL_JOBS_DEFAULT = int(hpo_cfg()["n_jobs"])
 _TRAIN_WORKERS = _COLAB.train_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
@@ -891,12 +893,17 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
     print("[train] single worker completed successfully", flush=True)
 
 
-def run_hpo(mode: str | None = None, *, resume: bool = False) -> None:
+def run_hpo(
+    mode: str | None = None,
+    *,
+    resume: bool = False,
+    trial_jobs: int = _HPO_TRIAL_JOBS_DEFAULT,
+) -> None:
     """Sweep every configured backbone, then evaluate and rerank each winner."""
     mode = mode or _HPO_MODE
     print(
-        f"[run] round-robin HPO (mode={mode}, workers={_HPO_WORKERS}, "
-        f"resume={resume}) ..."
+        f"[run] round-robin HPO (mode={mode}, model_workers={_HPO_WORKERS}, "
+        f"trial_jobs={trial_jobs}, resume={resume}) ..."
     )
     resume_pointers = _hpo_resume_pointer_payload() if resume else {}
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
@@ -906,6 +913,7 @@ from core.common import F, hpo_cfg, resolve_model
 root = pathlib.Path("{REMOTE_ROOT}")
 base = [sys.executable, "-u", "-m", "training.train", "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot"]
 hpo_base = list(base)
+hpo_base.extend(["--n-jobs", str({trial_jobs})])
 if {resume!r}:
     hpo_base.append("--resume")
 resume_pointers = {resume_pointers!r}
@@ -1317,6 +1325,12 @@ def main() -> None:
         help="HPO scheduling mode (default from config/training.yaml)",
     )
     ap.add_argument(
+        "--hpo-jobs",
+        type=int,
+        default=_HPO_TRIAL_JOBS_DEFAULT,
+        help="concurrent Optuna trials per backbone (3 models x 3 jobs = 9 A100 workers)",
+    )
+    ap.add_argument(
         "--refresh-data",
         action="store_true",
         help="explicitly regenerate frozen CSV inputs before training",
@@ -1351,7 +1365,9 @@ def main() -> None:
         elif args.what == "smoke":
             run_train(args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE, workers=_TRAIN_WORKERS)
         elif args.what == "hpo":
-            run_hpo(args.hpo_mode, resume=args.resume_hpo)
+            if args.hpo_jobs < 1:
+                raise ValueError("--hpo-jobs must be >= 1")
+            run_hpo(args.hpo_mode, resume=args.resume_hpo, trial_jobs=args.hpo_jobs)
         else:
             run_train(
                 args.train_frac, args.epochs, sample=args.sample, workers=args.workers,
