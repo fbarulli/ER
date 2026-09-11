@@ -836,7 +836,59 @@ def run_train(
         args.append("--no-mask-effect")
     if resume_run:
         args.append("--resume")
+    if workers == 1 and resume_run is None:
+        run_single_train_and_stream(args)
+        return
     run_parallel_train_and_tail(args, workers, resume_run=resume_run)
+
+
+def run_single_train_and_stream(args: list[str]) -> None:
+    """Run one worker in the Colab exec stream so W&B is visible immediately."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
+    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
+import os, pathlib, shutil, subprocess, sys
+from core.common import F
+root = pathlib.Path({REMOTE_ROOT!r})
+base = pathlib.Path({remote_base!r})
+out = base / "worker_1"
+base.mkdir(parents=True, exist_ok=False)
+out.mkdir()
+for name in (F["canonical_records"], F["gate_results"]):
+    source = root / "results" / name
+    if not source.is_file():
+        raise FileNotFoundError(f"worker input missing: {{source}}")
+    shutil.copy2(source, out / name)
+wandb_dir = out / "wandb"
+wandb_dir.mkdir(parents=True, exist_ok=True)
+env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
+       "EUROMONITOR_RESULTS_DIR": str(out), "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
+       "WANDB_DIR": str(wandb_dir), "WANDB_RUN_NAME": "train_worker_1"}}
+command = [sys.executable, *{args!r}]
+log_path = out / "training.log"
+print(f"[train-launch] worker 1 streaming directly: {{' '.join(command)}}", flush=True)
+with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+    process = subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True, bufsize=1)
+    assert process.stdout is not None
+    for line in process.stdout:
+        print(line, end="", flush=True)
+        log_file.write(line)
+    rc = process.wait()
+if rc:
+    raise RuntimeError(f"worker 1 failed (rc={{rc}}); log={{log_path}}")
+print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
+"""
+    print("[run] starting one trainer with direct live stdout streaming ...", flush=True)
+    run_colab_exec_stream(
+        SESSION,
+        script,
+        timeout=_WORKER_TIMEOUT_SECONDS,
+        log_name="02_train",
+    )
+    publish_parallel_results(remote_base, 1)
+    download_verified_training_results(remote_base, 1)
+    print("[train] single worker completed successfully", flush=True)
 
 
 def run_hpo(mode: str | None = None, *, resume: bool = False) -> None:
