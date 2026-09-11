@@ -46,6 +46,7 @@ from pathlib import Path
 # re-derived inline (HERE / "artifacts" / "results"), a second declaration
 # that happened to match today.
 from core.common import (
+    F,
     RESULTS,
     TRAIN_ROOT,
     sweep_cfg,
@@ -262,7 +263,7 @@ def _wandb_env_script() -> str:
         print("[wandb] WANDB_API_KEY absent from .env; run will remain local-only")
         return ""
     print("[wandb] API key loaded from local .env and injected into VM process")
-    return f"os.environ['WANDB_API_KEY'] = {key!r}\\n"
+    return f"os.environ['WANDB_API_KEY'] = {key!r}\n"
 
 
 def run_data_prep() -> None:
@@ -284,6 +285,26 @@ for step in ("src/training/dedupe.py", "src/training/build_reference.py --verify
 """
     # dedupe 1-2 min + reference verify ~3 min + data_prep ~2 min
     run_colab_exec_stream(SESSION, script, timeout=1800, log_name="01_data_prep")
+
+
+def verify_training_inputs() -> None:
+    """Use the frozen CSV inputs committed on the training branch."""
+    print("[data] validating frozen training CSVs from the cloned branch ...")
+    script = _BOOTSTRAP + f"""
+from core.common import DATA_DIR, F, RESULTS
+required = [
+    DATA_DIR / F["dataset_deduped"],
+    DATA_DIR / F["number_reference"],
+    RESULTS / F["canonical_records"],
+    RESULTS / F["gate_results"],
+]
+missing = [str(path) for path in required if not path.is_file()]
+if missing:
+    raise FileNotFoundError("frozen training CSVs missing: " + ", ".join(missing))
+for path in required:
+    print(f"[data] {{path}}: {{path.stat().st_size:,}} bytes", flush=True)
+"""
+    run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check")
 
 
 def run_train(frac: float, epochs: int, sample: int | None) -> None:
@@ -594,6 +615,11 @@ def main() -> None:
         default=GPU,
         help=f"Colab accelerator request (default {GPU}; e.g. A100 when available)",
     )
+    ap.add_argument(
+        "--refresh-data",
+        action="store_true",
+        help="explicitly regenerate frozen CSV inputs before training",
+    )
     ap.add_argument("--keep-alive", action="store_true",
                     help="do not tear down the VM on completion/failure")
     args = ap.parse_args()
@@ -612,20 +638,20 @@ def main() -> None:
         prepare_remote_layout()
         install_deps()
         log_gpu_profile()
+        if args.refresh_data:
+            run_data_prep()
+        else:
+            verify_training_inputs()
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
         # (run_train was unconditional) — hours of unintended GPU quota
         # for a lane that only needs the deberta scoring.
         if args.what == "sims":
-            run_data_prep()
             run_sims_deberta()
         elif args.what == "smoke":
-            run_data_prep()
             run_train(args.train_frac, args.epochs, sample=_SMOKE_SAMPLE)
         elif args.what == "hpo":
-            run_data_prep()
             run_hpo()
         else:
-            run_data_prep()
             run_train(args.train_frac, args.epochs, sample=None)
         download_results()
         if args.what == "train":

@@ -8,13 +8,19 @@ artifacts/results/
 artifacts/models/
 artifacts/embeddings/
 artifacts/mlruns/
-artifacts/data/dataset_deduped.csv
+# Frozen training input consumed directly by train.py.
+!artifacts/data/dataset_deduped.csv
 artifacts/data/sku_to_rep.csv
 artifacts/data/clean_sku_gtin.csv
 artifacts/data/embeddings_cache/
 .venv/
 .env
-results/
+results/*
+!results/
+results/*
+# Frozen training inputs consumed directly by train.py.
+!results/canonical_records.csv
+!results/gate_results.csv
 # Reproducible training input: keep the raw export in Git.
 !dataset.csv
 # NER-side derived input; regenerated from the configured source.
@@ -31,3 +37,4 @@ dataset_model_input.csv
 training.log
 # Unrelated local artifact tree (contains node_modules, archives, and media).
 archify/
+src/ner/results/
