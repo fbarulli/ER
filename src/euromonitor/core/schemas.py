@@ -1244,3 +1244,49 @@ def check_verdict_map(m: dict[str, str]) -> dict[str, str]:
     strip/keep_* vocabulary (a typo'd verdict would silently never match
     the startswith('keep') branch in strip_number_tokens)."""
     return _VerdictMap.validate_python(m)
+
+
+# ── per-stage manifest (SILENT_DROPS task 3 — the runtime artifact
+#    contract written by lib/manifest.finish_manifest) ──────────────────
+
+
+class ManifestFile(BaseModel):
+    """One file row inside a StageManifest — inputs and outputs share the
+    shape; `expected` is outputs-only (True = listed in expected_outputs,
+    False = unexpected extra; None on inputs)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1)  # repo-root-relative POSIX path
+    sha256: str = Field(min_length=64, max_length=64)  # lowercase hex
+    rows: int | None = None  # CSV row count when known
+    cols: int | None = None
+    expected: bool | None = None
+
+
+class StageManifest(BaseModel):
+    """results/manifests/<stage>.json — the silent-drop guardrail's per-
+    stage record (SILENT_DROPS design sketch). Written LAST via atomic
+    rename (lib/manifest.finish_manifest), so its presence with
+    status "complete" IS the stage's completion marker; a crashed stage
+    leaves at most the previous run's manifest plus .tmp-* residue.
+
+    Closure invariant (enforced by finish_manifest and verify_manifest):
+    row_accounting.input_rows == output_rows + sum(dropped.values()).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1"]
+    stage: str = Field(min_length=1)
+    started: str  # ISO-8601 UTC
+    finished: str | None = None
+    status: Literal["running", "complete", "failed"]
+    inputs: list[ManifestFile]
+    outputs: list[ManifestFile]
+    # {input_rows, output_rows, dropped: {reason: count}} — kept a flat
+    # dict (not a nested model) so stages can add reasons without a
+    # schema bump; the closure invariant above is what's contractual.
+    row_accounting: dict[str, Any]
+    environment: dict[str, str]  # git_sha, config_sha256, seed, host
+    expected_outputs: list[str]

@@ -39,10 +39,21 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+from euromonitor.core.common import (
+    CONFIG_PATH,
+    TRAINING_CONFIG_PATH,
+    _path,
+    training_cfg,
+)
+from euromonitor.core.schemas import ManifestFile, StageManifest
 
 # 1 MiB per read — matches data_quality_audit._sha256, keeps the 53MB
 # dataset hashable without loading it into memory.
@@ -158,3 +169,253 @@ def count_drop(before: int, after: int, reason: str) -> dict[str, int | str]:
         "after": after,
         "dropped": before - after,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Per-stage manifest (SILENT_DROPS task 3; task 4 wires the first caller)
+#
+# begin_manifest snapshots inputs; finish_manifest validates the row
+# accounting closes, then writes <manifest_dir>/<stage>.json LAST via
+# atomic_write_json — the rename IS the completion marker.  verify_manifest
+# re-checks everything against disk and fails on any .tmp-* residue.
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _csv_rows(path: Path) -> tuple[int | None, int | None]:
+    """(data_rows, cols) for CSV-ish files, (None, None) otherwise.
+
+    Counts by newline without loading the file into memory (the 53MB raw
+    export must stay cheap to snapshot).
+    """
+    if path.suffix.lower() not in {".csv", ".tsv"}:
+        return None, None
+    cols = None
+    with path.open("rb") as stream:
+        header = stream.readline()
+        if header:
+            cols = header.count(b",") + 1
+        total = sum(1 for line in stream if line.strip())
+    return total, cols
+
+
+def _file_entry(path: Path) -> dict[str, Any]:
+    rows, cols = _csv_rows(path)
+    return {
+        "path": path.resolve().as_posix(),
+        "sha256": sha256_file(path),
+        "rows": rows,
+        "cols": cols,
+    }
+
+
+def _environment(seed: int | None) -> dict[str, str]:
+    env: dict[str, str] = {
+        "git_sha": "unknown",
+        "config_sha256": "unknown",
+        "host": platform.node(),
+    }
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if head.returncode == 0:
+            dirty = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            sha = head.stdout.strip()
+            if dirty.returncode == 0 and dirty.stdout.strip():
+                sha = f"{sha[:12]}-dirty"
+            env["git_sha"] = sha
+    except (OSError, subprocess.SubprocessError):
+        pass  # git absent — "unknown" is the documented fallback
+    digests = []
+    for cfg_path in (CONFIG_PATH, TRAINING_CONFIG_PATH):
+        try:
+            digests.append(sha256_file(cfg_path))
+        except OSError:
+            digests = []
+            break
+    if digests:
+        env["config_sha256"] = hashlib.sha256(
+            "|".join(digests).encode()
+        ).hexdigest()
+    if seed is not None:
+        env["seed"] = str(seed)
+    return env
+
+
+def begin_manifest(
+    stage: str,
+    inputs: list[str | Path],
+    seed: int | None = None,
+) -> StageManifest:
+    """Snapshot the inputs a stage is about to read.
+
+    Hashes each input NOW (cheap-chunked), counts CSV rows, records
+    started + environment.  The returned manifest is status "running" —
+    incomplete by construction until finish_manifest renames it in.
+    """
+    return StageManifest(
+        schema_version="1",
+        stage=stage,
+        started=_utc_now(),
+        finished=None,
+        status="running",
+        inputs=[
+            ManifestFile.model_validate(_file_entry(Path(p)))
+            for p in inputs
+        ],
+        outputs=[],
+        row_accounting={},
+        environment=_environment(seed),
+        expected_outputs=[],
+    )
+
+
+def _check_closure(row_accounting: dict[str, Any]) -> None:
+    input_rows = row_accounting.get("input_rows")
+    output_rows = row_accounting.get("output_rows")
+    dropped = row_accounting.get("dropped") or {}
+    if input_rows is None or output_rows is None:
+        return  # partial accounting is allowed until the stage reports
+    total_dropped = sum(int(v) for v in dropped.values())
+    if input_rows != output_rows + total_dropped:
+        raise ValueError(
+            f"row accounting does not close: input_rows={input_rows} "
+            f"!= output_rows={output_rows} + dropped={total_dropped} "
+            f"(dropped by reason: {dropped})"
+        )
+
+
+def finish_manifest(
+    manifest: StageManifest,
+    outputs: list[str | Path],
+    row_accounting: dict[str, Any],
+    expected_outputs: list[str] | None = None,
+    status: str = "complete",
+    manifest_dir: str | Path | None = None,
+) -> Path:
+    """Validate closure, then write <manifest_dir>/<stage>.json LAST.
+
+    The atomic rename publishes the manifest only after every output was
+    hashed and the row accounting closes — so a manifest on disk with
+    status "complete" proves the stage finished.  `manifest_dir` defaults
+    to the audit knob (training_cfg().audit.manifest_dir resolved through
+    lib.common._path); the explicit override exists so tests and smokes
+    never touch the real results/ tree.
+    """
+    _check_closure(row_accounting)
+    expected = list(expected_outputs or [])
+    entries = []
+    for p in outputs:
+        entry = _file_entry(Path(p))
+        name = Path(p).name
+        entry["expected"] = name in expected if expected else None
+        entries.append(entry)
+    manifest.outputs = [ManifestFile.model_validate(e) for e in entries]
+    manifest.row_accounting = row_accounting
+    manifest.expected_outputs = expected
+    manifest.finished = _utc_now()
+    manifest.status = status
+    directory = (
+        Path(manifest_dir)
+        if manifest_dir is not None
+        else _path(training_cfg().audit.manifest_dir)
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    return atomic_write_json(
+        manifest.model_dump(mode="json"), directory / f"{manifest.stage}.json"
+    )
+
+
+def read_manifest(stage: str, manifest_dir: str | Path | None = None) -> StageManifest:
+    """Parse <manifest_dir>/<stage>.json; FileNotFoundError propagates
+    (a missing manifest IS a stage that never completed)."""
+    directory = (
+        Path(manifest_dir)
+        if manifest_dir is not None
+        else _path(training_cfg().audit.manifest_dir)
+    )
+    return StageManifest.model_validate_json(
+        (directory / f"{stage}.json").read_text(encoding="utf-8")
+    )
+
+
+def verify_manifest(
+    stage: str,
+    manifest_dir: str | Path | None = None,
+    check_inputs: bool = False,
+) -> None:
+    """Re-check a published manifest against disk; raise RuntimeError
+    listing EVERY problem (not just the first).
+
+    Checks: manifest exists; status is complete; every output is present
+    and hash-matches; every expected_outputs name appears in outputs; no
+    .tmp-* residue sits next to any listed file; row accounting closes.
+    `check_inputs=True` also re-hashes inputs (slow — off by default
+    because the raw export is 53MB).
+    """
+    problems: list[str] = []
+    directory = (
+        Path(manifest_dir)
+        if manifest_dir is not None
+        else _path(training_cfg().audit.manifest_dir)
+    )
+    path = directory / f"{stage}.json"
+    if not path.exists():
+        raise RuntimeError(f"manifest missing: {path} — stage never completed")
+    manifest = StageManifest.model_validate_json(
+        path.read_text(encoding="utf-8")
+    )
+    if manifest.status != "complete":
+        problems.append(f"status is {manifest.status!r}, not 'complete'")
+    for group, entries, rehash in (
+        ("input", manifest.inputs, check_inputs),
+        ("output", manifest.outputs, True),
+    ):
+        for entry in entries:
+            f = Path(entry.path)
+            if not f.exists():
+                problems.append(f"{group} missing on disk: {entry.path}")
+                continue
+            if rehash:
+                actual = sha256_file(f)
+                if actual != entry.sha256:
+                    problems.append(
+                        f"{group} sha256 mismatch: {entry.path} "
+                        f"manifest={entry.sha256[:12]} actual={actual[:12]}"
+                    )
+            residue = list(f.parent.glob(f"{f.name}.tmp-*"))
+            if residue:
+                problems.append(
+                    f"interrupted-write residue next to {entry.path}: "
+                    f"{[r.name for r in residue]}"
+                )
+    for name in manifest.expected_outputs:
+        if name not in [Path(e.path).name for e in manifest.outputs]:
+            problems.append(f"expected output never produced: {name}")
+    try:
+        _check_closure(manifest.row_accounting)
+    except ValueError as err:
+        problems.append(str(err))
+    if problems:
+        raise RuntimeError(
+            f"manifest verification failed for stage {stage!r}:\n  - "
+            + "\n  - ".join(problems)
+        )
+
+
+def verify_manifests(
+    stages: list[str] | None = None,
+    manifest_dir: str | Path | None = None,
+) -> None:
+    """Verify the registry (audit.manifest_stages when stages is None);
+    the FIRST failing stage raises, naming the stage."""
+    todo = stages if stages is not None else training_cfg().audit.manifest_stages
+    for stage in todo:
+        verify_manifest(stage, manifest_dir=manifest_dir)
