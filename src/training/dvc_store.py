@@ -196,6 +196,13 @@ def publish_checkpoint(source: Path, checkpoint_root: Path) -> Path:
             # object. Push the exact native pointer explicitly.
             print(f"[checkpoint-dvc] pushing target {native_relative}", flush=True)
             _run(["dvc", "push", "--jobs", "1", str(native_relative)], source)
+            # A successful push process is not sufficient evidence on its
+            # own. Require DVC's cloud comparison to report this exact
+            # pointer in sync before making the resume metadata visible.
+            _run(
+                ["dvc", "status", "--cloud", "--quiet", str(native_relative)],
+                source,
+            )
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     # Expose the durable resume pointer only after the exact target push has
