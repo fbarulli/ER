@@ -352,11 +352,18 @@ class AuditSpec(BaseModel):
     #   current dataset.csv row count. The source-drift gate (task 9)
     #   compares every loaded export against this number so a changed
     #   source export is loud, never silent.
-    source_export_expected_rows: int = Field(default=71_623, ge=0)
+    source_export_expected_rows: int = Field(default=71_623, ge=1)
     # source_drift_threshold_pct: relative row-count drift allowed on the
     #   source export before that gate fails. 0.0 = exact match required
     #   (any row-count change trips the gate).
     source_drift_threshold_pct: float = Field(default=0.0, ge=0.0)
+    # source_export_expected_sha256: byte-level fingerprint of the approved
+    # raw export.  A row census alone cannot detect a substituted export
+    # whose row count happens to match.
+    source_export_expected_sha256: str = Field(
+        default="539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c",
+        pattern=r"^[0-9a-f]{64}$",
+    )
     # manifest_stages: stages that MUST produce a manifest, in pipeline
     #   order. run_all steps may append their own later; this list is
     #   the required-minimum registry the verify pass walks.

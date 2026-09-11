@@ -520,6 +520,53 @@ def oracle_pinned_counts() -> None:
         check("pinned counts (CSVs present)", False, str(e))
 
 
+def oracle_source_export_drift() -> None:
+    """The raw-export gate rejects both count and byte-level drift."""
+    import hashlib
+
+    from euromonitor.core.common import _validate_source_export, training_cfg
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "source.csv"
+        path.write_text("sku_id\n1\n2\n", encoding="utf-8")
+        df = pd.read_csv(path, dtype=str)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        audit = training_cfg().audit.model_copy(
+            update={
+                "source_export_expected_rows": 2,
+                "source_export_expected_sha256": digest,
+                "source_drift_threshold_pct": 0.0,
+            }
+        )
+        _validate_source_export(df, path, audit=audit)
+        check("source-export gate accepts pinned rows and sha256", True)
+
+        try:
+            _validate_source_export(df, path, audit=audit.model_copy(
+                update={"source_export_expected_rows": 3}
+            ))
+            check("source-export gate rejects row-count drift", False)
+        except SystemExit as e:
+            message = str(e)
+            check(
+                "source-export gate reports observed and expected rows",
+                "observed_rows=2" in message and "expected_rows=3" in message,
+                message,
+            )
+
+        try:
+            _validate_source_export(df, path, audit=audit.model_copy(
+                update={"source_export_expected_sha256": "0" * 64}
+            ))
+            check("source-export gate rejects sha256 drift", False)
+        except SystemExit as e:
+            check(
+                "source-export gate reports observed and expected sha256",
+                "observed_sha256=" in str(e) and "expected_sha256=" in str(e),
+                str(e),
+            )
+
+
 def oracle_config_split() -> None:
     """Split-SSOT (2026-09-08; EDA removed 2026-09-10): the monolithic
     00_config.yaml is now TWO files, each validated by its pydantic model
@@ -1492,6 +1539,8 @@ def main() -> None:
     oracle_zero_pack_guard()
     print("== 9. pinned real-data counts ==")
     oracle_pinned_counts()
+    print("== 9a. source-export drift gate ==")
+    oracle_source_export_drift()
     print("== 9b. per-stage manifest guardrail (silent-drop layer) ==")
     oracle_manifest()
     print()

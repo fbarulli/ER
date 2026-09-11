@@ -347,6 +347,44 @@ def write_visibility_log(
         df.to_csv(logs / name, index=False)
 
 
+def _validate_source_export(
+    df: pd.DataFrame,
+    path: Path,
+    *,
+    audit: Any | None = None,
+) -> None:
+    """Fail before downstream work if the configured raw export drifted.
+
+    Both public raw-export loaders call this after parsing.  The row census
+    catches additions/removals, while the SSOT-held SHA-256 catches a
+    same-sized substitution.  Keep the hash helper as a local import: the
+    manifest module imports this config module, so a module-level import
+    would create a cycle.
+    """
+    spec = audit if audit is not None else training_cfg().audit
+    observed_rows = len(df)
+    expected_rows = spec.source_export_expected_rows
+    drift_pct = abs(observed_rows - expected_rows) / expected_rows * 100
+    if drift_pct > spec.source_drift_threshold_pct:
+        raise SystemExit(
+            "source export row-count drift: "
+            f"path={path} observed_rows={observed_rows} "
+            f"expected_rows={expected_rows} "
+            f"observed_drift_pct={drift_pct:.6f} "
+            f"allowed_drift_pct={spec.source_drift_threshold_pct:.6f}"
+        )
+
+    from euromonitor.core.manifest import sha256_file
+
+    observed_sha256 = sha256_file(path)
+    if observed_sha256 != spec.source_export_expected_sha256:
+        raise SystemExit(
+            "source export sha256 drift: "
+            f"path={path} observed_sha256={observed_sha256} "
+            f"expected_sha256={spec.source_export_expected_sha256}"
+        )
+
+
 def load_dataset() -> pd.DataFrame:
     """Load the ACTIVE dataset as raw strings (no silent coercion).
 
@@ -356,6 +394,7 @@ def load_dataset() -> pd.DataFrame:
     project-wide via COLUMN_MAPPING (00_config.yaml).
     """
     df = pd.read_csv(DATA_PATH, dtype=str)
+    _validate_source_export(df, DATA_PATH)
     return df.rename(columns=COLUMN_MAPPING)
 
 
@@ -365,7 +404,9 @@ def load_raw_export() -> pd.DataFrame:
     attribute); the training/eval lane works in canonical ones."""
     if not DATA_PATH.exists():
         raise FileNotFoundError(f"{DATA_PATH} missing")
-    return pd.read_csv(DATA_PATH, dtype=str)
+    df = pd.read_csv(DATA_PATH, dtype=str)
+    _validate_source_export(df, DATA_PATH)
+    return df
 
 
 def load_dataset_deduped() -> pd.DataFrame:
