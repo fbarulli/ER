@@ -45,6 +45,7 @@ colab:
   mask_effect_after_train: false
   smoke_epochs: 1
   dvc_remote_url: "https://dagshub.com/fbarulli/ER.dvc"
+  dagshub_repo: "fbarulli/ER"
 
 # ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
 # The gate's decision table, formerly signature defaults in

@@ -22,6 +22,12 @@ def publish(source: Path, run_id: str, worker: int) -> None:
         _run(["dvc", "add", *paths], source)
     _run(["dvc", "push"], source)
     (source / "dvc_manifest.json").write_text(f'{{"run_id": {run_id!r}, "worker": {worker}}}\n', encoding="utf-8")
+    repo = training_cfg().colab.dagshub_repo
+    env = {**os.environ, "DAGSHUB_USER_TOKEN": token}
+    subprocess.run(
+        ["dagshub", "upload", repo, str(source), f"runs/{run_id}/worker_{worker}"],
+        cwd=source, env=env, check=True,
+    )
 
 def main() -> None:
     p = argparse.ArgumentParser(); p.add_argument("--source", type=Path, required=True); p.add_argument("--run-id", required=True); p.add_argument("--worker", type=int, required=True)

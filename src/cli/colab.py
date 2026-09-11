@@ -428,7 +428,7 @@ def install_deps() -> None:
         "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q',\n"
         "                'sentence-transformers', 'datasets', 'accelerate',\n"
         "                'evaluate', 'scikit-learn', 'pandas', 'numpy',\n"
-        "                'mlflow', 'optuna', 'wandb', 'dvc'], check=True)\n"
+        "                'mlflow', 'optuna', 'wandb', 'dvc', 'dagshub'], check=True)\n"
         "print('deps installed')"
     )
     run_colab_exec_stream(SESSION, install_script, timeout=900, log_name="00_deps")
@@ -493,7 +493,7 @@ def _remote_auth_env_script() -> str:
     key = _env_value("DVC_API_KEY")
     if key:
         print("[dvc] DVC_API_KEY loaded from local .env and injected into VM process")
-        dvc = f"os.environ['DVC_API_KEY'] = {key!r}\n"
+        dvc = f"os.environ['DVC_API_KEY'] = {key!r}\nos.environ['DAGSHUB_USER_TOKEN'] = {key!r}\n"
     else:
         print("[dvc] DVC_API_KEY absent from .env; durable DVC upload will fail")
         dvc = ""
