@@ -78,6 +78,7 @@ _HPO_MODE = _COLAB.hpo_mode
 _HPO_WORKERS = _COLAB.hpo_workers
 _TRAIN_WORKERS = _COLAB.train_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
+_MASK_EFFECT_AFTER_TRAIN = _COLAB.mask_effect_after_train
 LIVE_LOG_PATH: Path | None = None
 _live_log = None
 _original_stdout = None
@@ -547,6 +548,8 @@ def run_train(frac: float, epochs: int, sample: int | None, workers: int = 1) ->
         "--no-plot"]
     if sample is not None:
         args.extend(["--sample", str(sample)])
+    if not _MASK_EFFECT_AFTER_TRAIN:
+        args.append("--no-mask-effect")
     if workers == 1:
         run_detached_train_and_tail(args)
     else:

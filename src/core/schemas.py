@@ -593,6 +593,7 @@ class ColabSpec(BaseModel):
     log_poll_seconds: int = Field(ge=1, le=30)
     artifact_repo_id: str = Field(min_length=1)
     artifact_repo_private: bool
+    mask_effect_after_train: bool
 
 
 class TrainingConfig(BaseModel):
