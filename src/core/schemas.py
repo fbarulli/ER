@@ -591,6 +591,8 @@ class ColabSpec(BaseModel):
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)
     log_poll_seconds: int = Field(ge=1, le=30)
+    artifact_repo_id: str = Field(min_length=1)
+    artifact_repo_private: bool
 
 
 class TrainingConfig(BaseModel):

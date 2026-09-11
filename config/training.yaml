@@ -40,6 +40,8 @@ colab:
   hpo_workers: 3
   train_workers: 6
   log_poll_seconds: 2
+  artifact_repo_id: "fbarulli/e-r-training-artifacts"
+  artifact_repo_private: true
 
 # ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
 # The gate's decision table, formerly signature defaults in

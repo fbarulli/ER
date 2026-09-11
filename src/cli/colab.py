@@ -304,7 +304,11 @@ for number in range(1, {workers} + 1):
     log_path, status_path = out / "training.log", out / "training.status"
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
-    wrapped = f"{{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+    publish = " ".join(shlex.quote(part) for part in [
+        sys.executable, "-u", "-m", "training.artifact_store",
+        "--source", str(out), "--run-id", {stamp!r}, "--worker", str(number),
+    ])
+    wrapped = f"{{command}}; rc=$?; if [ \\"$rc\\" -eq 0 ]; then {{publish}}; rc=$?; fi; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
     with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
         child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
