@@ -43,6 +43,7 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
     with tempfile.TemporaryDirectory(prefix="euromonitor-dvc-verify-") as temp:
         verify = Path(temp)
         _run(["dvc", "init", "--no-scm"], verify)
+        _run(["dvc", "config", "cache.dir", str(verify / ".dvc-cache")], verify)
         _run(["dvc", "remote", "add", "--default", "dagshub", remote], verify)
         _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], verify)
         _run(["dvc", "remote", "modify", "dagshub", "--local", "user", "fbarulli"], verify)
@@ -66,6 +67,7 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     if not token:
         raise RuntimeError("DVC_API_KEY is required for DagsHub persistence")
     _run(["dvc", "init", "--no-scm"], source)
+    _run(["dvc", "config", "cache.dir", str(source / ".dvc-cache")], source)
     remote = training_cfg().colab.dvc_remote_url
     _run(["dvc", "remote", "add", "--default", "dagshub", remote], source)
     _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], source)
