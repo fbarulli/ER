@@ -154,7 +154,6 @@ def publish_checkpoint(source: Path, checkpoint_root: Path) -> Path:
     relative_root = checkpoint_root.relative_to(source)
     _configure(source, token)
     pointer = source / ".resume" / f"{checkpoint_root.name}.dvc"
-    pointer.parent.mkdir(parents=True, exist_ok=True)
     # DVC recursively discovers existing .dvc files.  The durable resume
     # pointers are intentionally kept under source/.resume, but they must not
     # participate in discovery while a new output is added.  Temporarily
@@ -185,16 +184,26 @@ def publish_checkpoint(source: Path, checkpoint_root: Path) -> Path:
         native_output = (native_pointer.parent / str(entry["path"])).resolve()
         native_output.relative_to(source)
         entry["path"] = os.path.relpath(native_output, pointer.parent)
-    pointer.write_text(
-        yaml.safe_dump(pointer_data, sort_keys=False), encoding="utf-8"
-    )
+    native_relative = native_pointer.relative_to(source)
     lock_path = source.parent / ".dvc-push.lock"
     with lock_path.open("w", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            _run(["dvc", "push", "--jobs", "1"], source)
+            # This is a no-SCM repository and the checkpoint .dvc file is
+            # nested below _checkpoints/.  A target-less dvc push can report
+            # success while discovering no top-level tracked outputs, which
+            # leaves the resume pointer referring to a nonexistent remote
+            # object. Push the exact native pointer explicitly.
+            print(f"[checkpoint-dvc] pushing target {native_relative}", flush=True)
+            _run(["dvc", "push", "--jobs", "1", str(native_relative)], source)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    # Expose the durable resume pointer only after the exact target push has
+    # succeeded. The launcher mirrors this file while the worker is alive.
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(
+        yaml.safe_dump(pointer_data, sort_keys=False), encoding="utf-8"
+    )
     return pointer
 
 
