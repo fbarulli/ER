@@ -391,7 +391,7 @@ for number in range(1, {workers} + 1):
         pointers = sorted(pointer_dir.glob("*.dvc"))
         if not pointers:
             raise RuntimeError(
-                f"[resume-preflight] worker {number} has no DVC resume pointer; "
+                f"[resume-preflight] worker {{number}} has no DVC resume pointer; "
                 "the previous checkpoint cannot be restored"
             )
         restored_checkpoint = False
@@ -411,7 +411,7 @@ for number in range(1, {workers} + 1):
                     if not candidates:
                         raise RuntimeError(
                             f"[resume-preflight] restored checkpoint root is empty: "
-                            f"{checkpoint_root}"
+                            f"{{checkpoint_root}}"
                         )
                     latest = candidates[-1]
                     required = (
@@ -426,15 +426,15 @@ for number in range(1, {workers} + 1):
                     ]
                     if missing:
                         raise RuntimeError(
-                            f"[resume-preflight] {latest} is not resumable; "
-                            f"missing {', '.join(missing)}"
+                            f"[resume-preflight] {{latest}} is not resumable; "
+                            f"missing {{', '.join(missing)}}"
                         )
         if not restored_checkpoint:
             raise RuntimeError(
-                f"[resume-preflight] worker {number} restored no checkpoint "
+                f"[resume-preflight] worker {{number}} restored no checkpoint "
                 "pointer; refusing to start training"
             )
-        print(f"[resume-preflight] worker {number}: restored {len(pointers)} pointer(s)", flush=True)
+        print(f"[resume-preflight] worker {{number}}: restored {{len(pointers)}} pointer(s)", flush=True)
     else:
         out.mkdir()
         for name in (F["canonical_records"], F["gate_results"]):
