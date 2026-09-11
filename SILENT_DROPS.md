@@ -56,7 +56,7 @@ at most the previous run's manifest plus `.tmp-*` residue, which
 | 4 | Pilot manifest on training/dedupe.py | `src/euromonitor/training/dedupe.py` | done |
 | 5 | selftest oracle_manifest | `src/euromonitor/training/selftest.py` | done |
 | 6 | Manifests for data_prep/pipeline.py canonical+gate stage | `src/euromonitor/pipeline.py`, `src/euromonitor/training/data_prep.py` | done |
-| 7 | Manifests for labeled_pairs / evaluate_models / zero_shot_sims | `src/euromonitor/training/{labeled_pairs,evaluate_models,zero_shot_sims}.py` | pending |
+| 7 | Manifests for labeled_pairs / evaluate_models / zero_shot_sims | `src/euromonitor/training/{labeled_pairs,evaluate_models,zero_shot_sims}.py` | done |
 | 8 | run_all.py step manifests + atomic npz writes | `run_all.py` | pending |
 | 9 | Source-export drift gate in common.py loaders | `src/euromonitor/core/common.py` | pending |
 | 10 | Per-row dedup removal review table | `src/euromonitor/training/dedupe.py`, `schemas.py`, `selftest.py` | pending |
