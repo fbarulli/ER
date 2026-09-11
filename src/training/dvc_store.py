@@ -71,7 +71,13 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], source)
     _run(["dvc", "remote", "modify", "dagshub", "--local", "user", "fbarulli"], source)
     _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], source)
-    paths = [p.name for p in source.iterdir() if p.name not in {".dvc", "mlruns", "canonical_records.csv", "gate_results.csv"}]
+    paths = [
+        p.name for p in source.iterdir()
+        if p.name not in {
+            ".dvc", ".dvcignore", ".gitignore", "mlruns",
+            "canonical_records.csv", "gate_results.csv", "training.status",
+        }
+    ]
     if paths:
         _run(["dvc", "add", *paths], source)
     _run(["dvc", "push"], source)
