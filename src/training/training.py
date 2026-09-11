@@ -215,16 +215,24 @@ class ProgressCallback(TrainerCallback):
 
     def __init__(self, wandb_ctx=None):
         self.wandb_ctx = wandb_ctx
+        self.latest_train_loss: float | None = None
+        self.latest_dev_accuracy: float | None = None
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not logs or not state.is_world_process_zero:
             return
         if "loss" in logs:
             loss = float(logs["loss"])
+            self.latest_train_loss = loss
             total_epochs = float(args.num_train_epochs)
+            accuracy = (
+                f" | dev_acc {self.latest_dev_accuracy:.4f}"
+                if self.latest_dev_accuracy is not None
+                else ""
+            )
             print(
                 f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
-                f"{state.max_steps:<4}] train_loss {loss:.4f}",
+                f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy}",
                 flush=True,
             )
             if self.wandb_ctx is not None:
@@ -236,6 +244,8 @@ class ProgressCallback(TrainerCallback):
         ap = metrics.get("eval_dev_cosine_ap")
         auc_key = next((k for k in metrics if k.endswith("_auc")), None)
         acc_key = next((k for k in metrics if k.endswith("_cosine_accuracy")), None)
+        if acc_key is not None:
+            self.latest_dev_accuracy = float(metrics[acc_key])
         parts = [f"dev_ap {float(ap):.4f}"] if ap is not None else []
         if auc_key is not None:
             parts.append(f"dev_auc {float(metrics[auc_key]):.4f}")
@@ -253,7 +263,17 @@ class ProgressCallback(TrainerCallback):
         except ImportError:  # display only, never kill training
             pass
         if parts:
-            print(f"    [step {state.global_step:>4}] " + " | ".join(parts), flush=True)
+            total_epochs = float(args.num_train_epochs)
+            loss = (
+                f"train_loss {self.latest_train_loss:.4f} | "
+                if self.latest_train_loss is not None
+                else ""
+            )
+            print(
+                f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step "
+                f"{state.global_step:>4}/{state.max_steps:<4}] {loss}" + " | ".join(parts),
+                flush=True,
+            )
         if self.wandb_ctx is not None:
             self.wandb_ctx.log_metrics(
                 {
