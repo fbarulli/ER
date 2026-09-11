@@ -356,6 +356,11 @@ hard-negatives in labeled_pairs.csv.
 
 ## Pipeline steps (importable modules — renamed from numbered scripts 2026-09-07)
 
+The completion marker for each guarded stage is
+`results/manifests/<stage>.json`, atomically published only after its inputs,
+outputs, hashes, and row accounting have been recorded. These runtime
+manifests are regenerated and never committed.
+
 - **TRAIN/dedupe.py** — RUNS FIRST (historically `06_dedupe.py`, hence the
   `06_*` result filenames): tiered
   exact-duplicate dedupe of the raw export BEFORE canonical formation
@@ -378,6 +383,10 @@ hard-negatives in labeled_pairs.csv.
   (with flavor check) every candidate pair → `canonical_records.csv`
   (13,250) + `gate_results.csv` (135,769 pairs: hard_no 92,650 /
   proceed 29,351 / fallback 13,768).
+  Canonical records also retain per-GTIN `description_evidence` and
+  `breadcrumb_evidence` from the source export for review and a future
+  component-safe ablation; neither field changes the frozen gate or model
+  text without that validation.
 - **TRAIN/zero_shot_sims.py** — encode canonical texts with each
   model, score gate pairs → `embedding_similarities.csv` (per-model sim
   columns, incremental per-model writes, resumable).
@@ -409,7 +418,7 @@ hard-negatives in labeled_pairs.csv.
   `lib.common.sweep_cfg()` — no inline sweep lists. Step logs APPEND
   (run-separator line, never truncate a previous run — round 3 F16);
   `--stop-on-fail` halts the chain at the first failed step (default
-  off: record `failed:` in the manifest and continue, the historical
+  off: record `failed:` in the CSV run ledger and continue, the historical
   resumable behavior).
 
 ## CSV reproducibility map — every .csv and its producer
@@ -430,6 +439,8 @@ hard-negatives in labeled_pairs.csv.
 | `results/train_<model><era>_hpo_best.json` (+ `_hpo_trials.csv`) | `TRAIN/train.py --hpo` (TPE lane, run-tagged names) | regenerated |
 | `results/06_dedupe_summary.csv` | `TRAIN/dedupe.py` | regenerated |
 | `results/06_ambiguous_offer_groups.csv` | `TRAIN/dedupe.py` | regenerated |
+| `results/06_dedupe_removals.csv` | `TRAIN/dedupe.py` | regenerated (one reviewable row per removed product) |
+| `results/manifests/<stage>.json` | guarded pipeline stages / `run_all.py` | regenerated (atomic completion/integrity record; never committed) |
 | `results/07b_four_pop_scores.csv` | `TRAIN/train.py --rerank` | regenerated |
 | `results/07c_field_ablation.csv` | `TRAIN/train.py --payload <v>` | regenerated (append) |
 | `results/07d_data_scaling.csv` | `TRAIN/train.py --train-frac <f>` | regenerated (append) |
@@ -446,6 +457,10 @@ zero_shot_sims → labeled_pairs → evaluate_models → selftest → train
 - Every file name and path from the split config SSOT only
   (`00_config.yaml` + `TRAIN/training.yaml`, all through
   `lib.common`).
+- Every guarded stage writes an atomic manifest last; it hashes its declared
+  files, checks row-accounting closure, and treats a missing expected file or
+  interrupted-write residue as failure. Colab download lanes re-hash against
+  their remote manifests before accepting artifacts.
 - Every plot carries absolute n (titles + per-bar annotations).
 - `gate_results.csv` = GATE input (numbers kept). Model payload = NUMBER-FREE
   variant (derived at pair-construction time, never persisted as a second
@@ -473,7 +488,10 @@ zero_shot_sims → labeled_pairs → evaluate_models → selftest → train
   stay deleted from the config, the F18 dead symbols stay deleted from the
   import surface, colab's train-frac default == `sweep.train_fracs[0]`,
   blocking_audit knobs == the `audit:` block, and
-  `lib.nlp._cosine is lib.common.pair_similarity`. Exit 0 = green.
+  `lib.nlp._cosine is lib.common.pair_similarity`. The manifest oracle also
+  validates the manifest schema, atomic-write failure behavior, dedupe row
+  closure, and live output hashes when runtime results are present. Exit 0 =
+  green.
 
 Pinned real-data counts (update ONLY alongside an intentional contract
 change; `TRAIN/selftest.py` fails loudly on drift):

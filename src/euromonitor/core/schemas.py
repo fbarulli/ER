@@ -680,6 +680,10 @@ class CanonicalRecord(BaseModel):
     volume_consistency: float = Field(ge=0.0, le=1.0)
     pack_consistency: float = Field(ge=0.0, le=1.0)
     n_titles: int = Field(ge=1)
+    # Source evidence retained for feature ablations.  These are deliberately
+    # not folded into `canonical`: that text is the frozen gate/model input.
+    description_evidence: list[str] = Field(default_factory=list)
+    breadcrumb_evidence: list[str] = Field(default_factory=list)
 
     @field_validator("volume_set")
     @classmethod
@@ -1035,6 +1039,8 @@ CANONICAL_RECORDS_COLUMNS: tuple[str, ...] = (
     "volume_consistency",
     "pack_consistency",
     "n_titles",
+    "description_evidence",
+    "breadcrumb_evidence",
 )
 
 GATE_RESULTS_COLUMNS: tuple[str, ...] = (

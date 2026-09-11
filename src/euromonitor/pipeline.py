@@ -1270,6 +1270,23 @@ from collections import defaultdict
 def run_within_brand_pipeline(
     df_full: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
+    # Preserve the two high-coverage, previously-unused source fields as
+    # canonical-level evidence.  They remain OUTSIDE the frozen canonical
+    # text until a component-safe ablation establishes their value.
+    for column in ("description_short_eng", "breadcrumbs_eng"):
+        if column not in df_full:
+            df_full = df_full.assign(**{column: ""})
+
+    def _source_evidence(values: pd.Series) -> list[str]:
+        """Deterministic, non-empty raw strings for review/feature ablation."""
+        return sorted(
+            {
+                str(value).strip()
+                for value in values
+                if pd.notna(value) and str(value).strip()
+            }
+        )
+
     # NaN/empty GTINs must NOT form a group: 41,545 rows (58% of the corpus)
     # share gtin=NaN and used to collapse into ONE canonical record with an
     # arbitrary mode-brand — poisoning canonical_records.csv AND the global
@@ -1316,6 +1333,8 @@ def run_within_brand_pipeline(
                 lambda x: list(zip(x, df_full.loc[x.index, "attribute"])),
             ),
             brand=("brand", lambda x: Counter(x).most_common(1)[0][0]),
+            description_evidence=("description_short_eng", _source_evidence),
+            breadcrumb_evidence=("breadcrumbs_eng", _source_evidence),
         )
         .reset_index()
     )
@@ -1339,15 +1358,16 @@ def run_within_brand_pipeline(
     canonical_records = []
     for _, row in grouped.iterrows():
         brand_key = row["brand"].lower().strip()
-        canonical_records.append(
-            generate_canonical(
+        record = generate_canonical(
                 row["gtin"],
                 row["brand"],
                 row["rows"],
                 global_idf,
                 brand_idf_map[brand_key],
             )
-        )
+        record["description_evidence"] = row["description_evidence"]
+        record["breadcrumb_evidence"] = row["breadcrumb_evidence"]
+        canonical_records.append(record)
     df_canon = pd.DataFrame(canonical_records)
 
     # Brand blocking

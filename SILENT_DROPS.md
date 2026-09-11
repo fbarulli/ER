@@ -58,12 +58,12 @@ at most the previous run's manifest plus `.tmp-*` residue, which
 | 6 | Manifests for data_prep/pipeline.py canonical+gate stage | `src/euromonitor/pipeline.py`, `src/euromonitor/training/data_prep.py` | done |
 | 7 | Manifests for labeled_pairs / evaluate_models / zero_shot_sims | `src/euromonitor/training/{labeled_pairs,evaluate_models,zero_shot_sims}.py` | done |
 | 8 | run_all.py step manifests + atomic npz writes | `run_all.py` | done |
-| 9 | Source-export drift gate in common.py loaders | `src/euromonitor/core/common.py` | pending |
-| 10 | Per-row dedup removal review table | `src/euromonitor/training/dedupe.py`, `schemas.py`, `selftest.py` | pending |
-| 11 | Hash-verify Colab downloads in cli/colab.py | `src/euromonitor/cli/colab.py` | pending |
-| 12 | Hash-verify NER Colab downloads + remote manifest | `src/euromonitor/ner/colab_ner.py`, `src/euromonitor/ner/ner.py` | pending |
-| 13 | External-library row-loss guards at silent call sites | `src/euromonitor/core/{blocking,volume_verified}.py`, `training/data_quality_audit.py` | pending |
-| 14 | Sync STEPS.md with the manifest layer | `STEPS.md` | pending |
+| 9 | Source-export drift gate in common.py loaders | `src/euromonitor/core/common.py` | done |
+| 10 | Per-row dedup removal review table | `src/euromonitor/training/dedupe.py`, `schemas.py`, `selftest.py` | done |
+| 11 | Hash-verify Colab downloads in cli/colab.py | `src/euromonitor/cli/colab.py` | done |
+| 12 | Hash-verify NER Colab downloads + remote manifest | `src/euromonitor/ner/colab_ner.py`, `src/euromonitor/ner/ner.py` | done |
+| 13 | External-library row-loss guards at silent call sites | `src/euromonitor/core/{blocking,volume_verified}.py`, `training/data_quality_audit.py` | done |
+| 14 | Sync STEPS.md with the manifest layer | `STEPS.md` | done |
 
 ## Task details (verified file anchors from the research pass)
 
