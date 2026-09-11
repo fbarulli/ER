@@ -498,7 +498,7 @@ for number in range(1, {workers} + 1):
            "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
     live_status_path.write_text(json.dumps({{
         "updated_at": time.time(), "event": "launched", "step": 0,
-        "wandb_run_id": env["WANDB_RUN_ID"],
+        "wandb_run_name": env["WANDB_RUN_NAME"],
     }}) + "\\n", encoding="utf-8")
     process_log = out / "processes.log"
     ps_command = f"ps -eo pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args >> {{shlex.quote(str(process_log))}} 2>&1"
@@ -1358,6 +1358,10 @@ def main() -> None:
                 resume_run=args.resume_run,
             )
         print("[dvc] remote artifacts are authoritative; local download disabled", flush=True)
+    except BaseException:
+        print("[launcher] traceback before teardown:", flush=True)
+        traceback.print_exc()
+        raise
     finally:
         # Default behavior is to aggressively teardown to prevent quota burning.
         if not args.keep_alive:
