@@ -40,6 +40,7 @@ import argparse
 import subprocess
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 # AUDIT FIX (round 2 F15, round 3): RESULTS/DATA come from the config SSOT
 # via lib.common (config/paths.yaml paths.results_dir/data_dir) — were
@@ -70,7 +71,7 @@ BRANCH = _COLAB.branch
 SESSION = _COLAB.session
 GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
-LIVE_LOG_PATH = TRAIN_ROOT / "training.log"
+LIVE_LOG_PATH: Path | None = None
 _live_log = None
 
 # The clone contains the committed raw export and number-token reference;
@@ -106,9 +107,9 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
 def run_colab_exec_stream(session: str, script: str, timeout: int | None = None, log_name: str | None = None) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
 
-    log_name labels a stage in the single root training.log. The file is
-    opened once in write mode per invocation, line-flushed, and survives VM
-    teardown so every Colab stage is inspectable in one chronological log.
+    log_name labels a stage in one UTC-timestamped Colab log. The file is
+    opened once per invocation, line-flushed, and survives VM teardown so
+    every Colab stage is inspectable in one chronological log.
     """
     log_file = _live_log
     if log_file and log_name:
@@ -153,15 +154,22 @@ def run_colab_exec_stream(session: str, script: str, timeout: int | None = None,
     out_thread.join()
     err_thread.join()
     if process.returncode != 0:
-        raise SystemExit(f"Remote execution failed with return code {process.returncode}")
+        raise RuntimeError(
+            f"Remote execution failed with return code {process.returncode}; "
+            "see the timestamped Colab log for the full traceback"
+        )
 
 
 def start_live_log() -> None:
     """Start a fresh single-file log for one Colab invocation."""
-    global _live_log
+    global LIVE_LOG_PATH, _live_log
     if _live_log is not None:
         _live_log.close()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    LIVE_LOG_PATH = RESULTS / "logs" / f"colab_training_{stamp}.log"
+    LIVE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     _live_log = LIVE_LOG_PATH.open("w", encoding="utf-8")
+    print(f"[log] capturing Colab output -> {LIVE_LOG_PATH}", flush=True)
 
 
 def close_live_log() -> None:
@@ -280,7 +288,7 @@ for step in ("src/training/dedupe.py", "src/training/build_reference.py --verify
     print("== " + step, flush=True)
     rc = subprocess.run([sys.executable, "{REMOTE_ROOT}/" + step.split()[0]] + step.split()[1:]).returncode
     if rc != 0:
-        sys.exit(rc)
+        raise RuntimeError(f"data-prep stage failed: {{step}} (rc={{rc}})")
 """
     # dedupe 1-2 min + reference verify ~3 min + data_prep ~2 min
     run_colab_exec_stream(SESSION, script, timeout=1800, log_name="01_data_prep")
@@ -322,7 +330,8 @@ rc = subprocess.run([sys.executable, "{REMOTE_ROOT}/src/training/train.py",
                      "--train-frac", "{frac}",
                      "--epochs", "{epochs}",
                      "--no-plot"{extra}]).returncode
-sys.exit(rc)
+if rc != 0:
+    raise RuntimeError(f"training subprocess failed (rc={{rc}})")
 """
     # T4 full chain: encode ~1min + 740 steps at ~1.5-2s + eval — allow 4h
     run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="02_train")
@@ -345,8 +354,8 @@ for model_key in model_keys:
     model_tag = str(model).rstrip("/").rsplit("/", 1)[-1]
     best_path = root / "results" / f"train_{{model_tag}}-dlr_hpo_best.json"
     print(f"== HPO {{model_key}}: {{model}} (dev-selected; test withheld)", flush=True)
-    if subprocess.run(base + ["--model", str(model), "--hpo"]).returncode:
-        sys.exit(1)
+if subprocess.run(base + ["--model", str(model), "--hpo"]).returncode:
+        raise RuntimeError(f"HPO subprocess failed for {{model_key}}")
     if not best_path.is_file():
         raise RuntimeError(f"missing HPO winner for {{model_key}}: {{best_path}}")
     best = json.loads(best_path.read_text())
@@ -364,7 +373,7 @@ for model_key in model_keys:
     ]
     print(f"== FINAL {{model_key}}: selected dev config -> held-out test + rerank", flush=True)
     if subprocess.run(final).returncode:
-        sys.exit(1)
+        raise RuntimeError(f"selected training subprocess failed for {{model_key}}")
     summary.append({{"model_key": model_key, "model": str(model), "best": params}})
 (root / "results" / "hpo_round_robin_summary.json").write_text(
     json.dumps({{"models": summary, "rerank_model": "{_RERANK_MODEL}"}}, indent=2),
@@ -382,7 +391,8 @@ def run_sims_deberta() -> None:
 import subprocess, sys
 rc = subprocess.run([sys.executable, "{REMOTE_ROOT}/src/training/zero_shot_sims.py",
                      "--models", "deberta_v3_base"]).returncode
-sys.exit(rc)
+if rc != 0:
+    raise RuntimeError(f"zero-shot similarity subprocess failed (rc={{rc}})")
 """
     run_colab_exec_stream(SESSION, script, timeout=2 * 3600, log_name="03_sims_deberta")
 
