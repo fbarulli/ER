@@ -323,7 +323,7 @@ def run_train(frac: float, epochs: int, sample: int | None) -> None:
     # now; the CLI flag remains for explicit overrides.
     script = _BOOTSTRAP + _wandb_env_script() + f"""
 import subprocess, sys
-args = [sys.executable, "{REMOTE_ROOT}/src/training/train.py",
+args = [sys.executable, "-u", "-m", "training.train",
         "--split", "holdout",
         "--loss", "contrastive",
         "--train-frac", "{frac}",
@@ -331,7 +331,7 @@ args = [sys.executable, "{REMOTE_ROOT}/src/training/train.py",
         "--no-plot"]
 if {sample is not None!r}:
     args.extend(["--sample", {str(sample)!r}])
-rc = subprocess.run(args).returncode
+rc = subprocess.run(args, cwd="{REMOTE_ROOT}").returncode
 if rc != 0:
     raise RuntimeError(f"training subprocess failed (rc={{rc}})")
 """
@@ -347,8 +347,7 @@ import json, os, pathlib, subprocess, sys
 from datetime import datetime, timezone
 from core.common import hpo_cfg, resolve_model
 root = pathlib.Path("{REMOTE_ROOT}")
-train = root / "src/training/train.py"
-base = [sys.executable, "-u", str(train), "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot"]
+base = [sys.executable, "-u", "-m", "training.train", "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot"]
 model_keys = hpo_cfg()["models"]
 required = {{"epochs", "lr", "warmup_ratio", "weight_decay"}}
 summary = []
@@ -366,6 +365,7 @@ def run_logged(args, label):
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            cwd=root,
             env={{**os.environ, "PYTHONUNBUFFERED": "1"}},
         )
         assert proc.stdout is not None

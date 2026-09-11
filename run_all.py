@@ -37,6 +37,7 @@ from core.manifest import (
 _cfg = load_config()
 MODELS = dict(_cfg["models"])
 PY = sys.executable
+TRAIN_MODULE = [PY, "-m", "training.train"]
 
 LOGS = _path(_cfg["paths"]["logs_dir"])
 LOGS.mkdir(parents=True, exist_ok=True)
@@ -167,8 +168,7 @@ def step2_sweep_2k() -> None:
     model = resolve_model(MODELS["multilingual_l12"])
     _sh(
         [
-            PY,
-            "src/training/train.py",
+            *TRAIN_MODULE,
             "--model",
             model,
             "--sample",
@@ -186,8 +186,7 @@ def step3_sweep_full() -> None:
     model = resolve_model(MODELS["multilingual_l12"])
     _sh(
         [
-            PY,
-            "src/training/train.py",
+            *TRAIN_MODULE,
             "--model",
             model,
             "--split",
@@ -219,8 +218,7 @@ def step4_ablation() -> None:
         for variant in _sw["payload_variants"]:
             _sh(
                 [
-                    PY,
-                    "src/training/train.py",
+                    *TRAIN_MODULE,
                     "--model",
                     model,
                     "--split",
@@ -236,8 +234,7 @@ def step4_ablation() -> None:
         for frac in (f"{f:g}" for f in _sw["train_fracs"]):
             _sh(
                 [
-                    PY,
-                    "src/training/train.py",
+                    *TRAIN_MODULE,
                     "--model",
                     model,
                     "--split",
@@ -260,8 +257,7 @@ def step4_ablation() -> None:
     model = resolve_model(MODELS["multilingual_l12"])
     _sh(
         [
-            PY,
-            "src/training/train.py",
+            *TRAIN_MODULE,
             "--model",
             model,
             "--split",
