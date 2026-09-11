@@ -4,6 +4,26 @@ Needs embedding_similarities.csv (zero_shot_sims.py) and
 labeled_pairs.csv (true_label per pair — generate from the gate's
 auto_duplicate rule or a manual review round).
 
+MANIFEST (SILENT_DROPS task 7): the stage snapshots its three input
+CSVs (labeled_pairs, embedding_similarities, canonical_records), writes
+model_evaluation_summary.csv atomically, and publishes
+results/manifests/evaluate_models.json LAST.
+
+ROW ACCOUNTING (code truth — PAIR-level over the labeled universe): an
+eval stage consumes labeled pairs, not dataset rows, so the accounting
+unit is the labeled pair. input_rows = labeled pairs read; output_rows =
+pairs that stay in play (DEV + TEST — both are consumed: DEV to fit the
+Youden threshold, TEST to score); dropped = inner-join merge loss (0
+rows today, kept loud), straddling pairs (endpoints in different
+component folds — unassignable, counted + printed by the split block),
+and parked pairs (whole pairs in unused folds, k > 2). The code already
+asserts dev + test + straddle + parked == merged rows; the manifest
+makes that assert-exact partition MANIFEST-ENFORCED (closure
+input == output + sum(dropped) is re-asserted at publish and on every
+verify). Model-level facts (models evaluated / skipped for a missing
+sweep column) are recorded outside `dropped` — a skipped model is a
+missing summary row, not a dropped data row.
+
 HOLDOUT DISCIPLINE (self-fit leak closed 2026-09-14): this lane used to
 pick its Youden threshold via roc_curve ON THE VERY LABELED SET IT THEN
 SCORED accuracy/F1 on — every zero-shot operating metric was inflated.
@@ -32,7 +52,15 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from euromonitor.core.common import RESULTS, SEED, F, load_config, plot_dpi, set_determinism
+from euromonitor.core.common import (
+    RESULTS,
+    SEED,
+    F,
+    load_config,
+    plot_dpi,
+    set_determinism,
+)
+from euromonitor.core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 from euromonitor.core.schemas import EVAL_SUMMARY_COLUMNS, check_eval_summary_frame
 from euromonitor.training.folds import component_folds
 
@@ -45,6 +73,17 @@ set_determinism(SEED)
 LABELED_PAIRS_CSV = RESULTS / F["labeled_pairs"]
 EMBED_SIM_CSV = RESULTS / F["embedding_similarities"]
 CANON_CSV = RESULTS / F["canonical_records"]
+
+# Stage manifest (SILENT_DROPS task 7) — begin BEFORE the work: all three
+# input CSVs are hashed now so the record pins exactly what this stage
+# read. Seed = the SSOT seed; the component split below consumes RNG
+# through it (component_folds(seed=SEED)), so the split this manifest
+# certifies is the seeded one.
+manifest = begin_manifest(
+    "evaluate_models",
+    inputs=[LABELED_PAIRS_CSV, EMBED_SIM_CSV, CANON_CSV],
+    seed=SEED,
+)
 
 _CFG = load_config()  # pydantic-validated (TrainingConfig) before merge
 MODEL_COLUMNS = dict(_CFG["sim_columns"])
@@ -251,13 +290,18 @@ def evaluate_model(
 
 summary_rows = []
 # models whose sim column is present in the sweep output (a partial sweep
-# is evaluated — never crash on a missing column, say it loudly instead)
+# is evaluated — never crash on a missing column, say it loudly instead).
+# Skipped models are recorded for the manifest (model-level facts, NOT a
+# row drop — a skipped model means a missing summary row, which the
+# models_evaluated / models_skipped census pins).
+_models_skipped: list[str] = []
 _missing = [c for c in MODEL_COLUMNS.values() if c not in df.columns]
 if _missing:
     print(f"[warn] no similarity column yet (sweep incomplete): {_missing}")
 for model_name, sim_col in MODEL_COLUMNS.items():
     if sim_col not in df.columns:
         print(f"\nMODEL: {model_name} — skipped (no {sim_col} in sweep csv)")
+        _models_skipped.append(model_name)
         continue
     print(f"\n{'=' * 70}\nMODEL: {model_name}\n{'=' * 70}")
     # HOLDOUT DISCIPLINE: threshold fit on DEV, applied verbatim to TEST.
@@ -324,8 +368,12 @@ print(
 )
 print("\nSUMMARY TABLE (TEST component half; thresholds fit on DEV):")
 print(summary_df.to_string(index=False))
-summary_df.to_csv(RESULTS / F["model_evaluation_summary"], index=False)
-print(f"\nSaved summary to {RESULTS / F['model_evaluation_summary']}")
+# atomic write (SILENT_DROPS task 7): the summary is published through
+# the same temp-sibling + os.replace mechanism as every other stage
+# output — a crash never leaves a truncated CSV on the final path.
+summary_out = RESULTS / F["model_evaluation_summary"]
+atomic_write_csv(summary_df, summary_out, index=False)
+print(f"\nSaved summary to {summary_out}")
 
 # ── per-model result plots (zero-shot embedding similarity, TEST half) ────
 import matplotlib
@@ -412,3 +460,59 @@ out2 = RESULTS / "model_score_distributions.png"
 fig.savefig(out2, dpi=plot_dpi())  # SSOT (audit round 2 F03)
 plt.close(fig)
 print(f"[plot] {out2}")
+
+# ── row accounting + manifest (SILENT_DROPS task 7; capture-only) ─────────
+# PAIR-level over the labeled universe (an eval stage consumes labeled
+# pairs, not dataset rows). The partition is exactly the one the split
+# block above asserts:
+#   in play  = DEV + TEST pairs (DEV fits the Youden threshold, TEST is
+#              scored — BOTH are consumed, neither is dropped)
+#   dropped  = merge loss (inner join labeled x sims — 0 today, kept loud
+#              so drift shows as a number)
+#            + straddling pairs (endpoints in different folds —
+#              unassignable; all hard-negs, positives are asserted zero)
+#            + parked pairs (whole pairs in unused folds, k > 2; 0 at
+#              the config's component_split_k=2)
+# closure: input == output + sum(dropped), asserted by finish_manifest
+# before the manifest is published and re-checked by verify_manifest.
+row_accounting = {
+    "input_rows": _n_before,  # labeled pairs read
+    "output_rows": int(in_dev.sum()) + int(in_test.sum()),  # DEV + TEST
+    "dropped": {
+        "merge_dropped_pair_rows": _n_before - _n_after,
+        "straddling_fold_pairs": int(straddle.sum()),
+        "parked_fold_pairs": int(parked.sum()),
+    },
+    # population detail (outside `dropped`; not part of the closure)
+    "dev_pairs": int(in_dev.sum()),
+    "test_pairs": int(in_test.sum()),
+    "pos_dev": _pos_dev,
+    "hard_neg_dev": _neg_dev,
+    "pos_test": _pos_test,
+    "hard_neg_test": _neg_test,
+    # model-level census (a skipped model = a missing summary row, not a
+    # dropped data row)
+    "models_evaluated": len(summary_df),
+    "models_skipped_no_sweep_column": len(_models_skipped),
+    "models_skipped_names": sorted(_models_skipped),
+    "summary_rows": len(summary_df),
+    "component_split_k": int(_EV["component_split_k"]),
+    "dev_fold": int(_EV["dev_fold"]),
+    "test_fold": int(_EV["test_fold"]),
+}
+manifest_path = finish_manifest(
+    manifest,
+    outputs=[summary_out, out1, out2],
+    row_accounting=row_accounting,
+    expected_outputs=[F["model_evaluation_summary"]],
+)
+print(
+    f"[manifest] evaluate_models complete -> {manifest_path} | closure "
+    f"{row_accounting['input_rows']:,} == {row_accounting['output_rows']:,} "
+    f"in-play (dev {row_accounting['dev_pairs']:,} / test "
+    f"{row_accounting['test_pairs']:,}) + "
+    f"{sum(row_accounting['dropped'].values()):,} dropped "
+    f"(merge {row_accounting['dropped']['merge_dropped_pair_rows']:,} / "
+    f"straddle {row_accounting['dropped']['straddling_fold_pairs']:,} / "
+    f"parked {row_accounting['dropped']['parked_fold_pairs']:,})"
+)
