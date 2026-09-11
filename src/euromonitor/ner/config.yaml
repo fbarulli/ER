@@ -1,0 +1,125 @@
+# config.yaml
+#
+# config.yaml lives in:
+#   <repo>/DONT_TOUCH_ME_PLIS/config.yaml
+#
+# This config is now portable:
+# - paths are resolved relative to the directory containing config.yaml
+# - you can override paths with environment variables if needed:
+#     SEMANTICSIM_BASE_DIR
+#     SEMANTICSIM_RESULTS_DIR
+#     SEMANTICSIM_DATASET_CSV
+#     SEMANTICSIM_MODEL_INPUT_CSV
+#     SEMANTICSIM_MODEL_DIR
+
+# Directory containing this config.yaml.
+# "." makes the DONT_TOUCH_ME_PLIS folder the effective project root.
+base_dir: "."
+
+# All generated artifacts live here.
+results_dir: "results"
+
+columns: &columns
+  sku_name_eng: "sku_name_eng"
+  brand: "brand"
+  sku_name_clean: "sku_name_clean"
+  namebrandmatch: "namebrandmatch"
+
+
+data_prep:
+  # If dataset.csv is one level above this folder, this works as-is:
+  #   <repo>/dataset.csv
+  #
+  # If it lives somewhere else, override with:
+  #   SEMANTICSIM_DATASET_CSV=/abs/path/to/dataset.csv
+  input_csv: "../dataset.csv"
+
+  output_csv: "${results_dir}/dataset_model_input.csv"
+  columns: *columns
+
+
+semantic_training:
+  INPUT_CSV: "${results_dir}/dataset_model_input.csv"
+  MODEL_NAME: "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+  OUTPUT_DIR: "${results_dir}/model"
+
+  EPOCHS: 3
+  BATCH_SIZE: 32
+  LEARNING_RATE: 2.0e-5
+  WARMUP_STEPS: 100
+  WEIGHT_DECAY: 0.01
+
+  TRAIN_FRAC: 0.50
+  VALIDATION_FRAC: 0.25
+  HOLDOUT_FRAC: 0.25
+
+  NEGATIVE_SAMPLING_RATIO: 1.0
+
+  EVAL_STEPS: 500
+  SAVE_STEPS: 1000
+
+  SEED: 42
+
+  COLUMNS: *columns
+
+  HF_REPO_ID: "fbarulli/euromonitor-semantic-model"
+
+
+semantic_evaluation:
+  model_dir: "${results_dir}/model"
+  input_csv: "${results_dir}/dataset_model_input.csv"
+  hf_repo_id: "fbarulli/euromonitor-semantic-model"
+
+  # Retained for NER-adjacent inspection configuration.
+  sample_size: 100
+  random_state: 42
+
+  output_csv: "${results_dir}/semantic_similarity_top.csv"
+
+  metrics_csv: "${results_dir}/metrics.csv"
+  fp_csv: "${results_dir}/false_positives.csv"
+  fn_csv: "${results_dir}/false_negatives.csv"
+  predictions_csv: "${results_dir}/predictions.csv"
+
+  top_n_fp_fn: 100
+  seed: 42
+
+  columns:
+    <<: *columns
+    similarity: "similarity"
+    predicted: "predicted"
+    semantic_similarity: "semantic_similarity"
+
+  encode_params:
+    normalize_embeddings: true
+    show_progress_bar: true
+
+ner_training:
+  input_jsonl: "${results_dir}/ner_dataset.jsonl"
+  output_dir: "${results_dir}/ner_model"
+
+  model_name: "${base_dir}/models/xlm-roberta-base"
+  # Hugging Face source used by colab_ner.py when the base model is absent.
+  model_source_repo: "FacebookAI/xlm-roberta-base"
+
+  epochs: 10
+  batch_size: 8
+  learning_rate: 2.0e-5
+  dropout: 0.2
+
+  train_frac: 0.50
+  validation_frac: 0.25
+  holdout_frac: 0.25
+
+  seed: 42
+  label: "BRAND"
+
+colab:
+  session: "SemanticSim"
+  gpu: "T4"
+  remote_root: "/content/SemanticSim"
+
+huggingface:
+  ner_repo_id: "fbarulli/e-r"
+  # The repository-root .env contains HF_TOKEN and is intentionally ignored.
+  token_file: "../.env"

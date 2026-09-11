@@ -21,7 +21,7 @@
 paths:
   artifacts_dir: "artifacts"            # ONE root: everything lives under it
   data_dir: "artifacts/data"            # raw + deduped dataset live here
-  results_dir: "artifacts/results"      # ALL outputs (CSVs, PNGs, checkpoints)
+  results_dir: "results"                # ALL generated outputs at repository root
   models_dir: "artifacts/models"        # local model tensors (bundle)
   models_dir_sibling: "../models"       # bundle layout: models/ beside folder
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
@@ -35,7 +35,9 @@ paths:
 #   (n=318). Two lists, two files — renamed 2026-09-08 so they stop sharing
 #   a basename, each resolved relative to lib/.
 files:
-  dataset: "dataset.csv"
+  # The inspected raw export is repository-root dataset.csv.  Keep this
+  # explicit rather than silently falling back when artifacts/data is absent.
+  dataset: "../../dataset.csv"
   dataset_deduped: "dataset_deduped.csv"
   sku_to_rep: "sku_to_rep.csv"
   canonical_records: "canonical_records.csv"
@@ -54,6 +56,16 @@ files:
   four_pop_scores: "07b_four_pop_scores.csv"
   field_ablation: "07c_field_ablation.csv"
   data_scaling: "07d_data_scaling.csv"
+  data_quality_summary: "data_quality_summary.csv"
+  data_quality_columns: "data_quality_columns.csv"
+  data_quality_gtin_groups: "data_quality_gtin_groups.csv"
+  title_attribute_evidence: "title_attribute_evidence.csv"
+  title_attribute_summary: "title_attribute_summary.csv"
+  title_removed_tokens: "title_removed_tokens.csv"
+  attribute_agreement_summary: "attribute_agreement_summary.csv"
+  attribute_agreement_conflicts: "attribute_agreement_conflicts.csv"
+  package_gate_impact_summary: "package_gate_impact_summary.csv"
+  package_gate_impact_pairs: "package_gate_impact_pairs.csv"
   # cache_dir REMOVED (audit 2026-09-09): dead knob — zero readers; the
   # embeddings cache path is constructed inline (DATA_DIR/embeddings_cache)
   # by its three consumers.

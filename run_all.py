@@ -22,13 +22,15 @@ and continue, the historical resumable behavior).
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-from lib.common import _path, load_config, resolve_model, sweep_cfg
+sys.path.insert(0, str(HERE / "src"))
+from euromonitor.core.common import _path, load_config, resolve_model, sweep_cfg
 
 _cfg = load_config()
 MODELS = dict(_cfg["models"])
@@ -60,6 +62,7 @@ def _sh(cmd: list[str], log: Path) -> None:
             stderr=subprocess.STDOUT,
             text=True,
             cwd=str(HERE),
+            env={**os.environ, "PYTHONPATH": str(HERE / "src") + os.pathsep + os.environ.get("PYTHONPATH", "")},
         )
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -75,7 +78,7 @@ def step1_embeddings() -> None:
     """Full-corpus embeddings per model → artifacts/embeddings/<model>.npz.
 
     NOTE (audit 2026-09-07): these npz dumps have ZERO downstream consumers
-    — every later step (TRAIN/train, report_plots) encodes through lib.nlp's
+    — every later step (src/euromonitor/training/train, report_plots) encodes through lib.nlp's
     payload-keyed cache instead. The dump is kept as a standalone analysis
     artifact for the deliverable notebook (vectors + titles in one file,
     loadable without re-encoding); it is NOT part of any step's input. The
@@ -85,8 +88,8 @@ def step1_embeddings() -> None:
     """
     import numpy as np
 
-    from lib.common import load_dataset_deduped
-    from lib.nlp import encode_corpus
+    from euromonitor.core.common import load_dataset_deduped
+    from euromonitor.core.nlp import encode_corpus
 
     df = load_dataset_deduped()
     payload = (
@@ -101,7 +104,7 @@ def step1_embeddings() -> None:
     import torch
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    from lib.common import runtime as _runtime
+    from euromonitor.core.common import runtime as _runtime
 
     for key, sub in MODELS.items():
         model_id = resolve_model(sub)
@@ -136,7 +139,7 @@ def step2_sweep_2k() -> None:
     _sh(
         [
             PY,
-            "TRAIN/train.py",
+            "src/euromonitor/training/train.py",
             "--model",
             model,
             "--sample",
@@ -155,7 +158,7 @@ def step3_sweep_full() -> None:
     _sh(
         [
             PY,
-            "TRAIN/train.py",
+            "src/euromonitor/training/train.py",
             "--model",
             model,
             "--split",
@@ -188,7 +191,7 @@ def step4_ablation() -> None:
             _sh(
                 [
                     PY,
-                    "TRAIN/train.py",
+                    "src/euromonitor/training/train.py",
                     "--model",
                     model,
                     "--split",
@@ -205,7 +208,7 @@ def step4_ablation() -> None:
             _sh(
                 [
                     PY,
-                    "TRAIN/train.py",
+                    "src/euromonitor/training/train.py",
                     "--model",
                     model,
                     "--split",
@@ -229,7 +232,7 @@ def step4_ablation() -> None:
     _sh(
         [
             PY,
-            "TRAIN/train.py",
+            "src/euromonitor/training/train.py",
             "--model",
             model,
             "--split",
@@ -239,7 +242,7 @@ def step4_ablation() -> None:
         ],
         LOGS / "step4_07e_rerank.log",
     )
-    _sh([PY, "TRAIN/report_plots.py"], LOGS / "step4_07f_plots.log")
+    _sh([PY, "src/euromonitor/training/report_plots.py"], LOGS / "step4_07f_plots.log")
 
 
 STEPS = {
