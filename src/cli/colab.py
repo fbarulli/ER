@@ -354,7 +354,7 @@ for model_key in model_keys:
     model_tag = str(model).rstrip("/").rsplit("/", 1)[-1]
     best_path = root / "results" / f"train_{{model_tag}}-dlr_hpo_best.json"
     print(f"== HPO {{model_key}}: {{model}} (dev-selected; test withheld)", flush=True)
-if subprocess.run(base + ["--model", str(model), "--hpo"]).returncode:
+    if subprocess.run(base + ["--model", str(model), "--hpo"]).returncode:
         raise RuntimeError(f"HPO subprocess failed for {{model_key}}")
     if not best_path.is_file():
         raise RuntimeError(f"missing HPO winner for {{model_key}}: {{best_path}}")
