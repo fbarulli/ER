@@ -80,6 +80,8 @@ _HPO_WORKERS = _COLAB.hpo_workers
 _TRAIN_WORKERS = _COLAB.train_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
+_PROBE_RETRIES = _COLAB.probe_retries
+_PROBE_RETRY_BACKOFF_SECONDS = _COLAB.probe_retry_backoff_seconds
 _MASK_EFFECT_AFTER_TRAIN = _COLAB.mask_effect_after_train
 _SMOKE_EPOCHS = _COLAB.smoke_epochs
 _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
@@ -191,19 +193,27 @@ def run_colab_exec_stream(session: str, script: str, timeout: int | None = None,
 
 def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
     """Execute a short remote probe and return its stdout for the live tailer."""
-    process = subprocess.run(
-        ["colab", "exec", "-s", session, "--timeout", str(timeout)],
-        input=script,
-        capture_output=True,
-        text=True,
-        timeout=timeout + 30,
-    )
-    if process.returncode:
-        raise RuntimeError(
-            f"remote log probe failed (rc={process.returncode}): "
-            f"{process.stderr[-2000:]}"
-        )
-    return process.stdout
+    last_error = ""
+    for attempt in range(1, _PROBE_RETRIES + 1):
+        try:
+            process = subprocess.run(
+                ["colab", "exec", "-s", session, "--timeout", str(timeout)],
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=timeout + 30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            last_error = f"probe timeout: {exc}"
+        else:
+            if process.returncode == 0:
+                return process.stdout
+            last_error = f"rc={process.returncode}: {process.stderr[-2000:]}"
+        if attempt < _PROBE_RETRIES:
+            delay = _PROBE_RETRY_BACKOFF_SECONDS * attempt
+            print(f"[probe] transient remote failure ({attempt}/{_PROBE_RETRIES}); retrying in {delay}s", flush=True)
+            time.sleep(delay)
+    raise RuntimeError(f"remote log probe failed after {_PROBE_RETRIES} attempts: {last_error}")
 
 
 def _parse_remote_json(output: str) -> dict:

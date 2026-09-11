@@ -41,6 +41,8 @@ colab:
   train_workers: 6
   log_poll_seconds: 2
   probe_timeout_seconds: 600
+  probe_retries: 4
+  probe_retry_backoff_seconds: 5
   artifact_repo_id: "fbarulli/e-r-training-artifacts"
   artifact_repo_private: true
   mask_effect_after_train: false
