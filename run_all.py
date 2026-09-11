@@ -31,6 +31,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "src"))
 from euromonitor.core.common import _path, load_config, resolve_model, sweep_cfg
+from euromonitor.core.manifest import (
+    begin_manifest,
+    finish_manifest,
+)
 
 _cfg = load_config()
 MODELS = dict(_cfg["models"])
@@ -39,6 +43,7 @@ PY = sys.executable
 LOGS = _path(_cfg["paths"]["logs_dir"])
 LOGS.mkdir(parents=True, exist_ok=True)
 EMB_OUT = _path(_cfg["paths"]["embeddings_dir"])
+DATASET_DEDUPED = _path(_cfg["paths"]["data_dir"]) / _cfg["files"]["dataset_deduped"]
 
 # _resolve_model moved to lib.common.resolve_model (2026-09-08): run_all
 # now resolves model ids through ONE registry-aware helper
@@ -72,6 +77,32 @@ def _sh(cmd: list[str], log: Path) -> None:
         rc = proc.wait()
     if rc != 0:
         raise SystemExit(f"[fail] rc={rc} — see {log}")
+
+
+def _atomic_savez(npz: Path, **arrays) -> None:
+    """np.savez_compressed through the atomic pattern (SILENT_DROPS 8).
+
+    The old direct savez wrote in place: a crash mid-write left a
+    TRUNCATED <model>.npz that the skip-if-exists re-run check at the top
+    of step1_embeddings then silently skipped (run_all.py:112 bug) — the
+    chain burned GPU-hours on every later step with a dead artifact on
+    disk. The tmp-<pid> sibling + os.replace makes a partial file
+    impossible: the final name exists only after the full write.
+    """
+    import numpy as np
+
+    tmp = npz.with_name(f"{npz.name}.tmp-{os.getpid()}")
+    if tmp.exists():
+        raise FileExistsError(tmp)
+    try:
+        with tmp.open("xb") as fh:
+            np.savez_compressed(fh, **arrays)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, npz)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def step1_embeddings() -> None:
@@ -119,7 +150,7 @@ def step1_embeddings() -> None:
             max_seq_length=_runtime("max_seq_length"),
             device=device,
         )
-        np.savez_compressed(
+        _atomic_savez(
             npz, titles=np.array(payload), embeddings=emb, model=model_id
         )
         print(
@@ -253,6 +284,33 @@ STEPS = {
 }
 
 
+def _step_io(n: str) -> tuple[list, list]:
+    """Declared inputs/outputs each run_all step's manifest records.
+
+    Steps 2-4 run subprocesses whose own artifacts (train metrics,
+    plots, rerank CSVs) are produced inside <paths.results_dir>/ and the
+    embeddings tree; the manifest pins the step LOG (the one artifact
+    every step unconditionally writes through _sh) plus the npz files
+    for step 1. Subprocess outputs are covered by their own scripts'
+    manifests when those scripts are manifest-wired; run_all's JSON pins
+    the orchestration lane.
+    """
+    if n == "1":
+        return (
+            [DATASET_DEDUPED],
+            sorted(EMB_OUT.glob("*.npz")) if EMB_OUT.exists() else [],
+        )
+    log_names = {
+        "2": ["step2_sweep_2k.log"],
+        "3": ["step3_sweep_full.log"],
+        "4": [],  # 07-series logs: enumerated after the step runs
+    }[n]
+    # All training lanes consume the deduped corpus, whether directly or
+    # through the train.py subprocess.  Snapshot it before the subprocess
+    # starts so this orchestration manifest has a reproducible input pin too.
+    return [DATASET_DEDUPED], [LOGS / name for name in log_names]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--only", type=str, default=None, help="run ONE step (1-4)")
@@ -284,6 +342,16 @@ def main() -> None:
         name, fn = STEPS[n]
         t0 = time.time()
         print(f"\n{'=' * 70}\nSTEP {n}: {name}\n{'=' * 70}", flush=True)
+        inputs, outputs = _step_io(n)
+        # SILENT_DROPS 8: the manifest wraps the step — begin before any
+        # work, finish (write the JSON) only after the step returned ok.
+        # A failed step raises before finish, so no completion marker
+        # exists for it; the csv ledger below still records the attempt.
+        m = begin_manifest(
+            f"run_all_{n}_{name}",
+            inputs=[str(p) for p in inputs],
+            seed=None,
+        )
         try:
             fn()
             status = "ok"
@@ -292,6 +360,23 @@ def main() -> None:
         finally:
             with manifest.open("a") as fh:
                 fh.write(f'"{n}","{name}","{status}",{time.time() - t0:.0f}\n')
+        if status == "ok":
+            # outputs may have been created by the step itself (npz
+            # globs); re-resolve so post-run existence is what's pinned
+            _, outputs = _step_io(n)
+            if n == "4":
+                outputs = sorted(LOGS.glob("step4_*.log"))
+            outputs = [str(p) for p in outputs if Path(p).exists()]
+            finish_manifest(
+                m,
+                outputs=outputs,
+                # orchestrator-level: row math lives in each
+                # subprocess's own manifest; this one pins the chain link
+                row_accounting={"steps_run": 1},
+                expected_outputs=[Path(p).name for p in outputs],
+                status="complete",
+            )
+            print(f"[manifest] run_all_{n}_{name} -> results/manifests/", flush=True)
         if status != "ok" and args.stop_on_fail:
             print(
                 f"\n[stop-on-fail] step {n} ({name}) failed — halting the chain "
