@@ -73,11 +73,16 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], source)
     paths = [
         p.name for p in source.iterdir()
-        if p.name not in {
-            ".dvc", ".dvcignore", ".gitignore", "mlruns",
-            "canonical_records.csv", "gate_results.csv", "training.status",
-        }
+        if p.is_file() and p.suffix == ".csv"
+        and p.name not in {"canonical_records.csv", "gate_results.csv"}
     ]
+    log_dir = source / "logs"
+    if log_dir.is_dir():
+        paths.extend(
+            str(path.relative_to(source))
+            for path in sorted(log_dir.rglob("*.csv"))
+            if path.is_file()
+        )
     if paths:
         _run(["dvc", "add", *paths], source)
     _run(["dvc", "push"], source)
