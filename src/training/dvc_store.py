@@ -106,15 +106,7 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     (source / "dvc_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    repo = training_cfg().colab.dagshub_repo
-    env = {**os.environ, "DAGSHUB_USER_TOKEN": token}
-    with tempfile.TemporaryDirectory(prefix="euromonitor-dagshub-meta-") as temp:
-        metadata = Path(temp) / "dvc_manifest.json"
-        shutil.copy2(source / "dvc_manifest.json", metadata)
-        subprocess.run(
-            ["dagshub", "upload", repo, str(metadata), f"runs/{run_id}/worker_{worker}"],
-            cwd=source, env=env, check=True,
-        )
+    print("[dvc] clean pull verified; DagsHub DVC remote is authoritative", flush=True)
 
 def main() -> None:
     p = argparse.ArgumentParser(); p.add_argument("--source", type=Path, required=True); p.add_argument("--run-id", required=True); p.add_argument("--worker", type=int, required=True)
