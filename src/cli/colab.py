@@ -891,7 +891,7 @@ def main() -> None:
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", required=True,
-                    choices=["train", "hpo", "sims", "smoke", "stop"],
+                    choices=["train", "hpo", "sims", "smoke", "download", "stop"],
                     help="what to run on the VM")
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
@@ -932,6 +932,16 @@ def main() -> None:
 
     if args.what == "stop":
         stop()
+        return
+
+    if args.what == "download":
+        start_live_log()
+        check_colab_cli()
+        try:
+            manifests = download_results(require_manifests=False)
+            download_checkpoints(manifests)
+        finally:
+            close_live_log()
         return
 
     start_live_log()
