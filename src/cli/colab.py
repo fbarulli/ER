@@ -889,6 +889,10 @@ def main() -> None:
         "config/training.yaml colab.train_workers; use 1 for a single run)",
     )
     ap.add_argument(
+        "--sample", type=int, default=None,
+        help="optional smoke cap for --what train; full data when omitted",
+    )
+    ap.add_argument(
         "--gpu",
         default=GPU,
         help=f"Colab accelerator request (default {GPU}; e.g. A100 when available)",
@@ -936,7 +940,7 @@ def main() -> None:
         elif args.what == "hpo":
             run_hpo(args.hpo_mode)
         else:
-            run_train(args.train_frac, args.epochs, sample=None, workers=args.workers)
+            run_train(args.train_frac, args.epochs, sample=args.sample, workers=args.workers)
         manifests = download_results(require_manifests=args.refresh_data)
         if args.what == "train":
             download_checkpoints(manifests)
