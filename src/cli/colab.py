@@ -906,7 +906,7 @@ def main() -> None:
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", required=True,
-                    choices=["train", "hpo", "sims", "smoke", "download", "stop"],
+                    choices=["train", "hpo", "sims", "smoke", "stop"],
                     help="what to run on the VM")
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
@@ -949,16 +949,6 @@ def main() -> None:
         stop()
         return
 
-    if args.what == "download":
-        start_live_log()
-        check_colab_cli()
-        try:
-            manifests = download_results(require_manifests=False)
-            download_checkpoints(manifests)
-        finally:
-            close_live_log()
-        return
-
     start_live_log()
     check_colab_cli()
 
@@ -977,14 +967,12 @@ def main() -> None:
         if args.what == "sims":
             run_sims_deberta()
         elif args.what == "smoke":
-            run_train(args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE, workers=1)
+            run_train(args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE, workers=_TRAIN_WORKERS)
         elif args.what == "hpo":
             run_hpo(args.hpo_mode)
         else:
             run_train(args.train_frac, args.epochs, sample=args.sample, workers=args.workers)
-        manifests = download_results(require_manifests=args.refresh_data)
-        if args.what == "train":
-            download_checkpoints(manifests)
+        print("[dvc] remote artifacts are authoritative; local download disabled", flush=True)
     finally:
         # Default behavior is to aggressively teardown to prevent quota burning.
         if not args.keep_alive:
@@ -993,7 +981,7 @@ def main() -> None:
             print("\n[info] --keep-alive specified. VM is still running.")
         close_live_log()
 
-    print(f"\n[done] artifacts saved to {RESULTS}")
+    print("\n[done] artifacts persisted to the configured DVC remote")
 
 
 if __name__ == "__main__":
