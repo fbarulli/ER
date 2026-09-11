@@ -37,9 +37,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 # AUDIT FIX (round 2 F15, round 3): RESULTS/DATA come from the config SSOT
@@ -74,6 +76,7 @@ GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
 _HPO_WORKERS = _COLAB.hpo_workers
+_LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 LIVE_LOG_PATH: Path | None = None
 _live_log = None
 _original_stdout = None
@@ -178,6 +181,103 @@ def run_colab_exec_stream(session: str, script: str, timeout: int | None = None,
             f"Remote execution failed with return code {process.returncode}; "
             "see the timestamped Colab log for the full traceback"
         )
+
+
+def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
+    """Execute a short remote probe and return its stdout for the live tailer."""
+    process = subprocess.run(
+        ["colab", "exec", "-s", session, "--timeout", str(timeout)],
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=timeout + 30,
+    )
+    if process.returncode:
+        raise RuntimeError(
+            f"remote log probe failed (rc={process.returncode}): "
+            f"{process.stderr[-2000:]}"
+        )
+    return process.stdout
+
+
+def _parse_remote_json(output: str) -> dict:
+    """Read the last JSON object from a Colab probe without trusting banners."""
+    for line in reversed(output.splitlines()):
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    raise RuntimeError(f"remote log probe returned no JSON: {output[-1000:]}")
+
+
+def run_detached_train_and_tail(args: list[str]) -> None:
+    """Start training outside the Jupyter cell and mirror its remote log live.
+
+    The process has its own session and status file, so a transient notebook
+    client disconnect cannot kill training or swallow its traceback.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    remote_log = f"{REMOTE_ROOT}/results/logs/colab_train_{stamp}.log"
+    remote_status = f"{remote_log}.status"
+    launch = _BOOTSTRAP + _wandb_env_script() + f"""
+import json, os, pathlib, shlex, subprocess, sys
+log_path = pathlib.Path({remote_log!r})
+status_path = pathlib.Path({remote_status!r})
+log_path.parent.mkdir(parents=True, exist_ok=True)
+status_path.unlink(missing_ok=True)
+train_args = {args!r}
+command = " ".join(shlex.quote(part) for part in train_args)
+wrapped = f"{{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+    child = subprocess.Popen(
+        ["/bin/bash", "-lc", wrapped],
+        cwd={REMOTE_ROOT!r},
+        env={{**os.environ, "PYTHONUNBUFFERED": "1"}},
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+print(json.dumps({{"pid": child.pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
+"""
+    print("[run] starting detached train.py on the VM; streaming its remote log ...", flush=True)
+    launched = _parse_remote_json(run_colab_exec_capture(SESSION, launch, timeout=120))
+    print(f"[train] remote pid={launched['pid']} log={launched['log']}", flush=True)
+
+    offset = 0
+    while True:
+        probe = _BOOTSTRAP + f"""
+import json, pathlib
+log_path = pathlib.Path({remote_log!r})
+status_path = pathlib.Path({remote_status!r})
+offset = {offset}
+data = b""
+if log_path.is_file():
+    with log_path.open("rb") as handle:
+        handle.seek(offset)
+        data = handle.read()
+payload = {{
+    "offset": offset + len(data),
+    "chunk": data.decode("utf-8", errors="replace"),
+    "done": status_path.is_file(),
+    "returncode": status_path.read_text(encoding="utf-8").strip() if status_path.is_file() else None,
+}}
+print(json.dumps(payload), flush=True)
+"""
+        payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=120))
+        offset = int(payload["offset"])
+        if payload["chunk"]:
+            for line in str(payload["chunk"]).splitlines():
+                print(f"[out] {line}", flush=True)
+        if payload["done"]:
+            returncode = int(payload["returncode"])
+            if returncode:
+                raise RuntimeError(
+                    f"remote training failed (rc={returncode}); "
+                    f"full remote log was streamed above"
+                )
+            print("[train] remote process completed successfully", flush=True)
+            return
+        time.sleep(_LOG_POLL_SECONDS)
 
 
 def start_live_log() -> None:
@@ -347,22 +447,15 @@ def run_train(frac: float, epochs: int, sample: int | None) -> None:
     # silently contradicted the SSOT (masking.frac: 1.00 in
     # config/training.yaml). train.py's own default resolves from the config
     # now; the CLI flag remains for explicit overrides.
-    script = _BOOTSTRAP + _wandb_env_script() + f"""
-import subprocess, sys
-args = [sys.executable, "-u", "-m", "training.train",
+    args = [sys.executable, "-u", "-m", "training.train",
         "--split", "holdout",
         "--loss", "contrastive",
-        "--train-frac", "{frac}",
-        "--epochs", "{epochs}",
+        "--train-frac", str(frac),
+        "--epochs", str(epochs),
         "--no-plot"]
-if {sample is not None!r}:
-    args.extend(["--sample", {str(sample)!r}])
-rc = subprocess.run(args, cwd="{REMOTE_ROOT}").returncode
-if rc != 0:
-    raise RuntimeError(f"training subprocess failed (rc={{rc}})")
-"""
-    # T4 full chain: encode ~1min + 740 steps at ~1.5-2s + eval — allow 4h
-    run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="02_train")
+    if sample is not None:
+        args.extend(["--sample", str(sample)])
+    run_detached_train_and_tail(args)
 
 
 def run_hpo(mode: str | None = None) -> None:

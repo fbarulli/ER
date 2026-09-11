@@ -38,6 +38,7 @@ colab:
   gpu: "T4"
   hpo_mode: "sequential"
   hpo_workers: 3
+  log_poll_seconds: 2
 
 # ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
 # The gate's decision table, formerly signature defaults in

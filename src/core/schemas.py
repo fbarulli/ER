@@ -589,6 +589,7 @@ class ColabSpec(BaseModel):
     gpu: str = Field(min_length=1)
     hpo_mode: Literal["sequential", "parallel_same_vm"]
     hpo_workers: int = Field(ge=1, le=3)
+    log_poll_seconds: int = Field(ge=1, le=30)
 
 
 class TrainingConfig(BaseModel):
