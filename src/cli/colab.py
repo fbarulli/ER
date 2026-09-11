@@ -580,10 +580,7 @@ def run_train(frac: float, epochs: int, sample: int | None, workers: int = 1) ->
         args.extend(["--sample", str(sample)])
     if not _MASK_EFFECT_AFTER_TRAIN:
         args.append("--no-mask-effect")
-    if workers == 1:
-        run_detached_train_and_tail(args)
-    else:
-        run_parallel_train_and_tail(args, workers)
+    run_parallel_train_and_tail(args, workers)
 
 
 def run_hpo(mode: str | None = None) -> None:
