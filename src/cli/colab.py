@@ -46,7 +46,6 @@ from pathlib import Path
 # re-derived inline (HERE / "artifacts" / "results"), a second declaration
 # that happened to match today.
 from core.common import (
-    F,
     RESULTS,
     TRAIN_ROOT,
     sweep_cfg,
