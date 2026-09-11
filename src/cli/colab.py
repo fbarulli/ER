@@ -299,7 +299,9 @@ log_path.parent.mkdir(parents=True, exist_ok=True)
 status_path.unlink(missing_ok=True)
 train_args = [sys.executable, *{args!r}]
 command = " ".join(shlex.quote(part) for part in train_args)
-wrapped = f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+process_log = pathlib.Path(str(log_path) + ".processes")
+ps_command = f"ps -eo pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args >> {{shlex.quote(str(process_log))}} 2>&1"
+wrapped = f"{{ps_command}}; timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; {{ps_command}}; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
 with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
     child = subprocess.Popen(
         ["/bin/bash", "-lc", wrapped],
@@ -418,7 +420,7 @@ for number in range(1, {workers} + 1):
                         "optimizer.pt",
                         "scheduler.pt",
                         "rng_state.pth",
-                        "checkpoint_state.pt",
+                        "checkpoint_manifest.json",
                         "trainer_state.json",
                     )
                     missing = [
@@ -445,7 +447,9 @@ for number in range(1, {workers} + 1):
     log_path, status_path = out / "training.log", out / "training.status"
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
-    wrapped = f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+    process_log = out / "processes.log"
+    ps_command = f"ps -eo pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args >> {{shlex.quote(str(process_log))}} 2>&1"
+    wrapped = f"{{ps_command}}; timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; {{ps_command}}; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
     with log_path.open("a" if {bool(resume_run)!r} else "w", encoding="utf-8", buffering=1) as log_file:
         child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,

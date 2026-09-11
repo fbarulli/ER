@@ -4,15 +4,50 @@ import argparse, fcntl, json, os, shutil, subprocess, tempfile, time
 from pathlib import Path
 from core.common import training_cfg
 
+def _process_snapshot(label: str) -> None:
+    """Put the local process table in the live training/DVC log."""
+    result = subprocess.run(
+        ["ps", "-eo", "pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    output = result.stdout
+    for name in (
+        "DVC_API_KEY",
+        "DAGSHUB_USER_TOKEN",
+        "HF_TOKEN",
+        "HUGGINGFACE_HUB_TOKEN",
+        "WANDB_API_KEY",
+    ):
+        secret = os.environ.get(name)
+        if secret:
+            output = output.replace(secret, "<redacted>")
+    print(f"[processes:{label}]\n{output.rstrip()}", flush=True)
+
+
 def _run(command: list[str], cwd: Path) -> None:
     shown = ["<redacted>" if command[i - 1:i] == ["password"] else part for i, part in enumerate(command)]
     print(f"[dvc] running: {' '.join(shown)}", flush=True)
     cfg = training_cfg().colab
     attempts = cfg.dvc_push_retries if command[:2] == ["dvc", "push"] else 1
     for attempt in range(1, attempts + 1):
-        result = subprocess.run(command, cwd=cwd, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        _process_snapshot(f"before dvc attempt {attempt}: {command[0]}")
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        print(f"[processes] started pid={process.pid} command={command[0]}", flush=True)
+        _process_snapshot(f"running dvc attempt {attempt}: pid={process.pid}")
+        output, _ = process.communicate()
+        result = subprocess.CompletedProcess(command, process.returncode, output)
         if result.stdout:
             print(result.stdout.rstrip(), flush=True)
+        _process_snapshot(f"after dvc attempt {attempt}: rc={result.returncode}")
         if result.returncode == 0:
             return
         if attempt < attempts:
@@ -226,6 +261,10 @@ def publish(source: Path, run_id: str, worker: int) -> None:
         if p.is_file() and p.suffix == ".csv"
         and p.name not in {"canonical_records.csv", "gate_results.csv"}
     ]
+    paths.extend(
+        p.name for p in source.iterdir()
+        if p.is_file() and p.suffix == ".log"
+    )
     log_dir = source / "logs"
     if log_dir.is_dir():
         paths.extend(

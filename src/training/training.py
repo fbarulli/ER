@@ -213,22 +213,7 @@ def _make_checkpoint_tokenizer_portable(checkpoint: Path) -> None:
         )
 
 
-def _checkpoint_state_value(value):
-    """Move tensor leaves to CPU so a consolidated checkpoint is portable."""
-    import torch
-
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu().clone()
-    if isinstance(value, dict):
-        return {key: _checkpoint_state_value(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_checkpoint_state_value(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_checkpoint_state_value(item) for item in value)
-    return value
-
-
-def _write_consolidated_checkpoint_state(
+def _write_checkpoint_manifest(
     checkpoint: Path,
     *,
     epoch,
@@ -241,39 +226,40 @@ def _write_consolidated_checkpoint_state(
     trainer_control,
     training_args,
 ) -> None:
-    """Write one complete, portable resume snapshot beside HF's files."""
-    import random
-
-    import torch
-
+    """Describe the complete native HF resume snapshot without duplicating it."""
     log_history = getattr(trainer_state, "log_history", []) or []
     losses = [entry["eval_loss"] for entry in log_history if "eval_loss" in entry]
     tokenizer = getattr(model, "tokenizer", None)
     auto_model = model[0].auto_model
     token_names = ("pad_token_id", "bos_token_id", "eos_token_id")
-    checkpoint_state = {
+    model_files = sorted(
+        path.name
+        for path in checkpoint.glob("model.safetensors*")
+        if path.is_file()
+    )
+    if not model_files:
+        model_files = sorted(
+            path.name
+            for path in checkpoint.glob("pytorch_model*.bin*")
+            if path.is_file()
+        )
+    manifest = {
+        "format": "euromonitor-hf-resume-v1",
         "epoch": epoch,
         "global_step": global_step,
-        "model_state_dict": _checkpoint_state_value(model.state_dict()),
-        "optimizer_state_dict": _checkpoint_state_value(optimizer.state_dict())
-        if optimizer is not None
-        else None,
-        "scheduler_state_dict": _checkpoint_state_value(scheduler.state_dict())
-        if scheduler is not None
-        else None,
-        "scaler_state_dict": _checkpoint_state_value(scaler.state_dict())
-        if scaler is not None and hasattr(scaler, "state_dict")
-        else None,
-        "best_loss": min(losses) if losses else None,
-        "rng_state": torch.get_rng_state(),
-        "cuda_rng_state": torch.cuda.get_rng_state()
-        if torch.cuda.is_available()
-        else None,
-        "cuda_rng_state_all": torch.cuda.get_rng_state_all()
-        if torch.cuda.is_available()
-        else None,
-        "numpy_rng_state": np.random.get_state(),
-        "python_rng_state": random.getstate(),
+        "best_loss": float(min(losses)) if losses else None,
+        # These are the exact components of the requested checkpoint dict.
+        # They remain in their native HF files so model/optimizer tensors are
+        # not serialized a second time into a multi-GB sidecar.
+        "files": {
+            "model_state_dict": model_files,
+            "optimizer_state_dict": "optimizer.pt" if optimizer is not None else None,
+            "scheduler_state_dict": "scheduler.pt" if scheduler is not None else None,
+            "scaler_state_dict": "scaler.pt" if scaler is not None else None,
+            "rng_state": "rng_state.pth",
+            "trainer_state": "trainer_state.json",
+            "training_args": "training_args.bin",
+        },
         "tokenizer_token_ids": {
             name: getattr(tokenizer, name, None) for name in token_names
         },
@@ -284,13 +270,19 @@ def _write_consolidated_checkpoint_state(
             name: getattr(getattr(auto_model, "generation_config", None), name, None)
             for name in token_names
         },
-        # HF uses these to restore the exact position, best checkpoint, and
-        # callback decisions; keep them in the same atomic snapshot too.
-        "trainer_state": dict(vars(trainer_state)),
-        "trainer_control": dict(vars(trainer_control)),
-        "training_args": training_args.to_dict(),
+        "native_hf_resume": {
+            "trainer_state": "trainer_state.json",
+            "trainer_control": "trainer_state.json:control",
+            "training_args": "training_args.bin",
+            "optimizer": "optimizer.pt",
+            "scheduler": "scheduler.pt",
+            "rng": "rng_state.pth",
+        },
     }
-    torch.save(checkpoint_state, checkpoint / "checkpoint_state.pt")
+    (checkpoint / "checkpoint_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
 
 
 # _auc/_cos -> _common SSOT (see GATES_MAP.md)
@@ -477,7 +469,7 @@ class DvcCheckpointCallback(TrainerCallback):
             "optimizer.pt",
             "scheduler.pt",
             "rng_state.pth",
-            "checkpoint_state.pt",
+            "checkpoint_manifest.json",
             "trainer_state.json",
         )
         missing = [name for name in required if not (checkpoint / name).is_file()]
@@ -1056,7 +1048,7 @@ def train_one_config(
             )
 
             class ResumableSentenceTransformerTrainer(SentenceTransformerTrainer):
-                """HF Trainer plus one explicit all-state checkpoint snapshot."""
+                """HF Trainer plus an explicit manifest of all resume state."""
 
                 def _save_checkpoint(self, model, trial):
                     super()._save_checkpoint(model, trial)
@@ -1065,7 +1057,7 @@ def train_one_config(
                         / f"checkpoint-{self.state.global_step}"
                     )
                     _make_checkpoint_tokenizer_portable(checkpoint)
-                    _write_consolidated_checkpoint_state(
+                    _write_checkpoint_manifest(
                         checkpoint,
                         epoch=self.state.epoch,
                         global_step=self.state.global_step,
@@ -1179,7 +1171,7 @@ def train_one_config(
                         "optimizer.pt",
                         "scheduler.pt",
                         "rng_state.pth",
-                        "checkpoint_state.pt",
+                        "checkpoint_manifest.json",
                         "trainer_state.json",
                     )
                     missing = [name for name in required if not (latest / name).is_file()]
