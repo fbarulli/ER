@@ -305,7 +305,7 @@ for number in range(1, {workers} + 1):
             raise FileNotFoundError(f"worker input missing: {{source}}")
         shutil.copy2(source, out / name)
     log_path, status_path = out / "training.log", out / "training.status"
-    env = {{**os.environ, "PYTHONUNBUFFERED": "1", "EUROMONITOR_RESULTS_DIR": str(out),
+    env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
     publish = " ".join(shlex.quote(part) for part in [
         sys.executable, "-u", "-m", "training.dvc_store",

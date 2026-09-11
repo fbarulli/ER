@@ -34,7 +34,7 @@ colab:
   repository: "https://github.com/fbarulli/ER.git"
   branch: "training"
   remote_root: "/content/EuromonitoR"
-  session: "EuromonitoR"
+  session: "my-highram-session"
   gpu: "T4"
   hpo_mode: "sequential"
   hpo_workers: 3
