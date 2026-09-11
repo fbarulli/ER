@@ -1,6 +1,6 @@
 """Publish one worker's output through an isolated DVC project."""
 from __future__ import annotations
-import argparse, fcntl, json, os, shutil, subprocess, tempfile, time
+import argparse, fcntl, json, os, shutil, subprocess, tempfile, time, traceback
 from pathlib import Path
 from core.common import training_cfg
 
@@ -34,16 +34,24 @@ def _run(command: list[str], cwd: Path) -> None:
     attempts = cfg.dvc_push_retries if command[:2] == ["dvc", "push"] else 1
     for attempt in range(1, attempts + 1):
         _process_snapshot(f"before dvc attempt {attempt}: {command[0]}")
-        process = subprocess.Popen(
-            command,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        print(f"[processes] started pid={process.pid} command={command[0]}", flush=True)
-        _process_snapshot(f"running dvc attempt {attempt}: pid={process.pid}")
-        output, _ = process.communicate()
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            print(f"[processes] started pid={process.pid} command={command[0]}", flush=True)
+            _process_snapshot(f"running dvc attempt {attempt}: pid={process.pid}")
+            output, _ = process.communicate()
+        except BaseException:
+            print(
+                f"[dvc] traceback while running attempt {attempt}: {' '.join(shown)}",
+                flush=True,
+            )
+            traceback.print_exc()
+            raise
         result = subprocess.CompletedProcess(command, process.returncode, output)
         if result.stdout:
             print(result.stdout.rstrip(), flush=True)
@@ -220,22 +228,27 @@ def restore_pointer(source: Path, pointer: Path) -> list[Path]:
     still leave an incomplete working tree when a pointer is stale or
     malformed.
     """
-    token = os.environ.get("DVC_API_KEY")
-    if not token:
-        raise RuntimeError("DVC_API_KEY is required to restore a checkpoint")
-    source = source.resolve()
-    pointer = pointer.resolve()
-    pointer.relative_to(source)
-    outputs = _pointer_outputs(source, pointer)
-    _configure(source, token)
-    _run(["dvc", "pull", "--force", str(pointer.relative_to(source))], source)
-    missing = [str(path) for path in outputs if not path.is_file() and not path.is_dir()]
-    if missing:
-        raise RuntimeError(
-            f"DVC restore did not materialize outputs for {pointer.name}: "
-            + ", ".join(missing)
-        )
-    return outputs
+    try:
+        token = os.environ.get("DVC_API_KEY")
+        if not token:
+            raise RuntimeError("DVC_API_KEY is required to restore a checkpoint")
+        source = source.resolve()
+        pointer = pointer.resolve()
+        pointer.relative_to(source)
+        outputs = _pointer_outputs(source, pointer)
+        _configure(source, token)
+        _run(["dvc", "pull", "--force", str(pointer.relative_to(source))], source)
+        missing = [str(path) for path in outputs if not path.is_file() and not path.is_dir()]
+        if missing:
+            raise RuntimeError(
+                f"DVC restore did not materialize outputs for {pointer.name}: "
+                + ", ".join(missing)
+            )
+        return outputs
+    except BaseException:
+        print(f"[dvc] restore_pointer traceback for {pointer}:", flush=True)
+        traceback.print_exc()
+        raise
 
 
 def restore_checkpoint(source: Path, checkpoint_root: Path) -> Path:

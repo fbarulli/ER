@@ -45,6 +45,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 # AUDIT FIX (round 2 F15, round 3): RESULTS/DATA come from the config SSOT
@@ -209,10 +210,20 @@ def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
             )
         except subprocess.TimeoutExpired as exc:
             last_error = f"probe timeout: {exc}"
+            print(
+                f"[probe] timeout after {timeout}s on attempt {attempt}/{_PROBE_RETRIES}",
+                flush=True,
+            )
+            traceback.print_exc()
         else:
             if process.returncode == 0:
                 return process.stdout
             last_error = f"rc={process.returncode}: {process.stderr[-2000:]}"
+            print(
+                f"[probe] remote command rc={process.returncode}; stderr tail:",
+                flush=True,
+            )
+            print(process.stderr[-2000:], flush=True)
         if attempt < _PROBE_RETRIES:
             delay = _PROBE_RETRY_BACKOFF_SECONDS * attempt
             print(f"[probe] transient remote failure ({attempt}/{_PROBE_RETRIES}); retrying in {delay}s", flush=True)
@@ -314,7 +325,13 @@ with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
 print(json.dumps({{"pid": child.pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
 """
     print("[run] starting detached train.py on the VM; streaming its remote log ...", flush=True)
-    launched = _parse_remote_json(run_colab_exec_capture(SESSION, launch, timeout=120))
+    # Resume bootstrap restores each worker's checkpoint through DVC before
+    # it emits the launch JSON.  A full checkpoint pull can legitimately take
+    # longer than the short probe budget, so use the configured worker
+    # timeout for this one-time preflight.
+    launched = _parse_remote_json(
+        run_colab_exec_capture(SESSION, launch, timeout=_WORKER_TIMEOUT_SECONDS)
+    )
     print(f"[train] remote pid={launched['pid']} log={launched['log']}", flush=True)
 
     offset = 0
@@ -367,7 +384,7 @@ def run_parallel_train_and_tail(
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     resume_pointers = _resume_pointer_payload(run_id, workers) if resume_run else {}
     launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
-import base64, json, os, pathlib, shutil, shlex, subprocess, sys
+import base64, json, os, pathlib, shutil, shlex, subprocess, sys, traceback
 from core.common import F
 root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
@@ -389,54 +406,59 @@ for number in range(1, {workers} + 1):
                 if not source.is_file():
                     raise FileNotFoundError(f"resume worker input missing: {{source}}")
                 shutil.copy2(source, out / name)
-        from training.dvc_store import restore_pointer
-        pointers = sorted(pointer_dir.glob("*.dvc"))
-        if not pointers:
-            raise RuntimeError(
-                f"[resume-preflight] worker {{number}} has no DVC resume pointer; "
-                "the previous checkpoint cannot be restored"
-            )
-        restored_checkpoint = False
-        for pointer in pointers:
-            outputs = restore_pointer(out, pointer)
-            checkpoint_outputs = [
-                path for path in outputs
-                if "_checkpoints" in path.relative_to(out).parts
-            ]
-            if checkpoint_outputs:
-                restored_checkpoint = True
-                for checkpoint_root in checkpoint_outputs:
-                    candidates = sorted(
-                        checkpoint_root.glob("checkpoint-*"),
-                        key=lambda path: int(path.name.removeprefix("checkpoint-")),
-                    )
-                    if not candidates:
-                        raise RuntimeError(
-                            f"[resume-preflight] restored checkpoint root is empty: "
-                            f"{{checkpoint_root}}"
+        try:
+            from training.dvc_store import restore_pointer
+            pointers = sorted(pointer_dir.glob("*.dvc"))
+            if not pointers:
+                raise RuntimeError(
+                    f"[resume-preflight] worker {{number}} has no DVC resume pointer; "
+                    "the previous checkpoint cannot be restored"
+                )
+            restored_checkpoint = False
+            for pointer in pointers:
+                outputs = restore_pointer(out, pointer)
+                checkpoint_outputs = [
+                    path for path in outputs
+                    if "_checkpoints" in path.relative_to(out).parts
+                ]
+                if checkpoint_outputs:
+                    restored_checkpoint = True
+                    for checkpoint_root in checkpoint_outputs:
+                        candidates = sorted(
+                            checkpoint_root.glob("checkpoint-*"),
+                            key=lambda path: int(path.name.removeprefix("checkpoint-")),
                         )
-                    latest = candidates[-1]
-                    required = (
-                        "optimizer.pt",
-                        "scheduler.pt",
-                        "rng_state.pth",
-                        "checkpoint_manifest.json",
-                        "trainer_state.json",
-                    )
-                    missing = [
-                        name for name in required if not (latest / name).is_file()
-                    ]
-                    if missing:
-                        raise RuntimeError(
-                            f"[resume-preflight] {{latest}} is not resumable; "
-                            f"missing {{', '.join(missing)}}"
+                        if not candidates:
+                            raise RuntimeError(
+                                f"[resume-preflight] restored checkpoint root is empty: "
+                                f"{{checkpoint_root}}"
+                            )
+                        latest = candidates[-1]
+                        required = (
+                            "optimizer.pt",
+                            "scheduler.pt",
+                            "rng_state.pth",
+                            "checkpoint_manifest.json",
+                            "trainer_state.json",
                         )
-        if not restored_checkpoint:
-            raise RuntimeError(
-                f"[resume-preflight] worker {{number}} restored no checkpoint "
-                "pointer; refusing to start training"
-            )
-        print(f"[resume-preflight] worker {{number}}: restored {{len(pointers)}} pointer(s)", flush=True)
+                        missing = [
+                            name for name in required if not (latest / name).is_file()
+                        ]
+                        if missing:
+                            raise RuntimeError(
+                                f"[resume-preflight] {{latest}} is not resumable; "
+                                f"missing {{', '.join(missing)}}"
+                            )
+            if not restored_checkpoint:
+                raise RuntimeError(
+                    f"[resume-preflight] worker {{number}} restored no checkpoint "
+                    "pointer; refusing to start training"
+                )
+            print(f"[resume-preflight] worker {{number}}: restored {{len(pointers)}} pointer(s)", flush=True)
+        except BaseException:
+            print(f"[resume-preflight] worker {{number}} traceback:", flush=True)
+            traceback.print_exc()
+            raise
     else:
         out.mkdir()
         for name in (F["canonical_records"], F["gate_results"]):
@@ -458,7 +480,13 @@ for number in range(1, {workers} + 1):
 print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
 """
     print(f"[run] starting {workers} isolated full-data trainers; streaming all worker logs ...", flush=True)
-    launched = _parse_remote_json(run_colab_exec_capture(SESSION, launch, timeout=120))
+    # Resume bootstrap restores each worker's checkpoint through DVC before
+    # it emits the launch JSON. A full checkpoint pull can legitimately take
+    # longer than the short probe budget, so use the configured worker
+    # timeout for this one-time preflight.
+    launched = _parse_remote_json(
+        run_colab_exec_capture(SESSION, launch, timeout=_WORKER_TIMEOUT_SECONDS)
+    )
     print(f"[train] remote workers={launched['workers']} base={launched['base']}", flush=True)
     offsets = {str(item["worker"]): 0 for item in launched["workers"]}
     while True:
