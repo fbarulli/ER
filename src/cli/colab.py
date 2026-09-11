@@ -317,19 +317,21 @@ for path in required:
 def run_train(frac: float, epochs: int, sample: int | None) -> None:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the VM (GPU) ...")
-    extra = f" --sample {sample}" if sample else ""
     # AUDIT 2026-09-09: --mask-frac 0.15 REMOVED — it hardcoded a value that
     # silently contradicted the SSOT (masking.frac: 1.00 in
     # config/training.yaml). train.py's own default resolves from the config
     # now; the CLI flag remains for explicit overrides.
     script = _BOOTSTRAP + _wandb_env_script() + f"""
 import subprocess, sys
-rc = subprocess.run([sys.executable, "{REMOTE_ROOT}/src/training/train.py",
-                     "--split", "holdout",
-                     "--loss", "contrastive",
-                     "--train-frac", "{frac}",
-                     "--epochs", "{epochs}",
-                     "--no-plot"{extra}]).returncode
+args = [sys.executable, "{REMOTE_ROOT}/src/training/train.py",
+        "--split", "holdout",
+        "--loss", "contrastive",
+        "--train-frac", "{frac}",
+        "--epochs", "{epochs}",
+        "--no-plot"]
+if {sample is not None!r}:
+    args.extend(["--sample", {str(sample)!r}])
+rc = subprocess.run(args).returncode
 if rc != 0:
     raise RuntimeError(f"training subprocess failed (rc={{rc}})")
 """
