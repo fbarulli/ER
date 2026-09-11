@@ -108,11 +108,11 @@ training:
   # ── runtime knobs — no-fallback: every key must exist, nothing defaults
   #    inline at a call site (owner Q27) ──
   batch_size_cpu: 32          # finetune batch when on CPU
-  # Deliberately high T4 starting batch. Peak VRAM is recorded per fold; an
-  # OOM is loud, never silently retried with a weaker setting.
-  batch_size_cuda: 1024       # finetune batch when on GPU
-  batch_size_embed: 256       # encode batch (zero-shot, plots, eval encoders)
-  batch_size_eval: 256        # post-train eval encodes
+  # Conservative shared batch sizes for the 14.6-GB T4 across all three
+  # swept backbones (MiniLM, multilingual L12, and DeBERTa-v3-base).
+  batch_size_cuda: 16         # finetune batch when on GPU
+  batch_size_embed: 64        # encode batch (zero-shot, plots, eval encoders)
+  batch_size_eval: 64         # post-train eval encodes
   max_seq_length: 128         # every encoder call
   eval_steps_per_epoch: 4     # early-stop eval cadence
   dev_fraction: 0.15          # dev share OF THE TRAIN side (early stopping)
