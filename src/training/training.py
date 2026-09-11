@@ -421,9 +421,7 @@ class ProgressCallback(TrainerCallback):
                     {
                         "live/train_loss": loss,
                         "live/epoch": float(state.epoch or 0.0),
-                        "trainer/global_step": state.global_step,
                     },
-                    step=state.global_step,
                 )
             self._write_live_status(
                 state,
@@ -480,9 +478,7 @@ class ProgressCallback(TrainerCallback):
                     "live/dev_auc": float(metrics[auc_key])
                     if auc_key is not None else None,
                     "live/epoch": float(state.epoch or 0.0),
-                    "trainer/global_step": state.global_step,
                 },
-                step=state.global_step,
             )
         self._write_live_status(
             state,

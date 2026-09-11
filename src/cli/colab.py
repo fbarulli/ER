@@ -495,7 +495,6 @@ for number in range(1, {workers} + 1):
     wandb_dir.mkdir(parents=True, exist_ok=True)
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_DIR": str(wandb_dir),
-           "WANDB_RUN_ID": f"{run_id}-w{{number}}", "WANDB_RESUME": "allow",
            "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
     live_status_path.write_text(json.dumps({{
         "updated_at": time.time(), "event": "launched", "step": 0,
