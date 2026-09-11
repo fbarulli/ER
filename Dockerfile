@@ -5,10 +5,10 @@
 #
 # Run (WORKDIR = the lane root; artifacts/ is the volume point):
 #   docker run --rm -v $(pwd)/artifacts:/app/artifacts \
-#     euromonitor-train-gpu python TRAIN/data_prep.py
+#     euromonitor-train-gpu python src/training/data_prep.py
 #   docker run --gpus all --rm \
 #     -v $(pwd)/artifacts:/app/artifacts \
-#     euromonitor-train-gpu python TRAIN/train.py --model artifacts/models/all-MiniLM-L6-v2
+#     euromonitor-train-gpu python src/training/train.py --model artifacts/models/all-MiniLM-L6-v2
 #
 # CPU vs GPU: install the +cu torch wheel for CUDA hosts (swap the
 # requirements pin to torch==2.14.0+cu130 or use --extra-index-url
@@ -28,18 +28,16 @@ FROM python:3.12-slim-bookworm AS runtime
 # git: reproducible provenance stamps; curl: healthchecks
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tini git curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/src/core/apt/lists/*
 
-COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=deps /usr/local/src/core/python3.12/site-packages /usr/local/src/core/python3.12/site-packages
 COPY --from=deps /usr/local/bin /usr/local/bin
 
 # non-root
 RUN useradd -m -u 1000 trainer \
     && mkdir -p /home/trainer/.cache \
     && chown -R trainer:trainer /home/trainer
-# docker HOME = the lane root itself: the two config files (00_config.yaml,
-# TRAIN/training.yaml), run_all.py, data_pipe.py, STEPS.md,
-# TRAIN/, lib/ (with pipe_stopwords.json + sklearn_stopwords.json),
+# docker HOME = the lane root itself: config/, src/, run_all.py, STEPS.md,
 # artifacts/ — all at $PWD, the same layout as running in the repo.
 WORKDIR /app
 
@@ -47,13 +45,13 @@ WORKDIR /app
 # only fails on a missing COPY after the apt layers have baked, so check
 # before building (from the repo root; EDA/ left this list 2026-09-10 when
 # the dir was deleted):
-#   for s in requirements.txt STEPS.md README.md 00_config.yaml run_all.py \
-#            data_pipe.py colab_backend.py TRAIN lib; do
+#   for s in requirements.txt STEPS.md README.md config src run_all.py \
+#            colab_backend.py; do
 #     [ -e "$s" ] || echo "MISSING COPY source: $s"; done
 COPY --chown=trainer:trainer requirements.txt STEPS.md README.md /app/
-COPY --chown=trainer:trainer 00_config.yaml run_all.py data_pipe.py colab_backend.py /app/
-COPY --chown=trainer:trainer TRAIN /app/TRAIN
-COPY --chown=trainer:trainer lib /app/lib
+COPY --chown=trainer:trainer config /app/config
+COPY --chown=trainer:trainer src /app/src
+COPY --chown=trainer:trainer run_all.py colab_backend.py /app/
 RUN chown trainer:trainer /app
 # /app must be trainer-owned: the lane mkdirs artifacts/ + logs/ at runtime,
 # and ruff writes its cache under $PWD — both need write access
@@ -67,9 +65,9 @@ ENV MLFLOW_TRACKING_URI="" \
 
 # lint + contract gate: the image must boot the config SSOT and pass every
 # oracle before it is usable (byte-determinism of the lane depends on it)
-RUN python -c "import lib.common; import data_pipe; import TRAIN.masking; \
-    import TRAIN.folds; import lib.schemas; print('config SSOT + schemas import OK')" \
-    && ruff check lib/ TRAIN/ data_pipe.py run_all.py colab_backend.py
+RUN PYTHONPATH=/app/src python -c "import core.common; import pipeline; import training.masking; \
+    import training.folds; import core.schemas; print('config SSOT + schemas import OK')" \
+    && ruff check src/ run_all.py colab_backend.py
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python", "TRAIN/selftest.py"]
+CMD ["python", "src/training/selftest.py"]

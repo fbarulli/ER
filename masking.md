@@ -1,7 +1,7 @@
 # What the model sees — training pairs (masking.md)
 
 Generated from the OFFICIAL chain: `clean_sku_text` (number-token reference strip included)
-→ `DATA_PIPE.pairs.build_training_data` → masking augmentation (per the `masking:` block in TRAIN/training.yaml: `enabled: true`, `frac: 1.00` — every positive anchor masked; `mask_prob: null` — extent drawn per pair, U(`mask_lo: 0.20`, `mask_hi: 0.35`)).
+→ `DATA_PIPE.pairs.build_training_data` → masking augmentation (per the `masking:` block in config/training.yaml: `enabled: true`, `frac: 1.00` — every positive anchor masked; `mask_prob: null` — extent drawn per pair, U(`mask_lo: 0.20`, `mask_hi: 0.35`)).
 
 **Pair counts** — positives: 26,767 · masked positives: +26,767 (`masking.frac: 1.00` — every positive anchor) · hard negatives: 28,465 · total training pairs: 81,999
 

@@ -15,5 +15,17 @@ artifacts/data/embeddings_cache/
 .venv/
 .env
 results/
-dataset.csv
+# Reproducible training input: keep the raw export in Git.
+!dataset.csv
+# NER-side derived input; regenerated from the configured source.
 dataset_model_input.csv
+# Generated/model artifacts are intentionally never tracked.
+*.npz
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.parquet
+*.zip
+training.log

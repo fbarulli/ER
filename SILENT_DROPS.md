@@ -1,7 +1,7 @@
 # SILENT_DROPS — work plan for this session
 
 Repo: EuromonitoR (local git only — commits stay local, never pushed).
-Baseline: `5e3595a` (src/euromonitor package migration committed).
+Baseline: `5e3595a` (src package migration committed).
 
 This file is the coordination artifact for closing the silent-drop guarantee
 gap. Each task is scoped for one agent, under ~90 minutes. Observability and
@@ -12,10 +12,10 @@ runtime tree and never committed).
 
 ## Ground rules (apply to every task)
 
-- All code lives under src/euromonitor/ (post-migration layout).
-- Config knobs go in 00_config.yaml / src/euromonitor/training/training.yaml
-  via src/euromonitor/core/schemas.py pydantic models — nothing hardcoded.
-- New regression pins go into src/euromonitor/training/selftest.py following
+- All code lives under src/ (post-migration layout).
+- Config knobs go in config/paths.yaml / config/training.yaml
+  via src/core/schemas.py pydantic models — nothing hardcoded.
+- New regression pins go into src/training/selftest.py following
   the existing check()/oracle_* pattern.
 - Results/manifests/ and results/ generally are runtime artifacts — never
   commit them.
@@ -25,7 +25,7 @@ runtime tree and never committed).
 
 ## Design sketch: per-stage manifest
 
-`src/euromonitor/core/manifest.py` (stdlib hashlib/json/os/tempfile +
+`src/core/manifest.py` (stdlib hashsrc/core/json/os/tempfile +
 pandas only) provides: `sha256_file(path)` (chunked read), `atomic_write`
 (`<path>.tmp-<pid>` in the same dir then `os.replace` — a reader never sees a
 partial file), and a `StageManifest` pydantic model written to
@@ -50,19 +50,19 @@ at most the previous run's manifest plus `.tmp-*` residue, which
 
 | # | Task | Files | Status |
 |---|------|-------|--------|
-| 1 | `core/manifest.py`: sha256_file + atomic_write helpers | `src/euromonitor/core/manifest.py` | done |
-| 2 | AuditSpec manifest knobs in schemas.py + training.yaml | `src/euromonitor/core/schemas.py`, `src/euromonitor/training/training.yaml` | done |
-| 3 | StageManifest model + write/read/verify in manifest.py | `src/euromonitor/core/manifest.py`, `schemas.py` | done |
-| 4 | Pilot manifest on training/dedupe.py | `src/euromonitor/training/dedupe.py` | done |
-| 5 | selftest oracle_manifest | `src/euromonitor/training/selftest.py` | done |
-| 6 | Manifests for data_prep/pipeline.py canonical+gate stage | `src/euromonitor/pipeline.py`, `src/euromonitor/training/data_prep.py` | done |
-| 7 | Manifests for labeled_pairs / evaluate_models / zero_shot_sims | `src/euromonitor/training/{labeled_pairs,evaluate_models,zero_shot_sims}.py` | done |
+| 1 | `core/manifest.py`: sha256_file + atomic_write helpers | `src/core/manifest.py` | done |
+| 2 | AuditSpec manifest knobs in schemas.py + training.yaml | `src/core/schemas.py`, `config/training.yaml` | done |
+| 3 | StageManifest model + write/read/verify in manifest.py | `src/core/manifest.py`, `schemas.py` | done |
+| 4 | Pilot manifest on training/dedupe.py | `src/training/dedupe.py` | done |
+| 5 | selftest oracle_manifest | `src/training/selftest.py` | done |
+| 6 | Manifests for data_prep/pipeline.py canonical+gate stage | `src/pipeline.py`, `src/training/data_prep.py` | done |
+| 7 | Manifests for labeled_pairs / evaluate_models / zero_shot_sims | `src/training/{labeled_pairs,evaluate_models,zero_shot_sims}.py` | done |
 | 8 | run_all.py step manifests + atomic npz writes | `run_all.py` | done |
-| 9 | Source-export drift gate in common.py loaders | `src/euromonitor/core/common.py` | done |
-| 10 | Per-row dedup removal review table | `src/euromonitor/training/dedupe.py`, `schemas.py`, `selftest.py` | done |
-| 11 | Hash-verify Colab downloads in cli/colab.py | `src/euromonitor/cli/colab.py` | done |
-| 12 | Hash-verify NER Colab downloads + remote manifest | `src/euromonitor/ner/colab_ner.py`, `src/euromonitor/ner/ner.py` | done |
-| 13 | External-library row-loss guards at silent call sites | `src/euromonitor/core/{blocking,volume_verified}.py`, `training/data_quality_audit.py` | done |
+| 9 | Source-export drift gate in common.py loaders | `src/core/common.py` | done |
+| 10 | Per-row dedup removal review table | `src/training/dedupe.py`, `schemas.py`, `selftest.py` | done |
+| 11 | Hash-verify Colab downloads in cli/colab.py | `src/cli/colab.py` | done |
+| 12 | Hash-verify NER Colab downloads + remote manifest | `src/ner/colab_ner.py`, `src/ner/ner.py` | done |
+| 13 | External-library row-loss guards at silent call sites | `src/core/{blocking,volume_verified}.py`, `training/data_quality_audit.py` | done |
 | 14 | Sync STEPS.md with the manifest layer | `STEPS.md` | done |
 
 ## Task details (verified file anchors from the research pass)
@@ -70,7 +70,7 @@ at most the previous run's manifest plus `.tmp-*` residue, which
 ### 1. core/manifest.py — sha256_file + atomic_write
 
 Port the chunked `_sha256` pattern from
-`src/euromonitor/training/data_quality_audit.py:28`; `atomic_write(path,
+`src/training/data_quality_audit.py:28`; `atomic_write(path,
 data)` writes `path.tmp-<pid>` in the SAME directory then `os.replace`s onto
 the final path; `atomic_write_csv(df, path)` wraps `df.to_csv` through the
 same mechanism (serialize to the temp path, fsync, rename). Pure helpers,
@@ -78,12 +78,12 @@ no manifest logic yet. Depends: nothing. Blocks everything.
 
 ### 2. AuditSpec manifest knobs
 
-Extend the `AuditSpec` pydantic model in `src/euromonitor/core/schemas.py`
+Extend the `AuditSpec` pydantic model in `src/core/schemas.py`
 with `manifest_dir` (default `results/manifests`), `source_export_expected_rows`
 (71,623 — the current raw export census), `source_drift_threshold_pct`
 (default 0.0), `manifest_stages` (list of stage names that must produce
 manifests). Mirror defaults into the `audit:` block of
-`src/euromonitor/training/training.yaml` so the SSOT stays explicit.
+`config/training.yaml` so the SSOT stays explicit.
 `extra="forbid"` keeps the contract tight. Depends: none (parallel-safe
 with 1). Blocks 3+.
 
@@ -108,7 +108,7 @@ only — no dedupe logic edits. Depends: 1–3.
 
 ### 5. selftest oracle_manifest
 
-Add `oracle_manifest()` to `src/euromonitor/training/selftest.py`,
+Add `oracle_manifest()` to `src/training/selftest.py`,
 registered in the main list (~line 1260), following the existing
 check()/oracle pattern (cf. oracle_pinned_counts at :487). Pins: manifest
 parses against StageManifest; dedupe accounting closes
@@ -142,7 +142,7 @@ train_manifest.csv, not replaces it. Depends: 1–3.
 
 ### 9. Source-export drift gate in common.py loaders
 
-`load_raw_export`/`load_dataset` in `src/euromonitor/core/common.py`
+`load_raw_export`/`load_dataset` in `src/core/common.py`
 compare `len(df)` against `audit.source_export_expected_rows` and the
 pinned sha256 of the export path; mismatch beyond
 `source_drift_threshold_pct` raises SystemExit with the exact observed vs
@@ -180,9 +180,9 @@ and the 11 pattern.
 
 Wrap the silent pandas shrinkage sites with pre/post len reporting via a
 small `count_drop(before, after, reason)` helper in manifest.py:
-`src/euromonitor/core/blocking.py:61` (`drop_duplicates("_t")`),
-`src/euromonitor/core/volume_verified.py:38-60` (manifest filter +
-`pairs[agrees]`), `src/euromonitor/training/data_quality_audit.py:146`
+`src/core/blocking.py:61` (`drop_duplicates("_t")`),
+`src/core/volume_verified.py:38-60` (manifest filter +
+`pairs[agrees]`), `src/training/data_quality_audit.py:146`
 (`explode`). evaluate_models already demonstrates the assert-exact pattern.
 Depends: 1 (helper) only.
 

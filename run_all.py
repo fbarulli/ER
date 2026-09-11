@@ -28,10 +28,8 @@ import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE / "src"))
-from euromonitor.core.common import _path, load_config, resolve_model, sweep_cfg
-from euromonitor.core.manifest import (
+from core.common import TRAIN_ROOT, _path, load_config, resolve_model, sweep_cfg
+from core.manifest import (
     begin_manifest,
     finish_manifest,
 )
@@ -66,8 +64,8 @@ def _sh(cmd: list[str], log: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            cwd=str(HERE),
-            env={**os.environ, "PYTHONPATH": str(HERE / "src") + os.pathsep + os.environ.get("PYTHONPATH", "")},
+            cwd=str(TRAIN_ROOT),
+            env={**os.environ, "PYTHONPATH": str(TRAIN_ROOT / "src") + os.pathsep + os.environ.get("PYTHONPATH", "")},
         )
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -109,7 +107,7 @@ def step1_embeddings() -> None:
     """Full-corpus embeddings per model → artifacts/embeddings/<model>.npz.
 
     NOTE (audit 2026-09-07): these npz dumps have ZERO downstream consumers
-    — every later step (src/euromonitor/training/train, report_plots) encodes through lib.nlp's
+    — every later step (src/training/train, report_plots) encodes through lib.nlp's
     payload-keyed cache instead. The dump is kept as a standalone analysis
     artifact for the deliverable notebook (vectors + titles in one file,
     loadable without re-encoding); it is NOT part of any step's input. The
@@ -119,8 +117,8 @@ def step1_embeddings() -> None:
     """
     import numpy as np
 
-    from euromonitor.core.common import load_dataset_deduped
-    from euromonitor.core.nlp import encode_corpus
+    from core.common import load_dataset_deduped
+    from core.nlp import encode_corpus
 
     df = load_dataset_deduped()
     payload = (
@@ -135,7 +133,7 @@ def step1_embeddings() -> None:
     import torch
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    from euromonitor.core.common import runtime as _runtime
+    from core.common import runtime as _runtime
 
     for key, sub in MODELS.items():
         model_id = resolve_model(sub)
@@ -170,7 +168,7 @@ def step2_sweep_2k() -> None:
     _sh(
         [
             PY,
-            "src/euromonitor/training/train.py",
+            "src/training/train.py",
             "--model",
             model,
             "--sample",
@@ -189,7 +187,7 @@ def step3_sweep_full() -> None:
     _sh(
         [
             PY,
-            "src/euromonitor/training/train.py",
+            "src/training/train.py",
             "--model",
             model,
             "--split",
@@ -206,7 +204,7 @@ def step4_ablation() -> None:
     Per model: 07c payload variants, 07d train-frac curve, then the
     base full run's --plot. Rerank (07e) runs afterwards on the FIXED
     paraphrase-multilingual-MiniLM-L12-v2 base — config key
-    models.multilingual_l12 in 00_config.yaml, resolved through
+    models.multilingual_l12 in config/paths.yaml, resolved through
     lib.common.resolve_model — NOT on a "best base model": no artifact
     at this point in the pipeline ranks base models by best_dev_ap
     (step 3 trains the L12 base only; every train_*_fold_metrics.csv
@@ -222,7 +220,7 @@ def step4_ablation() -> None:
             _sh(
                 [
                     PY,
-                    "src/euromonitor/training/train.py",
+                    "src/training/train.py",
                     "--model",
                     model,
                     "--split",
@@ -239,7 +237,7 @@ def step4_ablation() -> None:
             _sh(
                 [
                     PY,
-                    "src/euromonitor/training/train.py",
+                    "src/training/train.py",
                     "--model",
                     model,
                     "--split",
@@ -254,7 +252,7 @@ def step4_ablation() -> None:
     # promised "runs on the best base model afterwards" but the
     # invocation was never wired — 07b_four_pop_scores.csv had no
     # producer in this repo until now. Runs on the FIXED L12 base
-    # (models.multilingual_l12 in 00_config.yaml, the lane's default
+    # (models.multilingual_l12 in config/paths.yaml, the lane's default
     # trainer and the only base step 3 trains) after step3's checkpoint
     # exists. No best-model selection: no per-model ranking artifact
     # exists at this pipeline point (all train_*_fold_metrics.csv rows
@@ -263,7 +261,7 @@ def step4_ablation() -> None:
     _sh(
         [
             PY,
-            "src/euromonitor/training/train.py",
+            "src/training/train.py",
             "--model",
             model,
             "--split",
@@ -273,7 +271,7 @@ def step4_ablation() -> None:
         ],
         LOGS / "step4_07e_rerank.log",
     )
-    _sh([PY, "src/euromonitor/training/report_plots.py"], LOGS / "step4_07f_plots.log")
+    _sh([PY, "src/training/report_plots.py"], LOGS / "step4_07f_plots.log")
 
 
 STEPS = {
@@ -333,7 +331,7 @@ def main() -> None:
     )
     args = ap.parse_args()
     LOGS.mkdir(exist_ok=True)
-    manifest = HERE / "train_manifest.csv"
+    manifest = TRAIN_ROOT / "train_manifest.csv"
     order = sorted(STEPS) if args.only is None else [args.only]
     start = args.start if args.start in STEPS else "1"
     for n in order:

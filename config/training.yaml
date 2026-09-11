@@ -1,0 +1,311 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# config/training.yaml — the TRAINING lane's OWN config (split-SSOT,
+# 2026-09-08). Every knob below steers training only; shared data paths,
+# file names, the column mapping, the seed and the model registry live in
+# the root config/paths.yaml. Validated at load by lib.schemas.TrainingConfig
+# via lib.common — a bad value crashes at import, never mid-run.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── similarity column names (one per model-registry key) ────────────────────
+sim_columns:
+  minilm_l6: "sim_minilm_l6"
+  multilingual_l12: "sim_multilingual_l12"
+  deberta_v3_base: "sim_deberta_v3_base"
+
+# ── masking augmentation ────────────────────────────────────────────────────
+masking:
+  enabled: true
+  frac: 1.00          # fraction of positive anchors masked when enabled
+  mask_prob: null     # null: per-pair extent drawn from mask_lo..mask_hi
+  mask_lo: 0.20       # variable extent band, U(0.20, 0.35) per masked copy
+  mask_hi: 0.30
+
+# Optional remote mirror. Credentials stay in WANDB_API_KEY, never here.
+# Without that environment variable, runs remain local and MLflow is intact.
+tracking:
+  wandb:
+    project: "e-r"
+    mode: "online"
+
+# ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
+# The gate's decision table, formerly signature defaults in
+# data_pipe.three_way_gate (vol_tolerance=0.05 / raw_conf_threshold=0.85 /
+# consistency_fallback_threshold=0.3). Same values, now config-owned:
+#   vol_tolerance               ± relative volume overlap (250ml ≈ 500ml)
+#   raw_conf_threshold          min volume/pack parse confidence to gate at all
+#   consistency_fallback_threshold  below this consistency -> fallback, not hard_no
+gate:
+  vol_tolerance: 0.05
+  raw_conf_threshold: 0.85
+  consistency_fallback_threshold: 0.3
+
+# ── split (component-aware; no pair ever straddles a boundary) ─────────────
+# train  = 50% of connected components — the ONLY data the model trains on
+# dev    = 25% — early-stopping target; weights are picked here, never trained on
+# test   = 25% — HOLDOUT: the model NEVER trains on it, directly or via
+#          early stopping. Every reported test metric (AUC, PR-AUC, F1)
+#          comes from this set and nothing else.
+split:
+  mode: "holdout"
+  train_fraction: 0.50
+  dev_fraction: 0.25    # carved OUT OF THE TRAIN SIDE in cv mode; in holdout
+                        # mode it is the q2 component quarter (q0+q1=train)
+  test_fraction: 0.25
+  fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
+  cv_folds: 5           # cv mode only
+
+# ── zero-shot evaluation protocol (src/training/evaluate_models.py) ────────────────
+# HOLDOUT DISCIPLINE for the zero-shot lane (self-fit leak closed 2026-09-14):
+# labeled pairs are split into DEV/TEST halves by CONNECTED COMPONENT
+# (component_folds, same seed SSOT as the training lane). The Youden
+# threshold is FIT ON DEV and applied verbatim to TEST — never fitted on
+# the scores it rates. Every reported metric is test-side; the CSV keeps
+# youden_thr_test_descriptive as the leak diagnostic only.
+evaluation:
+  component_split_k: 2   # component folds over the labeled-pair barcode graph
+  dev_fold: 0             # fold index used as DEV  (threshold-fit half)
+  test_fold: 1            # fold index used as TEST (reported half)
+  retrieval_ks: [1, 5, 10]  # persisted Precision@K / Recall@K cutoffs
+
+# ── training ────────────────────────────────────────────────────────────────
+training:
+  architecture: "two_tower"  # default: shared-weight SKU/canonical retrieval towers
+  # loss: contrastive = OnlineContrastiveLoss over labeled (pos=1/neg=0)
+  # hard pairs — per-batch hard-pair selection is native to the loss.
+  # mnrl = MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
+  loss: "contrastive"
+  contrastive_margin: 0.5     # OnlineContrastiveLoss margin (cosine distance)
+  hard_positives: true        # volume-verified cross-country pairs join train
+                              # when the second04 manifest exists (absent ->
+                              # loud notice, lane runs gate-only)
+  epochs: 10
+  lr: 0.00002
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  lr_scheduler: "linear"
+  max_grad_norm: 1.0
+  es_patience: 3
+  es_threshold: 0.001
+  # discriminative-LR groups: per-layer multiplicative decay bottom->top
+  # (was an inline 0.9 default in src/training/training._discriminative_groups)
+  layer_decay: 0.9
+  # checkpoint retention (HF Trainer save_total_limit): best + last
+  # (was an inline 2 in the STArgs build)
+  save_total_limit: 2
+  # cross-encoder rerank lane (07e): the stage-2 model's own encode cap
+  # (was an inline 512 in src/training/rerank.CrossEncoder)
+  rerank_max_length: 512
+  # ── runtime knobs — no-fallback: every key must exist, nothing defaults
+  #    inline at a call site (owner Q27) ──
+  batch_size_cpu: 32          # finetune batch when on CPU
+  # Deliberately high T4 starting batch. Peak VRAM is recorded per fold; an
+  # OOM is loud, never silently retried with a weaker setting.
+  batch_size_cuda: 1024       # finetune batch when on GPU
+  batch_size_embed: 256       # encode batch (zero-shot, plots, eval encoders)
+  batch_size_eval: 256        # post-train eval encodes
+  max_seq_length: 128         # every encoder call
+  eval_steps_per_epoch: 4     # early-stop eval cadence
+  dev_fraction: 0.15          # dev share OF THE TRAIN side (early stopping)
+  max_triples: 5000           # triplet-lane cap (build_triplets reads this)
+  n_target_mining: 20000      # in-band eval-pair mining target
+  hardneg_k: 40               # cosine-ANN block size (mine_hard_negatives)
+
+# ── pair-selection thresholds (owner's label semantics) ─────────────────────
+# thresholds: the label rule; caps: eval-pair construction (were EDA/eda.yaml
+# pairs: — migrated 2026-09-10 when the EDA dir was deleted).
+# neg_oversample: random-negative bulk-draw multiplier (was inline 60 in
+# src/core/blocking.build_pairs).
+pairs:
+  proceed_sim_threshold: 0.80    # positives: proceed & sim>=0.80
+  hardneg_sim_threshold: 0.80    # hard negatives: hard_no & sim>=0.80
+  max_pos_per_group: 4           # eval-pair positives per multi-retailer group
+  n_neg: 10000                   # eval negatives per build_pairs call
+  neg_oversample: 60             # bulk-draw multiplier for valid negatives
+
+# ── plotting (was EDA/eda.yaml plots: — every fig.savefig reads this) ────────
+plots:
+  dpi: 150                      # SSOT for every figure in the tree
+
+# ── audits ────────────────────────────────────────────────────────────────────
+# strip-audit sample size (was EDA/eda.yaml strip_audit_sample).
+# blocking_audit knobs (audit round 2 F18, moved round 3): the blocking-
+# feature audit's candidate-pair budget and greedy min-recall floor (were
+# inline BUDGET = 5_000_000 / MIN_RECALL = 0.95 in src/training/blocking_audit.py).
+# strip_ladder_bands (SSOT move, this round): the strip-audit similarity
+# ladder's Jaccard band edges — were an inline literal list in
+# src/training/strip_audit.py (~:186). Same values, new home; read via
+# lib.common.strip_ladder_bands().
+# The four manifest_* / source_* knobs below (SILENT_DROPS task 2) feed the
+# silent-drop guardrail layer: per-stage manifests, the raw-export census,
+# and the source-drift gate that enforces it. Defaults live in
+# AuditSpec (src/core/schemas.py) and are mirrored here explicitly so the SSOT
+# stays self-documenting; tasks 3+ consume them via training_cfg().audit.
+audit:
+  strip_audit_sample: 200
+  strip_ladder_bands: [[0.0, 0.2], [0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.01]]
+  blocking_budget: 5_000_000      # candidate pairs the classifier can afford
+  blocking_min_recall: 0.95      # greedy forward-selection recall floor
+  manifest_dir: "results/manifests"   # per-stage <stage>.json, written LAST;
+                               # presence w/ status "complete" = stage ran
+  source_export_expected_rows: 71_623 # approved dataset.csv census (drift gate)
+  source_drift_threshold_pct: 0.0     # allowed row-count drift; 0.0 = exact
+  source_export_expected_sha256: "539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c" # approved source bytes
+  manifest_stages:                    # stages that MUST produce a manifest,
+    - "dedupe"                        # in pipeline order (run_all steps may
+    - "data_prep"                     # append their own later)
+    - "labeled_pairs"
+    - "evaluate_models"
+    - "zero_shot_sims"
+
+
+# ── confusion / rerank bands (bi-encoder cosine) ────────────────────────────
+bands:
+  eval_mining: [0.35, 0.90]   # train_one_config's EVAL-pool mining band
+  rerank_band: [0.50, 0.75]   # cross-encoder rerank slice
+
+# ── rerank A/B decision rule (07e) — the quantitative "clearly improve" ────
+# The hybrid SHIPS only when it beats the bi-encoder by at least this
+# margin on PR-AUC OR F1 (dev-selected threshold, test-side absolutes —
+# see the holdout discipline in src/training/rerank.py).
+rerank:
+  min_delta_pr_auc: 0.005
+  min_delta_f1: 0.005
+
+# ── HPO lanes (grid + TPE) — sweep spaces, trial budgets ────────────────────
+# second07's fixed grid, verbatim (epochs x lr x warmup%), + the TPE
+# search space and budgets. All were module-level literals in src/training/hpo.py
+# / src/training/training.py — a config change can now steer every sweep.
+hpo:
+  # Backbone registry keys swept in round-robin order. Values resolve through
+  # config/paths.yaml models; the launcher never embeds model identifiers.
+  models: ["minilm_l6", "multilingual_l12", "deberta_v3_base"]
+  grid:                       # each row: epochs / lr / warmup percent
+    - {epochs: 1, lr: 2.0e-05, warmup: 0}
+    - {epochs: 1, lr: 5.0e-05, warmup: 0}
+    - {epochs: 1, lr: 1.0e-04, warmup: 0}
+    - {epochs: 2, lr: 2.0e-05, warmup: 0}
+    - {epochs: 2, lr: 5.0e-05, warmup: 0}
+    - {epochs: 2, lr: 1.0e-04, warmup: 0}
+    - {epochs: 4, lr: 2.0e-05, warmup: 0}
+    - {epochs: 4, lr: 5.0e-05, warmup: 0}
+    - {epochs: 4, lr: 1.0e-04, warmup: 0}
+    - {epochs: 1, lr: 2.0e-05, warmup: 10}
+    - {epochs: 2, lr: 5.0e-05, warmup: 10}
+  quick:                      # --quick smoke: 3-config subset of the grid
+    - {epochs: 1, lr: 2.0e-05, warmup: 0}
+    - {epochs: 2, lr: 5.0e-05, warmup: 0}
+    - {epochs: 2, lr: 5.0e-05, warmup: 10}
+  tpe_space:                  # optuna suggest ranges per knob
+    epochs: [1, 4]           # int
+    lr: [1.0e-05, 1.0e-04]    # float, log-uniform
+    warmup_ratio: [0.0, 0.1]  # float
+    weight_decay: [0.0, 0.1]  # float
+  n_trials: 20                # default TPE trial budget (was --n-trials 20)
+  n_jobs: 1                   # default parallel workers (was --n-jobs 1)
+  # ── selection protocol (test-leak fix, 2026-09-12) ─────────────────────
+  # WHICH signal a sweep ranks configs on, per split mode. Holdout sweeps
+  # train q0+q1, early-stop + select on the dev quarter q2 (best_dev_ap)
+  # and NEVER compute a per-config test metric — the test quarter is read
+  # exactly once, by the main train lane. CV fold test sides are
+  # validation folds, so mean fold auc is legitimate there.
+  objective:
+    holdout: best_dev_ap     # q2 dev AP — the only sanctioned holdout rule
+    cv: mean_fold_auc        # fold test sides are validation folds in cv
+  # selection-mode folds skip the test-side eval block + pair dump and
+  # record test_eval=skipped_selection_mode instead. MUST stay true:
+  # computing a per-config test metric re-opens the leak this closed.
+  selection_skip_test_eval: true
+
+# ── ablation sweep (run_all step 4 / colab smoke) ──────────────────────────
+# The 07-series axes run_all sweeps: payload variants (07c, 'full' is
+# step 3 itself so it is skipped), train-frac curve (07d), the smoke
+# sample size, and the 07e rerank cross-encoder. All were inline
+# literals in run_all.py / colab_backend.py.
+sweep:
+  payload_variants: ["title_only"]   # 07c variants beyond 'full'
+  train_fracs: [0.25, 0.50, 0.75]    # 07d data-scaling curve
+  smoke_sample: 1000                  # chain-check sample size (--sample)
+  sweep_sample: 2000                  # step-2 smoke sweep size
+  rerank_model: "cross-encoder/ms-marco-MiniLM-L-6-v2"  # 07e stage-2
+
+# ── mining band for in-batch negatives ───────────────────────────────────────
+mining:
+  band: "0.45-0.80"           # "lo-hi" — parsed + validated by MiningSpec
+  k: 40                      # ANN candidates per block (mine_hard_negatives)
+
+# ── NER lane ───────────────────────────────────────────────────────────────
+# NER is a training consumer, so it shares this configuration contract rather
+# than carrying a module-specific config file. Paths are resolved by
+# core.common.ner_config(); no NER module infers a config location.
+ner:
+  base_dir: "."
+  results_dir: "results"
+  columns: &ner_columns
+    sku_name_eng: "sku_name_eng"
+    brand: "brand"
+    sku_name_clean: "sku_name_clean"
+    namebrandmatch: "namebrandmatch"
+  data_prep:
+    input_csv: "dataset.csv"
+    output_csv: "${results_dir}/dataset_model_input.csv"
+    columns: *ner_columns
+  semantic_training:
+    INPUT_CSV: "${results_dir}/dataset_model_input.csv"
+    MODEL_NAME: "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+    OUTPUT_DIR: "${results_dir}/model"
+    EPOCHS: 3
+    BATCH_SIZE: 32
+    LEARNING_RATE: 2.0e-5
+    WARMUP_STEPS: 100
+    WEIGHT_DECAY: 0.01
+    TRAIN_FRAC: 0.50
+    VALIDATION_FRAC: 0.25
+    HOLDOUT_FRAC: 0.25
+    NEGATIVE_SAMPLING_RATIO: 1.0
+    EVAL_STEPS: 500
+    SAVE_STEPS: 1000
+    SEED: 42
+    COLUMNS: *ner_columns
+    HF_REPO_ID: "fbarulli/euromonitor-semantic-model"
+  semantic_evaluation:
+    model_dir: "${results_dir}/model"
+    input_csv: "${results_dir}/dataset_model_input.csv"
+    hf_repo_id: "fbarulli/euromonitor-semantic-model"
+    sample_size: 100
+    random_state: 42
+    output_csv: "${results_dir}/semantic_similarity_top.csv"
+    metrics_csv: "${results_dir}/metrics.csv"
+    fp_csv: "${results_dir}/false_positives.csv"
+    fn_csv: "${results_dir}/false_negatives.csv"
+    predictions_csv: "${results_dir}/predictions.csv"
+    top_n_fp_fn: 100
+    seed: 42
+    columns:
+      <<: *ner_columns
+      similarity: "similarity"
+      predicted: "predicted"
+      semantic_similarity: "semantic_similarity"
+    encode_params:
+      normalize_embeddings: true
+      show_progress_bar: true
+  ner_training:
+    input_jsonl: "${results_dir}/ner_dataset.jsonl"
+    output_dir: "${results_dir}/ner_model"
+    model_name: "${base_dir}/models/xlm-roberta-base"
+    model_source_repo: "FacebookAI/xlm-roberta-base"
+    epochs: 10
+    batch_size: 8
+    learning_rate: 2.0e-5
+    dropout: 0.2
+    train_frac: 0.50
+    validation_frac: 0.25
+    holdout_frac: 0.25
+    seed: 42
+    label: "BRAND"
+  colab:
+    session: "SemanticSim"
+    gpu: "T4"
+    remote_root: "/content/SemanticSim"
+  huggingface:
+    ner_repo_id: "fbarulli/e-r"
+    token_file: ".env"

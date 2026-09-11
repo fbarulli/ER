@@ -8,8 +8,8 @@ version = "0.1.0"
 requires-python = ">=3.12"
 
 [project.scripts]
-er-colab = "euromonitor.cli.colab:main"
-er-train = "euromonitor.training.train:main"
+er-colab = "cli.colab:main"
+er-train = "training.train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
