@@ -86,6 +86,7 @@ class DataFilesSpec(BaseModel):
     # field — F["hpo_tpe_best"] had zero readers anywhere.
     dedupe_summary: str
     ambiguous_offer_groups: str
+    removals: str
     four_pop_scores: str
     field_ablation: str
     data_scaling: str

@@ -1347,7 +1347,7 @@ def oracle_manifest() -> None:
 
     from pydantic import ValidationError
 
-    from euromonitor.core.common import RESULTS, _path, training_cfg
+    from euromonitor.core.common import F, RESULTS, _path, training_cfg
     from euromonitor.core.manifest import atomic_write, read_manifest, verify_manifest
     from euromonitor.core.schemas import ManifestFile, StageManifest
 
@@ -1500,6 +1500,24 @@ def oracle_manifest() -> None:
         check(
             "verify_manifest('dedupe') passes on the live manifest", False, str(e)
         )
+    removals_path = RESULTS / F["removals"]
+    try:
+        removals = pd.read_csv(removals_path, dtype={"product_id": str})
+        check(
+            "dedupe removals review table pinned: 10,094 rows with product_id/rep_id/tier",
+            len(removals) == 10094
+            and list(removals.columns) == ["product_id", "rep_id", "tier"]
+            and removals["product_id"].notna().all()
+            and removals["rep_id"].notna().all()
+            and removals["tier"].isin({
+                "T1 retailer+barcode",
+                "T2 retailer+title+price+barcode",
+                "T3 retailer+title (price-aggregation)",
+            }).all(),
+            f"got {len(removals):,} rows / columns {list(removals.columns)!r}",
+        )
+    except Exception as e:  # noqa: BLE001
+        check("dedupe removals review table pinned: 10,094 rows with product_id/rep_id/tier", False, str(e))
 
 
 def main() -> None:
