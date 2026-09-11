@@ -231,7 +231,7 @@ log_path.parent.mkdir(parents=True, exist_ok=True)
 status_path.unlink(missing_ok=True)
 train_args = [sys.executable, *{args!r}]
 command = " ".join(shlex.quote(part) for part in train_args)
-wrapped = f"{{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+wrapped = f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
 with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
     child = subprocess.Popen(
         ["/bin/bash", "-lc", wrapped],
