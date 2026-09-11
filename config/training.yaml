@@ -48,6 +48,8 @@ colab:
   dvc_remote_url: "https://dagshub.com/fbarulli/ER.dvc"
   dagshub_repo: "fbarulli/ER"
   worker_timeout_seconds: 14400
+  dvc_push_retries: 5
+  dvc_push_backoff_seconds: 15
 
 # ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
 # The gate's decision table, formerly signature defaults in

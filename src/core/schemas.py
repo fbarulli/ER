@@ -600,6 +600,8 @@ class ColabSpec(BaseModel):
     dvc_remote_url: str = Field(min_length=1)
     dagshub_repo: str = Field(min_length=1)
     worker_timeout_seconds: int = Field(ge=60)
+    dvc_push_retries: int = Field(ge=1, le=10)
+    dvc_push_backoff_seconds: int = Field(ge=1, le=120)
 
 
 class TrainingConfig(BaseModel):

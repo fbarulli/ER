@@ -1,17 +1,25 @@
 """Publish one worker's output through an isolated DVC project."""
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, tempfile
+import argparse, json, os, shutil, subprocess, tempfile, time
 from pathlib import Path
 from core.common import training_cfg
 
 def _run(command: list[str], cwd: Path) -> None:
     shown = ["<redacted>" if command[i - 1:i] == ["password"] else part for i, part in enumerate(command)]
     print(f"[dvc] running: {' '.join(shown)}", flush=True)
-    result = subprocess.run(command, cwd=cwd, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if result.stdout:
-        print(result.stdout.rstrip(), flush=True)
-    if result.returncode:
-        raise RuntimeError(f"DVC command failed ({result.returncode}): {' '.join(shown)}")
+    cfg = training_cfg().colab
+    attempts = cfg.dvc_push_retries if command[:2] == ["dvc", "push"] else 1
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(command, cwd=cwd, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if result.stdout:
+            print(result.stdout.rstrip(), flush=True)
+        if result.returncode == 0:
+            return
+        if attempt < attempts:
+            delay = cfg.dvc_push_backoff_seconds * (2 ** (attempt - 1))
+            print(f"[dvc] command failed; retry {attempt}/{attempts - 1} in {delay}s", flush=True)
+            time.sleep(delay)
+    raise RuntimeError(f"DVC command failed ({result.returncode}): {' '.join(shown)}")
 
 
 def _sha256(path: Path) -> str:
@@ -94,7 +102,7 @@ def publish(source: Path, run_id: str, worker: int) -> None:
         )
     if paths:
         _run(["dvc", "add", *paths], source)
-    _run(["dvc", "push"], source)
+    _run(["dvc", "push", "--jobs", "1"], source)
     outputs = _verify_clean_pull(source, token, remote)
     manifest = {
         "run_id": run_id,
