@@ -52,14 +52,13 @@ DATASET_DEDUPED = _path(_cfg["paths"]["data_dir"]) / _cfg["files"]["dataset_dedu
 def _sh(cmd: list[str], log: Path) -> None:
     """Run a subprocess, streaming output to BOTH the log file and stdout.
 
-    AUDIT FIX (round 2 F16a, round 3): the log opens in APPEND mode with a
-    run-separator line — the old "w" truncated the previous run's log on a
-    re-run while the docstring sold resumability (artifacts were append-
-    safe; logs were not). Same cwd/echo behavior otherwise.
+    Each invocation starts a fresh log so it contains exactly the current
+    run's output. Resumability belongs to the generated artifacts and
+    manifests, not to stale mixed stdout from prior attempts.
     """
     print(f"[cmd] {' '.join(cmd)}", flush=True)
-    with log.open("a") as fh:
-        fh.write(f"\n{'=' * 70}\n[rerun {time.strftime('%Y-%m-%d %H:%M:%S')}] {' '.join(cmd)}\n{'=' * 70}\n")
+    with log.open("w") as fh:
+        fh.write(f"{'=' * 70}\n[start {time.strftime('%Y-%m-%d %H:%M:%S')}] {' '.join(cmd)}\n{'=' * 70}\n")
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

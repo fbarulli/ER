@@ -36,6 +36,10 @@ colab:
   remote_root: "/content/EuromonitoR"
   session: "EuromonitoR"
   gpu: "T4"
+  # HPO orchestration: sequential is the safest default; parallel_same_vm
+  # launches one isolated worker per configured backbone on the same GPU.
+  hpo_mode: "sequential"
+  hpo_workers: 3
 
 # ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
 # The gate's decision table, formerly signature defaults in
@@ -110,7 +114,7 @@ training:
   batch_size_cpu: 32          # finetune batch when on CPU
   # Conservative shared batch sizes for the 14.6-GB T4 across all three
   # swept backbones (MiniLM, multilingual L12, and DeBERTa-v3-base).
-  batch_size_cuda: 16         # finetune batch when on GPU
+  batch_size_cuda: 64         # finetune batch when on GPU
   batch_size_embed: 64        # encode batch (zero-shot, plots, eval encoders)
   batch_size_eval: 64         # post-train eval encodes
   max_seq_length: 128         # every encoder call
