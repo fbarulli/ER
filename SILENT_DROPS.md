@@ -53,7 +53,7 @@ at most the previous run's manifest plus `.tmp-*` residue, which
 | 1 | `core/manifest.py`: sha256_file + atomic_write helpers | `src/euromonitor/core/manifest.py` | done |
 | 2 | AuditSpec manifest knobs in schemas.py + training.yaml | `src/euromonitor/core/schemas.py`, `src/euromonitor/training/training.yaml` | done |
 | 3 | StageManifest model + write/read/verify in manifest.py | `src/euromonitor/core/manifest.py`, `schemas.py` | done |
-| 4 | Pilot manifest on training/dedupe.py | `src/euromonitor/training/dedupe.py` | pending |
+| 4 | Pilot manifest on training/dedupe.py | `src/euromonitor/training/dedupe.py` | done |
 | 5 | selftest oracle_manifest | `src/euromonitor/training/selftest.py` | pending |
 | 6 | Manifests for data_prep/pipeline.py canonical+gate stage | `src/euromonitor/pipeline.py`, `src/euromonitor/training/data_prep.py` | pending |
 | 7 | Manifests for labeled_pairs / evaluate_models / zero_shot_sims | `src/euromonitor/training/{labeled_pairs,evaluate_models,zero_shot_sims}.py` | pending |
