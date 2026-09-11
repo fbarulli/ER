@@ -377,6 +377,28 @@ class ProgressCallback(TrainerCallback):
         self.latest_train_loss: float | None = None
         self.latest_dev_accuracy: float | None = None
 
+    def _write_live_status(self, state, event: str, **values) -> None:
+        """Atomically expose a compact worker heartbeat to the Colab launcher."""
+        payload = {
+            "updated_at": time.time(),
+            "event": event,
+            "step": int(state.global_step),
+            "max_steps": int(state.max_steps),
+            "epoch": float(state.epoch or 0.0),
+            "wandb_run_id": getattr(self.wandb_ctx, "run_id", None),
+            "wandb_url": getattr(self.wandb_ctx, "run_url", None),
+            **{key: value for key, value in values.items() if value is not None},
+        }
+        target = RESULTS / "live_status.json"
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, target)
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self._write_live_status(state, "training-started")
+        return control
+
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not logs or not state.is_world_process_zero:
             return
@@ -403,6 +425,12 @@ class ProgressCallback(TrainerCallback):
                     },
                     step=state.global_step,
                 )
+            self._write_live_status(
+                state,
+                "train",
+                train_loss=loss,
+                dev_accuracy=self.latest_dev_accuracy,
+            )
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if not metrics or not state.is_world_process_zero:
@@ -456,6 +484,15 @@ class ProgressCallback(TrainerCallback):
                 },
                 step=state.global_step,
             )
+        self._write_live_status(
+            state,
+            "evaluation",
+            train_loss=self.latest_train_loss,
+            dev_loss=float(metrics["eval_loss"]) if metrics.get("eval_loss") is not None else None,
+            dev_average_precision=float(ap) if ap is not None else None,
+            dev_auc=float(metrics[auc_key]) if auc_key is not None else None,
+            dev_accuracy=self.latest_dev_accuracy,
+        )
 
 
 class DvcCheckpointCallback(TrainerCallback):

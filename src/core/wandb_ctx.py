@@ -25,7 +25,11 @@ class WandbCtx:
         import wandb
         run_name = os.environ.get("WANDB_RUN_NAME", self._name)
         self._run = wandb.init(project=self._project, name=run_name, mode=self._mode)
-        print(f"[wandb] run started: project={self._project} mode={self._mode}", flush=True)
+        print(
+            f"[wandb] run started: project={self._project} mode={self._mode} "
+            f"id={self._run.id} url={self._run.url}",
+            flush=True,
+        )
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -42,6 +46,14 @@ class WandbCtx:
             numeric = {k: v for k, v in values.items() if isinstance(v, (int, float))}
             if numeric:
                 self._run.log(numeric, step=step)
+
+    @property
+    def run_id(self) -> str | None:
+        return str(self._run.id) if self._run is not None else None
+
+    @property
+    def run_url(self) -> str | None:
+        return str(self._run.url) if self._run is not None else None
 
     def set_summary(self, values: dict[str, Any]) -> None:
         if self._run is not None:

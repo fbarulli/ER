@@ -197,7 +197,7 @@ def run_colab_exec_stream(session: str, script: str, timeout: int | None = None,
 
 
 def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
-    """Execute a remote probe, streaming its output while retaining stdout."""
+    """Execute a remote probe while retaining stdout for structured parsing."""
     last_error = ""
     for attempt in range(1, _PROBE_RETRIES + 1):
         try:
@@ -215,7 +215,6 @@ def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
                 assert process.stdout is not None
                 for line in process.stdout:
                     captured.append(line)
-                    print(f"[probe-out] {line.rstrip()}", flush=True)
 
             reader = threading.Thread(target=stream_probe_output, daemon=True)
             reader.start()
@@ -404,7 +403,7 @@ def run_parallel_train_and_tail(
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     resume_pointers = _resume_pointer_payload(run_id, workers) if resume_run else {}
     launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
-import base64, json, os, pathlib, shutil, shlex, subprocess, sys, traceback
+import base64, json, os, pathlib, shutil, shlex, subprocess, sys, time, traceback
 from core.common import F
 root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
@@ -491,12 +490,17 @@ for number in range(1, {workers} + 1):
                 raise FileNotFoundError(f"worker input missing: {{source}}")
             shutil.copy2(source, out / name)
     log_path, status_path = out / "training.log", out / "training.status"
+    live_status_path = out / "live_status.json"
     wandb_dir = out / "wandb"
     wandb_dir.mkdir(parents=True, exist_ok=True)
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_DIR": str(wandb_dir),
            "WANDB_RUN_ID": f"{run_id}-w{{number}}", "WANDB_RESUME": "allow",
            "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
+    live_status_path.write_text(json.dumps({{
+        "updated_at": time.time(), "event": "launched", "step": 0,
+        "wandb_run_id": env["WANDB_RUN_ID"],
+    }}) + "\\n", encoding="utf-8")
     process_log = out / "processes.log"
     ps_command = f"ps -eo pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args >> {{shlex.quote(str(process_log))}} 2>&1"
     wrapped = f"{{ps_command}}; timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; {{ps_command}}; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
@@ -518,16 +522,18 @@ print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
     )
     print(f"[train] remote workers={launched['workers']} base={launched['base']}", flush=True)
     offsets = {str(item["worker"]): 0 for item in launched["workers"]}
+    live_signatures: dict[str, str] = {}
     while True:
         probe = _BOOTSTRAP + f"""
 import json, pathlib
 base = pathlib.Path({remote_base!r})
 offsets = {offsets!r}
-payload = {{"offsets": {{}}, "chunks": {{}}, "status": {{}}, "resume": {{}}}}
+payload = {{"offsets": {{}}, "chunks": {{}}, "status": {{}}, "resume": {{}}, "live": {{}}}}
 for number in range(1, {workers} + 1):
     key = str(number)
     out = base / f"worker_{{number}}"
     log_path, status_path = out / "training.log", out / "training.status"
+    live_status_path = out / "live_status.json"
     offset = int(offsets.get(key, 0))
     data = b""
     if log_path.is_file():
@@ -537,6 +543,11 @@ for number in range(1, {workers} + 1):
     payload["offsets"][key] = offset + len(data)
     payload["chunks"][key] = data.decode("utf-8", errors="replace")
     payload["status"][key] = status_path.read_text(encoding="utf-8").strip() if status_path.is_file() else None
+    if live_status_path.is_file():
+        try:
+            payload["live"][key] = json.loads(live_status_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
     pointer_dir = out / ".resume"
     payload["resume"][key] = {{
         path.name: base64.b64encode(path.read_bytes()).decode("ascii")
@@ -548,9 +559,25 @@ print(json.dumps(payload), flush=True)
         payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS))
         offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
         _mirror_resume_pointers(run_id, payload["resume"])
+        for worker, live in payload["live"].items():
+            signature = json.dumps(live, sort_keys=True)
+            if live_signatures.get(worker) == signature:
+                continue
+            live_signatures[worker] = signature
+            metrics = []
+            for key, label in (("train_loss", "train_loss"), ("dev_average_precision", "dev_ap"),
+                               ("dev_accuracy", "dev_acc")):
+                if live.get(key) is not None:
+                    metrics.append(f"{{label}}={{float(live[key]):.4f}}")
+            position = f"step {live.get('step', 0)}/{live.get('max_steps', '?')}"
+            print(f"[worker {{worker}}] {{live.get('event', 'running')}} | {{position}}" +
+                  (" | " + " | ".join(metrics) if metrics else "") +
+                  (f" | W&B {{live['wandb_url']}}" if live.get("wandb_url") else ""), flush=True)
         for worker, chunk in payload["chunks"].items():
-            for line in str(chunk).splitlines():
-                print(f"[worker {worker}] {line}", flush=True)
+            important = [line for line in str(chunk).splitlines()
+                         if any(token in line for token in ("Traceback", "RuntimeError", "ERROR", "[checkpoint-dvc]", "[dvc]"))]
+            for line in important:
+                print(f"[worker {{worker}}] {{line}}", flush=True)
         if payload["done"]:
             failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
             if failed:
