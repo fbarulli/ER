@@ -225,7 +225,7 @@ log_path = pathlib.Path({remote_log!r})
 status_path = pathlib.Path({remote_status!r})
 log_path.parent.mkdir(parents=True, exist_ok=True)
 status_path.unlink(missing_ok=True)
-train_args = {args!r}
+train_args = [sys.executable, *{args!r}]
 command = " ".join(shlex.quote(part) for part in train_args)
 wrapped = f"{{command}}; rc=$?; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
 with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
@@ -447,7 +447,7 @@ def run_train(frac: float, epochs: int, sample: int | None) -> None:
     # silently contradicted the SSOT (masking.frac: 1.00 in
     # config/training.yaml). train.py's own default resolves from the config
     # now; the CLI flag remains for explicit overrides.
-    args = [sys.executable, "-u", "-m", "training.train",
+    args = ["-u", "-m", "training.train",
         "--split", "holdout",
         "--loss", "contrastive",
         "--train-frac", str(frac),
