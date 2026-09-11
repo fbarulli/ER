@@ -574,9 +574,9 @@ print(json.dumps(payload), flush=True)
                   (" | " + " | ".join(metrics) if metrics else "") +
                   (f" | W&B {{live['wandb_url']}}" if live.get("wandb_url") else ""), flush=True)
         for worker, chunk in payload["chunks"].items():
-            important = [line for line in str(chunk).splitlines()
-                         if any(token in line for token in ("Traceback", "RuntimeError", "ERROR", "[checkpoint-dvc]", "[dvc]"))]
-            for line in important:
+            # Forward the complete worker log. Detached workers write to the
+            # remote file, so filtering here would hide normal training output.
+            for line in str(chunk).splitlines():
                 print(f"[worker {{worker}}] {{line}}", flush=True)
         if payload["done"]:
             failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
@@ -698,7 +698,7 @@ def install_deps() -> None:
     # lane; sentence-transformers pins its own transformers requirement.
     install_script = (
         "import sys, subprocess\n"
-        "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q',\n"
+        "subprocess.run([sys.executable, '-m', 'pip', 'install',\n"
         "                'sentence-transformers', 'datasets', 'accelerate',\n"
         "                'evaluate', 'scikit-learn', 'pandas', 'numpy',\n"
         "                'mlflow', 'optuna', 'wandb', 'dvc', 'dagshub'], check=True)\n"
