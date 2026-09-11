@@ -343,21 +343,50 @@ def run_hpo() -> None:
     """Sweep every configured backbone, then evaluate and rerank each winner."""
     print("[run] round-robin HPO -> held-out evaluation -> CrossEncoder rerank ...")
     script = _BOOTSTRAP + _wandb_env_script() + f"""
-import json, pathlib, subprocess, sys
+import json, os, pathlib, subprocess, sys
+from datetime import datetime, timezone
 from core.common import hpo_cfg, resolve_model
 root = pathlib.Path("{REMOTE_ROOT}")
 train = root / "src/training/train.py"
-base = [sys.executable, str(train), "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot"]
+base = [sys.executable, "-u", str(train), "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot"]
 model_keys = hpo_cfg()["models"]
 required = {{"epochs", "lr", "warmup_ratio", "weight_decay"}}
 summary = []
+
+def run_logged(args, label):
+    log_path = root / "results" / "logs" / (
+        f"colab_{{label}}_{{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}}.log"
+    )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"[subprocess] {{' '.join(args)}} -> {{log_path}}", flush=True)
+    with log_path.open("w", encoding="utf-8") as log:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env={{**os.environ, "PYTHONUNBUFFERED": "1"}},
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            log.write(line)
+            log.flush()
+        rc = proc.wait()
+    if rc:
+        tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]
+        raise RuntimeError(
+            f"{{label}} failed (rc={{rc}}); log={{log_path}}\\n" + "\\n".join(tail)
+        )
+    return log_path
+
 for model_key in model_keys:
     model = resolve_model(model_key)
     model_tag = str(model).rstrip("/").rsplit("/", 1)[-1]
     best_path = root / "results" / f"train_{{model_tag}}-dlr_hpo_best.json"
     print(f"== HPO {{model_key}}: {{model}} (dev-selected; test withheld)", flush=True)
-    if subprocess.run(base + ["--model", str(model), "--hpo"]).returncode:
-        raise RuntimeError(f"HPO subprocess failed for {{model_key}}")
+    run_logged(base + ["--model", str(model), "--hpo"], f"hpo_{{model_key}}")
     if not best_path.is_file():
         raise RuntimeError(f"missing HPO winner for {{model_key}}: {{best_path}}")
     best = json.loads(best_path.read_text())
@@ -374,8 +403,7 @@ for model_key in model_keys:
         "--rerank", "{_RERANK_MODEL}",
     ]
     print(f"== FINAL {{model_key}}: selected dev config -> held-out test + rerank", flush=True)
-    if subprocess.run(final).returncode:
-        raise RuntimeError(f"selected training subprocess failed for {{model_key}}")
+    run_logged(final, f"final_{{model_key}}")
     summary.append({{"model_key": model_key, "model": str(model), "best": params}})
 (root / "results" / "hpo_round_robin_summary.json").write_text(
     json.dumps({{"models": summary, "rerank_model": "{_RERANK_MODEL}"}}, indent=2),
