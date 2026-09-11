@@ -30,7 +30,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from euromonitor.core.common import DATA_DIR, RESULTS, TRAIN_ROOT, F, load_config, training_cfg
+from euromonitor.core.common import (
+    DATA_DIR,
+    RESULTS,
+    F,
+    load_config,
+    training_cfg,
+)
 from euromonitor.core.schemas import (
     CanonicalRecord,
     ExtractedAttributes,
@@ -1445,14 +1451,23 @@ def run_within_brand_pipeline(
     # transform can never land in the CSVs every downstream step reads.
     check_canonical_records_frame(df_canon)
     check_gate_results_frame(results_df)
-    df_canon.to_csv(RESULTS / F["canonical_records"], index=False)
-    results_df.to_csv(RESULTS / F["gate_results"], index=False)
+    # SILENT_DROPS task 6: every CSV write goes through the atomic
+    # mechanism (tmp sibling + fsync + rename) so an interrupt can never
+    # leave a truncated artifact for downstream steps to read.
+    from euromonitor.core.manifest import atomic_write_csv
+
+    atomic_write_csv(df_canon, RESULTS / F["canonical_records"], index=False)
+    atomic_write_csv(results_df, RESULTS / F["gate_results"], index=False)
     # gate visibility: rewritten EVERY run (single source, full census)
     vis_dir = RESULTS / "logs"
     vis_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(gate_vis).sort_values(
-        ["gtin1", "gtin2"], kind="stable"
-    ).to_csv(vis_dir / "gate_visibility.csv", index=False)
+    atomic_write_csv(
+        pd.DataFrame(gate_vis).sort_values(
+            ["gtin1", "gtin2"], kind="stable"
+        ),
+        vis_dir / "gate_visibility.csv",
+        index=False,
+    )
     vis_counts = pd.DataFrame(gate_vis)["decision"].value_counts().to_dict()
     print(
         f"[gate-visibility] {len(gate_vis):,} gate calls logged -> "

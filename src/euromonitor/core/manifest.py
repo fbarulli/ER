@@ -284,10 +284,16 @@ def _check_closure(row_accounting: dict[str, Any]) -> None:
     if input_rows is None or output_rows is None:
         return  # partial accounting is allowed until the stage reports
     total_dropped = sum(int(v) for v in dropped.values())
-    if input_rows != output_rows + total_dropped:
+    # aggregation stages (data_prep canonical, dedupe tiers) may record
+    # kept-and-collapsed rows outside `dropped`: input == output +
+    # collapsed + dropped.  A collapsed bucket is a population that
+    # REMAINS represented (one row per group), never one that vanished.
+    total_collapsed = int(row_accounting.get("collapsed_same_gtin", 0) or 0)
+    if input_rows != output_rows + total_collapsed + total_dropped:
         raise ValueError(
             f"row accounting does not close: input_rows={input_rows} "
-            f"!= output_rows={output_rows} + dropped={total_dropped} "
+            f"!= output_rows={output_rows} + collapsed={total_collapsed} "
+            f"+ dropped={total_dropped} "
             f"(dropped by reason: {dropped})"
         )
 
