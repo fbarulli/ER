@@ -87,8 +87,10 @@ MAX_TRIPLES = runtime("max_triples")
 EVAL_STEPS_PER_EPOCH = runtime("eval_steps_per_epoch")
 ES_PATIENCE = runtime("es_patience")
 ES_THRESHOLD = runtime("es_threshold")
-N_TARGET_MINING = runtime("n_target_mining")
-ANN_MINING_ENABLED = bool(load_config()["mining"]["ann_enabled"])
+_ANN_MINING_CFG = load_config()["mining"]["ann"]
+N_TARGET_MINING = int(_ANN_MINING_CFG["target"])
+ANN_MINING_ENABLED = bool(_ANN_MINING_CFG["enabled"])
+MASK_TRACK_PER_EPOCH = bool(load_config()["masking"]["track_per_epoch"])
 
 # DEFAULT_CFG REMOVED (audit 2026-09-09): zero readers since the entry
 # (train.py) constructs its own cfg dict; a stale epochs=2 default here
@@ -1256,6 +1258,7 @@ def _dynamic_mask_negative_transform(
     mask_prob: float | None,
     counts: dict[int, int],
     counts_by_epoch: dict[int, dict[int, int]],
+    stats_by_epoch: dict[int, dict[str, float]],
     epoch_ref: dict[str, int],
 ):
     """Freshly mask selected label-0 anchors whenever a batch is materialized."""
@@ -1263,10 +1266,19 @@ def _dynamic_mask_negative_transform(
 
     transformed = {key: list(values) for key, values in batch.items()}
     for i, label in enumerate(batch["label"]):
-        if int(label) != 0 or rng.random() >= frac:
+        if int(label) != 0:
+            continue
+        epoch_stats = stats_by_epoch.setdefault(
+            int(epoch_ref["epoch"]),
+            {"negative_presented": 0.0, "masked_count": 0.0, "extent_sum": 0.0},
+        )
+        epoch_stats["negative_presented"] += 1.0
+        if rng.random() >= frac:
             continue
         masked, _extent = mask_text(str(batch["sentence1"][i]), mask_prob, rng)
         transformed["sentence1"][i] = masked
+        epoch_stats["masked_count"] += 1.0
+        epoch_stats["extent_sum"] += float(_extent)
         pair_id = int(batch["pair_id"][i])
         counts[pair_id] = counts.get(pair_id, 0) + 1
         epoch_counts = counts_by_epoch.setdefault(int(epoch_ref["epoch"]), {})
@@ -1576,6 +1588,19 @@ def train_one_config(
                         flush=True,
                     )
 
+            # Static masked-positive copies are present in every epoch of the
+            # training dataset. Keep their per-fold denominator beside the
+            # dynamic hard-negative mask telemetry so masking percentages are
+            # interpretable rather than just raw counts.
+            train_barcodes = set(row_bc[train_all[:, 0]].tolist()) if len(train_all) else set()
+            static_masked_pos = sum(
+                1 for item in (mask_audit or [])
+                if str(item.get("barcode", "")) in train_barcodes
+            )
+            static_positive_pct = (
+                static_masked_pos / len(train_all) if len(train_all) else 0.0
+            )
+
             # dev evaluator needs pos/neg pairs as texts
             dev_pairs = [(payload[a], payload[b]) for a, b in dev_pos]
             dev_neg_pairs = [(payload[a], payload[b]) for a, b in hard_dev]
@@ -1654,6 +1679,7 @@ def train_one_config(
                 )
                 dynamic_mask_counts: dict[int, int] = {}
                 dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
+                dynamic_mask_stats_by_epoch: dict[int, dict[str, float]] = {}
                 dynamic_epoch_ref = {"epoch": 0}
                 if dynamic_mask_hard_negatives and dynamic_mask_frac > 0:
                     import random as _random
@@ -1668,6 +1694,7 @@ def train_one_config(
                             mask_prob=dynamic_mask_prob,
                             counts=dynamic_mask_counts,
                             counts_by_epoch=dynamic_mask_counts_by_epoch,
+                            stats_by_epoch=dynamic_mask_stats_by_epoch,
                             epoch_ref=dynamic_epoch_ref,
                         )
                     )
@@ -1944,6 +1971,7 @@ def train_one_config(
                 )
                 loss_fn._dynamic_mask_counts = dynamic_mask_counts
                 loss_fn._dynamic_mask_counts_by_epoch = dynamic_mask_counts_by_epoch
+                loss_fn._dynamic_mask_stats_by_epoch = dynamic_mask_stats_by_epoch
                 loss_fn._dynamic_epoch_ref = dynamic_epoch_ref
             if hasattr(loss_fn, "set_total_negative_pairs"):
                 loss_fn.set_total_negative_pairs(len(tr_negs))
@@ -2006,6 +2034,47 @@ def train_one_config(
                 else:
                     print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
             trainer.train(resume_from_checkpoint=resume_checkpoint)
+            if MASK_TRACK_PER_EPOCH and dynamic_mask_stats_by_epoch:
+                mask_epoch_rows = []
+                for epoch, stats in sorted(dynamic_mask_stats_by_epoch.items()):
+                    presented = float(stats["negative_presented"])
+                    masked_count = float(stats["masked_count"])
+                    mask_epoch_rows.append(
+                        {
+                            "fold": fold_i,
+                            "epoch": int(epoch),
+                            "negative_presented": int(presented),
+                            "masked_count": int(masked_count),
+                            "masked_pct": masked_count / presented if presented else 0.0,
+                            "mean_realized_extent": (
+                                float(stats["extent_sum"]) / masked_count
+                                if masked_count else 0.0
+                            ),
+                            "static_positive_masked": int(static_masked_pos),
+                            "static_positive_total": int(len(train_all)),
+                            "static_positive_masked_pct": float(static_positive_pct),
+                        }
+                    )
+                from core.common import write_visibility_log
+
+                write_visibility_log(
+                    pd.DataFrame(mask_epoch_rows),
+                    f"masking_per_epoch_fold{fold_i}.csv",
+                    run_tag,
+                    sample,
+                )
+                if wandb_ctx is not None:
+                    for row in mask_epoch_rows:
+                        wandb_ctx.log_metrics(
+                            {
+                                "masking/epoch": float(row["epoch"]),
+                                "masking/dynamic_negative_presented": float(row["negative_presented"]),
+                                "masking/dynamic_negative_masked": float(row["masked_count"]),
+                                "masking/dynamic_negative_masked_pct": float(row["masked_pct"]),
+                                "masking/dynamic_negative_mean_realized_extent": float(row["mean_realized_extent"]),
+                            },
+                            step=int(row["epoch"]),
+                        )
             if hasattr(loss_fn, "pair_usage_rows_by_epoch"):
                 usage_rows = loss_fn.pair_usage_rows_by_epoch()
                 if usage_rows:

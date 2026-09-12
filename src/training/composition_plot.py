@@ -30,8 +30,8 @@ def main() -> None:
     n_pos, n_neg = len(pos), len(neg)
     n_masked = int(n_pos * float(_mask_cfg["frac"]))
     # mined in-band (sku,sku) eval pool — src/training/train lane's mining target
-    # (SSOT: training.n_target_mining; was a hardcoded 20_000 duplicate)
-    silver = int(_cfg["training"]["n_target_mining"])
+    # (SSOT: mining.ann.target; was a hardcoded 20_000 duplicate)
+    silver = int(_cfg["mining"]["ann"]["target"])
 
     # Label-semantics honesty (2026-09-12): these labels are derived from
     # deterministic gate rules over the transductive census, NOT human-

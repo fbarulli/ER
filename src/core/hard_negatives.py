@@ -233,7 +233,7 @@ def mine_hard_negatives(
     n_target: int | None = None,
     cosine_lo: float | None = None,
     cosine_hi: float | None = None,
-    exclude_conflicting: bool = True,
+    exclude_conflicting: bool | None = None,
     k: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mine hard negatives: cross-barcode, different-brand, same-macro, mid-cosine.
@@ -244,22 +244,23 @@ def mine_hard_negatives(
     conflicting-barcode label error. Returns (pairs, cosine) as an (N,2) int
     array and an (N,) float array, hardest-first.
 
-    CONFIG SSOT (owner directive: read from configs, not declared): every
-    numeric default resolves from config/training.yaml when None — seed
-    from the root seed, n_target from training.n_target_mining, the cosine
-    band from mining.band ("lo-hi"), and k (ANN block size) from mining.k.
-    Explicit values still win (training.py passes its eval band).
+    CONFIG SSOT: every miner parameter resolves from config/training.yaml when
+    omitted — target, band, k, chunk size, and conflict exclusion are all
+    under mining.ann. Explicit values still win.
     """
     from core.common import SEED, category_macros, training_cfg
 
     if seed is None:
         seed = SEED
+    ann_cfg = training_cfg().mining.ann
     if n_target is None:
-        n_target = int(training_cfg().training.n_target_mining)
+        n_target = int(ann_cfg.target)
     if k is None:
-        k = int(training_cfg().mining.k)
+        k = int(ann_cfg.k)
+    if exclude_conflicting is None:
+        exclude_conflicting = bool(ann_cfg.exclude_conflicting)
     if cosine_lo is None or cosine_hi is None:
-        lo, hi = training_cfg().mining.band.split("-")
+        lo, hi = ann_cfg.band.split("-")
         cosine_lo = float(lo) if cosine_lo is None else cosine_lo
         cosine_hi = float(hi) if cosine_hi is None else cosine_hi
     barcodes = df["barcode"].fillna("").astype(str).to_numpy()
@@ -304,8 +305,9 @@ def mine_hard_negatives(
         bc_blk = barcodes[idx]
         br_blk = brands[idx]
         bcv_blk = bc_valid[idx]
-        for c0 in range(0, n, 2048):
-            c1 = min(c0 + 2048, n)
+        chunk_size = int(ann_cfg.chunk_size)
+        for c0 in range(0, n, chunk_size):
+            c1 = min(c0 + chunk_size, n)
             sims_chunk = emb[idx[c0:c1]] @ emb[idx].T  # (c, n) cosine
             top = np.argpartition(-sims_chunk, kth=k_eff - 1, axis=1)[:, :k_eff]
             # candidate pairs from top-k membership: (local_i, local_j)

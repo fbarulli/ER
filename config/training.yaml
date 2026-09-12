@@ -20,6 +20,8 @@ masking:
   mask_prob: null     # null: per-pair extent drawn from mask_lo..mask_hi
   mask_lo: 0.20       # variable extent band, U(0.20, 0.35) per masked copy
   mask_hi: 0.30
+  track_visibility: true      # persist per-copy realized mask percentages
+  track_per_epoch: true       # persist dynamic hard-negative mask percentages
 
 # Optional remote mirror. Credentials stay in WANDB_API_KEY, never here.
 # Without that environment variable, runs remain local and MLflow is intact.
@@ -136,8 +138,6 @@ training:
   eval_steps_per_epoch: 4     # early-stop eval cadence
   dev_fraction: 0.15          # dev share OF THE TRAIN side (early stopping)
   max_triples: 5000           # triplet-lane cap (build_triplets reads this)
-  n_target_mining: 20000      # in-band eval-pair mining target
-  hardneg_k: 40               # cosine-ANN block size (mine_hard_negatives)
 
 # ── pair-selection thresholds (owner's label semantics) ─────────────────────
 # thresholds: the label rule; caps: eval-pair construction (were EDA/eda.yaml
@@ -260,12 +260,19 @@ sweep:
 
 # ── mining band for in-batch negatives ───────────────────────────────────────
 mining:
-  ann_enabled: true         # generic cosine ANN hard/eval-pair mining
-  attribute_conflict_enabled: true  # volume/pack/flavor-conflict mining
-  band: "0.45-0.80"           # "lo-hi" — parsed + validated by MiningSpec
-  attribute_band: "0.45-0.95"  # same-brand/category attribute-conflict band
-  attribute_conflict_target: 12000   # extra distinct conflict pairs to mine
-  k: 40                      # ANN candidates per block (mine_hard_negatives)
+  # Each miner has an independent switch and parameter set. Masking is
+  # configured separately above.
+  ann:
+    enabled: true
+    target: 20000             # maximum generic hard/eval pairs per lane
+    band: "0.45-0.80"        # cosine band for ANN candidates
+    k: 40                     # top ANN candidates per row
+    chunk_size: 2048          # rows per cosine-matrix chunk (OOM control)
+    exclude_conflicting: true # drop known conflicting-barcode label errors
+  attribute_conflict:
+    enabled: true
+    target: 12000             # maximum volume/pack/flavor-conflict pairs
+    band: "0.45-0.95"        # cosine band for same-brand/category conflicts
 
 # ── NER lane ───────────────────────────────────────────────────────────────
 # NER is a training consumer, so it shares this configuration contract rather

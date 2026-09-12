@@ -232,8 +232,10 @@ def _main_inner(_mlf, _wandb) -> None:
     # indexing — a missing key crashes at startup, never a silent default.
     tr = cfg["training"]
     mining_cfg = cfg["mining"]
-    ann_mining_enabled = bool(mining_cfg["ann_enabled"])
-    attribute_conflict_enabled = bool(mining_cfg["attribute_conflict_enabled"])
+    ann_cfg = mining_cfg["ann"]
+    attr_cfg = mining_cfg["attribute_conflict"]
+    ann_mining_enabled = bool(ann_cfg["enabled"])
+    attribute_conflict_enabled = bool(attr_cfg["enabled"])
     mining_enabled = ann_mining_enabled or attribute_conflict_enabled
     mask_cfg = cfg["masking"]
     split_cfg = cfg["split"]
@@ -245,7 +247,7 @@ def _main_inner(_mlf, _wandb) -> None:
     from core.common import resolve_model
 
     default_model = resolve_model("multilingual_l12")
-    default_band = str(mining_cfg["band"])
+    default_band = str(ann_cfg["band"])
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--epochs", type=int, default=int(tr["epochs"]))
@@ -287,8 +289,8 @@ def _main_inner(_mlf, _wandb) -> None:
     ap.add_argument(
         "--n-target-mining",
         type=int,
-        default=int(tr["n_target_mining"]),
-        help="mining target (SSOT: training.n_target_mining — mining.n_target was a duplicate knob, removed)",
+        default=int(ann_cfg["target"]),
+        help="ANN mining target (SSOT: mining.ann.target)",
     )
     ap.add_argument(
         "--dev-fraction",
@@ -458,6 +460,11 @@ def _main_inner(_mlf, _wandb) -> None:
             "mask_frac": args.mask_frac,
             "masking_enabled": bool(args.mask_frac > 0),
             "mask_hard_negatives": mask_hard_negatives,
+            "mask_prob": mask_prob,
+            "mask_lo": float(mask_cfg["mask_lo"]),
+            "mask_hi": float(mask_cfg["mask_hi"]),
+            "mask_track_visibility": bool(mask_cfg["track_visibility"]),
+            "mask_track_per_epoch": bool(mask_cfg["track_per_epoch"]),
             "train_frac": args.train_frac,
             "batch_size_cuda": tr["batch_size_cuda"],
             "sample": args.sample or "full",
@@ -465,8 +472,10 @@ def _main_inner(_mlf, _wandb) -> None:
             "n_canonicals": s["n_canonicals"],
             "n_gate_hard_negatives": s["n_neg_gate_rows"],
             "ann_mining_enabled": ann_mining_enabled,
+            "ann_target": int(ann_cfg["target"]),
+            "ann_k": int(ann_cfg["k"]),
             "attribute_conflict_enabled": attribute_conflict_enabled,
-            "attribute_conflict_target": int(mining_cfg["attribute_conflict_target"]),
+            "attribute_conflict_target": int(attr_cfg["target"]),
         }
     )
     print(
@@ -529,7 +538,8 @@ def _main_inner(_mlf, _wandb) -> None:
         from core.common import write_visibility_log as _wvl
 
         _ma = _pd.DataFrame(mask_audit)
-        _wvl(_ma, "mask_visibility.csv", run_tag, bool(args.sample))
+        if bool(mask_cfg["track_visibility"]):
+            _wvl(_ma, "mask_visibility.csv", run_tag, bool(args.sample))
         if hard_negative_mask_audit:
             _wvl(
                 _pd.DataFrame(hard_negative_mask_audit),
@@ -646,16 +656,14 @@ def _main_inner(_mlf, _wandb) -> None:
     if attribute_conflict_enabled:
         from core.hard_negatives import mine_attribute_conflict_negatives
 
-        _attr_lo, _attr_hi = (
-            float(x) for x in training_cfg().mining.attribute_band.split("-")
-        )
+        _attr_lo, _attr_hi = (float(x) for x in attr_cfg["band"].split("-"))
         _attr_neg, _attr_scores = mine_attribute_conflict_negatives(
             df,
             payload,
             row_bc,
             emb0,
             existing=neg,
-            n_target=int(training_cfg().mining.attribute_conflict_target),
+            n_target=int(attr_cfg["target"]),
             cosine_lo=_attr_lo,
             cosine_hi=_attr_hi,
         )

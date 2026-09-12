@@ -228,6 +228,8 @@ class MaskingSpec(BaseModel):
     mask_prob: float | None = Field(default=None, ge=0.0, le=1.0)
     mask_lo: float = Field(ge=0.0, lt=1.0)
     mask_hi: float = Field(gt=0.0, le=1.0)
+    track_visibility: bool
+    track_per_epoch: bool
 
     @model_validator(mode="after")
     def _band_ordered(self) -> MaskingSpec:
@@ -276,8 +278,6 @@ class TrainingSpec(BaseModel):
     eval_steps_per_epoch: int = Field(ge=1)
     dev_fraction: float = Field(gt=0.0, lt=1.0)
     max_triples: int = Field(ge=1)
-    n_target_mining: int = Field(ge=1)
-    hardneg_k: int = Field(ge=1)
 
 
 class PairsSpec(BaseModel):
@@ -429,31 +429,62 @@ class BandsSpec(BaseModel):
     rerank_band: BandSpec
 
 
-class MiningSpec(BaseModel):
-    """Hard-negative mining knobs (config/training.yaml mining:) — `band` is
-    the in-batch mining band string "lo-hi"; `k` is the ANN block size."""
+class AnnMiningSpec(BaseModel):
+    """Generic cosine-ANN miner knobs."""
 
     model_config = ConfigDict(extra="forbid")
 
-    ann_enabled: bool
-    attribute_conflict_enabled: bool
+    enabled: bool
+    target: int = Field(ge=0)
     band: str
-    attribute_band: str
-    attribute_conflict_target: int = Field(ge=0)
     k: int = Field(ge=1)
+    chunk_size: int = Field(ge=1)
+    exclude_conflicting: bool
 
-    @field_validator("band", "attribute_band")
+    @field_validator("band")
+    @classmethod
+    def _band_parses(cls, v: str) -> str:
+        try:
+            lo, hi = (float(x) for x in v.split("-"))
+        except ValueError as e:
+            raise ValueError(f'mining.ann.band must be "lo-hi" floats, got {v!r}') from e
+        if not lo < hi:
+            raise ValueError(f"mining.ann.band must satisfy lo < hi, got {v!r}")
+        return v
+
+
+class AttributeConflictMiningSpec(BaseModel):
+    """Same-brand/category volume, pack, or flavor conflict miner knobs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    target: int = Field(ge=0)
+    band: str
+
+    @field_validator("band")
     @classmethod
     def _band_parses(cls, v: str) -> str:
         try:
             lo, hi = (float(x) for x in v.split("-"))
         except ValueError as e:
             raise ValueError(
-                f'mining.band must be "lo-hi" floats, got {v!r}'
+                f'mining.attribute_conflict.band must be "lo-hi" floats, got {v!r}'
             ) from e
         if not lo < hi:
-            raise ValueError(f"mining.band must satisfy lo < hi, got {v!r}")
+            raise ValueError(
+                f"mining.attribute_conflict.band must satisfy lo < hi, got {v!r}"
+            )
         return v
+
+
+class MiningSpec(BaseModel):
+    """Per-method hard-negative mining configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ann: AnnMiningSpec
+    attribute_conflict: AttributeConflictMiningSpec
 
 
 class HpoGridRowSpec(BaseModel):
