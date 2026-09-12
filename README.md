@@ -1,3 +1,5 @@
+https://fbarulli.github.io/ER/euromonitor-lane.workflow.html
+
 # EuromonitoR
 
 ### Entity Matching - So What, Who Cares?
