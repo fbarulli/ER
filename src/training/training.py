@@ -437,11 +437,20 @@ def _make_loss(
             if margin is not None
             else _SSOT_MARGIN
         )
-        return _tracking_contrastive_loss(model, margin=m)
+        return _tracking_contrastive_loss(
+            model,
+            margin=m,
+            structured_feature_weight=structured_feature_weight,
+        )
     return losses.TripletLoss(model)
 
 
-def _tracking_contrastive_loss(model, *, margin: float):
+def _tracking_contrastive_loss(
+    model,
+    *,
+    margin: float,
+    structured_feature_weight: float,
+):
     """Return OnlineContrastiveLoss with selection/backprop telemetry.
 
     The implementation preserves the installed loss's hard-pair selection
