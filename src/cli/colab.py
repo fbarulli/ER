@@ -46,6 +46,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 # AUDIT FIX (round 2 F15, round 3): RESULTS/DATA come from the config SSOT
@@ -940,12 +941,18 @@ def run_hpo(
         f"[run] round-robin HPO (mode={mode}, model_workers={_HPO_WORKERS}, "
         f"trial_jobs={trial_jobs}, resume={resume}) ..."
     )
+    run_id = (
+        datetime.now(timezone.utc).strftime("hpo_%Y%m%dT%H%M%SZ")
+        + "_" + uuid.uuid4().hex[:8]
+    )
     resume_pointers = _hpo_resume_pointer_payload() if resume else {}
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import concurrent.futures, json, os, pathlib, shutil, subprocess, sys
 from datetime import datetime, timezone
 from core.common import F, hpo_cfg, resolve_model
 root = pathlib.Path("{REMOTE_ROOT}")
+hpo_root = root / "results" / "hpo_runs" / "{run_id}"
+hpo_root.mkdir(parents=True, exist_ok=False)
 base = [sys.executable, "-u", "-m", "training.train", "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot"]
 hpo_base = list(base)
 hpo_base.extend(["--n-jobs", str({trial_jobs})])
@@ -986,7 +993,7 @@ if {resume!r}:
     print(f"[resume-preflight] restored {{len(pointers)}} HPO pointer(s)", flush=True)
 
 def run_logged(args, label, extra_env=None):
-    log_path = root / "results" / "logs" / (
+    log_path = hpo_root / "logs" / (
         f"colab_{{label}}_{{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}}.log"
     )
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1018,9 +1025,7 @@ def run_logged(args, label, extra_env=None):
     return log_path
 
 def worker_setup(model_key):
-    if mode != "parallel_same_vm":
-        return root / "results", {{}}
-    out = root / "results" / "hpo_workers" / model_key
+    out = hpo_root / "models" / model_key
     out.mkdir(parents=True, exist_ok=True)
     for name in (F["canonical_records"], F["gate_results"]):
         source, target = root / "results" / name, out / name
@@ -1030,7 +1035,7 @@ def worker_setup(model_key):
     return out, {{
         "EUROMONITOR_RESULTS_DIR": str(out),
         "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
-        "WANDB_RUN_NAME": f"hpo_{{model_key}}",
+        "WANDB_RUN_NAME": f"{run_id}_hpo_{{model_key}}",
         "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1",
         "EUROMONITOR_HPO_RETENTION_MODE": "1",
     }}
@@ -1060,22 +1065,21 @@ def run_model(model_key):
     print(f"== FINAL {{model_key}}: selected dev config -> held-out test + rerank", flush=True)
     final_env = dict(env)
     if final_env:
-        final_env["WANDB_RUN_NAME"] = f"final_{{model_key}}"
+        final_env["WANDB_RUN_NAME"] = f"{run_id}_final_{{model_key}}"
     run_logged(final, f"final_{{model_key}}", final_env)
     return {{"model_key": model_key, "model": str(model), "best": params,
-            "results_dir": str(out.relative_to(root / "results"))
-            if mode == "parallel_same_vm" else "results"}}
+            "results_dir": str(out.relative_to(root / "results"))}}
 
 if mode == "parallel_same_vm":
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(model_keys))) as pool:
         summary = [future.result() for future in [pool.submit(run_model, key) for key in model_keys]]
 else:
     summary = [run_model(key) for key in model_keys]
-(root / "results" / "hpo_round_robin_summary.json").write_text(
-    json.dumps({{"models": summary, "rerank_model": "{_RERANK_MODEL}"}}, indent=2),
+(hpo_root / "hpo_round_robin_summary.json").write_text(
+    json.dumps({{"run_id": "{run_id}", "models": summary, "rerank_model": "{_RERANK_MODEL}"}}, indent=2),
     encoding="utf-8",
 )
-print(json.dumps({{"hpo_round_robin": summary, "rerank_model": "{_RERANK_MODEL}"}}, sort_keys=True), flush=True)
+print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank_model": "{_RERANK_MODEL}"}}, sort_keys=True), flush=True)
 """
     try:
         run_colab_exec_stream(SESSION, script, timeout=8 * 3600 * 3, log_name="training_hpo")
