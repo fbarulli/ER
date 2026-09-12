@@ -41,8 +41,20 @@ def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
     from pipeline import extract_all
 
     extracted = extract_all(str(title), str(attributes))
+    volume_ml = extracted.get("volume_ml")
+    # Zero is the extractor's sentinel for "no volume mention".  It must
+    # remain unknown here; turning it into {0.0} makes every known canonical
+    # volume look like a real conflict.
+    try:
+        volume = (
+            {float(volume_ml)}
+            if volume_ml is not None and float(volume_ml) > 0
+            else set()
+        )
+    except (TypeError, ValueError):
+        volume = set()
     return {
-        "volume": {float(extracted.get("volume_ml") or 0.0)},
+        "volume": volume,
         "pack": {int(extracted.get("pack_qty") or 1)},
         "flavor": str(extracted.get("flavor") or "").strip().lower(),
     }
