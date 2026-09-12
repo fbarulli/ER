@@ -294,6 +294,125 @@ def _parse_remote_json(output: str) -> dict:
     raise RuntimeError(f"remote log probe returned no JSON: {output[-1000:]}")
 
 
+def _download_stage_log(remote_log: str, remote_status: str, stage: str) -> Path | None:
+    """Best-effort copy of a persistent remote stage log before teardown."""
+    local_dir = TRAIN_ROOT / "remote_stage_logs"
+    local_dir.mkdir(parents=True, exist_ok=True)
+    local_log = local_dir / Path(remote_log).name
+    try:
+        colab("download", "-s", SESSION, remote_log, str(local_log), timeout=600)
+        status_path = local_log.with_suffix(local_log.suffix + ".status")
+        colab("download", "-s", SESSION, remote_status, str(status_path), timeout=600)
+        print(f"[{stage}] persisted remote log -> {local_log}", flush=True)
+        return local_log
+    except BaseException as exc:
+        print(
+            f"[{stage}] could not download remote stage log before teardown: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+
+
+def run_detached_stage(stage: str, command_expr: str, timeout: int) -> None:
+    """Run a VM stage outside the notebook kernel and stream its durable log."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    remote_log = f"{REMOTE_ROOT}/results/logs/colab_stages/{stage}_{stamp}.log"
+    remote_status = f"{remote_log}.status"
+    remote_pid = f"{remote_log}.pid"
+    launch = _BOOTSTRAP + f"""
+import json, os, pathlib, shlex, subprocess, sys
+log_path = pathlib.Path({remote_log!r})
+status_path = pathlib.Path({remote_status!r})
+pid_path = pathlib.Path({remote_pid!r})
+log_path.parent.mkdir(parents=True, exist_ok=True)
+running_pid = None
+if status_path.is_file():
+    print(json.dumps({{"pid": None, "log": str(log_path), "status": str(status_path)}}), flush=True)
+else:
+    try:
+        candidate = int(pid_path.read_text(encoding="utf-8"))
+        os.kill(candidate, 0)
+        running_pid = candidate
+    except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError):
+        pass
+    if running_pid is None:
+        status_path.unlink(missing_ok=True)
+        pid_path.unlink(missing_ok=True)
+        command = ["timeout", "--signal=TERM", "--kill-after=60", str({timeout})] + {command_expr}
+        command_text = " ".join(shlex.quote(part) for part in command)
+        wrapped = (
+            "echo '[stage] started'; "
+            + command_text
+            + "; rc=$?; echo '[stage] exited rc='$rc; "
+            + "printf '%s\\n' \\\"$rc\\\" > "
+            + shlex.quote(str(status_path))
+        )
+        with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+            child = subprocess.Popen(
+                ["/bin/bash", "-lc", wrapped],
+                cwd={REMOTE_ROOT!r},
+                env={{**os.environ, "PYTHONUNBUFFERED": "1"}},
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        pid_path.write_text(str(child.pid), encoding="utf-8")
+        running_pid = child.pid
+print(json.dumps({{"pid": running_pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
+"""
+    print(f"[{stage}] starting detached remote stage; durable log={remote_log}", flush=True)
+    try:
+        launched = _parse_remote_json(
+            run_colab_exec_capture(SESSION, launch, timeout=120)
+        )
+        print(f"[{stage}] remote pid={launched.get('pid')}", flush=True)
+        offset = 0
+        while True:
+            probe = _BOOTSTRAP + f"""
+import json, pathlib
+log_path = pathlib.Path({remote_log!r})
+status_path = pathlib.Path({remote_status!r})
+offset = {offset}
+data = b""
+if log_path.is_file():
+    with log_path.open("rb") as handle:
+        handle.seek(offset)
+        data = handle.read()
+payload = {{
+    "offset": offset + len(data),
+    "chunk": data.decode("utf-8", errors="replace"),
+    "done": status_path.is_file(),
+    "returncode": status_path.read_text(encoding="utf-8").strip() if status_path.is_file() else None,
+}}
+print(json.dumps(payload), flush=True)
+"""
+            payload = _parse_remote_json(
+                run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS)
+            )
+            offset = int(payload["offset"])
+            if payload["chunk"]:
+                for line in str(payload["chunk"]).splitlines():
+                    print(f"[{stage}] {line}", flush=True)
+            if payload["done"]:
+                local_log = _download_stage_log(remote_log, remote_status, stage)
+                returncode = int(payload["returncode"])
+                if returncode:
+                    raise RuntimeError(
+                        f"remote stage {stage} failed (rc={returncode}); "
+                        f"remote log={remote_log}; local log={local_log}"
+                    )
+                print(f"[{stage}] completed successfully", flush=True)
+                return
+            time.sleep(_LOG_POLL_SECONDS)
+    except BaseException as exc:
+        local_log = _download_stage_log(remote_log, remote_status, stage)
+        raise RuntimeError(
+            f"remote stage {stage} lost its control connection; "
+            f"remote log={remote_log}; local log={local_log}; cause={exc}"
+        ) from exc
+
+
 def _resume_pointer_payload(run_id: str, workers: int) -> dict[str, dict[str, str]]:
     """Load locally mirrored DVC pointers without exposing cache internals."""
     payload: dict[str, dict[str, str]] = {}
@@ -745,19 +864,17 @@ print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r}, "at", root)
 
 def install_deps() -> None:
     print("[deps] installing dependencies on the VM ...")
-    # pip via sys.executable is guaranteed on a Colab VM (uv is NOT installed
-    # there by default); streaming shows install progress live.
-    # datasets + accelerate + transformers for the HF Trainer-based training
-    # lane; sentence-transformers pins its own transformers requirement.
-    install_script = (
-        "import sys, subprocess\n"
-        "subprocess.run([sys.executable, '-m', 'pip', 'install',\n"
-        "                'sentence-transformers', 'datasets', 'accelerate',\n"
-        "                'evaluate', 'scikit-learn', 'pandas', 'numpy',\n"
-        "                'mlflow', 'optuna', 'psycopg[binary]', 'wandb', 'dvc', 'dagshub'], check=True)\n"
-        "print('deps installed')"
+    # Run pip outside the notebook kernel. A kernel disconnect can interrupt
+    # the control channel, but the detached process keeps writing a durable
+    # log/status pair that the launcher can retrieve before teardown.
+    run_detached_stage(
+        "00_deps",
+        "[sys.executable, '-m', 'pip', 'install', "
+        "'sentence-transformers', 'datasets', 'accelerate', 'evaluate', "
+        "'scikit-learn', 'pandas', 'numpy', 'mlflow', 'optuna', "
+        "'psycopg[binary]', 'wandb', 'dvc', 'dagshub']",
+        timeout=900,
     )
-    run_colab_exec_stream(SESSION, install_script, timeout=900, log_name="00_deps", retry_safe=True)
 
 
 def log_gpu_profile() -> None:
