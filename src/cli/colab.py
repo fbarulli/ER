@@ -725,7 +725,7 @@ for number in range(1, {workers} + 1):
     wandb_dir.mkdir(parents=True, exist_ok=True)
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_DIR": str(wandb_dir),
-           "WANDB_RUN_NAME": f"train_{{worker_label}}",
+           "WANDB_RUN_NAME": worker_label,
            "EUROMONITOR_MINING_PROFILE": worker_profile,
            "EUROMONITOR_REMOTE_TRAINING": "1"}}
     live_status_path.write_text(json.dumps({{
@@ -1458,7 +1458,7 @@ wandb_dir.mkdir(parents=True, exist_ok=True)
 env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
        "EUROMONITOR_RESULTS_DIR": str(out), "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
        "WANDB_DIR": str(wandb_dir),
-       "WANDB_RUN_NAME": {f"train_{run_label}" if run_label else "train_worker_1"!r},
+       "WANDB_RUN_NAME": {run_label if run_label else "worker_1"!r},
        "EUROMONITOR_MINING_PROFILE": {run_label if run_label in ("mining_enabled", "masking_only") else ""!r},
        "EUROMONITOR_REMOTE_TRAINING": "1"}}
 command = [sys.executable, *{args!r}]
