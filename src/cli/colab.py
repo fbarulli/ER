@@ -147,7 +147,14 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
         raise
 
 
-def run_colab_exec_stream(session: str, script: str, timeout: int | None = None, log_name: str | None = None) -> None:
+def run_colab_exec_stream(
+    session: str,
+    script: str,
+    timeout: int | None = None,
+    log_name: str | None = None,
+    *,
+    retry_safe: bool = False,
+) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
 
     log_name labels a stage in the root training.log transcript. The file is
@@ -157,41 +164,54 @@ def run_colab_exec_stream(session: str, script: str, timeout: int | None = None,
     if _live_log and log_name:
         print(f"\n===== {log_name} =====", flush=True)
 
-    def stream_output(pipe, prefix):
+    def stream_output(pipe, prefix, captured):
         for line in iter(pipe.readline, ''):
+            captured.append(line)
             print(f"{prefix} {line.rstrip()}", flush=True)
         pipe.close()
 
-    process = subprocess.Popen(
-        # colab exec has its own 30-second kernel-client timeout.  It must
-        # match the caller's legitimate lane timeout; otherwise a live VM
-        # computation is reported as failed after 30 seconds.
-        ["colab", "exec", "-s", session, "--timeout", str(timeout or 30)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,  # line-buffered
-    )
-
-    out_thread = threading.Thread(target=stream_output, args=(process.stdout, "[out]"))
-    err_thread = threading.Thread(target=stream_output, args=(process.stderr, "[err]"))
-    out_thread.start()
-    err_thread.start()
-
-    process.stdin.write(script)
-    process.stdin.close()
-
-    try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        print(f"\n[error] Execution timed out after {timeout}s", file=sys.stderr)
-        raise
-
-    out_thread.join()
-    err_thread.join()
-    if process.returncode != 0:
+    attempts = _PROBE_RETRIES if retry_safe else 1
+    for attempt in range(1, attempts + 1):
+        process = subprocess.Popen(
+            # colab exec has its own 30-second kernel-client timeout.  It must
+            # match the caller's legitimate lane timeout; otherwise a live VM
+            # computation is reported as failed after 30 seconds.
+            ["colab", "exec", "-s", session, "--timeout", str(timeout or 30)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        captured: list[str] = []
+        out_thread = threading.Thread(target=stream_output, args=(process.stdout, "[out]", captured))
+        err_thread = threading.Thread(target=stream_output, args=(process.stderr, "[err]", captured))
+        out_thread.start()
+        err_thread.start()
+        assert process.stdin is not None
+        process.stdin.write(script)
+        process.stdin.close()
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            print(f"\n[error] Execution timed out after {timeout}s", file=sys.stderr)
+            raise
+        out_thread.join()
+        err_thread.join()
+        if process.returncode == 0:
+            return
+        output = "".join(captured)
+        transient = "connection was lost" in output.lower()
+        if retry_safe and transient and attempt < attempts:
+            delay = _PROBE_RETRY_BACKOFF_SECONDS * attempt
+            print(
+                f"[stream] transient kernel connection loss ({attempt}/{attempts}); "
+                f"retrying safe stage in {delay}s",
+                flush=True,
+            )
+            time.sleep(delay)
+            continue
         raise RuntimeError(
             f"Remote execution failed with return code {process.returncode}; "
             "see the timestamped Colab log for the full traceback"
@@ -703,7 +723,7 @@ for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
 print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r}, "at", root)
 """
-    run_colab_exec_stream(SESSION, script, timeout=600, log_name="00_checkout")
+    run_colab_exec_stream(SESSION, script, timeout=600, log_name="00_checkout", retry_safe=True)
 
 
 def install_deps() -> None:
@@ -720,7 +740,7 @@ def install_deps() -> None:
         "                'mlflow', 'optuna', 'wandb', 'dvc', 'dagshub'], check=True)\n"
         "print('deps installed')"
     )
-    run_colab_exec_stream(SESSION, install_script, timeout=900, log_name="00_deps")
+    run_colab_exec_stream(SESSION, install_script, timeout=900, log_name="00_deps", retry_safe=True)
 
 
 def log_gpu_profile() -> None:
@@ -733,7 +753,7 @@ if torch.cuda.is_available():
 else:
     print({'hardware': 'cpu', 'threads': torch.get_num_threads(), 'torch': torch.__version__}, flush=True)
 """
-    run_colab_exec_stream(SESSION, script, timeout=120, log_name="runtime_profile")
+    run_colab_exec_stream(SESSION, script, timeout=120, log_name="runtime_profile", retry_safe=True)
 
 
 _BOOTSTRAP = f"""
@@ -828,7 +848,7 @@ if missing:
 for path in required:
     print(f"[data] {{path}}: {{path.stat().st_size:,}} bytes", flush=True)
 """
-    run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check")
+    run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)
 
 
 def run_train(
