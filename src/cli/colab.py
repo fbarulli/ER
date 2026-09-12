@@ -632,6 +632,7 @@ import base64, json, os, pathlib, shutil, shlex, subprocess, sys, time, tracebac
 from core.common import F
 root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
+run_id = base.name.removeprefix("concurrent_train_")
 base.mkdir(parents=True, exist_ok={bool(resume_run)!r})
 command = " ".join(shlex.quote(part) for part in [sys.executable, *{args!r}])
 resume_pointers = {resume_pointers!r}
