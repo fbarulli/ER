@@ -103,8 +103,8 @@ training:
   architecture: "two_tower"  # default: shared-weight SKU/canonical retrieval towers
   structured_features:
     enabled: true
-    append_to_text: true
-    feed_to_loss: true
+    append_to_text: true  # intentional text channel for normalized volume/pack
+    feed_to_loss: true    # intentional second structured channel in the loss
     embedding_weight: 0.35
     volume_scale_ml: 10000.0
     pack_scale: 100.0

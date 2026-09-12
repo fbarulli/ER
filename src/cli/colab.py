@@ -863,13 +863,20 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
         local_dir = local_base / f"worker_{number}"
         for name in _list_remote(remote_dir):
             remote = Path(name)
+            rel = remote.relative_to(remote_dir)
+            # Checkpoints are already pushed and verified through DVC at each
+            # save event. Pulling every safetensors/optimizer snapshot again
+            # here multiplies transfer and local disk use per worker; the
+            # result bundle only needs the reports, scores, logs, and DVC
+            # pointers. Resume pointers are mirrored during live polling.
+            if "_checkpoints" in rel.parts or ".resume" in rel.parts:
+                continue
             if remote.suffix not in {
                 ".csv", ".json", ".log", ".png", ".safetensors", ".bin",
                 ".pt", ".pth", ".npz", ".pkl", ".pickle", ".dvc",
                 ".yaml", ".yml", ".txt", ".html", ".db", ".sqlite3",
             }:
                 continue
-            rel = remote.relative_to(remote_dir)
             local = local_dir / rel
             local.parent.mkdir(parents=True, exist_ok=True)
             colab("download", "-s", SESSION, name, str(local), timeout=600)

@@ -17,6 +17,43 @@ import pandas as pd
 from core.hard_negatives import calibrated_ann_band, mine_hard_negatives, pairs_in_set
 
 
+def encode_finetuned_embeddings(
+    model,
+    payload: list[str],
+    structured_features: np.ndarray | None,
+    *,
+    batch_size: int,
+    max_seq_length: int,
+) -> np.ndarray:
+    """Encode the supplied payload with the live fine-tuned model exactly once."""
+    model.max_seq_length = max_seq_length
+    emb = model.encode(
+        payload,
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
+    emb = np.asarray(emb, dtype=np.float32)
+    if structured_features is not None:
+        from core.common import load_config
+        from core.structured_features import fuse_numpy
+
+        sf_cfg = load_config()["training"]["structured_features"]
+        sf_weight = (
+            float(sf_cfg["embedding_weight"])
+            if bool(sf_cfg["enabled"]) and bool(sf_cfg["feed_to_loss"])
+            else 0.0
+        )
+        emb = fuse_numpy(emb, np.asarray(structured_features), sf_weight)
+    if emb.ndim != 2 or emb.shape[0] != len(payload):
+        raise RuntimeError(
+            "fine-tuned ANN embedding shape mismatch: "
+            f"{emb.shape} != ({len(payload)}, d)"
+        )
+    return emb
+
+
 def refresh_finetuned_ann(
     model,
     df: pd.DataFrame,
@@ -40,6 +77,7 @@ def refresh_finetuned_ann(
     batch_size: int,
     max_seq_length: int,
     exclude_conflicting: bool,
+    embeddings: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict[str, object]]:
     """Mine from the current fine-tuned model and rewrite one audit CSV.
 
@@ -55,28 +93,23 @@ def refresh_finetuned_ann(
             "fine-tuned ANN refresh requires payload rows covering the catalog"
         )
 
-    # This is the only encoding in this path: the caller supplies the already
-    # fine-tuned model. No model ID, cache, or zero-shot encoder is accepted.
-    model.max_seq_length = max_seq_length
-    emb = model.encode(
-        payload[: len(df)],
-        batch_size=batch_size,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-    )
-    emb = np.asarray(emb, dtype=np.float32)
-    if structured_features is not None:
-        from core.common import load_config
-        from core.structured_features import fuse_numpy
-
-        sf_cfg = load_config()["training"]["structured_features"]
-        sf_weight = (
-            float(sf_cfg["embedding_weight"])
-            if bool(sf_cfg["enabled"]) and bool(sf_cfg["feed_to_loss"])
-            else 0.0
+    # The caller may provide this checkpoint's single encoding so ANN and
+    # attribute-conflict miners operate on identical fine-tuned embeddings.
+    emb = (
+        np.asarray(embeddings, dtype=np.float32)
+        if embeddings is not None
+        else encode_finetuned_embeddings(
+            model,
+            payload[: len(df)],
+            structured_features[: len(df)] if structured_features is not None else None,
+            batch_size=batch_size,
+            max_seq_length=max_seq_length,
         )
-        emb = fuse_numpy(emb, np.asarray(structured_features)[: len(df)], sf_weight)
+    )
+    if emb.shape[0] < len(df):
+        raise RuntimeError(
+            f"fine-tuned ANN embeddings cover {emb.shape[0]} rows; need {len(df)}"
+        )
 
     broad_target = max(int(target), 1) * max(int(candidate_multiplier), 1)
     broad_pairs, broad_scores = mine_hard_negatives(
@@ -149,7 +182,8 @@ def refresh_finetuned_ann(
         "configured_band_hi": float(configured_band[1]),
         "band_mode": band_mode,
         "refreshed_count": float(len(refreshed)),
+        "scores": refreshed_scores.tolist(),
     }
 
 
-__all__ = ["refresh_finetuned_ann"]
+__all__ = ["encode_finetuned_embeddings", "refresh_finetuned_ann"]

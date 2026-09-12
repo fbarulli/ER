@@ -109,8 +109,12 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
             target = verify / pointer.relative_to(source)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(pointer, target)
-        pointer_args = [
-            str(pointer.relative_to(source))
+        # Pull pointers one at a time. A single argv containing every result
+        # pointer grows with checkpoint/report count and can exceed the
+        # process argument limit on large runs; individual pulls also make
+        # the failing pointer explicit in the traceback.
+        pointers = [
+            pointer
             for pointer in sorted(source.rglob("*.dvc"))
             if (
                 pointer.is_file()
@@ -118,7 +122,8 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
                 and "_checkpoints" not in pointer.parts
             )
         ]
-        _run(["dvc", "pull", "--force", *pointer_args], verify)
+        for pointer in pointers:
+            _run(["dvc", "pull", "--force", str(pointer.relative_to(source))], verify)
         result = []
         for original in tracked:
             restored = verify / original.relative_to(source)

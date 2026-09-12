@@ -92,14 +92,6 @@ N_TARGET_MINING = int(_ANN_MINING_CFG["target"])
 ANN_MINING_ENABLED = bool(_ANN_MINING_CFG["enabled"])
 MASK_TRACK_PER_EPOCH = bool(load_config()["masking"]["track_per_epoch"])
 TRACK_DATAPOINT_USAGE = bool(load_config()["training"]["track_datapoint_usage"])
-_STRUCTURED_FEATURE_CFG = load_config()["training"]["structured_features"]
-_STRUCTURED_FEATURE_LOSS_WEIGHT = (
-    float(_STRUCTURED_FEATURE_CFG["embedding_weight"])
-    if bool(_STRUCTURED_FEATURE_CFG["enabled"])
-    and bool(_STRUCTURED_FEATURE_CFG["feed_to_loss"])
-    else 0.0
-)
-
 # Keep the coverage artifact explicit about every population that can enter
 # the training/evaluation lane, including configured-but-empty populations.
 KNOWN_DATAPOINT_POPULATIONS = (
@@ -416,7 +408,13 @@ def _youden_thr(scores: np.ndarray, labels: np.ndarray) -> float:
     return float(scores[order][k])
 
 
-def _make_loss(model, loss: str, margin: float | None = None):
+def _make_loss(
+    model,
+    loss: str,
+    *,
+    margin: float | None = None,
+    structured_feature_weight: float,
+):
     """Loss factory (SSOT knobs: training.loss / training.contrastive_margin).
 
     mnrl  — MultipleNegativesRankingLoss: (anchor, positive[, negative])
@@ -503,7 +501,7 @@ def _tracking_contrastive_loss(model, *, margin: float):
 
             structured = self._batch_structured_features
             self._batch_structured_features = None
-            if structured is not None and _STRUCTURED_FEATURE_LOSS_WEIGHT > 0:
+            if structured is not None and structured_feature_weight > 0:
                 from core.structured_features import fuse_torch
 
                 pair_features = structured.to(device=embeddings[0].device)
@@ -511,7 +509,7 @@ def _tracking_contrastive_loss(model, *, margin: float):
                     fuse_torch(
                         embedding,
                         pair_features[:, side, :],
-                        _STRUCTURED_FEATURE_LOSS_WEIGHT,
+                        structured_feature_weight,
                     )
                     for side, embedding in enumerate(embeddings)
                 ]
@@ -1117,6 +1115,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         run_tag,
         batch_size,
         max_seq_length,
+        model,
         wandb_ctx,
     ):
         self.df = df
@@ -1131,21 +1130,31 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         self.run_tag = str(run_tag)
         self.batch_size = int(batch_size)
         self.max_seq_length = int(max_seq_length)
+        self.model = model
         self.wandb_ctx = wandb_ctx
         self.last_epoch = 0
 
-    def on_save(self, args, state, control, model=None, **kwargs):
-        if not state.is_world_process_zero or model is None:
+    def on_save(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
             return control
+        model = self.model
+        if model is None:
+            raise RuntimeError(
+                "FineTunedAnnRefreshCallback was created without the live model"
+            )
         ann_cfg = load_config()["mining"]["ann"]
-        if not bool(ann_cfg["refresh_enabled"]):
+        attr_cfg = load_config()["mining"]["attribute_conflict"]
+        if not bool(ann_cfg["refresh_enabled"]) and not bool(attr_cfg["enabled"]):
             return control
         epoch = float(state.epoch or 0.0)
         cadence = int(ann_cfg["refresh_every_epochs"])
         completed_epoch = int(np.floor(epoch + 1e-8))
         if completed_epoch < self.last_epoch + cadence:
             return control
-        from training.ann_refresh import refresh_finetuned_ann
+        from training.ann_refresh import (
+            encode_finetuned_embeddings,
+            refresh_finetuned_ann,
+        )
 
         lo, hi = (float(x) for x in str(ann_cfg["band"]).split("-"))
         qlo, qhi = (
@@ -1156,6 +1165,13 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             / "logs"
             / self.run_tag
             / f"ann_refresh_fold{self.fold_i}_step{state.global_step}.csv"
+        )
+        fine_tuned_emb = encode_finetuned_embeddings(
+            model,
+            self.payload,
+            self.structured_features,
+            batch_size=self.batch_size,
+            max_seq_length=self.max_seq_length,
         )
         pairs, stats = refresh_finetuned_ann(
             model,
@@ -1179,7 +1195,124 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             batch_size=self.batch_size,
             max_seq_length=self.max_seq_length,
             exclude_conflicting=bool(ann_cfg["exclude_conflicting"]),
+            embeddings=fine_tuned_emb,
         )
+        from core.hard_negatives import mine_attribute_conflict_negatives
+
+        attr_lo, attr_hi = (float(x) for x in str(attr_cfg["band"]).split("-"))
+        if bool(attr_cfg["enabled"]):
+            attr_pairs, attr_scores = mine_attribute_conflict_negatives(
+                self.df,
+                self.payload,
+                self.row_barcodes,
+                fine_tuned_emb,
+                existing=self.existing,
+                n_target=int(attr_cfg["target"]),
+                cosine_lo=attr_lo,
+                cosine_hi=attr_hi,
+            )
+        else:
+            attr_pairs = np.empty((0, 2), dtype=int)
+            attr_scores = np.empty((0,), dtype=float)
+        if len(attr_pairs):
+            attr_keep = pairs_in_set(
+                attr_pairs, self.row_barcodes, set(self.train_barcodes)
+            )
+            attr_pairs, attr_scores = attr_pairs[attr_keep], attr_scores[attr_keep]
+
+        # ANN and attribute-conflict candidates share the reserved dynamic
+        # negative slots. Allocate those slots by configured target share,
+        # then fill any unused capacity from the remaining highest scores.
+        capacity = len(self.slot_ids)
+        candidates: dict[str, list[tuple[float, int, int]]] = {
+            "ann_finetuned": [
+                (float(score), int(a), int(b))
+                for (a, b), score in zip(pairs.tolist(), stats.get("scores", []))
+            ],
+            "attribute_conflict": [
+                (float(score), int(a), int(b))
+                for (a, b), score in zip(attr_pairs.tolist(), attr_scores.tolist())
+            ],
+        }
+        # refresh_finetuned_ann intentionally returns only pairs plus summary;
+        # recover ANN scores from the audit output so source allocation remains
+        # deterministic without encoding the model a second time.
+        if candidates["ann_finetuned"] and not stats.get("scores"):
+            ann_audit = pd.read_csv(audit_path)
+            candidates["ann_finetuned"] = [
+                (float(row.cosine), int(row.row_a), int(row.row_b))
+                for row in ann_audit.itertuples(index=False)
+            ]
+        for source in candidates:
+            candidates[source].sort(reverse=True)
+        target_by_source = {
+            "ann_finetuned": int(ann_cfg["target"])
+            if bool(ann_cfg["refresh_enabled"])
+            else 0,
+            "attribute_conflict": int(attr_cfg["target"])
+            if bool(attr_cfg["enabled"])
+            else 0,
+        }
+        requested = sum(target_by_source.values())
+        take_by_source = {
+            source: min(
+                len(candidates[source]),
+                int(round(capacity * target_by_source[source] / requested))
+                if requested and capacity
+                else 0,
+            )
+            for source in candidates
+        }
+        selected: list[tuple[str, float, int, int]] = []
+        used: set[tuple[int, int]] = set()
+        for source in ("ann_finetuned", "attribute_conflict"):
+            for score, a, b in candidates[source][: take_by_source[source]]:
+                key = (min(a, b), max(a, b))
+                if key not in used:
+                    used.add(key)
+                    selected.append((source, score, a, b))
+        remaining = [
+            (source, score, a, b)
+            for source, values in candidates.items()
+            for score, a, b in values
+            if (min(a, b), max(a, b)) not in used
+        ]
+        remaining.sort(key=lambda item: -item[1])
+        selected.extend(remaining[: max(0, capacity - len(selected))])
+        selected = selected[:capacity]
+        pairs = (
+            np.asarray([(a, b) for _, _, a, b in selected], dtype=int).reshape(-1, 2)
+            if selected
+            else np.empty((0, 2), dtype=int)
+        )
+        selected_sources = [source for source, _, _, _ in selected]
+        attr_audit_path = (
+            RESULTS
+            / "logs"
+            / self.run_tag
+            / f"attribute_conflict_refresh_fold{self.fold_i}_step{state.global_step}.csv"
+        )
+        attr_audit_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            [
+                {
+                    "step": int(state.global_step),
+                    "epoch": float(epoch),
+                    "row_a": int(a),
+                    "row_b": int(b),
+                    "barcode_a": str(self.row_barcodes[a]),
+                    "barcode_b": str(self.row_barcodes[b]),
+                    "cosine": float(score),
+                    "source": source,
+                }
+                for source, score, a, b in selected
+                if source == "attribute_conflict"
+            ],
+            columns=[
+                "step", "epoch", "row_a", "row_b", "barcode_a", "barcode_b",
+                "cosine", "source",
+            ],
+        ).to_csv(attr_audit_path, index=False, mode="w")
         # Only slots that exist in this fold can be presented. The miner may
         # find more rows than the current fold's negative population.
         pair_map = self.ann_state["pairs"]
@@ -1199,14 +1332,24 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
                 for slot, (a, b) in zip(self.slot_ids, pairs.tolist())
             }
         )
+        source_map = self.ann_state["sources"]
+        source_map.clear()
+        source_map.update(
+            {
+                int(slot): source
+                for slot, source in zip(self.slot_ids, selected_sources)
+            }
+        )
         self.ann_state["version"] = int(state.global_step)
         self.ann_state["count"] = int(len(pairs))
         self.last_epoch = completed_epoch
         print(
             f"    [ann-refresh] fold {self.fold_i}: step={state.global_step} "
             f"epoch={epoch:.2f} pairs={len(pairs):,} "
+            f"ann={selected_sources.count('ann_finetuned'):,} "
+            f"attribute_conflict={selected_sources.count('attribute_conflict'):,} "
             f"band={stats.get('band_lo', lo):.4f}-{stats.get('band_hi', hi):.4f} "
-            f"audit={audit_path}",
+            f"audit={audit_path} attr_audit={attr_audit_path}",
             flush=True,
         )
         if self.wandb_ctx is not None:
@@ -1215,6 +1358,15 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
                     "ann_refresh/step": float(state.global_step),
                     "ann_refresh/epoch": epoch,
                     "ann_refresh/pairs": float(len(pairs)),
+                    "ann_refresh/ann_selected_pairs": float(
+                        selected_sources.count("ann_finetuned")
+                    ),
+                    "ann_refresh/attribute_conflict_selected_pairs": float(
+                        selected_sources.count("attribute_conflict")
+                    ),
+                    "ann_refresh/attribute_conflict_candidates": float(
+                        len(attr_pairs)
+                    ),
                     "ann_refresh/candidate_count": stats.get("candidate_count"),
                     "ann_refresh/candidate_median": stats.get("candidate_median"),
                     "ann_refresh/band_overlap_pct": stats.get("band_overlap_pct"),
@@ -1609,6 +1761,7 @@ def _dynamic_mask_negative_transform(
     epoch_ref: dict[str, int],
     ann_pairs: dict[int, tuple[str, str]] | None = None,
     ann_structured_features: dict[int, list[list[float]]] | None = None,
+    ann_sources: dict[int, str] | None = None,
     ann_state: dict[str, object] | None = None,
     pair_populations: list[str] | None = None,
     presentation_counts: dict[tuple, int] | None = None,
@@ -1635,7 +1788,11 @@ def _dynamic_mask_negative_transform(
                     feature_replacement = ann_structured_features.get(pair_id)
                     if feature_replacement is not None and "structured_features" in transformed:
                         transformed["structured_features"][i] = feature_replacement
-                base_population = "ann_finetuned"
+            base_population = (
+                ann_sources.get(pair_id, "ann_finetuned")
+                if ann_sources is not None
+                else "ann_finetuned"
+            )
         if int(label) != 0:
             if base_population == "masked_positive":
                 augmentation = "static_mask"
@@ -2074,6 +2231,7 @@ def train_one_config(
             ann_refresh_state: dict[str, object] = {
                 "pairs": {},
                 "structured_features": {},
+                "sources": {},
                 "version": 0,
                 "count": 0,
             }
@@ -2155,6 +2313,7 @@ def train_one_config(
                             ann_structured_features=ann_refresh_state[
                                 "structured_features"
                             ],
+                            ann_sources=ann_refresh_state["sources"],
                             ann_state=ann_refresh_state,
                             pair_populations=pair_populations,
                             presentation_counts=(
@@ -2297,7 +2456,7 @@ def train_one_config(
             sentences2 = [b for _, b in dev_pairs] + [b for _, b in dev_neg_pairs]
             labels = [1] * len(dev_pairs) + [0] * len(dev_neg_pairs)
             _sf_cfg = load_config()["training"]["structured_features"]
-            _sf_weight = (
+            structured_feature_weight = (
                 float(_sf_cfg["embedding_weight"])
                 if bool(_sf_cfg["enabled"]) and bool(_sf_cfg["feed_to_loss"])
                 else 0.0
@@ -2309,7 +2468,7 @@ def train_one_config(
                 name="dev",
                 show_progress_bar=False,
                 structured_features=np.asarray(dev_structured, dtype=np.float32),
-                feature_weight=_sf_weight,
+                feature_weight=structured_feature_weight,
             )
 
             # ── VALIDATION-LOSS DATASET (owner directive 2026-09-10) ──────
@@ -2503,7 +2662,11 @@ def train_one_config(
                 groups, weight_decay=cfg["weight_decay"], lr=base_lr
             )
 
-            loss_fn = _make_loss(model, loss)
+            loss_fn = _make_loss(
+                model,
+                loss,
+                structured_feature_weight=structured_feature_weight,
+            )
             pair_lineage = _build_pair_lineage(
                 train_all,
                 tr_negs,
@@ -2551,6 +2714,7 @@ def train_one_config(
                         run_tag=run_tag,
                         batch_size=runtime("batch_size_embed"),
                         max_seq_length=runtime("max_seq_length"),
+                        model=model,
                         wandb_ctx=wandb_ctx,
                     )
                 )
@@ -2605,7 +2769,7 @@ def train_one_config(
                     pair_populations=pair_populations,
                     presentation_counts=presentation_counts,
                     pair_lineage=pair_lineage,
-                    dynamic_populations={"ann_finetuned"},
+                    dynamic_populations={"ann_finetuned", "attribute_conflict"},
                     run_tag=run_tag,
                     sample=sample,
                 )
@@ -3007,13 +3171,9 @@ def train_one_config(
             )
             from core.structured_features import fuse_numpy
 
-            _sf_cfg = load_config()["training"]["structured_features"]
-            _sf_weight = (
-                float(_sf_cfg["embedding_weight"])
-                if bool(_sf_cfg["enabled"]) and bool(_sf_cfg["feed_to_loss"])
-                else 0.0
+            emb = fuse_numpy(
+                emb, structured_features[eval_rows], structured_feature_weight
             )
-            emb = fuse_numpy(emb, structured_features[eval_rows], _sf_weight)
             encode_s = time.perf_counter() - t_encode
             pos_s = _cos(emb, tp_idx)
             neg_s = _cos(emb, hn_idx)
@@ -3046,7 +3206,7 @@ def train_one_config(
                     show_progress_bar=False,
                 )
                 random_emb = fuse_numpy(
-                    random_emb, structured_features[random_rows], _sf_weight
+                    random_emb, structured_features[random_rows], structured_feature_weight
                 )
                 random_easy_s = _cos(random_emb, random_idx)
             random_easy_status = "ok" if len(random_neg_pairs) else "empty"
@@ -3094,7 +3254,9 @@ def train_one_config(
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )
-            dev_emb = fuse_numpy(dev_emb, structured_features[dev_rows], _sf_weight)
+            dev_emb = fuse_numpy(
+                dev_emb, structured_features[dev_rows], structured_feature_weight
+            )
             dev_pos_s = _cos(dev_emb, dev_tp_idx)
             dev_neg_s = _cos(dev_emb, dev_hn_idx)
 
@@ -3127,7 +3289,7 @@ def train_one_config(
                 show_progress_bar=False,
             )
             train_emb = fuse_numpy(
-                train_emb, structured_features[train_rows], _sf_weight
+                train_emb, structured_features[train_rows], structured_feature_weight
             )
             train_pos_s = _cos(train_emb, train_pos_idx)
             train_neg_s = _cos(train_emb, train_neg_idx)
