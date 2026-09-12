@@ -176,6 +176,17 @@ class SplitSpec(BaseModel):
         return self
 
 
+class UniformitySpec(BaseModel):
+    """Unrelated-pair embedding-space collapse diagnostic."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    sample_pairs: int = Field(ge=1)
+    seed: int
+    threshold: float = Field(ge=-1.0, le=1.0)
+
+
 class EvaluationSpec(BaseModel):
     """Zero-shot evaluation protocol (config/training.yaml evaluation:) —
     the component dev/test split behind evaluate_models.
@@ -192,6 +203,7 @@ class EvaluationSpec(BaseModel):
     dev_fold: int = Field(ge=0)
     test_fold: int = Field(ge=0)
     retrieval_ks: list[int] = Field(min_length=1)
+    uniformity: UniformitySpec
 
     @model_validator(mode="after")
     def _folds_distinct_and_in_range(self) -> EvaluationSpec:
@@ -225,6 +237,7 @@ class MaskingSpec(BaseModel):
     enabled: bool
     frac: float = Field(ge=0.0, le=1.0)
     mask_hard_negatives: bool
+    hard_negative_frac: float = Field(ge=0.0, le=1.0)
     mask_prob: float | None = Field(default=None, ge=0.0, le=1.0)
     mask_lo: float = Field(ge=0.0, lt=1.0)
     mask_hi: float = Field(gt=0.0, le=1.0)

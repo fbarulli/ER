@@ -5,8 +5,8 @@ Two lanes, both on the OFFICIAL clean-sku pair scheme:
   grid: fixed 11-config grid
         (epochs x lr x warmup), fold AUC + sd + cross-country AUC per
         config, config_mean summary block, --quick 3-config smoke. Every
-        config trains WITH masking augmentation (variable 20-35% extent,
-        U(0.20, 0.35) per masked copy — config/training.yaml masking band)
+        config trains WITH masking augmentation (variable configured extent,
+        U(mask_lo, mask_hi) per masked copy — config/training.yaml band)
         when enabled — "it must be like this, but with masking as well".
 
   tpe   (second08 lane): optuna TPE over HPO_SPACE, resume-safe sqlite

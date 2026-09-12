@@ -864,13 +864,11 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
         for name in _list_remote(remote_dir):
             remote = Path(name)
             rel = remote.relative_to(remote_dir)
-            # Checkpoints are already pushed and verified through DVC at each
-            # save event. Pulling every safetensors/optimizer snapshot again
-            # here multiplies transfer and local disk use per worker; the
-            # result bundle only needs the reports, scores, logs, and DVC
-            # pointers. Resume pointers are mirrored during live polling.
-            if "_checkpoints" in rel.parts or ".resume" in rel.parts:
-                continue
+            # Checkpoints are part of the deliverable: the local uniformity
+            # audit and final prediction notebook must run against the actual
+            # fine-tuned weights. DVC verification still happens at each save,
+            # but the selected local post-processing lane needs the materialized
+            # checkpoint tree before teardown.
             if remote.suffix not in {
                 ".csv", ".json", ".log", ".png", ".safetensors", ".bin",
                 ".pt", ".pth", ".npz", ".pkl", ".pickle", ".dvc",
@@ -888,6 +886,9 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     local_base = TRAINING_RESULTS / run_id
     from training.generate_training_report import generate_report
+    from core.common import load_config, load_dataset_deduped, resolve_model
+    from pipeline import build_training_data
+    from training.uniformity import run_uniformity_audit
 
     for number in range(1, workers + 1):
         worker = local_base / f"worker_{number}"
@@ -904,12 +905,39 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
             pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
             run_tag = str(pointer.get("run_tag") or run_tag)
         report_dir = worker / f"report_{run_tag}"
+        checkpoints = sorted(
+            worker.glob("_checkpoints/**/checkpoint-*"),
+            key=lambda path: int(path.name.split("-")[-1])
+            if path.name.split("-")[-1].isdigit()
+            else -1,
+        )
+        if not checkpoints:
+            raise FileNotFoundError(
+                f"uniformity audit requires a downloaded fine-tuned checkpoint under {worker / '_checkpoints'}"
+            )
+        uniformity_cfg = load_config()["evaluation"]["uniformity"]
+        data = load_dataset_deduped()
+        payload = build_training_data(data, payload_variant="full")["payload"]
+        uniformity = {}
+        if bool(uniformity_cfg["enabled"]):
+            for checkpoint in checkpoints:
+                uniformity[checkpoint.name] = run_uniformity_audit(
+                    checkpoint,
+                    report_dir / "uniformity" / checkpoint.name,
+                    base_model=resolve_model("minilm_l6"),
+                    df=data,
+                    payload=payload,
+                    n_pairs=int(uniformity_cfg["sample_pairs"]),
+                    seed=int(uniformity_cfg["seed"]),
+                    threshold=float(uniformity_cfg["threshold"]),
+                )
         generate_report(
             metrics[-1],
             pair_paths,
             report_dir,
             sorted(worker.glob("*_fold*_train_scores.csv")),
             sorted(worker.glob("*_fold*_random_easy_scores.csv")),
+            uniformity_summary={"checkpoints": uniformity},
         )
         print(f"[report-local] worker {number}: {report_dir}", flush=True)
 

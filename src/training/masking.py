@@ -42,9 +42,8 @@ def mask_text(
     """Randomly replace whitespace tokens with the mask token.
 
     mask_prob=None draws the extent per call from U(lo, hi)
-    spec: masking done to different extents varying from 20-35%
-    (AUDIT round 2 F08: this comment still said 5-15% after the band
-    moved to the config values 0.20-0.35 in config/training.yaml).
+    spec: masking extent is drawn from the configured mask_lo..mask_hi band
+    The band is owned by config/training.yaml and is validated at load time.
 
     GUARANTEE (owner audit 2026-09-07): a masked copy must actually be a
     COPY — when the extent draw masks zero tokens (27.4% of short SKU

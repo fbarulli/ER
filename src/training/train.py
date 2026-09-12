@@ -430,6 +430,9 @@ def _main_inner(_mlf, _wandb) -> None:
     if args.mask_frac is None:
         args.mask_frac = float(mask_cfg["frac"]) if mask_cfg["enabled"] else 0.0
     mask_hard_negatives = bool(mask_cfg["mask_hard_negatives"])
+    mask_hard_negative_frac = (
+        float(mask_cfg["hard_negative_frac"]) if mask_hard_negatives else 0.0
+    )
     mask_prob = mask_cfg["mask_prob"]
     mask_prob = float(mask_prob) if mask_prob is not None else None
 
@@ -486,6 +489,7 @@ def _main_inner(_mlf, _wandb) -> None:
             "mask_frac": args.mask_frac,
             "masking_enabled": bool(args.mask_frac > 0),
             "mask_hard_negatives": mask_hard_negatives,
+            "mask_hard_negative_frac": mask_hard_negative_frac,
             "mask_prob": mask_prob,
             "mask_lo": float(mask_cfg["mask_lo"]),
             "mask_hi": float(mask_cfg["mask_hi"]),
@@ -565,7 +569,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # IGNORES labels and would train them as POSITIVES (different products
     # pulled together). Here masking augments POSITIVES only: for a fraction
     # of pairs, the ANCHOR text gets config-band variable token masking
-    # (U(0.20, 0.35) per masked copy — config/training.yaml masking band;
+    # (U(mask_lo, mask_hi) per masked copy — config/training.yaml masking band;
     # AUDIT round 2 F08: this comment still said "15% random token
     # masking") and the masked pair is appended as an EXTRA positive (same
     # pair semantics, noised anchor). When configured, hard negatives receive
@@ -648,7 +652,7 @@ def _main_inner(_mlf, _wandb) -> None:
             if mask_hard_negatives:
                 print(
                     f"[masking] hard negatives use dynamic per-presentation "
-                    f"masking (label=0, frac={args.mask_frac:.0%})",
+                    f"masking (label=0, frac={mask_hard_negative_frac:.0%})",
                     flush=True,
                 )
 
@@ -837,7 +841,7 @@ def _main_inner(_mlf, _wandb) -> None:
                 neg_pair_sources=neg_sources,
                 train_neg_pair_sources=train_neg_sources,
                 dynamic_mask_hard_negatives=mask_hard_negatives,
-                dynamic_mask_frac=args.mask_frac,
+                dynamic_mask_frac=mask_hard_negative_frac,
                 dynamic_mask_prob=mask_prob,
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
@@ -850,7 +854,7 @@ def _main_inner(_mlf, _wandb) -> None:
                 neg_pair_sources=neg_sources,
                 train_neg_pair_sources=train_neg_sources,
                 dynamic_mask_hard_negatives=mask_hard_negatives,
-                dynamic_mask_frac=args.mask_frac,
+                dynamic_mask_frac=mask_hard_negative_frac,
                 dynamic_mask_prob=mask_prob,
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
@@ -907,7 +911,7 @@ def _main_inner(_mlf, _wandb) -> None:
         neg_pair_sources=neg_sources,
         train_neg_pair_sources=train_neg_sources,
         dynamic_mask_hard_negatives=mask_hard_negatives,
-        dynamic_mask_frac=args.mask_frac,
+        dynamic_mask_frac=mask_hard_negative_frac,
         dynamic_mask_prob=mask_prob,
         mask_audit=mask_audit,
         hard_negative_mask_audit=hard_negative_mask_audit,

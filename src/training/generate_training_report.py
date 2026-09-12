@@ -194,6 +194,18 @@ def _numeric_row(row: pd.Series, *, exclude: set[str] = frozenset()) -> dict[str
     return result
 
 
+def _numeric_tree(value):
+    if isinstance(value, dict):
+        return {
+            str(key): child
+            for key, raw in value.items()
+            if (child := _numeric_tree(raw)) is not None
+        }
+    if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
+        return float(value) if np.isfinite(value) else None
+    return None
+
+
 def generate_report(
     metrics_path: str | Path,
     pair_paths: list[str | Path],
@@ -202,6 +214,7 @@ def generate_report(
     random_score_paths: list[str | Path] | None = None,
     data_path: str | Path | None = None,
     canonical_path: str | Path | None = None,
+    uniformity_summary: dict | None = None,
 ) -> dict:
     metrics_path = Path(metrics_path)
     out = Path(out_dir)
@@ -707,6 +720,7 @@ def generate_report(
         "ranking": _numeric_csv(out / "ranking_hits_at_k.csv", ("fold", "k")),
         "random_easy": _numeric_csv(out / "random_easy_metrics.csv", ("population", "label")),
         "attribute_errors": _numeric_csv(out / "attribute_error_breakdown.csv", ("attribute_bucket", "label")),
+        "uniformity": _numeric_tree(uniformity_summary or {}),
     }
     (out / "report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"

@@ -16,9 +16,10 @@ sim_columns:
 masking:
   enabled: true
   frac: 1.00          # fraction of positive anchors masked when enabled
-  mask_hard_negatives: true  # apply the same fraction to label-0 hard negatives
+  mask_hard_negatives: true  # enable dynamic masking on label-0 training pairs
+  hard_negative_frac: 0.25   # only 25% of label-0 presentations are masked; 75% stay raw
   mask_prob: null     # null: per-pair extent drawn from mask_lo..mask_hi
-  mask_lo: 0.20       # variable extent band, U(0.20, 0.35) per masked copy
+  mask_lo: 0.20       # variable extent band, U(0.20, 0.30) per masked copy
   mask_hi: 0.30
   track_visibility: true      # persist per-copy realized mask percentages
   track_per_epoch: true       # persist dynamic hard-negative mask percentages
@@ -97,6 +98,11 @@ evaluation:
   dev_fold: 0             # fold index used as DEV  (threshold-fit half)
   test_fold: 1            # fold index used as TEST (reported half)
   retrieval_ks: [1, 5, 10]  # persisted Precision@K / Recall@K cutoffs
+  uniformity:
+    enabled: true
+    sample_pairs: 100
+    seed: 42
+    threshold: 0.70
 
 # ── training ────────────────────────────────────────────────────────────────
 training:
