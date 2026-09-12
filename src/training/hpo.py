@@ -57,6 +57,11 @@ def run_grid(
     neg_pairs=None,
     # training-only augmented negatives; neg_pairs remains eval-only
     train_neg_pairs=None,
+    dynamic_mask_hard_negatives=False,
+    dynamic_mask_frac=0.0,
+    dynamic_mask_prob=None,
+    mask_audit=None,
+    hard_negative_mask_audit=None,
 ) -> None:
     """Fixed-grid sweep (second07 semantics) over the ENTRY-augmented tuple.
 
@@ -186,6 +191,11 @@ def run_grid(
             # labeled negatives and every fold skips
             neg_pairs=neg_pairs,
             train_neg_pairs=train_neg_pairs,
+            dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
+            dynamic_mask_frac=dynamic_mask_frac,
+            dynamic_mask_prob=dynamic_mask_prob,
+            mask_audit=mask_audit,
+            hard_negative_mask_audit=hard_negative_mask_audit,
         )
         vals = [
             r[_sig]
@@ -251,6 +261,11 @@ def run_tpe(
     neg_pairs: np.ndarray | None = None,
     # training-only augmented negatives; neg_pairs remains eval-only
     train_neg_pairs: np.ndarray | None = None,
+    dynamic_mask_hard_negatives: bool = False,
+    dynamic_mask_frac: float = 0.0,
+    dynamic_mask_prob: float | None = None,
+    mask_audit: list[dict] | None = None,
+    hard_negative_mask_audit: list[dict] | None = None,
     wandb_ctx=None,
     mlf_ctx=None,
 ) -> None:
@@ -323,6 +338,11 @@ def run_tpe(
         selection_mode=_holdout,
         neg_pairs=neg_pairs,
         train_neg_pairs=train_neg_pairs,
+        dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
+        dynamic_mask_frac=dynamic_mask_frac,
+        dynamic_mask_prob=dynamic_mask_prob,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
         wandb_ctx=wandb_ctx,
     )
 

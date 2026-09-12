@@ -440,12 +440,24 @@ def _tracking_contrastive_loss(model, *, margin: float):
             self._total_negative_pairs = 0
             self._seen_hard_negative_ids: set[int] = set()
             self._seen_margin_active_negative_ids: set[int] = set()
+            self._negative_present_counts: dict[int, int] = {}
+            self._negative_selected_counts: dict[int, int] = {}
+            self._negative_backprop_counts: dict[int, int] = {}
+            self._per_epoch_counts: dict[int, dict[int, dict[str, int]]] = {}
+            self._pair_lineage: list[dict] = []
+            self._current_epoch = 0
 
         def set_batch_pair_ids(self, pair_ids) -> None:
             self._batch_pair_ids = pair_ids.detach().cpu()
 
         def set_total_negative_pairs(self, count: int) -> None:
             self._total_negative_pairs = int(count)
+
+        def set_pair_lineage(self, pair_lineage: list[dict]) -> None:
+            self._pair_lineage = pair_lineage
+
+        def set_epoch(self, epoch: int) -> None:
+            self._current_epoch = int(epoch)
 
         def compute_loss_from_embeddings(self, embeddings, labels):
             if not self._checked_labels:
@@ -497,6 +509,30 @@ def _tracking_contrastive_loss(model, *, margin: float):
                     active_negative_ids = selected_negative_ids[
                         (negative_hinge > 0).detach().cpu()
                     ]
+                    for value in negative_ids.tolist():
+                        key = int(value)
+                        self._negative_present_counts[key] = (
+                            self._negative_present_counts.get(key, 0) + 1
+                        )
+                        self._per_epoch_counts.setdefault(self._current_epoch, {}).setdefault(
+                            key, {"present_count": 0, "hard_selected_count": 0, "backprop_count": 0}
+                        )["present_count"] += 1
+                    for value in selected_negative_ids.tolist():
+                        key = int(value)
+                        self._negative_selected_counts[key] = (
+                            self._negative_selected_counts.get(key, 0) + 1
+                        )
+                        self._per_epoch_counts.setdefault(self._current_epoch, {}).setdefault(
+                            key, {"present_count": 0, "hard_selected_count": 0, "backprop_count": 0}
+                        )["hard_selected_count"] += 1
+                    for value in active_negative_ids.tolist():
+                        key = int(value)
+                        self._negative_backprop_counts[key] = (
+                            self._negative_backprop_counts.get(key, 0) + 1
+                        )
+                        self._per_epoch_counts.setdefault(self._current_epoch, {}).setdefault(
+                            key, {"present_count": 0, "hard_selected_count": 0, "backprop_count": 0}
+                        )["backprop_count"] += 1
                     self._seen_hard_negative_ids.update(
                         int(value) for value in selected_negative_ids.tolist()
                     )
@@ -565,7 +601,53 @@ def _tracking_contrastive_loss(model, *, margin: float):
                 "n_train_neg_margin_active_unique": float(active),
                 "train_neg_hard_selection_coverage": selected / total if total else 0.0,
                 "train_neg_margin_active_coverage": active / total if total else 0.0,
+                "n_train_neg_present_unique": float(len(self._negative_present_counts)),
+                "n_train_neg_backprop_unique": float(len(self._negative_backprop_counts)),
+                "train_neg_backprop_events": float(sum(self._negative_backprop_counts.values())),
             }
+
+        def pair_usage_rows(self) -> list[dict]:
+            """Return cumulative per-pair usage and gradient attribution."""
+            ids = set(self._negative_present_counts)
+            ids.update(self._negative_selected_counts)
+            ids.update(self._negative_backprop_counts)
+            rows = []
+            for pair_id in sorted(ids):
+                lineage = (
+                    self._pair_lineage[pair_id]
+                    if pair_id < len(self._pair_lineage)
+                    else {}
+                )
+                rows.append(
+                    {
+                        "pair_id": pair_id,
+                        "present_count": self._negative_present_counts.get(pair_id, 0),
+                        "hard_selected_count": self._negative_selected_counts.get(pair_id, 0),
+                        "backprop_count": self._negative_backprop_counts.get(pair_id, 0),
+                        **lineage,
+                    }
+                )
+            return rows
+
+        def pair_usage_rows_by_epoch(self) -> list[dict]:
+            """Return per-epoch pair presentation/selection/backprop counts."""
+            rows = []
+            for epoch in sorted(self._per_epoch_counts):
+                for pair_id in sorted(self._per_epoch_counts[epoch]):
+                    lineage = (
+                        self._pair_lineage[pair_id]
+                        if pair_id < len(self._pair_lineage)
+                        else {}
+                    )
+                    rows.append(
+                        {
+                            "epoch": epoch,
+                            "pair_id": pair_id,
+                            **self._per_epoch_counts[epoch][pair_id],
+                            **lineage,
+                        }
+                    )
+            return rows
 
     return _TrackedOnlineContrastiveLoss(model, margin=margin)
 
@@ -698,6 +780,15 @@ class ProgressCallback(TrainerCallback):
             if self.wandb_ctx is not None:
                 self.wandb_ctx.log_metrics(_wandb_memory_metrics(telemetry))
             self._write_live_status(state, "training-started", **telemetry)
+        return control
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        epoch = int((state.epoch or 0.0)) + 1
+        if self.tracked_loss is not None and hasattr(self.tracked_loss, "set_epoch"):
+            self.tracked_loss.set_epoch(epoch)
+        dynamic_ref = getattr(self.tracked_loss, "_dynamic_epoch_ref", None)
+        if dynamic_ref is not None:
+            dynamic_ref["epoch"] = epoch
         return control
 
     def on_log(self, args, state, control, logs=None, **kwargs):
@@ -1109,6 +1200,79 @@ def _dump_train_visibility(
     )
 
 
+def _build_pair_lineage(
+    train_pos: np.ndarray,
+    train_neg: np.ndarray,
+    *,
+    mask_audit: list[dict] | None,
+    hard_negative_mask_audit: list[dict] | None,
+) -> list[dict]:
+    """Map training pair IDs to original/masked source-pair lineage."""
+    lookup: dict[tuple[int, int, int], dict] = {}
+    audits = list(mask_audit or []) + list(hard_negative_mask_audit or [])
+    for audit in audits:
+        population = str(audit.get("population", "positive"))
+        label = 1 if population == "positive" else 0
+        anchor = int(audit["anchor_payload_idx"])
+        target = int(audit["pair_payload_idx"])
+        lineage_id = f"{population}:{anchor}:{target}"
+        base = {
+            "population": population,
+            "lineage_id": lineage_id,
+            "source_anchor_payload_idx": anchor,
+            "source_pair_payload_idx": target,
+            "is_masked_copy": 0,
+        }
+        lookup[(label, anchor, target)] = base
+        lookup[(label, int(audit["copy_payload_idx"]), target)] = {
+            **base,
+            "is_masked_copy": 1,
+        }
+
+    rows: list[dict] = []
+    for label, pairs in ((1, train_pos), (0, train_neg)):
+        for a, b in pairs:
+            a, b = int(a), int(b)
+            row = lookup.get((label, a, b))
+            if row is None:
+                population = "positive" if label else "hard_negative"
+                row = {
+                    "population": population,
+                    "lineage_id": f"{population}:{a}:{b}",
+                    "source_anchor_payload_idx": a,
+                    "source_pair_payload_idx": b,
+                    "is_masked_copy": 0,
+                }
+            rows.append(dict(row))
+    return rows
+
+
+def _dynamic_mask_negative_transform(
+    batch,
+    *,
+    rng,
+    frac: float,
+    mask_prob: float | None,
+    counts: dict[int, int],
+    counts_by_epoch: dict[int, dict[int, int]],
+    epoch_ref: dict[str, int],
+):
+    """Freshly mask selected label-0 anchors whenever a batch is materialized."""
+    from training.masking import mask_text
+
+    transformed = {key: list(values) for key, values in batch.items()}
+    for i, label in enumerate(batch["label"]):
+        if int(label) != 0 or rng.random() >= frac:
+            continue
+        masked, _extent = mask_text(str(batch["sentence1"][i]), mask_prob, rng)
+        transformed["sentence1"][i] = masked
+        pair_id = int(batch["pair_id"][i])
+        counts[pair_id] = counts.get(pair_id, 0) + 1
+        epoch_counts = counts_by_epoch.setdefault(int(epoch_ref["epoch"]), {})
+        epoch_counts[pair_id] = epoch_counts.get(pair_id, 0) + 1
+    return transformed
+
+
 def train_one_config(
     cfg: dict,
     *,
@@ -1133,6 +1297,13 @@ def train_one_config(
     # training-only negative population; may include masked label-0 copies.
     # neg_pairs remains the immutable dev/test evaluation population.
     train_neg_pairs: np.ndarray | None = None,
+    # dynamic hard-negative masking: each training dataset presentation gets
+    # a fresh masked anchor; no static negative copies are added.
+    dynamic_mask_hard_negatives: bool = False,
+    dynamic_mask_frac: float = 0.0,
+    dynamic_mask_prob: float | None = None,
+    mask_audit: list[dict] | None = None,
+    hard_negative_mask_audit: list[dict] | None = None,
     # 07d data-scaling: keep only this fraction of TRAIN pairs (dev/test
     # pools untouched). Subsampled AFTER the split, seeded per fold.
     train_frac: float | None = None,
@@ -1169,6 +1340,7 @@ def train_one_config(
     _train_neg_source = (
         train_neg_pairs if train_neg_pairs is not None else neg_pairs
     )
+
 
     df, payload, row_bc, country, pos, hp_pairs, emb0 = data
     all_barcode_set = set(row_bc.tolist())
@@ -1454,6 +1626,25 @@ def train_one_config(
                         "pair_id": list(range(len(s1))),
                     }
                 )
+                dynamic_mask_counts: dict[int, int] = {}
+                dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
+                dynamic_epoch_ref = {"epoch": 0}
+                if dynamic_mask_hard_negatives and dynamic_mask_frac > 0:
+                    import random as _random
+                    from functools import partial
+
+                    _mask_rng = _random.Random(seed + fold_i + 100_003)
+                    train_ds.set_transform(
+                        partial(
+                            _dynamic_mask_negative_transform,
+                            rng=_mask_rng,
+                            frac=dynamic_mask_frac,
+                            mask_prob=dynamic_mask_prob,
+                            counts=dynamic_mask_counts,
+                            counts_by_epoch=dynamic_mask_counts_by_epoch,
+                            epoch_ref=dynamic_epoch_ref,
+                        )
+                    )
                 # ── TRAIN VISIBILITY (owner directive 2026-09-07): the
                 # EXACT rows the model ingests for this fold — sentence1,
                 # sentence2, label, both barcodes, pos/hp/neg provenance.
@@ -1716,6 +1907,18 @@ def train_one_config(
             )
 
             loss_fn = _make_loss(model, loss)
+            if hasattr(loss_fn, "set_pair_lineage"):
+                loss_fn.set_pair_lineage(
+                    _build_pair_lineage(
+                        train_all,
+                        tr_negs,
+                        mask_audit=mask_audit,
+                        hard_negative_mask_audit=hard_negative_mask_audit,
+                    )
+                )
+                loss_fn._dynamic_mask_counts = dynamic_mask_counts
+                loss_fn._dynamic_mask_counts_by_epoch = dynamic_mask_counts_by_epoch
+                loss_fn._dynamic_epoch_ref = dynamic_epoch_ref
             if hasattr(loss_fn, "set_total_negative_pairs"):
                 loss_fn.set_total_negative_pairs(len(tr_negs))
 
@@ -1777,6 +1980,24 @@ def train_one_config(
                 else:
                     print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
             trainer.train(resume_from_checkpoint=resume_checkpoint)
+            if hasattr(loss_fn, "pair_usage_rows_by_epoch"):
+                usage_rows = loss_fn.pair_usage_rows_by_epoch()
+                if usage_rows:
+                    for usage in usage_rows:
+                        pair_id = int(usage["pair_id"])
+                        usage["dynamic_mask_count"] = int(
+                            dynamic_mask_counts_by_epoch.get(
+                                int(usage["epoch"]), {}
+                            ).get(pair_id, 0)
+                        )
+                    from core.common import write_visibility_log
+
+                    write_visibility_log(
+                        pd.DataFrame(usage_rows),
+                        f"pair_backprop_fold{fold_i}.csv",
+                        run_tag,
+                        sample,
+                    )
             coverage = (
                 loss_fn.coverage_stats()
                 if hasattr(loss_fn, "coverage_stats")
@@ -2544,6 +2765,11 @@ def run_hpo(
     # (train_one_config filters them to the fold's train side itself)
     neg_pairs: np.ndarray | None = None,
     train_neg_pairs: np.ndarray | None = None,
+    dynamic_mask_hard_negatives: bool = False,
+    dynamic_mask_frac: float = 0.0,
+    dynamic_mask_prob: float | None = None,
+    mask_audit: list[dict] | None = None,
+    hard_negative_mask_audit: list[dict] | None = None,
     wandb_ctx=None,
 ) -> None:
     import optuna
@@ -2593,6 +2819,11 @@ def run_hpo(
                 selection_mode=selection_mode,
                 neg_pairs=neg_pairs,
                 train_neg_pairs=train_neg_pairs,
+                dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
+                dynamic_mask_frac=dynamic_mask_frac,
+                dynamic_mask_prob=dynamic_mask_prob,
+                mask_audit=mask_audit,
+                hard_negative_mask_audit=hard_negative_mask_audit,
                 wandb_ctx=wandb_ctx,
             )
             ok_rows = [r for r in rows if r.get("status") == "ok"]

@@ -503,22 +503,11 @@ def _main_inner(_mlf, _wandb) -> None:
     # training-only rows so dev/holdout metrics cannot include augmentation.
     train_neg = neg
     if args.mask_frac > 0:
-        from training.masking import augment_hard_negatives, augment_positives
+        from training.masking import augment_positives
 
         pos, payload, row_bc, n_added, mask_audit = augment_positives(
             pos, payload, row_bc, frac=args.mask_frac, mask_prob=mask_prob, seed=SEED
         )
-        if mask_hard_negatives and len(neg):
-            train_neg, payload, row_bc, n_hard_added, hard_negative_mask_audit = augment_hard_negatives(
-                neg,
-                payload,
-                row_bc,
-                frac=args.mask_frac,
-                mask_prob=mask_prob,
-                seed=SEED + 1,
-            )
-        else:
-            n_hard_added = 0
         # MASK VISIBILITY (owner directive 2026-09-07): per-copy realized
         # extents — the high-vs-low-extent effect on overfitting is
         # measurable only when each copy's TRUE masked fraction is logged
@@ -558,10 +547,10 @@ def _main_inner(_mlf, _wandb) -> None:
                 f"low-extent(<{_mid:.2f}): {len(_lo):,} copies, mean {_lo.realized_extent.mean() if len(_lo) else 0:.3f}",
                 flush=True,
             )
-            if hard_negative_mask_audit:
+            if mask_hard_negatives:
                 print(
-                    f"[masking] +{n_hard_added:,} masked hard negatives "
-                    f"(label=0, frac={args.mask_frac:.0%})",
+                    f"[masking] hard negatives use dynamic per-presentation "
+                    f"masking (label=0, frac={args.mask_frac:.0%})",
                     flush=True,
                 )
 
@@ -654,45 +643,9 @@ def _main_inner(_mlf, _wandb) -> None:
     )
     if len(_attr_neg):
         neg = np.vstack([neg, _attr_neg]) if len(neg) else _attr_neg
-        if mask_hard_negatives and args.mask_frac > 0:
-            from training.masking import augment_hard_negatives
-
-            _attr_train_neg, payload, row_bc, _attr_masked_added, _attr_audit = (
-                augment_hard_negatives(
-                    _attr_neg,
-                    payload,
-                    row_bc,
-                    frac=args.mask_frac,
-                    mask_prob=mask_prob,
-                    seed=SEED + 2,
-                )
-            )
-            train_neg = np.vstack([train_neg, _attr_train_neg])
-            hard_negative_mask_audit.extend(_attr_audit)
-            if len(payload) > len(emb0):
-                _attr_emb, _attr_encode_s = encode_corpus(
-                    args.model,
-                    payload[len(emb0):],
-                    batch_size=runtime("batch_size_embed"),
-                    max_seq_length=runtime("max_seq_length"),
-                    device="cuda" if on_cuda else "cpu",
-                    cache_dir=EMB_CACHE,
-                )
-                emb0 = np.vstack([emb0, _attr_emb])
-                encode_s += _attr_encode_s
-        else:
-            train_neg = np.vstack([train_neg, _attr_neg])
-        if hard_negative_mask_audit:
-            # The first visibility write occurs before zero-shot mining; this
-            # rewrite includes the supplemental attribute-conflict copies.
-            from core.common import write_visibility_log as _wvl
-
-            _wvl(
-                pd.DataFrame(hard_negative_mask_audit),
-                "mask_hard_negative_visibility.csv",
-                run_tag,
-                bool(args.sample),
-            )
+        # Keep supplemental negatives unexpanded; dynamic masking happens at
+        # each training presentation, so every epoch can see a fresh variant.
+        train_neg = np.vstack([train_neg, _attr_neg])
     _wandb.log_config(
         {
             "n_attribute_conflict_negatives": int(len(_attr_neg)),
@@ -763,12 +716,23 @@ def _main_inner(_mlf, _wandb) -> None:
                 args, data, mask_cfg, folds_override, dev_override,
                 n_masked=len(mask_audit), neg_pairs=neg,
                 train_neg_pairs=train_neg,
+                dynamic_mask_hard_negatives=mask_hard_negatives,
+                dynamic_mask_frac=args.mask_frac,
+                dynamic_mask_prob=mask_prob,
+                mask_audit=mask_audit,
+                hard_negative_mask_audit=hard_negative_mask_audit,
             )
         else:
             run_tpe(
                 args, data, mask_cfg, folds_override, dev_override,
                 n_masked=len(mask_audit), neg_pairs=neg,
-                train_neg_pairs=train_neg, wandb_ctx=_wandb,
+                train_neg_pairs=train_neg,
+                dynamic_mask_hard_negatives=mask_hard_negatives,
+                dynamic_mask_frac=args.mask_frac,
+                dynamic_mask_prob=mask_prob,
+                mask_audit=mask_audit,
+                hard_negative_mask_audit=hard_negative_mask_audit,
+                wandb_ctx=_wandb,
                 mlf_ctx=_mlf,
             )
         return
@@ -818,6 +782,11 @@ def _main_inner(_mlf, _wandb) -> None:
         dev_override=dev_override,
         neg_pairs=neg,
         train_neg_pairs=train_neg,
+        dynamic_mask_hard_negatives=mask_hard_negatives,
+        dynamic_mask_frac=args.mask_frac,
+        dynamic_mask_prob=mask_prob,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
         train_frac=args.train_frac if args.train_frac < 1.0 else None,
         run_tag=run_tag,
         sample=bool(args.sample),
