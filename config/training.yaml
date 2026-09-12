@@ -260,6 +260,7 @@ sweep:
 
 # ── mining band for in-batch negatives ───────────────────────────────────────
 mining:
+  enabled: false             # masking-only run: skip ANN and supplemental mining
   band: "0.45-0.80"           # "lo-hi" — parsed + validated by MiningSpec
   attribute_band: "0.45-0.95"  # same-brand/category attribute-conflict band
   attribute_conflict_target: 0       # masking-only run: disable supplemental mining

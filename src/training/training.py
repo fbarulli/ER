@@ -88,6 +88,7 @@ EVAL_STEPS_PER_EPOCH = runtime("eval_steps_per_epoch")
 ES_PATIENCE = runtime("es_patience")
 ES_THRESHOLD = runtime("es_threshold")
 N_TARGET_MINING = runtime("n_target_mining")
+MINING_ENABLED = bool(load_config()["mining"]["enabled"])
 
 # DEFAULT_CFG REMOVED (audit 2026-09-09): zero readers since the entry
 # (train.py) constructs its own cfg dict; a stale epochs=2 default here
@@ -1420,16 +1421,20 @@ def train_one_config(
     # resurrected the inline literal.
     # NOTE: the `band` PARAMETER (tuple) shadows lib.common.band() in this
     # function scope — alias the import.
-    from core.common import band as _band_helper
+    if MINING_ENABLED:
+        from core.common import band as _band_helper
 
-    _eval_band = _band_helper("eval_mining")
-    hard_train_all, _ = mine_hard_negatives(
-        df, emb0, n_target=N_TARGET_MINING, cosine_lo=band[0], cosine_hi=band[1]
-    )
-    hard_eval, _ = mine_hard_negatives(
-        df, emb0, n_target=N_TARGET_MINING,
-        cosine_lo=_eval_band[0], cosine_hi=_eval_band[1],
-    )
+        _eval_band = _band_helper("eval_mining")
+        hard_train_all, _ = mine_hard_negatives(
+            df, emb0, n_target=N_TARGET_MINING, cosine_lo=band[0], cosine_hi=band[1]
+        )
+        hard_eval, _ = mine_hard_negatives(
+            df, emb0, n_target=N_TARGET_MINING,
+            cosine_lo=_eval_band[0], cosine_hi=_eval_band[1],
+        )
+    else:
+        hard_train_all = np.empty((0, 2), dtype=int)
+        hard_eval = np.empty((0, 2), dtype=int)
 
     rows: list[dict] = []
     for fold_i, test_bc in enumerate(folds):

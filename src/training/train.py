@@ -232,6 +232,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # indexing — a missing key crashes at startup, never a silent default.
     tr = cfg["training"]
     mining_cfg = cfg["mining"]
+    mining_enabled = bool(mining_cfg["enabled"])
     mask_cfg = cfg["masking"]
     split_cfg = cfg["split"]
 
@@ -461,6 +462,8 @@ def _main_inner(_mlf, _wandb) -> None:
             "n_source_rows": s["n_rows"],
             "n_canonicals": s["n_canonicals"],
             "n_gate_hard_negatives": s["n_neg_gate_rows"],
+            "mining_enabled": mining_enabled,
+            "attribute_conflict_target": int(mining_cfg["attribute_conflict_target"]),
         }
     )
     print(
@@ -617,35 +620,44 @@ def _main_inner(_mlf, _wandb) -> None:
     from core.nlp import encode_corpus
 
     EMB_CACHE = str(DATA_DIR / "embeddings_cache")
-    emb0, encode_s = encode_corpus(
-        args.model,
-        payload,
-        batch_size=runtime("batch_size_embed"),
-        max_seq_length=runtime("max_seq_length"),
-        device="cuda" if on_cuda else "cpu",
-        cache_dir=EMB_CACHE,
-    )
-    print(f"zero-shot encode_s = {encode_s:.1f}s", flush=True)
+    if mining_enabled:
+        emb0, encode_s = encode_corpus(
+            args.model,
+            payload,
+            batch_size=runtime("batch_size_embed"),
+            max_seq_length=runtime("max_seq_length"),
+            device="cuda" if on_cuda else "cpu",
+            cache_dir=EMB_CACHE,
+        )
+        print(f"zero-shot encode_s = {encode_s:.1f}s", flush=True)
+    else:
+        # ANN and supplemental mining are disabled for masking-only runs; the
+        # training lane does not need a second zero-shot encoder pass.
+        emb0 = np.empty((0, 0), dtype=np.float32)
+        print("[mining] disabled by config; skipping ANN and supplemental mining", flush=True)
 
     # Supplemental mining targets the same-brand/category attribute-conflict
     # population that the gate's 6,051 hard negatives cannot exhaust. The
     # original gate negatives remain intact; these are additional label-0
     # training rows selected from the configured cosine band.
-    from core.hard_negatives import mine_attribute_conflict_negatives
+    if mining_enabled:
+        from core.hard_negatives import mine_attribute_conflict_negatives
 
-    _attr_lo, _attr_hi = (
-        float(x) for x in training_cfg().mining.attribute_band.split("-")
-    )
-    _attr_neg, _attr_scores = mine_attribute_conflict_negatives(
-        df,
-        payload,
-        row_bc,
-        emb0,
-        existing=neg,
-        n_target=int(training_cfg().mining.attribute_conflict_target),
-        cosine_lo=_attr_lo,
-        cosine_hi=_attr_hi,
-    )
+        _attr_lo, _attr_hi = (
+            float(x) for x in training_cfg().mining.attribute_band.split("-")
+        )
+        _attr_neg, _attr_scores = mine_attribute_conflict_negatives(
+            df,
+            payload,
+            row_bc,
+            emb0,
+            existing=neg,
+            n_target=int(training_cfg().mining.attribute_conflict_target),
+            cosine_lo=_attr_lo,
+            cosine_hi=_attr_hi,
+        )
+    else:
+        _attr_neg = np.empty((0, 2), dtype=int)
     if len(_attr_neg):
         neg = np.vstack([neg, _attr_neg]) if len(neg) else _attr_neg
         # Keep supplemental negatives unexpanded; dynamic masking happens at

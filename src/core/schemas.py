@@ -435,6 +435,7 @@ class MiningSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    enabled: bool = True
     band: str
     attribute_band: str
     attribute_conflict_target: int = Field(ge=0)
