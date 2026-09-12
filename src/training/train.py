@@ -175,6 +175,7 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
         artifact_paths.append(
             checkpoint_root / f"r{run_tag}_f{int(fold)}"
         )
+    artifact_paths.append(RESULTS / f"mask_effect_{run_tag}.png")
 
     pointer = RESULTS / F["results_pointer"]
     if pointer.is_file() and "_sample" not in metrics_path.name:
@@ -719,6 +720,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # Overfit signature = low-extent copies score HIGH (memorized surface
     # forms) while high-extent copies score much lower (the model leaned
     # on tokens that got masked).
+    mask_effect_metrics: dict[str, float] = {}
     try:
         _ok = [r for r in rows if r.get("status") == "ok"]
         if args.mask_effect and getattr(args, "mask_frac", 0) > 0 and mask_audit and _ok:
@@ -754,23 +756,31 @@ def _main_inner(_mlf, _wandb) -> None:
             print(f"[mask-effect] scoring model from {_src}", flush=True)
             _model = _ST(str(_src), device="cpu")
             _texts = [m["masked_text"] for m in mask_audit]
+            _unmasked_texts = [m["anchor_text"] for m in mask_audit]
             _targets = [payload[m["pair_payload_idx"]] for m in mask_audit]
             _em = _model.encode(
-                _texts + _targets,
+                _texts + _unmasked_texts + _targets,
                 batch_size=runtime("batch_size_embed"),  # SSOT
                 normalize_embeddings=True,
                 show_progress_bar=False,
                 convert_to_numpy=True,
             )
             _n = len(_texts)
-            _sims = np.einsum(
-                "ij,ij->i", _em[:_n], _em[_n:]
+            _masked_sims = np.einsum("ij,ij->i", _em[:_n], _em[2 * _n:])
+            _unmasked_sims = np.einsum(
+                "ij,ij->i", _em[_n : 2 * _n], _em[2 * _n:]
             )
             _eff = pd.DataFrame(
                 {
                     "realized_extent": [m["realized_extent"] for m in mask_audit],
-                    "sim_to_target": _sims.round(4),
+                    "sim_to_target": _masked_sims.round(4),
+                    "masked_score": _masked_sims.round(4),
+                    "unmasked_score": _unmasked_sims.round(4),
+                    "masked_minus_unmasked": (
+                        _masked_sims - _unmasked_sims
+                    ).round(4),
                     "barcode": [m["barcode"] for m in mask_audit],
+                    "anchor_text": _unmasked_texts,
                     "masked_text": _texts,
                 }
             )
@@ -785,15 +795,67 @@ def _main_inner(_mlf, _wandb) -> None:
             from core.common import write_visibility_log as _wvl
 
             _wvl(_eff, "mask_effect.csv", run_tag, bool(args.sample))
-            _g = _eff.groupby("bucket")["sim_to_target"].agg(["count", "mean"])
+            _g = _eff.groupby("bucket")[[
+                "masked_score", "unmasked_score", "masked_minus_unmasked"
+            ]].agg(["count", "mean"])
+            mask_effect_metrics = {
+                "mask_n": float(len(_eff)),
+                "mask_masked_mean_cosine": float(_eff["masked_score"].mean()),
+                "mask_masked_median_cosine": float(_eff["masked_score"].median()),
+                "mask_unmasked_mean_cosine": float(_eff["unmasked_score"].mean()),
+                "mask_unmasked_median_cosine": float(_eff["unmasked_score"].median()),
+                "mask_mean_cosine_delta": float(_eff["masked_minus_unmasked"].mean()),
+                "mask_median_cosine_delta": float(_eff["masked_minus_unmasked"].median()),
+            }
+            if _wandb is not None:
+                _wandb.log_metrics(
+                    {
+                        f"masking/{key}": value
+                        for key, value in mask_effect_metrics.items()
+                    }
+                )
+                _wandb.set_summary(
+                    {
+                        f"masking/{key}": value
+                        for key, value in mask_effect_metrics.items()
+                    }
+                )
+            import matplotlib
+
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            _mask_plot = RESULTS / f"mask_effect_{run_tag}.png"
+            _fig, _ax = plt.subplots(figsize=(7, 4.5))
+            _ax.hist(
+                _eff["unmasked_score"], bins=20, alpha=0.55, label="non-masked"
+            )
+            _ax.hist(
+                _eff["masked_score"], bins=20, alpha=0.55, label="masked"
+            )
+            _ax.set(
+                xlabel="cosine similarity to target",
+                ylabel="count",
+                title="Masked vs non-masked positive performance",
+            )
+            _ax.grid(alpha=0.25)
+            _ax.legend()
+            _fig.tight_layout()
+            _fig.savefig(_mask_plot, dpi=150)
+            plt.close(_fig)
+            if _wandb is not None:
+                _wandb.log_image(_mask_plot, f"masking/{run_tag}/score_distributions")
             print(
-                "[mask-effect] trained-model cos(masked copy, target) "
+                "[mask-effect] trained-model masked vs non-masked cosine "
                 "by extent bucket:",
                 flush=True,
             )
             for _b, _r in _g.iterrows():
                 print(
-                    f"    {_b:12s} n={int(_r['count']):>6,}  mean_sim={_r['mean']:.4f}",
+                    f"    {_b:12s} n={int(_r[('masked_score', 'count')]):>6,} "
+                    f"masked={_r[('masked_score', 'mean')]:.4f} "
+                    f"non_masked={_r[('unmasked_score', 'mean')]:.4f} "
+                    f"delta={_r[('masked_minus_unmasked', 'mean')]:+.4f}",
                     flush=True,
                 )
             print(
@@ -808,6 +870,11 @@ def _main_inner(_mlf, _wandb) -> None:
             + _tb.format_exc(),
             flush=True,
         )
+
+    if mask_effect_metrics:
+        for _row in rows:
+            if _row.get("status") == "ok":
+                _row.update(mask_effect_metrics)
 
     # persist metrics — SUFFIXED per run (see run_tag note): the fixed
     # F["fold_metrics"] name meant the run_all step-4 series left only
@@ -950,7 +1017,8 @@ def _main_inner(_mlf, _wandb) -> None:
                     f"fold_{r.get('fold')}_{k}": r[k]
                     for k in (
                         "auc", "auc_cross", "acc_at_thr", "pr_auc", "hits_at_1",
-                        "best_dev_ap", "final_train_loss",
+                        "best_dev_ap", "final_train_loss", "n_random_easy_neg",
+                        "random_easy_available",
                         *[key for key in r if key.startswith(("f1_at_", "precision_at_", "recall_at_"))],
                     )
                     if r.get(k) is not None

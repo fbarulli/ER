@@ -545,7 +545,8 @@ for number in range(1, {workers} + 1):
         f"echo '[worker-process] resource snapshot after training'; {{diagnostics}}; "
         f"printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
     )
-    with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+    log_mode = "a" if {bool(resume_run)!r} else "w"
+    with log_path.open(log_mode, encoding="utf-8", buffering=1) as log_file:
         child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
             start_new_session=True)

@@ -641,6 +641,17 @@ class TrainingConfig(BaseModel):
     # retired; core.common owns parsing/path expansion for every consumer.
     ner: dict[str, Any] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def _fixed_epoch_space_matches_training(self) -> TrainingConfig:
+        """Allow a fixed epoch budget only when it matches the SSOT budget."""
+        lo, hi = self.hpo.tpe_space.epochs
+        if lo == hi and lo != self.training.epochs:
+            raise ValueError(
+                "hpo.tpe_space.epochs may be fixed only to "
+                f"training.epochs={self.training.epochs}, got [{lo}, {hi}]"
+            )
+        return self
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════

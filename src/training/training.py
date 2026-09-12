@@ -314,6 +314,12 @@ def _split_safe_random_negative_pairs(
         np.isin(row_bc[: len(df)], np.asarray(sorted(split_barcodes), dtype=str))
     )
     if len(split_rows) < 2 or n_neg <= 0:
+        if n_neg > 0:
+            print(
+                "[random-easy] WARNING: split-safe negative sampling skipped "
+                f"(requested={n_neg}, split_rows={len(split_rows)})",
+                flush=True,
+            )
         return np.empty((0, 2), dtype=int)
 
     subset = df.iloc[split_rows].reset_index(drop=True)
@@ -335,6 +341,11 @@ def _split_safe_random_negative_pairs(
             if target == 1:
                 break
             target = max(1, target // 2)
+    print(
+        "[random-easy] WARNING: no split-safe negatives could be sampled "
+        f"(requested={n_neg}, split_rows={len(split_rows)})",
+        flush=True,
+    )
     return np.empty((0, 2), dtype=int)
 
 
@@ -1760,23 +1771,38 @@ def train_one_config(
             # for early stopping and remains holdout-safe.
             if wandb_ctx is not None:
                 curve_prefix = f"curve/{run_tag}/fold_{fold_i}"
-                for event in hist:
-                    point = {}
-                    if event.get("loss") is not None:
-                        point[f"{curve_prefix}/train_loss"] = float(event["loss"])
-                    if event.get("eval_loss") is not None:
-                        point[f"{curve_prefix}/dev_loss"] = float(event["eval_loss"])
-                    if event.get("eval_dev_cosine_ap") is not None:
-                        point[f"{curve_prefix}/dev_average_precision"] = float(
-                            event["eval_dev_cosine_ap"]
+                # Keep W&B bounded: one point per integer epoch, selected by
+                # nearest true event epoch. Logging every sub-epoch event made
+                # long HPO runs noisy without adding a useful curve.
+                curve_events = [
+                    event
+                    for event in hist
+                    if event.get("epoch") is not None
+                    and any(
+                        event.get(key) is not None
+                        for key in ("loss", "eval_loss", "eval_dev_cosine_ap")
+                    )
+                ]
+                if curve_events:
+                    max_epoch = int(
+                        np.ceil(max(float(event["epoch"]) for event in curve_events))
+                    )
+                    for epoch in range(1, max_epoch + 1):
+                        nearest = min(
+                            curve_events,
+                            key=lambda event: abs(float(event["epoch"]) - epoch),
                         )
-                    if not point:
-                        continue
-                    if event.get("epoch") is not None:
-                        point[f"{curve_prefix}/epoch"] = float(event["epoch"])
-                    if event.get("step") is not None:
-                        point[f"{curve_prefix}/global_step"] = float(event["step"])
-                    wandb_ctx.log_metrics(point)
+                        point = {f"{curve_prefix}/epoch": float(epoch)}
+                        for source, target in (
+                            ("loss", "train_loss"),
+                            ("eval_loss", "dev_loss"),
+                            ("eval_dev_cosine_ap", "dev_average_precision"),
+                        ):
+                            if nearest.get(source) is not None:
+                                point[f"{curve_prefix}/{target}"] = float(
+                                    nearest[source]
+                                )
+                        wandb_ctx.log_metrics(point)
                 if train_losses and dev_losses:
                     dev_min_i = int(np.argmin(dev_losses))
                     overfit_signature = int(
@@ -1793,35 +1819,34 @@ def train_one_config(
                             f"{curve_prefix}/overfit_signature": overfit_signature,
                         }
                     )
-                train_by_epoch: dict[int, list[float]] = {}
-                dev_by_epoch: dict[int, list[float]] = {}
-                for event in hist:
-                    if event.get("epoch") is None:
-                        continue
-                    epoch = max(1, int(np.ceil(float(event["epoch"]))))
-                    if event.get("loss") is not None:
-                        train_by_epoch.setdefault(epoch, []).append(float(event["loss"]))
-                    if event.get("eval_loss") is not None:
-                        dev_by_epoch.setdefault(epoch, []).append(float(event["eval_loss"]))
-                if train_by_epoch or dev_by_epoch:
+                train_curve = [
+                    (float(event["epoch"]), float(event["loss"]))
+                    for event in hist
+                    if event.get("epoch") is not None and event.get("loss") is not None
+                ]
+                dev_curve = [
+                    (float(event["epoch"]), float(event["eval_loss"]))
+                    for event in hist
+                    if event.get("epoch") is not None and event.get("eval_loss") is not None
+                ]
+                if train_curve or dev_curve:
                     import matplotlib
 
                     matplotlib.use("Agg")
                     import matplotlib.pyplot as plt
 
-                    epochs = sorted(set(train_by_epoch) | set(dev_by_epoch))
                     fig, ax = plt.subplots(figsize=(7, 4.5))
-                    if train_by_epoch:
+                    if train_curve:
                         ax.plot(
-                            epochs,
-                            [np.mean(train_by_epoch.get(e, [np.nan])) for e in epochs],
+                            [point[0] for point in train_curve],
+                            [point[1] for point in train_curve],
                             marker="o",
                             label="train loss",
                         )
-                    if dev_by_epoch:
+                    if dev_curve:
                         ax.plot(
-                            epochs,
-                            [np.mean(dev_by_epoch.get(e, [np.nan])) for e in epochs],
+                            [point[0] for point in dev_curve],
+                            [point[1] for point in dev_curve],
                             marker="o",
                             label="dev loss",
                         )
@@ -1955,6 +1980,7 @@ def train_one_config(
                     show_progress_bar=False,
                 )
                 random_easy_s = _cos(random_emb, random_idx)
+            random_easy_status = "ok" if len(random_neg_pairs) else "empty"
             pd.DataFrame(
                 [
                     *(
@@ -2140,6 +2166,8 @@ def train_one_config(
                 "n_pos": len(test_pos),
                 "n_neg": len(hard_test),
                 "n_random_easy_neg": len(random_neg_pairs),
+                "random_easy_status": random_easy_status,
+                "random_easy_available": int(bool(len(random_neg_pairs))),
                 "random_easy_score_csv": str(random_easy_score_path),
                 **coverage,
                 "n_train_pos": len(train_pos),
