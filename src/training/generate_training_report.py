@@ -17,8 +17,16 @@ Example::
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import os
 from pathlib import Path
+
+# Keep local report generation visible and workspace-local; never fall back to
+# the read-only home cache (or an implicit /tmp matplotlib cache).
+_REPORT_ROOT = Path(__file__).resolve().parents[2]
+os.environ.setdefault("MPLCONFIGDIR", str(_REPORT_ROOT / "matplotlib"))
+(_REPORT_ROOT / "matplotlib").mkdir(parents=True, exist_ok=True)
 
 import matplotlib
 
@@ -81,6 +89,82 @@ def _score_overlap(negative: np.ndarray, positive: np.ndarray) -> float:
     return float(np.minimum(neg_hist, pos_hist).sum() * (bins[1] - bins[0]))
 
 
+def _value_set(value: object) -> set[object]:
+    """Parse canonical-record set columns without trusting CSV dtype inference."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return set()
+    try:
+        parsed = ast.literal_eval(str(value))
+    except (ValueError, SyntaxError):
+        return set()
+    if isinstance(parsed, (list, tuple, set)):
+        return set(parsed)
+    return set()
+
+
+def _add_attribute_conflicts(
+    pairs: pd.DataFrame,
+    data_path: str | Path,
+    canonical_path: str | Path,
+) -> pd.DataFrame:
+    """Attach volume/pack/flavor conflict labels to legacy pair dumps."""
+    if "attribute_conflict_type" in pairs.columns:
+        return pairs
+    data = pd.read_csv(data_path, dtype=str).fillna("")
+    canon = pd.read_csv(canonical_path, dtype=str).fillna("")
+    sku_lookup = data.set_index("product_id").to_dict("index")
+    canon_lookup = canon.set_index("gtin").to_dict("index")
+    from pipeline import extract_all
+
+    cache: dict[str, dict[str, object]] = {}
+
+    def attrs(ref: object) -> dict[str, object]:
+        key = str(ref)
+        if key in cache:
+            return cache[key]
+        if key.startswith("canon#"):
+            record = canon_lookup.get(key.removeprefix("canon#"), {})
+            info = {
+                "volume": _value_set(record.get("volume_set")),
+                "pack": _value_set(record.get("pack_set")),
+                "flavor": str(record.get("mode_flavor", "")).strip().lower(),
+            }
+        else:
+            record = sku_lookup.get(key, {})
+            try:
+                extracted = extract_all(
+                    str(record.get("title", "")), str(record.get("attributes", ""))
+                )
+                info = {
+                    "volume": {float(extracted.get("volume_ml") or 0.0)},
+                    "pack": {int(extracted.get("pack_qty") or 1)},
+                    "flavor": str(extracted.get("flavor") or "").strip().lower(),
+                }
+            except Exception:
+                info = {"volume": set(), "pack": set(), "flavor": ""}
+        cache[key] = info
+        return info
+
+    def conflict(row: pd.Series) -> dict[str, object]:
+        left, right = attrs(row["sku_id_a"]), attrs(row["sku_id_b"])
+        types = []
+        if left["volume"] and right["volume"] and not (left["volume"] & right["volume"]):
+            types.append("volume")
+        if left["pack"] and right["pack"] and not (left["pack"] & right["pack"]):
+            types.append("pack")
+        if left["flavor"] and right["flavor"] and left["flavor"] != right["flavor"]:
+            types.append("flavor")
+        return {
+            "volume_conflict": int("volume" in types),
+            "pack_conflict": int("pack" in types),
+            "flavor_conflict": int("flavor" in types),
+            "attribute_conflict_type": "+".join(types) if types else "none",
+        }
+
+    labels = pd.DataFrame([conflict(row) for _, row in pairs.iterrows()])
+    return pd.concat([pairs.reset_index(drop=True), labels], axis=1)
+
+
 def _save(fig: plt.Figure, path: Path) -> None:
     fig.savefig(path, dpi=plot_dpi(), bbox_inches="tight")
     plt.close(fig)
@@ -93,6 +177,8 @@ def generate_report(
     out_dir: str | Path,
     train_score_paths: list[str | Path] | None = None,
     random_score_paths: list[str | Path] | None = None,
+    data_path: str | Path | None = None,
+    canonical_path: str | Path | None = None,
 ) -> dict:
     metrics_path = Path(metrics_path)
     out = Path(out_dir)
@@ -108,6 +194,13 @@ def generate_report(
         if not frame.empty:
             pair_frames.append(frame)
     pairs = pd.concat(pair_frames, ignore_index=True) if pair_frames else pd.DataFrame()
+    if (
+        not pairs.empty
+        and "attribute_conflict_type" not in pairs.columns
+        and data_path is not None
+        and canonical_path is not None
+    ):
+        pairs = _add_attribute_conflicts(pairs, data_path, canonical_path)
     train_score_frames = []
     for path in train_score_paths or []:
         frame = pd.read_csv(path)
@@ -208,6 +301,39 @@ def generate_report(
     fig.suptitle("Training vs DEV validation loss by epoch")
     fig.tight_layout()
     _save(fig, out / "training_vs_dev_loss_by_epoch.png")
+
+    # Ranking quality over training. AP is the evaluator's PR/ranking signal;
+    # AUC, precision and recall are plotted when the evaluator emitted them.
+    fig, axes = plt.subplots(
+        1, len(ok), figsize=(4.5 * len(ok), 3.8), squeeze=False
+    )
+    for i, (_, row) in enumerate(ok.iterrows()):
+        ax = axes[0, i]
+        epochs = _json_list(row.get("dev_metric_epoch_hist"))
+        ap = _json_list(row.get("dev_ap_hist"))
+        auc = _json_list(row.get("dev_auc_hist"))
+        precision = _json_list(row.get("dev_precision_hist"))
+        recall = _json_list(row.get("dev_recall_hist"))
+        if not epochs:
+            epochs = list(range(1, max(len(ap), len(auc), len(precision), len(recall)) + 1))
+        for values, label, color in (
+            (ap, "dev AP / PR", "#4c72b0"),
+            (auc, "dev ROC AUC", "#55a868"),
+            (precision, "dev precision", "#c44e52"),
+            (recall, "dev recall", "#8172b2"),
+        ):
+            if values:
+                x = epochs[: len(values)] if len(epochs) >= len(values) else list(range(1, len(values) + 1))
+                ax.plot(x, values, marker="o", label=label, color=color)
+        ax.set_title(f"fold {int(row['fold'])}")
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("score")
+        ax.set_ylim(0, 1.05)
+        ax.grid(alpha=0.25)
+        ax.legend(fontsize=8)
+    fig.suptitle("Ranking quality over training")
+    fig.tight_layout()
+    _save(fig, out / "ranking_quality_by_epoch.png")
 
     # Ranking and threshold metrics from the holdout CSV.
     rank_names = [
@@ -378,6 +504,43 @@ def generate_report(
         _save(fig, out / "train_holdout_score_distributions.png")
         pd.DataFrame(overlap_rows).to_csv(out / "score_distribution_overlap.csv", index=False)
 
+        # Attribute-conflict error breakdown. Pair exports carry the parser's
+        # volume/pack/flavor conflict type, so this is computed on exactly the
+        # same raw-cosine population and threshold as the holdout metrics.
+        if "attribute_conflict_type" in pairs.columns:
+            attr = pairs.copy()
+            threshold_by_fold = ok.set_index("fold")["youden_thr"].astype(float)
+            attr["threshold"] = attr["fold"].map(threshold_by_fold)
+            attr["error"] = (
+                ((attr["label"] == 1) & (attr["score"] < attr["threshold"]))
+                | ((attr["label"] == 0) & (attr["score"] >= attr["threshold"]))
+            )
+
+            def _attr_bucket(value: object) -> str:
+                parts = sorted({part for part in str(value).split("+") if part and part != "none"})
+                return "multiple" if len(parts) > 1 else (parts[0] if parts else "none")
+
+            attr["attribute_bucket"] = attr["attribute_conflict_type"].map(_attr_bucket)
+            breakdown = (
+                attr.groupby(["attribute_bucket", "label"], dropna=False)
+                .agg(n=("error", "size"), errors=("error", "sum"), mean_score=("score", "mean"))
+                .reset_index()
+            )
+            breakdown["error_rate"] = breakdown["errors"] / breakdown["n"]
+            breakdown.to_csv(out / "attribute_error_breakdown.csv", index=False)
+            plot_data = breakdown.pivot(index="attribute_bucket", columns="label", values="error_rate").fillna(0)
+            plot_data = plot_data.rename(columns={0: "label 0 error rate", 1: "label 1 error rate"})
+            fig, ax = plt.subplots(figsize=(8, 4.8))
+            plot_data.plot(kind="bar", ax=ax, color=["#c44e52", "#4c72b0"])
+            ax.set_xlabel("attribute conflict type")
+            ax.set_ylabel("error rate at DEV-fit Youden threshold")
+            ax.set_title("Holdout error breakdown by volume / pack / flavor conflict")
+            ax.set_ylim(0, 1.05)
+            ax.grid(axis="y", alpha=0.25)
+            ax.legend(title="population")
+            fig.tight_layout()
+            _save(fig, out / "attribute_error_breakdown.png")
+
     random_easy_plot = out / "random_easy_score_distributions.png"
     random_easy_csv = out / "random_easy_metrics.csv"
     if not random_scores.empty:
@@ -442,6 +605,24 @@ def generate_report(
         _save(fig, random_easy_plot)
         pd.DataFrame(rows).to_csv(random_easy_csv, index=False)
 
+    # Fine-tuning efficiency view: one point per fold, with labels retained
+    # even when only one fold exists. encode_s is the post-training embedding
+    # cost used by the reported holdout evaluation.
+    if {"auc", "encode_s"}.issubset(ok.columns):
+        pareto = ok[["fold", "auc", "encode_s"]].dropna()
+        if not pareto.empty:
+            fig, ax = plt.subplots(figsize=(7.5, 4.8))
+            ax.scatter(pareto["encode_s"], pareto["auc"], s=70, color="#4c72b0")
+            for _, row in pareto.iterrows():
+                ax.annotate(f"fold {int(row['fold'])}", (row["encode_s"], row["auc"]), xytext=(5, 5), textcoords="offset points")
+            ax.set_xlabel("holdout encode time (s)")
+            ax.set_ylabel("holdout ROC AUC")
+            ax.set_ylim(0, 1.05)
+            ax.set_title("Accuracy / latency trade-off")
+            ax.grid(alpha=0.25)
+            fig.tight_layout()
+            _save(fig, out / "auc_vs_encode_time.png")
+
     report = {
         "metrics": str(metrics_path),
         "pairs": [str(Path(p)) for p in pair_paths],
@@ -450,8 +631,12 @@ def generate_report(
         "rule_based_reconciliation_applied": False,
         "summary_csv": str(out / "metrics_summary.csv"),
         "loss_by_epoch_plot": str(out / "training_vs_dev_loss_by_epoch.png"),
+        "ranking_quality_by_epoch_plot": str(out / "ranking_quality_by_epoch.png"),
+        "auc_vs_encode_time_plot": str(out / "auc_vs_encode_time.png") if (out / "auc_vs_encode_time.png").is_file() else None,
         "train_holdout_score_plot": str(out / "train_holdout_score_distributions.png"),
         "score_overlap_csv": str(out / "score_distribution_overlap.csv"),
+        "attribute_error_plot": str(out / "attribute_error_breakdown.png") if (out / "attribute_error_breakdown.png").is_file() else None,
+        "attribute_error_csv": str(out / "attribute_error_breakdown.csv") if (out / "attribute_error_breakdown.csv").is_file() else None,
         "random_easy_score_plot": str(random_easy_plot) if random_scores is not None and not random_scores.empty else None,
         "random_easy_metrics_csv": str(random_easy_csv) if random_scores is not None and not random_scores.empty else None,
         "confusion_csv": str(out / "confusion_matrices.csv") if confusion_rows else None,
@@ -469,6 +654,8 @@ def main() -> None:
     ap.add_argument("--pairs", nargs="*", default=None, help="fold*_pairs.csv files")
     ap.add_argument("--train-scores", nargs="*", default=None, help="fold*_train_scores.csv files")
     ap.add_argument("--random-scores", nargs="*", default=None, help="fold*_random_easy_scores.csv files")
+    ap.add_argument("--data", default=None, help="dataset_deduped.csv for legacy pair attribute enrichment")
+    ap.add_argument("--canonicals", default=None, help="canonical_records.csv for legacy pair attribute enrichment")
     ap.add_argument("--out-dir", required=True, help="report output directory")
     args = ap.parse_args()
     metrics = Path(args.metrics)
@@ -483,7 +670,15 @@ def main() -> None:
         if args.random_scores is not None
         else sorted(metrics.parent.glob("*fold*_random_easy_scores.csv"))
     )
-    generate_report(metrics, pairs, args.out_dir, train_scores, random_scores)
+    generate_report(
+        metrics,
+        pairs,
+        args.out_dir,
+        train_scores,
+        random_scores,
+        args.data,
+        args.canonicals,
+    )
 
 
 if __name__ == "__main__":

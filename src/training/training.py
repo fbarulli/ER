@@ -1794,6 +1794,34 @@ def train_one_config(
             # evaluator's own loss per eval step — the pair the train-vs-val
             # plot draws. Absent only when no eval ran (skipped/failed fold).
             dev_losses = [e["eval_loss"] for e in hist if "eval_loss" in e]
+            dev_metric_events = [
+                e for e in hist
+                if e.get("epoch") is not None
+                and any(
+                    e.get(key) is not None
+                    for key in (
+                        "eval_dev_cosine_ap",
+                        "eval_dev_cosine_auc",
+                        "eval_dev_cosine_precision",
+                        "eval_dev_cosine_recall",
+                    )
+                )
+            ]
+            dev_aucs = [
+                e["eval_dev_cosine_auc"]
+                for e in dev_metric_events
+                if e.get("eval_dev_cosine_auc") is not None
+            ]
+            dev_precisions = [
+                e["eval_dev_cosine_precision"]
+                for e in dev_metric_events
+                if e.get("eval_dev_cosine_precision") is not None
+            ]
+            dev_recalls = [
+                e["eval_dev_cosine_recall"]
+                for e in dev_metric_events
+                if e.get("eval_dev_cosine_recall") is not None
+            ]
             final_train_loss = train_losses[-1] if train_losses else float("nan")
             best_dev_ap = max(dev_aps) if dev_aps else float("nan")
 
@@ -2191,6 +2219,12 @@ def train_one_config(
                     [round(float(e["epoch"]), 4) for e in hist if "loss" in e and e.get("epoch") is not None]
                 ),
                 "dev_ap_hist": json.dumps([round(x, 4) for x in dev_aps]),
+                "dev_auc_hist": json.dumps([round(x, 4) for x in dev_aucs]),
+                "dev_precision_hist": json.dumps([round(x, 4) for x in dev_precisions]),
+                "dev_recall_hist": json.dumps([round(x, 4) for x in dev_recalls]),
+                "dev_metric_epoch_hist": json.dumps(
+                    [round(float(e["epoch"]), 4) for e in dev_metric_events]
+                ),
                 "dev_loss_hist": json.dumps([round(x, 4) for x in dev_losses]),
                 "dev_epoch_hist": json.dumps(
                     [round(float(e["epoch"]), 4) for e in hist if "eval_loss" in e and e.get("epoch") is not None]
@@ -2279,6 +2313,50 @@ def train_one_config(
             )
             n_canon_entries = max(0, _canon_end - len(df))
             pair_records = []
+            _attribute_cache: dict[int, dict[str, object]] = {}
+
+            def _attribute_info(index: int) -> dict[str, object]:
+                """Extract comparable volume/pack/flavor fields for a pair endpoint."""
+                if index in _attribute_cache:
+                    return _attribute_cache[index]
+                try:
+                    from pipeline import extract_all
+
+                    if index < len(df):
+                        title = str(df["title"].iloc[index])
+                        attribute = str(df["attributes"].iloc[index])
+                    else:
+                        title = str(payload[index])
+                        attribute = ""
+                    extracted = extract_all(title, attribute)
+                    info = {
+                        "volume": float(extracted.get("volume_ml") or 0.0),
+                        "pack": int(extracted.get("pack_qty") or 1),
+                        "flavor": str(extracted.get("flavor") or "").strip().lower(),
+                    }
+                except Exception:
+                    # Pair scoring must remain available even if an optional
+                    # attribute parser cannot classify one endpoint.
+                    info = {"volume": 0.0, "pack": 1, "flavor": ""}
+                _attribute_cache[index] = info
+                return info
+
+            def _attribute_conflicts(a: int, b: int) -> dict[str, object]:
+                left, right = _attribute_info(a), _attribute_info(b)
+                conflicts = []
+                if left["volume"] and right["volume"] and left["volume"] != right["volume"]:
+                    conflicts.append("volume")
+                if left["pack"] != right["pack"]:
+                    conflicts.append("pack")
+                if left["flavor"] and right["flavor"] and left["flavor"] != right["flavor"]:
+                    conflicts.append("flavor")
+                return {
+                    "volume_conflict": int("volume" in conflicts),
+                    "pack_conflict": int("pack" in conflicts),
+                    "flavor_conflict": int("flavor" in conflicts),
+                    "attribute_conflict_type": "+".join(conflicts) if conflicts else "none",
+                }
+
             for pairs, scores, label, a_col, b_col in (
                 (test_pos, pos_s, 1, None, None),
                 (hard_test, neg_s, 0, None, None),
@@ -2312,6 +2390,7 @@ def train_one_config(
                             "cross_country": bool(country[a] != country[b]),
                             "retailer_a": _retailer(a),
                             "retailer_b": _retailer(b),
+                            **_attribute_conflicts(a, b),
                         }
                     )
             model_tag = model_id.split("/")[-1]

@@ -159,6 +159,9 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
     run_logs = RESULTS / "logs" / run_tag
     if run_logs.is_dir():
         artifact_paths.append(run_logs)
+    report_dir = RESULTS / f"report_{run_tag}"
+    if report_dir.is_dir():
+        artifact_paths.append(report_dir)
 
     checkpoint_root = RESULTS / "_checkpoints" / model_tag
     for row in rows:

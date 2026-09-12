@@ -45,7 +45,9 @@ colab:
   probe_retry_backoff_seconds: 5
   artifact_repo_id: "fbarulli/e-r-training-artifacts"
   artifact_repo_private: true
-  mask_effect_after_train: true
+  # Mask-effect scoring is a local post-run analysis over the downloaded
+  # checkpoint/results; do not spend remote GPU time on it during training.
+  mask_effect_after_train: false
   smoke_epochs: 1
   dvc_remote_url: "https://dagshub.com/fbarulli/ER.dvc"
   dagshub_repo: "fbarulli/ER"
