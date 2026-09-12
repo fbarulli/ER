@@ -476,9 +476,10 @@ class HpoSpaceSpec(BaseModel):
     def _ranges_ordered(self) -> HpoSpaceSpec:
         for name in ("epochs", "lr", "warmup_ratio", "weight_decay"):
             lo, hi = getattr(self, name)
-            if not lo < hi:
+            valid = lo <= hi if name == "epochs" else lo < hi
+            if not valid:
                 raise ValueError(
-                    f"hpo.tpe_space.{name} must satisfy lo < hi, got [{lo}, {hi}]"
+                    f"hpo.tpe_space.{name} has an invalid range [{lo}, {hi}]"
                 )
         return self
 
@@ -509,6 +510,7 @@ class HpoSpec(BaseModel):
     tpe_space: HpoSpaceSpec
     n_trials: int = Field(ge=1)
     n_jobs: int = Field(ge=1)
+    persistence: Literal["dvc", "local", "none"]
     # selection protocol (test-leak fix, 2026-09-12): WHICH signal a sweep
     # ranks configs on, pinned PER SPLIT MODE so a config typo can never
     # re-couple the holdout objective to the test quarter. holdout MUST

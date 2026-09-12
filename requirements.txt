@@ -31,6 +31,10 @@ sentencepiece==0.2.2
 # ── experiment tracking / HPO (lazy-imported; both optional at runtime) ─────
 mlflow==3.15.1
 optuna==4.4.0
+# PostgreSQL driver for the shared Optuna RDBStorage control plane. The
+# binary extra supplies a reproducible wheel on Colab; no database URL or
+# credentials are committed — the launcher reads OPTUNA_STORAGE_URL.
+psycopg[binary]==3.3.5
 
 # ── plots ──────────────────────────────────────────────────────────────────
 matplotlib==3.11.1

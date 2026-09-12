@@ -28,6 +28,7 @@ from core.common import (
     set_determinism,
 )
 from core.common import SSOT_LOSS as _SSOT_LOSS
+from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_CONTRASTIVE_MARGIN
 from training.folds import component_folds
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 
@@ -145,6 +146,50 @@ def _append_csv(
         else:
             appended.append(r)
     pd.DataFrame(out_rows + appended).to_csv(path, index=False)
+
+
+def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics_path: Path) -> None:
+    """Publish every run-scoped result and checkpoint as one downloadable artifact."""
+    artifact_paths: list[Path] = [metrics_path]
+    latest_metrics = RESULTS / F["fold_metrics"]
+    if latest_metrics.is_file() and latest_metrics != metrics_path:
+        artifact_paths.append(latest_metrics)
+
+    run_logs = RESULTS / "logs" / run_tag
+    if run_logs.is_dir():
+        artifact_paths.append(run_logs)
+
+    artifact_paths.extend(
+        sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*"))
+    )
+    artifact_paths.extend(
+        sorted(RESULTS.glob(f"wandb_*_{run_tag}_fold*.png"))
+    )
+
+    checkpoint_root = RESULTS / "_checkpoints" / model_tag
+    if checkpoint_root.is_dir():
+        artifact_paths.extend(
+            sorted(checkpoint_root.glob(f"r{run_tag}_f*"))
+        )
+
+    pointer = RESULTS / F["results_pointer"]
+    if pointer.is_file() and "_sample" not in metrics_path.name:
+        artifact_paths.append(pointer)
+    dvc_resume = RESULTS / ".resume"
+    if dvc_resume.is_dir():
+        artifact_paths.append(dvc_resume)
+
+    # Keep the artifact deterministic if a path was discovered by more than
+    # one glob, while preserving the first occurrence's useful directory name.
+    unique_paths: list[Path] = []
+    seen: set[Path] = set()
+    for path in artifact_paths:
+        resolved = path.resolve()
+        if resolved not in seen and path.exists():
+            seen.add(resolved)
+            unique_paths.append(path)
+    if unique_paths:
+        _wandb.log_artifacts(unique_paths, f"run-{run_tag}-downloadable")
 
 
 def main() -> None:
@@ -390,6 +435,7 @@ def _main_inner(_mlf, _wandb) -> None:
             "split": args.split,
             "payload": args.payload,
             "loss": args.loss,
+            "contrastive_margin": float(_SSOT_CONTRASTIVE_MARGIN),
             "architecture": runtime("architecture"),
             "mask_frac": args.mask_frac,
             "masking_enabled": bool(args.mask_frac > 0),
@@ -910,6 +956,12 @@ def _main_inner(_mlf, _wandb) -> None:
         )
     _mlf.log_artifact(out)
     _wandb.log_artifact(out, "fold-metrics")
+    _log_run_artifacts_to_wandb(
+        _wandb,
+        run_tag=run_tag,
+        model_tag=model_tag,
+        metrics_path=out,
+    )
     _wandb.set_summary(
         {
             "mean_auc": float(np.mean(aucs)) if aucs else None,

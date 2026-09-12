@@ -659,7 +659,10 @@ def oracle_no_fallback_ssot() -> None:
     )
     check(
         "hpo.tpe_space ranges ordered + numeric",
-        all(lo < hi for lo, hi in h["tpe_space"].values()),
+        all(
+            (lo <= hi if name == "epochs" else lo < hi)
+            for name, (lo, hi) in h["tpe_space"].items()
+        ),
         str(h["tpe_space"]),
     )
     check("hpo.n_trials >= 1", h["n_trials"] >= 1)

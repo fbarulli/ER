@@ -325,7 +325,7 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     remote = _configure(source, token)
     paths = [
         p.name for p in source.iterdir()
-        if p.is_file() and p.suffix == ".csv"
+        if p.is_file() and p.suffix in {".csv", ".json", ".png"}
         and p.name not in {"canonical_records.csv", "gate_results.csv"}
     ]
     paths.extend(

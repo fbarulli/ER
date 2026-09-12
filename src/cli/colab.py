@@ -61,6 +61,7 @@ from core.common import (
     TRAIN_ROOT,
     sweep_cfg,
     hpo_cfg,
+    resolve_model,
     training_cfg,
 )
 from core.manifest import sha256_file
@@ -85,6 +86,7 @@ REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
 _HPO_WORKERS = _COLAB.hpo_workers
 _HPO_TRIAL_JOBS_DEFAULT = int(hpo_cfg()["n_jobs"])
+_HPO_PERSISTENCE = str(hpo_cfg()["persistence"])
 _TRAIN_WORKERS = _COLAB.train_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
@@ -195,10 +197,17 @@ def run_colab_exec_stream(
         process.stdin.close()
         try:
             process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             process.kill()
-            print(f"\n[error] Execution timed out after {timeout}s", file=sys.stderr)
-            raise
+            process.wait()
+            out_thread.join()
+            err_thread.join()
+            output = "".join(captured)
+            raise RuntimeError(
+                f"Remote execution timed out after {timeout}s.\n"
+                "--- complete remote output / traceback ---\n"
+                f"{output}"
+            ) from exc
         out_thread.join()
         err_thread.join()
         if process.returncode == 0:
@@ -215,8 +224,9 @@ def run_colab_exec_stream(
             time.sleep(delay)
             continue
         raise RuntimeError(
-            f"Remote execution failed with return code {process.returncode}; "
-            "see the timestamped Colab log for the full traceback"
+            f"Remote execution failed with return code {process.returncode}.\n"
+            "--- complete remote output / traceback ---\n"
+            f"{output}"
         )
 
 
@@ -535,7 +545,7 @@ for number in range(1, {workers} + 1):
         f"echo '[worker-process] resource snapshot after training'; {{diagnostics}}; "
         f"printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
     )
-    with log_path.open("a" if {bool(resume_run)!r} else "w", encoding="utf-8", buffering=1) as log_file:
+    with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
         child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
             start_new_session=True)
@@ -659,7 +669,11 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
         local_dir = local_base / f"worker_{number}"
         for name in _list_remote(remote_dir):
             remote = Path(name)
-            if remote.suffix not in {".csv", ".json", ".log"}:
+            if remote.suffix not in {
+                ".csv", ".json", ".log", ".png", ".safetensors", ".bin",
+                ".pt", ".pth", ".npz", ".pkl", ".pickle", ".dvc",
+                ".yaml", ".yml", ".txt", ".html", ".db", ".sqlite3",
+            }:
                 continue
             rel = remote.relative_to(remote_dir)
             local = local_dir / rel
@@ -739,7 +753,7 @@ def install_deps() -> None:
         "subprocess.run([sys.executable, '-m', 'pip', 'install',\n"
         "                'sentence-transformers', 'datasets', 'accelerate',\n"
         "                'evaluate', 'scikit-learn', 'pandas', 'numpy',\n"
-        "                'mlflow', 'optuna', 'wandb', 'dvc', 'dagshub'], check=True)\n"
+        "                'mlflow', 'optuna', 'psycopg[binary]', 'wandb', 'dvc', 'dagshub'], check=True)\n"
         "print('deps installed')"
     )
     run_colab_exec_stream(SESSION, install_script, timeout=900, log_name="00_deps", retry_safe=True)
@@ -800,6 +814,18 @@ def _hf_env_script() -> str:
     return ""
 
 
+def _optuna_env_script() -> str:
+    """Inject the shared PostgreSQL control-plane URL into the VM only."""
+    url = _env_value("OPTUNA_STORAGE_URL")
+    if not url:
+        print("[hpo-control] OPTUNA_STORAGE_URL absent; concurrent HPO is disabled")
+        return ""
+    if not url.startswith(("postgresql://", "postgresql+psycopg://")):
+        raise RuntimeError("OPTUNA_STORAGE_URL must use a PostgreSQL URL")
+    print("[hpo-control] PostgreSQL Optuna URL loaded from local .env and injected into VM process")
+    return f"os.environ['OPTUNA_STORAGE_URL'] = {url!r}\n"
+
+
 def _remote_auth_env_script() -> str:
     """Credential exports used by remote subprocess launch cells only."""
     key = _env_value("DVC_API_KEY")
@@ -809,7 +835,7 @@ def _remote_auth_env_script() -> str:
     else:
         print("[dvc] DVC_API_KEY absent from .env; durable DVC upload will fail")
         dvc = ""
-    return _wandb_env_script() + _hf_env_script() + dvc
+    return _wandb_env_script() + _hf_env_script() + _optuna_env_script() + dvc
 
 
 def run_data_prep() -> None:
@@ -855,7 +881,7 @@ for path in required:
 
 def run_train(
     frac: float, epochs: int, sample: int | None, workers: int = 1,
-    *, resume_run: str | None = None,
+    *, resume_run: str | None = None, model: str | None = None,
 ) -> None:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the VM (GPU) ...")
@@ -869,6 +895,8 @@ def run_train(
         "--train-frac", str(frac),
         "--epochs", str(epochs),
         "--no-plot"]
+    if model is not None:
+        args.extend(["--model", resolve_model(model)])
     if sample is not None:
         args.extend(["--sample", str(sample)])
     if not _MASK_EFFECT_AFTER_TRAIN:
@@ -935,26 +963,33 @@ def run_hpo(
     *,
     resume: bool = False,
     trial_jobs: int = _HPO_TRIAL_JOBS_DEFAULT,
+    persistence: str | None = None,
 ) -> None:
     """Sweep every configured backbone, then evaluate and rerank each winner."""
     mode = mode or _HPO_MODE
+    persistence = persistence or _HPO_PERSISTENCE
     print(
         f"[run] round-robin HPO (mode={mode}, model_workers={_HPO_WORKERS}, "
-        f"trial_jobs={trial_jobs}, resume={resume}) ..."
+        f"trial_jobs={trial_jobs}, resume={resume}, persistence={persistence}) ..."
     )
     run_id = (
         datetime.now(timezone.utc).strftime("hpo_%Y%m%dT%H%M%SZ")
         + "_" + uuid.uuid4().hex[:8]
     )
+    mask_effect_flag = "--mask-effect" if _MASK_EFFECT_AFTER_TRAIN else "--no-mask-effect"
     resume_pointers = _hpo_resume_pointer_payload() if resume else {}
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
-import concurrent.futures, json, os, pathlib, shutil, subprocess, sys
+import concurrent.futures, json, os, pathlib, shutil, subprocess, sys, time
 from datetime import datetime, timezone
 from core.common import F, hpo_cfg, resolve_model
 root = pathlib.Path("{REMOTE_ROOT}")
 hpo_root = root / "results" / "hpo_runs" / "{run_id}"
 hpo_root.mkdir(parents=True, exist_ok=False)
-base = [sys.executable, "-u", "-m", "training.train", "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot"]
+(hpo_root / "generation.json").write_text(json.dumps({{
+    "run_id": "{run_id}", "created_at": datetime.now(timezone.utc).isoformat(),
+    "persistence": "{persistence}", "mode": "{mode}", "trial_jobs": {trial_jobs},
+}}, indent=2, sort_keys=True), encoding="utf-8")
+base = [sys.executable, "-u", "-m", "training.train", "--split", "holdout", "--loss", "contrastive", "--payload", "full", "--no-plot", "{mask_effect_flag}"]
 hpo_base = list(base)
 hpo_base.extend(["--n-jobs", str({trial_jobs})])
 if {resume!r}:
@@ -1039,6 +1074,8 @@ def worker_setup(model_key):
         "WANDB_RUN_NAME": f"{run_id}_hpo_{{model_key}}",
         "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1",
         "EUROMONITOR_HPO_RETENTION_MODE": "1",
+        "EUROMONITOR_HPO_GENERATION_ID": "{run_id}",
+        "EUROMONITOR_HPO_MODEL_KEY": model_key,
     }}
 
 def run_model(model_key):
@@ -1068,6 +1105,19 @@ def run_model(model_key):
     if final_env:
         final_env["WANDB_RUN_NAME"] = f"{run_id}_final_{{model_key}}"
     run_logged(final, f"final_{{model_key}}", final_env)
+    if "{persistence}" != "none":
+        # The subprocess is finished: its model directory and SQLite study are
+        # stable.  Snapshot first, mark READY last, then *optionally* publish.
+        # A DVC error is intentionally non-fatal: the model result remains on
+        # disk and the launcher proceeds to the next model.
+        from training.hpo_persistence import build_snapshot, best_effort_dvc_publish
+        snapshot = build_snapshot(
+            generation=hpo_root, sequence=time.time_ns(), optuna_db=None,
+            include=[out], scope=model_key,
+        )
+        print(f"[hpo-durability] local snapshot ready: {{snapshot}}", flush=True)
+        if "{persistence}" == "dvc":
+            best_effort_dvc_publish(snapshot)
     return {{"model_key": model_key, "model": str(model), "best": params,
             "results_dir": str(out.relative_to(root / "results"))}}
 
@@ -1357,6 +1407,11 @@ def main() -> None:
         help="optional smoke cap for --what train; full data when omitted",
     )
     ap.add_argument(
+        "--model",
+        default=None,
+        help="model registry key for --what train (for example minilm_l6)",
+    )
+    ap.add_argument(
         "--resume-run",
         default=None,
         help="resume this existing concurrent_train_<id> run on the VM",
@@ -1365,6 +1420,12 @@ def main() -> None:
         "--resume-hpo",
         action="store_true",
         help="restore the previous HPO Optuna database/checkpoints before the sweep",
+    )
+    ap.add_argument(
+        "--hpo-persistence",
+        choices=["dvc", "local", "none"],
+        default=_HPO_PERSISTENCE,
+        help="HPO durability backend (default from config/training.yaml)",
     )
     ap.add_argument(
         "--gpu",
@@ -1420,11 +1481,16 @@ def main() -> None:
         elif args.what == "hpo":
             if args.hpo_jobs < 1:
                 raise ValueError("--hpo-jobs must be >= 1")
-            run_hpo(args.hpo_mode, resume=args.resume_hpo, trial_jobs=args.hpo_jobs)
+            run_hpo(
+                args.hpo_mode,
+                resume=args.resume_hpo,
+                trial_jobs=args.hpo_jobs,
+                persistence=args.hpo_persistence,
+            )
         else:
             run_train(
                 args.train_frac, args.epochs, sample=args.sample, workers=args.workers,
-                resume_run=args.resume_run,
+                resume_run=args.resume_run, model=args.model,
             )
         print("[dvc] remote artifacts are authoritative; local download disabled", flush=True)
     except BaseException:

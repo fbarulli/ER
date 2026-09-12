@@ -293,6 +293,46 @@ _auc = pair_auc
 _cos = pair_similarity
 
 
+def _split_safe_random_negative_pairs(
+    df: pd.DataFrame,
+    row_bc: np.ndarray,
+    split_barcodes: set[str],
+    *,
+    seed: int,
+    n_neg: int,
+) -> np.ndarray:
+    """Build known-different random negatives using only one split.
+
+    ``build_pairs`` owns the barcode validity/title-difference rules. This
+    wrapper restricts its input to the requested split first, then maps the
+    returned local row indices back to the training payload indices.
+    """
+    from core.blocking import build_pairs
+    from core.common import training_cfg
+
+    split_rows = np.flatnonzero(
+        np.isin(row_bc[: len(df)], np.asarray(sorted(split_barcodes), dtype=str))
+    )
+    if len(split_rows) < 2 or n_neg <= 0:
+        return np.empty((0, 2), dtype=int)
+
+    subset = df.iloc[split_rows].reset_index(drop=True)
+    pairs_cfg = training_cfg().pairs
+    target = min(int(n_neg), max(1, len(subset) * 4))
+    while target:
+        try:
+            _, local_neg = build_pairs(
+                subset,
+                seed=seed,
+                max_pos_per_group=int(pairs_cfg.max_pos_per_group),
+                n_neg=target,
+            )
+            return split_rows[local_neg]
+        except RuntimeError:
+            target //= 2
+    return np.empty((0, 2), dtype=int)
+
+
 def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float):
     """Precision/recall/threshold at a target recall (07-series schema).
 
@@ -359,8 +399,159 @@ def _make_loss(model, loss: str, margin: float | None = None):
             if margin is not None
             else _SSOT_MARGIN
         )
-        return losses.OnlineContrastiveLoss(model, margin=m)
+        return _tracking_contrastive_loss(model, margin=m)
     return losses.TripletLoss(model)
+
+
+def _tracking_contrastive_loss(model, *, margin: float):
+    """Return OnlineContrastiveLoss with selection/backprop telemetry.
+
+    The implementation preserves the installed loss's hard-pair selection
+    and arithmetic. It only accumulates detached counters and loss-component
+    values during gradient-enabled forwards; ProgressCallback drains them at
+    Trainer logging steps.
+    """
+    import torch
+    import torch.nn.functional as F
+    from sentence_transformers.sentence_transformer import losses
+
+    class _TrackedOnlineContrastiveLoss(losses.OnlineContrastiveLoss):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._tracking_totals: dict[str, float] = {}
+            self._tracking_batches = 0
+            self._batch_pair_ids = None
+            self._total_negative_pairs = 0
+            self._seen_hard_negative_ids: set[int] = set()
+            self._seen_margin_active_negative_ids: set[int] = set()
+
+        def set_batch_pair_ids(self, pair_ids) -> None:
+            self._batch_pair_ids = pair_ids.detach().cpu()
+
+        def set_total_negative_pairs(self, count: int) -> None:
+            self._total_negative_pairs = int(count)
+
+        def compute_loss_from_embeddings(self, embeddings, labels):
+            if not self._checked_labels:
+                self._checked_labels = True
+                if labels.ne(0).logical_and(labels.ne(1)).any().item():
+                    import warnings
+
+                    warnings.warn(
+                        "OnlineContrastiveLoss expects binary labels (0 or 1). "
+                        "Pairs with any other label are ignored, since they "
+                        "match neither the positive nor the negative set.",
+                        UserWarning,
+                        stacklevel=4,
+                    )
+
+            distance_matrix = self.distance_metric(embeddings[0], embeddings[1])
+            negs = distance_matrix[labels == 0]
+            poss = distance_matrix[labels == 1]
+            batch_pair_ids = self._batch_pair_ids
+            self._batch_pair_ids = None
+
+            # This is the installed sentence-transformers selection rule.
+            negative_selection = negs < (
+                poss.max() if len(poss) > 1 else negs.mean()
+            )
+            negative_pairs = negs[
+                negative_selection
+            ]
+            positive_selection = poss > (
+                negs.min() if len(negs) > 1 else poss.mean()
+            )
+            positive_pairs = poss[
+                positive_selection
+            ]
+            positive_loss = positive_pairs.pow(2).sum()
+            negative_hinge = F.relu(self.margin - negative_pairs)
+            negative_loss = negative_hinge.pow(2).sum()
+            loss_value = positive_loss + negative_loss
+
+            # Evaluator forwards are no-grad; only optimizer-facing forwards
+            # belong to the backprop attribution window.
+            if torch.is_grad_enabled():
+                if batch_pair_ids is not None:
+                    labels_cpu = labels.detach().cpu()
+                    negative_ids = batch_pair_ids[labels_cpu == 0]
+                    selected_negative_ids = negative_ids[
+                        negative_selection.detach().cpu()
+                    ]
+                    active_negative_ids = selected_negative_ids[
+                        (negative_hinge > 0).detach().cpu()
+                    ]
+                    self._seen_hard_negative_ids.update(
+                        int(value) for value in selected_negative_ids.tolist()
+                    )
+                    self._seen_margin_active_negative_ids.update(
+                        int(value) for value in active_negative_ids.tolist()
+                    )
+                values = {
+                    "hard_positive_count": float(len(positive_pairs)),
+                    "hard_negative_count": float(len(negative_pairs)),
+                    "margin_active_negative_count": float(
+                        (negative_hinge > 0).sum().item()
+                    ),
+                    "all_positive_count": float(len(poss)),
+                    "all_negative_count": float(len(negs)),
+                    "positive_loss": float(positive_loss.detach().item()),
+                    "negative_loss": float(negative_loss.detach().item()),
+                }
+                for key, value in values.items():
+                    self._tracking_totals[key] = (
+                        self._tracking_totals.get(key, 0.0) + value
+                    )
+                self._tracking_batches += 1
+
+            return loss_value
+
+        def pop_tracking_stats(self) -> dict[str, float]:
+            batches = self._tracking_batches
+            totals = self._tracking_totals
+            self._tracking_totals = {}
+            self._tracking_batches = 0
+            if not batches:
+                return {}
+            result = {
+                "hard_positive_count": totals.get("hard_positive_count", 0.0),
+                "hard_negative_count": totals.get("hard_negative_count", 0.0),
+                "margin_active_negative_count": totals.get(
+                    "margin_active_negative_count", 0.0
+                ),
+                "all_positive_count": totals.get("all_positive_count", 0.0),
+                "all_negative_count": totals.get("all_negative_count", 0.0),
+                "positive_loss": totals.get("positive_loss", 0.0),
+                "negative_loss": totals.get("negative_loss", 0.0),
+                "tracking_batches": float(batches),
+            }
+            result["margin_active_negative_fraction"] = (
+                result["margin_active_negative_count"]
+                / result["hard_negative_count"]
+                if result["hard_negative_count"]
+                else 0.0
+            )
+            total_loss = result["positive_loss"] + result["negative_loss"]
+            result["negative_loss_fraction"] = (
+                result["negative_loss"] / total_loss if total_loss else 0.0
+            )
+            return result
+
+        def coverage_stats(self) -> dict[str, float]:
+            selected = len(self._seen_hard_negative_ids)
+            active = len(self._seen_margin_active_negative_ids)
+            total = self._total_negative_pairs
+            return {
+                "contrastive_margin": float(self.margin),
+                "negative_cosine_target": float(1.0 - self.margin),
+                "n_train_neg_total": float(total),
+                "n_train_neg_hard_selected_unique": float(selected),
+                "n_train_neg_margin_active_unique": float(active),
+                "train_neg_hard_selection_coverage": selected / total if total else 0.0,
+                "train_neg_margin_active_coverage": active / total if total else 0.0,
+            }
+
+    return _TrackedOnlineContrastiveLoss(model, margin=margin)
 
 
 def _runtime_telemetry() -> dict[str, float | int]:
@@ -413,8 +604,11 @@ class ProgressCallback(TrainerCallback):
     early-stopper is actually watching.
     """
 
-    def __init__(self, wandb_ctx=None):
+    def __init__(self, wandb_ctx=None, tracked_loss=None, trace_path=None):
         self.wandb_ctx = wandb_ctx
+        self.tracked_loss = tracked_loss
+        self.trace_path = Path(trace_path) if trace_path is not None else None
+        self._trace_rows: list[dict[str, float]] = []
         self.latest_train_loss: float | None = None
         self.latest_dev_accuracy: float | None = None
 
@@ -464,6 +658,23 @@ class ProgressCallback(TrainerCallback):
         if "loss" in logs:
             loss = float(logs["loss"])
             self.latest_train_loss = loss
+            loss_stats = (
+                self.tracked_loss.pop_tracking_stats()
+                if self.tracked_loss is not None
+                and hasattr(self.tracked_loss, "pop_tracking_stats")
+                else {}
+            )
+            self._trace_rows.append(
+                {
+                    "step": float(state.global_step),
+                    "epoch": float(state.epoch or 0.0),
+                    "train_loss": loss,
+                    "grad_norm": float(logs["grad_norm"])
+                    if logs.get("grad_norm") is not None
+                    else float("nan"),
+                    **loss_stats,
+                }
+            )
             telemetry = _runtime_telemetry()
             total_epochs = float(args.num_train_epochs)
             accuracy = (
@@ -481,15 +692,37 @@ class ProgressCallback(TrainerCallback):
                     {
                         "live/train_loss": loss,
                         "live/epoch": float(state.epoch or 0.0),
+                        "live/grad_norm": float(logs["grad_norm"])
+                        if logs.get("grad_norm") is not None
+                        else None,
+                        **{
+                            f"live/loss_{key}": value
+                            for key, value in loss_stats.items()
+                        },
                     },
-                )
+            )
             self._write_live_status(
                 state,
                 "train",
                 train_loss=loss,
                 dev_accuracy=self.latest_dev_accuracy,
+                grad_norm=(
+                    float(logs["grad_norm"])
+                    if logs.get("grad_norm") is not None
+                    else None
+                ),
+                **{f"loss_{key}": value for key, value in loss_stats.items()},
                 **telemetry,
             )
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if self.trace_path is not None and self._trace_rows:
+            self.trace_path.parent.mkdir(parents=True, exist_ok=True)
+            # A fold owns this file; write mode keeps reruns from appending
+            # stale optimizer telemetry from an earlier attempt.
+            pd.DataFrame(self._trace_rows).to_csv(self.trace_path, index=False, mode="w")
+            print(f"    [loss-trace] wrote {self.trace_path}", flush=True)
+        return control
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if not metrics or not state.is_world_process_zero:
@@ -1155,7 +1388,12 @@ def train_one_config(
                 ]
                 lab = [1] * len(train_all) + [0] * len(tr_negs)
                 train_ds = Dataset.from_dict(
-                    {"sentence1": s1, "sentence2": s2, "label": lab}
+                    {
+                        "sentence1": s1,
+                        "sentence2": s2,
+                        "label": lab,
+                        "pair_id": list(range(len(s1))),
+                    }
                 )
                 # ── TRAIN VISIBILITY (owner directive 2026-09-07): the
                 # EXACT rows the model ingests for this fold — sentence1,
@@ -1278,12 +1516,47 @@ def train_one_config(
             # and load_best_model_at_end restores the best epoch. Unique subdir
             # per run_tag so parallel trials never collide.
             from sentence_transformers import SentenceTransformerTrainer
+            from sentence_transformers.sentence_transformer.data_collator import (
+                SentenceTransformerDataCollator,
+            )
             from sentence_transformers import (
                 SentenceTransformerTrainingArguments as STArgs,
             )
 
+            class PairIdDataCollator(SentenceTransformerDataCollator):
+                """Keep numeric pair IDs out of tokenization but in the batch."""
+
+                def __call__(self, features):
+                    pair_ids = [row.get("pair_id") for row in features]
+                    text_features = [
+                        {key: value for key, value in row.items() if key != "pair_id"}
+                        for row in features
+                    ]
+                    batch = super().__call__(text_features)
+                    if all(value is not None for value in pair_ids):
+                        batch["pair_id"] = torch.tensor(pair_ids, dtype=torch.long)
+                    return batch
+
             class ResumableSentenceTransformerTrainer(SentenceTransformerTrainer):
                 """HF Trainer plus an explicit manifest of all resume state."""
+
+                def compute_loss(
+                    self,
+                    model,
+                    inputs,
+                    return_outputs=False,
+                    num_items_in_batch=None,
+                ):
+                    pair_ids = inputs.pop("pair_id", None)
+                    loss_fn = self.loss
+                    if pair_ids is not None and hasattr(loss_fn, "set_batch_pair_ids"):
+                        loss_fn.set_batch_pair_ids(pair_ids)
+                    return super().compute_loss(
+                        model,
+                        inputs,
+                        return_outputs=return_outputs,
+                        num_items_in_batch=num_items_in_batch,
+                    )
 
                 def _save_checkpoint(self, model, trial):
                     super()._save_checkpoint(model, trial)
@@ -1335,6 +1608,7 @@ def train_one_config(
                 save_only_model=False,
                 logging_strategy="steps",
                 logging_steps=eval_steps,
+                remove_unused_columns=False,
                 report_to=[],
                 seed=seed + fold_i,
                 use_cpu=not on_cuda,
@@ -1375,18 +1649,35 @@ def train_one_config(
                 groups, weight_decay=cfg["weight_decay"], lr=base_lr
             )
 
+            loss_fn = _make_loss(model, loss)
+            if hasattr(loss_fn, "set_total_negative_pairs"):
+                loss_fn.set_total_negative_pairs(len(tr_negs))
+
             trainer = ResumableSentenceTransformerTrainer(
                 model=model,
                 args=args_hf,
                 train_dataset=train_ds,
                 eval_dataset=eval_ds,
                 evaluator=evaluator,
-                loss=_make_loss(model, loss),
+                data_collator=PairIdDataCollator(
+                    preprocess_fn=model.preprocess,
+                    router_mapping=args_hf.router_mapping,
+                    prompts=args_hf.prompts,
+                    max_length=getattr(args_hf, "max_length", None),
+                ),
+                loss=loss_fn,
                 optimizers=(optimizer, None),  # prebuilt AdamW with
                 # discriminative LRs; scheduler=None -> HF builds warmup+linear
                 # from args, scaling our per-group LRs
                 callbacks=[
-                    ProgressCallback(wandb_ctx),
+                    ProgressCallback(
+                        wandb_ctx,
+                        tracked_loss=loss_fn,
+                        trace_path=RESULTS
+                        / "logs"
+                        / run_tag
+                        / f"loss_backprop_fold{fold_i}.csv",
+                    ),
                     DvcCheckpointCallback(),
                     EarlyStoppingCallback(
                         early_stopping_patience=cfg["patience"],
@@ -1421,6 +1712,22 @@ def train_one_config(
                 else:
                     print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
             trainer.train(resume_from_checkpoint=resume_checkpoint)
+            coverage = (
+                loss_fn.coverage_stats()
+                if hasattr(loss_fn, "coverage_stats")
+                else {}
+            )
+            if coverage:
+                print(
+                    f"    [loss-coverage] fold {fold_i}: "
+                    f"hard-selected {int(coverage['n_train_neg_hard_selected_unique']):,}/"
+                    f"{int(coverage['n_train_neg_total']):,} "
+                    f"({coverage['train_neg_hard_selection_coverage']:.2%}), "
+                    f"margin-active {int(coverage['n_train_neg_margin_active_unique']):,}/"
+                    f"{int(coverage['n_train_neg_total']):,} "
+                    f"({coverage['train_neg_margin_active_coverage']:.2%})",
+                    flush=True,
+                )
 
             # final training loss + best dev AP from the trainer's own log
             # history (the source the early-stopper actually used)
@@ -1435,6 +1742,94 @@ def train_one_config(
             dev_losses = [e["eval_loss"] for e in hist if "eval_loss" in e]
             final_train_loss = train_losses[-1] if train_losses else float("nan")
             best_dev_ap = max(dev_aps) if dev_aps else float("nan")
+
+            # W&B curve tracking: log the train/dev loss trajectory at the
+            # trainer's global steps so an overfit shape is visible, rather
+            # than inferring it from one final loss snapshot. The test split
+            # is intentionally excluded; dev is the validation signal used
+            # for early stopping and remains holdout-safe.
+            if wandb_ctx is not None:
+                curve_prefix = f"curve/{run_tag}/fold_{fold_i}"
+                for event in hist:
+                    point = {}
+                    if event.get("loss") is not None:
+                        point[f"{curve_prefix}/train_loss"] = float(event["loss"])
+                    if event.get("eval_loss") is not None:
+                        point[f"{curve_prefix}/dev_loss"] = float(event["eval_loss"])
+                    if event.get("eval_dev_cosine_ap") is not None:
+                        point[f"{curve_prefix}/dev_average_precision"] = float(
+                            event["eval_dev_cosine_ap"]
+                        )
+                    if not point:
+                        continue
+                    if event.get("epoch") is not None:
+                        point[f"{curve_prefix}/epoch"] = float(event["epoch"])
+                    if event.get("step") is not None:
+                        point[f"{curve_prefix}/global_step"] = float(event["step"])
+                    wandb_ctx.log_metrics(point)
+                if train_losses and dev_losses:
+                    dev_min_i = int(np.argmin(dev_losses))
+                    overfit_signature = int(
+                        train_losses[-1] < train_losses[0]
+                        and len(dev_losses) > dev_min_i + 1
+                        and dev_losses[-1] > dev_losses[dev_min_i]
+                    )
+                    wandb_ctx.set_summary(
+                        {
+                            f"{curve_prefix}/train_loss_first": float(train_losses[0]),
+                            f"{curve_prefix}/train_loss_final": float(train_losses[-1]),
+                            f"{curve_prefix}/dev_loss_min": float(min(dev_losses)),
+                            f"{curve_prefix}/dev_loss_final": float(dev_losses[-1]),
+                            f"{curve_prefix}/overfit_signature": overfit_signature,
+                        }
+                    )
+                train_by_epoch: dict[int, list[float]] = {}
+                dev_by_epoch: dict[int, list[float]] = {}
+                for event in hist:
+                    if event.get("epoch") is None:
+                        continue
+                    epoch = max(1, int(np.ceil(float(event["epoch"]))))
+                    if event.get("loss") is not None:
+                        train_by_epoch.setdefault(epoch, []).append(float(event["loss"]))
+                    if event.get("eval_loss") is not None:
+                        dev_by_epoch.setdefault(epoch, []).append(float(event["eval_loss"]))
+                if train_by_epoch or dev_by_epoch:
+                    import matplotlib
+
+                    matplotlib.use("Agg")
+                    import matplotlib.pyplot as plt
+
+                    epochs = sorted(set(train_by_epoch) | set(dev_by_epoch))
+                    fig, ax = plt.subplots(figsize=(7, 4.5))
+                    if train_by_epoch:
+                        ax.plot(
+                            epochs,
+                            [np.mean(train_by_epoch.get(e, [np.nan])) for e in epochs],
+                            marker="o",
+                            label="train loss",
+                        )
+                    if dev_by_epoch:
+                        ax.plot(
+                            epochs,
+                            [np.mean(dev_by_epoch.get(e, [np.nan])) for e in epochs],
+                            marker="o",
+                            label="dev loss",
+                        )
+                    ax.set(
+                        xlabel="epoch",
+                        ylabel="loss",
+                        title="Train vs DEV loss by epoch",
+                    )
+                    ax.grid(alpha=0.25)
+                    ax.legend()
+                    fig.tight_layout()
+                    curve_path = RESULTS / f"wandb_loss_by_epoch_{run_tag}_fold{fold_i}.png"
+                    fig.savefig(curve_path, dpi=150)
+                    plt.close(fig)
+                    wandb_ctx.log_image(
+                        curve_path,
+                        f"{curve_prefix}/loss_by_epoch",
+                    )
 
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────
             # Holdout HPO/grid folds STOP HERE: the config is ranked on
@@ -1466,12 +1861,19 @@ def train_one_config(
                         "train_loss_hist": json.dumps(
                             [round(x, 4) for x in train_losses]
                         ),
+                        "train_epoch_hist": json.dumps(
+                            [round(float(e["epoch"]), 4) for e in hist if "loss" in e and e.get("epoch") is not None]
+                        ),
                         "dev_ap_hist": json.dumps([round(x, 4) for x in dev_aps]),
                         "dev_loss_hist": json.dumps(
                             [round(x, 4) for x in dev_losses]
                         ),
+                        "dev_epoch_hist": json.dumps(
+                            [round(float(e["epoch"]), 4) for e in hist if "eval_loss" in e and e.get("epoch") is not None]
+                        ),
                         "n_dev_pos": len(dev_pos),
                         "n_dev_neg": len(hard_dev),
+                        **coverage,
                         "n_train": (
                             len(train_ds)
                             if loss in ("mnrl", "contrastive")
@@ -1516,6 +1918,56 @@ def train_one_config(
             neg_s = _cos(emb, hn_idx)
             cross_mask = country[test_pos[:, 0]] != country[test_pos[:, 1]]
 
+            # Split-safe random/easy negatives: construct from TEST rows only,
+            # score with this fine-tuned model, and keep the population label
+            # separate from the gate-mined hard-negative dump.
+            random_neg_pairs = _split_safe_random_negative_pairs(
+                df,
+                row_bc,
+                set(test_bc),
+                seed=SEED + fold_i + 1000,
+                n_neg=int(load_config()["pairs"]["n_neg"]),
+            )
+            random_easy_s = np.empty(0, dtype=float)
+            random_easy_score_path = RESULTS / (
+                f"train_{model_tag}_{run_tag}_fold{fold_i}_random_easy_scores.csv"
+            )
+            if len(random_neg_pairs):
+                random_rows = np.unique(random_neg_pairs.ravel())
+                random_row_to_idx = {int(r): i for i, r in enumerate(random_rows)}
+                random_idx = np.array(
+                    [random_row_to_idx[int(r)] for r in random_neg_pairs.ravel()]
+                ).reshape(-1, 2)
+                random_emb = model.encode(
+                    [payload[r] for r in random_rows],
+                    batch_size=runtime("batch_size_eval"),
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
+                random_easy_s = _cos(random_emb, random_idx)
+            pd.DataFrame(
+                [
+                    *(
+                        {
+                            "fold": fold_i,
+                            "population": "holdout_pos",
+                            "label": 1,
+                            "score": float(score),
+                        }
+                        for score in pos_s
+                    ),
+                    *(
+                        {
+                            "fold": fold_i,
+                            "population": "random_neg",
+                            "label": 0,
+                            "score": float(score),
+                        }
+                        for score in random_easy_s
+                    ),
+                ]
+            ).to_csv(random_easy_score_path, index=False)
+
             # ── HOLDOUT DISCIPLINE (owner audit 2026-09-07) ────────────────
             # Youden threshold is picked on DEV and applied to TEST. The old
             # code computed the operating point on the test scores itself —
@@ -1539,6 +1991,35 @@ def train_one_config(
             )
             dev_pos_s = _cos(dev_emb, dev_tp_idx)
             dev_neg_s = _cos(dev_emb, dev_hn_idx)
+
+            # Diagnostic train-side score population for class-overlap plots.
+            # It is never used for threshold fitting or HPO selection. For
+            # contrastive training, negatives are the exact gate negatives
+            # seen by the loss; for other losses, the mined hard-train set is
+            # the comparable negative population.
+            train_neg_pairs = (
+                neg_pairs[pairs_in_set(neg_pairs, row_bc, tr_bc)]
+                if neg_pairs is not None and len(neg_pairs)
+                else hard_train
+            )
+            train_rows = np.unique(
+                np.r_[train_all.ravel(), train_neg_pairs.ravel()]
+            )
+            train_row_to_idx = {int(r): i for i, r in enumerate(train_rows)}
+            train_pos_idx = np.array(
+                [train_row_to_idx[int(r)] for r in train_all.ravel()]
+            ).reshape(-1, 2)
+            train_neg_idx = np.array(
+                [train_row_to_idx[int(r)] for r in train_neg_pairs.ravel()]
+            ).reshape(-1, 2)
+            train_emb = model.encode(
+                [payload[r] for r in train_rows],
+                batch_size=runtime("batch_size_eval"),
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+            train_pos_s = _cos(train_emb, train_pos_idx)
+            train_neg_s = _cos(train_emb, train_neg_idx)
 
             # ── latency metrics ──────────────────────────────────────────
             train_s = time.perf_counter() - t_fold - encode_s
@@ -1637,11 +2118,20 @@ def train_one_config(
                 "best_dev_ap": best_dev_ap,
                 # full curves for the train-vs-val loss plot (json: csv-column-safe)
                 "train_loss_hist": json.dumps([round(x, 4) for x in train_losses]),
+                "train_epoch_hist": json.dumps(
+                    [round(float(e["epoch"]), 4) for e in hist if "loss" in e and e.get("epoch") is not None]
+                ),
                 "dev_ap_hist": json.dumps([round(x, 4) for x in dev_aps]),
                 "dev_loss_hist": json.dumps([round(x, 4) for x in dev_losses]),
+                "dev_epoch_hist": json.dumps(
+                    [round(float(e["epoch"]), 4) for e in hist if "eval_loss" in e and e.get("epoch") is not None]
+                ),
                 # ── pair accounting (failure-analysis ground) ────────────
                 "n_pos": len(test_pos),
                 "n_neg": len(hard_test),
+                "n_random_easy_neg": len(random_neg_pairs),
+                "random_easy_score_csv": str(random_easy_score_path),
+                **coverage,
                 "n_train_pos": len(train_pos),
                 # hp rows in train = total minus the GATE rows actually kept.
                 # Subtracting the UNSAMPLED train_pos went NEGATIVE under
@@ -1761,6 +2251,15 @@ def train_one_config(
                 RESULTS / f"train_{model_tag}_{run_tag}_fold{fold_i}_pairs.csv",
                 index=False,
             )
+            pd.DataFrame(
+                [
+                    *({"fold": fold_i, "label": 1, "score": float(s)} for s in train_pos_s),
+                    *({"fold": fold_i, "label": 0, "score": float(s)} for s in train_neg_s),
+                ]
+            ).to_csv(
+                RESULTS / f"train_{model_tag}_{run_tag}_fold{fold_i}_train_scores.csv",
+                index=False,
+            )
 
             dev = f"gpu {gpu_peak_gb:.1f}GB peak" if on_cuda else "cpu"
             print(
@@ -1862,6 +2361,26 @@ def run_hpo(
             _trial_loss = [r.get("final_train_loss") for r in ok_rows if np.isfinite(r.get("final_train_loss", float("nan")))]
             if _trial_loss:
                 trial.set_user_attr("mean_final_train_loss", float(np.mean(_trial_loss)))
+            _dev_loss_histories = []
+            _train_loss_histories = []
+            for row in ok_rows:
+                try:
+                    _dev_loss_histories.append(json.loads(row.get("dev_loss_hist", "[]")))
+                    _train_loss_histories.append(json.loads(row.get("train_loss_hist", "[]")))
+                except (TypeError, json.JSONDecodeError):
+                    continue
+            _best_dev_losses = [min(v) for v in _dev_loss_histories if v]
+            _final_dev_losses = [v[-1] for v in _dev_loss_histories if v]
+            _overfit_flags = [
+                int(bool(t) and bool(d) and t[-1] < t[0] and d[-1] > min(d))
+                for t, d in zip(_train_loss_histories, _dev_loss_histories)
+            ]
+            if _best_dev_losses:
+                trial.set_user_attr("mean_best_dev_loss", float(np.mean(_best_dev_losses)))
+            if _final_dev_losses:
+                trial.set_user_attr("mean_final_dev_loss", float(np.mean(_final_dev_losses)))
+            if _overfit_flags:
+                trial.set_user_attr("overfit_signature_rate", float(np.mean(_overfit_flags)))
             if selection_mode:
                 # HOLDOUT RULE (test-leak fix, 2026-09-12): rank the trial
                 # on the dev quarter's best_dev_ap ONLY. Selection-mode
@@ -1877,12 +2396,17 @@ def run_hpo(
                 if not dev_aps:
                     raise optuna.TrialPruned("no fold produced a finite dev AP")
                 value = float(np.mean(dev_aps))
-                retain_hpo_champion(
-                    model_id=args.model,
-                    run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
-                    value=value,
-                    folds=[int(r["fold"]) for r in ok_rows],
-                )
+                # PostgreSQL mode promotes only from the controller after
+                # Optuna commits COMPLETE and a sealed artifact snapshot is
+                # READY.  Doing it here would let a later storage/tracking
+                # failure delete a valid prior champion.
+                if control_plane is None:
+                    retain_hpo_champion(
+                        model_id=args.model,
+                        run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
+                        value=value,
+                        folds=[int(r["fold"]) for r in ok_rows],
+                    )
                 trial.set_user_attr("dev_selection_ap", value)
                 mlf.log_metrics(
                     {
@@ -1904,12 +2428,13 @@ def run_hpo(
             if not aucs:
                 raise optuna.TrialPruned("no fold produced a finite AUC")
             mean_auc = float(np.mean(aucs))
-            retain_hpo_champion(
-                model_id=args.model,
-                run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
-                value=mean_auc,
-                folds=[int(r["fold"]) for r in ok_rows],
-            )
+            if control_plane is None:
+                retain_hpo_champion(
+                    model_id=args.model,
+                    run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
+                    value=mean_auc,
+                    folds=[int(r["fold"]) for r in ok_rows],
+                )
             trial.set_user_attr("mean_auc", mean_auc)
             mlf.log_metrics(
                 {
@@ -1931,12 +2456,33 @@ def run_hpo(
     # by trials whose values came from single-LR training)
     study_name = f"second08-{args.model.split('/')[-1]}-dlr"
     study_db = RESULTS / f"{study_name}.optuna.db"
-    if args.resume:
+    control_plane = None
+    if os.environ.get("OPTUNA_STORAGE_URL"):
+        from training.hpo_control_plane import (
+            create_storage,
+            fail_stale_trials,
+            generation_study_name,
+            storage_from_environment,
+        )
+
+        generation_id = os.environ.get("EUROMONITOR_HPO_GENERATION_ID", "").strip()
+        model_key = os.environ.get("EUROMONITOR_HPO_MODEL_KEY", "").strip()
+        if not generation_id or not model_key:
+            raise RuntimeError(
+                "PostgreSQL HPO requires EUROMONITOR_HPO_GENERATION_ID and "
+                "EUROMONITOR_HPO_MODEL_KEY"
+            )
+        study_name = generation_study_name(
+            generation_id=generation_id, model_key=model_key
+        )
+        control_plane = create_storage(storage_from_environment())
+        print(f"[hpo-control] PostgreSQL study={study_name}", flush=True)
+    if args.resume and control_plane is None:
         from training.dvc_store import restore_checkpoint
 
         restore_checkpoint(RESULTS, study_db)
         print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
-    storage = f"sqlite:///{study_db}"
+    storage = control_plane or f"sqlite:///{study_db}"
     study = optuna.create_study(
         direction="maximize",
         sampler=sampler,
@@ -1944,6 +2490,8 @@ def run_hpo(
         storage=storage,
         load_if_exists=True,
     )
+    if control_plane is not None:
+        fail_stale_trials(study)
     # resume-safe: count prior trials, run only what remains
     prior = len(
         [t for t in study.trials if t.state.name in ("COMPLETE", "PRUNED", "FAIL")]

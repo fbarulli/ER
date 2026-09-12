@@ -60,11 +60,29 @@ class WandbCtx:
             self._run.summary.update(values)
 
     def log_artifact(self, path: str | Path, name: str) -> None:
+        self.log_artifacts([path], name)
+
+    def log_artifacts(self, paths: list[str | Path], name: str) -> None:
+        """Upload files or directories as one downloadable W&B artifact."""
         if self._run is not None:
+            import wandb
+
+            artifact = wandb.Artifact(name, type="training-result")
+            for raw_path in paths:
+                p = Path(raw_path)
+                if not p.exists():
+                    raise FileNotFoundError(f"W&B artifact missing: {p}")
+                if p.is_dir():
+                    artifact.add_dir(str(p), name=p.name)
+                else:
+                    artifact.add_file(str(p), name=p.name)
+            self._run.log_artifact(artifact)
+
+    def log_image(self, path: str | Path, name: str) -> None:
+        if self._run is not None:
+            import wandb
+
             p = Path(path)
             if not p.exists():
-                raise FileNotFoundError(f"W&B artifact missing: {p}")
-            import wandb
-            artifact = wandb.Artifact(name, type="training-result")
-            artifact.add_file(str(p))
-            self._run.log_artifact(artifact)
+                raise FileNotFoundError(f"W&B image missing: {p}")
+            self._run.log({name: wandb.Image(str(p))})

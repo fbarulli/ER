@@ -279,7 +279,7 @@ def strip_ladder_bands() -> list[tuple[float, float]]:
 # These expose the hpo:, rerank:, sweep: blocks as PLAIN JSON-able data
 # (lists of dicts / tuples) so callers never re-declare the sweep spaces.
 def hpo_cfg() -> dict:
-    """The hpo: block (grid/quick/tpe_space/n_trials/n_jobs) as plain data.
+    """The hpo: block as plain data.
 
     grid/quick rows come back as dicts ({epochs, lr, warmup}); tpe_space as
     {knob: (lo, hi)}. Validated by HpoSpec at load — no re-validation here.

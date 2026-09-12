@@ -37,7 +37,7 @@ colab:
   session: "my-highram-session"
   gpu: "T4"
   hpo_mode: "sequential"
-  hpo_workers: 3
+  hpo_workers: 2
   train_workers: 6
   log_poll_seconds: 2
   probe_timeout_seconds: 600
@@ -45,7 +45,7 @@ colab:
   probe_retry_backoff_seconds: 5
   artifact_repo_id: "fbarulli/e-r-training-artifacts"
   artifact_repo_private: true
-  mask_effect_after_train: false
+  mask_effect_after_train: true
   smoke_epochs: 1
   dvc_remote_url: "https://dagshub.com/fbarulli/ER.dvc"
   dagshub_repo: "fbarulli/ER"
@@ -100,11 +100,11 @@ training:
   # hard pairs — per-batch hard-pair selection is native to the loss.
   # mnrl = MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
   loss: "contrastive"
-  contrastive_margin: 0.5     # OnlineContrastiveLoss margin (cosine distance)
+  contrastive_margin: 0.2     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
   hard_positives: true        # volume-verified cross-country pairs join train
                               # when the second04 manifest exists (absent ->
                               # loud notice, lane runs gate-only)
-  epochs: 10
+  epochs: 20
   lr: 0.00002
   warmup_ratio: 0.05
   weight_decay: 0.01
@@ -204,7 +204,7 @@ rerank:
 hpo:
   # Backbone registry keys swept in round-robin order. Values resolve through
   # config/paths.yaml models; the launcher never embeds model identifiers.
-  models: ["minilm_l6", "multilingual_l12", "deberta_v3_base"]
+  models: ["minilm_l6"]
   grid:                       # each row: epochs / lr / warmup percent
     - {epochs: 1, lr: 2.0e-05, warmup: 0}
     - {epochs: 1, lr: 5.0e-05, warmup: 0}
@@ -222,12 +222,13 @@ hpo:
     - {epochs: 2, lr: 5.0e-05, warmup: 0}
     - {epochs: 2, lr: 5.0e-05, warmup: 10}
   tpe_space:                  # optuna suggest ranges per knob
-    epochs: [1, 4]           # int
+    epochs: [20, 20]         # fixed: every HPO trial runs 20 epochs
     lr: [1.0e-05, 1.0e-04]    # float, log-uniform
     warmup_ratio: [0.0, 0.1]  # float
     weight_decay: [0.0, 0.1]  # float
   n_trials: 20                # default TPE trial budget (was --n-trials 20)
-  n_jobs: 1                   # default parallel workers (was --n-jobs 1)
+  n_jobs: 2                   # default parallel HPO trial workers
+  persistence: "dvc"         # DVC-backed HPO snapshots
   # ── selection protocol (test-leak fix, 2026-09-12) ─────────────────────
   # WHICH signal a sweep ranks configs on, per split mode. Holdout sweeps
   # train q0+q1, early-stop + select on the dev quarter q2 (best_dev_ap)
