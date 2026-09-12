@@ -1170,6 +1170,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             output_path=audit_path,
             target=int(ann_cfg["target"]),
             configured_band=(lo, hi),
+            band_mode=str(ann_cfg["band_mode"]),
             k=int(ann_cfg["k"]),
             candidate_multiplier=int(ann_cfg["candidate_multiplier"]),
             score_quantiles=(qlo, qhi),

@@ -275,6 +275,7 @@ mining:
     enabled: true
     target: 20000             # maximum generic hard/eval pairs per lane
     band: "0.45-0.80"        # cosine band for ANN candidates
+    band_mode: "adaptive_quantile" # fixed | adaptive_quantile | intersection
     k: 40                     # top ANN candidates per row
     chunk_size: 2048          # rows per cosine-matrix chunk (OOM control)
     exclude_conflicting: true # drop known conflicting-barcode label errors

@@ -524,6 +524,7 @@ def _main_inner(_mlf, _wandb) -> None:
             "ann_k": int(ann_cfg["k"]),
             "ann_refresh_enabled": bool(ann_cfg["refresh_enabled"]),
             "ann_refresh_every_epochs": int(ann_cfg["refresh_every_epochs"]),
+            "ann_band_mode": str(ann_cfg["band_mode"]),
             "ann_candidate_multiplier": int(ann_cfg["candidate_multiplier"]),
             "ann_score_quantiles": str(ann_cfg["score_quantiles"]),
             "ann_max_per_canonical": int(ann_cfg["max_per_canonical"]),

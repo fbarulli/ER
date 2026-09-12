@@ -414,17 +414,23 @@ def calibrated_ann_band(
     scores: np.ndarray,
     configured_band: tuple[float, float],
     score_quantiles: tuple[float, float],
-) -> tuple[float, float, dict[str, float]]:
-    """Recenter the configured band using current fine-tuned ANN scores.
+    band_mode: str,
+) -> tuple[float, float, dict[str, object]]:
+    """Select the ANN band using the explicitly configured mode.
 
-    The configured mid-cosine band remains the hard boundary. Quantiles only
-    narrow it when the current model's candidate distribution supports that
-    overlap. An empty/non-overlapping population keeps the configured band and
-    reports the condition instead of silently switching populations.
+    There is intentionally no implicit fallback. ``fixed`` uses the literal
+    configured band, ``adaptive_quantile`` uses the configured score
+    quantiles, and ``intersection`` uses only their overlap (which may be
+    empty). The mode is required from the config SSOT by every caller.
     """
     scores = np.asarray(scores, dtype=float)
     lo, hi = (float(x) for x in configured_band)
     qlo, qhi = (float(x) for x in score_quantiles)
+    if band_mode not in {"fixed", "adaptive_quantile", "intersection"}:
+        raise ValueError(
+            "mining.ann.band_mode must be one of fixed, adaptive_quantile, "
+            f"intersection; got {band_mode!r}"
+        )
     if scores.size == 0:
         return lo, hi, {
             "candidate_count": 0.0,
@@ -434,13 +440,17 @@ def calibrated_ann_band(
             "band_overlap_pct": 0.0,
             "band_lo": lo,
             "band_hi": hi,
+            "band_mode": band_mode,
         }
     q_values = np.quantile(scores, [qlo, qhi])
     overlap = (scores >= lo) & (scores <= hi)
-    band_lo = max(lo, float(q_values[0]))
-    band_hi = min(hi, float(q_values[1]))
-    if not band_lo < band_hi:
+    if band_mode == "fixed":
         band_lo, band_hi = lo, hi
+    elif band_mode == "adaptive_quantile":
+        band_lo, band_hi = (float(q_values[0]), float(q_values[1]))
+    else:
+        band_lo = max(lo, float(q_values[0]))
+        band_hi = min(hi, float(q_values[1]))
     return band_lo, band_hi, {
         "candidate_count": float(scores.size),
         "candidate_min": float(np.min(scores)),
@@ -449,4 +459,5 @@ def calibrated_ann_band(
         "band_overlap_pct": float(np.mean(overlap)),
         "band_lo": float(band_lo),
         "band_hi": float(band_hi),
+        "band_mode": band_mode,
     }

@@ -31,6 +31,7 @@ def refresh_finetuned_ann(
     output_path: Path,
     target: int,
     configured_band: tuple[float, float],
+    band_mode: str,
     k: int,
     candidate_multiplier: int,
     score_quantiles: tuple[float, float],
@@ -39,7 +40,7 @@ def refresh_finetuned_ann(
     batch_size: int,
     max_seq_length: int,
     exclude_conflicting: bool,
-) -> tuple[np.ndarray, dict[str, float]]:
+) -> tuple[np.ndarray, dict[str, object]]:
     """Mine from the current fine-tuned model and rewrite one audit CSV.
 
     The broad candidate pass is intentionally unbounded by the configured
@@ -90,7 +91,7 @@ def refresh_finetuned_ann(
         max_per_brand=max(len(df), 1),
     )
     band_lo, band_hi, band_stats = calibrated_ann_band(
-        broad_scores, configured_band, score_quantiles
+        broad_scores, configured_band, score_quantiles, band_mode
     )
     refreshed, refreshed_scores = mine_hard_negatives(
         df,
@@ -134,6 +135,7 @@ def refresh_finetuned_ann(
                 "cosine": float(score),
                 "band_lo": float(band_lo),
                 "band_hi": float(band_hi),
+                "band_mode": band_mode,
                 "source": "ann_finetuned",
             }
         )
@@ -145,6 +147,7 @@ def refresh_finetuned_ann(
         "epoch": float(epoch),
         "configured_band_lo": float(configured_band[0]),
         "configured_band_hi": float(configured_band[1]),
+        "band_mode": band_mode,
         "refreshed_count": float(len(refreshed)),
     }
 

@@ -451,6 +451,7 @@ class AnnMiningSpec(BaseModel):
     enabled: bool
     target: int = Field(ge=0)
     band: str
+    band_mode: str
     k: int = Field(ge=1)
     chunk_size: int = Field(ge=1)
     exclude_conflicting: bool
@@ -460,6 +461,17 @@ class AnnMiningSpec(BaseModel):
     score_quantiles: str
     max_per_canonical: int = Field(ge=1)
     max_per_brand: int = Field(ge=1)
+
+    @field_validator("band_mode")
+    @classmethod
+    def _band_mode_allowed(cls, v: str) -> str:
+        allowed = {"fixed", "adaptive_quantile", "intersection"}
+        if v not in allowed:
+            raise ValueError(
+                "mining.ann.band_mode must be one of "
+                f"{', '.join(sorted(allowed))}, got {v!r}"
+            )
+        return v
 
     @field_validator("band")
     @classmethod
