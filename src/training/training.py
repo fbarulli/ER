@@ -1467,7 +1467,10 @@ def train_one_config(
     # resurrected the inline literal.
     # NOTE: the `band` PARAMETER (tuple) shadows lib.common.band() in this
     # function scope — alias the import.
-    if ANN_MINING_ENABLED:
+    # Profile-selected masking-only runs pass an empty embedding matrix.
+    # Guard on the actual input as well as the import-time default so a
+    # worker profile cannot invoke even an empty ANN audit.
+    if ANN_MINING_ENABLED and emb0.size:
         from core.common import band as _band_helper
 
         _eval_band = _band_helper("eval_mining")
