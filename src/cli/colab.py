@@ -97,9 +97,9 @@ _SMOKE_EPOCHS = _COLAB.smoke_epochs
 _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
-# config path is supplied.  This workspace's home is read-only, so isolate
-# the CLI state/history in /tmp for every launcher invocation.
-_COLAB_CLI_STATE_DIR = Path("/tmp/euromonitor-colab-cli")
+# config path is supplied. This workspace's home is read-only, so isolate the
+# CLI state/history in a visible, root-local folder for every launcher run.
+_COLAB_CLI_STATE_DIR = TRAIN_ROOT / "colab_cli_state"
 _COLAB_CLI_CONFIG = _COLAB_CLI_STATE_DIR / "sessions.json"
 _COLAB_CLI_ENTRYPOINT = Path(__file__).with_name("colab_cli_entry.py")
 LIVE_LOG_PATH: Path | None = None
@@ -143,23 +143,29 @@ def check_colab_cli() -> None:
         )
 
 
-def colab(*args: str, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess:
-    """Run a colab CLI subcommand."""
+def _colab_command(*args: str) -> list[str]:
+    """Build every Colab CLI command through the shared safe entrypoint."""
     _COLAB_CLI_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    display_cmd = ["colab", *args]
     colab_executable = shutil.which("colab")
-    cmd = display_cmd
-    if colab_executable:
-        first_line = Path(colab_executable).read_text(encoding="utf-8").splitlines()[0]
-        if first_line.startswith("#!"):
-            colab_python = first_line[2:].strip()
-            cmd = [
-                colab_python,
-                str(_COLAB_CLI_ENTRYPOINT),
-                "--config",
-                str(_COLAB_CLI_CONFIG),
-                *args,
-            ]
+    if not colab_executable:
+        return ["colab", *args]
+    first_line = Path(colab_executable).read_text(encoding="utf-8").splitlines()[0]
+    if not first_line.startswith("#!"):
+        return ["colab", *args]
+    colab_python = first_line[2:].strip()
+    return [
+        colab_python,
+        str(_COLAB_CLI_ENTRYPOINT),
+        "--config",
+        str(_COLAB_CLI_CONFIG),
+        *args,
+    ]
+
+
+def colab(*args: str, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess:
+    """Run a Colab CLI subcommand through the shared safe entrypoint."""
+    display_cmd = ["colab", *args]
+    cmd = _colab_command(*args)
     try:
         return subprocess.run(cmd, check=check, capture_output=True, text=True, timeout=timeout)
     except subprocess.CalledProcessError as e:
@@ -200,7 +206,7 @@ def run_colab_exec_stream(
             # colab exec has its own 30-second kernel-client timeout.  It must
             # match the caller's legitimate lane timeout; otherwise a live VM
             # computation is reported as failed after 30 seconds.
-            ["colab", "exec", "-s", session, "--timeout", str(timeout or 30)],
+            _colab_command("exec", "-s", session, "--timeout", str(timeout or 30)),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -256,7 +262,7 @@ def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
     for attempt in range(1, _PROBE_RETRIES + 1):
         try:
             process = subprocess.Popen(
-                ["colab", "exec", "-s", session, "--timeout", str(timeout)],
+                _colab_command("exec", "-s", session, "--timeout", str(timeout)),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -1334,7 +1340,7 @@ def _list_remote(pattern_dir: str) -> list[str]:
         "print('@@FILES@@' + json.dumps(files))\n"
     )
     proc = subprocess.Popen(
-        ["colab", "exec", "-s", SESSION],
+        _colab_command("exec", "-s", SESSION, "--timeout", "120"),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

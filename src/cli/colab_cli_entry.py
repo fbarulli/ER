@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 
-STATE_DIR = Path("/tmp/euromonitor-colab-cli")
+STATE_DIR = Path(__file__).resolve().parents[2] / "colab_cli_state"
 HISTORY_DIR = STATE_DIR / "history"
 ENTRYPOINT = Path(__file__).resolve()
 
