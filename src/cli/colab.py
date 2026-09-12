@@ -1081,8 +1081,10 @@ def publish_local_wandb_artifacts(remote_base: str, workers: int) -> None:
     """Attach the final local report bundle to the existing W&B run."""
     api_key = _env_value("WANDB_API_KEY")
     if not api_key:
-        print("[wandb-local] WANDB_API_KEY absent; artifact upload skipped", flush=True)
-        return
+        raise RuntimeError(
+            "WANDB_API_KEY is required to finalize a training run; "
+            "refusing to mark artifacts complete without W&B publication"
+        )
     import os
 
     import wandb
@@ -1095,8 +1097,10 @@ def publish_local_wandb_artifacts(remote_base: str, workers: int) -> None:
         status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.is_file() else {}
         wandb_run_id = status.get("wandb_run_id")
         if not wandb_run_id:
-            print(f"[wandb-local] worker {number}: no W&B run id; skipped", flush=True)
-            continue
+            raise RuntimeError(
+                f"worker {number}: no W&B run id in {status_path}; "
+                "refusing to mark artifacts complete"
+            )
         os.environ["WANDB_API_KEY"] = api_key
         os.environ["WANDB_DIR"] = str(worker / "wandb")
         run = wandb.init(
@@ -1124,14 +1128,35 @@ def publish_local_wandb_artifacts(remote_base: str, workers: int) -> None:
                 artifact.add_dir(str(path), name=path.name)
             else:
                 artifact.add_file(str(path), name=path.name)
-        if selected:
-            run.log_artifact(artifact)
-        run.finish()
+        if not selected:
+            run.finish(exit_code=1)
+            raise RuntimeError(
+                f"worker {number}: no downloadable result files found under {worker}"
+            )
+        run.log_artifact(artifact)
+        run.finish(exit_code=0)
         print(f"[wandb-local] worker {number}: final artifact uploaded", flush=True)
 
 
+def finalize_local_training_run(remote_base: str, workers: int) -> None:
+    """Complete every local post-run publication before remote teardown.
+
+    A training run is not complete when the GPU workers exit.  It is complete
+    only after the raw outputs are downloaded, CPU reports are generated, the
+    result bundle is verified/published through DVC, and the same bundle is
+    attached to each W&B run.  Keep this as one explicit gate so teardown
+    cannot destroy a remote-only result after a partial post-run step.
+    """
+    print("[post-training] finalizing downloaded results on local CPU ...", flush=True)
+    generate_local_mask_effect(remote_base, workers)
+    generate_local_training_reports(remote_base, workers)
+    publish_local_training_results(remote_base, workers)
+    publish_local_wandb_artifacts(remote_base, workers)
+    print("[post-training] DVC and W&B publication verified", flush=True)
+
+
 def publish_local_hpo_results(run_id: str, persistence: str) -> None:
-    """Generate HPO reports and persist snapshots after VM teardown."""
+    """Generate HPO reports and persist snapshots before VM teardown."""
     from training.generate_training_report import generate_report
 
     generation = TRAINING_RESULTS / "hpo_runs" / run_id
@@ -2018,6 +2043,7 @@ def main() -> None:
     check_colab_cli()
     local_training_run: tuple[str, int] | None = None
     local_hpo_run: str | None = None
+    publication_complete = False
 
     try:
         ensure_session()
@@ -2053,30 +2079,38 @@ def main() -> None:
                 resume_run=args.resume_run, model=args.model,
                 run_label=args.run_label,
             )
-        if local_training_run is None:
-            print("[post-training] no local train finalization requested", flush=True)
+        if local_training_run is not None:
+            remote_base, workers = local_training_run
+            finalize_local_training_run(remote_base, workers)
+        if local_hpo_run is not None:
+            print("[post-training] publishing HPO snapshots on local CPU ...", flush=True)
+            publish_local_hpo_results(local_hpo_run, args.hpo_persistence)
+        publication_complete = True
     except BaseException:
-        print("[launcher] traceback before teardown:", flush=True)
+        print(
+            "[launcher] traceback before teardown; publication is incomplete and "
+            "the VM will be kept alive for recovery:",
+            flush=True,
+        )
         traceback.print_exc()
         raise
     finally:
-        # Default behavior is to aggressively teardown to prevent quota burning.
-        if not args.keep_alive:
+        # A successful run is released only after every local publication step
+        # has completed.  On a failed/cancelled run, preserve the VM so a
+        # partial transfer or publication can be recovered instead of deleting
+        # the only remaining copy of the results.
+        if not args.keep_alive and publication_complete:
             stop()
+        elif not args.keep_alive:
+            print(
+                "[stop] skipped: training/publication did not complete; "
+                "remote results remain available for recovery",
+                file=sys.stderr,
+                flush=True,
+            )
         else:
             print("\n[info] --keep-alive specified. VM is still running.")
         close_live_log()
-
-    if local_training_run is not None:
-        remote_base, workers = local_training_run
-        print("[post-training] VM is released; continuing on local CPU ...", flush=True)
-        generate_local_mask_effect(remote_base, workers)
-        generate_local_training_reports(remote_base, workers)
-        publish_local_training_results(remote_base, workers)
-        publish_local_wandb_artifacts(remote_base, workers)
-    if local_hpo_run is not None:
-        print("[post-training] HPO VM is released; publishing snapshots locally ...", flush=True)
-        publish_local_hpo_results(local_hpo_run, args.hpo_persistence)
 
     print("\n[done] artifacts persisted to the configured DVC remote")
 
