@@ -1343,6 +1343,27 @@ def train_one_config(
 
 
     df, payload, row_bc, country, pos, hp_pairs, emb0 = data
+    # Masked positive copies are augmentation for training only.  Splits are
+    # barcode-based, so passing the augmented array directly into dev/test
+    # would silently put those copies into evaluation even though they carry
+    # the same barcode as the original SKU.  Keep the augmented ``pos`` for
+    # train-side selection, but remove copy endpoints from evaluation pools.
+    _masked_copy_ids = {
+        int(row["copy_payload_idx"])
+        for row in (mask_audit or [])
+        if row.get("copy_payload_idx") is not None
+    }
+    eval_pos = (
+        pos[~np.isin(pos[:, 0], np.fromiter(_masked_copy_ids, dtype=int))]
+        if _masked_copy_ids and len(pos)
+        else pos
+    )
+    if _masked_copy_ids:
+        print(
+            f"    [masking] excluded {len(pos) - len(eval_pos):,} masked "
+            "positive copies from dev/holdout evaluation; training retains them",
+            flush=True,
+        )
     all_barcode_set = set(row_bc.tolist())
 
     # country must cover every payload entry (canonicals + masked copies
@@ -1478,9 +1499,9 @@ def train_one_config(
                     flush=True,
                 )
 
-            test_pos = pos[pairs_in_set(pos, row_bc, test_bc)]
+            test_pos = eval_pos[pairs_in_set(eval_pos, row_bc, test_bc)]
             train_pos = pos[pairs_in_set(pos, row_bc, tr_bc)]
-            dev_pos = pos[pairs_in_set(pos, row_bc, dev_bc)]
+            dev_pos = eval_pos[pairs_in_set(eval_pos, row_bc, dev_bc)]
             hard_train = hard_train_all[pairs_in_set(hard_train_all, row_bc, tr_bc)]
             hard_dev = hard_eval[pairs_in_set(hard_eval, row_bc, dev_bc)]
             hard_test = hard_eval[pairs_in_set(hard_eval, row_bc, test_bc)]
@@ -2549,47 +2570,42 @@ def train_one_config(
             pair_records = []
             _attribute_cache: dict[int, dict[str, object]] = {}
 
+            from core.attribute_conflicts import (
+                canonical_attribute_info,
+                conflict_columns,
+                sku_attribute_info,
+            )
+            from core.common import F as _F, RESULTS as _RESULTS
+
+            _canon_frame = pd.read_csv(
+                _RESULTS / _F["canonical_records"], dtype=str, keep_default_na=False
+            )
+            _canon_attrs = {
+                str(record["gtin"]): canonical_attribute_info(record)
+                for record in _canon_frame.to_dict("records")
+            }
+
             def _attribute_info(index: int) -> dict[str, object]:
-                """Extract comparable volume/pack/flavor fields for a pair endpoint."""
+                """Use structured canonical attributes for canonical endpoints."""
                 if index in _attribute_cache:
                     return _attribute_cache[index]
-                try:
-                    from pipeline import extract_all
-
-                    if index < len(df):
-                        title = str(df["title"].iloc[index])
-                        attribute = str(df["attributes"].iloc[index])
-                    else:
-                        title = str(payload[index])
-                        attribute = ""
-                    extracted = extract_all(title, attribute)
-                    info = {
-                        "volume": float(extracted.get("volume_ml") or 0.0),
-                        "pack": int(extracted.get("pack_qty") or 1),
-                        "flavor": str(extracted.get("flavor") or "").strip().lower(),
-                    }
-                except Exception:
-                    # Pair scoring must remain available even if an optional
-                    # attribute parser cannot classify one endpoint.
-                    info = {"volume": 0.0, "pack": 1, "flavor": ""}
+                if index < len(df):
+                    info = sku_attribute_info(
+                        df["title"].iloc[index], df["attributes"].iloc[index]
+                    )
+                else:
+                    gtin = str(row_bc[index])
+                    if gtin not in _canon_attrs:
+                        raise KeyError(
+                            f"payload endpoint {index} has barcode {gtin!r} "
+                            "but no canonical attribute record"
+                        )
+                    info = _canon_attrs[gtin]
                 _attribute_cache[index] = info
                 return info
 
             def _attribute_conflicts(a: int, b: int) -> dict[str, object]:
-                left, right = _attribute_info(a), _attribute_info(b)
-                conflicts = []
-                if left["volume"] and right["volume"] and left["volume"] != right["volume"]:
-                    conflicts.append("volume")
-                if left["pack"] != right["pack"]:
-                    conflicts.append("pack")
-                if left["flavor"] and right["flavor"] and left["flavor"] != right["flavor"]:
-                    conflicts.append("flavor")
-                return {
-                    "volume_conflict": int("volume" in conflicts),
-                    "pack_conflict": int("pack" in conflicts),
-                    "flavor_conflict": int("flavor" in conflicts),
-                    "attribute_conflict_type": "+".join(conflicts) if conflicts else "none",
-                }
+                return conflict_columns(_attribute_info(a), _attribute_info(b))
 
             for pairs, scores, label, a_col, b_col in (
                 (test_pos, pos_s, 1, None, None),

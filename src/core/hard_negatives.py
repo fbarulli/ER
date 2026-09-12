@@ -9,25 +9,11 @@ sample and the exclusion is visible, never hidden.
 
 from __future__ import annotations
 
-import ast
 from collections import defaultdict
 from itertools import combinations
 
 import numpy as np
 import pandas as pd
-
-
-def _canonical_set(value: object) -> set[object]:
-    """Parse set/list columns from canonical_records.csv safely."""
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return set()
-    try:
-        parsed = ast.literal_eval(str(value))
-    except (SyntaxError, ValueError):
-        return set()
-    if isinstance(parsed, (set, list, tuple)):
-        return set(parsed)
-    return set()
 
 
 def mine_attribute_conflict_negatives(
@@ -56,21 +42,24 @@ def mine_attribute_conflict_negatives(
 
     canon_path = RESULTS / F["canonical_records"]
     canon = pd.read_csv(canon_path, dtype=str, keep_default_na=False)
-    canon_by_gtin = {
-        str(row.gtin): {
-            "brand": str(row.mode_brand).strip().lower(),
-            "type": str(row.mode_type).strip().lower(),
-            "flavor": str(row.mode_flavor).strip().lower(),
-            "volume": _canonical_set(row.volume_set),
-            "pack": _canonical_set(row.pack_set),
+    from core.attribute_conflicts import attribute_conflict_types, canonical_attribute_info
+
+    canon_by_gtin = {}
+    for record in canon.to_dict("records"):
+        gtin = str(record["gtin"])
+        canon_by_gtin[gtin] = {
+            "brand": str(record.get("mode_brand", "")).strip().lower(),
+            "type": str(record.get("mode_type", "")).strip().lower(),
+            "canonical": str(record.get("canonical", "")).strip(),
+            **canonical_attribute_info(record),
         }
-        for row in canon.itertuples(index=False)
-    }
-    canon_idx = {
-        str(row_barcodes[i]): i
-        for i in range(len(df), len(row_barcodes))
-        if str(row_barcodes[i]) in canon_by_gtin
-    }
+    # Canonicals occupy the first post-data block. Masked copies are appended
+    # later with the same barcode, so first-wins is the canonical-only rule.
+    canon_idx: dict[str, int] = {}
+    for i in range(len(df), len(row_barcodes)):
+        gtin = str(row_barcodes[i])
+        if gtin in canon_by_gtin:
+            canon_idx.setdefault(gtin, i)
     if not canon_idx:
         return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
 
@@ -99,15 +88,17 @@ def mine_attribute_conflict_negatives(
         source = canon_by_gtin[source_gtin]
         candidates = groups.get((source["brand"], source["type"]), [])
         for target_gtin in candidates:
-            if target_gtin == source_gtin or target_gtin not in canon_idx:
+            if (
+                target_gtin == source_gtin
+                or target_gtin not in canon_idx
+                or (
+                    source["canonical"]
+                    and source["canonical"] == canon_by_gtin[target_gtin]["canonical"]
+                )
+            ):
                 continue
             target = canon_by_gtin[target_gtin]
-            conflicts = (
-                (source["volume"] and target["volume"] and source["volume"].isdisjoint(target["volume"]))
-                or (source["pack"] and target["pack"] and source["pack"].isdisjoint(target["pack"]))
-                or (source["flavor"] and target["flavor"] and source["flavor"] != target["flavor"])
-            )
-            if not conflicts:
+            if not attribute_conflict_types(source, target):
                 continue
             target_row = canon_idx[target_gtin]
             score = float(np.dot(emb[source_row], emb[target_row]))

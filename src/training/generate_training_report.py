@@ -17,7 +17,6 @@ Example::
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import os
 from pathlib import Path
@@ -89,19 +88,6 @@ def _score_overlap(negative: np.ndarray, positive: np.ndarray) -> float:
     return float(np.minimum(neg_hist, pos_hist).sum() * (bins[1] - bins[0]))
 
 
-def _value_set(value: object) -> set[object]:
-    """Parse canonical-record set columns without trusting CSV dtype inference."""
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return set()
-    try:
-        parsed = ast.literal_eval(str(value))
-    except (ValueError, SyntaxError):
-        return set()
-    if isinstance(parsed, (list, tuple, set)):
-        return set(parsed)
-    return set()
-
-
 def _add_attribute_conflicts(
     pairs: pd.DataFrame,
     data_path: str | Path,
@@ -114,52 +100,67 @@ def _add_attribute_conflicts(
     canon = pd.read_csv(canonical_path, dtype=str).fillna("")
     sku_lookup = data.set_index("product_id").to_dict("index")
     canon_lookup = canon.set_index("gtin").to_dict("index")
-    from pipeline import extract_all
+    from core.attribute_conflicts import (
+        canonical_attribute_info,
+        conflict_columns,
+        sku_attribute_info,
+    )
 
+    canonical_gtins = sorted(str(gtin) for gtin in canon["gtin"])
     cache: dict[str, dict[str, object]] = {}
+
+    def endpoint_ref(row: pd.Series, side: str) -> str:
+        """Resolve current IDs and legacy payload-index pair columns."""
+        id_col = f"sku_id_{side}"
+        if id_col in row.index:
+            return str(row[id_col])
+        for col in (f"payload_idx_{side}", side):
+            if col not in row.index:
+                continue
+            value = row[col]
+            try:
+                index = int(float(value))
+            except (TypeError, ValueError):
+                return str(value)
+            if index < len(data):
+                return str(data.iloc[index]["product_id"])
+            canon_index = index - len(data)
+            if 0 <= canon_index < len(canonical_gtins):
+                return f"canon#{canonical_gtins[canon_index]}"
+            barcode_col = f"barcode_{side}"
+            if barcode_col in row.index and str(row[barcode_col]).strip():
+                return f"canon#{str(row[barcode_col]).strip()}"
+            raise ValueError(
+                f"legacy pair endpoint index {index} is outside the payload "
+                f"and has no {barcode_col} fallback"
+            )
+        raise ValueError(
+            f"pair dump lacks an endpoint column for side {side!r}; "
+            f"columns={list(row.index)}"
+        )
 
     def attrs(ref: object) -> dict[str, object]:
         key = str(ref)
         if key in cache:
             return cache[key]
         if key.startswith("canon#"):
-            record = canon_lookup.get(key.removeprefix("canon#"), {})
-            info = {
-                "volume": _value_set(record.get("volume_set")),
-                "pack": _value_set(record.get("pack_set")),
-                "flavor": str(record.get("mode_flavor", "")).strip().lower(),
-            }
+            gtin = key.removeprefix("canon#")
+            record = canon_lookup.get(gtin)
+            if record is None:
+                raise KeyError(f"pair endpoint references unknown canonical {gtin!r}")
+            info = canonical_attribute_info(record)
         else:
-            record = sku_lookup.get(key, {})
-            try:
-                extracted = extract_all(
-                    str(record.get("title", "")), str(record.get("attributes", ""))
-                )
-                info = {
-                    "volume": {float(extracted.get("volume_ml") or 0.0)},
-                    "pack": {int(extracted.get("pack_qty") or 1)},
-                    "flavor": str(extracted.get("flavor") or "").strip().lower(),
-                }
-            except Exception:
-                info = {"volume": set(), "pack": set(), "flavor": ""}
+            record = sku_lookup.get(key)
+            if record is None:
+                raise KeyError(f"pair endpoint references unknown SKU {key!r}")
+            info = sku_attribute_info(record.get("title", ""), record.get("attributes", ""))
         cache[key] = info
         return info
 
     def conflict(row: pd.Series) -> dict[str, object]:
-        left, right = attrs(row["sku_id_a"]), attrs(row["sku_id_b"])
-        types = []
-        if left["volume"] and right["volume"] and not (left["volume"] & right["volume"]):
-            types.append("volume")
-        if left["pack"] and right["pack"] and not (left["pack"] & right["pack"]):
-            types.append("pack")
-        if left["flavor"] and right["flavor"] and left["flavor"] != right["flavor"]:
-            types.append("flavor")
-        return {
-            "volume_conflict": int("volume" in types),
-            "pack_conflict": int("pack" in types),
-            "flavor_conflict": int("flavor" in types),
-            "attribute_conflict_type": "+".join(types) if types else "none",
-        }
+        left = attrs(endpoint_ref(row, "a"))
+        right = attrs(endpoint_ref(row, "b"))
+        return conflict_columns(left, right)
 
     labels = pd.DataFrame([conflict(row) for _, row in pairs.iterrows()])
     return pd.concat([pairs.reset_index(drop=True), labels], axis=1)

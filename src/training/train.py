@@ -474,6 +474,11 @@ def _main_inner(_mlf, _wandb) -> None:
         f"({s['n_neg_dropped']:,} endpoints unresolved)",
         flush=True,
     )
+    print(
+        f"[negatives] excluded {s['n_neg_same_canonical_dropped']:,} "
+        "hard-no rows whose two GTINs share the same canonical item",
+        flush=True,
+    )
     if args.payload != "full":
         print(f"[07c] payload variant: {args.payload}", flush=True)
     country = df["country"].fillna("").astype(str).to_numpy()
@@ -1075,9 +1080,20 @@ def _main_inner(_mlf, _wandb) -> None:
                 )
                 print(f"[report] complete report -> {report_dir}", flush=True)
             except Exception:
+                report_dir.mkdir(parents=True, exist_ok=True)
+                report_trace = traceback.format_exc()
+                (report_dir / "report_error.txt").write_text(
+                    report_trace, encoding="utf-8"
+                )
+                _wandb.log_config(
+                    {
+                        "report_status": "failed",
+                        "report_error_file": str(report_dir / "report_error.txt"),
+                    }
+                )
                 print(
-                    "[report] FAILED (non-fatal — training results stand):\n"
-                    + traceback.format_exc(),
+                    "[report] FAILED (full traceback saved as report_error.txt):\n"
+                    + report_trace,
                     flush=True,
                 )
 

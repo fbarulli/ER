@@ -1196,7 +1196,8 @@ def oracle_schemas() -> None:
         neg=np.empty((0, 2), dtype=int), gtin_to_row={"1": 0}, stats={
             "n_rows": 3, "n_sku_with_canonical": 1, "n_pos_empty_dropped": 0,
             "n_empty_sku_texts": 0, "n_empty_canon_texts": 0, "n_canonicals": 1,
-            "n_pos_gate_rows": 1, "n_neg_gate_rows": 0, "n_neg_resolved": 0,
+            "n_pos_gate_rows": 1, "n_neg_same_canonical_dropped": 0,
+            "n_neg_gate_rows": 0, "n_neg_resolved": 0,
             "n_neg_dropped": 0,
         },
     )

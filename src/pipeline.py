@@ -1589,7 +1589,20 @@ def build_training_data(
             gtin_to_row[g] = i
 
     # ── negatives: gate hard-no pairs (both directions) ──
-    neg_mask = (gates["gate_decision"] == "hard_no") & (gates["similarity"] >= thr_neg)
+    # A hard_no gate decision is not sufficient for training: separate GTINs
+    # can still resolve to the same canonical item.  Those rows are true
+    # matches and must never be emitted as label-0 pairs.
+    gate_canon1 = gates["gtin1"].map(canon_map)
+    gate_canon2 = gates["gtin2"].map(canon_map)
+    same_canonical = (
+        gate_canon1.notna()
+        & gate_canon2.notna()
+        & gate_canon1.eq(gate_canon2)
+    )
+    hard_no_band = (gates["gate_decision"] == "hard_no") & (
+        gates["similarity"] >= thr_neg
+    )
+    neg_mask = hard_no_band & ~same_canonical
     neg_gates = gates[neg_mask]
     a = neg_gates["gtin1"].map(gtin_to_row)
     b = neg_gates["gtin2"].map(gtin_to_row)
@@ -1613,6 +1626,7 @@ def build_training_data(
                 (gates["gate_decision"] == "proceed") & (gates["similarity"] >= thr_pos)
             ).sum()
         ),
+        "n_neg_same_canonical_dropped": int((hard_no_band & same_canonical).sum()),
         "n_neg_gate_rows": int(neg_mask.sum()),
         "n_neg_resolved": len(neg),
         "n_neg_dropped": int(neg_mask.sum() * 2 - len(neg)),

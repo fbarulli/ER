@@ -799,6 +799,7 @@ class TrainingStats(BaseModel):
     n_empty_canon_texts: int = Field(ge=0)
     n_canonicals: int = Field(ge=0)
     n_pos_gate_rows: int = Field(ge=0)
+    n_neg_same_canonical_dropped: int = Field(ge=0)
     n_neg_gate_rows: int = Field(ge=0)
     n_neg_resolved: int = Field(ge=0)
     n_neg_dropped: int = Field(ge=0)
