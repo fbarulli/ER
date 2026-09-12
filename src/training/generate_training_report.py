@@ -171,6 +171,28 @@ def _save(fig: plt.Figure, path: Path) -> None:
     print(f"[report] {path}", flush=True)
 
 
+def _finite_number(value: object) -> int | float | None:
+    """Return a JSON-safe numeric scalar, omitting NaN/inf values."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number):
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _numeric_row(row: pd.Series, *, exclude: set[str] = frozenset()) -> dict[str, int | float]:
+    result: dict[str, int | float] = {}
+    for key, value in row.items():
+        if key in exclude:
+            continue
+        number = _finite_number(value)
+        if number is not None:
+            result[str(key)] = number
+    return result
+
+
 def generate_report(
     metrics_path: str | Path,
     pair_paths: list[str | Path],
@@ -623,24 +645,67 @@ def generate_report(
             fig.tight_layout()
             _save(fig, out / "auc_vs_encode_time.png")
 
+    # report.json is deliberately a numbers-only summary. Artifact locations
+    # belong to the filesystem/W&B manifest, not the metric contract consumed
+    # by downstream analysis.
+    numeric_metrics: dict[str, dict] = {}
+    histories: dict[str, dict[str, list[float]]] = {}
+    history_columns = {
+        "train_loss_hist": "train_loss",
+        "train_epoch_hist": "train_epoch",
+        "dev_ap_hist": "dev_ap",
+        "dev_auc_hist": "dev_auc",
+        "dev_precision_hist": "dev_precision",
+        "dev_recall_hist": "dev_recall",
+        "dev_loss_hist": "dev_loss",
+        "dev_epoch_hist": "dev_epoch",
+        "dev_metric_epoch_hist": "dev_metric_epoch",
+    }
+    for _, metric_row in ok.iterrows():
+        fold_key = f"fold_{int(metric_row['fold'])}"
+        numeric_metrics[fold_key] = _numeric_row(
+            metric_row,
+            exclude={"status", "model", "payload", *history_columns},
+        )
+        histories[fold_key] = {
+            target: [
+                number
+                for value in _json_list(metric_row.get(source))
+                if (number := _finite_number(value)) is not None
+            ]
+            for source, target in history_columns.items()
+        }
+
+    def _numeric_csv(path: Path, key_columns: tuple[str, ...]) -> dict[str, dict]:
+        if not path.is_file():
+            return {}
+        frame = pd.read_csv(path)
+        output: dict[str, dict] = {}
+        for _, row in frame.iterrows():
+            key = "/".join(str(row[column]) for column in key_columns if column in row)
+            if not key:
+                key = str(len(output))
+            output[key] = _numeric_row(row, exclude=set(key_columns))
+        return output
+
     report = {
-        "metrics": str(metrics_path),
-        "pairs": [str(Path(p)) for p in pair_paths],
+        "report_version": 2,
         "folds": int(len(ok)),
-        "score_basis": "normalized_embedding_dot_product_raw_cosine",
-        "rule_based_reconciliation_applied": False,
-        "summary_csv": str(out / "metrics_summary.csv"),
-        "loss_by_epoch_plot": str(out / "training_vs_dev_loss_by_epoch.png"),
-        "ranking_quality_by_epoch_plot": str(out / "ranking_quality_by_epoch.png"),
-        "auc_vs_encode_time_plot": str(out / "auc_vs_encode_time.png") if (out / "auc_vs_encode_time.png").is_file() else None,
-        "train_holdout_score_plot": str(out / "train_holdout_score_distributions.png"),
-        "score_overlap_csv": str(out / "score_distribution_overlap.csv"),
-        "attribute_error_plot": str(out / "attribute_error_breakdown.png") if (out / "attribute_error_breakdown.png").is_file() else None,
-        "attribute_error_csv": str(out / "attribute_error_breakdown.csv") if (out / "attribute_error_breakdown.csv").is_file() else None,
-        "random_easy_score_plot": str(random_easy_plot) if random_scores is not None and not random_scores.empty else None,
-        "random_easy_metrics_csv": str(random_easy_csv) if random_scores is not None and not random_scores.empty else None,
-        "confusion_csv": str(out / "confusion_matrices.csv") if confusion_rows else None,
-        "ranking_csv": str(out / "ranking_hits_at_k.csv") if ranking_rows else None,
+        "metrics": numeric_metrics,
+        "histories": histories,
+        "aggregate": {
+            str(key): {
+                str(stat): _finite_number(value)
+                for stat, value in values.items()
+                if _finite_number(value) is not None
+            }
+            for key, values in aggregate.items()
+        },
+        "score_overlap": _numeric_csv(out / "score_distribution_overlap.csv", ("split",)),
+        "confusion": _numeric_csv(out / "confusion_matrices.csv", ("fold", "operating_point")),
+        "ranking": _numeric_csv(out / "ranking_hits_at_k.csv", ("fold", "k")),
+        "random_easy": _numeric_csv(out / "random_easy_metrics.csv", ("population", "label")),
+        "attribute_errors": _numeric_csv(out / "attribute_error_breakdown.csv", ("attribute_bucket", "label")),
     }
     (out / "report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
