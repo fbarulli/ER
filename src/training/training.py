@@ -318,7 +318,7 @@ def _split_safe_random_negative_pairs(
 
     subset = df.iloc[split_rows].reset_index(drop=True)
     pairs_cfg = training_cfg().pairs
-    target = min(int(n_neg), max(1, len(subset) * 4))
+    target = min(int(n_neg), len(subset) * 4)
     while target:
         try:
             _, local_neg = build_pairs(
@@ -329,7 +329,12 @@ def _split_safe_random_negative_pairs(
             )
             return split_rows[local_neg]
         except RuntimeError:
-            target //= 2
+            # Keep a one-pair request alive for the final feasibility check;
+            # target //= 2 used to turn 1 into 0 and silently discard the
+            # random/easy population after one sampling miss.
+            if target == 1:
+                break
+            target = max(1, target // 2)
     return np.empty((0, 2), dtype=int)
 
 
@@ -1527,14 +1532,19 @@ def train_one_config(
                 """Keep numeric pair IDs out of tokenization but in the batch."""
 
                 def __call__(self, features):
-                    pair_ids = [row.get("pair_id") for row in features]
                     text_features = [
                         {key: value for key, value in row.items() if key != "pair_id"}
                         for row in features
                     ]
                     batch = super().__call__(text_features)
-                    if all(value is not None for value in pair_ids):
-                        batch["pair_id"] = torch.tensor(pair_ids, dtype=torch.long)
+                    # Training rows carry pair_id; evaluator rows do not.
+                    # Detect the field structurally rather than treating a
+                    # list of optional values as a valid batch. If a training
+                    # row is malformed, direct indexing raises loudly.
+                    if features and "pair_id" in features[0]:
+                        batch["pair_id"] = torch.tensor(
+                            [row["pair_id"] for row in features], dtype=torch.long
+                        )
                     return batch
 
             class ResumableSentenceTransformerTrainer(SentenceTransformerTrainer):

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -148,7 +149,7 @@ def _append_csv(
     pd.DataFrame(out_rows + appended).to_csv(path, index=False)
 
 
-def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics_path: Path) -> None:
+def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics_path: Path, rows: list[dict]) -> None:
     """Publish every run-scoped result and checkpoint as one downloadable artifact."""
     artifact_paths: list[Path] = [metrics_path]
     latest_metrics = RESULTS / F["fold_metrics"]
@@ -159,17 +160,20 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
     if run_logs.is_dir():
         artifact_paths.append(run_logs)
 
-    artifact_paths.extend(
-        sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*"))
-    )
-    artifact_paths.extend(
-        sorted(RESULTS.glob(f"wandb_*_{run_tag}_fold*.png"))
-    )
-
     checkpoint_root = RESULTS / "_checkpoints" / model_tag
-    if checkpoint_root.is_dir():
+    for row in rows:
+        fold = row.get("fold")
+        if not isinstance(fold, (int, np.integer)):
+            continue
         artifact_paths.extend(
-            sorted(checkpoint_root.glob(f"r{run_tag}_f*"))
+            RESULTS / f"train_{model_tag}_{run_tag}_fold{int(fold)}_{suffix}"
+            for suffix in ("pairs.csv", "train_scores.csv", "random_easy_scores.csv")
+        )
+        artifact_paths.append(
+            RESULTS / f"wandb_loss_by_epoch_{run_tag}_fold{int(fold)}.png"
+        )
+        artifact_paths.append(
+            checkpoint_root / f"r{run_tag}_f{int(fold)}"
         )
 
     pointer = RESULTS / F["results_pointer"]
@@ -184,9 +188,11 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
     unique_paths: list[Path] = []
     seen: set[Path] = set()
     for path in artifact_paths:
-        resolved = path.resolve()
-        if resolved not in seen and path.exists():
-            seen.add(resolved)
+        # realpath deduplicates aliases while retaining a stable canonical
+        # identity across symlinked result/checkpoint mounts.
+        identity = os.path.realpath(os.fspath(path))
+        if identity not in seen and path.exists():
+            seen.add(identity)
             unique_paths.append(path)
     if unique_paths:
         _wandb.log_artifacts(unique_paths, f"run-{run_tag}-downloadable")
@@ -961,6 +967,7 @@ def _main_inner(_mlf, _wandb) -> None:
         run_tag=run_tag,
         model_tag=model_tag,
         metrics_path=out,
+        rows=all_rows,
     )
     _wandb.set_summary(
         {
