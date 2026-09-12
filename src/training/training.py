@@ -91,6 +91,20 @@ _ANN_MINING_CFG = load_config()["mining"]["ann"]
 N_TARGET_MINING = int(_ANN_MINING_CFG["target"])
 ANN_MINING_ENABLED = bool(_ANN_MINING_CFG["enabled"])
 MASK_TRACK_PER_EPOCH = bool(load_config()["masking"]["track_per_epoch"])
+TRACK_DATAPOINT_USAGE = bool(load_config()["training"]["track_datapoint_usage"])
+
+# Keep the coverage artifact explicit about every population that can enter
+# the training/evaluation lane, including configured-but-empty populations.
+KNOWN_DATAPOINT_POPULATIONS = (
+    "gate_positive",
+    "hard_positive",
+    "masked_positive",
+    "gate",
+    "attribute_conflict",
+    "random_easy",
+    "ann_finetuned",
+)
+EVAL_ONLY_DATAPOINT_POPULATIONS = {"random_easy"}
 
 # DEFAULT_CFG REMOVED (audit 2026-09-09): zero readers since the entry
 # (train.py) constructs its own cfg dict; a stale epochs=2 default here
@@ -881,6 +895,9 @@ class ProgressCallback(TrainerCallback):
             parts.append(f"dev_auc {float(metrics[auc_key]):.4f}")
         if acc_key is not None:
             parts.append(f"dev_acc {float(metrics[acc_key]):.4f}")
+        f1_key = next((k for k in metrics if k.endswith("_f1")), None)
+        if f1_key is not None:
+            parts.append(f"dev_f1 {float(metrics[f1_key]):.4f}")
         parts.append(_format_telemetry(telemetry))
         if parts:
             total_epochs = float(args.num_train_epochs)
@@ -895,6 +912,9 @@ class ProgressCallback(TrainerCallback):
                 flush=True,
             )
         if self.wandb_ctx is not None:
+            f1_key = next((k for k in metrics if k.endswith("_f1")), None)
+            precision_key = next((k for k in metrics if k.endswith("_precision")), None)
+            recall_key = next((k for k in metrics if k.endswith("_recall")), None)
             self.wandb_ctx.log_metrics(
                 {
                     "live/dev_loss": float(metrics["eval_loss"])
@@ -905,6 +925,12 @@ class ProgressCallback(TrainerCallback):
                     if ap is not None else None,
                     "live/dev_auc": float(metrics[auc_key])
                     if auc_key is not None else None,
+                    "live/dev_f1": float(metrics[f1_key])
+                    if f1_key is not None else None,
+                    "live/dev_precision": float(metrics[precision_key])
+                    if precision_key is not None else None,
+                    "live/dev_recall": float(metrics[recall_key])
+                    if recall_key is not None else None,
                     "live/epoch": float(state.epoch or 0.0),
                     **_wandb_memory_metrics(telemetry),
                 },
@@ -917,6 +943,11 @@ class ProgressCallback(TrainerCallback):
             dev_average_precision=float(ap) if ap is not None else None,
             dev_auc=float(metrics[auc_key]) if auc_key is not None else None,
             dev_accuracy=self.latest_dev_accuracy,
+            dev_f1=(float(metrics[f1_key]) if f1_key is not None else None),
+            dev_precision=(
+                float(metrics[precision_key]) if precision_key is not None else None
+            ),
+            dev_recall=(float(metrics[recall_key]) if recall_key is not None else None),
             **telemetry,
         )
 
@@ -1034,6 +1065,124 @@ class DvcCheckpointCallback(TrainerCallback):
             print(f"    [checkpoint-dvc] verified -> {pointer.relative_to(RESULTS)}", flush=True)
         self._futures = []
         self._publisher.shutdown(wait=True)
+        return control
+
+
+class FineTunedAnnRefreshCallback(TrainerCallback):
+    """Refresh ANN negatives from the live fine-tuned model after saves.
+
+    The callback starts only after a checkpoint exists.  Its pair map is read
+    by the contrastive dataset transform, so refreshed pairs replace the
+    reserved negative slots on subsequent batches without ever creating a
+    zero-shot embedding pool.
+    """
+
+    def __init__(
+        self,
+        *,
+        df,
+        payload,
+        row_barcodes,
+        train_barcodes,
+        existing,
+        ann_state,
+        slot_ids,
+        fold_i,
+        run_tag,
+        batch_size,
+        max_seq_length,
+        wandb_ctx,
+    ):
+        self.df = df
+        self.payload = payload
+        self.row_barcodes = row_barcodes
+        self.train_barcodes = train_barcodes
+        self.existing = existing
+        self.ann_state = ann_state
+        self.slot_ids = list(slot_ids)
+        self.fold_i = int(fold_i)
+        self.run_tag = str(run_tag)
+        self.batch_size = int(batch_size)
+        self.max_seq_length = int(max_seq_length)
+        self.wandb_ctx = wandb_ctx
+        self.last_epoch = 0
+
+    def on_save(self, args, state, control, model=None, **kwargs):
+        if not state.is_world_process_zero or model is None:
+            return control
+        ann_cfg = load_config()["mining"]["ann"]
+        if not bool(ann_cfg["refresh_enabled"]):
+            return control
+        epoch = float(state.epoch or 0.0)
+        cadence = int(ann_cfg["refresh_every_epochs"])
+        completed_epoch = int(np.floor(epoch + 1e-8))
+        if completed_epoch < self.last_epoch + cadence:
+            return control
+        from training.ann_refresh import refresh_finetuned_ann
+
+        lo, hi = (float(x) for x in str(ann_cfg["band"]).split("-"))
+        qlo, qhi = (
+            float(x) for x in str(ann_cfg["score_quantiles"]).split("-")
+        )
+        audit_path = (
+            RESULTS
+            / "logs"
+            / self.run_tag
+            / f"ann_refresh_fold{self.fold_i}_step{state.global_step}.csv"
+        )
+        pairs, stats = refresh_finetuned_ann(
+            model,
+            self.df,
+            self.payload,
+            self.row_barcodes,
+            train_barcodes=self.train_barcodes,
+            existing=self.existing,
+            step=int(state.global_step),
+            epoch=epoch,
+            output_path=audit_path,
+            target=int(ann_cfg["target"]),
+            configured_band=(lo, hi),
+            k=int(ann_cfg["k"]),
+            candidate_multiplier=int(ann_cfg["candidate_multiplier"]),
+            score_quantiles=(qlo, qhi),
+            max_per_canonical=int(ann_cfg["max_per_canonical"]),
+            max_per_brand=int(ann_cfg["max_per_brand"]),
+            batch_size=self.batch_size,
+            max_seq_length=self.max_seq_length,
+            exclude_conflicting=bool(ann_cfg["exclude_conflicting"]),
+        )
+        # Only slots that exist in this fold can be presented. The miner may
+        # find more rows than the current fold's negative population.
+        pair_map = self.ann_state["pairs"]
+        pair_map.clear()
+        pair_map.update({
+            int(slot): (str(self.payload[a]), str(self.payload[b]))
+            for slot, (a, b) in zip(self.slot_ids, pairs.tolist())
+        })
+        self.ann_state["version"] = int(state.global_step)
+        self.ann_state["count"] = int(len(pairs))
+        self.last_epoch = completed_epoch
+        print(
+            f"    [ann-refresh] fold {self.fold_i}: step={state.global_step} "
+            f"epoch={epoch:.2f} pairs={len(pairs):,} "
+            f"band={stats.get('band_lo', lo):.4f}-{stats.get('band_hi', hi):.4f} "
+            f"audit={audit_path}",
+            flush=True,
+        )
+        if self.wandb_ctx is not None:
+            self.wandb_ctx.log_metrics(
+                {
+                    "ann_refresh/step": float(state.global_step),
+                    "ann_refresh/epoch": epoch,
+                    "ann_refresh/pairs": float(len(pairs)),
+                    "ann_refresh/candidate_count": stats.get("candidate_count"),
+                    "ann_refresh/candidate_median": stats.get("candidate_median"),
+                    "ann_refresh/band_overlap_pct": stats.get("band_overlap_pct"),
+                    "ann_refresh/band_lo": stats.get("band_lo"),
+                    "ann_refresh/band_hi": stats.get("band_hi"),
+                },
+                step=int(state.global_step),
+            )
         return control
 
 
@@ -1258,6 +1407,156 @@ def _build_pair_lineage(
     return rows
 
 
+def _training_pair_populations(
+    train_pos: np.ndarray,
+    train_neg: np.ndarray,
+    *,
+    train_neg_sources: np.ndarray | None,
+    hp_in_train: np.ndarray | None,
+    mask_audit: list[dict] | None,
+) -> list[str]:
+    """Return the population label for every contrastive dataset pair."""
+    hp_set = {
+        (int(a), int(b)) for a, b in (hp_in_train if hp_in_train is not None else [])
+    }
+    masked_ids = {
+        int(item["copy_payload_idx"])
+        for item in (mask_audit or [])
+        if item.get("copy_payload_idx") is not None
+    }
+    populations: list[str] = []
+    for a, b in train_pos:
+        pair = (int(a), int(b))
+        if int(a) in masked_ids:
+            populations.append("masked_positive")
+        elif pair in hp_set:
+            populations.append("hard_positive")
+        else:
+            populations.append("gate_positive")
+    for i, _pair in enumerate(train_neg):
+        populations.append(
+            str(train_neg_sources[i])
+            if train_neg_sources is not None and i < len(train_neg_sources)
+            else "hard_negative"
+        )
+    return populations
+
+
+def _write_datapoint_usage(
+    *,
+    fold_i: int,
+    pair_populations: list[str],
+    presentation_counts: dict[tuple, int],
+    pair_lineage: list[dict] | None,
+    dynamic_populations: set[str] | None,
+    run_tag: str,
+    sample: bool,
+) -> dict[str, int]:
+    """Persist per-pair presentation counts and verify source coverage.
+
+    A configured source with no rows is recorded as ``unavailable``. A
+    dynamic source that has not had a chance to run before early stopping is
+    recorded as ``not_reached``. Non-empty training populations are still
+    hard failures when they receive zero presentations.
+    """
+    from collections import Counter
+    from core.common import write_visibility_log
+
+    expected = Counter(pair_populations)
+    dynamic_populations = set(dynamic_populations or ())
+    observed: Counter[str] = Counter()
+    detailed: list[dict] = []
+    for key, count in sorted(presentation_counts.items(), key=lambda item: str(item[0])):
+        epoch, pair_id, population, augmentation, ann_version = key
+        observed[str(population)] += int(count)
+        lineage = (
+            pair_lineage[int(pair_id)]
+            if pair_lineage is not None and int(pair_id) < len(pair_lineage)
+            else {}
+        )
+        detailed.append(
+            {
+                "fold": int(fold_i),
+                "epoch": int(epoch),
+                "pair_id": int(pair_id),
+                "population": str(population),
+                "augmentation": str(augmentation),
+                "ann_version": int(ann_version),
+                "presentations": int(count),
+                "lineage_id": lineage.get("lineage_id", ""),
+                "source_anchor_payload_idx": lineage.get(
+                    "source_anchor_payload_idx", ""
+                ),
+                "source_pair_payload_idx": lineage.get(
+                    "source_pair_payload_idx", ""
+                ),
+                "is_masked_copy": int(lineage.get("is_masked_copy", 0)),
+            }
+        )
+    write_visibility_log(
+        pd.DataFrame(detailed),
+        f"datapoint_usage_fold{fold_i}.csv",
+        run_tag,
+        sample,
+    )
+    by_population: dict[str, dict[str, object]] = {}
+    for row in detailed:
+        item = by_population.setdefault(
+            row["population"], {"presentations": 0, "pair_ids": set()}
+        )
+        item["presentations"] += int(row["presentations"])
+        item["pair_ids"].add(int(row["pair_id"]))
+    coverage_rows: list[dict] = []
+    missing: list[str] = []
+    all_populations = (
+        set(KNOWN_DATAPOINT_POPULATIONS) | set(expected) | set(by_population)
+    )
+    for population in sorted(all_populations):
+        expected_rows = int(expected.get(population, 0))
+        item = by_population.get(population, {"presentations": 0, "pair_ids": set()})
+        presentations = int(item["presentations"])
+        if expected_rows > 0:
+            status = "ok" if presentations > 0 else "missing"
+        elif population in EVAL_ONLY_DATAPOINT_POPULATIONS:
+            status = "eval_only"
+        elif population in dynamic_populations:
+            status = "ok" if presentations > 0 else "not_reached"
+        else:
+            status = "ok" if presentations > 0 else "unavailable"
+        if status == "missing":
+            missing.append(population)
+        coverage_rows.append(
+            {
+                "fold": int(fold_i),
+                "population": population,
+                "expected_pairs": expected_rows,
+                "presentations": presentations,
+                "distinct_pairs_presented": len(item["pair_ids"]),
+                "status": status,
+            }
+        )
+    write_visibility_log(
+        pd.DataFrame(coverage_rows),
+        f"datapoint_type_coverage_fold{fold_i}.csv",
+        run_tag,
+        sample,
+    )
+    if missing:
+        raise RuntimeError(
+            f"datapoint presentation coverage missing non-empty populations: "
+            f"{', '.join(missing)}"
+        )
+    print(
+        f"    [datapoint-coverage] fold {fold_i}: "
+        + ", ".join(
+            f"{row['population']}={row['presentations']:,}"
+            for row in coverage_rows
+        ),
+        flush=True,
+    )
+    return {f"n_presented_{key}": int(value) for key, value in observed.items()}
+
+
 def _dynamic_mask_negative_transform(
     batch,
     *,
@@ -1268,13 +1567,36 @@ def _dynamic_mask_negative_transform(
     counts_by_epoch: dict[int, dict[int, int]],
     stats_by_epoch: dict[int, dict[str, float]],
     epoch_ref: dict[str, int],
+    ann_pairs: dict[int, tuple[str, str]] | None = None,
+    ann_state: dict[str, object] | None = None,
+    pair_populations: list[str] | None = None,
+    presentation_counts: dict[tuple, int] | None = None,
 ):
     """Freshly mask selected label-0 anchors whenever a batch is materialized."""
     from training.masking import mask_text
 
     transformed = {key: list(values) for key, values in batch.items()}
     for i, label in enumerate(batch["label"]):
+        pair_id = int(batch["pair_id"][i])
+        base_population = (
+            str(pair_populations[pair_id])
+            if pair_populations is not None and pair_id < len(pair_populations)
+            else ("positive" if int(label) else "hard_negative")
+        )
+        ann_version = int(ann_state.get("version", 0)) if ann_state else 0
+        augmentation = "none"
+        if int(label) == 0 and ann_pairs:
+            replacement = ann_pairs.get(pair_id)
+            if replacement is not None:
+                transformed["sentence1"][i] = replacement[0]
+                transformed["sentence2"][i] = replacement[1]
+                base_population = "ann_finetuned"
         if int(label) != 0:
+            if base_population == "masked_positive":
+                augmentation = "static_mask"
+            if presentation_counts is not None:
+                key = (int(epoch_ref["epoch"]), pair_id, base_population, augmentation, ann_version)
+                presentation_counts[key] = presentation_counts.get(key, 0) + 1
             continue
         epoch_stats = stats_by_epoch.setdefault(
             int(epoch_ref["epoch"]),
@@ -1282,15 +1604,21 @@ def _dynamic_mask_negative_transform(
         )
         epoch_stats["negative_presented"] += 1.0
         if rng.random() >= frac:
+            if presentation_counts is not None:
+                key = (int(epoch_ref["epoch"]), pair_id, base_population, augmentation, ann_version)
+                presentation_counts[key] = presentation_counts.get(key, 0) + 1
             continue
-        masked, _extent = mask_text(str(batch["sentence1"][i]), mask_prob, rng)
+        masked, _extent = mask_text(str(transformed["sentence1"][i]), mask_prob, rng)
         transformed["sentence1"][i] = masked
+        augmentation = "dynamic_mask"
         epoch_stats["masked_count"] += 1.0
         epoch_stats["extent_sum"] += float(_extent)
-        pair_id = int(batch["pair_id"][i])
         counts[pair_id] = counts.get(pair_id, 0) + 1
         epoch_counts = counts_by_epoch.setdefault(int(epoch_ref["epoch"]), {})
         epoch_counts[pair_id] = epoch_counts.get(pair_id, 0) + 1
+        if presentation_counts is not None:
+            key = (int(epoch_ref["epoch"]), pair_id, base_population, augmentation, ann_version)
+            presentation_counts[key] = presentation_counts.get(key, 0) + 1
     return transformed
 
 
@@ -1329,6 +1657,7 @@ def train_one_config(
     dynamic_mask_prob: float | None = None,
     mask_audit: list[dict] | None = None,
     hard_negative_mask_audit: list[dict] | None = None,
+    ann_refresh_enabled: bool = False,
     # 07d data-scaling: keep only this fraction of TRAIN pairs (dev/test
     # pools untouched). Subsampled AFTER the split, seeded per fold.
     train_frac: float | None = None,
@@ -1692,6 +2021,11 @@ def train_one_config(
             from datasets import Dataset
 
             examples = None
+            ann_refresh_state: dict[str, object] = {
+                "pairs": {},
+                "version": 0,
+                "count": 0,
+            }
             if loss == "contrastive":
                 # OnlineContrastiveLoss (owner ruling 2026-09-07): paired
                 # (sentence1, sentence2, label) rows. POSITIVES = train_all
@@ -1718,6 +2052,19 @@ def train_one_config(
                     payload[b] for a, b in tr_negs
                 ]
                 lab = [1] * len(train_all) + [0] * len(tr_negs)
+                hp_train_for_tracking = (
+                    hp_pairs[pairs_in_set(hp_pairs, row_bc, tr_bc)]
+                    if use_hp and hp_pairs is not None and len(hp_pairs)
+                    else None
+                )
+                pair_populations = _training_pair_populations(
+                    train_all,
+                    tr_negs,
+                    train_neg_sources=tr_neg_sources,
+                    hp_in_train=hp_train_for_tracking,
+                    mask_audit=mask_audit,
+                )
+                presentation_counts: dict[tuple, int] = {}
                 train_ds = Dataset.from_dict(
                     {
                         "sentence1": s1,
@@ -1730,7 +2077,11 @@ def train_one_config(
                 dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
                 dynamic_mask_stats_by_epoch: dict[int, dict[str, float]] = {}
                 dynamic_epoch_ref = {"epoch": 0}
-                if dynamic_mask_hard_negatives and dynamic_mask_frac > 0:
+                if (
+                    (dynamic_mask_hard_negatives and dynamic_mask_frac > 0)
+                    or ann_refresh_enabled
+                    or TRACK_DATAPOINT_USAGE
+                ):
                     import random as _random
                     from functools import partial
 
@@ -1745,6 +2096,14 @@ def train_one_config(
                             counts_by_epoch=dynamic_mask_counts_by_epoch,
                             stats_by_epoch=dynamic_mask_stats_by_epoch,
                             epoch_ref=dynamic_epoch_ref,
+                            ann_pairs=ann_refresh_state["pairs"],
+                            ann_state=ann_refresh_state,
+                            pair_populations=pair_populations,
+                            presentation_counts=(
+                                presentation_counts
+                                if TRACK_DATAPOINT_USAGE
+                                else None
+                            ),
                         )
                     )
                 # ── TRAIN VISIBILITY (owner directive 2026-09-07): the
@@ -2007,16 +2366,15 @@ def train_one_config(
             )
 
             loss_fn = _make_loss(model, loss)
+            pair_lineage = _build_pair_lineage(
+                train_all,
+                tr_negs,
+                train_neg_sources=tr_neg_sources,
+                mask_audit=mask_audit,
+                hard_negative_mask_audit=hard_negative_mask_audit,
+            )
             if hasattr(loss_fn, "set_pair_lineage"):
-                loss_fn.set_pair_lineage(
-                    _build_pair_lineage(
-                        train_all,
-                        tr_negs,
-                        train_neg_sources=tr_neg_sources,
-                        mask_audit=mask_audit,
-                        hard_negative_mask_audit=hard_negative_mask_audit,
-                    )
-                )
+                loss_fn.set_pair_lineage(pair_lineage)
                 loss_fn._dynamic_mask_counts = dynamic_mask_counts
                 loss_fn._dynamic_mask_counts_by_epoch = dynamic_mask_counts_by_epoch
                 loss_fn._dynamic_mask_stats_by_epoch = dynamic_mask_stats_by_epoch
@@ -2024,6 +2382,39 @@ def train_one_config(
             if hasattr(loss_fn, "set_total_negative_pairs"):
                 loss_fn.set_total_negative_pairs(len(tr_negs))
 
+            callbacks = [
+                ProgressCallback(
+                    wandb_ctx,
+                    tracked_loss=loss_fn,
+                    trace_path=RESULTS
+                    / "logs"
+                    / run_tag
+                    / f"loss_backprop_fold{fold_i}.csv",
+                ),
+                DvcCheckpointCallback(),
+                EarlyStoppingCallback(
+                    early_stopping_patience=cfg["patience"],
+                    early_stopping_threshold=cfg["es_threshold"],
+                ),
+            ]
+            if ann_refresh_enabled and loss == "contrastive":
+                ann_cfg = load_config()["mining"]["ann"]
+                callbacks.append(
+                    FineTunedAnnRefreshCallback(
+                        df=df,
+                        payload=payload,
+                        row_barcodes=row_bc,
+                        train_barcodes=set(tr_bc),
+                        existing=tr_negs,
+                        ann_state=ann_refresh_state,
+                        slot_ids=range(len(train_all), len(train_all) + len(tr_negs)),
+                        fold_i=fold_i,
+                        run_tag=run_tag,
+                        batch_size=runtime("batch_size_embed"),
+                        max_seq_length=runtime("max_seq_length"),
+                        wandb_ctx=wandb_ctx,
+                    )
+                )
             trainer = ResumableSentenceTransformerTrainer(
                 model=model,
                 args=args_hf,
@@ -2039,21 +2430,7 @@ def train_one_config(
                 optimizers=(optimizer, None),  # prebuilt AdamW with
                 # discriminative LRs; scheduler=None -> HF builds warmup+linear
                 # from args, scaling our per-group LRs
-                callbacks=[
-                    ProgressCallback(
-                        wandb_ctx,
-                        tracked_loss=loss_fn,
-                        trace_path=RESULTS
-                        / "logs"
-                        / run_tag
-                        / f"loss_backprop_fold{fold_i}.csv",
-                    ),
-                    DvcCheckpointCallback(),
-                    EarlyStoppingCallback(
-                        early_stopping_patience=cfg["patience"],
-                        early_stopping_threshold=cfg["es_threshold"],
-                    ),
-                ],
+                callbacks=callbacks,
             )
             resume_checkpoint = None
             if resume:
@@ -2082,6 +2459,30 @@ def train_one_config(
                 else:
                     print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
             trainer.train(resume_from_checkpoint=resume_checkpoint)
+            datapoint_coverage: dict[str, int] = {}
+            if loss == "contrastive" and TRACK_DATAPOINT_USAGE:
+                datapoint_coverage = _write_datapoint_usage(
+                    fold_i=fold_i,
+                    pair_populations=pair_populations,
+                    presentation_counts=presentation_counts,
+                    pair_lineage=pair_lineage,
+                    dynamic_populations={"ann_finetuned"},
+                    run_tag=run_tag,
+                    sample=sample,
+                )
+                if wandb_ctx is not None and datapoint_coverage:
+                    wandb_ctx.log_metrics(
+                        {
+                            f"datapoint_coverage/{key}": float(value)
+                            for key, value in datapoint_coverage.items()
+                        }
+                    )
+                    wandb_ctx.set_summary(
+                        {
+                            f"datapoint_coverage/{key}": float(value)
+                            for key, value in datapoint_coverage.items()
+                        }
+                    )
             if MASK_TRACK_PER_EPOCH and dynamic_mask_stats_by_epoch:
                 mask_epoch_rows = []
                 for epoch, stats in sorted(dynamic_mask_stats_by_epoch.items()):
@@ -2242,6 +2643,7 @@ def train_one_config(
                     for key in (
                         "eval_dev_cosine_ap",
                         "eval_dev_cosine_auc",
+                        "eval_dev_cosine_f1",
                         "eval_dev_cosine_precision",
                         "eval_dev_cosine_recall",
                     )
@@ -2262,6 +2664,11 @@ def train_one_config(
                 for e in dev_metric_events
                 if e.get("eval_dev_cosine_recall") is not None
             ]
+            dev_f1s = [
+                e["eval_dev_cosine_f1"]
+                for e in dev_metric_events
+                if e.get("eval_dev_cosine_f1") is not None
+            ]
             final_train_loss = train_losses[-1] if train_losses else float("nan")
             best_dev_ap = max(dev_aps) if dev_aps else float("nan")
 
@@ -2279,10 +2686,15 @@ def train_one_config(
                     event
                     for event in hist
                     if event.get("epoch") is not None
-                    and any(
-                        event.get(key) is not None
-                        for key in ("loss", "eval_loss", "eval_dev_cosine_ap")
-                    )
+                        and any(
+                            event.get(key) is not None
+                            for key in (
+                                "loss",
+                                "eval_loss",
+                                "eval_dev_cosine_ap",
+                                "eval_dev_cosine_f1",
+                            )
+                        )
                 ]
                 if curve_events:
                     max_epoch = int(
@@ -2298,6 +2710,7 @@ def train_one_config(
                             ("loss", "train_loss"),
                             ("eval_loss", "dev_loss"),
                             ("eval_dev_cosine_ap", "dev_average_precision"),
+                            ("eval_dev_cosine_f1", "dev_f1"),
                         ):
                             if nearest.get(source) is not None:
                                 point[f"{curve_prefix}/{target}"] = float(
@@ -2413,6 +2826,7 @@ def train_one_config(
                         "n_dev_pos": len(dev_pos),
                         "n_dev_neg": len(hard_dev),
                         **coverage,
+                        **datapoint_coverage,
                         "n_train": (
                             len(train_ds)
                             if loss in ("mnrl", "contrastive")
@@ -2667,6 +3081,7 @@ def train_one_config(
                 "dev_auc_hist": json.dumps([round(x, 4) for x in dev_aucs]),
                 "dev_precision_hist": json.dumps([round(x, 4) for x in dev_precisions]),
                 "dev_recall_hist": json.dumps([round(x, 4) for x in dev_recalls]),
+                "dev_f1_hist": json.dumps([round(x, 4) for x in dev_f1s]),
                 "dev_metric_epoch_hist": json.dumps(
                     [round(float(e["epoch"]), 4) for e in dev_metric_events]
                 ),
@@ -2683,6 +3098,7 @@ def train_one_config(
                 "random_easy_score_csv": str(random_easy_score_path),
                 **coverage,
                 **source_coverage,
+                **datapoint_coverage,
                 "n_train_pos": len(train_pos),
                 # hp rows in train = total minus the GATE rows actually kept.
                 # Subtracting the UNSAMPLED train_pos went NEGATIVE under
@@ -2879,6 +3295,20 @@ def train_one_config(
                     )
                     for name, values in score_groups.items()
                     if len(values)
+                }
+            )
+            # Final decision metrics are separate from the score-distribution
+            # medians so W&B exposes the business operating point explicitly.
+            score_metrics.update(
+                {
+                    f"metrics/fold_{fold_i}/auc": float(_auc(pos_s, neg_s)),
+                    f"metrics/fold_{fold_i}/average_precision": _pr_auc,
+                    f"metrics/fold_{fold_i}/accuracy_at_youden": _acc,
+                    f"metrics/fold_{fold_i}/f1_at_{_thr_key}": _f1_fixed,
+                    f"metrics/fold_{fold_i}/precision_at_{_thr_key}": _prec_fixed,
+                    f"metrics/fold_{fold_i}/recall_at_{_thr_key}": _rec_fixed,
+                    f"metrics/fold_{fold_i}/precision_at_90pct_recall": _prec90,
+                    f"metrics/fold_{fold_i}/threshold_at_90pct_recall": _thr90,
                 }
             )
             if wandb_ctx is not None and score_metrics:

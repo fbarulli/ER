@@ -487,6 +487,7 @@ def _main_inner(_mlf, _wandb) -> None:
             "mask_track_per_epoch": bool(mask_cfg["track_per_epoch"]),
             "train_frac": args.train_frac,
             "batch_size_cuda": tr["batch_size_cuda"],
+            "track_datapoint_usage": bool(tr["track_datapoint_usage"]),
             "sample": args.sample or "full",
             "n_source_rows": s["n_rows"],
             "n_canonicals": s["n_canonicals"],
@@ -494,6 +495,12 @@ def _main_inner(_mlf, _wandb) -> None:
             "ann_mining_enabled": ann_mining_enabled,
             "ann_target": int(ann_cfg["target"]),
             "ann_k": int(ann_cfg["k"]),
+            "ann_refresh_enabled": bool(ann_cfg["refresh_enabled"]),
+            "ann_refresh_every_epochs": int(ann_cfg["refresh_every_epochs"]),
+            "ann_candidate_multiplier": int(ann_cfg["candidate_multiplier"]),
+            "ann_score_quantiles": str(ann_cfg["score_quantiles"]),
+            "ann_max_per_canonical": int(ann_cfg["max_per_canonical"]),
+            "ann_max_per_brand": int(ann_cfg["max_per_brand"]),
             "attribute_conflict_enabled": attribute_conflict_enabled,
             "attribute_conflict_target": int(attr_cfg["target"]),
             "mining_profile": mining_profile or "config_default",
@@ -652,35 +659,24 @@ def _main_inner(_mlf, _wandb) -> None:
     # below; the contrastive loss trains label=0 rows on them directly and
     # MNRL uses them as explicit in-batch negatives.
 
-    # embedding SSOT cache ): the zero-shot encode shares the
-    # model+payload-keyed npy cache that report_plots already uses — the
-    # ablation series (--train-frac xN, --payload variants) re-encoded the
-    # full 76k-text corpus on EVERY run without this.
-    from core.common import DATA_DIR
-    from core.nlp import encode_corpus
-
-    EMB_CACHE = str(DATA_DIR / "embeddings_cache")
+    # ANN is deliberately deferred until a fine-tuned checkpoint exists.
+    # There is no zero-shot embedding fallback here: the first training phase
+    # uses the frozen gate population and masking, then the refresh callback
+    # mines from the live fine-tuned model after checkpoint saves.
+    emb0 = np.empty((0, 0), dtype=np.float32)
     if mining_enabled:
-        emb0, encode_s = encode_corpus(
-            args.model,
-            payload,
-            batch_size=runtime("batch_size_embed"),
-            max_seq_length=runtime("max_seq_length"),
-            device="cuda" if on_cuda else "cpu",
-            cache_dir=EMB_CACHE,
+        print(
+            "[ANN] deferred until a fine-tuned checkpoint; zero-shot embeddings disabled",
+            flush=True,
         )
-        print(f"zero-shot encode_s = {encode_s:.1f}s", flush=True)
     else:
-        # ANN and supplemental mining are disabled for masking-only runs; the
-        # training lane does not need a second zero-shot encoder pass.
-        emb0 = np.empty((0, 0), dtype=np.float32)
         print("[mining] disabled by config; skipping ANN and supplemental mining", flush=True)
 
     # Supplemental mining targets the same-brand/category attribute-conflict
     # population that the gate's 6,051 hard negatives cannot exhaust. The
     # original gate negatives remain intact; these are additional label-0
     # training rows selected from the configured cosine band.
-    if attribute_conflict_enabled:
+    if attribute_conflict_enabled and emb0.size:
         from core.hard_negatives import mine_attribute_conflict_negatives
 
         _attr_lo, _attr_hi = (float(x) for x in attr_cfg["band"].split("-"))
@@ -694,6 +690,13 @@ def _main_inner(_mlf, _wandb) -> None:
             cosine_lo=_attr_lo,
             cosine_hi=_attr_hi,
         )
+    elif attribute_conflict_enabled:
+        print(
+            "[attribute-conflicts] deferred until a fine-tuned checkpoint; "
+            "no zero-shot mining embeddings",
+            flush=True,
+        )
+        _attr_neg = np.empty((0, 2), dtype=int)
     else:
         _attr_neg = np.empty((0, 2), dtype=int)
     if len(_attr_neg):
@@ -865,6 +868,7 @@ def _main_inner(_mlf, _wandb) -> None:
         dynamic_mask_prob=mask_prob,
         mask_audit=mask_audit,
         hard_negative_mask_audit=hard_negative_mask_audit,
+        ann_refresh_enabled=ann_mining_enabled,
         train_frac=args.train_frac if args.train_frac < 1.0 else None,
         run_tag=run_tag,
         sample=bool(args.sample),

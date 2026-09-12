@@ -235,6 +235,8 @@ def mine_hard_negatives(
     cosine_hi: float | None = None,
     exclude_conflicting: bool | None = None,
     k: int | None = None,
+    max_per_canonical: int | None = None,
+    max_per_brand: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mine hard negatives: cross-barcode, different-brand, same-macro, mid-cosine.
 
@@ -246,7 +248,8 @@ def mine_hard_negatives(
 
     CONFIG SSOT: every miner parameter resolves from config/training.yaml when
     omitted — target, band, k, chunk size, and conflict exclusion are all
-    under mining.ann. Explicit values still win.
+    under mining.ann. Explicit values still win. Endpoint diversity caps keep
+    one canonical or brand cluster from consuming the entire target.
     """
     from core.common import SEED, category_macros, training_cfg
 
@@ -259,6 +262,10 @@ def mine_hard_negatives(
         k = int(ann_cfg.k)
     if exclude_conflicting is None:
         exclude_conflicting = bool(ann_cfg.exclude_conflicting)
+    if max_per_canonical is None:
+        max_per_canonical = int(ann_cfg.max_per_canonical)
+    if max_per_brand is None:
+        max_per_brand = int(ann_cfg.max_per_brand)
     if cosine_lo is None or cosine_hi is None:
         lo, hi = ann_cfg.band.split("-")
         cosine_lo = float(lo) if cosine_lo is None else cosine_lo
@@ -364,17 +371,82 @@ def mine_hard_negatives(
 
     found.sort(key=lambda t: -t[2])  # hardest (highest cosine) first
     seen: set[tuple[int, int]] = set()
+    canonical_counts: dict[str, int] = defaultdict(int)
+    brand_counts: dict[str, int] = defaultdict(int)
     pairs_out: list[tuple[int, int]] = []
     cos_out: list[float] = []
     for a, b, s in found:
         if (a, b) in seen:
             continue
+        endpoint_barcodes = (str(barcodes[a]), str(barcodes[b]))
+        endpoint_brands = (
+            str(brands[a]).strip().lower(),
+            str(brands[b]).strip().lower(),
+        )
+        if any(
+            value and canonical_counts[value] >= int(max_per_canonical)
+            for value in endpoint_barcodes
+        ):
+            continue
+        if any(
+            value and brand_counts[value] >= int(max_per_brand)
+            for value in endpoint_brands
+        ):
+            continue
         seen.add((a, b))
         pairs_out.append((a, b))
         cos_out.append(s)
+        for value in endpoint_barcodes:
+            if value:
+                canonical_counts[value] += 1
+        for value in endpoint_brands:
+            if value:
+                brand_counts[value] += 1
         if len(pairs_out) >= n_target:
             break
 
     if not pairs_out:
         return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
     return np.asarray(pairs_out, dtype=int), np.asarray(cos_out, dtype=float)
+
+
+def calibrated_ann_band(
+    scores: np.ndarray,
+    configured_band: tuple[float, float],
+    score_quantiles: tuple[float, float],
+) -> tuple[float, float, dict[str, float]]:
+    """Recenter the configured band using current fine-tuned ANN scores.
+
+    The configured mid-cosine band remains the hard boundary. Quantiles only
+    narrow it when the current model's candidate distribution supports that
+    overlap. An empty/non-overlapping population keeps the configured band and
+    reports the condition instead of silently switching populations.
+    """
+    scores = np.asarray(scores, dtype=float)
+    lo, hi = (float(x) for x in configured_band)
+    qlo, qhi = (float(x) for x in score_quantiles)
+    if scores.size == 0:
+        return lo, hi, {
+            "candidate_count": 0.0,
+            "candidate_min": float("nan"),
+            "candidate_max": float("nan"),
+            "candidate_median": float("nan"),
+            "band_overlap_pct": 0.0,
+            "band_lo": lo,
+            "band_hi": hi,
+        }
+    q_values = np.quantile(scores, [qlo, qhi])
+    overlap = (scores >= lo) & (scores <= hi)
+    band_lo = max(lo, float(q_values[0]))
+    band_hi = min(hi, float(q_values[1]))
+    if not band_lo < band_hi:
+        band_lo, band_hi = lo, hi
+    return band_lo, band_hi, {
+        "candidate_count": float(scores.size),
+        "candidate_min": float(np.min(scores)),
+        "candidate_max": float(np.max(scores)),
+        "candidate_median": float(np.median(scores)),
+        "band_overlap_pct": float(np.mean(overlap)),
+        "band_lo": float(band_lo),
+        "band_hi": float(band_hi),
+    }

@@ -385,7 +385,10 @@ def _parse_remote_json(output: str) -> dict:
 
 def run_detached_stage(stage: str, command_expr: str, timeout: int) -> None:
     """Run a VM stage outside the notebook kernel and stream its durable log."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # Two launches can occur within the same UTC second (especially after a
+    # failed preflight). Microseconds keep the remote result root unique and
+    # prevent FileExistsError from aborting before workers launch.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     remote_log = f"{REMOTE_ROOT}/results/logs/colab_stages/{stage}_{stamp}.log"
     remote_status = f"{remote_log}.status"
     remote_pid = f"{remote_log}.pid"
@@ -538,7 +541,8 @@ def run_detached_train_and_tail(args: list[str]) -> None:
     The process has its own session and status file, so a transient notebook
     client disconnect cannot kill training or swallow its traceback.
     """
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # Keep single-worker roots collision-proof for rapid retries as well.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     remote_log = f"{REMOTE_ROOT}/results/logs/colab_train_{stamp}.log"
     remote_status = f"{remote_log}.status"
     launch = _BOOTSTRAP + _remote_auth_env_script() + f"""

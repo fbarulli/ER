@@ -138,6 +138,7 @@ training:
   eval_steps_per_epoch: 4     # early-stop eval cadence
   dev_fraction: 0.15          # dev share OF THE TRAIN side (early stopping)
   max_triples: 5000           # triplet-lane cap (build_triplets reads this)
+  track_datapoint_usage: true # per-presentation population/epoch verifier
 
 # ── pair-selection thresholds (owner's label semantics) ─────────────────────
 # thresholds: the label rule; caps: eval-pair construction (were EDA/eda.yaml
@@ -269,6 +270,12 @@ mining:
     k: 40                     # top ANN candidates per row
     chunk_size: 2048          # rows per cosine-matrix chunk (OOM control)
     exclude_conflicting: true # drop known conflicting-barcode label errors
+    refresh_enabled: true     # refresh from the current fine-tuned model only
+    refresh_every_epochs: 1   # checkpoint refresh cadence in completed epochs
+    candidate_multiplier: 4    # broad candidates retained for score calibration
+    score_quantiles: "0.10-0.90" # fine-tuned candidate quantiles inside band
+    max_per_canonical: 5      # endpoint diversity cap per canonical/barcode
+    max_per_brand: 100        # endpoint diversity cap per brand
   attribute_conflict:
     enabled: true
     target: 12000             # maximum volume/pack/flavor-conflict pairs

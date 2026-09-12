@@ -278,6 +278,7 @@ class TrainingSpec(BaseModel):
     eval_steps_per_epoch: int = Field(ge=1)
     dev_fraction: float = Field(gt=0.0, lt=1.0)
     max_triples: int = Field(ge=1)
+    track_datapoint_usage: bool
 
 
 class PairsSpec(BaseModel):
@@ -430,7 +431,7 @@ class BandsSpec(BaseModel):
 
 
 class AnnMiningSpec(BaseModel):
-    """Generic cosine-ANN miner knobs."""
+    """Generic cosine-ANN miner and fine-tuned refresh knobs."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -440,6 +441,12 @@ class AnnMiningSpec(BaseModel):
     k: int = Field(ge=1)
     chunk_size: int = Field(ge=1)
     exclude_conflicting: bool
+    refresh_enabled: bool
+    refresh_every_epochs: int = Field(ge=1)
+    candidate_multiplier: int = Field(ge=1)
+    score_quantiles: str
+    max_per_canonical: int = Field(ge=1)
+    max_per_brand: int = Field(ge=1)
 
     @field_validator("band")
     @classmethod
@@ -450,6 +457,21 @@ class AnnMiningSpec(BaseModel):
             raise ValueError(f'mining.ann.band must be "lo-hi" floats, got {v!r}') from e
         if not lo < hi:
             raise ValueError(f"mining.ann.band must satisfy lo < hi, got {v!r}")
+        return v
+
+    @field_validator("score_quantiles")
+    @classmethod
+    def _quantiles_parse(cls, v: str) -> str:
+        try:
+            lo, hi = (float(x) for x in v.split("-"))
+        except ValueError as e:
+            raise ValueError(
+                'mining.ann.score_quantiles must be "lo-hi" floats'
+            ) from e
+        if not 0.0 <= lo < hi <= 1.0:
+            raise ValueError(
+                "mining.ann.score_quantiles must satisfy 0 <= lo < hi <= 1"
+            )
         return v
 
 
