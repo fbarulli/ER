@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import nullcontext
 import json
 import shutil
 import subprocess
@@ -106,6 +107,7 @@ LIVE_LOG_PATH: Path | None = None
 _live_log = None
 _original_stdout = None
 _original_stderr = None
+_SUPPRESS_LIVE_LOG = False
 
 
 class _Tee:
@@ -117,15 +119,31 @@ class _Tee:
 
     def write(self, text: str) -> int:
         self._stream.write(text)
-        self._log_file.write(text)
+        if not _SUPPRESS_LIVE_LOG:
+            self._log_file.write(text)
         return len(text)
 
     def flush(self) -> None:
         self._stream.flush()
-        self._log_file.flush()
+        if not _SUPPRESS_LIVE_LOG:
+            self._log_file.flush()
 
     def isatty(self) -> bool:
         return self._stream.isatty()
+
+
+class _LiveLogSuppressed:
+    """Temporarily keep streamed worker training out of the system log."""
+
+    def __enter__(self):
+        global _SUPPRESS_LIVE_LOG
+        self._previous = _SUPPRESS_LIVE_LOG
+        _SUPPRESS_LIVE_LOG = True
+
+    def __exit__(self, exc_type, exc_value, traceback_value):
+        global _SUPPRESS_LIVE_LOG
+        _SUPPRESS_LIVE_LOG = self._previous
+        return False
 
 # The clone contains the committed raw export and number-token reference;
 # data_prep regenerates deduped data and all downstream CSVs on the VM.
@@ -184,6 +202,7 @@ def run_colab_exec_stream(
     log_name: str | None = None,
     *,
     retry_safe: bool = False,
+    exclude_from_live_log: bool = False,
 ) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
 
@@ -197,7 +216,9 @@ def run_colab_exec_stream(
     def stream_output(pipe, prefix, captured):
         for line in iter(pipe.readline, ''):
             captured.append(line)
-            print(f"{prefix} {line.rstrip()}", flush=True)
+            context = _LiveLogSuppressed() if exclude_from_live_log else nullcontext()
+            with context:
+                print(f"{prefix} {line.rstrip()}", flush=True)
         pipe.close()
 
     attempts = _PROBE_RETRIES if retry_safe else 1
@@ -769,9 +790,11 @@ print(json.dumps(payload), flush=True)
                   (f" | W&B {live['wandb_url']}" if live.get("wandb_url") else ""), flush=True)
         for worker, chunk in payload["chunks"].items():
             # Forward the complete worker log. Detached workers write to the
-            # remote file, so filtering here would hide normal training output.
-            for line in str(chunk).splitlines():
-                print(f"[worker {worker}] {line}", flush=True)
+            # remote file; keep it out of the root system log to avoid a
+            # second copy of the worker's training log.
+            with _LiveLogSuppressed():
+                for line in str(chunk).splitlines():
+                    print(f"[worker {worker}] {line}", flush=True)
         if payload["done"]:
             failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
             if failed:
@@ -1114,6 +1137,7 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
         script,
         timeout=_WORKER_TIMEOUT_SECONDS,
         log_name="02_train",
+        exclude_from_live_log=True,
     )
     publish_parallel_results(remote_base, 1)
     download_verified_training_results(remote_base, 1)

@@ -173,6 +173,9 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
             RESULTS / f"wandb_loss_by_epoch_{run_tag}_fold{int(fold)}.png"
         )
         artifact_paths.append(
+            RESULTS / f"wandb_score_distributions_{run_tag}_fold{int(fold)}.png"
+        )
+        artifact_paths.append(
             checkpoint_root / f"r{run_tag}_f{int(fold)}"
         )
     artifact_paths.append(RESULTS / f"mask_effect_{run_tag}.png")

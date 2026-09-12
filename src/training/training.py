@@ -2332,6 +2332,83 @@ def train_one_config(
                 index=False,
             )
 
+            # Track the train-versus-holdout geometry directly in W&B. The
+            # CSVs remain the source of truth, but these summaries and the
+            # overlay make a generalization gap visible without downloading
+            # the artifact first.
+            score_plot_path = RESULTS / (
+                f"wandb_score_distributions_{run_tag}_fold{fold_i}.png"
+            )
+            score_groups = {
+                "train/label_0": train_neg_s,
+                "train/label_1": train_pos_s,
+                "holdout/label_0": neg_s,
+                "holdout/label_1": pos_s,
+            }
+            score_metrics = {
+                f"scores/fold_{fold_i}/{name.replace('/', '_')}_median": float(
+                    np.median(values)
+                )
+                for name, values in score_groups.items()
+                if len(values)
+            }
+            score_metrics.update(
+                {
+                    f"scores/fold_{fold_i}/{name.replace('/', '_')}_mean": float(
+                        np.mean(values)
+                    )
+                    for name, values in score_groups.items()
+                    if len(values)
+                }
+            )
+            if wandb_ctx is not None and score_metrics:
+                wandb_ctx.log_metrics(score_metrics)
+                wandb_ctx.set_summary(score_metrics)
+
+            import matplotlib
+
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            finite_groups = {
+                name: np.asarray(values, dtype=float)[
+                    np.isfinite(np.asarray(values, dtype=float))
+                ]
+                for name, values in score_groups.items()
+            }
+            nonempty = [values for values in finite_groups.values() if len(values)]
+            if nonempty:
+                all_scores = np.concatenate(nonempty)
+                lo, hi = float(np.min(all_scores)), float(np.max(all_scores))
+                bins = np.linspace(lo, hi, 31) if hi > lo else 30
+                fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), sharey=True)
+                for ax, split in zip(axes, ("train", "holdout")):
+                    for label, color in ((0, "tab:orange"), (1, "tab:blue")):
+                        values = finite_groups[f"{split}/label_{label}"]
+                        if len(values):
+                            ax.hist(
+                                values,
+                                bins=bins,
+                                alpha=0.55,
+                                density=True,
+                                label=f"label {label}",
+                                color=color,
+                            )
+                    ax.set_title(split)
+                    ax.set_xlabel("cosine similarity")
+                    ax.grid(alpha=0.25)
+                    ax.legend()
+                axes[0].set_ylabel("density")
+                fig.suptitle("Train vs holdout score distributions")
+                fig.tight_layout()
+                fig.savefig(score_plot_path, dpi=150)
+                plt.close(fig)
+                if wandb_ctx is not None:
+                    wandb_ctx.log_image(
+                        score_plot_path,
+                        f"scores/fold_{fold_i}/train_vs_holdout_distributions",
+                    )
+
             dev = f"gpu {gpu_peak_gb:.1f}GB peak" if on_cuda else "cpu"
             print(
                 f"  fold {fold_i}: loss={row['final_train_loss']:.4f} "
