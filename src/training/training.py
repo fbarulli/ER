@@ -362,6 +362,46 @@ def _make_loss(model, loss: str, margin: float | None = None):
     return losses.TripletLoss(model)
 
 
+def _runtime_telemetry() -> dict[str, float | int]:
+    """Cheap process and CUDA facts emitted with each training heartbeat."""
+    telemetry: dict[str, float | int] = {"pid": os.getpid()}
+    try:
+        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+            if line.startswith("VmRSS:"):
+                telemetry["rss_mb"] = round(int(line.split()[1]) / 1024, 1)
+                break
+    except OSError:
+        pass
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            telemetry.update(
+                gpu_allocated_gb=round(torch.cuda.memory_allocated() / 1e9, 2),
+                gpu_reserved_gb=round(torch.cuda.memory_reserved() / 1e9, 2),
+                gpu_peak_gb=round(torch.cuda.max_memory_allocated() / 1e9, 2),
+                gpu_free_gb=round(free / 1e9, 2),
+                gpu_total_gb=round(total / 1e9, 2),
+            )
+    except Exception as exc:  # telemetry must never interrupt training
+        print(f"    [telemetry] CUDA query failed: {exc}", flush=True)
+    return telemetry
+
+
+def _format_telemetry(values: dict[str, float | int]) -> str:
+    pieces = [f"pid={values['pid']}"]
+    if "rss_mb" in values:
+        pieces.append(f"rss={values['rss_mb']:.0f}MB")
+    if "gpu_allocated_gb" in values:
+        pieces.append(
+            f"gpu={values['gpu_allocated_gb']:.2f}G alloc/"
+            f"{values['gpu_reserved_gb']:.2f}G reserved/"
+            f"{values['gpu_free_gb']:.2f}G free"
+        )
+    return " | ".join(pieces)
+
+
 class ProgressCallback(TrainerCallback):
     """Live per-step display of train loss + dev AP/AUC during training.
 
@@ -396,7 +436,9 @@ class ProgressCallback(TrainerCallback):
 
     def on_train_begin(self, args, state, control, **kwargs):
         if state.is_world_process_zero:
-            self._write_live_status(state, "training-started")
+            telemetry = _runtime_telemetry()
+            print(f"    [telemetry] training-started | {_format_telemetry(telemetry)}", flush=True)
+            self._write_live_status(state, "training-started", **telemetry)
         return control
 
     def on_log(self, args, state, control, logs=None, **kwargs):
@@ -405,6 +447,7 @@ class ProgressCallback(TrainerCallback):
         if "loss" in logs:
             loss = float(logs["loss"])
             self.latest_train_loss = loss
+            telemetry = _runtime_telemetry()
             total_epochs = float(args.num_train_epochs)
             accuracy = (
                 f" | dev_acc {self.latest_dev_accuracy:.4f}"
@@ -413,7 +456,7 @@ class ProgressCallback(TrainerCallback):
             )
             print(
                 f"    [epoch {state.epoch:>5.2f}/{total_epochs:g} | step {state.global_step:>4}/"
-                f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy}",
+                f"{state.max_steps:<4}] train_loss {loss:.4f}{accuracy} | {_format_telemetry(telemetry)}",
                 flush=True,
             )
             if self.wandb_ctx is not None:
@@ -428,6 +471,7 @@ class ProgressCallback(TrainerCallback):
                 "train",
                 train_loss=loss,
                 dev_accuracy=self.latest_dev_accuracy,
+                **telemetry,
             )
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
@@ -438,22 +482,13 @@ class ProgressCallback(TrainerCallback):
         acc_key = next((k for k in metrics if k.endswith("_cosine_accuracy")), None)
         if acc_key is not None:
             self.latest_dev_accuracy = float(metrics[acc_key])
+        telemetry = _runtime_telemetry()
         parts = [f"dev_ap {float(ap):.4f}"] if ap is not None else []
         if auc_key is not None:
             parts.append(f"dev_auc {float(metrics[auc_key]):.4f}")
         if acc_key is not None:
             parts.append(f"dev_acc {float(metrics[acc_key]):.4f}")
-        # live GPU usage alongside the metrics
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                parts.append(
-                    f"vram {torch.cuda.memory_allocated() / 1e9:.1f}/"
-                    f"{torch.cuda.max_memory_allocated() / 1e9:.1f}GB peak"
-                )
-        except ImportError:  # display only, never kill training
-            pass
+        parts.append(_format_telemetry(telemetry))
         if parts:
             total_epochs = float(args.num_train_epochs)
             loss = (
@@ -488,6 +523,7 @@ class ProgressCallback(TrainerCallback):
             dev_average_precision=float(ap) if ap is not None else None,
             dev_auc=float(metrics[auc_key]) if auc_key is not None else None,
             dev_accuracy=self.latest_dev_accuracy,
+            **telemetry,
         )
 
 
@@ -1644,8 +1680,10 @@ def train_one_config(
                 f"ES-saved {row['es_saved_pct']:.0f}% [{dev}] ({row['fold_s']}s)",
                 flush=True,
             )
-        except Exception:
+        except Exception as exc:
             tb = traceback.format_exc()
+            if "out of memory" in str(exc).lower():
+                print(f"  [cuda-oom] fold {fold_i} | {_format_telemetry(_runtime_telemetry())}\n{tb}", flush=True)
             print(f"  fold {fold_i}: FAILED\n{tb}", flush=True)
             rows.append({"fold": fold_i, "status": "failed", "traceback": tb})
 

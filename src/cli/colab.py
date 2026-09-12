@@ -504,7 +504,15 @@ for number in range(1, {workers} + 1):
     }}) + "\\n", encoding="utf-8")
     process_log = out / "processes.log"
     ps_command = f"ps -eo pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args >> {{shlex.quote(str(process_log))}} 2>&1"
-    wrapped = f"{{ps_command}}; timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; {{ps_command}}; printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+    diagnostics = "free -h || true; nvidia-smi --query-gpu=index,name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits || true; nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits || true"
+    wrapped = (
+        f"echo '[worker-process] starting pid=$$'; {{ps_command}}; "
+        f"echo '[worker-process] resource snapshot before training'; {{diagnostics}}; "
+        f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; "
+        f"echo '[worker-process] exited rc='$rc; {{ps_command}}; "
+        f"echo '[worker-process] resource snapshot after training'; {{diagnostics}}; "
+        f"printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
+    )
     with log_path.open("a" if {bool(resume_run)!r} else "w", encoding="utf-8", buffering=1) as log_file:
         child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
@@ -570,6 +578,13 @@ print(json.dumps(payload), flush=True)
                                ("dev_accuracy", "dev_acc")):
                 if live.get(key) is not None:
                     metrics.append(f"{label}={float(live[key]):.4f}")
+            if live.get("rss_mb") is not None:
+                metrics.append(f"rss={float(live['rss_mb']):.0f}MB")
+            if live.get("gpu_free_gb") is not None:
+                metrics.append(
+                    f"gpu={float(live.get('gpu_allocated_gb', 0)):.2f}G alloc/"
+                    f"{float(live['gpu_free_gb']):.2f}G free"
+                )
             position = f"step {live.get('step', 0)}/{live.get('max_steps', '?')}"
             print(f"[worker {worker}] {live.get('event', 'running')} | {position}" +
                   (" | " + " | ".join(metrics) if metrics else "") +
