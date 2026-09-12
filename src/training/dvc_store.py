@@ -70,14 +70,18 @@ def _dvc_status_is_clean(output: str) -> bool:
 def _tracked_outputs(source: Path) -> list[Path]:
     import yaml
     outputs: list[Path] = []
-    for pointer in sorted(source.glob("*.dvc")):
+    for pointer in sorted(source.rglob("*.dvc")):
         if not pointer.is_file():
+            continue
+        if ".resume" in pointer.parts or "_checkpoints" in pointer.parts:
             continue
         data = yaml.safe_load(pointer.read_text(encoding="utf-8")) or {}
         for entry in data.get("outs", []):
-            path = source / str(entry["path"])
+            path = pointer.parent / str(entry["path"])
             if path.is_file():
                 outputs.append(path)
+            elif path.is_dir():
+                outputs.extend(sorted(child for child in path.rglob("*") if child.is_file()))
     return outputs
 
 
@@ -86,7 +90,9 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
     tracked = _tracked_outputs(source)
     if not tracked:
         raise RuntimeError("DVC push produced no tracked output pointers")
-    with tempfile.TemporaryDirectory(prefix="euromonitor-dvc-verify-") as temp:
+    with tempfile.TemporaryDirectory(
+        prefix=".dvc-verify-", dir=source.parent
+    ) as temp:
         verify = Path(temp)
         os.environ["DVC_SITE_CACHE_DIR"] = str(verify / ".dvc-site-cache")
         _run(["dvc", "init", "--no-scm"], verify)
@@ -95,11 +101,24 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
         _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], verify)
         _run(["dvc", "remote", "modify", "dagshub", "--local", "user", "fbarulli"], verify)
         _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], verify)
-        for pointer in source.glob("*.dvc"):
+        for pointer in source.rglob("*.dvc"):
             if not pointer.is_file():
                 continue
-            shutil.copy2(pointer, verify / pointer.name)
-        _run(["dvc", "pull", "--force"], verify)
+            if ".resume" in pointer.parts or "_checkpoints" in pointer.parts:
+                continue
+            target = verify / pointer.relative_to(source)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(pointer, target)
+        pointer_args = [
+            str(pointer.relative_to(source))
+            for pointer in sorted(source.rglob("*.dvc"))
+            if (
+                pointer.is_file()
+                and ".resume" not in pointer.parts
+                and "_checkpoints" not in pointer.parts
+            )
+        ]
+        _run(["dvc", "pull", "--force", *pointer_args], verify)
         result = []
         for original in tracked:
             restored = verify / original.relative_to(source)
@@ -108,7 +127,10 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
             expected, actual = _sha256(original), _sha256(restored)
             if expected != actual:
                 raise RuntimeError(f"DVC pull hash mismatch for {original.name}")
-            result.append({"path": original.name, "sha256": actual})
+            result.append({
+                "path": str(original.relative_to(source)),
+                "sha256": actual,
+            })
         return result
 
 
@@ -323,22 +345,23 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     if not token:
         raise RuntimeError("DVC_API_KEY is required for DagsHub persistence")
     remote = _configure(source, token)
-    paths = [
-        p.name for p in source.iterdir()
-        if p.is_file() and p.suffix in {".csv", ".json", ".png"}
-        and p.name not in {"canonical_records.csv", "gate_results.csv"}
-    ]
-    paths.extend(
-        p.name for p in source.iterdir()
-        if p.is_file() and p.suffix == ".log"
-    )
-    log_dir = source / "logs"
-    if log_dir.is_dir():
-        paths.extend(
-            str(path.relative_to(source))
-            for path in sorted(log_dir.rglob("*.csv"))
-            if path.is_file()
-        )
+    tracked_suffixes = {
+        ".csv", ".json", ".png", ".log", ".yaml", ".yml", ".txt",
+    }
+    excluded_dirs = {
+        ".dvc", ".dvc-cache", ".dvc-site-cache", ".resume", "_checkpoints",
+        "_checkpoint_upload_staging", "wandb", "mlruns",
+    }
+    paths = []
+    for path in sorted(source.rglob("*")):
+        if not path.is_file() or path.suffix not in tracked_suffixes:
+            continue
+        relative = path.relative_to(source)
+        if any(part in excluded_dirs for part in relative.parts):
+            continue
+        if relative.as_posix() in {"canonical_records.csv", "gate_results.csv"}:
+            continue
+        paths.append(str(relative))
     if paths:
         _run(["dvc", "add", *paths], source)
     lock_path = source.parent / ".dvc-push.lock"

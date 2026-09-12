@@ -487,6 +487,15 @@ class MiningSpec(BaseModel):
     attribute_conflict: AttributeConflictMiningSpec
 
 
+class MiningProfileSpec(BaseModel):
+    """Named experiment profile selecting which configured miners are active."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ann_enabled: bool
+    attribute_conflict_enabled: bool
+
+
 class HpoGridRowSpec(BaseModel):
     """One fixed-grid config (config/training.yaml hpo.grid[] / hpo.quick[]):
     epochs x lr x warmup-percent — second07's axes, verbatim."""
@@ -668,6 +677,7 @@ class TrainingConfig(BaseModel):
     audit: AuditSpec
     bands: BandsSpec
     mining: MiningSpec
+    mining_profiles: dict[str, MiningProfileSpec] = Field(default_factory=dict)
     hpo: HpoSpec
     rerank: RerankSpec
     sweep: SweepSpec

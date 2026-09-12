@@ -42,6 +42,7 @@ import argparse
 import base64
 from contextlib import nullcontext
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -610,8 +611,9 @@ print(json.dumps(payload), flush=True)
 
 
 def run_parallel_train_and_tail(
-    args: list[str], workers: int, *, resume_run: str | None = None
-) -> None:
+    args: list[str], workers: int, *, resume_run: str | None = None,
+    run_labels: list[str] | None = None,
+) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     remote_base = (
@@ -629,8 +631,17 @@ base = pathlib.Path({remote_base!r})
 base.mkdir(parents=True, exist_ok={bool(resume_run)!r})
 command = " ".join(shlex.quote(part) for part in [sys.executable, *{args!r}])
 resume_pointers = {resume_pointers!r}
+run_labels = {run_labels!r}
 started = []
 for number in range(1, {workers} + 1):
+    worker_label = (
+        run_labels[number - 1]
+        if run_labels and number <= len(run_labels)
+        else f"worker_{{number}}"
+    )
+    worker_profile = (
+        worker_label if worker_label in ("mining_enabled", "masking_only") else ""
+    )
     out = base / f"worker_{{number}}"
     print(f"[resume-preflight] worker {{number}}: preparing {{out}}", flush=True)
     if {bool(resume_run)!r}:
@@ -714,7 +725,9 @@ for number in range(1, {workers} + 1):
     wandb_dir.mkdir(parents=True, exist_ok=True)
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_DIR": str(wandb_dir),
-           "WANDB_RUN_NAME": f"train_worker_{{number}}"}}
+           "WANDB_RUN_NAME": f"train_{{worker_label}}",
+           "EUROMONITOR_MINING_PROFILE": worker_profile,
+           "EUROMONITOR_REMOTE_TRAINING": "1"}}
     live_status_path.write_text(json.dumps({{
         "updated_at": time.time(), "event": "launched", "step": 0,
         "wandb_run_name": env["WANDB_RUN_NAME"],
@@ -824,39 +837,18 @@ print(json.dumps(payload), flush=True)
             failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
             if failed:
                 raise RuntimeError(f"parallel trainers failed: {failed}")
-            publish_parallel_results(remote_base, workers)
             download_verified_training_results(remote_base, workers)
-            generate_local_training_reports(remote_base, workers)
             print(f"[train] all {workers} remote workers completed successfully", flush=True)
-            return
+            return remote_base, workers
         time.sleep(_LOG_POLL_SECONDS)
 
 
-def publish_parallel_results(remote_base: str, workers: int) -> None:
-    """Publish completed workers sequentially through one remote process."""
-    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
-import pathlib, subprocess, sys, os
-root = pathlib.Path({REMOTE_ROOT!r})
-base = pathlib.Path({remote_base!r})
-for number in range(1, {workers} + 1):
-    source = base / f"worker_{{number}}"
-    print(f"[dvc] central publish worker {{number}}/{workers}", flush=True)
-    subprocess.run([
-        sys.executable, "-u", "-m", "training.dvc_store",
-        "--source", str(source), "--run-id", {run_id!r}, "--worker", str(number),
-    ], cwd=root, env={{**os.environ, "PYTHONPATH": str(root / "src")}}, check=True)
-print("[dvc] central publisher completed all workers", flush=True)
-"""
-    run_colab_exec_stream(
-        SESSION, script,
-        timeout=_WORKER_TIMEOUT_SECONDS * max(1, workers),
-        log_name="03_dvc_publish",
-    )
-
-
 def download_verified_training_results(remote_base: str, workers: int) -> None:
-    """Materialize only DVC-verified smoke outputs under training_results/."""
+    """Materialize raw worker outputs before the VM is released.
+
+    DVC publication is deliberately local now, after reports are generated;
+    this transfer therefore cannot claim DVC verification yet.
+    """
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     local_base = TRAINING_RESULTS / run_id
     for number in range(1, workers + 1):
@@ -874,7 +866,7 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
             local = local_dir / rel
             local.parent.mkdir(parents=True, exist_ok=True)
             colab("download", "-s", SESSION, name, str(local), timeout=600)
-    print(f"[download] DVC-verified training outputs -> {local_base}", flush=True)
+    print(f"[download] raw training outputs -> {local_base}", flush=True)
 
 
 def generate_local_training_reports(remote_base: str, workers: int) -> None:
@@ -906,6 +898,282 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
             sorted(worker.glob("*_fold*_random_easy_scores.csv")),
         )
         print(f"[report-local] worker {number}: {report_dir}", flush=True)
+
+
+def generate_local_mask_effect(remote_base: str, workers: int) -> None:
+    """Run optional masked-vs-unmasked scoring on CPU after teardown."""
+    if not _MASK_EFFECT_AFTER_TRAIN:
+        return
+    import numpy as np
+    import pandas as pd
+
+    from core.common import training_cfg as _training_cfg
+
+    mask_cfg = _training_cfg().masking
+    embed_batch = int(_training_cfg().training.batch_size_embed)
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    for number in range(1, workers + 1):
+        worker = TRAINING_RESULTS / run_id / f"worker_{number}"
+        pointer_path = worker / "latest_results.json"
+        if not pointer_path.is_file():
+            continue
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        run_tag = str(pointer.get("run_tag") or run_id)
+        visibility = worker / "logs" / run_tag / "mask_visibility.csv"
+        if not visibility.is_file():
+            visibility = worker / "logs" / "mask_visibility.csv"
+        if not visibility.is_file():
+            print(f"[mask-effect-local] worker {number}: visibility log absent; skipped", flush=True)
+            continue
+        audit = pd.read_csv(visibility)
+        if audit.empty:
+            continue
+        model_tag = str(pointer.get("model", "")).rstrip("/").rsplit("/", 1)[-1]
+        roots = sorted((worker / "_checkpoints" / model_tag).glob(f"r{run_tag}_f*"))
+        if not roots:
+            print(f"[mask-effect-local] worker {number}: checkpoint root absent; skipped", flush=True)
+            continue
+        candidates = sorted(
+            roots[0].glob("checkpoint-*"),
+            key=lambda path: int(path.name.removeprefix("checkpoint-")),
+        )
+        source = candidates[-1] if candidates else roots[0]
+        for candidate in candidates:
+            state_path = candidate / "trainer_state.json"
+            if not state_path.is_file():
+                continue
+            best = json.loads(state_path.read_text(encoding="utf-8")).get("best_model_checkpoint")
+            if best:
+                best_path = roots[0] / Path(best).name
+                if best_path.exists():
+                    source = best_path
+                    break
+
+        if "target_text" not in audit.columns:
+            canonical = pd.read_csv(worker / "canonical_records.csv", dtype=str)
+            by_gtin = dict(zip(canonical["gtin"].astype(str), canonical["canonical"].astype(str)))
+            audit["target_text"] = audit["barcode"].astype(str).map(by_gtin)
+        audit = audit.dropna(subset=["target_text"])
+        if audit.empty:
+            continue
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            model = SentenceTransformer(str(source), device="cpu")
+            masked = audit["masked_text"].astype(str).tolist()
+            anchors = audit["anchor_text"].astype(str).tolist()
+            targets = audit["target_text"].astype(str).tolist()
+            embeddings = model.encode(
+                masked + anchors + targets,
+                batch_size=embed_batch,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+            n = len(audit)
+            masked_scores = np.einsum("ij,ij->i", embeddings[:n], embeddings[2 * n:])
+            unmasked_scores = np.einsum("ij,ij->i", embeddings[n:2 * n], embeddings[2 * n:])
+            result = pd.DataFrame({
+                "realized_extent": audit["realized_extent"],
+                "sim_to_target": masked_scores.round(4),
+                "masked_score": masked_scores.round(4),
+                "unmasked_score": unmasked_scores.round(4),
+                "masked_minus_unmasked": (masked_scores - unmasked_scores).round(4),
+                "barcode": audit["barcode"],
+                "anchor_text": anchors,
+                "masked_text": masked,
+            })
+            midpoint = (float(mask_cfg.mask_lo) + float(mask_cfg.mask_hi)) / 2.0
+            result["bucket"] = np.where(
+                result["realized_extent"] >= midpoint,
+                f"high(>={midpoint:.2f})",
+                f"low(<{midpoint:.2f})",
+            )
+            log_dir = worker / "logs" / run_tag
+            log_dir.mkdir(parents=True, exist_ok=True)
+            result.to_csv(log_dir / "mask_effect.csv", index=False)
+            result.to_csv(worker / "logs" / "mask_effect.csv", index=False)
+            metrics = {
+                "mask_n": float(len(result)),
+                "mask_masked_mean_cosine": float(result["masked_score"].mean()),
+                "mask_masked_median_cosine": float(result["masked_score"].median()),
+                "mask_unmasked_mean_cosine": float(result["unmasked_score"].mean()),
+                "mask_unmasked_median_cosine": float(result["unmasked_score"].median()),
+                "mask_mean_cosine_delta": float(result["masked_minus_unmasked"].mean()),
+                "mask_median_cosine_delta": float(result["masked_minus_unmasked"].median()),
+            }
+            (worker / "local_mask_effect_metrics.json").write_text(
+                json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            figure, axis = plt.subplots(figsize=(7, 4.5))
+            axis.hist(result["unmasked_score"], bins=20, alpha=0.55, label="non-masked")
+            axis.hist(result["masked_score"], bins=20, alpha=0.55, label="masked")
+            axis.set(xlabel="cosine similarity to target", ylabel="count",
+                     title="Masked vs non-masked positive performance")
+            axis.grid(alpha=0.25)
+            axis.legend()
+            figure.tight_layout()
+            figure.savefig(worker / f"mask_effect_{run_tag}.png", dpi=150)
+            plt.close(figure)
+            metric_paths = sorted(worker.glob("*_holdout_*_fold_metrics.csv"))
+            if metric_paths:
+                metrics_frame = pd.read_csv(metric_paths[-1])
+                for key, value in metrics.items():
+                    metrics_frame.loc[metrics_frame["status"].eq("ok"), key] = value
+                metrics_frame.to_csv(metric_paths[-1], index=False)
+                shared = worker / "train_fold_metrics.csv"
+                metrics_frame.to_csv(shared, index=False)
+            print(f"[mask-effect-local] worker {number}: CPU scoring complete", flush=True)
+        except Exception:
+            print(
+                f"[mask-effect-local] worker {number} failed; full traceback:",
+                file=sys.stderr,
+                flush=True,
+            )
+            traceback.print_exc()
+
+
+def _local_auth_env() -> dict[str, str]:
+    """Return local-only credentials for post-training publishers."""
+    env = dict(os.environ)
+    dvc_key = _env_value("DVC_API_KEY")
+    if dvc_key:
+        env["DVC_API_KEY"] = dvc_key
+        env["DAGSHUB_USER_TOKEN"] = dvc_key
+    wandb_key = _env_value("WANDB_API_KEY")
+    if wandb_key:
+        env["WANDB_API_KEY"] = wandb_key
+    return env
+
+
+def publish_local_training_results(remote_base: str, workers: int) -> None:
+    """Publish downloaded, locally generated results through DVC."""
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    for number in range(1, workers + 1):
+        source = TRAINING_RESULTS / run_id / f"worker_{number}"
+        if not source.is_dir():
+            raise FileNotFoundError(f"local worker output missing: {source}")
+        print(f"[dvc-local] publishing worker {number}/{workers}: {source}", flush=True)
+        subprocess.run(
+            [
+                sys.executable, "-u", "-m", "training.dvc_store",
+                "--source", str(source), "--run-id", run_id,
+                "--worker", str(number),
+            ],
+            cwd=TRAIN_ROOT,
+            env={**_local_auth_env(), "PYTHONPATH": str(TRAIN_ROOT / "src")},
+            check=True,
+        )
+    print("[dvc-local] local result publication completed", flush=True)
+
+
+def publish_local_wandb_artifacts(remote_base: str, workers: int) -> None:
+    """Attach the final local report bundle to the existing W&B run."""
+    api_key = _env_value("WANDB_API_KEY")
+    if not api_key:
+        print("[wandb-local] WANDB_API_KEY absent; artifact upload skipped", flush=True)
+        return
+    import os
+
+    import wandb
+
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    project = str(training_cfg().tracking.wandb.project)
+    for number in range(1, workers + 1):
+        worker = TRAINING_RESULTS / run_id / f"worker_{number}"
+        status_path = worker / "live_status.json"
+        status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.is_file() else {}
+        wandb_run_id = status.get("wandb_run_id")
+        if not wandb_run_id:
+            print(f"[wandb-local] worker {number}: no W&B run id; skipped", flush=True)
+            continue
+        os.environ["WANDB_API_KEY"] = api_key
+        os.environ["WANDB_DIR"] = str(worker / "wandb")
+        run = wandb.init(
+            project=project,
+            id=str(wandb_run_id),
+            resume="allow",
+            settings=wandb.Settings(x_disable_stats=True, x_disable_machine_info=True),
+        )
+        artifact = wandb.Artifact(f"run-{run_id}-downloadable", type="training-result")
+        selected = []
+        for path in sorted(worker.iterdir()):
+            if path.name in {"canonical_records.csv", "gate_results.csv", "wandb", "mlruns"}:
+                continue
+            if path.is_file() and path.suffix in {
+                ".csv", ".json", ".log", ".png", ".dvc", ".yaml", ".yml", ".txt",
+            }:
+                selected.append(path)
+            elif path.is_dir() and (
+                path.name.startswith("report_")
+                or path.name in {"logs", "_checkpoints", ".resume"}
+            ):
+                selected.append(path)
+        for path in selected:
+            if path.is_dir():
+                artifact.add_dir(str(path), name=path.name)
+            else:
+                artifact.add_file(str(path), name=path.name)
+        if selected:
+            run.log_artifact(artifact)
+        run.finish()
+        print(f"[wandb-local] worker {number}: final artifact uploaded", flush=True)
+
+
+def publish_local_hpo_results(run_id: str, persistence: str) -> None:
+    """Generate HPO reports and persist snapshots after VM teardown."""
+    from training.generate_training_report import generate_report
+
+    generation = TRAINING_RESULTS / "hpo_runs" / run_id
+    if not generation.is_dir():
+        raise FileNotFoundError(f"local HPO archive missing: {generation}")
+    for model_dir in sorted((generation / "models").iterdir()):
+        if not model_dir.is_dir():
+            continue
+        metrics = sorted(model_dir.glob("*_holdout_*_fold_metrics.csv"))
+        pairs = sorted(model_dir.glob("*_fold*_pairs.csv"))
+        if metrics and pairs:
+            pointer = model_dir / "latest_results.json"
+            pointer_data = json.loads(pointer.read_text(encoding="utf-8")) if pointer.is_file() else {}
+            report_tag = str(pointer_data.get("run_tag") or model_dir.name)
+            generate_report(
+                metrics[-1], pairs, model_dir / f"report_{report_tag}",
+                sorted(model_dir.glob("*_fold*_train_scores.csv")),
+                sorted(model_dir.glob("*_fold*_random_easy_scores.csv")),
+            )
+            print(f"[report-local] HPO {model_dir.name}: report generated", flush=True)
+    if persistence != "dvc":
+        return
+    from training.hpo_persistence import best_effort_dvc_publish, build_snapshot
+
+    env = _local_auth_env()
+    previous = {key: os.environ.get(key) for key in ("DVC_API_KEY", "DAGSHUB_USER_TOKEN")}
+    try:
+        for key in ("DVC_API_KEY", "DAGSHUB_USER_TOKEN"):
+            if key in env:
+                os.environ[key] = env[key]
+        for model_dir in sorted((generation / "models").iterdir()):
+            if not model_dir.is_dir():
+                continue
+            snapshot = build_snapshot(
+                generation=generation,
+                sequence=time.time_ns(),
+                optuna_db=None,
+                include=[model_dir],
+                scope=model_dir.name,
+            )
+            if not best_effort_dvc_publish(snapshot):
+                raise RuntimeError(f"local HPO DVC publication failed: {snapshot}")
+            print(f"[hpo-durability-local] published {model_dir.name}", flush=True)
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def start_live_log() -> None:
@@ -1131,7 +1399,8 @@ for path in required:
 def run_train(
     frac: float, epochs: int, sample: int | None, workers: int = 1,
     *, resume_run: str | None = None, model: str | None = None,
-) -> None:
+    run_label: str | None = None,
+) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the VM (GPU) ...")
     # AUDIT 2026-09-09: --mask-frac 0.15 REMOVED — it hardcoded a value that
@@ -1155,12 +1424,19 @@ def run_train(
     if resume_run:
         args.append("--resume")
     if workers == 1 and resume_run is None:
-        run_single_train_and_stream(args)
-        return
-    run_parallel_train_and_tail(args, workers, resume_run=resume_run)
+        return run_single_train_and_stream(args, run_label=run_label)
+    return run_parallel_train_and_tail(
+        args, workers, resume_run=resume_run,
+        run_labels=(
+            [item.strip() for item in run_label.split(",") if item.strip()]
+            if run_label else None
+        ),
+    )
 
 
-def run_single_train_and_stream(args: list[str]) -> None:
+def run_single_train_and_stream(
+    args: list[str], *, run_label: str | None = None
+) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
@@ -1181,7 +1457,10 @@ wandb_dir = out / "wandb"
 wandb_dir.mkdir(parents=True, exist_ok=True)
 env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
        "EUROMONITOR_RESULTS_DIR": str(out), "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
-       "WANDB_DIR": str(wandb_dir), "WANDB_RUN_NAME": "train_worker_1"}}
+       "WANDB_DIR": str(wandb_dir),
+       "WANDB_RUN_NAME": {f"train_{run_label}" if run_label else "train_worker_1"!r},
+       "EUROMONITOR_MINING_PROFILE": {run_label if run_label in ("mining_enabled", "masking_only") else ""!r},
+       "EUROMONITOR_REMOTE_TRAINING": "1"}}
 command = [sys.executable, *{args!r}]
 log_path = out / "training.log"
 print(f"[train-launch] worker 1 streaming directly: {{' '.join(command)}}", flush=True)
@@ -1206,10 +1485,9 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
         exclude_from_live_log=True,
         training_output=True,
     )
-    publish_parallel_results(remote_base, 1)
     download_verified_training_results(remote_base, 1)
-    generate_local_training_reports(remote_base, 1)
-    print("[train] single worker completed successfully", flush=True)
+    print("[train] single worker completed; local post-processing deferred", flush=True)
+    return remote_base, 1
 
 
 def run_hpo(
@@ -1326,6 +1604,7 @@ def worker_setup(model_key):
         "EUROMONITOR_RESULTS_DIR": str(out),
         "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
         "WANDB_RUN_NAME": f"{run_id}_hpo_{{model_key}}",
+        "EUROMONITOR_REMOTE_TRAINING": "1",
         "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1",
         "EUROMONITOR_HPO_RETENTION_MODE": "1",
         "EUROMONITOR_HPO_GENERATION_ID": "{run_id}",
@@ -1359,19 +1638,6 @@ def run_model(model_key):
     if final_env:
         final_env["WANDB_RUN_NAME"] = f"{run_id}_final_{{model_key}}"
     run_logged(final, f"final_{{model_key}}", final_env)
-    if "{persistence}" != "none":
-        # The subprocess is finished: its model directory and SQLite study are
-        # stable.  Snapshot first, mark READY last, then *optionally* publish.
-        # A DVC error is intentionally non-fatal: the model result remains on
-        # disk and the launcher proceeds to the next model.
-        from training.hpo_persistence import build_snapshot, best_effort_dvc_publish
-        snapshot = build_snapshot(
-            generation=hpo_root, sequence=time.time_ns(), optuna_db=None,
-            include=[out], scope=model_key,
-        )
-        print(f"[hpo-durability] local snapshot ready: {{snapshot}}", flush=True)
-        if "{persistence}" == "dvc":
-            best_effort_dvc_publish(snapshot)
     return {{"model_key": model_key, "model": str(model), "best": params,
             "results_dir": str(out.relative_to(root / "results"))}}
 
@@ -1407,6 +1673,7 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
             _mirror_hpo_resume_pointers()
         except Exception as exc:
             print(f"[warn] could not mirror HPO resume pointers: {exc}", file=sys.stderr, flush=True)
+    return run_id
 
 
 def run_sims_deberta() -> None:
@@ -1687,6 +1954,11 @@ def main() -> None:
         help="model registry key for --what train (for example minilm_l6)",
     )
     ap.add_argument(
+        "--run-label",
+        default=None,
+        help="experiment label for W&B (for example mining_enabled or masking_only)",
+    )
+    ap.add_argument(
         "--resume-run",
         default=None,
         help="resume this existing concurrent_train_<id> run on the VM",
@@ -1736,6 +2008,8 @@ def main() -> None:
 
     start_live_log()
     check_colab_cli()
+    local_training_run: tuple[str, int] | None = None
+    local_hpo_run: str | None = None
 
     try:
         ensure_session()
@@ -1752,22 +2026,27 @@ def main() -> None:
         if args.what == "sims":
             run_sims_deberta()
         elif args.what == "smoke":
-            run_train(args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE, workers=_TRAIN_WORKERS)
+            local_training_run = run_train(
+                args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE,
+                workers=_TRAIN_WORKERS, run_label=args.run_label,
+            )
         elif args.what == "hpo":
             if args.hpo_jobs < 1:
                 raise ValueError("--hpo-jobs must be >= 1")
-            run_hpo(
+            local_hpo_run = run_hpo(
                 args.hpo_mode,
                 resume=args.resume_hpo,
                 trial_jobs=args.hpo_jobs,
                 persistence=args.hpo_persistence,
             )
         else:
-            run_train(
+            local_training_run = run_train(
                 args.train_frac, args.epochs, sample=args.sample, workers=args.workers,
                 resume_run=args.resume_run, model=args.model,
+                run_label=args.run_label,
             )
-        print("[dvc] remote artifacts are authoritative; local download disabled", flush=True)
+        if local_training_run is None:
+            print("[post-training] no local train finalization requested", flush=True)
     except BaseException:
         print("[launcher] traceback before teardown:", flush=True)
         traceback.print_exc()
@@ -1779,6 +2058,17 @@ def main() -> None:
         else:
             print("\n[info] --keep-alive specified. VM is still running.")
         close_live_log()
+
+    if local_training_run is not None:
+        remote_base, workers = local_training_run
+        print("[post-training] VM is released; continuing on local CPU ...", flush=True)
+        generate_local_mask_effect(remote_base, workers)
+        generate_local_training_reports(remote_base, workers)
+        publish_local_training_results(remote_base, workers)
+        publish_local_wandb_artifacts(remote_base, workers)
+    if local_hpo_run is not None:
+        print("[post-training] HPO VM is released; publishing snapshots locally ...", flush=True)
+        publish_local_hpo_results(local_hpo_run, args.hpo_persistence)
 
     print("\n[done] artifacts persisted to the configured DVC remote")
 

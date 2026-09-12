@@ -1151,6 +1151,7 @@ def _dump_train_visibility(
     tr_negs,
     *,
     hp_in_train,
+    tr_neg_sources=None,
     payload,
     row_bc,
     run_tag="main",
@@ -1169,7 +1170,7 @@ def _dump_train_visibility(
         if lab[k] == 1:
             a, b = int(train_all[k][0]), int(train_all[k][1])
             return "hard_positive" if (a, b) in hp_set else "gate_pos"
-        return "hard_neg"
+        return str(tr_neg_sources[k - len(train_all)]) if tr_neg_sources is not None else "hard_neg"
 
     rows = []
     for k, (t1, t2, l) in enumerate(zip(s1, s2, lab)):
@@ -1207,6 +1208,7 @@ def _build_pair_lineage(
     train_pos: np.ndarray,
     train_neg: np.ndarray,
     *,
+    train_neg_sources: np.ndarray | None,
     mask_audit: list[dict] | None,
     hard_negative_mask_audit: list[dict] | None,
 ) -> list[dict]:
@@ -1234,11 +1236,17 @@ def _build_pair_lineage(
 
     rows: list[dict] = []
     for label, pairs in ((1, train_pos), (0, train_neg)):
-        for a, b in pairs:
+        for pair_index, (a, b) in enumerate(pairs):
             a, b = int(a), int(b)
             row = lookup.get((label, a, b))
             if row is None:
-                population = "positive" if label else "hard_negative"
+                population = (
+                    "positive"
+                    if label
+                    else str(train_neg_sources[pair_index])
+                    if train_neg_sources is not None
+                    else "hard_negative"
+                )
                 row = {
                     "population": population,
                     "lineage_id": f"{population}:{a}:{b}",
@@ -1310,6 +1318,10 @@ def train_one_config(
     # training-only negative population; may include masked label-0 copies.
     # neg_pairs remains the immutable dev/test evaluation population.
     train_neg_pairs: np.ndarray | None = None,
+    # Source provenance aligned row-for-row with the negative arrays. These
+    # labels must travel with the pairs through the component fold boundary.
+    neg_pair_sources: np.ndarray | None = None,
+    train_neg_pair_sources: np.ndarray | None = None,
     # dynamic hard-negative masking: each training dataset presentation gets
     # a fresh masked anchor; no static negative copies are added.
     dynamic_mask_hard_negatives: bool = False,
@@ -1353,6 +1365,28 @@ def train_one_config(
     _train_neg_source = (
         train_neg_pairs if train_neg_pairs is not None else neg_pairs
     )
+    _eval_neg_sources = (
+        np.asarray(neg_pair_sources, dtype=object)
+        if neg_pair_sources is not None
+        else (np.full(len(neg_pairs), "unknown", dtype=object)
+              if neg_pairs is not None else np.empty(0, dtype=object))
+    )
+    _train_neg_sources = (
+        np.asarray(train_neg_pair_sources, dtype=object)
+        if train_neg_pair_sources is not None
+        else (_eval_neg_sources.copy() if train_neg_pairs is None
+              else np.full(len(train_neg_pairs), "unknown", dtype=object))
+    )
+    if neg_pairs is not None and len(_eval_neg_sources) != len(neg_pairs):
+        raise ValueError(
+            "neg_pair_sources must align with neg_pairs: "
+            f"{len(_eval_neg_sources)} != {len(neg_pairs)}"
+        )
+    if _train_neg_source is not None and len(_train_neg_sources) != len(_train_neg_source):
+        raise ValueError(
+            "train_neg_pair_sources must align with train_neg_pairs: "
+            f"{len(_train_neg_sources)} != {len(_train_neg_source)}"
+        )
 
 
     df, payload, row_bc, country, pos, hp_pairs, emb0 = data
@@ -1522,6 +1556,25 @@ def train_one_config(
             hard_train = hard_train_all[pairs_in_set(hard_train_all, row_bc, tr_bc)]
             hard_dev = hard_eval[pairs_in_set(hard_eval, row_bc, dev_bc)]
             hard_test = hard_eval[pairs_in_set(hard_eval, row_bc, test_bc)]
+            _train_neg_mask = (
+                pairs_in_set(_train_neg_source, row_bc, tr_bc)
+                if _train_neg_source is not None and len(_train_neg_source)
+                else np.zeros(0, dtype=bool)
+            )
+            tr_negs = (
+                _train_neg_source[_train_neg_mask]
+                if _train_neg_source is not None and len(_train_neg_source)
+                else np.empty((0, 2), dtype=int)
+            )
+            tr_neg_sources = (
+                _train_neg_sources[_train_neg_mask]
+                if len(_train_neg_mask)
+                else np.empty(0, dtype=object)
+            )
+            train_neg_source_counts = {
+                str(source): int(np.sum(tr_neg_sources == source))
+                for source in np.unique(tr_neg_sources)
+            }
             # caller's explicit negatives (gate hard-negs): same eval pools,
             # same boundary rules — they reinforce dev early-stopping and the
             # test AUC with the "text-similar, different size/pack" class
@@ -1645,13 +1698,6 @@ def train_one_config(
                 # pairs_in_set filters by tr_bc). The loss itself then picks
                 # the hard subset per batch (farthest positives, closest
                 # negatives) — hard-pair training at both layers.
-                tr_negs = (
-                    _train_neg_source[
-                        pairs_in_set(_train_neg_source, row_bc, tr_bc)
-                    ]
-                    if _train_neg_source is not None and len(_train_neg_source)
-                    else np.empty((0, 2), dtype=int)
-                )
                 if len(tr_negs) == 0:
                     rows.append(
                         {
@@ -1710,6 +1756,7 @@ def train_one_config(
                     lab,
                     train_all,
                     tr_negs,
+                    tr_neg_sources=tr_neg_sources,
                     hp_in_train=(
                         hp_pairs[pairs_in_set(hp_pairs, row_bc, tr_bc)]
                         if use_hp and hp_pairs is not None and len(hp_pairs)
@@ -1729,9 +1776,6 @@ def train_one_config(
                 # positive text).
                 neg_texts: list[str] | None = None
                 if _train_neg_source is not None and len(_train_neg_source):
-                    tr_negs = _train_neg_source[
-                        pairs_in_set(_train_neg_source, row_bc, tr_bc)
-                    ]
                     if len(tr_negs):
                         rng_n = np.random.default_rng(seed + fold_i + 1)
                         pool = [payload[a] for a, b in tr_negs] + [
@@ -1965,6 +2009,7 @@ def train_one_config(
                     _build_pair_lineage(
                         train_all,
                         tr_negs,
+                        train_neg_sources=tr_neg_sources,
                         mask_audit=mask_audit,
                         hard_negative_mask_audit=hard_negative_mask_audit,
                     )
@@ -2075,10 +2120,13 @@ def train_one_config(
                             },
                             step=int(row["epoch"]),
                         )
+            usage_rows: list[dict] = []
+            if hasattr(loss_fn, "pair_usage_rows"):
+                usage_rows = loss_fn.pair_usage_rows()
             if hasattr(loss_fn, "pair_usage_rows_by_epoch"):
-                usage_rows = loss_fn.pair_usage_rows_by_epoch()
-                if usage_rows:
-                    for usage in usage_rows:
+                usage_epoch_rows = loss_fn.pair_usage_rows_by_epoch()
+                if usage_epoch_rows:
+                    for usage in usage_epoch_rows:
                         pair_id = int(usage["pair_id"])
                         usage["dynamic_mask_count"] = int(
                             dynamic_mask_counts_by_epoch.get(
@@ -2088,11 +2136,73 @@ def train_one_config(
                     from core.common import write_visibility_log
 
                     write_visibility_log(
-                        pd.DataFrame(usage_rows),
+                        pd.DataFrame(usage_epoch_rows),
                         f"pair_backprop_fold{fold_i}.csv",
                         run_tag,
                         sample,
                     )
+            # Source accounting is computed after the fold boundary and from
+            # the same pair IDs used by the loss. This directly answers how
+            # many gate versus attribute-conflict negatives landed in the
+            # training fold and how many received selection/backprop.
+            source_coverage: dict[str, int] = {}
+            for source in np.unique(tr_neg_sources):
+                source = str(source)
+                source_coverage[f"n_train_neg_source_{source}"] = int(
+                    np.sum(tr_neg_sources == source)
+                )
+            for usage in usage_rows:
+                source = str(usage.get("population", "unknown"))
+                if source not in {"gate", "attribute_conflict"}:
+                    continue
+                source_coverage[f"n_train_neg_source_{source}_present"] = (
+                    source_coverage.get(
+                        f"n_train_neg_source_{source}_present", 0
+                    ) + int(bool(usage.get("present_count", 0)))
+                )
+                source_coverage[f"n_train_neg_source_{source}_selected"] = (
+                    source_coverage.get(
+                        f"n_train_neg_source_{source}_selected", 0
+                    ) + int(bool(usage.get("hard_selected_count", 0)))
+                )
+                source_coverage[f"n_train_neg_source_{source}_backprop"] = (
+                    source_coverage.get(
+                        f"n_train_neg_source_{source}_backprop", 0
+                    ) + int(bool(usage.get("backprop_count", 0)))
+                )
+            for source in ("gate", "attribute_conflict"):
+                for suffix in ("", "_present", "_selected", "_backprop"):
+                    source_coverage.setdefault(
+                        f"n_train_neg_source_{source}{suffix}", 0
+                    )
+                source_coverage[f"pct_train_neg_source_{source}"] = (
+                    source_coverage[f"n_train_neg_source_{source}"]
+                    / len(tr_negs)
+                    if len(tr_negs)
+                    else 0.0
+                )
+            print(
+                f"    [negative-source] fold {fold_i}: "
+                f"gate={source_coverage['n_train_neg_source_gate']:,} "
+                f"({source_coverage['pct_train_neg_source_gate']:.2%}) | "
+                f"attribute_conflict={source_coverage['n_train_neg_source_attribute_conflict']:,} "
+                f"({source_coverage['pct_train_neg_source_attribute_conflict']:.2%}) "
+                f"of {len(tr_negs):,} train-fold negatives",
+                flush=True,
+            )
+            if wandb_ctx is not None:
+                wandb_ctx.log_metrics(
+                    {
+                        f"negative_source/{key}": float(value)
+                        for key, value in source_coverage.items()
+                    }
+                )
+                wandb_ctx.set_summary(
+                    {
+                        f"negative_source/{key}": float(value)
+                        for key, value in source_coverage.items()
+                    }
+                )
             coverage = (
                 loss_fn.coverage_stats()
                 if hasattr(loss_fn, "coverage_stats")
@@ -2217,7 +2327,10 @@ def train_one_config(
                     for event in hist
                     if event.get("epoch") is not None and event.get("eval_loss") is not None
                 ]
-                if train_curve or dev_curve:
+                if (
+                    (train_curve or dev_curve)
+                    and os.environ.get("EUROMONITOR_REMOTE_TRAINING") != "1"
+                ):
                     import matplotlib
 
                     matplotlib.use("Agg")
@@ -2566,6 +2679,7 @@ def train_one_config(
                 "random_easy_available": int(bool(len(random_neg_pairs))),
                 "random_easy_score_csv": str(random_easy_score_path),
                 **coverage,
+                **source_coverage,
                 "n_train_pos": len(train_pos),
                 # hp rows in train = total minus the GATE rows actually kept.
                 # Subtracting the UNSAMPLED train_pos went NEGATIVE under
@@ -2780,7 +2894,10 @@ def train_one_config(
                 for name, values in score_groups.items()
             }
             nonempty = [values for values in finite_groups.values() if len(values)]
-            if nonempty:
+            if (
+                nonempty
+                and os.environ.get("EUROMONITOR_REMOTE_TRAINING") != "1"
+            ):
                 all_scores = np.concatenate(nonempty)
                 lo, hi = float(np.min(all_scores)), float(np.max(all_scores))
                 bins = np.linspace(lo, hi, 31) if hi > lo else 30
@@ -2855,6 +2972,8 @@ def run_hpo(
     # (train_one_config filters them to the fold's train side itself)
     neg_pairs: np.ndarray | None = None,
     train_neg_pairs: np.ndarray | None = None,
+    neg_pair_sources: np.ndarray | None = None,
+    train_neg_pair_sources: np.ndarray | None = None,
     dynamic_mask_hard_negatives: bool = False,
     dynamic_mask_frac: float = 0.0,
     dynamic_mask_prob: float | None = None,
@@ -2909,6 +3028,8 @@ def run_hpo(
                 selection_mode=selection_mode,
                 neg_pairs=neg_pairs,
                 train_neg_pairs=train_neg_pairs,
+                neg_pair_sources=neg_pair_sources,
+                train_neg_pair_sources=train_neg_pair_sources,
                 dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
                 dynamic_mask_frac=dynamic_mask_frac,
                 dynamic_mask_prob=dynamic_mask_prob,
@@ -3104,7 +3225,10 @@ def run_hpo(
     out_path = RESULTS / f"train_{model_tag}{era}_hpo_best.json"
     with open(out_path, "w") as f:
         json.dump(best, f, indent=2)
-    if wandb_ctx is not None:
+    if (
+        wandb_ctx is not None
+        and os.environ.get("EUROMONITOR_REMOTE_TRAINING") != "1"
+    ):
         trials_path = RESULTS / f"train_{model_tag}{era}_hpo_trials.csv"
         wandb_ctx.log_artifact(trials_path, "hpo-trials")
         wandb_ctx.log_artifact(out_path, "hpo-best")

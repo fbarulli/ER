@@ -34,6 +34,12 @@ from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_CONTRASTIVE_MARGIN
 from training.folds import component_folds
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 
+# Colab workers should spend GPU time only on training and the score exports
+# needed by the local post-processing lane.  Reports, plots, artifact bundles,
+# and final DVC publishing are CPU/network work and are intentionally deferred
+# until the worker outputs have been downloaded locally.
+_REMOTE_TRAINING = os.environ.get("EUROMONITOR_REMOTE_TRAINING") == "1"
+
 # thresholds live in config/paths.yaml (pairs.proceed_sim_threshold /
 # pairs.hardneg_sim_threshold) and are read by pipeline.build_training_data
 # directly — no duplicate constants here (they were dead globals: set but
@@ -232,6 +238,20 @@ def _main_inner(_mlf, _wandb) -> None:
     # indexing — a missing key crashes at startup, never a silent default.
     tr = cfg["training"]
     mining_cfg = cfg["mining"]
+    mining_profile = os.environ.get("EUROMONITOR_MINING_PROFILE")
+    if mining_profile:
+        profile_cfg = cfg["mining_profiles"][mining_profile]
+        mining_cfg = {
+            **mining_cfg,
+            "ann": {
+                **mining_cfg["ann"],
+                "enabled": bool(profile_cfg["ann_enabled"]),
+            },
+            "attribute_conflict": {
+                **mining_cfg["attribute_conflict"],
+                "enabled": bool(profile_cfg["attribute_conflict_enabled"]),
+            },
+        }
     ann_cfg = mining_cfg["ann"]
     attr_cfg = mining_cfg["attribute_conflict"]
     ann_mining_enabled = bool(ann_cfg["enabled"])
@@ -476,6 +496,7 @@ def _main_inner(_mlf, _wandb) -> None:
             "ann_k": int(ann_cfg["k"]),
             "attribute_conflict_enabled": attribute_conflict_enabled,
             "attribute_conflict_target": int(attr_cfg["target"]),
+            "mining_profile": mining_profile or "config_default",
         }
     )
     print(
@@ -522,6 +543,12 @@ def _main_inner(_mlf, _wandb) -> None:
     # Keep evaluation negatives immutable. Masked hard-negative copies are
     # training-only rows so dev/holdout metrics cannot include augmentation.
     train_neg = neg
+    # Keep provenance aligned with every negative row before any fold split.
+    # The baseline resolved gate population is immutable; supplemental
+    # miners append their own source label rather than collapsing into a
+    # generic ``hard_negative`` bucket.
+    neg_sources = np.full(len(neg), "gate", dtype=object)
+    train_neg_sources = neg_sources.copy()
     if args.mask_frac > 0:
         from training.masking import augment_positives
 
@@ -674,6 +701,23 @@ def _main_inner(_mlf, _wandb) -> None:
         # Keep supplemental negatives unexpanded; dynamic masking happens at
         # each training presentation, so every epoch can see a fresh variant.
         train_neg = np.vstack([train_neg, _attr_neg])
+        _attr_sources = np.full(len(_attr_neg), "attribute_conflict", dtype=object)
+        neg_sources = np.concatenate([neg_sources, _attr_sources])
+        train_neg_sources = np.concatenate([train_neg_sources, _attr_sources])
+    if len(neg_sources) != len(neg) or len(train_neg_sources) != len(train_neg):
+        raise RuntimeError(
+            "negative source provenance length mismatch before fold split: "
+            f"eval={len(neg_sources)}/{len(neg)} "
+            f"train={len(train_neg_sources)}/{len(train_neg)}"
+        )
+    _wandb.log_config(
+        {
+            "n_gate_negative_pairs": int(np.sum(neg_sources == "gate")),
+            "n_attribute_conflict_negative_pairs": int(
+                np.sum(neg_sources == "attribute_conflict")
+            ),
+        }
+    )
     _wandb.log_config(
         {
             "n_attribute_conflict_negatives": int(len(_attr_neg)),
@@ -744,6 +788,8 @@ def _main_inner(_mlf, _wandb) -> None:
                 args, data, mask_cfg, folds_override, dev_override,
                 n_masked=len(mask_audit), neg_pairs=neg,
                 train_neg_pairs=train_neg,
+                neg_pair_sources=neg_sources,
+                train_neg_pair_sources=train_neg_sources,
                 dynamic_mask_hard_negatives=mask_hard_negatives,
                 dynamic_mask_frac=args.mask_frac,
                 dynamic_mask_prob=mask_prob,
@@ -755,6 +801,8 @@ def _main_inner(_mlf, _wandb) -> None:
                 args, data, mask_cfg, folds_override, dev_override,
                 n_masked=len(mask_audit), neg_pairs=neg,
                 train_neg_pairs=train_neg,
+                neg_pair_sources=neg_sources,
+                train_neg_pair_sources=train_neg_sources,
                 dynamic_mask_hard_negatives=mask_hard_negatives,
                 dynamic_mask_frac=args.mask_frac,
                 dynamic_mask_prob=mask_prob,
@@ -810,6 +858,8 @@ def _main_inner(_mlf, _wandb) -> None:
         dev_override=dev_override,
         neg_pairs=neg,
         train_neg_pairs=train_neg,
+        neg_pair_sources=neg_sources,
+        train_neg_pair_sources=train_neg_sources,
         dynamic_mask_hard_negatives=mask_hard_negatives,
         dynamic_mask_frac=args.mask_frac,
         dynamic_mask_prob=mask_prob,
@@ -836,7 +886,13 @@ def _main_inner(_mlf, _wandb) -> None:
     mask_effect_metrics: dict[str, float] = {}
     try:
         _ok = [r for r in rows if r.get("status") == "ok"]
-        if args.mask_effect and getattr(args, "mask_frac", 0) > 0 and mask_audit and _ok:
+        if (
+            not _REMOTE_TRAINING
+            and args.mask_effect
+            and getattr(args, "mask_frac", 0) > 0
+            and mask_audit
+            and _ok
+        ):
             from sentence_transformers import SentenceTransformer as _ST
 
             _best = RESULTS / "_checkpoints" / model_tag / f"r{run_tag}_f{_ok[0]['fold']}"
@@ -1072,7 +1128,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # SMOKE GUARD: --sample runs are chain validation, not results — their
     # rows must not sit in the ablation CSVs until a real run replaces them.
     ok_rows_07 = [r for r in all_rows if r.get("status") == "ok"]
-    if ok_rows_07 and not args.sample:
+    if ok_rows_07 and not args.sample and not _REMOTE_TRAINING:
         _emit_07_series(ok_rows_07, args)
     elif ok_rows_07 and args.sample:
         print(
@@ -1087,7 +1143,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # Build the complete post-run report before publishing the downloadable
     # W&B/DVC bundle. HPO selection rows intentionally have no test pair dump,
     # so they skip this report until the final holdout-scoring lane.
-    if args.plot and aucs:
+    if args.plot and aucs and not _REMOTE_TRAINING:
         pair_paths = sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*_pairs.csv"))
         if pair_paths:
             try:
@@ -1182,15 +1238,16 @@ def _main_inner(_mlf, _wandb) -> None:
         _mlf.log_metrics(
             {"mean_auc": float(np.mean(aucs)), "std_auc": float(np.std(aucs))}
         )
-    _mlf.log_artifact(out)
-    _wandb.log_artifact(out, "fold-metrics")
-    _log_run_artifacts_to_wandb(
-        _wandb,
-        run_tag=run_tag,
-        model_tag=model_tag,
-        metrics_path=out,
-        rows=all_rows,
-    )
+    if not _REMOTE_TRAINING:
+        _mlf.log_artifact(out)
+        _wandb.log_artifact(out, "fold-metrics")
+        _log_run_artifacts_to_wandb(
+            _wandb,
+            run_tag=run_tag,
+            model_tag=model_tag,
+            metrics_path=out,
+            rows=all_rows,
+        )
     _wandb.set_summary(
         {
             "mean_auc": float(np.mean(aucs)) if aucs else None,
@@ -1210,7 +1267,7 @@ def _main_inner(_mlf, _wandb) -> None:
     print(f"[artifacts] {out}", flush=True)
     # pair stats for the run log
     print(json.dumps(s, indent=2), flush=True)
-    if args.plot and aucs:
+    if args.plot and aucs and not _REMOTE_TRAINING:
         from training.plots import report_plots, training_loss_plot
 
         report_plots(out, args)

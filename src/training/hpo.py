@@ -57,6 +57,8 @@ def run_grid(
     neg_pairs=None,
     # training-only augmented negatives; neg_pairs remains eval-only
     train_neg_pairs=None,
+    neg_pair_sources=None,
+    train_neg_pair_sources=None,
     dynamic_mask_hard_negatives=False,
     dynamic_mask_frac=0.0,
     dynamic_mask_prob=None,
@@ -191,6 +193,8 @@ def run_grid(
             # labeled negatives and every fold skips
             neg_pairs=neg_pairs,
             train_neg_pairs=train_neg_pairs,
+            neg_pair_sources=neg_pair_sources,
+            train_neg_pair_sources=train_neg_pair_sources,
             dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
             dynamic_mask_frac=dynamic_mask_frac,
             dynamic_mask_prob=dynamic_mask_prob,
@@ -261,6 +265,8 @@ def run_tpe(
     neg_pairs: np.ndarray | None = None,
     # training-only augmented negatives; neg_pairs remains eval-only
     train_neg_pairs: np.ndarray | None = None,
+    neg_pair_sources: np.ndarray | None = None,
+    train_neg_pair_sources: np.ndarray | None = None,
     dynamic_mask_hard_negatives: bool = False,
     dynamic_mask_frac: float = 0.0,
     dynamic_mask_prob: float | None = None,
@@ -338,6 +344,8 @@ def run_tpe(
         selection_mode=_holdout,
         neg_pairs=neg_pairs,
         train_neg_pairs=train_neg_pairs,
+        neg_pair_sources=neg_pair_sources,
+        train_neg_pair_sources=train_neg_pair_sources,
         dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
         dynamic_mask_frac=dynamic_mask_frac,
         dynamic_mask_prob=dynamic_mask_prob,
