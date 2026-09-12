@@ -1684,7 +1684,6 @@ def train_one_config(
                     preprocess_fn=model.preprocess,
                     router_mapping=args_hf.router_mapping,
                     prompts=args_hf.prompts,
-                    max_length=getattr(args_hf, "max_length", None),
                 ),
                 loss=loss_fn,
                 optimizers=(optimizer, None),  # prebuilt AdamW with
