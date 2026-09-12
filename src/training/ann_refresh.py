@@ -22,6 +22,7 @@ def refresh_finetuned_ann(
     df: pd.DataFrame,
     payload: list[str],
     row_barcodes: np.ndarray,
+    structured_features: np.ndarray | None = None,
     *,
     train_barcodes: set[str],
     existing: np.ndarray | None,
@@ -64,6 +65,17 @@ def refresh_finetuned_ann(
         show_progress_bar=False,
     )
     emb = np.asarray(emb, dtype=np.float32)
+    if structured_features is not None:
+        from core.common import load_config
+        from core.structured_features import fuse_numpy
+
+        sf_cfg = load_config()["training"]["structured_features"]
+        sf_weight = (
+            float(sf_cfg["embedding_weight"])
+            if bool(sf_cfg["enabled"]) and bool(sf_cfg["feed_to_loss"])
+            else 0.0
+        )
+        emb = fuse_numpy(emb, np.asarray(structured_features)[: len(df)], sf_weight)
 
     broad_target = max(int(target), 1) * max(int(candidate_multiplier), 1)
     broad_pairs, broad_scores = mine_hard_negatives(

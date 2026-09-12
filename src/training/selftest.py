@@ -1193,6 +1193,7 @@ def oracle_schemas() -> None:
     ok_pos = np.array([[0, 2], [1, 2]])
     good = TrainingData(
         payload=payload, row_bc=row_bc, pos=ok_pos,
+        structured_features=[[0.0] * 10 for _ in payload],
         neg=np.empty((0, 2), dtype=int), gtin_to_row={"1": 0}, stats={
             "n_rows": 3, "n_sku_with_canonical": 1, "n_pos_empty_dropped": 0,
             "n_empty_sku_texts": 0, "n_empty_canon_texts": 0, "n_canonicals": 1,
@@ -1205,6 +1206,7 @@ def oracle_schemas() -> None:
     try:
         TrainingData(
             payload=payload, row_bc=np.array(["1", "2"]), pos=ok_pos,
+            structured_features=[[0.0] * 10 for _ in payload],
             neg=np.empty((0, 2), dtype=int), gtin_to_row={}, stats=good.stats.model_dump(),
         )
         check("TrainingData rejects unlocked row_bc", False)
@@ -1213,6 +1215,7 @@ def oracle_schemas() -> None:
     try:
         TrainingData(
             payload=payload, row_bc=row_bc,
+            structured_features=[[0.0] * 10 for _ in payload],
             pos=np.array([[0, 3]]),  # index 3 out of range
             neg=np.empty((0, 2), dtype=int), gtin_to_row={}, stats=good.stats.model_dump(),
         )
@@ -1241,10 +1244,11 @@ def oracle_schemas() -> None:
 
     ok_dt = DataTuple(
         n_df=2, payload=["a", "b", "c"], row_bc=np.array(["1", "2", "3"]),
+        structured_features=np.zeros((3, 10)),
         country=np.array(["X", "Y", "X"]), pos=np.array([[0, 2]]),
         hp_pairs=np.empty((0, 2), dtype=int), emb0=np.zeros((3, 4)),
     )
-    check("DataTuple accepts aligned 7-tuple", ok_dt.n_df == 2)
+    check("DataTuple accepts aligned 8-tuple", ok_dt.n_df == 2)
     for over, why in (
         ({"country": np.array(["X"])}, "country shorter than payload"),
         ({"emb0": np.zeros((2, 4))}, "emb0 rows != payload"),
@@ -1252,6 +1256,7 @@ def oracle_schemas() -> None:
     ):
         kw = {
             "n_df": 2, "payload": ["a", "b", "c"],
+            "structured_features": np.zeros((3, 10)),
             "row_bc": np.array(["1", "2", "3"]),
             "country": np.array(["X", "Y", "X"]), "pos": np.array([[0, 2]]),
             "hp_pairs": np.empty((0, 2), dtype=int), "emb0": np.zeros((3, 4)),

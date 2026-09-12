@@ -90,7 +90,7 @@ def run_grid(
     import torch
 
     grid = QUICK if args.quick else GRID
-    df, payload, row_bc, country, pos, hp_pairs, emb0 = data
+    df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0 = data
 
     # side arrays must cover canonical entries appended to the payload
     # (same pad src/training/train.main does before building the data tuple)
@@ -100,7 +100,7 @@ def run_grid(
         country = _np.concatenate(
             [country, _np.full(len(payload) - len(country), "", dtype=country.dtype)]
         )
-    data = (df, payload, row_bc, country, pos, hp_pairs, emb0)
+    data = (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0)
 
     # masking provenance: the augmentation itself lives in the entry lane
     # (identical for every config — the sweep measures optimizer knobs,
@@ -296,7 +296,7 @@ def run_tpe(
     # .py _main_inner) already seeds; this makes a standalone run_tpe
     # call identical, before any optuna/trial randomness.
     set_determinism(SEED)
-    df, payload, row_bc, country, pos, hp_pairs, emb0 = data
+    df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0 = data
     _holdout = getattr(args, "split", None) == "holdout"
     if _holdout:
         # NO FALLBACK (owner Q27): holdout without the explicit boundary is
@@ -335,7 +335,7 @@ def run_tpe(
     # quarter; the assert above is what keeps that from happening quietly.
     run_hpo(
         args,
-        (df, payload, row_bc, country, pos, hp_pairs, emb0),
+        (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0),
         mlf_ctx if mlf_ctx is not None else _mlf_null(),
         cv_folds=None,
         folds_override=folds,

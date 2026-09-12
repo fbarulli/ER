@@ -20,8 +20,8 @@ TWO jobs:
        PairArrays            index-pair containers (pos/neg/hp)
        TrainingData          pipeline.build_training_data (the bundle)
        MaskingResult         TRAIN.masking.augment_positives
-       DataTuple             the (df, payload, row_bc, country, pos,
-                             hp_pairs, emb0) 7-tuple crossing into
+       DataTuple             the (df, payload, structured_features, row_bc,
+                             country, pos, hp_pairs, emb0) 8-tuple crossing into
                              train_one_config
        TrainConfig           the per-config dict train_one_config receives
        FoldSets              TRAIN.folds.component_folds output
@@ -250,6 +250,19 @@ class TrainingSpec(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    class StructuredFeaturesSpec(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        enabled: bool
+        append_to_text: bool
+        feed_to_loss: bool
+        embedding_weight: float = Field(ge=0.0)
+        volume_scale_ml: float = Field(gt=0.0)
+        pack_scale: float = Field(gt=0.0)
+        max_set_size: int = Field(ge=1)
+
+    structured_features: StructuredFeaturesSpec
 
     # The default SentenceTransformer path is a tied-weight two-tower
     # encoder: SKU and canonical text are encoded independently, then
@@ -878,6 +891,7 @@ class TrainingData(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     payload: list[str]
+    structured_features: list[list[float]]
     row_bc: np.ndarray
     pos: np.ndarray
     neg: np.ndarray
@@ -916,6 +930,11 @@ class TrainingData(BaseModel):
         if len(self.row_bc) != n:
             raise ValueError(
                 f"row_bc length {len(self.row_bc)} != payload length {n}"
+            )
+        if len(self.structured_features) != n:
+            raise ValueError(
+                "structured_features length "
+                f"{len(self.structured_features)} != payload length {n}"
             )
         for name in ("pos", "neg"):
             arr = getattr(self, name)
@@ -1000,8 +1019,8 @@ class MaskingResult(BaseModel):
 
 
 class DataTuple(BaseModel):
-    """The 7-tuple crossing into train_one_config:
-    (df, payload, row_bc, country, pos, hp_pairs, emb0).
+    """The 8-tuple crossing into train_one_config:
+    (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0).
 
     Cross-shape assertions (the exact class of bug the audits found —
     country shorter than payload after canonical/masked extension):
@@ -1015,11 +1034,22 @@ class DataTuple(BaseModel):
 
     n_df: int = Field(ge=0)
     payload: list[str]
+    structured_features: np.ndarray
     row_bc: np.ndarray
     country: np.ndarray
     pos: np.ndarray
     hp_pairs: np.ndarray
     emb0: np.ndarray
+
+    @field_validator("structured_features")
+    @classmethod
+    def _structured_matrix(cls, v: Any) -> np.ndarray:
+        arr = np.asarray(v)
+        if arr.ndim != 2:
+            raise ValueError(f"structured_features must be 2-D, got shape {arr.shape}")
+        if not np.issubdtype(arr.dtype, np.floating):
+            raise ValueError(f"structured_features must be float, got {arr.dtype}")
+        return arr
 
     @field_validator("row_bc", "country")
     @classmethod
@@ -1064,6 +1094,10 @@ class DataTuple(BaseModel):
     @model_validator(mode="after")
     def _shapes_agree(self) -> DataTuple:
         n = len(self.payload)
+        if len(self.structured_features) != n:
+            raise ValueError(
+                f"structured_features length {len(self.structured_features)} != payload length {n}"
+            )
         if len(self.row_bc) != n:
             raise ValueError(
                 f"row_bc length {len(self.row_bc)} != payload length {n}"

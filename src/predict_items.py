@@ -7,20 +7,18 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 from sentence_transformers import SentenceTransformer, util
 
-from core.common import load_dataset_deduped
+from core.common import F, RESULTS, load_config, load_dataset_deduped
+from core.structured_features import (
+    append_text as append_structured_text,
+    canonical_info as canonical_structured_info,
+    fuse_numpy,
+    sku_info as sku_structured_info,
+    vector as structured_vector,
+)
 from pipeline import canonical_model_text, clean_sku_text, load_canonical_map, strip_schema_words
-
-
-def _text_for_sku(row: pd.Series) -> str:
-    return strip_schema_words(
-        clean_sku_text(row.get("title", ""), row.get("attr", ""))
-    )
-
-
-def _text_for_item(canonical: object) -> str:
-    return strip_schema_words(canonical_model_text(canonical))
 
 
 def main() -> None:
@@ -55,9 +53,57 @@ def main() -> None:
     if not item_ids:
         raise ValueError("Canonical item map is empty")
 
+    sf_cfg = load_config()["training"]["structured_features"]
+    sf_enabled = bool(sf_cfg["enabled"])
+    sf_text = sf_enabled and bool(sf_cfg["append_to_text"])
+    sf_weight = (
+        float(sf_cfg["embedding_weight"])
+        if sf_enabled and bool(sf_cfg["feed_to_loss"])
+        else 0.0
+    )
+    canonical_records = pd.read_csv(
+        RESULTS / F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
+    )
+    canonical_record_map = {
+        str(row["gtin"]): row.to_dict()
+        for _, row in canonical_records.iterrows()
+    }
+    sku_infos = [
+        sku_structured_info(
+            row.get("title", ""), row.get("attributes", row.get("attr", ""))
+        )
+        if sf_enabled
+        else {"volume": set(), "pack": set()}
+        for _, row in skus.iterrows()
+    ]
+    item_infos = [
+        canonical_structured_info(canonical_record_map.get(item_id, {}))
+        if sf_enabled
+        else {"volume": set(), "pack": set()}
+        for item_id in item_ids
+    ]
+    sku_texts = [
+        append_structured_text(
+            strip_schema_words(
+                clean_sku_text(
+                    row.get("title", ""),
+                    row.get("attributes", row.get("attr", "")),
+                )
+            ),
+            info,
+            enabled=sf_text,
+        )
+        for (_, row), info in zip(skus.iterrows(), sku_infos)
+    ]
+    item_texts = [
+        append_structured_text(
+            strip_schema_words(canonical_model_text(canonical[item_id])),
+            info,
+            enabled=sf_text,
+        )
+        for item_id, info in zip(item_ids, item_infos)
+    ]
     model = SentenceTransformer(str(Path(args.model)))
-    sku_texts = skus.apply(_text_for_sku, axis=1).tolist()
-    item_texts = [_text_for_item(canonical[item_id]) for item_id in item_ids]
     sku_embeddings = model.encode(
         sku_texts,
         batch_size=128,
@@ -72,6 +118,34 @@ def main() -> None:
         normalize_embeddings=True,
         show_progress_bar=True,
     )
+    sku_features = np.asarray(
+        [
+            structured_vector(
+                info,
+                volume_scale_ml=float(sf_cfg["volume_scale_ml"]),
+                pack_scale=float(sf_cfg["pack_scale"]),
+                max_set_size=int(sf_cfg["max_set_size"]),
+            )
+            for info in sku_infos
+        ],
+        dtype=np.float32,
+    )
+    item_features = np.asarray(
+        [
+            structured_vector(
+                info,
+                volume_scale_ml=float(sf_cfg["volume_scale_ml"]),
+                pack_scale=float(sf_cfg["pack_scale"]),
+                max_set_size=int(sf_cfg["max_set_size"]),
+            )
+            for info in item_infos
+        ],
+        dtype=np.float32,
+    )
+    sku_embeddings = fuse_numpy(sku_embeddings.cpu().numpy(), sku_features, sf_weight)
+    item_embeddings = fuse_numpy(item_embeddings.cpu().numpy(), item_features, sf_weight)
+    sku_embeddings = torch.as_tensor(sku_embeddings)
+    item_embeddings = torch.as_tensor(item_embeddings)
     nearest = util.semantic_search(sku_embeddings, item_embeddings, top_k=1)
 
     predictions = []

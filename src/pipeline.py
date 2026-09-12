@@ -916,14 +916,13 @@ _CANON_KEEP_DIGIT = re.compile(
 
 
 def canonical_model_text(canonical: str) -> str:
-    """Number-free canonical for the MODEL payload.
+    """Number-free base canonical for the MODEL payload.
 
     The gate's canonical (canonical_records.csv) keeps volumes/packs/metric
-    mentions — that file drives hard_no decisions. The MODEL must never see
-    numbers (owner spec): strip every digit token that is not a semantic
-    nutrient/brand whitelist member. Underscore n-gram compounds keep their
-    alpha part when it survives (kr_white_grape_flavored → the words stay,
-    the 12x500 volume dies with the compound).
+    mentions — that file drives hard_no decisions. Strip every digit token
+    that is not a semantic nutrient/brand whitelist member here; the training
+    payload then appends normalized ``volume_ml_*`` and ``pack_qty_*`` tokens
+    from the structured sets.
     """
     if not re.search(r"\d", canonical):
         return canonical
@@ -1501,6 +1500,7 @@ def build_training_data(
 
     Returns dict with:
         payload : list[str]  — clean sku text per row + one canonical per GTIN
+        structured_features : list[list[float]] — normalized volume/pack features
         row_bc  : np.ndarray — barcode per payload entry (gtin for canonicals)
         pos     : np.ndarray (N,2) — (sku_row, canon_idx) for every row whose
                   barcode has a canonical
@@ -1509,6 +1509,18 @@ def build_training_data(
         stats   : dict — counts (nothing dropped silently)
     """
     cfg = load_config()
+    structured_cfg = cfg["training"]["structured_features"]
+    structured_enabled = bool(structured_cfg["enabled"])
+    structured_append_to_text = structured_enabled and bool(
+        structured_cfg["append_to_text"]
+    )
+    from core.structured_features import (
+        append_text as append_structured_text,
+        canonical_info as canonical_structured_info,
+        sku_info as sku_structured_info,
+        vector as structured_vector,
+    )
+
     thr_pos = float(cfg["pairs"]["proceed_sim_threshold"])
     thr_neg = float(cfg["pairs"]["hardneg_sim_threshold"])
 
@@ -1523,15 +1535,33 @@ def build_training_data(
     title = df["title"].fillna("")
     attrs = df["attributes"].fillna("")
 
+    # Keep the structured source of truth alongside every payload endpoint.
+    # The old text lane deliberately removed these tokens; that made the
+    # volume/pack work useful for labels but invisible to the embedding.
+    sku_structured = [
+        sku_structured_info(t, a) if structured_enabled else {"volume": set(), "pack": set()}
+        for t, a in zip(title, attrs)
+    ]
+
     # ── clean sku text per row (variant: full = title+attr, title_only) ──
     # schema words (type/content/material/...) die on the MODEL side only —
     # the gate's inputs are untouched (owner 2026-09-07: stage-2 strip)
     if payload_variant == "full":
         sku_texts = [
-            strip_schema_words(clean_sku_text(t, a)) for t, a in zip(title, attrs)
+            append_structured_text(
+                strip_schema_words(clean_sku_text(t, a)), info,
+                enabled=structured_append_to_text,
+            )
+            for t, a, info in zip(title, attrs, sku_structured)
         ]
     elif payload_variant == "title_only":
-        sku_texts = [strip_schema_words(clean_sku_text(t)) for t in title]
+        sku_texts = [
+            append_structured_text(
+                strip_schema_words(clean_sku_text(t)), info,
+                enabled=structured_append_to_text,
+            )
+            for t, info in zip(title, sku_structured)
+        ]
     else:
         raise SystemExit(f"unknown payload variant: {payload_variant}")
 
@@ -1541,14 +1571,42 @@ def build_training_data(
     canon_gtins = sorted(canon_map)
     canon_start = len(payload)
     gtin_to_canon_idx = {g: canon_start + i for i, g in enumerate(canon_gtins)}
-    # MODEL payload: number-free + schema-free canonical variant — the gate's
-    # CSV keeps numbers AND schema labels (hard_no decisions), the model sees
-    # neither (owner spec: no numbers; schema strip = stage-2 census)
+    # MODEL payload: schema-free canonical variant plus normalized structured
+    # volume/pack tokens. The gate's CSV keeps the original numbers and schema
+    # labels for decisions; the model receives the stable normalized tokens
+    # explicitly so those attributes are no longer discarded.
+    canonical_records = pd.read_csv(
+        RESULTS / F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
+    )
+    canonical_record_map = {
+        str(row["gtin"]): row.to_dict()
+        for _, row in canonical_records.iterrows()
+    }
+    canon_structured = [
+        canonical_structured_info(canonical_record_map.get(g, {}))
+        if structured_enabled
+        else {"volume": set(), "pack": set()}
+        for g in canon_gtins
+    ]
     canon_texts = [
-        strip_schema_words(canonical_model_text(canon_map[g])) for g in canon_gtins
+        append_structured_text(
+            strip_schema_words(canonical_model_text(canon_map[g])), info,
+            enabled=structured_append_to_text,
+        )
+        for g, info in zip(canon_gtins, canon_structured)
     ]
     payload.extend(canon_texts)
     row_bc.extend(canon_gtins)
+    structured_infos = sku_structured + canon_structured
+    structured_features = [
+        structured_vector(
+            info,
+            volume_scale_ml=float(structured_cfg["volume_scale_ml"]),
+            pack_scale=float(structured_cfg["pack_scale"]),
+            max_set_size=int(structured_cfg["max_set_size"]),
+        )
+        for info in structured_infos
+    ]
 
     # ── empty-text guard (stage-3 soft stop) ──────────────────────────
     # Low-signal rows ("Single 2 Liter Bottle", "water 1.5 lt pack of 6")
@@ -1679,6 +1737,7 @@ def build_training_data(
 
     _bundle = _TrainingData(
         payload=payload,
+        structured_features=structured_features,
         row_bc=np.array(row_bc),
         pos=pos,
         neg=neg,

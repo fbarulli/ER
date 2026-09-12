@@ -101,6 +101,14 @@ evaluation:
 # ── training ────────────────────────────────────────────────────────────────
 training:
   architecture: "two_tower"  # default: shared-weight SKU/canonical retrieval towers
+  structured_features:
+    enabled: true
+    append_to_text: true
+    feed_to_loss: true
+    embedding_weight: 0.35
+    volume_scale_ml: 10000.0
+    pack_scale: 100.0
+    max_set_size: 8
   # loss: contrastive = OnlineContrastiveLoss over labeled (pos=1/neg=0)
   # hard pairs — per-batch hard-pair selection is native to the loss.
   # mnrl = MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.

@@ -467,8 +467,9 @@ def _main_inner(_mlf, _wandb) -> None:
     #                — pairs (sku, own canonical)
     #   title_only = clean sku from title alone
     data = load_training_data(df, payload_variant=args.payload)
-    payload, row_bc, pos, neg = (
+    payload, structured_features, row_bc, pos, neg = (
         data["payload"],
+        np.asarray(data["structured_features"], dtype=np.float32),
         data["row_bc"],
         data["pos"],
         data["neg"],
@@ -490,6 +491,27 @@ def _main_inner(_mlf, _wandb) -> None:
             "mask_hi": float(mask_cfg["mask_hi"]),
             "mask_track_visibility": bool(mask_cfg["track_visibility"]),
             "mask_track_per_epoch": bool(mask_cfg["track_per_epoch"]),
+            "structured_features_enabled": bool(
+                tr["structured_features"]["enabled"]
+            ),
+            "structured_features_append_to_text": bool(
+                tr["structured_features"]["append_to_text"]
+            ),
+            "structured_features_feed_to_loss": bool(
+                tr["structured_features"]["feed_to_loss"]
+            ),
+            "structured_features_embedding_weight": float(
+                tr["structured_features"]["embedding_weight"]
+            ),
+            "structured_features_volume_scale_ml": float(
+                tr["structured_features"]["volume_scale_ml"]
+            ),
+            "structured_features_pack_scale": float(
+                tr["structured_features"]["pack_scale"]
+            ),
+            "structured_features_max_set_size": int(
+                tr["structured_features"]["max_set_size"]
+            ),
             "train_frac": args.train_frac,
             "batch_size_cuda": tr["batch_size_cuda"],
             "track_datapoint_usage": bool(tr["track_datapoint_usage"]),
@@ -567,6 +589,21 @@ def _main_inner(_mlf, _wandb) -> None:
         pos, payload, row_bc, n_added, mask_audit = augment_positives(
             pos, payload, row_bc, frac=args.mask_frac, mask_prob=mask_prob, seed=SEED
         )
+        if n_added:
+            structured_features = np.vstack(
+                [
+                    structured_features,
+                    np.asarray(
+                        [structured_features[int(row["anchor_payload_idx"])] for row in mask_audit],
+                        dtype=np.float32,
+                    ),
+                ]
+            )
+        if len(structured_features) != len(payload):
+            raise RuntimeError(
+                "structured feature/payload length mismatch after masking: "
+                f"{len(structured_features)} != {len(payload)}"
+            )
         # MASK VISIBILITY (owner directive 2026-09-07): per-copy realized
         # extents — the high-vs-low-extent effect on overfitting is
         # measurable only when each copy's TRUE masked fraction is logged
@@ -772,7 +809,7 @@ def _main_inner(_mlf, _wandb) -> None:
             flush=True,
         )
 
-    data = (df, payload, row_bc, country, pos, hp_pairs, emb0)
+    data = (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0)
 
     # ── HPO lanes: second07 fixed grid / second08 optuna TPE ───────────────
     if args.grid or args.hpo:

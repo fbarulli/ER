@@ -92,6 +92,13 @@ N_TARGET_MINING = int(_ANN_MINING_CFG["target"])
 ANN_MINING_ENABLED = bool(_ANN_MINING_CFG["enabled"])
 MASK_TRACK_PER_EPOCH = bool(load_config()["masking"]["track_per_epoch"])
 TRACK_DATAPOINT_USAGE = bool(load_config()["training"]["track_datapoint_usage"])
+_STRUCTURED_FEATURE_CFG = load_config()["training"]["structured_features"]
+_STRUCTURED_FEATURE_LOSS_WEIGHT = (
+    float(_STRUCTURED_FEATURE_CFG["embedding_weight"])
+    if bool(_STRUCTURED_FEATURE_CFG["enabled"])
+    and bool(_STRUCTURED_FEATURE_CFG["feed_to_loss"])
+    else 0.0
+)
 
 # Keep the coverage artifact explicit about every population that can enter
 # the training/evaluation lane, including configured-but-empty populations.
@@ -454,6 +461,7 @@ def _tracking_contrastive_loss(model, *, margin: float):
             self._tracking_totals: dict[str, float] = {}
             self._tracking_batches = 0
             self._batch_pair_ids = None
+            self._batch_structured_features = None
             self._total_negative_pairs = 0
             self._seen_hard_negative_ids: set[int] = set()
             self._seen_margin_active_negative_ids: set[int] = set()
@@ -466,6 +474,9 @@ def _tracking_contrastive_loss(model, *, margin: float):
 
         def set_batch_pair_ids(self, pair_ids) -> None:
             self._batch_pair_ids = pair_ids.detach().cpu()
+
+        def set_batch_structured_features(self, features) -> None:
+            self._batch_structured_features = features.detach().cpu()
 
         def set_total_negative_pairs(self, count: int) -> None:
             self._total_negative_pairs = int(count)
@@ -490,6 +501,20 @@ def _tracking_contrastive_loss(model, *, margin: float):
                         stacklevel=4,
                     )
 
+            structured = self._batch_structured_features
+            self._batch_structured_features = None
+            if structured is not None and _STRUCTURED_FEATURE_LOSS_WEIGHT > 0:
+                from core.structured_features import fuse_torch
+
+                pair_features = structured.to(device=embeddings[0].device)
+                embeddings = [
+                    fuse_torch(
+                        embedding,
+                        pair_features[:, side, :],
+                        _STRUCTURED_FEATURE_LOSS_WEIGHT,
+                    )
+                    for side, embedding in enumerate(embeddings)
+                ]
             distance_matrix = self.distance_metric(embeddings[0], embeddings[1])
             negs = distance_matrix[labels == 0]
             poss = distance_matrix[labels == 1]
@@ -1083,6 +1108,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         df,
         payload,
         row_barcodes,
+        structured_features,
         train_barcodes,
         existing,
         ann_state,
@@ -1096,6 +1122,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         self.df = df
         self.payload = payload
         self.row_barcodes = row_barcodes
+        self.structured_features = structured_features
         self.train_barcodes = train_barcodes
         self.existing = existing
         self.ann_state = ann_state
@@ -1135,6 +1162,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             self.df,
             self.payload,
             self.row_barcodes,
+            structured_features=self.structured_features,
             train_barcodes=self.train_barcodes,
             existing=self.existing,
             step=int(state.global_step),
@@ -1159,6 +1187,17 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             int(slot): (str(self.payload[a]), str(self.payload[b]))
             for slot, (a, b) in zip(self.slot_ids, pairs.tolist())
         })
+        feature_map = self.ann_state["structured_features"]
+        feature_map.clear()
+        feature_map.update(
+            {
+                int(slot): [
+                    self.structured_features[int(a)].tolist(),
+                    self.structured_features[int(b)].tolist(),
+                ]
+                for slot, (a, b) in zip(self.slot_ids, pairs.tolist())
+            }
+        )
         self.ann_state["version"] = int(state.global_step)
         self.ann_state["count"] = int(len(pairs))
         self.last_epoch = completed_epoch
@@ -1568,6 +1607,7 @@ def _dynamic_mask_negative_transform(
     stats_by_epoch: dict[int, dict[str, float]],
     epoch_ref: dict[str, int],
     ann_pairs: dict[int, tuple[str, str]] | None = None,
+    ann_structured_features: dict[int, list[list[float]]] | None = None,
     ann_state: dict[str, object] | None = None,
     pair_populations: list[str] | None = None,
     presentation_counts: dict[tuple, int] | None = None,
@@ -1590,6 +1630,10 @@ def _dynamic_mask_negative_transform(
             if replacement is not None:
                 transformed["sentence1"][i] = replacement[0]
                 transformed["sentence2"][i] = replacement[1]
+                if ann_structured_features is not None:
+                    feature_replacement = ann_structured_features.get(pair_id)
+                    if feature_replacement is not None and "structured_features" in transformed:
+                        transformed["structured_features"][i] = feature_replacement
                 base_population = "ann_finetuned"
         if int(label) != 0:
             if base_population == "masked_positive":
@@ -1718,7 +1762,7 @@ def train_one_config(
         )
 
 
-    df, payload, row_bc, country, pos, hp_pairs, emb0 = data
+    df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0 = data
     # Masked positive copies are augmentation for training only.  Splits are
     # barcode-based, so passing the augmented array directly into dev/test
     # would silently put those copies into evaluation even though they carry
@@ -1748,10 +1792,10 @@ def train_one_config(
     if len(country) < len(payload):
         pad = np.full(len(payload) - len(country), "", dtype=country.dtype)
         country = np.concatenate([country, pad])
-        data = (df, payload, row_bc, country, pos, hp_pairs, emb0)
+        data = (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0)
 
-    # BOUNDARY CONTRACT (lib.schemas.DataTuple): the 7-tuple is the widest
-    # crossing in the lane — payload/row_bc/country length-locked, every
+    # BOUNDARY CONTRACT (lib.schemas.DataTuple): the 8-tuple is the widest
+    # crossing in the lane — payload/structured_features/row_bc/country locked, every
     # pos/hp index in range, emb0 rows == payload. Validated ONCE per
     # train_one_config call; a shape break dies here with a named field
     # instead of an IndexError three stack frames into a fold.
@@ -1760,6 +1804,7 @@ def train_one_config(
     _DataTuple(
         n_df=len(df),
         payload=payload,
+        structured_features=structured_features,
         row_bc=row_bc,
         country=country,
         pos=pos,
@@ -1989,6 +2034,10 @@ def train_one_config(
             # dev evaluator needs pos/neg pairs as texts
             dev_pairs = [(payload[a], payload[b]) for a, b in dev_pos]
             dev_neg_pairs = [(payload[a], payload[b]) for a, b in hard_dev]
+            dev_structured = [
+                [structured_features[int(a)].tolist(), structured_features[int(b)].tolist()]
+                for a, b in list(dev_pos) + list(hard_dev)
+            ]
             if len(dev_pairs) == 0 or len(dev_neg_pairs) == 0:
                 rows.append(
                     {
@@ -2023,6 +2072,7 @@ def train_one_config(
             examples = None
             ann_refresh_state: dict[str, object] = {
                 "pairs": {},
+                "structured_features": {},
                 "version": 0,
                 "count": 0,
             }
@@ -2071,6 +2121,10 @@ def train_one_config(
                         "sentence2": s2,
                         "label": lab,
                         "pair_id": list(range(len(s1))),
+                        "structured_features": [
+                            [structured_features[int(a)].tolist(), structured_features[int(b)].tolist()]
+                            for a, b in list(train_all) + list(tr_negs)
+                        ],
                     }
                 )
                 dynamic_mask_counts: dict[int, int] = {}
@@ -2097,6 +2151,9 @@ def train_one_config(
                             stats_by_epoch=dynamic_mask_stats_by_epoch,
                             epoch_ref=dynamic_epoch_ref,
                             ann_pairs=ann_refresh_state["pairs"],
+                            ann_structured_features=ann_refresh_state[
+                                "structured_features"
+                            ],
                             ann_state=ann_refresh_state,
                             pair_populations=pair_populations,
                             presentation_counts=(
@@ -2182,11 +2239,76 @@ def train_one_config(
             # dev evaluator: pos pairs vs hard negatives, binary AUC-style
             from sentence_transformers.evaluation import BinaryClassificationEvaluator
 
+            class StructuredBinaryClassificationEvaluator(BinaryClassificationEvaluator):
+                """Binary evaluator using the same fused score as final reports."""
+
+                def __init__(self, *args, structured_features, feature_weight, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    self.structured_features = np.asarray(
+                        structured_features, dtype=np.float32
+                    )
+                    self.feature_weight = float(feature_weight)
+
+                def compute_metrics(self, model):
+                    from sklearn.metrics import average_precision_score, matthews_corrcoef
+                    from sentence_transformers.util import pairwise_cos_sim
+
+                    emb1 = self.embed_inputs(model, self.sentences1)
+                    emb2 = self.embed_inputs(model, self.sentences2)
+                    from core.structured_features import fuse_torch
+
+                    n = len(self.sentences1)
+                    if self.structured_features.shape[0] != n or self.structured_features.shape[1] != 2:
+                        raise RuntimeError(
+                            "structured evaluator feature count mismatch: "
+                            f"{self.structured_features.shape} != ({n}, 2, feature_dim)"
+                        )
+                    feat = torch.tensor(self.structured_features, dtype=torch.float32)
+                    emb1 = fuse_torch(
+                        torch.as_tensor(emb1), feat[:, 0, :], self.feature_weight
+                    )
+                    emb2 = fuse_torch(
+                        torch.as_tensor(emb2), feat[:, 1, :], self.feature_weight
+                    )
+                    scores = pairwise_cos_sim(emb1, emb2).detach().cpu().numpy()
+                    labels_np = np.asarray(self.labels)
+                    acc, acc_threshold = self.find_best_acc_and_threshold(
+                        scores, labels_np, True
+                    )
+                    f1, precision, recall, f1_threshold = self.find_best_f1_and_threshold(
+                        scores, labels_np, True
+                    )
+                    predicted = scores >= f1_threshold
+                    return {
+                        "cosine": {
+                            "accuracy": acc,
+                            "accuracy_threshold": acc_threshold,
+                            "f1": f1,
+                            "f1_threshold": f1_threshold,
+                            "precision": precision,
+                            "recall": recall,
+                            "ap": average_precision_score(labels_np, scores),
+                            "mcc": matthews_corrcoef(labels_np, predicted),
+                        }
+                    }
+
             sentences1 = [a for a, _ in dev_pairs] + [a for a, _ in dev_neg_pairs]
             sentences2 = [b for _, b in dev_pairs] + [b for _, b in dev_neg_pairs]
             labels = [1] * len(dev_pairs) + [0] * len(dev_neg_pairs)
-            evaluator = BinaryClassificationEvaluator(
-                sentences1, sentences2, labels, name="dev", show_progress_bar=False
+            _sf_cfg = load_config()["training"]["structured_features"]
+            _sf_weight = (
+                float(_sf_cfg["embedding_weight"])
+                if bool(_sf_cfg["enabled"]) and bool(_sf_cfg["feed_to_loss"])
+                else 0.0
+            )
+            evaluator = StructuredBinaryClassificationEvaluator(
+                sentences1,
+                sentences2,
+                labels,
+                name="dev",
+                show_progress_bar=False,
+                structured_features=np.asarray(dev_structured, dtype=np.float32),
+                feature_weight=_sf_weight,
             )
 
             # ── VALIDATION-LOSS DATASET (owner directive 2026-09-10) ──────
@@ -2207,6 +2329,7 @@ def train_one_config(
                         "sentence1": sentences1,
                         "sentence2": sentences2,
                         "label": labels,
+                        "structured_features": dev_structured,
                     }
                 )
             elif loss == "mnrl":
@@ -2235,11 +2358,15 @@ def train_one_config(
             )
 
             class PairIdDataCollator(SentenceTransformerDataCollator):
-                """Keep numeric pair IDs out of tokenization but in the batch."""
+                """Keep telemetry and structured features out of tokenization."""
 
                 def __call__(self, features):
                     text_features = [
-                        {key: value for key, value in row.items() if key != "pair_id"}
+                        {
+                            key: value
+                            for key, value in row.items()
+                            if key not in {"pair_id", "structured_features"}
+                        }
                         for row in features
                     ]
                     batch = super().__call__(text_features)
@@ -2250,6 +2377,11 @@ def train_one_config(
                     if features and "pair_id" in features[0]:
                         batch["pair_id"] = torch.tensor(
                             [row["pair_id"] for row in features], dtype=torch.long
+                        )
+                    if features and "structured_features" in features[0]:
+                        batch["structured_features"] = torch.tensor(
+                            [row["structured_features"] for row in features],
+                            dtype=torch.float32,
                         )
                     return batch
 
@@ -2264,9 +2396,14 @@ def train_one_config(
                     num_items_in_batch=None,
                 ):
                     pair_ids = inputs.pop("pair_id", None)
+                    structured = inputs.pop("structured_features", None)
                     loss_fn = self.loss
                     if pair_ids is not None and hasattr(loss_fn, "set_batch_pair_ids"):
                         loss_fn.set_batch_pair_ids(pair_ids)
+                    if structured is not None and hasattr(
+                        loss_fn, "set_batch_structured_features"
+                    ):
+                        loss_fn.set_batch_structured_features(structured)
                     return super().compute_loss(
                         model,
                         inputs,
@@ -2404,6 +2541,7 @@ def train_one_config(
                         df=df,
                         payload=payload,
                         row_barcodes=row_bc,
+                        structured_features=structured_features,
                         train_barcodes=set(tr_bc),
                         existing=tr_negs,
                         ann_state=ann_refresh_state,
@@ -2866,6 +3004,15 @@ def train_one_config(
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )
+            from core.structured_features import fuse_numpy
+
+            _sf_cfg = load_config()["training"]["structured_features"]
+            _sf_weight = (
+                float(_sf_cfg["embedding_weight"])
+                if bool(_sf_cfg["enabled"]) and bool(_sf_cfg["feed_to_loss"])
+                else 0.0
+            )
+            emb = fuse_numpy(emb, structured_features[eval_rows], _sf_weight)
             encode_s = time.perf_counter() - t_encode
             pos_s = _cos(emb, tp_idx)
             neg_s = _cos(emb, hn_idx)
@@ -2896,6 +3043,9 @@ def train_one_config(
                     batch_size=runtime("batch_size_eval"),
                     normalize_embeddings=True,
                     show_progress_bar=False,
+                )
+                random_emb = fuse_numpy(
+                    random_emb, structured_features[random_rows], _sf_weight
                 )
                 random_easy_s = _cos(random_emb, random_idx)
             random_easy_status = "ok" if len(random_neg_pairs) else "empty"
@@ -2943,6 +3093,7 @@ def train_one_config(
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )
+            dev_emb = fuse_numpy(dev_emb, structured_features[dev_rows], _sf_weight)
             dev_pos_s = _cos(dev_emb, dev_tp_idx)
             dev_neg_s = _cos(dev_emb, dev_hn_idx)
 
@@ -2973,6 +3124,9 @@ def train_one_config(
                 batch_size=runtime("batch_size_eval"),
                 normalize_embeddings=True,
                 show_progress_bar=False,
+            )
+            train_emb = fuse_numpy(
+                train_emb, structured_features[train_rows], _sf_weight
             )
             train_pos_s = _cos(train_emb, train_pos_idx)
             train_neg_s = _cos(train_emb, train_neg_idx)
