@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import shutil
 import subprocess
 import sys
 import threading
@@ -1079,10 +1080,21 @@ else:
     json.dumps({{"run_id": "{run_id}", "models": summary, "rerank_model": "{_RERANK_MODEL}"}}, indent=2),
     encoding="utf-8",
 )
+archive = pathlib.Path(shutil.make_archive(
+    str(hpo_root), "gztar", root_dir=hpo_root.parent, base_dir=hpo_root.name
+))
+print(f"[hpo-archive] {{archive}}", flush=True)
 print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank_model": "{_RERANK_MODEL}"}}, sort_keys=True), flush=True)
 """
     try:
         run_colab_exec_stream(SESSION, script, timeout=8 * 3600 * 3, log_name="training_hpo")
+        remote_archive = f"{REMOTE_ROOT}/results/hpo_runs/{run_id}.tar.gz"
+        local_archive = TRAINING_RESULTS / "hpo_runs" / f"{run_id}.tar.gz"
+        local_archive.parent.mkdir(parents=True, exist_ok=True)
+        colab("download", "-s", SESSION, remote_archive, str(local_archive), timeout=3600)
+        local_root = TRAINING_RESULTS / "hpo_runs"
+        shutil.unpack_archive(local_archive, local_root, format="gztar")
+        print(f"[hpo-archive] preserved -> {local_root / run_id}", flush=True)
     finally:
         # The VM is normally stopped by main() immediately after this
         # returns/raises. Keep the pointer files locally so a later
