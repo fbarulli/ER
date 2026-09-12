@@ -826,6 +826,7 @@ print(json.dumps(payload), flush=True)
                 raise RuntimeError(f"parallel trainers failed: {failed}")
             publish_parallel_results(remote_base, workers)
             download_verified_training_results(remote_base, workers)
+            generate_local_training_reports(remote_base, workers)
             print(f"[train] all {workers} remote workers completed successfully", flush=True)
             return
         time.sleep(_LOG_POLL_SECONDS)
@@ -874,6 +875,37 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
             local.parent.mkdir(parents=True, exist_ok=True)
             colab("download", "-s", SESSION, name, str(local), timeout=600)
     print(f"[download] DVC-verified training outputs -> {local_base}", flush=True)
+
+
+def generate_local_training_reports(remote_base: str, workers: int) -> None:
+    """Generate CPU-side reports after remote training results are downloaded."""
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    local_base = TRAINING_RESULTS / run_id
+    from training.generate_training_report import generate_report
+
+    for number in range(1, workers + 1):
+        worker = local_base / f"worker_{number}"
+        metrics = sorted(worker.glob("*_holdout_*_fold_metrics.csv"))
+        pair_paths = sorted(worker.glob("*_fold*_pairs.csv"))
+        if not metrics or not pair_paths:
+            raise FileNotFoundError(
+                f"cannot generate local report for worker {number}: "
+                f"metrics={len(metrics)} pairs={len(pair_paths)} under {worker}"
+            )
+        pointer_path = worker / "latest_results.json"
+        run_tag = run_id
+        if pointer_path.is_file():
+            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+            run_tag = str(pointer.get("run_tag") or run_tag)
+        report_dir = worker / f"report_{run_tag}"
+        generate_report(
+            metrics[-1],
+            pair_paths,
+            report_dir,
+            sorted(worker.glob("*_fold*_train_scores.csv")),
+            sorted(worker.glob("*_fold*_random_easy_scores.csv")),
+        )
+        print(f"[report-local] worker {number}: {report_dir}", flush=True)
 
 
 def start_live_log() -> None:
@@ -1111,7 +1143,9 @@ def run_train(
         "--loss", "contrastive",
         "--train-frac", str(frac),
         "--epochs", str(epochs),
-        "--plot"]
+        # Reports and plots are CPU-side post-processing. Generate them after
+        # the DVC-verified download instead of spending GPU time on them.
+        "--no-plot"]
     if model is not None:
         args.extend(["--model", resolve_model(model)])
     if sample is not None:
@@ -1174,6 +1208,7 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
     )
     publish_parallel_results(remote_base, 1)
     download_verified_training_results(remote_base, 1)
+    generate_local_training_reports(remote_base, 1)
     print("[train] single worker completed successfully", flush=True)
 
 
