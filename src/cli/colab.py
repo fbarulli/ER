@@ -720,6 +720,10 @@ for number in range(1, {workers} + 1):
         "wandb_run_name": env["WANDB_RUN_NAME"],
     }}) + "\\n", encoding="utf-8")
     process_log = out / "processes.log"
+    # Every worker launch owns a fresh diagnostics log.  Resume restores
+    # checkpoints, not log history; stale snapshots from an earlier attempt
+    # must not be mistaken for this run's lifecycle.
+    process_log.write_text("", encoding="utf-8")
     ps_command = f"ps -eo pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args >> {{shlex.quote(str(process_log))}} 2>&1"
     diagnostics = "free -h || true; nvidia-smi --query-gpu=index,name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits || true; nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits || true"
     wrapped = (
@@ -730,8 +734,9 @@ for number in range(1, {workers} + 1):
         f"echo '[worker-process] resource snapshot after training'; {{diagnostics}}; "
         f"printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
     )
-    log_mode = "a" if {bool(resume_run)!r} else "w"
-    with log_path.open(log_mode, encoding="utf-8", buffering=1) as log_file:
+    # Resume restores model state only.  Worker training logs always start
+    # fresh so a new attempt cannot append to a prior run's output.
+    with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
         child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
             start_new_session=True)
