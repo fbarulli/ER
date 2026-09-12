@@ -1173,30 +1173,49 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             batch_size=self.batch_size,
             max_seq_length=self.max_seq_length,
         )
-        pairs, stats = refresh_finetuned_ann(
-            model,
-            self.df,
-            self.payload,
-            self.row_barcodes,
-            structured_features=self.structured_features,
-            train_barcodes=self.train_barcodes,
-            existing=self.existing,
-            step=int(state.global_step),
-            epoch=epoch,
-            output_path=audit_path,
-            target=int(ann_cfg["target"]),
-            configured_band=(lo, hi),
-            band_mode=str(ann_cfg["band_mode"]),
-            k=int(ann_cfg["k"]),
-            candidate_multiplier=int(ann_cfg["candidate_multiplier"]),
-            score_quantiles=(qlo, qhi),
-            max_per_canonical=int(ann_cfg["max_per_canonical"]),
-            max_per_brand=int(ann_cfg["max_per_brand"]),
-            batch_size=self.batch_size,
-            max_seq_length=self.max_seq_length,
-            exclude_conflicting=bool(ann_cfg["exclude_conflicting"]),
-            embeddings=fine_tuned_emb,
-        )
+        if bool(ann_cfg["refresh_enabled"]):
+            pairs, stats = refresh_finetuned_ann(
+                model,
+                self.df,
+                self.payload,
+                self.row_barcodes,
+                structured_features=self.structured_features,
+                train_barcodes=self.train_barcodes,
+                existing=self.existing,
+                step=int(state.global_step),
+                epoch=epoch,
+                output_path=audit_path,
+                target=int(ann_cfg["target"]),
+                configured_band=(lo, hi),
+                band_mode=str(ann_cfg["band_mode"]),
+                k=int(ann_cfg["k"]),
+                candidate_multiplier=int(ann_cfg["candidate_multiplier"]),
+                score_quantiles=(qlo, qhi),
+                max_per_canonical=int(ann_cfg["max_per_canonical"]),
+                max_per_brand=int(ann_cfg["max_per_brand"]),
+                batch_size=self.batch_size,
+                max_seq_length=self.max_seq_length,
+                exclude_conflicting=bool(ann_cfg["exclude_conflicting"]),
+                embeddings=fine_tuned_emb,
+            )
+        else:
+            pairs = np.empty((0, 2), dtype=int)
+            stats = {
+                "band_lo": lo,
+                "band_hi": hi,
+                "band_overlap_pct": 0.0,
+                "candidate_count": 0.0,
+                "candidate_median": float("nan"),
+                "scores": [],
+                "band_mode": str(ann_cfg["band_mode"]),
+            }
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                columns=[
+                    "step", "epoch", "row_a", "row_b", "barcode_a", "barcode_b",
+                    "cosine", "band_lo", "band_hi", "band_mode", "source",
+                ]
+            ).to_csv(audit_path, index=False, mode="w")
         from core.hard_negatives import mine_attribute_conflict_negatives
 
         attr_lo, attr_hi = (float(x) for x in str(attr_cfg["band"]).split("-"))
@@ -1860,6 +1879,7 @@ def train_one_config(
     mask_audit: list[dict] | None = None,
     hard_negative_mask_audit: list[dict] | None = None,
     ann_refresh_enabled: bool = False,
+    attribute_conflict_refresh_enabled: bool = False,
     # 07d data-scaling: keep only this fraction of TRAIN pairs (dev/test
     # pools untouched). Subsampled AFTER the split, seeded per fold.
     train_frac: float | None = None,
@@ -2698,7 +2718,10 @@ def train_one_config(
                     early_stopping_threshold=cfg["es_threshold"],
                 ),
             ]
-            if ann_refresh_enabled and loss == "contrastive":
+            if (
+                (ann_refresh_enabled or attribute_conflict_refresh_enabled)
+                and loss == "contrastive"
+            ):
                 ann_cfg = load_config()["mining"]["ann"]
                 callbacks.append(
                     FineTunedAnnRefreshCallback(

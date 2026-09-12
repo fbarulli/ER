@@ -912,6 +912,7 @@ def _main_inner(_mlf, _wandb) -> None:
         mask_audit=mask_audit,
         hard_negative_mask_audit=hard_negative_mask_audit,
         ann_refresh_enabled=ann_mining_enabled,
+        attribute_conflict_refresh_enabled=attribute_conflict_enabled,
         train_frac=args.train_frac if args.train_frac < 1.0 else None,
         run_tag=run_tag,
         sample=bool(args.sample),
