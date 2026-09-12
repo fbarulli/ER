@@ -106,6 +106,7 @@ class DataFilesSpec(BaseModel):
     second04_pairs_positive: str
     results_pointer: str
     colab_live_log: str
+    colab_training_log: str
 
 
 class DataPathsSpec(BaseModel):

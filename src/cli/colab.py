@@ -104,7 +104,10 @@ _COLAB_CLI_STATE_DIR = TRAIN_ROOT / "colab_cli_state"
 _COLAB_CLI_CONFIG = _COLAB_CLI_STATE_DIR / "sessions.json"
 _COLAB_CLI_ENTRYPOINT = Path(__file__).with_name("colab_cli_entry.py")
 LIVE_LOG_PATH: Path | None = None
+TRAINING_LOG_PATH: Path | None = None
 _live_log = None
+_training_log = None
+_training_log_lock = threading.Lock()
 _original_stdout = None
 _original_stderr = None
 _SUPPRESS_LIVE_LOG = False
@@ -144,6 +147,15 @@ class _LiveLogSuppressed:
         global _SUPPRESS_LIVE_LOG
         _SUPPRESS_LIVE_LOG = self._previous
         return False
+
+
+def _write_training_log(text: str) -> None:
+    """Write trainer output to the dedicated local training log immediately."""
+    if _training_log is None or not text:
+        return
+    with _training_log_lock:
+        _training_log.write(text)
+        _training_log.flush()
 
 # The clone contains the committed raw export and number-token reference;
 # data_prep regenerates deduped data and all downstream CSVs on the VM.
@@ -203,10 +215,11 @@ def run_colab_exec_stream(
     *,
     retry_safe: bool = False,
     exclude_from_live_log: bool = False,
+    training_output: bool = False,
 ) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
 
-    log_name labels a stage in the root training.log transcript. The file is
+    log_name labels a stage in the root colab_system.log transcript. The file is
     opened once per invocation, line-flushed, and survives VM teardown so
     every Colab stage is inspectable in one chronological log.
     """
@@ -214,11 +227,39 @@ def run_colab_exec_stream(
         print(f"\n===== {log_name} =====", flush=True)
 
     def stream_output(pipe, prefix, captured):
-        for line in iter(pipe.readline, ''):
-            captured.append(line)
+        pending = ""
+
+        def emit(text: str) -> None:
+            nonlocal pending
+            if training_output:
+                _write_training_log(text)
+            pending += text
+            # tqdm uses carriage returns instead of newlines. Emit each
+            # progress update immediately so a long encode/training stage
+            # cannot appear hung in the terminal.
+            while "\n" in pending or "\r" in pending:
+                newline_positions = [p for p in (pending.find("\n"), pending.find("\r")) if p >= 0]
+                end = min(newline_positions)
+                unit = pending[:end].rstrip()
+                captured.append(pending[: end + 1])
+                pending = pending[end + 1:]
+                if unit:
+                    context = _LiveLogSuppressed() if exclude_from_live_log else nullcontext()
+                    with context:
+                        print(f"{prefix} {unit}", flush=True)
+
+        while True:
+            chunk = pipe.read(1)
+            if chunk == "":
+                break
+            emit(chunk)
+        if pending:
+            if training_output:
+                _write_training_log(pending)
+            captured.append(pending)
             context = _LiveLogSuppressed() if exclude_from_live_log else nullcontext()
             with context:
-                print(f"{prefix} {line.rstrip()}", flush=True)
+                print(f"{prefix} {pending.rstrip()}", flush=True)
         pipe.close()
 
     attempts = _PROBE_RETRIES if retry_safe else 1
@@ -341,26 +382,6 @@ def _parse_remote_json(output: str) -> dict:
     raise RuntimeError(f"remote log probe returned no JSON: {output[-1000:]}")
 
 
-def _download_stage_log(remote_log: str, remote_status: str, stage: str) -> Path | None:
-    """Best-effort copy of a persistent remote stage log before teardown."""
-    local_dir = TRAIN_ROOT / "remote_stage_logs"
-    local_dir.mkdir(parents=True, exist_ok=True)
-    local_log = local_dir / Path(remote_log).name
-    try:
-        colab("download", "-s", SESSION, remote_log, str(local_log), timeout=600)
-        status_path = local_log.with_suffix(local_log.suffix + ".status")
-        colab("download", "-s", SESSION, remote_status, str(status_path), timeout=600)
-        print(f"[{stage}] persisted remote log -> {local_log}", flush=True)
-        return local_log
-    except BaseException as exc:
-        print(
-            f"[{stage}] could not download remote stage log before teardown: {exc}",
-            file=sys.stderr,
-            flush=True,
-        )
-        return None
-
-
 def run_detached_stage(stage: str, command_expr: str, timeout: int) -> None:
     """Run a VM stage outside the notebook kernel and stream its durable log."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -442,21 +463,19 @@ print(json.dumps(payload), flush=True)
                 for line in str(payload["chunk"]).splitlines():
                     print(f"[{stage}] {line}", flush=True)
             if payload["done"]:
-                local_log = _download_stage_log(remote_log, remote_status, stage)
                 returncode = int(payload["returncode"])
                 if returncode:
                     raise RuntimeError(
                         f"remote stage {stage} failed (rc={returncode}); "
-                        f"remote log={remote_log}; local log={local_log}"
+                        f"system log contains the streamed output; remote log={remote_log}"
                     )
                 print(f"[{stage}] completed successfully", flush=True)
                 return
             time.sleep(_LOG_POLL_SECONDS)
     except BaseException as exc:
-        local_log = _download_stage_log(remote_log, remote_status, stage)
         raise RuntimeError(
             f"remote stage {stage} lost its control connection; "
-            f"remote log={remote_log}; local log={local_log}; cause={exc}"
+            f"system log contains the streamed output; remote log={remote_log}; cause={exc}"
         ) from exc
 
 
@@ -794,6 +813,7 @@ print(json.dumps(payload), flush=True)
             # second copy of the worker's training log.
             with _LiveLogSuppressed():
                 for line in str(chunk).splitlines():
+                    _write_training_log(f"[worker {worker}] {line}\n")
                     print(f"[worker {worker}] {line}", flush=True)
         if payload["done"]:
             failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
@@ -853,11 +873,14 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
 
 def start_live_log() -> None:
     """Start the root-level live Colab log, replacing the prior run's log."""
-    global LIVE_LOG_PATH, _live_log, _original_stdout, _original_stderr
+    global LIVE_LOG_PATH, TRAINING_LOG_PATH, _live_log, _training_log
+    global _original_stdout, _original_stderr
     if _live_log is not None:
         _live_log.close()
     LIVE_LOG_PATH = TRAIN_ROOT / F["colab_live_log"]
+    TRAINING_LOG_PATH = TRAIN_ROOT / F["colab_training_log"]
     _live_log = LIVE_LOG_PATH.open("w", encoding="utf-8")
+    _training_log = TRAINING_LOG_PATH.open("w", encoding="utf-8")
     _original_stdout = sys.stdout
     _original_stderr = sys.stderr
     sys.stdout = _Tee(_original_stdout, _live_log)
@@ -866,12 +889,16 @@ def start_live_log() -> None:
 
 
 def close_live_log() -> None:
-    global _live_log, _original_stdout, _original_stderr
+    global _live_log, _training_log, _original_stdout, _original_stderr
     if _live_log is not None:
         sys.stdout = _original_stdout or sys.stdout
         sys.stderr = _original_stderr or sys.stderr
         _live_log.close()
         _live_log = None
+    if _training_log is not None:
+        _training_log.flush()
+        _training_log.close()
+        _training_log = None
         _original_stdout = None
         _original_stderr = None
 
@@ -1138,6 +1165,7 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
         timeout=_WORKER_TIMEOUT_SECONDS,
         log_name="02_train",
         exclude_from_live_log=True,
+        training_output=True,
     )
     publish_parallel_results(remote_base, 1)
     download_verified_training_results(remote_base, 1)
