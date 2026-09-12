@@ -614,7 +614,7 @@ root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
 for number in range(1, {workers} + 1):
     source = base / f"worker_{{number}}"
-    print(f"[dvc] central publish worker {{number}}/{{workers}}", flush=True)
+    print(f"[dvc] central publish worker {{number}}/{workers}", flush=True)
     subprocess.run([
         sys.executable, "-u", "-m", "training.dvc_store",
         "--source", str(source), "--run-id", {run_id!r}, "--worker", str(number),
