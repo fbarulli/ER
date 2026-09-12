@@ -44,6 +44,7 @@ import json
 import os
 import time
 import traceback
+import fcntl
 from pathlib import Path
 
 import numpy as np
@@ -621,6 +622,9 @@ class DvcCheckpointCallback(TrainerCallback):
 
         if not state.is_world_process_zero:
             return control
+        if os.environ.get("EUROMONITOR_DISABLE_DVC_CHECKPOINTS"):
+            print("    [checkpoint-dvc] skipped: disabled for HPO retention mode", flush=True)
+            return control
         if not os.environ.get("DVC_API_KEY"):
             print("    [checkpoint-dvc] skipped: DVC_API_KEY absent", flush=True)
             return control
@@ -654,6 +658,67 @@ class DvcCheckpointCallback(TrainerCallback):
         self._futures = []
         self._publisher.shutdown(wait=True)
         return control
+
+
+def retain_hpo_champion(
+    *, model_id: str, run_tag: str, value: float, folds: list[int]
+) -> bool:
+    """Keep exactly one completed HPO trial's bulky local artifacts per model.
+
+    Optuna may complete two trials concurrently.  The per-model lock makes
+    comparison, removal of the previous champion, and champion-record update
+    one transaction.  This mode deliberately retains local artifacts only;
+    DVC checkpoint publishing is disabled by the HPO launcher.
+    """
+    import shutil
+    import tempfile
+
+    model_tag = model_id.rstrip("/").rsplit("/", 1)[-1]
+    checkpoint_base = RESULTS / "_checkpoints" / model_tag
+    record = RESULTS / f"hpo_{model_tag}_champion.json"
+    lock_path = RESULTS / f".hpo-{model_tag}-retention.lock"
+
+    def artifacts(tag: str, fold_numbers: list[int]) -> list[Path]:
+        paths = [RESULTS / "logs" / tag]
+        paths.extend(
+            checkpoint_base / f"r{tag}_f{fold}" for fold in fold_numbers
+        )
+        paths.extend(RESULTS.glob(f"train_{model_tag}_{tag}_fold*_pairs.csv"))
+        return paths
+
+    def remove(paths: list[Path]) -> None:
+        for path in paths:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+
+    with lock_path.open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            previous = json.loads(record.read_text(encoding="utf-8")) if record.is_file() else None
+            if previous is not None and float(previous["value"]) >= value:
+                remove(artifacts(run_tag, folds))
+                print(
+                    f"[hpo-retention] pruned trial {run_tag}: {value:.6f} "
+                    f"<= champion {previous['value']:.6f}",
+                    flush=True,
+                )
+                return False
+            if previous is not None:
+                remove(artifacts(previous["run_tag"], list(previous["folds"])))
+            payload = {"model": model_id, "run_tag": run_tag, "value": value, "folds": folds}
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=RESULTS,
+                prefix=f".{record.name}.", suffix=".tmp", delete=False,
+            ) as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                temporary = Path(handle.name)
+            os.replace(temporary, record)
+            print(f"[hpo-retention] champion {run_tag}: {value:.6f}", flush=True)
+            return True
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _discriminative_groups(
@@ -1812,6 +1877,12 @@ def run_hpo(
                 if not dev_aps:
                     raise optuna.TrialPruned("no fold produced a finite dev AP")
                 value = float(np.mean(dev_aps))
+                retain_hpo_champion(
+                    model_id=args.model,
+                    run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
+                    value=value,
+                    folds=[int(r["fold"]) for r in ok_rows],
+                )
                 trial.set_user_attr("dev_selection_ap", value)
                 mlf.log_metrics(
                     {
@@ -1833,6 +1904,12 @@ def run_hpo(
             if not aucs:
                 raise optuna.TrialPruned("no fold produced a finite AUC")
             mean_auc = float(np.mean(aucs))
+            retain_hpo_champion(
+                model_id=args.model,
+                run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
+                value=mean_auc,
+                folds=[int(r["fold"]) for r in ok_rows],
+            )
             trial.set_user_attr("mean_auc", mean_auc)
             mlf.log_metrics(
                 {
@@ -1878,6 +1955,8 @@ def run_hpo(
     )
     if remaining:
         def _persist_study(*_args) -> None:
+            if os.environ.get("EUROMONITOR_DISABLE_DVC_CHECKPOINTS"):
+                return
             if not os.environ.get("DVC_API_KEY"):
                 return
             from training.dvc_store import publish_checkpoint

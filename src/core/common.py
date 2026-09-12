@@ -26,6 +26,7 @@ New accessors:
 
 import json
 import copy
+import os
 from pathlib import Path
 from typing import Any
 
@@ -444,7 +445,7 @@ def write_visibility_log(
     logs = RESULTS / "logs"
     (logs / run_tag).mkdir(parents=True, exist_ok=True)
     df.to_csv(logs / run_tag / name, index=False)
-    if not sample:
+    if not sample and not os.environ.get("EUROMONITOR_HPO_RETENTION_MODE"):
         df.to_csv(logs / name, index=False)
 
 

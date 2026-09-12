@@ -1031,6 +1031,8 @@ def worker_setup(model_key):
         "EUROMONITOR_RESULTS_DIR": str(out),
         "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
         "WANDB_RUN_NAME": f"hpo_{{model_key}}",
+        "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1",
+        "EUROMONITOR_HPO_RETENTION_MODE": "1",
     }}
 
 def run_model(model_key):
