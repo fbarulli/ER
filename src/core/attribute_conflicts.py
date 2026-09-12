@@ -53,9 +53,21 @@ def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
         )
     except (TypeError, ValueError):
         volume = set()
+    pack_qty = extracted.get("pack_qty")
+    pack_confidence = extracted.get("pack_confidence")
+    try:
+        pack = (
+            {int(pack_qty)}
+            if pack_qty is not None
+            and int(pack_qty) >= 1
+            and float(pack_confidence or 0.0) > 0.0
+            else set()
+        )
+    except (TypeError, ValueError):
+        pack = set()
     return {
         "volume": volume,
-        "pack": {int(extracted.get("pack_qty") or 1)},
+        "pack": pack,
         "flavor": str(extracted.get("flavor") or "").strip().lower(),
     }
 

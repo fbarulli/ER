@@ -2847,6 +2847,12 @@ def train_one_config(
                     run_tag,
                     sample,
                 )
+                write_visibility_log(
+                    pd.DataFrame(mask_epoch_rows),
+                    "mask_hard_negative_visibility.csv",
+                    run_tag,
+                    sample,
+                )
                 if wandb_ctx is not None:
                     for row in mask_epoch_rows:
                         wandb_ctx.log_metrics(
@@ -3118,6 +3124,13 @@ def train_one_config(
                         f"{curve_prefix}/loss_by_epoch",
                     )
 
+            dynamic_negative_presented_total = int(
+                sum(stats["negative_presented"] for stats in dynamic_mask_stats_by_epoch.values())
+            )
+            dynamic_negative_masked_total = int(
+                sum(stats["masked_count"] for stats in dynamic_mask_stats_by_epoch.values())
+            )
+
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────
             # Holdout HPO/grid folds STOP HERE: the config is ranked on
             # best_dev_ap and the test quarter's eval block is never
@@ -3162,6 +3175,13 @@ def train_one_config(
                         "n_dev_neg": len(hard_dev),
                         **coverage,
                         **datapoint_coverage,
+                        "n_negative_presented": dynamic_negative_presented_total,
+                        "n_masked_hard_negatives": dynamic_negative_masked_total,
+                        "masked_hard_negative_pct": (
+                            dynamic_negative_masked_total / dynamic_negative_presented_total
+                            if dynamic_negative_presented_total
+                            else 0.0
+                        ),
                         "n_train": (
                             len(train_ds)
                             if loss in ("mnrl", "contrastive")
@@ -3483,6 +3503,13 @@ def train_one_config(
                 else 0,
                 "n_dev_pos": len(dev_pos),
                 "n_dev_neg": len(hard_dev),
+                "n_negative_presented": dynamic_negative_presented_total,
+                "n_masked_hard_negatives": dynamic_negative_masked_total,
+                "masked_hard_negative_pct": (
+                    dynamic_negative_masked_total / dynamic_negative_presented_total
+                    if dynamic_negative_presented_total
+                    else 0.0
+                ),
                 "n_train": (
                     len(train_ds)
                     if loss in ("mnrl", "contrastive")

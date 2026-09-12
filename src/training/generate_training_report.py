@@ -436,14 +436,20 @@ def generate_report(
                         "recall_at_k": float(top.sum() / max(int(y.sum()), 1)),
                     }
                 )
-            thresholds = {
-                "dev_youden": float(row["youden_thr"]),
-                "fixed": float(row.get("threshold_at_90pct_recall", 0.55)),
-            }
+            thresholds = {"dev_youden": float(row["youden_thr"])}
             # The configured fixed operating threshold is encoded in the
             # f1/precision/recall column suffix, not the 90%-recall threshold.
             if f1_col and "_at_" in f1_col:
                 thresholds["fixed"] = float(f1_col.rsplit("_at_", 1)[1])
+            elif "threshold_at_90pct_recall" in row and pd.notna(
+                row["threshold_at_90pct_recall"]
+            ):
+                thresholds["fixed"] = float(row["threshold_at_90pct_recall"])
+            else:
+                raise ValueError(
+                    f"fold {fold}: no fixed operating threshold is present; "
+                    "report generation refuses an implicit 0.55 fallback"
+                )
             mats = []
             for name, threshold in thresholds.items():
                 result = _confusion(y, scores, threshold)

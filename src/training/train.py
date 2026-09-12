@@ -1099,7 +1099,9 @@ def _main_inner(_mlf, _wandb) -> None:
     for _row in rows:
         if _row.get("status") == "ok":
             _row["n_masked_pos"] = len(mask_audit)
-            _row["n_masked_hard_negatives"] = len(hard_negative_mask_audit)
+            _row["n_masked_hard_negatives"] = int(
+                _row.get("n_masked_hard_negatives", len(hard_negative_mask_audit))
+            )
 
     # persist metrics — SUFFIXED per run (see run_tag note): the fixed
     # F["fold_metrics"] name meant the run_all step-4 series left only

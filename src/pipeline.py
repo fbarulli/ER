@@ -216,8 +216,10 @@ def extract_pack_from_title(title: str) -> tuple:
     m = re.search(r"(\d+)\s*(?:count|ct)\b", t, re.IGNORECASE)
     if m and int(m.group(1)) > 0:
         return int(m.group(1)), 0.85
-    # Default single
-    return 1, 0.95
+    # No explicit pack evidence: keep the schema-safe quantity of one, but
+    # mark it unknown.  Downstream attribute/conflict code must not turn this
+    # parser default into a fabricated ``pack_set={1}`` observation.
+    return 1, 0.0
 
 
 def parse_attribute_volume_pack(
@@ -710,13 +712,18 @@ def generate_canonical(
 
     # Volume and pack sets
     volume_set = {round(x["volume_ml"], 2) for x in extracted if x["volume_ml"] > 0}
-    pack_set = {x["pack_qty"] for x in extracted}
+    # A parser-safe quantity of one is not evidence of a single-item pack.
+    # Keep only rows with explicit pack evidence in the canonical attribute
+    # set; otherwise missing pack data becomes a false pack conflict.
+    pack_set = {
+        x["pack_qty"] for x in extracted if x["pack_confidence"] > 0
+    }
     package_type_set = {value for x in extracted for value in x["package_types"]}
     package_material_set = {value for x in extracted for value in x["package_materials"]}
 
     # Confidence / consistency
     vol_confs = [x["volume_confidence"] for x in extracted if x["volume_ml"] > 0]
-    pack_confs = [x["pack_confidence"] for x in extracted]
+    pack_confs = [x["pack_confidence"] for x in extracted if x["pack_confidence"] > 0]
     vol_conf = sum(vol_confs) / len(vol_confs) if vol_confs else 0.0
     pack_conf = sum(pack_confs) / len(pack_confs) if pack_confs else 0.0
     n = len(extracted)
@@ -725,12 +732,19 @@ def generate_canonical(
     # with 2,000 distinct volumes scored 0.95 "consistent" — more rows made
     # contradiction look BETTER. Mode-share is scale-free and monotone.
     vol_mode = Counter(x["volume_ml"] for x in extracted if x["volume_ml"] > 0)
-    pack_mode = Counter(x["pack_qty"] for x in extracted)
+    pack_mode = Counter(
+        x["pack_qty"] for x in extracted if x["pack_confidence"] > 0
+    )
     # mode share over rows that HAVE a volume (unknown-volume rows don't vote)
     volume_consistency = (
         (vol_mode.most_common(1)[0][1] / sum(vol_mode.values())) if vol_mode else 1.0
     )
-    pack_consistency = (pack_mode.most_common(1)[0][1] / n) if n else 1.0
+    n_known_pack = sum(pack_mode.values())
+    pack_consistency = (
+        pack_mode.most_common(1)[0][1] / n_known_pack
+        if n_known_pack
+        else 1.0
+    )
 
     # Build canonical string
     # TOKEN-ONCE DISCIPLINE (owner directive 2026-09-08): a canonical must
@@ -1672,6 +1686,11 @@ def build_training_data(
     rev = np.stack([b[ok2].astype(int), cb[ok2].astype(int)], axis=1)
     neg = np.vstack([fwd, rev]) if len(fwd) or len(rev) else np.empty((0, 2), dtype=int)
 
+    n_forward_source_unresolved = int(a.isna().sum())
+    n_forward_target_unresolved = int(ca.isna().sum())
+    n_reverse_source_unresolved = int(b.isna().sum())
+    n_reverse_target_unresolved = int(cb.isna().sum())
+    n_resolution_dropped = int(len(neg_gates) * 2 - len(neg))
     stats = {
         "n_rows": len(df),
         "n_sku_with_canonical": len(cand_pos),
@@ -1685,10 +1704,25 @@ def build_training_data(
             ).sum()
         ),
         "n_neg_same_canonical_dropped": int((hard_no_band & same_canonical).sum()),
+        "n_neg_hard_no_band": int(hard_no_band.sum()),
         "n_neg_gate_rows": int(neg_mask.sum()),
         "n_neg_resolved": len(neg),
-        "n_neg_dropped": int(neg_mask.sum() * 2 - len(neg)),
+        "n_neg_forward_resolved": int(len(fwd)),
+        "n_neg_reverse_resolved": int(len(rev)),
+        "n_neg_forward_source_unresolved": n_forward_source_unresolved,
+        "n_neg_forward_target_unresolved": n_forward_target_unresolved,
+        "n_neg_reverse_source_unresolved": n_reverse_source_unresolved,
+        "n_neg_reverse_target_unresolved": n_reverse_target_unresolved,
+        "n_neg_resolution_dropped": n_resolution_dropped,
+        "n_neg_dropped": n_resolution_dropped,
     }
+    _resolution_log = RESULTS / "logs"
+    _resolution_log.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([stats]).to_csv(
+        _resolution_log / "negative_resolution_manifest.csv",
+        index=False,
+        mode="w",
+    )
     # ── EXACT MODEL PAYLOAD DUMP (owner directive 2026-09-07) ──────────
     # Every pair the model trains on, with the LITERAL texts it ingests —
     # no sampling, no summarization: the full payload is auditable. Written

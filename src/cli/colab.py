@@ -921,16 +921,32 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
         uniformity = {}
         if bool(uniformity_cfg["enabled"]):
             for checkpoint in checkpoints:
-                uniformity[checkpoint.name] = run_uniformity_audit(
-                    checkpoint,
-                    report_dir / "uniformity" / checkpoint.name,
-                    base_model=resolve_model("minilm_l6"),
-                    df=data,
-                    payload=payload,
-                    n_pairs=int(uniformity_cfg["sample_pairs"]),
-                    seed=int(uniformity_cfg["seed"]),
-                    threshold=float(uniformity_cfg["threshold"]),
-                )
+                try:
+                    uniformity[checkpoint.name] = run_uniformity_audit(
+                        checkpoint,
+                        report_dir / "uniformity" / checkpoint.name,
+                        base_model=resolve_model("minilm_l6"),
+                        df=data,
+                        payload=payload,
+                        n_pairs=int(uniformity_cfg["sample_pairs"]),
+                        seed=int(uniformity_cfg["seed"]),
+                        threshold=float(uniformity_cfg["threshold"]),
+                    )
+                except Exception:
+                    # Uniformity is an optional diagnostic. Preserve the
+                    # traceback and continue report generation/publication so
+                    # one unavailable checkpoint cannot strand teardown.
+                    print(
+                        f"[report-local] worker {number}: uniformity audit "
+                        f"failed for {checkpoint}; full traceback:",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    traceback.print_exc()
+                    uniformity[checkpoint.name] = {
+                        "status": "error",
+                        "error_type": "uniformity_audit_failed",
+                    }
         generate_report(
             metrics[-1],
             pair_paths,
@@ -1116,61 +1132,100 @@ def publish_local_wandb_artifacts(remote_base: str, workers: int) -> None:
     """Attach the final local report bundle to the existing W&B run."""
     api_key = _env_value("WANDB_API_KEY")
     if not api_key:
-        raise RuntimeError(
-            "WANDB_API_KEY is required to finalize a training run; "
-            "refusing to mark artifacts complete without W&B publication"
+        print(
+            "[wandb-local] WANDB_API_KEY is absent; skipping W&B artifact "
+            "publication. DVC publication and teardown may continue.",
+            flush=True,
         )
+        return
     import os
 
-    import wandb
+    try:
+        import wandb
+    except Exception:
+        print(
+            "[wandb-local] W&B import failed; DVC publication and teardown "
+            "may continue. Full traceback:",
+            file=sys.stderr,
+            flush=True,
+        )
+        traceback.print_exc()
+        return
 
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     project = str(training_cfg().tracking.wandb.project)
     for number in range(1, workers + 1):
         worker = TRAINING_RESULTS / run_id / f"worker_{number}"
         status_path = worker / "live_status.json"
-        status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.is_file() else {}
+        try:
+            status = (
+                json.loads(status_path.read_text(encoding="utf-8"))
+                if status_path.is_file()
+                else {}
+            )
+        except Exception:
+            print(
+                f"[wandb-local] worker {number}: could not read {status_path}; "
+                "skipping this worker. Full traceback:",
+                file=sys.stderr,
+                flush=True,
+            )
+            traceback.print_exc()
+            continue
         wandb_run_id = status.get("wandb_run_id")
         if not wandb_run_id:
-            raise RuntimeError(
-                f"worker {number}: no W&B run id in {status_path}; "
-                "refusing to mark artifacts complete"
+            print(
+                f"[wandb-local] worker {number}: no W&B run id in {status_path}; "
+                "skipping this worker",
+                flush=True,
             )
-        os.environ["WANDB_API_KEY"] = api_key
-        os.environ["WANDB_DIR"] = str(worker / "wandb")
-        run = wandb.init(
-            project=project,
-            id=str(wandb_run_id),
-            resume="allow",
-            settings=wandb.Settings(x_disable_stats=True, x_disable_machine_info=True),
-        )
-        artifact = wandb.Artifact(f"run-{run_id}-downloadable", type="training-result")
-        selected = []
-        for path in sorted(worker.iterdir()):
-            if path.name in {"canonical_records.csv", "gate_results.csv", "wandb", "mlruns"}:
+            continue
+        try:
+            os.environ["WANDB_API_KEY"] = api_key
+            os.environ["WANDB_DIR"] = str(worker / "wandb")
+            run = wandb.init(
+                project=project,
+                id=str(wandb_run_id),
+                resume="allow",
+                settings=wandb.Settings(x_disable_stats=True, x_disable_machine_info=True),
+            )
+            artifact = wandb.Artifact(f"run-{run_id}-downloadable", type="training-result")
+            selected = []
+            for path in sorted(worker.iterdir()):
+                if path.name in {"canonical_records.csv", "gate_results.csv", "wandb", "mlruns"}:
+                    continue
+                if path.is_file() and path.suffix in {
+                    ".csv", ".json", ".log", ".png", ".dvc", ".yaml", ".yml", ".txt",
+                }:
+                    selected.append(path)
+                elif path.is_dir() and (
+                    path.name.startswith("report_")
+                    or path.name in {"logs", "_checkpoints", ".resume"}
+                ):
+                    selected.append(path)
+            if not selected:
+                print(
+                    f"[wandb-local] worker {number}: no downloadable files; skipping",
+                    flush=True,
+                )
+                run.finish(exit_code=1)
                 continue
-            if path.is_file() and path.suffix in {
-                ".csv", ".json", ".log", ".png", ".dvc", ".yaml", ".yml", ".txt",
-            }:
-                selected.append(path)
-            elif path.is_dir() and (
-                path.name.startswith("report_")
-                or path.name in {"logs", "_checkpoints", ".resume"}
-            ):
-                selected.append(path)
-        for path in selected:
-            if path.is_dir():
-                artifact.add_dir(str(path), name=path.name)
-            else:
-                artifact.add_file(str(path), name=path.name)
-        if not selected:
-            run.finish(exit_code=1)
-            raise RuntimeError(
-                f"worker {number}: no downloadable result files found under {worker}"
+            for path in selected:
+                if path.is_dir():
+                    artifact.add_dir(str(path), name=path.name)
+                else:
+                    artifact.add_file(str(path), name=path.name)
+            run.log_artifact(artifact)
+            run.finish(exit_code=0)
+            print(f"[wandb-local] worker {number}: final artifact uploaded", flush=True)
+        except Exception:
+            print(
+                f"[wandb-local] worker {number} publication failed; "
+                "DVC publication and teardown may continue. Full traceback:",
+                file=sys.stderr,
+                flush=True,
             )
-        run.log_artifact(artifact)
-        run.finish(exit_code=0)
-        print(f"[wandb-local] worker {number}: final artifact uploaded", flush=True)
+            traceback.print_exc()
 
 
 def finalize_local_training_run(remote_base: str, workers: int) -> None:

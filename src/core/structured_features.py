@@ -47,10 +47,14 @@ def sku_info(title: object, attributes: object) -> dict[str, set[float]]:
     from pipeline import extract_all
 
     extracted = extract_all(str(title), str(attributes))
-    return info_from_sets(
-        {float(extracted.get("volume_ml") or 0.0)},
-        {float(extracted.get("pack_qty") or 1.0)},
+    volume = {float(extracted.get("volume_ml") or 0.0)}
+    pack_qty = extracted.get("pack_qty")
+    pack = (
+        {float(pack_qty)}
+        if pack_qty is not None and float(extracted.get("pack_confidence") or 0.0) > 0.0
+        else set()
     )
+    return info_from_sets(volume, pack)
 
 
 def canonical_info(record: Mapping[str, object]) -> dict[str, set[float]]:

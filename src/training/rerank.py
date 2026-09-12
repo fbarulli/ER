@@ -238,16 +238,38 @@ def rerank_stage(
     # The trained bi-encoder + test pools are live in this scope; the plot
     # reads population/cosine rows. Populations per the 07b contract:
     # in_country_pos / cross_country_pos / hard_neg / random_neg.
-    _emit_four_pop(bi, payload, df, test_pos, test_neg, pos, neg)
+    _emit_four_pop(bi, payload, df, row_bc, test_pos, test_neg, pos, neg)
 
 
-def _emit_four_pop(bi, payload, df, test_pos, test_neg, pos, neg) -> None:
+def _emit_four_pop(bi, payload, df, row_bc, test_pos, test_neg, pos, neg) -> None:
     """07b_four_pop_scores.csv — four-population cosines (fine-tuned)."""
     import pandas as pd
 
     from core.common import RESULTS
 
     country = df["country"].fillna("").astype(str).to_numpy()
+    if len(row_bc) > len(country):
+        by_barcode: dict[str, list[str]] = {}
+        for barcode, value in zip(
+            df["barcode"].fillna("").astype(str), country
+        ):
+            if barcode:
+                by_barcode.setdefault(barcode, []).append(value)
+        mode_country = {
+            barcode: max(set(values), key=values.count)
+            for barcode, values in by_barcode.items()
+        }
+        padded = np.asarray(
+            [mode_country.get(str(barcode), "") for barcode in row_bc[len(country):]],
+            dtype=object,
+        )
+        country = np.concatenate([country.astype(object), padded])
+    if len(country) < len(payload):
+        country = np.pad(
+            country.astype(object),
+            (0, len(payload) - len(country)),
+            constant_values="",
+        )
 
     def pop_scores(pairs, name):
         if pairs is None or not len(pairs):

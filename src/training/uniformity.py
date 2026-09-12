@@ -61,10 +61,10 @@ def select_unrelated_pairs(
             break
         if len(selected) >= n_pairs:
             return selected
-    raise RuntimeError(
-        f"uniformity audit found {len(selected)} unrelated pairs; "
-        f"required {n_pairs}"
-    )
+    # This is a diagnostic, not a training or publication gate.  Return the
+    # available deterministic sample so small/overlapping catalogs can still
+    # finalize and record an explicit insufficient-sample result.
+    return selected
 
 
 def _summary(scores: np.ndarray, threshold: float) -> dict[str, float | int]:
@@ -103,6 +103,28 @@ def run_uniformity_audit(
     pairs = select_unrelated_pairs(
         df, payload, n_pairs=n_pairs, seed=seed
     )
+    if len(pairs) < n_pairs:
+        frame = pd.DataFrame(
+            [
+                {"pair": i, "row_a": left, "row_b": right}
+                for i, (left, right) in enumerate(pairs)
+            ]
+        )
+        frame.to_csv(out / "uniformity_unrelated_pairs.csv", index=False)
+        result = {
+            "base_model": str(base_model),
+            "fine_tuned_checkpoint": str(checkpoint),
+            "selection": "different brand, different category, zero shared exact payload tokens",
+            "seed": int(seed),
+            "status": "insufficient_pairs",
+            "required_pairs": int(n_pairs),
+            "selected_pairs": int(len(pairs)),
+        }
+        (out / "uniformity_summary.json").write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return result
     texts = [payload[index] for pair in pairs for index in pair]
     base = SentenceTransformer(str(base_model), device="cpu")
     fine = SentenceTransformer(str(checkpoint), device="cpu")
