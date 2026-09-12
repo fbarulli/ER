@@ -419,6 +419,8 @@ class ProgressCallback(TrainerCallback):
 
     def _write_live_status(self, state, event: str, **values) -> None:
         """Atomically expose a compact worker heartbeat to the Colab launcher."""
+        import tempfile
+
         payload = {
             "updated_at": time.time(),
             "event": event,
@@ -430,8 +432,22 @@ class ProgressCallback(TrainerCallback):
             **{key: value for key, value in values.items() if value is not None},
         }
         target = RESULTS / "live_status.json"
-        temporary = target.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        # Parallel Optuna trials share a model worker's RESULTS directory.
+        # A fixed ``live_status.json.tmp`` lets one thread replace (remove)
+        # the other thread's temporary file before it reaches os.replace.
+        # Keep the final target shared (latest heartbeat wins), but give every
+        # atomic write a private same-filesystem temporary path.
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=target.parent,
+            delete=False,
+        ) as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+            temporary = Path(handle.name)
         os.replace(temporary, target)
 
     def on_train_begin(self, args, state, control, **kwargs):
