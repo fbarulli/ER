@@ -581,6 +581,22 @@ def _runtime_telemetry() -> dict[str, float | int]:
     except OSError:
         pass
     try:
+        memory = {}
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, value = line.split(":", 1)
+            if key in {"MemTotal", "MemAvailable"}:
+                memory[key] = int(value.strip().split()[0])
+        if "MemTotal" in memory and "MemAvailable" in memory:
+            telemetry.update(
+                memory_total_mb=round(memory["MemTotal"] / 1024, 1),
+                memory_available_mb=round(memory["MemAvailable"] / 1024, 1),
+                memory_used_mb=round(
+                    (memory["MemTotal"] - memory["MemAvailable"]) / 1024, 1
+                ),
+            )
+    except (OSError, ValueError):
+        pass
+    try:
         import torch
 
         if torch.cuda.is_available():
@@ -608,6 +624,20 @@ def _format_telemetry(values: dict[str, float | int]) -> str:
             f"{values['gpu_free_gb']:.2f}G free"
         )
     return " | ".join(pieces)
+
+
+def _wandb_memory_metrics(values: dict[str, float | int]) -> dict[str, float]:
+    """Return the only system telemetry allowed into W&B."""
+    names = {
+        "rss_mb": "memory/worker_rss_mb",
+        "memory_used_mb": "memory/total_used_mb",
+        "memory_available_mb": "memory/total_available_mb",
+    }
+    return {
+        target: float(values[source])
+        for source, target in names.items()
+        if source in values
+    }
 
 
 class ProgressCallback(TrainerCallback):
@@ -665,6 +695,8 @@ class ProgressCallback(TrainerCallback):
         if state.is_world_process_zero:
             telemetry = _runtime_telemetry()
             print(f"    [telemetry] training-started | {_format_telemetry(telemetry)}", flush=True)
+            if self.wandb_ctx is not None:
+                self.wandb_ctx.log_metrics(_wandb_memory_metrics(telemetry))
             self._write_live_status(state, "training-started", **telemetry)
         return control
 
@@ -715,8 +747,9 @@ class ProgressCallback(TrainerCallback):
                             f"live/loss_{key}": value
                             for key, value in loss_stats.items()
                         },
+                        **_wandb_memory_metrics(telemetry),
                     },
-            )
+                )
             self._write_live_status(
                 state,
                 "train",
@@ -779,6 +812,7 @@ class ProgressCallback(TrainerCallback):
                     "live/dev_auc": float(metrics[auc_key])
                     if auc_key is not None else None,
                     "live/epoch": float(state.epoch or 0.0),
+                    **_wandb_memory_metrics(telemetry),
                 },
             )
         self._write_live_status(

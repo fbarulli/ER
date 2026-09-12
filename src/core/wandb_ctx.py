@@ -24,7 +24,19 @@ class WandbCtx:
             return self
         import wandb
         run_name = os.environ.get("WANDB_RUN_NAME", self._name)
-        self._run = wandb.init(project=self._project, name=run_name, mode=self._mode)
+        # Disable W&B's broad host sampler. Training emits the deliberately
+        # bounded memory series itself, so CPU/GPU/disk/system auto-series do
+        # not flood the run or overlap with worker telemetry.
+        settings = wandb.Settings(
+            x_disable_stats=True,
+            x_disable_machine_info=True,
+        )
+        self._run = wandb.init(
+            project=self._project,
+            name=run_name,
+            mode=self._mode,
+            settings=settings,
+        )
         print(
             f"[wandb] run started: project={self._project} mode={self._mode} "
             f"id={self._run.id} url={self._run.url}",
