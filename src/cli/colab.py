@@ -96,6 +96,12 @@ _MASK_EFFECT_AFTER_TRAIN = _COLAB.mask_effect_after_train
 _SMOKE_EPOCHS = _COLAB.smoke_epochs
 _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
+# The installed Colab CLI writes its diagnostic log under $HOME even when a
+# config path is supplied.  This workspace's home is read-only, so isolate
+# the CLI state/history in /tmp for every launcher invocation.
+_COLAB_CLI_STATE_DIR = Path("/tmp/euromonitor-colab-cli")
+_COLAB_CLI_CONFIG = _COLAB_CLI_STATE_DIR / "sessions.json"
+_COLAB_CLI_ENTRYPOINT = Path(__file__).with_name("colab_cli_entry.py")
 LIVE_LOG_PATH: Path | None = None
 _live_log = None
 _original_stdout = None
@@ -128,7 +134,7 @@ class _Tee:
 def check_colab_cli() -> None:
     """Ensure the colab CLI is installed and authenticated."""
     try:
-        subprocess.run(["colab", "--help"], capture_output=True, check=True)
+        colab("--help")
     except (subprocess.CalledProcessError, FileNotFoundError):
         raise SystemExit(
             "colab CLI not found or not authenticated.\n"
@@ -139,11 +145,25 @@ def check_colab_cli() -> None:
 
 def colab(*args: str, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess:
     """Run a colab CLI subcommand."""
-    cmd = ["colab", *args]
+    _COLAB_CLI_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    display_cmd = ["colab", *args]
+    colab_executable = shutil.which("colab")
+    cmd = display_cmd
+    if colab_executable:
+        first_line = Path(colab_executable).read_text(encoding="utf-8").splitlines()[0]
+        if first_line.startswith("#!"):
+            colab_python = first_line[2:].strip()
+            cmd = [
+                colab_python,
+                str(_COLAB_CLI_ENTRYPOINT),
+                "--config",
+                str(_COLAB_CLI_CONFIG),
+                *args,
+            ]
     try:
         return subprocess.run(cmd, check=check, capture_output=True, text=True, timeout=timeout)
     except subprocess.CalledProcessError as e:
-        print(f"\n[error] colab command failed: {' '.join(cmd)}", file=sys.stderr)
+        print(f"\n[error] colab command failed: {' '.join(display_cmd)}", file=sys.stderr)
         if e.stdout:
             print(f"stdout:\n{e.stdout[-1000:]}", file=sys.stderr)
         if e.stderr:
@@ -827,16 +847,34 @@ def close_live_log() -> None:
         _original_stderr = None
 
 
+def _verify_session_handshake() -> None:
+    """Fail before checkout if the CLI cannot execute on the VM."""
+    try:
+        heartbeat = run_colab_exec_capture(
+            SESSION,
+            "import os, socket, sys; print({'pid': os.getpid(), 'python': sys.version.split()[0], 'host': socket.gethostname()})",
+            timeout=60,
+        )
+    except BaseException as exc:
+        raise RuntimeError(
+            f"Colab session '{SESSION}' failed the control-channel handshake "
+            f"before training: {exc}"
+        ) from exc
+    print(f"[session] control-channel handshake passed: {heartbeat.strip()}")
+
+
 def ensure_session() -> None:
-    """Provision the session if it does not already exist."""
+    """Provision and verify the session before any training stage starts."""
     r = colab("sessions", check=False)
     if SESSION in (r.stdout or ""):
-        print(f"[session] '{SESSION}' already active")
+        print(f"[session] '{SESSION}' already active; verifying control channel ...")
+        _verify_session_handshake()
         return
     accelerator = [] if GPU.upper() == "CPU" else ["--gpu", GPU]
     print(f"[session] provisioning {SESSION} ({'cpu' if not accelerator else f'gpu={GPU}'}) ...")
     colab("new", "-s", SESSION, *accelerator, timeout=300)
-    print("[session] up")
+    print("[session] provisioned; running control-channel handshake ...")
+    _verify_session_handshake()
 
 
 def prepare_remote_layout() -> None:
@@ -1490,7 +1528,28 @@ def stop() -> None:
     # Colab GPU quota until manually reaped, so warn loudly with the
     # consequence + the exact recovery command.
     try:
-        colab("stop", "-s", SESSION, check=False)
+        result = colab("stop", "-s", SESSION, check=False)
+        if result.returncode:
+            print(
+                f"[warn] VM release command returned rc={result.returncode}; "
+                f"stdout={result.stdout[-2000:]!r} stderr={result.stderr[-2000:]!r}",
+                file=sys.stderr,
+            )
+        status = colab("sessions", check=False)
+        if SESSION in (status.stdout or ""):
+            print(
+                f"[warn] teardown verification still lists '{SESSION}'; "
+                "the VM may still be live and consuming quota.",
+                file=sys.stderr,
+            )
+        elif status.returncode == 0:
+            print("[stop] teardown verified: session is no longer listed")
+        else:
+            print(
+                f"[warn] could not verify teardown; sessions command returned "
+                f"rc={status.returncode}: {status.stderr[-1000:]!r}",
+                file=sys.stderr,
+            )
     except subprocess.SubprocessError as exc:
         print(
             f"[warn] VM release request failed — the VM '{SESSION}' may "
