@@ -973,6 +973,31 @@ def _main_inner(_mlf, _wandb) -> None:
     ok_rows = [r for r in rows if r.get("status") != "skipped"]
     aucs = [r.get("auc") for r in ok_rows if r.get("auc") is not None]
 
+    # Build the complete post-run report before publishing the downloadable
+    # W&B/DVC bundle. HPO selection rows intentionally have no test pair dump,
+    # so they skip this report until the final holdout-scoring lane.
+    if args.plot and aucs:
+        pair_paths = sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*_pairs.csv"))
+        if pair_paths:
+            try:
+                from training.generate_training_report import generate_report
+
+                report_dir = RESULTS / f"report_{run_tag}"
+                generate_report(
+                    out,
+                    pair_paths,
+                    report_dir,
+                    sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*_train_scores.csv")),
+                    sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*_random_easy_scores.csv")),
+                )
+                print(f"[report] complete report -> {report_dir}", flush=True)
+            except Exception:
+                print(
+                    "[report] FAILED (non-fatal — training results stand):\n"
+                    + traceback.format_exc(),
+                    flush=True,
+                )
+
     # ── mlflow: params + per-fold nested runs (local backend by default) ──
     _mlf.log_params(
         {

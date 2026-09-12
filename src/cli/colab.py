@@ -1079,7 +1079,7 @@ def run_train(
         "--loss", "contrastive",
         "--train-frac", str(frac),
         "--epochs", str(epochs),
-        "--no-plot"]
+        "--plot"]
     if model is not None:
         args.extend(["--model", resolve_model(model)])
     if sample is not None:
