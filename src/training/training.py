@@ -543,11 +543,18 @@ class DvcCheckpointCallback(TrainerCallback):
     @staticmethod
     def _snapshot(checkpoint: Path) -> Path:
         """Hard-link an immutable checkpoint before Trainer rotation can delete it."""
+        import hashlib
         import shutil
 
         staging = RESULTS / "_checkpoint_upload_staging"
         staging.mkdir(parents=True, exist_ok=True)
-        snapshot = staging / checkpoint.name
+        # Optuna runs trial callbacks concurrently.  Steps are only unique
+        # inside one Trainer output directory, so two trials can both save
+        # ``checkpoint-459``.  Preserve that output-root identity in staging
+        # instead of flattening every checkpoint into one shared directory.
+        key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
+        snapshot = staging / key / checkpoint.name
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
         if snapshot.exists():
             shutil.rmtree(snapshot)
         try:
@@ -560,20 +567,28 @@ class DvcCheckpointCallback(TrainerCallback):
 
     @staticmethod
     def _publish(snapshot: Path, checkpoint: Path) -> Path:
+        import hashlib
         import shutil
         from training.dvc_store import publish_checkpoint
 
         try:
+            key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
             return publish_checkpoint(
                 RESULTS,
                 snapshot,
-                resume_name=checkpoint.name,
+                # Likewise, resume pointers must not collide between two
+                # trial output roots that happen to save at the same step.
+                resume_name=f"{checkpoint.name}--{key}",
                 restore_root=checkpoint,
             )
         finally:
             native_pointer = snapshot.with_name(f"{snapshot.name}.dvc")
             shutil.rmtree(snapshot, ignore_errors=True)
             native_pointer.unlink(missing_ok=True)
+            try:
+                snapshot.parent.rmdir()
+            except OSError:
+                pass
 
     def _raise_publish_errors(self) -> None:
         remaining = []

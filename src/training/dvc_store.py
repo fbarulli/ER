@@ -147,24 +147,33 @@ def publish_checkpoint(
     restore_root = (restore_root or checkpoint_root).resolve()
     relative_root = checkpoint_root.relative_to(source)
     restore_root.relative_to(source)
-    _configure(source, token)
     pointer = source / ".resume" / f"{resume_name or checkpoint_root.name}.dvc"
     # DVC recursively discovers existing .dvc files.  The durable resume
     # pointers are intentionally kept under source/.resume, but they must not
     # participate in discovery while a new output is added.  Temporarily
     # stage that metadata outside the DVC source, then put it back even when
     # dvc add fails.
-    staged_resume = None
-    resume_dir = source / ".resume"
-    if resume_dir.is_dir():
-        staged_resume = Path(tempfile.mkdtemp(prefix=".resume-staging-", dir=source.parent))
-        shutil.move(str(resume_dir), str(staged_resume / ".resume"))
-    try:
-        _run(["dvc", "add", str(relative_root)], source)
-    finally:
-        if staged_resume is not None:
-            shutil.move(str(staged_resume / ".resume"), str(resume_dir))
-            shutil.rmtree(staged_resume, ignore_errors=True)
+    # Separate Optuna trials share one no-SCM DVC workspace.  Serialise its
+    # mutable metadata operations, not just the remote push, otherwise two
+    # ``dvc add`` calls can observe or rewrite each other's state.
+    lock_path = source.parent / ".dvc-push.lock"
+    with lock_path.open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            _configure(source, token)
+            staged_resume = None
+            resume_dir = source / ".resume"
+            if resume_dir.is_dir():
+                staged_resume = Path(tempfile.mkdtemp(prefix=".resume-staging-", dir=source.parent))
+                shutil.move(str(resume_dir), str(staged_resume / ".resume"))
+            try:
+                _run(["dvc", "add", str(relative_root)], source)
+            finally:
+                if staged_resume is not None:
+                    shutil.move(str(staged_resume / ".resume"), str(resume_dir))
+                    shutil.rmtree(staged_resume, ignore_errors=True)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     native_pointer = checkpoint_root.with_name(f"{checkpoint_root.name}.dvc")
     if not native_pointer.is_file():
         raise RuntimeError(f"DVC did not create checkpoint pointer: {native_pointer}")
@@ -183,7 +192,6 @@ def publish_checkpoint(
         # restore to the Trainer's original checkpoint location instead.
         entry["path"] = os.path.relpath(restore_root, pointer.parent)
     native_relative = native_pointer.relative_to(source)
-    lock_path = source.parent / ".dvc-push.lock"
     with lock_path.open("w", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
@@ -293,7 +301,10 @@ def restore_checkpoint(source: Path, checkpoint_root: Path) -> Path:
             if len(outputs) != 1 or outputs[0].parent != checkpoint_root:
                 continue
             try:
-                step = int(outputs[0].name.removeprefix("checkpoint-"))
+                # Concurrent HPO adds a stable output-root suffix to avoid
+                # clobbering pointers from trials that share a global step.
+                step_text = candidate.stem.removeprefix("checkpoint-").split("--", 1)[0]
+                step = int(step_text)
             except ValueError:
                 continue
             candidates.append((step, candidate))
