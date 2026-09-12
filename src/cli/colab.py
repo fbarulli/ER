@@ -619,7 +619,7 @@ def run_parallel_train_and_tail(
     run_labels: list[str] | None = None,
 ) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     remote_base = (
         f"{REMOTE_ROOT}/results/concurrent_train_{resume_run}"
         if resume_run
@@ -638,13 +638,14 @@ resume_pointers = {resume_pointers!r}
 run_labels = {run_labels!r}
 started = []
 for number in range(1, {workers} + 1):
-    worker_label = (
+    worker_profile = (
         run_labels[number - 1]
         if run_labels and number <= len(run_labels)
-        else f"worker_{{number}}"
+        else ""
     )
+    training_name = f"{{run_id}}-{{worker_profile}}" if worker_profile else "{{run_id}}"
     worker_profile = (
-        worker_label if worker_label in ("mining_enabled", "masking_only") else ""
+        worker_profile if worker_profile in ("mining_enabled", "masking_only") else ""
     )
     out = base / f"worker_{{number}}"
     print(f"[resume-preflight] worker {{number}}: preparing {{out}}", flush=True)
@@ -729,7 +730,8 @@ for number in range(1, {workers} + 1):
     wandb_dir.mkdir(parents=True, exist_ok=True)
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
            "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_DIR": str(wandb_dir),
-           "WANDB_RUN_NAME": worker_label,
+           "WANDB_RUN_NAME": training_name,
+           "EUROMONITOR_RUN_ID": training_name,
            "EUROMONITOR_MINING_PROFILE": worker_profile,
            "EUROMONITOR_REMOTE_TRAINING": "1"}}
     live_status_path.write_text(json.dumps({{
@@ -1442,7 +1444,7 @@ def run_single_train_and_stream(
     args: list[str], *, run_label: str | None = None
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import os, pathlib, shutil, subprocess, sys
@@ -1462,7 +1464,8 @@ wandb_dir.mkdir(parents=True, exist_ok=True)
 env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
        "EUROMONITOR_RESULTS_DIR": str(out), "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
        "WANDB_DIR": str(wandb_dir),
-       "WANDB_RUN_NAME": {run_label if run_label else "worker_1"!r},
+       "WANDB_RUN_NAME": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
+       "EUROMONITOR_RUN_ID": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_MINING_PROFILE": {run_label if run_label in ("mining_enabled", "masking_only") else ""!r},
        "EUROMONITOR_REMOTE_TRAINING": "1"}}
 command = [sys.executable, *{args!r}]

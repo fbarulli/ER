@@ -453,9 +453,14 @@ def _main_inner(_mlf, _wandb) -> None:
     model_tag = args.model.rstrip("/").split("/")[-1]
     frac_tag = "full" if args.train_frac >= 1.0 else f"frac{args.train_frac:g}"
     sample_tag = f"sample{args.sample}" if args.sample else ""
-    run_tag = (
+    base_run_tag = (
         f"train-{args.split}-{model_tag}-{args.payload}-{frac_tag}-{sample_tag}"
     ).replace("/", "-").rstrip("-")
+    # The launcher supplies one immutable ID for the entire remote run. Keep
+    # it in every artifact/W&B namespace so two otherwise identical retries
+    # cannot overwrite or become indistinguishable from one another.
+    global_run_id = os.environ.get("EUROMONITOR_RUN_ID", "").strip()
+    run_tag = global_run_id or base_run_tag
     # 07c field ablation — payload variants (only the TEXT the encoder sees
     # changes, so fold metrics are comparable):
     #   full       = clean sku (title + attributes, the owner's cleaning)
