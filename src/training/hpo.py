@@ -55,6 +55,8 @@ def run_grid(
     # negatives — same channel the main lane uses (train_one_config
     # filters them to each fold's train side via pairs_in_set)
     neg_pairs=None,
+    # training-only augmented negatives; neg_pairs remains eval-only
+    train_neg_pairs=None,
 ) -> None:
     """Fixed-grid sweep (second07 semantics) over the ENTRY-augmented tuple.
 
@@ -183,6 +185,7 @@ def run_grid(
             # lane uses — without them the contrastive loss (SSOT) has no
             # labeled negatives and every fold skips
             neg_pairs=neg_pairs,
+            train_neg_pairs=train_neg_pairs,
         )
         vals = [
             r[_sig]
@@ -246,6 +249,8 @@ def run_tpe(
     n_masked: int = 0,
     # gate hard-no pairs (same channel as the main lane — see run_grid)
     neg_pairs: np.ndarray | None = None,
+    # training-only augmented negatives; neg_pairs remains eval-only
+    train_neg_pairs: np.ndarray | None = None,
     wandb_ctx=None,
     mlf_ctx=None,
 ) -> None:
@@ -317,6 +322,7 @@ def run_tpe(
         dev_override=dev_override,
         selection_mode=_holdout,
         neg_pairs=neg_pairs,
+        train_neg_pairs=train_neg_pairs,
         wandb_ctx=wandb_ctx,
     )
 

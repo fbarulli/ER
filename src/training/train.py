@@ -27,6 +27,7 @@ from core.common import (
     load_dataset_deduped,
     runtime,
     set_determinism,
+    training_cfg,
 )
 from core.common import SSOT_LOSS as _SSOT_LOSS
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_CONTRASTIVE_MARGIN
@@ -403,6 +404,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # that disagrees with the YAML (1.00) can never ship.
     if args.mask_frac is None:
         args.mask_frac = float(mask_cfg["frac"]) if mask_cfg["enabled"] else 0.0
+    mask_hard_negatives = bool(mask_cfg["mask_hard_negatives"])
     mask_prob = mask_cfg["mask_prob"]
     mask_prob = float(mask_prob) if mask_prob is not None else None
 
@@ -452,6 +454,7 @@ def _main_inner(_mlf, _wandb) -> None:
             "architecture": runtime("architecture"),
             "mask_frac": args.mask_frac,
             "masking_enabled": bool(args.mask_frac > 0),
+            "mask_hard_negatives": mask_hard_negatives,
             "train_frac": args.train_frac,
             "batch_size_cuda": tr["batch_size_cuda"],
             "sample": args.sample or "full",
@@ -480,7 +483,7 @@ def _main_inner(_mlf, _wandb) -> None:
             "vs dataset_deduped.csv barcodes"
         )
 
-    # ── masking augmentation (src/training/masking.py, on/off via config/paths.yaml) ──
+    # ── masking augmentation (src/training/masking.py, config-driven) ──
     # Owner's masking augmentation, corrected for MNRL semantics: the original
     # the original masking script fed label=0.0 hard-negative pairs to MNRL — MNRL
     # IGNORES labels and would train them as POSITIVES (different products
@@ -489,15 +492,33 @@ def _main_inner(_mlf, _wandb) -> None:
     # (U(0.20, 0.35) per masked copy — config/training.yaml masking band;
     # AUDIT round 2 F08: this comment still said "15% random token
     # masking") and the masked pair is appended as an EXTRA positive (same
-    # pair semantics, noised anchor). Masked texts are NEW payload entries
-    # (row_bc = same barcode), so folds/components are unaffected.
+    # pair semantics, noised anchor). When configured, hard negatives receive
+    # the same label-preserving augmentation: the masked anchor remains paired
+    # with its different-product target and stays label 0. Masked texts are
+    # NEW payload entries (row_bc = same barcode), so folds/components are
+    # unaffected.
     mask_audit: list[dict] = []
+    hard_negative_mask_audit: list[dict] = []
+    # Keep evaluation negatives immutable. Masked hard-negative copies are
+    # training-only rows so dev/holdout metrics cannot include augmentation.
+    train_neg = neg
     if args.mask_frac > 0:
-        from training.masking import augment_positives
+        from training.masking import augment_hard_negatives, augment_positives
 
         pos, payload, row_bc, n_added, mask_audit = augment_positives(
             pos, payload, row_bc, frac=args.mask_frac, mask_prob=mask_prob, seed=SEED
         )
+        if mask_hard_negatives and len(neg):
+            train_neg, payload, row_bc, n_hard_added, hard_negative_mask_audit = augment_hard_negatives(
+                neg,
+                payload,
+                row_bc,
+                frac=args.mask_frac,
+                mask_prob=mask_prob,
+                seed=SEED + 1,
+            )
+        else:
+            n_hard_added = 0
         # MASK VISIBILITY (owner directive 2026-09-07): per-copy realized
         # extents — the high-vs-low-extent effect on overfitting is
         # measurable only when each copy's TRUE masked fraction is logged
@@ -509,6 +530,13 @@ def _main_inner(_mlf, _wandb) -> None:
 
         _ma = _pd.DataFrame(mask_audit)
         _wvl(_ma, "mask_visibility.csv", run_tag, bool(args.sample))
+        if hard_negative_mask_audit:
+            _wvl(
+                _pd.DataFrame(hard_negative_mask_audit),
+                "mask_hard_negative_visibility.csv",
+                run_tag,
+                bool(args.sample),
+            )
         # high/low halves of the extent distribution — the split point is
         # the MIDPOINT of the config extent band (masking.mask_lo..
         # mask_hi), derived here so a band change can never leave the
@@ -530,6 +558,12 @@ def _main_inner(_mlf, _wandb) -> None:
                 f"low-extent(<{_mid:.2f}): {len(_lo):,} copies, mean {_lo.realized_extent.mean() if len(_lo) else 0:.3f}",
                 flush=True,
             )
+            if hard_negative_mask_audit:
+                print(
+                    f"[masking] +{n_hard_added:,} masked hard negatives "
+                    f"(label=0, frac={args.mask_frac:.0%})",
+                    flush=True,
+                )
 
     # ── COMPONENT-AWARE SPLITS ──────────────────────────────────────────────
     # UNEXPECTED-BEHAVIOR FIX: pipeline positives connect TWO DIFFERENT
@@ -599,6 +633,79 @@ def _main_inner(_mlf, _wandb) -> None:
     )
     print(f"zero-shot encode_s = {encode_s:.1f}s", flush=True)
 
+    # Supplemental mining targets the same-brand/category attribute-conflict
+    # population that the gate's 6,051 hard negatives cannot exhaust. The
+    # original gate negatives remain intact; these are additional label-0
+    # training rows selected from the configured cosine band.
+    from core.hard_negatives import mine_attribute_conflict_negatives
+
+    _attr_lo, _attr_hi = (
+        float(x) for x in training_cfg().mining.attribute_band.split("-")
+    )
+    _attr_neg, _attr_scores = mine_attribute_conflict_negatives(
+        df,
+        payload,
+        row_bc,
+        emb0,
+        existing=neg,
+        n_target=int(training_cfg().mining.attribute_conflict_target),
+        cosine_lo=_attr_lo,
+        cosine_hi=_attr_hi,
+    )
+    if len(_attr_neg):
+        neg = np.vstack([neg, _attr_neg]) if len(neg) else _attr_neg
+        if mask_hard_negatives and args.mask_frac > 0:
+            from training.masking import augment_hard_negatives
+
+            _attr_train_neg, payload, row_bc, _attr_masked_added, _attr_audit = (
+                augment_hard_negatives(
+                    _attr_neg,
+                    payload,
+                    row_bc,
+                    frac=args.mask_frac,
+                    mask_prob=mask_prob,
+                    seed=SEED + 2,
+                )
+            )
+            train_neg = np.vstack([train_neg, _attr_train_neg])
+            hard_negative_mask_audit.extend(_attr_audit)
+            if len(payload) > len(emb0):
+                _attr_emb, _attr_encode_s = encode_corpus(
+                    args.model,
+                    payload[len(emb0):],
+                    batch_size=runtime("batch_size_embed"),
+                    max_seq_length=runtime("max_seq_length"),
+                    device="cuda" if on_cuda else "cpu",
+                    cache_dir=EMB_CACHE,
+                )
+                emb0 = np.vstack([emb0, _attr_emb])
+                encode_s += _attr_encode_s
+        else:
+            train_neg = np.vstack([train_neg, _attr_neg])
+        if hard_negative_mask_audit:
+            # The first visibility write occurs before zero-shot mining; this
+            # rewrite includes the supplemental attribute-conflict copies.
+            from core.common import write_visibility_log as _wvl
+
+            _wvl(
+                pd.DataFrame(hard_negative_mask_audit),
+                "mask_hard_negative_visibility.csv",
+                run_tag,
+                bool(args.sample),
+            )
+    _wandb.log_config(
+        {
+            "n_attribute_conflict_negatives": int(len(_attr_neg)),
+            "n_hard_negative_training_pairs": int(len(train_neg)),
+            "n_hard_negative_eval_pairs": int(len(neg)),
+        }
+    )
+    print(
+        f"[attribute-conflicts] +{len(_attr_neg):,} supplemental label-0 pairs "
+        f"(baseline gate hard-negatives preserved; total {len(neg):,})",
+        flush=True,
+    )
+
     # masked anchors extend the row-index space beyond df; every df-indexed
     # side array must cover them (row_bc/payload/emb0 already do; country
     # doesn't — pad with the anchor's own country)
@@ -655,11 +762,13 @@ def _main_inner(_mlf, _wandb) -> None:
             run_grid(
                 args, data, mask_cfg, folds_override, dev_override,
                 n_masked=len(mask_audit), neg_pairs=neg,
+                train_neg_pairs=train_neg,
             )
         else:
             run_tpe(
                 args, data, mask_cfg, folds_override, dev_override,
-                n_masked=len(mask_audit), neg_pairs=neg, wandb_ctx=_wandb,
+                n_masked=len(mask_audit), neg_pairs=neg,
+                train_neg_pairs=train_neg, wandb_ctx=_wandb,
                 mlf_ctx=_mlf,
             )
         return
@@ -708,6 +817,7 @@ def _main_inner(_mlf, _wandb) -> None:
         dev_fraction=args.dev_fraction,
         dev_override=dev_override,
         neg_pairs=neg,
+        train_neg_pairs=train_neg,
         train_frac=args.train_frac if args.train_frac < 1.0 else None,
         run_tag=run_tag,
         sample=bool(args.sample),
@@ -881,6 +991,10 @@ def _main_inner(_mlf, _wandb) -> None:
         for _row in rows:
             if _row.get("status") == "ok":
                 _row.update(mask_effect_metrics)
+    for _row in rows:
+        if _row.get("status") == "ok":
+            _row["n_masked_pos"] = len(mask_audit)
+            _row["n_masked_hard_negatives"] = len(hard_negative_mask_audit)
 
     # persist metrics — SUFFIXED per run (see run_tag note): the fixed
     # F["fold_metrics"] name meant the run_all step-4 series left only
@@ -1049,7 +1163,8 @@ def _main_inner(_mlf, _wandb) -> None:
                     for k in (
                         "auc", "auc_cross", "acc_at_thr", "pr_auc", "hits_at_1",
                         "best_dev_ap", "final_train_loss", "n_random_easy_neg",
-                        "random_easy_available",
+                        "random_easy_available", "n_masked_pos",
+                        "n_masked_hard_negatives",
                         *[key for key in r if key.startswith(("f1_at_", "precision_at_", "recall_at_"))],
                     )
                     if r.get(k) is not None

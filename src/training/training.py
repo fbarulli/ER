@@ -1130,6 +1130,9 @@ def train_one_config(
     # mined dev/test eval pools and, for MNRL, the 3rd dataset column (the
     # gate hard-negatives: same-brand, text-similar, different size/pack)
     neg_pairs: np.ndarray | None = None,
+    # training-only negative population; may include masked label-0 copies.
+    # neg_pairs remains the immutable dev/test evaluation population.
+    train_neg_pairs: np.ndarray | None = None,
     # 07d data-scaling: keep only this fraction of TRAIN pairs (dev/test
     # pools untouched). Subsampled AFTER the split, seeded per fold.
     train_frac: float | None = None,
@@ -1162,6 +1165,10 @@ def train_one_config(
     _TrainConfig.model_validate(cfg)
     if cfg["architecture"] != "two_tower":  # schema keeps this exhaustive
         raise ValueError(f"unsupported training architecture: {cfg['architecture']}")
+
+    _train_neg_source = (
+        train_neg_pairs if train_neg_pairs is not None else neg_pairs
+    )
 
     df, payload, row_bc, country, pos, hp_pairs, emb0 = data
     all_barcode_set = set(row_bc.tolist())
@@ -1416,8 +1423,10 @@ def train_one_config(
                 # the hard subset per batch (farthest positives, closest
                 # negatives) — hard-pair training at both layers.
                 tr_negs = (
-                    neg_pairs[pairs_in_set(neg_pairs, row_bc, tr_bc)]
-                    if neg_pairs is not None and len(neg_pairs)
+                    _train_neg_source[
+                        pairs_in_set(_train_neg_source, row_bc, tr_bc)
+                    ]
+                    if _train_neg_source is not None and len(_train_neg_source)
                     else np.empty((0, 2), dtype=int)
                 )
                 if len(tr_negs) == 0:
@@ -1475,8 +1484,10 @@ def train_one_config(
                 # shuffled neg pool (dedup guard: skip negs that ARE the
                 # positive text).
                 neg_texts: list[str] | None = None
-                if neg_pairs is not None and len(neg_pairs):
-                    tr_negs = neg_pairs[pairs_in_set(neg_pairs, row_bc, tr_bc)]
+                if _train_neg_source is not None and len(_train_neg_source):
+                    tr_negs = _train_neg_source[
+                        pairs_in_set(_train_neg_source, row_bc, tr_bc)
+                    ]
                     if len(tr_negs):
                         rng_n = np.random.default_rng(seed + fold_i + 1)
                         pool = [payload[a] for a, b in tr_negs] + [
@@ -2094,20 +2105,22 @@ def train_one_config(
             # contrastive training, negatives are the exact gate negatives
             # seen by the loss; for other losses, the mined hard-train set is
             # the comparable negative population.
-            train_neg_pairs = (
-                neg_pairs[pairs_in_set(neg_pairs, row_bc, tr_bc)]
-                if neg_pairs is not None and len(neg_pairs)
+            train_neg_eval_pairs = (
+                _train_neg_source[
+                    pairs_in_set(_train_neg_source, row_bc, tr_bc)
+                ]
+                if _train_neg_source is not None and len(_train_neg_source)
                 else hard_train
             )
             train_rows = np.unique(
-                np.r_[train_all.ravel(), train_neg_pairs.ravel()]
+                np.r_[train_all.ravel(), train_neg_eval_pairs.ravel()]
             )
             train_row_to_idx = {int(r): i for i, r in enumerate(train_rows)}
             train_pos_idx = np.array(
                 [train_row_to_idx[int(r)] for r in train_all.ravel()]
             ).reshape(-1, 2)
             train_neg_idx = np.array(
-                [train_row_to_idx[int(r)] for r in train_neg_pairs.ravel()]
+                [train_row_to_idx[int(r)] for r in train_neg_eval_pairs.ravel()]
             ).reshape(-1, 2)
             train_emb = model.encode(
                 [payload[r] for r in train_rows],
@@ -2247,13 +2260,13 @@ def train_one_config(
                 # in-batch only (counted separately below); triplet: mined
                 "n_train_neg": (
                     len(
-                            neg_pairs[
-                                pairs_in_set(neg_pairs, row_bc, tr_bc)
-                            ]
-                        )
+                        _train_neg_source[
+                            pairs_in_set(_train_neg_source, row_bc, tr_bc)
+                        ]
+                    )
                     if loss == "contrastive"
-                    and neg_pairs is not None
-                    and len(neg_pairs)
+                    and _train_neg_source is not None
+                    and len(_train_neg_source)
                     else (0 if loss == "mnrl" else len(hard_train))
                 ),
                 "n_hp_in_train": (
@@ -2530,6 +2543,7 @@ def run_hpo(
     # negatives; the sweep lanes pass them exactly like the main lane
     # (train_one_config filters them to the fold's train side itself)
     neg_pairs: np.ndarray | None = None,
+    train_neg_pairs: np.ndarray | None = None,
     wandb_ctx=None,
 ) -> None:
     import optuna
@@ -2578,6 +2592,7 @@ def run_hpo(
                 dev_override=dev_override,
                 selection_mode=selection_mode,
                 neg_pairs=neg_pairs,
+                train_neg_pairs=train_neg_pairs,
                 wandb_ctx=wandb_ctx,
             )
             ok_rows = [r for r in rows if r.get("status") == "ok"]

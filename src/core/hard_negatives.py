@@ -9,11 +9,124 @@ sample and the exclusion is visible, never hidden.
 
 from __future__ import annotations
 
+import ast
 from collections import defaultdict
 from itertools import combinations
 
 import numpy as np
 import pandas as pd
+
+
+def _canonical_set(value: object) -> set[object]:
+    """Parse set/list columns from canonical_records.csv safely."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return set()
+    try:
+        parsed = ast.literal_eval(str(value))
+    except (SyntaxError, ValueError):
+        return set()
+    if isinstance(parsed, (set, list, tuple)):
+        return set(parsed)
+    return set()
+
+
+def mine_attribute_conflict_negatives(
+    df: pd.DataFrame,
+    payload: list[str],
+    row_barcodes: np.ndarray,
+    emb: np.ndarray,
+    *,
+    existing: np.ndarray | None = None,
+    n_target: int = 0,
+    cosine_lo: float = 0.45,
+    cosine_hi: float = 0.95,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Mine additional same-brand/category pairs that disagree on attributes.
+
+    The gate hard-no population remains the baseline. This supplemental lane
+    searches representative SKU rows against other canonical targets sharing
+    the canonical brand/type, requires a volume, pack, or flavor conflict, and
+    keeps only high-cosine pairs. It therefore expands coverage of the exact
+    attribute-conflict population without relabeling the original 6,051 rows.
+    """
+    if n_target <= 0 or len(df) == 0:
+        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+
+    from core.common import F, RESULTS
+
+    canon_path = RESULTS / F["canonical_records"]
+    canon = pd.read_csv(canon_path, dtype=str, keep_default_na=False)
+    canon_by_gtin = {
+        str(row.gtin): {
+            "brand": str(row.mode_brand).strip().lower(),
+            "type": str(row.mode_type).strip().lower(),
+            "flavor": str(row.mode_flavor).strip().lower(),
+            "volume": _canonical_set(row.volume_set),
+            "pack": _canonical_set(row.pack_set),
+        }
+        for row in canon.itertuples(index=False)
+    }
+    canon_idx = {
+        str(row_barcodes[i]): i
+        for i in range(len(df), len(row_barcodes))
+        if str(row_barcodes[i]) in canon_by_gtin
+    }
+    if not canon_idx:
+        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+
+    groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for gtin, info in canon_by_gtin.items():
+        key = (info["brand"], info["type"])
+        if key[0] and key[1]:
+            groups[key].append(gtin)
+
+    # Longest representative row per barcode, stable on original row order.
+    reps: dict[str, int] = {}
+    for i, gtin in enumerate(row_barcodes[: len(df)]):
+        gtin = str(gtin)
+        if gtin not in canon_by_gtin:
+            continue
+        title_len = len(str(df.iloc[i].get("title", "")))
+        old = reps.get(gtin)
+        if old is None or title_len > len(str(df.iloc[old].get("title", ""))):
+            reps[gtin] = i
+
+    existing_keys = {
+        (int(a), int(b)) for a, b in (existing if existing is not None else [])
+    }
+    found: list[tuple[int, int, float]] = []
+    for source_gtin, source_row in reps.items():
+        source = canon_by_gtin[source_gtin]
+        candidates = groups.get((source["brand"], source["type"]), [])
+        for target_gtin in candidates:
+            if target_gtin == source_gtin or target_gtin not in canon_idx:
+                continue
+            target = canon_by_gtin[target_gtin]
+            conflicts = (
+                (source["volume"] and target["volume"] and source["volume"].isdisjoint(target["volume"]))
+                or (source["pack"] and target["pack"] and source["pack"].isdisjoint(target["pack"]))
+                or (source["flavor"] and target["flavor"] and source["flavor"] != target["flavor"])
+            )
+            if not conflicts:
+                continue
+            target_row = canon_idx[target_gtin]
+            score = float(np.dot(emb[source_row], emb[target_row]))
+            if not cosine_lo <= score <= cosine_hi:
+                continue
+            pair = (int(source_row), int(target_row))
+            if pair in existing_keys:
+                continue
+            existing_keys.add(pair)
+            found.append((pair[0], pair[1], score))
+
+    found.sort(key=lambda item: (-item[2], item[0], item[1]))
+    found = found[: int(n_target)]
+    if not found:
+        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+    return (
+        np.asarray([(a, b) for a, b, _ in found], dtype=int),
+        np.asarray([s for _, _, s in found], dtype=float),
+    )
 
 
 def conflicting_barcode_pairs(df: pd.DataFrame) -> set[tuple[int, int]]:

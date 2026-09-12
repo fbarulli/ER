@@ -30,11 +30,15 @@ import os
 from pathlib import Path
 from typing import Any
 
+# Keep matplotlib's cache inside the workspace for local and remote runs;
+# importing this module must not fall back to a transient /tmp cache.
+_MPLCONFIGDIR = Path(__file__).resolve().parents[2] / "matplotlib"
+os.environ.setdefault("MPLCONFIGDIR", str(_MPLCONFIGDIR))
+_MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
+
 import matplotlib
 
 matplotlib.use("Agg")  # headless; set before pyplot import
-
-import os
 
 import pandas as pd
 import yaml

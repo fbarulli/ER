@@ -1,9 +1,11 @@
-"""Masking augmentation (second_masking, corrected for MNRL semantics).
+"""Masking augmentation for positive and labeled hard-negative pairs.
 
 The original second_masking.py fed label=0.0 hard-negative pairs into
 MultipleNegativesRankingLoss — MNRL IGNORES labels, so those pairs would be
 trained as POSITIVES (pulling different products together). This module
-implements the corrected behavior: masking augments POSITIVES only.
+implements label-preserving augmentation for both populations. MNRL callers
+must continue to pass masked hard negatives through an explicit negative
+channel; this module never changes labels or treats a negative as positive.
 
 For a chosen fraction of positive pairs, the ANCHOR text gets random token
 masking (each token replaced with the mask token at mask_prob). The masked
@@ -70,7 +72,7 @@ def mask_text(
     return " ".join(out), extent
 
 
-def augment_positives(
+def augment_pairs(
     pos: np.ndarray,
     payload: list[str],
     row_bc: np.ndarray,
@@ -78,10 +80,11 @@ def augment_positives(
     frac: float,
     mask_prob: float | None = None,
     seed: int = 0,
+    population: str = "positive",
 ) -> tuple[
     np.ndarray, list[str], np.ndarray, int, list[dict]
 ]:  # (pos', payload', row_bc', n_added, audit dicts)
-    """Append masked-anchor copies of a fraction of positive pairs.
+    """Append masked-anchor copies of a fraction of labeled pair rows.
 
     mask_prob None (default): each masked copy draws its own extent from
     the config band U(mask_lo, mask_hi) — per-pair variation per the owner
@@ -129,6 +132,7 @@ def augment_positives(
                 "realized_extent": round(extent, 4),
                 "anchor_text": payload[a],
                 "masked_text": masked,
+                "population": population,
             }
         )
         # per-pair varied extent: next draw differs even for same anchor
@@ -140,3 +144,35 @@ def augment_positives(
         audit=audit,
     )
     return res.pos, res.payload, res.row_bc, res.n_added, res.audit_dicts()
+
+
+def augment_positives(
+    pos: np.ndarray,
+    payload: list[str],
+    row_bc: np.ndarray,
+    *,
+    frac: float,
+    mask_prob: float | None = None,
+    seed: int = 0,
+) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
+    """Append masked-anchor copies with positive-pair semantics."""
+    return augment_pairs(
+        pos, payload, row_bc,
+        frac=frac, mask_prob=mask_prob, seed=seed, population="positive",
+    )
+
+
+def augment_hard_negatives(
+    neg: np.ndarray,
+    payload: list[str],
+    row_bc: np.ndarray,
+    *,
+    frac: float,
+    mask_prob: float | None = None,
+    seed: int = 0,
+) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
+    """Append masked-anchor copies while preserving label-0 semantics."""
+    return augment_pairs(
+        neg, payload, row_bc,
+        frac=frac, mask_prob=mask_prob, seed=seed, population="hard_negative",
+    )

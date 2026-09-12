@@ -16,6 +16,7 @@ sim_columns:
 masking:
   enabled: true
   frac: 1.00          # fraction of positive anchors masked when enabled
+  mask_hard_negatives: true  # apply the same fraction to label-0 hard negatives
   mask_prob: null     # null: per-pair extent drawn from mask_lo..mask_hi
   mask_lo: 0.20       # variable extent band, U(0.20, 0.35) per masked copy
   mask_hi: 0.30
@@ -260,6 +261,8 @@ sweep:
 # ── mining band for in-batch negatives ───────────────────────────────────────
 mining:
   band: "0.45-0.80"           # "lo-hi" — parsed + validated by MiningSpec
+  attribute_band: "0.45-0.95"  # same-brand/category attribute-conflict band
+  attribute_conflict_target: 12000  # extra distinct conflict pairs to mine
   k: 40                      # ANN candidates per block (mine_hard_negatives)
 
 # ── NER lane ───────────────────────────────────────────────────────────────

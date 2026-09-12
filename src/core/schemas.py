@@ -223,6 +223,7 @@ class MaskingSpec(BaseModel):
 
     enabled: bool
     frac: float = Field(ge=0.0, le=1.0)
+    mask_hard_negatives: bool
     mask_prob: float | None = Field(default=None, ge=0.0, le=1.0)
     mask_lo: float = Field(ge=0.0, lt=1.0)
     mask_hi: float = Field(gt=0.0, le=1.0)
@@ -434,9 +435,11 @@ class MiningSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     band: str
+    attribute_band: str
+    attribute_conflict_target: int = Field(ge=0)
     k: int = Field(ge=1)
 
-    @field_validator("band")
+    @field_validator("band", "attribute_band")
     @classmethod
     def _band_parses(cls, v: str) -> str:
         try:
@@ -872,6 +875,7 @@ class MaskAuditEntry(BaseModel):
     realized_extent: float = Field(ge=0.0, le=1.0)
     anchor_text: str
     masked_text: str
+    population: str = "positive"
 
 
 class MaskingResult(BaseModel):
