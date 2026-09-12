@@ -88,7 +88,7 @@ EVAL_STEPS_PER_EPOCH = runtime("eval_steps_per_epoch")
 ES_PATIENCE = runtime("es_patience")
 ES_THRESHOLD = runtime("es_threshold")
 N_TARGET_MINING = runtime("n_target_mining")
-MINING_ENABLED = bool(load_config()["mining"]["enabled"])
+ANN_MINING_ENABLED = bool(load_config()["mining"]["ann_enabled"])
 
 # DEFAULT_CFG REMOVED (audit 2026-09-09): zero readers since the entry
 # (train.py) constructs its own cfg dict; a stale epochs=2 default here
@@ -1421,7 +1421,7 @@ def train_one_config(
     # resurrected the inline literal.
     # NOTE: the `band` PARAMETER (tuple) shadows lib.common.band() in this
     # function scope — alias the import.
-    if MINING_ENABLED:
+    if ANN_MINING_ENABLED:
         from core.common import band as _band_helper
 
         _eval_band = _band_helper("eval_mining")

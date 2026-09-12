@@ -260,7 +260,8 @@ sweep:
 
 # ── mining band for in-batch negatives ───────────────────────────────────────
 mining:
-  enabled: true              # enable ANN mining plus supplemental mining
+  ann_enabled: true         # generic cosine ANN hard/eval-pair mining
+  attribute_conflict_enabled: true  # volume/pack/flavor-conflict mining
   band: "0.45-0.80"           # "lo-hi" — parsed + validated by MiningSpec
   attribute_band: "0.45-0.95"  # same-brand/category attribute-conflict band
   attribute_conflict_target: 12000   # extra distinct conflict pairs to mine

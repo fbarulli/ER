@@ -232,7 +232,9 @@ def _main_inner(_mlf, _wandb) -> None:
     # indexing — a missing key crashes at startup, never a silent default.
     tr = cfg["training"]
     mining_cfg = cfg["mining"]
-    mining_enabled = bool(mining_cfg["enabled"])
+    ann_mining_enabled = bool(mining_cfg["ann_enabled"])
+    attribute_conflict_enabled = bool(mining_cfg["attribute_conflict_enabled"])
+    mining_enabled = ann_mining_enabled or attribute_conflict_enabled
     mask_cfg = cfg["masking"]
     split_cfg = cfg["split"]
 
@@ -462,7 +464,8 @@ def _main_inner(_mlf, _wandb) -> None:
             "n_source_rows": s["n_rows"],
             "n_canonicals": s["n_canonicals"],
             "n_gate_hard_negatives": s["n_neg_gate_rows"],
-            "mining_enabled": mining_enabled,
+            "ann_mining_enabled": ann_mining_enabled,
+            "attribute_conflict_enabled": attribute_conflict_enabled,
             "attribute_conflict_target": int(mining_cfg["attribute_conflict_target"]),
         }
     )
@@ -640,7 +643,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # population that the gate's 6,051 hard negatives cannot exhaust. The
     # original gate negatives remain intact; these are additional label-0
     # training rows selected from the configured cosine band.
-    if mining_enabled:
+    if attribute_conflict_enabled:
         from core.hard_negatives import mine_attribute_conflict_negatives
 
         _attr_lo, _attr_hi = (
