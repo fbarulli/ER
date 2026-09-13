@@ -270,12 +270,11 @@ class SplitSpec(BaseModel):
     model pins exactly is the DECLARED quarter, and only when mode is
     "holdout": dev_fraction and test_fraction must each be within 1e-9 of
     1.0 / holdout_component_folds (4 -> 0.25/0.25), so a knob the lane cannot
-    honour is a load error and not a mid-lane crash. In mode "cv" that gate
-    does not apply and no quarter is built — the lane deals cv_folds
-    component folds and carves dev out of the TRAIN side with
-    training.dev_fraction — so these three fractions are not realized as
-    quarter shares there. The same disagreement re-raises inside
-    folds.holdout_split, which remains the runtime backstop.
+    honour is a load error and not a mid-lane crash. In mode "cv" the split
+    envelope must be 1.0/0.0/0.0: the lane deals cv_folds component folds
+    across the full data and carves DEV out of each fold's TRAIN side with
+    training.dev_fraction. The same disagreement re-raises inside
+    folds.holdout_split for holdout runs, which remains the runtime backstop.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -302,26 +301,36 @@ class SplitSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _quarters_match_declared_fractions(self) -> SplitSpec:
-        """05-01 (load-time): the declared DEV/TEST fractions must equal the
-        quarter the split actually deals.
+    def _mode_matches_fraction_contract(self) -> SplitSpec:
+        """Reject fraction declarations the selected builder cannot honor.
 
-        folds.holdout_split derives the roles from holdout_component_folds
-        (component_folds deals the components round-robin over that many
-        groups, so DEV and TEST are one group each = 1.0/n_folds of the
-        graph); it then RAISES when dev_fraction/test_fraction disagree with
-        that quarter. A config the lane refuses is a config error, so it is
-        rejected here at load with the knob and the declared fractions named
-        — the same check inside folds.holdout_split remains the backstop.
+        Holdout derives train/dev/test from ``holdout_component_folds``, so
+        DEV and TEST must each name one dealt quarter. CV has a different
+        builder: ``component_folds(cv_folds)`` partitions the full data and
+        the training-level ``training.dev_fraction`` carves early-stopping
+        DEV from each fold's training side. Therefore the split envelope in
+        CV is 100% of the data entering cross-validation and no holdout DEV or
+        TEST share: 1.0/0.0/0.0. Requiring that sentinel prevents 0.25/0.25
+        from being accepted as if it described a CV lane it does not build.
 
-        GATED ON mode == "holdout": in cv mode the lane deals cv_folds
-        component folds and carves dev out of the TRAIN side using the
-        runtime training.dev_fraction, so split.dev_fraction/test_fraction are
-        not realized as quarters there and a 1.0/n_folds agreement would be a
-        false alarm (the schema knows the mode, so it can tell the two apart).
+        ``folds.holdout_split`` keeps the same checks as the runtime backstop;
+        this validator is the earlier load-time contract.
         """
-        if self.mode != "holdout":
+        if self.mode == "cv":
+            if (
+                abs(self.train_fraction - 1.0) > 1e-9
+                or abs(self.dev_fraction) > 1e-9
+                or abs(self.test_fraction) > 1e-9
+            ):
+                raise ValueError(
+                    "cv split contract violated: component_folds(cv_folds) "
+                    "partitions the full data and training.dev_fraction "
+                    "carves per-fold DEV; split must declare "
+                    "train_fraction=1.0, dev_fraction=0.0, "
+                    "test_fraction=0.0"
+                )
             return self
+
         # Literal[4] is the only arity the 50/25/25 contract supports, but the
         # check is written for any n_folds (the runtime helper accepts them).
         n_folds = int(self.holdout_component_folds)

@@ -94,8 +94,9 @@ gate:
 split:
   mode: "holdout"
   train_fraction: 0.50
-  dev_fraction: 0.25    # carved OUT OF THE TRAIN SIDE in cv mode; in holdout
-                        # mode it is the q2 component quarter (q0+q1=train)
+  dev_fraction: 0.25    # holdout q2 component quarter (q0+q1=train); CV
+                        # must declare 0.0 here because training.dev_fraction
+                        # owns the per-fold early-stopping carve
   calibration_dev_fraction: 0.50  # component-safe share of DEV reserved for Rand threshold
                                   # calibration; at most half (config load rejects > 0.5)
   calibration_seed_offset: 17     # deterministic per-fold calibration carve offset
@@ -103,7 +104,7 @@ split:
                                   # 50/25/25 contract supports (schema-pinned Literal[4]);
                                   # folds.holdout_split derives the roles from it and
                                   # requires dev_fraction == test_fraction == 1/4
-  test_fraction: 0.25
+  test_fraction: 0.25   # holdout q3 component quarter; CV must declare 0.0
   fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
   cv_folds: 5           # cv mode only
 

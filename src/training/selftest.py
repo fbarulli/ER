@@ -1112,6 +1112,36 @@ def oracle_config_split() -> None:
         f"split {sp.train_fraction:.0%}/{sp.dev_fraction:.0%}/{sp.test_fraction:.0%} sums to 1",
         abs(sp.train_fraction + sp.dev_fraction + sp.test_fraction - 1.0) < 1e-9,
     )
+    from core.schemas import SplitSpec
+
+    cv_split = sp.model_dump()
+    cv_split.update(
+        mode="cv",
+        train_fraction=0.50,
+        dev_fraction=0.25,
+        test_fraction=0.25,
+    )
+    try:
+        SplitSpec.model_validate(cv_split)
+    except ValueError as exc:
+        check(
+            "split.mode=cv rejects holdout fractions at config load",
+            "cv split contract violated" in str(exc),
+            str(exc),
+        )
+    else:
+        check(
+            "split.mode=cv rejects holdout fractions at config load",
+            False,
+            "0.25/0.25 was accepted",
+        )
+    cv_split.update(train_fraction=1.0, dev_fraction=0.0, test_fraction=0.0)
+    try:
+        SplitSpec.model_validate(cv_split)
+    except ValueError as exc:
+        check("split.mode=cv accepts the full-data envelope", False, str(exc))
+    else:
+        check("split.mode=cv accepts the full-data envelope", True)
 
 
 def oracle_model_resolution_contract() -> None:
