@@ -2097,8 +2097,10 @@ def run_sims() -> None:
     print(f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
     script = _BOOTSTRAP + f"""
 import subprocess, sys
-rc = subprocess.run([sys.executable, "{REMOTE_ROOT}/src/training/zero_shot_sims.py",
-                     "--models", {_SIMS_MODEL!r}]).returncode
+rc = subprocess.run(
+    [sys.executable, "-m", "training.zero_shot_sims", "--models", {_SIMS_MODEL!r}],
+    cwd={REMOTE_ROOT!r},
+).returncode
 if rc != 0:
     raise RuntimeError(f"zero-shot similarity subprocess failed (rc={{rc}})")
 """
@@ -2138,7 +2140,8 @@ def run_mixed(
     ]
     sims_args = [
         "-u",
-        "src/training/zero_shot_sims.py",
+        "-m",
+        "training.zero_shot_sims",
         "--models",
         model_key,
     ]

@@ -62,7 +62,7 @@ SIM_COLUMNS = {k: v for k, v in _cfg["sim_columns"].items()}
 # The deberta lane is GPU-only in practice (14h+ on CPU) and used to hold
 # the whole script hostage: completing the two MiniLM columns required
 # manual kills that raced the incremental CSV writes. Explicit lanes:
-#   python src/training/zero_shot_sims.py --models minilm_l6,multilingual_l12
+#   python -m training.zero_shot_sims --models minilm_l6,multilingual_l12
 # --models lane selector moved INTO main() (audit 2026-09-09): was a manual
 # sys.argv.index("--models") parse that (a) crashed with IndexError when
 # --models was the last token, (b) had no --help, and (c) ran at MODULE
