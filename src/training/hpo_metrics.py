@@ -487,6 +487,8 @@ def _collapse_penalty(stats: dict, cfg: dict) -> float:
     guardrail = cfg["hpo"]["collapse_guardrail"]
     if not bool(guardrail["enabled"]):
         return 0.0
+    if stats["collapse_status"] == "not_requested":
+        return 0.0
     if stats["collapse_status"] == "insufficient_pairs":
         return float(guardrail["penalty_weight"])
     median_excess = max(
