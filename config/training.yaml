@@ -104,9 +104,37 @@ evaluation:
     seed: 42
     threshold: 0.70
 
+# ── final Rand Index matching lane ─────────────────────────────────────────
+# Runtime input files are required CLI arguments; all matcher behavior and
+# output locations live here so the final submission has one SSOT.
+rand_matching:
+  output_dir: "submission"
+  outputs:
+    submission: "SKU_ITEM_submission.csv"
+    diagnostics: "SKU_ITEM_submission_diagnostics.csv"
+    threshold_selection_by_fold: "threshold_selection_by_fold.csv"
+    threshold_sensitivity_by_gtin_status: "threshold_sensitivity_by_gtin_status.csv"
+    threshold_sensitivity_plot: "threshold_sensitivity_by_gtin_status.png"
+    threshold_comparison: "threshold_comparison.csv"
+    plateau_diagnostic: "plateau_diagnostic.json"
+    holdout_metrics: "holdout_metrics.csv"
+  top_k: 20
+  batch_size: 128
+  threshold_min: 0.80
+  threshold_max: 0.98
+  threshold_step: 0.01
+  target_recall: 0.90
+  plateau_tolerance: 0.005
+  plateau_min_points: 3
+
 # ── training ────────────────────────────────────────────────────────────────
 training:
   architecture: "two_tower"  # default: shared-weight SKU/canonical retrieval towers
+  uniformity_regularization:
+    enabled: true
+    weight: 0.02
+    temperature: 2.0
+    min_batch_size: 4
   structured_features:
     enabled: true
     append_to_text: true  # intentional text channel for normalized volume/pack
@@ -244,9 +272,21 @@ hpo:
     lr: [1.0e-05, 1.0e-04]    # float, log-uniform
     warmup_ratio: [0.0, 0.1]  # float
     weight_decay: [0.0, 0.1]  # float
+    negative_mask_frac: [0.0, 0.5]  # hard-negative masking; positive masking stays masking.frac
+    uniformity_weight: [0.0, 0.05]  # trial-level anti-collapse regularizer
   n_trials: 20                # default TPE trial budget (was --n-trials 20)
   n_jobs: 2                   # default parallel HPO trial workers
   persistence: "dvc"         # DVC-backed HPO snapshots
+  calibration_folds: 2        # canonical-disjoint folds for the trial proxy
+  collapse_guardrail:
+    enabled: true
+    unrelated_pairs: 100
+    seed: 42
+    median_penalty_start: 0.50
+    p90_penalty_start: 0.70
+    cosine_std_floor: 0.05
+    penalty_weight: 1.0
+    reject_median: 0.80
   # ── selection protocol (test-leak fix, 2026-09-12) ─────────────────────
   # WHICH signal a sweep ranks configs on, per split mode. Holdout sweeps
   # train q0+q1, early-stop + select on the dev quarter q2 (best_dev_ap)
@@ -254,8 +294,8 @@ hpo:
   # exactly once, by the main train lane. CV fold test sides are
   # validation folds, so mean fold auc is legitimate there.
   objective:
-    holdout: best_dev_ap     # q2 dev AP — the only sanctioned holdout rule
-    cv: mean_fold_auc        # fold test sides are validation folds in cv
+    holdout: rand_index_proxy
+    cv: rand_index_proxy
   # selection-mode folds skip the test-side eval block + pair dump and
   # record test_eval=skipped_selection_mode instead. MUST stay true:
   # computing a per-config test metric re-opens the leak this closed.

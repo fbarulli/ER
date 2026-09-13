@@ -229,6 +229,46 @@ class EvaluationSpec(BaseModel):
         return self
 
 
+class RandMatchingOutputsSpec(BaseModel):
+    """Output filenames for the final Rand Index matching lane."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    submission: str = Field(min_length=1)
+    diagnostics: str = Field(min_length=1)
+    threshold_selection_by_fold: str = Field(min_length=1)
+    threshold_sensitivity_by_gtin_status: str = Field(min_length=1)
+    threshold_sensitivity_plot: str = Field(min_length=1)
+    threshold_comparison: str = Field(min_length=1)
+    plateau_diagnostic: str = Field(min_length=1)
+    holdout_metrics: str = Field(min_length=1)
+
+
+class RandMatchingSpec(BaseModel):
+    """Final direct SKU-to-canonical Rand Index matching contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    output_dir: str = Field(min_length=1)
+    outputs: RandMatchingOutputsSpec
+    top_k: int = Field(ge=1)
+    batch_size: int = Field(ge=1)
+    threshold_min: float = Field(ge=-1.0, le=1.0)
+    threshold_max: float = Field(ge=-1.0, le=1.0)
+    threshold_step: float = Field(gt=0.0)
+    target_recall: float = Field(gt=0.0, le=1.0)
+    plateau_tolerance: float = Field(gt=0.0)
+    plateau_min_points: int = Field(ge=2)
+
+    @model_validator(mode="after")
+    def _threshold_range_is_valid(self) -> RandMatchingSpec:
+        if self.threshold_min > self.threshold_max:
+            raise ValueError(
+                "rand_matching.threshold_min must not exceed threshold_max"
+            )
+        return self
+
+
 class MaskingSpec(BaseModel):
     """Masking augmentation contract (config/training.yaml masking:)."""
 
@@ -254,6 +294,17 @@ class MaskingSpec(BaseModel):
         return self
 
 
+class UniformityRegularizationSpec(BaseModel):
+    """Batch-level anti-collapse regularization for contrastive training."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    weight: float = Field(ge=0.0)
+    temperature: float = Field(gt=0.0)
+    min_batch_size: int = Field(ge=2)
+
+
 class TrainingSpec(BaseModel):
     """Training runtime knobs (config/training.yaml training:).
 
@@ -275,6 +326,7 @@ class TrainingSpec(BaseModel):
         pack_scale: float = Field(gt=0.0)
         max_set_size: int = Field(ge=1)
 
+    uniformity_regularization: UniformityRegularizationSpec
     structured_features: StructuredFeaturesSpec
 
     # The default SentenceTransformer path is a tied-weight two-tower
@@ -577,10 +629,19 @@ class HpoSpaceSpec(BaseModel):
     lr: tuple[float, float]
     warmup_ratio: tuple[float, float]
     weight_decay: tuple[float, float]
+    negative_mask_frac: tuple[float, float]
+    uniformity_weight: tuple[float, float]
 
     @model_validator(mode="after")
     def _ranges_ordered(self) -> HpoSpaceSpec:
-        for name in ("epochs", "lr", "warmup_ratio", "weight_decay"):
+        for name in (
+            "epochs",
+            "lr",
+            "warmup_ratio",
+            "weight_decay",
+            "negative_mask_frac",
+            "uniformity_weight",
+        ):
             lo, hi = getattr(self, name)
             valid = lo <= hi if name == "epochs" else lo < hi
             if not valid:
@@ -599,8 +660,37 @@ class ObjectiveSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    holdout: Literal["best_dev_ap"]
-    cv: Literal["mean_fold_auc"]
+    holdout: Literal["rand_index_proxy"]
+    cv: Literal["rand_index_proxy"]
+
+
+class HpoCollapseGuardrailSpec(BaseModel):
+    """Per-trial embedding-collapse guardrail and penalty contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    unrelated_pairs: int = Field(ge=1)
+    seed: int
+    median_penalty_start: float = Field(ge=-1.0, le=1.0)
+    p90_penalty_start: float = Field(ge=-1.0, le=1.0)
+    cosine_std_floor: float = Field(gt=0.0)
+    penalty_weight: float = Field(ge=0.0)
+    reject_median: float = Field(ge=-1.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> HpoCollapseGuardrailSpec:
+        if self.median_penalty_start > self.reject_median:
+            raise ValueError(
+                "hpo.collapse_guardrail.median_penalty_start must not exceed "
+                "reject_median"
+            )
+        if self.p90_penalty_start < self.median_penalty_start:
+            raise ValueError(
+                "hpo.collapse_guardrail.p90_penalty_start must be >= "
+                "median_penalty_start"
+            )
+        return self
 
 
 class HpoSpec(BaseModel):
@@ -614,6 +704,8 @@ class HpoSpec(BaseModel):
     grid: list[HpoGridRowSpec] = Field(min_length=1)
     quick: list[HpoGridRowSpec] = Field(min_length=1)
     tpe_space: HpoSpaceSpec
+    calibration_folds: int = Field(ge=2)
+    collapse_guardrail: HpoCollapseGuardrailSpec
     n_trials: int = Field(ge=1)
     n_jobs: int = Field(ge=1)
     persistence: Literal["dvc", "local", "none"]
@@ -743,6 +835,7 @@ class TrainingConfig(BaseModel):
     sweep: SweepSpec
     tracking: TrackingSpec
     colab: ColabSpec
+    rand_matching: RandMatchingSpec
     # The NER lane's legacy settings live under the training SSOT too. Their
     # shape is intentionally open while the older standalone scripts are
     # retired; core.common owns parsing/path expansion for every consumer.
@@ -905,6 +998,14 @@ class TrainingStats(BaseModel):
     n_neg_same_canonical_dropped: int = Field(ge=0)
     n_neg_gate_rows: int = Field(ge=0)
     n_neg_resolved: int = Field(ge=0)
+    n_neg_hard_no_band: int = Field(ge=0)
+    n_neg_forward_resolved: int = Field(ge=0)
+    n_neg_reverse_resolved: int = Field(ge=0)
+    n_neg_forward_source_unresolved: int = Field(ge=0)
+    n_neg_forward_target_unresolved: int = Field(ge=0)
+    n_neg_reverse_source_unresolved: int = Field(ge=0)
+    n_neg_reverse_target_unresolved: int = Field(ge=0)
+    n_neg_resolution_dropped: int = Field(ge=0)
     n_neg_dropped: int = Field(ge=0)
 
 
@@ -1163,6 +1264,7 @@ class TrainConfig(BaseModel):
     max_grad_norm: float = Field(gt=0.0)
     patience: int = Field(ge=1)
     es_threshold: float = Field(ge=0.0)
+    uniformity_weight: float = Field(ge=0.0)
 
 
 class FoldSets(BaseModel):

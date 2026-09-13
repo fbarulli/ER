@@ -1,0 +1,456 @@
+"""Cheap, calibration-aware trial diagnostics for the Optuna objective.
+
+The trial lane deliberately calls the same direct-assignment and clustering
+metric functions as the final matcher.  It does not use the holdout quarter,
+connected components for submission, or pairwise AUC as its objective.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from core.gtin import is_valid_gtin_checksum
+from core.structured_features import fuse_numpy
+from training.rand_matching import (
+    GTIN_STATUSES,
+    choose_assignments,
+    gtin_metrics,
+    prediction_metrics,
+    _threshold_at_recall,
+    _youden_threshold,
+)
+from training.uniformity import select_unrelated_pairs
+
+
+def _trusted_gtin(value: object) -> str:
+    text = "" if value is None else str(value).strip()
+    return text if text and is_valid_gtin_checksum(text) else ""
+
+
+def _status(left: object, right: object) -> str:
+    left_gtin = _trusted_gtin(left)
+    right_gtin = _trusted_gtin(right)
+    if not left_gtin and not right_gtin:
+        return "both_missing"
+    if not left_gtin or not right_gtin:
+        return "one_missing"
+    return "both_equal" if left_gtin == right_gtin else "different"
+
+
+def _thresholds(cfg: dict) -> np.ndarray:
+    matcher = cfg["rand_matching"]
+    values = np.arange(
+        float(matcher["threshold_min"]),
+        float(matcher["threshold_max"]) + float(matcher["threshold_step"]) / 2,
+        float(matcher["threshold_step"]),
+    )
+    return np.round(values, 10)
+
+
+def _candidate_frame(
+    pos_pairs: np.ndarray,
+    neg_pairs: np.ndarray,
+    row_bc: np.ndarray,
+    scores: np.ndarray,
+) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
+    n_pos = len(pos_pairs)
+    pairs = np.vstack([pos_pairs, neg_pairs])
+    if len(scores) != len(pairs):
+        raise ValueError("trial proxy scores are not aligned with pair rows")
+    records: list[dict[str, object]] = []
+    truth: dict[str, str] = {}
+    for pair_index, (pair, score) in enumerate(zip(pairs, scores)):
+        source, target = (int(pair[0]), int(pair[1]))
+        sku_id = str(source)
+        candidate_gtin = str(row_bc[target]).strip()
+        if not candidate_gtin:
+            raise ValueError(f"empty canonical GTIN in proxy payload row {target}")
+        if source < 0 or source >= len(row_bc):
+            raise ValueError(f"proxy SKU row {source} is outside row_bc")
+        if pair_index < n_pos:
+            existing = truth.get(sku_id)
+            if existing is not None and existing != candidate_gtin:
+                raise ValueError(f"SKU {sku_id} has conflicting proxy truth GTINs")
+            truth[sku_id] = candidate_gtin
+        records.append(
+            {
+                "SKU_ID": sku_id,
+                "candidate_gtin": candidate_gtin,
+                "score": float(score),
+                "exact_gtin": int(_status(row_bc[source], candidate_gtin) == "both_equal"),
+                "gtin_status": _status(row_bc[source], candidate_gtin),
+                "rule_ok": 1,
+                "attribute_matches": 0,
+            }
+        )
+    candidates = pd.DataFrame(records).drop_duplicates(
+        ["SKU_ID", "candidate_gtin"], keep="first"
+    )
+    expected = set(truth)
+    observed = set(candidates["SKU_ID"])
+    if expected != observed:
+        raise ValueError(
+            "proxy candidate construction changed SKU population: "
+            f"missing={sorted(expected - observed)[:5]}, "
+            f"unexpected={sorted(observed - expected)[:5]}"
+        )
+    truth_frame = pd.DataFrame(
+        [{"SKU_ID": sku_id, "true_item_id": item_id} for sku_id, item_id in truth.items()]
+    )
+    statuses = [
+        _status(row_bc[int(sku_id)], item_id)
+        for sku_id, item_id in truth.items()
+    ]
+    truth_frame["gtin_status"] = statuses
+    return candidates, truth_frame, np.arange(n_pos)
+
+
+def _score_pairs(
+    model,
+    payload: list[str],
+    structured_features: np.ndarray,
+    pairs: np.ndarray,
+    structured_weight: float,
+    batch_size: int,
+) -> np.ndarray:
+    if len(pairs) == 0:
+        return np.empty(0, dtype=float)
+    rows = np.unique(pairs.ravel())
+    row_to_position = {int(row): position for position, row in enumerate(rows)}
+    indices = np.asarray(
+        [[row_to_position[int(left)], row_to_position[int(right)]] for left, right in pairs],
+        dtype=int,
+    )
+    embeddings = model.encode(
+        [payload[int(row)] for row in rows],
+        batch_size=batch_size,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    embeddings = fuse_numpy(
+        embeddings,
+        np.asarray(structured_features)[rows],
+        structured_weight,
+    )
+    return np.sum(embeddings[indices[:, 0]] * embeddings[indices[:, 1]], axis=1)
+
+
+def _assignment_metrics(
+    candidates: pd.DataFrame,
+    truth: pd.DataFrame,
+    threshold: float,
+) -> dict[str, float | int]:
+    predicted = choose_assignments(candidates, threshold)
+    return prediction_metrics(predicted, truth[["SKU_ID", "true_item_id"]])
+
+
+def _fit_threshold(
+    candidates: pd.DataFrame,
+    truth: pd.DataFrame,
+    thresholds: np.ndarray,
+) -> tuple[float, dict[str, float | int]]:
+    rows = [
+        (float(threshold), _assignment_metrics(candidates, truth, float(threshold)))
+        for threshold in thresholds
+    ]
+    threshold, metrics = max(
+        rows,
+        key=lambda item: (
+            float(item[1]["rand_index"]),
+            float(item[1]["adjusted_rand"]),
+            -item[0],
+        ),
+    )
+    return threshold, metrics
+
+
+def _fold_ids(truth: pd.DataFrame, n_folds: int, seed: int) -> dict[str, int]:
+    items = np.asarray(sorted(truth["true_item_id"].astype(str).unique()))
+    order = np.random.default_rng(seed).permutation(len(items))
+    return {str(items[position]): int(index % n_folds) for index, position in enumerate(order)}
+
+
+def _collapse_stats(
+    model,
+    df: pd.DataFrame,
+    payload: list[str],
+    cfg: dict,
+    batch_size: int,
+) -> dict[str, float | int | str]:
+    guardrail = cfg["hpo"]["collapse_guardrail"]
+    if not bool(guardrail["enabled"]):
+        return {
+            "collapse_guardrail_enabled": 0,
+            "collapse_status": "disabled",
+        }
+    pairs = select_unrelated_pairs(
+        df,
+        payload,
+        n_pairs=int(guardrail["unrelated_pairs"]),
+        seed=int(guardrail["seed"]),
+    )
+    if len(pairs) != int(guardrail["unrelated_pairs"]):
+        raise RuntimeError(
+            "collapse guardrail could not construct its configured unrelated-pair "
+            f"sample: required={guardrail['unrelated_pairs']} selected={len(pairs)}"
+        )
+    pair_array = np.asarray(pairs, dtype=int)
+    embeddings = model.encode(
+        [payload[int(row)] for row in pair_array.ravel()],
+        batch_size=batch_size,
+        convert_to_numpy=True,
+        normalize_embeddings=False,
+        show_progress_bar=False,
+    )
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    normalized = embeddings / np.maximum(norms, np.finfo(float).eps)
+    scores = np.sum(normalized[0::2] * normalized[1::2], axis=1)
+    median = float(np.median(scores))
+    p90 = float(np.quantile(scores, 0.90))
+    std = float(np.std(scores))
+    return {
+        "collapse_guardrail_enabled": 1,
+        "collapse_status": "ok",
+        "collapse_unrelated_pairs": int(len(scores)),
+        "collapse_median_cosine": median,
+        "collapse_p90_cosine": p90,
+        "collapse_cosine_std": std,
+        "collapse_embedding_norm_mean": float(np.mean(norms)),
+        "collapse_embedding_norm_std": float(np.std(norms)),
+        "collapse_median_flag": int(median > float(guardrail["median_penalty_start"])),
+        "collapse_p90_flag": int(p90 > float(guardrail["p90_penalty_start"])),
+    }
+
+
+def _collapse_penalty(stats: dict, cfg: dict) -> float:
+    guardrail = cfg["hpo"]["collapse_guardrail"]
+    if not bool(guardrail["enabled"]):
+        return 0.0
+    median_excess = max(
+        0.0,
+        float(stats["collapse_median_cosine"]) - float(guardrail["median_penalty_start"]),
+    )
+    p90_excess = max(
+        0.0,
+        float(stats["collapse_p90_cosine"]) - float(guardrail["p90_penalty_start"]),
+    )
+    variance_excess = max(
+        0.0,
+        float(guardrail["cosine_std_floor"]) - float(stats["collapse_cosine_std"]),
+    )
+    return float(guardrail["penalty_weight"]) * (
+        median_excess + p90_excess + variance_excess
+    )
+
+
+def _graph_diagnostics(candidates: pd.DataFrame, threshold: float) -> dict[str, float | int]:
+    """Describe the diagnostic SKU↔canonical graph without using it to assign."""
+    accepted = candidates[
+        candidates["gtin_status"].ne("different")
+        & (
+            candidates["exact_gtin"].astype(bool)
+            | candidates["score"].ge(float(threshold))
+        )
+    ]
+    if accepted.empty:
+        return {
+            "diagnostic_edge_count": 0,
+            "diagnostic_component_count": 0,
+            "diagnostic_max_component_size": 0,
+            "diagnostic_score_diameter": 0.0,
+            "diagnostic_bridge_edge_count": 0,
+        }
+    nodes = sorted(
+        {
+            *(f"sku:{value}" for value in accepted["SKU_ID"].astype(str)),
+            *(f"gtin:{value}" for value in accepted["candidate_gtin"].astype(str)),
+        }
+    )
+    index = {node: number for number, node in enumerate(nodes)}
+    edges = [
+        (index[f"sku:{sku}"], index[f"gtin:{gtin}"], float(score))
+        for sku, gtin, score in accepted[["SKU_ID", "candidate_gtin", "score"]].itertuples(index=False)
+    ]
+    adjacency: list[list[tuple[int, int]]] = [[] for _ in nodes]
+    for edge_id, (left, right, _) in enumerate(edges):
+        adjacency[left].append((right, edge_id))
+        adjacency[right].append((left, edge_id))
+    discovery = [-1] * len(nodes)
+    low = [-1] * len(nodes)
+    bridges = 0
+    components: list[list[int]] = []
+    time_counter = 0
+
+    def visit(node: int, parent_edge: int, component: list[int]) -> None:
+        nonlocal bridges, time_counter
+        discovery[node] = low[node] = time_counter
+        time_counter += 1
+        component.append(node)
+        for neighbour, edge_id in adjacency[node]:
+            if edge_id == parent_edge:
+                continue
+            if discovery[neighbour] < 0:
+                visit(neighbour, edge_id, component)
+                low[node] = min(low[node], low[neighbour])
+                bridges += int(low[neighbour] > discovery[node])
+            else:
+                low[node] = min(low[node], discovery[neighbour])
+
+    for node in range(len(nodes)):
+        if discovery[node] < 0:
+            component: list[int] = []
+            visit(node, -1, component)
+            components.append(component)
+    component_ids = {
+        node: component_id
+        for component_id, component in enumerate(components)
+        for node in component
+    }
+    edge_scores = [
+        [score for left, right, score in edges if component_ids[left] == component_id]
+        for component_id in range(len(components))
+    ]
+    diameters = [max(scores) - min(scores) for scores in edge_scores if scores]
+    return {
+        "diagnostic_edge_count": int(len(edges)),
+        "diagnostic_component_count": int(len(components)),
+        "diagnostic_max_component_size": int(max(map(len, components))),
+        "diagnostic_score_diameter": float(max(diameters)) if diameters else 0.0,
+        "diagnostic_bridge_edge_count": int(bridges),
+    }
+
+
+def evaluate_hpo_trial(
+    *,
+    model,
+    df: pd.DataFrame,
+    payload: list[str],
+    structured_features: np.ndarray,
+    pos_pairs: np.ndarray,
+    neg_pairs: np.ndarray,
+    row_bc: np.ndarray,
+    structured_weight: float,
+    batch_size: int,
+    config: dict,
+) -> dict[str, float | int | str]:
+    """Evaluate one trained model on a held-out direct-assignment proxy."""
+    if len(pos_pairs) == 0 or len(neg_pairs) == 0:
+        raise ValueError("HPO calibration proxy requires positive and negative pairs")
+    candidate_pairs = np.vstack([pos_pairs, neg_pairs])
+    scores = _score_pairs(
+        model,
+        payload,
+        structured_features,
+        candidate_pairs,
+        structured_weight,
+        batch_size,
+    )
+    candidates, truth, _ = _candidate_frame(
+        pos_pairs, neg_pairs, row_bc, scores
+    )
+    n_folds = int(config["hpo"]["calibration_folds"])
+    fold_map = _fold_ids(truth, n_folds, int(config["hpo"]["collapse_guardrail"]["seed"]))
+    thresholds = _thresholds(config)
+    fold_rows: list[dict[str, float | int]] = []
+    for fold in range(n_folds):
+        check_items = {item for item, value in fold_map.items() if value == fold}
+        fit_items = set(fold_map) - check_items
+        fit_truth = truth[truth["true_item_id"].isin(fit_items)]
+        check_truth = truth[truth["true_item_id"].isin(check_items)]
+        fit_candidates = candidates[candidates["SKU_ID"].isin(fit_truth["SKU_ID"])]
+        check_candidates = candidates[candidates["SKU_ID"].isin(check_truth["SKU_ID"])]
+        if fit_truth.empty or check_truth.empty:
+            raise ValueError(f"HPO calibration fold {fold} has an empty fit/check side")
+        threshold, fit_metrics = _fit_threshold(fit_candidates, fit_truth, thresholds)
+        check_metrics = _assignment_metrics(check_candidates, check_truth, threshold)
+        fold_rows.append(
+            {
+                "calibration_fold": fold,
+                "calibrated_threshold": threshold,
+                "fit_rand_index": float(fit_metrics["rand_index"]),
+                "check_rand_index": float(check_metrics["rand_index"]),
+                "check_adjusted_rand": float(check_metrics["adjusted_rand"]),
+                "check_group_precision": float(check_metrics["group_precision"]),
+                "check_group_recall": float(check_metrics["group_recall"]),
+                "check_over_merge_rate": float(check_metrics["over_merge_rate"]),
+                "check_under_merge_rate": float(check_metrics["under_merge_rate"]),
+            }
+        )
+    final_threshold = float(np.median([row["calibrated_threshold"] for row in fold_rows]))
+    overall = _assignment_metrics(candidates, truth, final_threshold)
+    sensitivity = [
+        (float(threshold), _assignment_metrics(candidates, truth, float(threshold)))
+        for threshold in thresholds
+    ]
+    best_rand = max(float(row[1]["rand_index"]) for row in sensitivity)
+    plateau_count = sum(
+        float(row[1]["rand_index"]) >= best_rand - float(config["rand_matching"]["plateau_tolerance"])
+        for row in sensitivity
+    )
+    collapse = _collapse_stats(model, df, payload, config, batch_size)
+    result: dict[str, float | int | str] = {
+        "calibration_proxy_source": "dev_component_safe_subsplit",
+        "calibrated_threshold": final_threshold,
+        "calibration_threshold_fold_median": final_threshold,
+        "calibration_threshold_fold_min": float(min(row["calibrated_threshold"] for row in fold_rows)),
+        "calibration_threshold_fold_max": float(max(row["calibrated_threshold"] for row in fold_rows)),
+        "calibration_threshold_plateau_points": int(plateau_count),
+        "calibration_threshold_stable": int(
+            plateau_count >= int(config["rand_matching"]["plateau_min_points"])
+        ),
+        "calibration_rand_index": float(overall["rand_index"]),
+        "calibration_adjusted_rand": float(overall["adjusted_rand"]),
+        "calibration_group_precision": float(overall["group_precision"]),
+        "calibration_group_recall": float(overall["group_recall"]),
+        "calibration_pairwise_precision": float(overall["pairwise_precision"]),
+        "calibration_pairwise_recall": float(overall["pairwise_recall"]),
+        "calibration_pairwise_f1": float(overall["pairwise_f1"]),
+        "calibration_over_merge_rate": float(overall["over_merge_rate"]),
+        "calibration_under_merge_rate": float(overall["under_merge_rate"]),
+        "calibration_predicted_group_count": int(overall["predicted_group_count"]),
+        "calibration_unmatched_skus": int(overall["unmatched_skus"]),
+        "calibration_youden_threshold": float(
+            _youden_threshold(
+                candidates["score"].to_numpy(float),
+                (candidates["candidate_gtin"] == candidates["SKU_ID"].map(
+                    truth.set_index("SKU_ID")["true_item_id"]
+                )).to_numpy(int),
+            )
+        ),
+        "calibration_precision_at_target_recall_threshold": float(
+            _threshold_at_recall(
+                candidates["score"].to_numpy(float),
+                (candidates["candidate_gtin"] == candidates["SKU_ID"].map(
+                    truth.set_index("SKU_ID")["true_item_id"]
+                )).to_numpy(int),
+                float(config["rand_matching"]["target_recall"]),
+            )
+        ),
+    }
+    calibrated_metrics = overall
+    result["calibration_precision_at_threshold"] = float(
+        calibrated_metrics["pairwise_precision"]
+    )
+    result["calibration_recall_at_threshold"] = float(
+        calibrated_metrics["pairwise_recall"]
+    )
+    result.update(collapse)
+    result["collapse_penalty"] = _collapse_penalty(result, config)
+    result.update(_graph_diagnostics(candidates, final_threshold))
+    strata_rows = gtin_metrics(
+        choose_assignments(candidates, final_threshold),
+        truth,
+        "trial",
+        final_threshold,
+    )
+    result["calibration_gtin_strata"] = len(strata_rows)
+    for row in strata_rows:
+        status = str(row["gtin_status"])
+        result[f"calibration_{status}_rand_index"] = float(row["rand_index"])
+        result[f"calibration_{status}_precision"] = float(row["pairwise_precision"])
+        result[f"calibration_{status}_recall"] = float(row["pairwise_recall"])
+    result["attribute_conflict_error_rate"] = float("nan")
+    result["attribute_conflict_status"] = "not_available_in_pair_proxy"
+    return result

@@ -46,6 +46,27 @@ import yaml
 from core.schemas import DataConfig, TrainingConfig
 from core.text import extract_volume_ml
 
+
+def metadata_text(value: object) -> str:
+    """Serialize source metadata without converting valid false-y values."""
+    if value is None:
+        return ""
+    try:
+        if bool(pd.isna(value)):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def row_metadata_text(row, primary: str, alias: str | None = None) -> str:
+    """Read a source field while retaining missing metadata as unknown."""
+    if primary in row.index:
+        return metadata_text(row[primary])
+    if alias is not None and alias in row.index:
+        return metadata_text(row[alias])
+    return ""
+
 # require_keys REMOVED (audit 2026-09-09): zero consumers — the pydantic
 # validation at load (DataConfig/TrainingConfig) already fails
 # loudly on missing keys, with named field errors. This helper duplicated
@@ -303,6 +324,11 @@ def rerank_cfg() -> dict:
 def sweep_cfg() -> dict:
     """The sweep: block (run_all ablation axes) as plain data."""
     return dict(_CFG["sweep"])
+
+
+def rand_matching_cfg() -> dict:
+    """The final direct SKU-to-canonical matching contract."""
+    return copy.deepcopy(_CFG["rand_matching"])
 
 
 def band(name: str) -> tuple[float, float]:

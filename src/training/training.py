@@ -56,12 +56,15 @@ import pandas as pd
 from transformers import EarlyStoppingCallback, TrainerCallback
 
 from core.common import (
+    F,
     RESULTS,
     SEED,
     kfold_barcodes,
     load_config,
+    metadata_text,
     pair_auc,
     pair_similarity,
+    row_metadata_text,
     runtime,
 )
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_MARGIN
@@ -92,6 +95,7 @@ N_TARGET_MINING = int(_ANN_MINING_CFG["target"])
 ANN_MINING_ENABLED = bool(_ANN_MINING_CFG["enabled"])
 MASK_TRACK_PER_EPOCH = bool(load_config()["masking"]["track_per_epoch"])
 TRACK_DATAPOINT_USAGE = bool(load_config()["training"]["track_datapoint_usage"])
+_UNIFORMITY_CFG = load_config()["training"]["uniformity_regularization"]
 # Keep the coverage artifact explicit about every population that can enter
 # the training/evaluation lane, including configured-but-empty populations.
 KNOWN_DATAPOINT_POPULATIONS = (
@@ -116,13 +120,10 @@ from core.common import hpo_cfg as _hpo_cfg_load
 
 HPO_SPACE = {k: (lo, hi) for k, (lo, hi) in _hpo_cfg_load()["tpe_space"].items()}
 
-# selection protocol (test-leak fix, 2026-09-12), SSOT: hpo.objective /
-# hpo.selection_skip_test_eval (validated by HpoSpec/ObjectiveSpec at
-# load). The table is PINNED per split mode — holdout sweeps select on the
-# dev quarter's best_dev_ap (the test quarter's eval is skipped entirely);
-# cv sweeps select on mean fold auc (fold test sides are validation folds
-# there). selection_mode=True in train_one_config means the holdout rule
-# is in force, so the selection row carries the holdout entry.
+# HPO objective protocol, SSOT: hpo.objective /
+# hpo.selection_skip_test_eval (validated by HpoSpec/ObjectiveSpec at load).
+# Both modes now rank trials on the calibrated direct-assignment Rand proxy;
+# holdout selection still skips the test quarter entirely.
 _HPO_OBJ_TABLE = _hpo_cfg_load()["objective"]
 HPO_OBJECTIVE_HOLDOUT = _HPO_OBJ_TABLE["holdout"]
 HPO_OBJECTIVE_CV = _HPO_OBJ_TABLE["cv"]
@@ -414,6 +415,9 @@ def _make_loss(
     *,
     margin: float | None = None,
     structured_feature_weight: float,
+    uniformity_weight: float,
+    uniformity_temperature: float,
+    uniformity_min_batch_size: int,
 ):
     """Loss factory (SSOT knobs: training.loss / training.contrastive_margin).
 
@@ -441,6 +445,9 @@ def _make_loss(
             model,
             margin=m,
             structured_feature_weight=structured_feature_weight,
+            uniformity_weight=uniformity_weight,
+            uniformity_temperature=uniformity_temperature,
+            uniformity_min_batch_size=uniformity_min_batch_size,
         )
     return losses.TripletLoss(model)
 
@@ -450,6 +457,9 @@ def _tracking_contrastive_loss(
     *,
     margin: float,
     structured_feature_weight: float,
+    uniformity_weight: float,
+    uniformity_temperature: float,
+    uniformity_min_batch_size: int,
 ):
     """Return OnlineContrastiveLoss with selection/backprop telemetry.
 
@@ -478,6 +488,27 @@ def _tracking_contrastive_loss(
             self._per_epoch_counts: dict[int, dict[int, dict[str, int]]] = {}
             self._pair_lineage: list[dict] = []
             self._current_epoch = 0
+
+        def _uniformity_penalty(self, embeddings):
+            if uniformity_weight <= 0:
+                return embeddings[0].sum() * 0.0
+            vectors = torch.cat(embeddings, dim=0)
+            if len(vectors) < uniformity_min_batch_size:
+                return vectors.sum() * 0.0
+            vectors = F.normalize(vectors, p=2, dim=1)
+            distances = torch.pdist(vectors, p=2).pow(2)
+            if not len(distances):
+                return vectors.sum() * 0.0
+            return torch.logsumexp(
+                -uniformity_temperature * distances,
+                dim=0,
+            ) - torch.log(
+                torch.as_tensor(
+                    len(distances),
+                    dtype=distances.dtype,
+                    device=distances.device,
+                )
+            )
 
         def set_batch_pair_ids(self, pair_ids) -> None:
             self._batch_pair_ids = pair_ids.detach().cpu()
@@ -544,7 +575,12 @@ def _tracking_contrastive_loss(
             positive_loss = positive_pairs.pow(2).sum()
             negative_hinge = F.relu(self.margin - negative_pairs)
             negative_loss = negative_hinge.pow(2).sum()
-            loss_value = positive_loss + negative_loss
+            uniformity_loss = self._uniformity_penalty(embeddings)
+            loss_value = (
+                positive_loss
+                + negative_loss
+                + uniformity_weight * uniformity_loss
+            )
 
             # Evaluator forwards are no-grad; only optimizer-facing forwards
             # belong to the backprop attribution window.
@@ -598,6 +634,7 @@ def _tracking_contrastive_loss(
                     "all_negative_count": float(len(negs)),
                     "positive_loss": float(positive_loss.detach().item()),
                     "negative_loss": float(negative_loss.detach().item()),
+                    "uniformity_loss": float(uniformity_loss.detach().item()),
                 }
                 for key, value in values.items():
                     self._tracking_totals[key] = (
@@ -624,6 +661,7 @@ def _tracking_contrastive_loss(
                 "all_negative_count": totals.get("all_negative_count", 0.0),
                 "positive_loss": totals.get("positive_loss", 0.0),
                 "negative_loss": totals.get("negative_loss", 0.0),
+                "uniformity_loss": totals.get("uniformity_loss", 0.0),
                 "tracking_batches": float(batches),
             }
             result["margin_active_negative_fraction"] = (
@@ -1511,6 +1549,212 @@ def _discriminative_groups(
     return groups
 
 
+def _load_canonical_metadata() -> dict[str, dict]:
+    records = pd.read_csv(
+        RESULTS / F["canonical_records"], dtype=str, keep_default_na=False
+    )
+    required = {
+        "gtin",
+        "canonical",
+        "mode_brand",
+        "mode_type",
+        "mode_flavor",
+        "volume_set",
+        "pack_set",
+        "volume_confidence",
+        "pack_confidence",
+    }
+    missing = required - set(records.columns)
+    if missing:
+        raise ValueError(
+            f"canonical metadata missing columns: {sorted(missing)}"
+        )
+    if records["gtin"].duplicated().any():
+        raise ValueError("canonical_records.csv contains duplicate GTIN rows")
+    return {
+        str(row["gtin"]): row.to_dict()
+        for _, row in records.iterrows()
+    }
+
+
+def _sku_payload_metadata(index: int, row, barcode: str, text: str) -> dict:
+    from core.attribute_conflicts import sku_attribute_info
+
+    attributes = row_metadata_text(row, "attributes", "attr")
+    info = sku_attribute_info(row_metadata_text(row, "title"), attributes)
+    return {
+        "payload_idx": index,
+        "point_kind": "sku",
+        "source_payload_idx": index,
+        "sku_id": row_metadata_text(row, "product_id", "SKU_ID"),
+        "gtin": barcode,
+        "brand": row_metadata_text(row, "brand"),
+        "title": row_metadata_text(row, "title"),
+        "attributes": attributes,
+        "country": row_metadata_text(row, "country"),
+        "category": row_metadata_text(row, "category", "category_path"),
+        "volume": sorted(info["volume"]),
+        "pack": sorted(info["pack"]),
+        "flavor": str(info["flavor"]),
+        "volume_confidence": "",
+        "pack_confidence": "",
+        "text": text,
+    }
+
+
+def _canonical_payload_metadata(
+    index: int, record: dict, barcode: str, text: str
+) -> dict:
+    from core.attribute_conflicts import canonical_attribute_info
+
+    info = canonical_attribute_info(record)
+    return {
+        "payload_idx": index,
+        "point_kind": "canonical",
+        "source_payload_idx": index,
+        "sku_id": "",
+        "gtin": barcode,
+        "brand": metadata_text(record["mode_brand"]),
+        "title": metadata_text(record["canonical"]),
+        "attributes": "",
+        "country": "",
+        "category": metadata_text(record["mode_type"]),
+        "volume": sorted(info["volume"]),
+        "pack": sorted(info["pack"]),
+        "flavor": str(info["flavor"]),
+        "volume_confidence": metadata_text(record["volume_confidence"]),
+        "pack_confidence": metadata_text(record["pack_confidence"]),
+        "text": text,
+    }
+
+
+def _load_gate_lookup() -> dict[tuple[str, str], dict[str, object]]:
+    gate_path = RESULTS / F["gate_results"]
+    if not gate_path.is_file():
+        raise FileNotFoundError(f"gate metadata is missing: {gate_path}")
+    gates = pd.read_csv(gate_path, dtype=str, keep_default_na=False)
+    required = {"gtin1", "gtin2", "gate_decision", "gate_reason", "similarity"}
+    missing = required - set(gates.columns)
+    if missing:
+        raise ValueError(f"gate metadata missing columns: {sorted(missing)}")
+    lookup: dict[tuple[str, str], dict[str, object]] = {}
+    for _, row in gates.iterrows():
+        value = {
+            "gate_decision": str(row["gate_decision"]),
+            "gate_reason": str(row["gate_reason"]),
+            "gate_similarity": str(row["similarity"]),
+        }
+        left, right = str(row["gtin1"]), str(row["gtin2"])
+        for key in ((left, right), (right, left)):
+            if key in lookup and lookup[key] != value:
+                raise ValueError(f"conflicting gate metadata for GTIN pair: {key}")
+            lookup[key] = value
+    return lookup
+
+
+def _build_payload_metadata(
+    df: pd.DataFrame,
+    payload: list[str],
+    row_bc: np.ndarray,
+    *,
+    mask_audit: list[dict] | None,
+    hard_negative_mask_audit: list[dict] | None,
+) -> tuple[list[dict], dict[tuple[str, str], dict[str, object]]]:
+    """Build endpoint metadata keyed by the payload lineage index."""
+    if len(payload) != len(row_bc):
+        raise ValueError(
+            f"payload metadata alignment failure: {len(payload)} != {len(row_bc)}"
+        )
+    canonical_map = _load_canonical_metadata()
+    copy_sources = {
+        int(item["copy_payload_idx"]): int(item["anchor_payload_idx"])
+        for item in list(mask_audit or []) + list(hard_negative_mask_audit or [])
+        if item.get("copy_payload_idx") is not None
+        and item.get("anchor_payload_idx") is not None
+    }
+    metadata: list[dict] = []
+    for index, value in enumerate(row_bc):
+        barcode = str(value)
+        source_index = copy_sources.get(index)
+        if source_index is not None:
+            source = dict(metadata[source_index])
+            source.update(
+                payload_idx=index,
+                point_kind="masked_copy",
+                source_payload_idx=source_index,
+                text=str(payload[index]),
+            )
+            metadata.append(source)
+        elif index < len(df):
+            metadata.append(
+                _sku_payload_metadata(index, df.iloc[index], barcode, str(payload[index]))
+            )
+        else:
+            if barcode not in canonical_map:
+                raise ValueError(
+                    "payload canonical has no canonical metadata: "
+                    f"{barcode}"
+                )
+            metadata.append(
+                _canonical_payload_metadata(
+                    index,
+                    canonical_map[barcode],
+                    barcode,
+                    str(payload[index]),
+                )
+            )
+    return metadata, _load_gate_lookup()
+
+
+def _pair_metadata(
+    left_index: int,
+    right_index: int,
+    metadata: list[dict],
+    gate_lookup: dict[tuple[str, str], dict[str, object]],
+) -> dict:
+    """Flatten endpoint and gate metadata into one traceable pair record."""
+    left = metadata[int(left_index)]
+    right = metadata[int(right_index)]
+    fields = {
+        "endpoint_a_payload_idx": int(left_index),
+        "endpoint_b_payload_idx": int(right_index),
+    }
+    for prefix, endpoint in (("a", left), ("b", right)):
+        for key in (
+            "point_kind",
+            "source_payload_idx",
+            "sku_id",
+            "gtin",
+            "brand",
+            "title",
+            "attributes",
+            "country",
+            "category",
+            "volume",
+            "pack",
+            "flavor",
+            "volume_confidence",
+            "pack_confidence",
+        ):
+            if key not in endpoint:
+                raise ValueError(f"payload metadata is missing field: {key}")
+            value = endpoint[key]
+            fields[f"{prefix}_{key}"] = json.dumps(value) if isinstance(value, list) else value
+    gate = gate_lookup.get((str(left["gtin"]), str(right["gtin"])))
+    if gate is None and str(left["gtin"]) == str(right["gtin"]):
+        gate = {
+            "gate_decision": "same_gtin",
+            "gate_reason": "same_gtin_identity",
+            "gate_similarity": "",
+        }
+    fields.update(gate or {
+        "gate_decision": "missing_gate_lookup",
+        "gate_reason": "pair_not_present_in_gate_results",
+        "gate_similarity": "",
+    })
+    return fields
+
+
 def _dump_train_visibility(
     fold_i,
     s1,
@@ -1523,6 +1767,8 @@ def _dump_train_visibility(
     tr_neg_sources=None,
     payload,
     row_bc,
+    payload_metadata,
+    gate_lookup,
     run_tag="main",
     sample=False,
 ) -> None:
@@ -1555,6 +1801,7 @@ def _dump_train_visibility(
                 "provenance": prov(k),
                 "barcode_a": row_bc[a],
                 "barcode_b": row_bc[b],
+                **_pair_metadata(a, b, payload_metadata, gate_lookup),
             }
         )
     from core.common import write_visibility_log
@@ -1580,6 +1827,8 @@ def _build_pair_lineage(
     train_neg_sources: np.ndarray | None,
     mask_audit: list[dict] | None,
     hard_negative_mask_audit: list[dict] | None,
+    payload_metadata: list[dict],
+    gate_lookup: dict[tuple[str, str], dict[str, object]],
 ) -> list[dict]:
     """Map training pair IDs to original/masked source-pair lineage."""
     lookup: dict[tuple[int, int, int], dict] = {}
@@ -1623,7 +1872,12 @@ def _build_pair_lineage(
                     "source_pair_payload_idx": b,
                     "is_masked_copy": 0,
                 }
-            rows.append(dict(row))
+            rows.append(
+                {
+                    **dict(row),
+                    **_pair_metadata(a, b, payload_metadata, gate_lookup),
+                }
+            )
     return rows
 
 
@@ -1694,8 +1948,7 @@ def _write_datapoint_usage(
             if pair_lineage is not None and int(pair_id) < len(pair_lineage)
             else {}
         )
-        detailed.append(
-            {
+        detail = {
                 "fold": int(fold_i),
                 "epoch": int(epoch),
                 "pair_id": int(pair_id),
@@ -1712,7 +1965,14 @@ def _write_datapoint_usage(
                 ),
                 "is_masked_copy": int(lineage.get("is_masked_copy", 0)),
             }
+        detail.update(
+            {
+                key: value
+                for key, value in lineage.items()
+                if key not in detail
+            }
         )
+        detailed.append(detail)
     write_visibility_log(
         pd.DataFrame(detailed),
         f"datapoint_usage_fold{fold_i}.csv",
@@ -1905,6 +2165,7 @@ def train_one_config(
     # hyperparameters can never be fitted on it. Skipped rows carry
     # test_eval="skipped_selection_mode" — loud, never a silent NaN.
     selection_mode: bool = False,
+    compute_hpo_proxy: bool = False,
     wandb_ctx=None,
 ) -> list[dict]:
     """Train cfg across the group-aware folds. Returns fold metric rows
@@ -1950,6 +2211,13 @@ def train_one_config(
 
 
     df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0 = data
+    payload_metadata, gate_lookup = _build_payload_metadata(
+        df,
+        payload,
+        row_bc,
+        mask_audit=mask_audit,
+        hard_negative_mask_audit=hard_negative_mask_audit,
+    )
     # Masked positive copies are augmentation for training only.  Splits are
     # barcode-based, so passing the augmented array directly into dev/test
     # would silently put those copies into evaluation even though they carry
@@ -2372,6 +2640,8 @@ def train_one_config(
                     ),
                     payload=payload,
                     row_bc=row_bc,
+                    payload_metadata=payload_metadata,
+                    gate_lookup=gate_lookup,
                     run_tag=run_tag,
                     sample=sample,
                 )
@@ -2695,6 +2965,9 @@ def train_one_config(
                 model,
                 loss,
                 structured_feature_weight=structured_feature_weight,
+                uniformity_weight=float(cfg["uniformity_weight"]),
+                uniformity_temperature=float(_UNIFORMITY_CFG["temperature"]),
+                uniformity_min_batch_size=int(_UNIFORMITY_CFG["min_batch_size"]),
             )
             pair_lineage = _build_pair_lineage(
                 train_all,
@@ -2702,6 +2975,8 @@ def train_one_config(
                 train_neg_sources=tr_neg_sources,
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
+                payload_metadata=payload_metadata,
+                gate_lookup=gate_lookup,
             )
             if hasattr(loss_fn, "set_pair_lineage"):
                 loss_fn.set_pair_lineage(pair_lineage)
@@ -3131,6 +3406,23 @@ def train_one_config(
                 sum(stats["masked_count"] for stats in dynamic_mask_stats_by_epoch.values())
             )
 
+            hpo_proxy: dict[str, object] = {}
+            if compute_hpo_proxy:
+                from training.hpo_metrics import evaluate_hpo_trial
+
+                hpo_proxy = evaluate_hpo_trial(
+                    model=model,
+                    df=df,
+                    payload=payload,
+                    structured_features=structured_features,
+                    pos_pairs=dev_pos,
+                    neg_pairs=hard_dev,
+                    row_bc=row_bc,
+                    structured_weight=structured_feature_weight,
+                    batch_size=runtime("batch_size_eval"),
+                    config=load_config(),
+                )
+
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────
             # Holdout HPO/grid folds STOP HERE: the config is ranked on
             # best_dev_ap and the test quarter's eval block is never
@@ -3200,6 +3492,7 @@ def train_one_config(
                             1,
                         ),
                         "fold_s": round(time.perf_counter() - t_fold, 1),
+                        **hpo_proxy,
                     }
                 )
                 continue
@@ -3530,6 +3823,7 @@ def train_one_config(
                 "gpu_vram_gb": round(gpu_vram_gb, 2),
                 "gpu_peak_gb": round(gpu_peak_gb, 2),
                 "fold_s": round(time.perf_counter() - t_fold, 1),
+                **hpo_proxy,
             }
             rows.append(row)
 
@@ -3808,6 +4102,12 @@ def run_hpo(
             "max_grad_norm": _runtime("max_grad_norm"),  # SSOT
             "patience": ES_PATIENCE,
             "es_threshold": ES_THRESHOLD,
+            "negative_mask_frac": trial.suggest_float(
+                "negative_mask_frac", *HPO_SPACE["negative_mask_frac"]
+            ),
+            "uniformity_weight": trial.suggest_float(
+                "uniformity_weight", *HPO_SPACE["uniformity_weight"]
+            ),
         }
         with mlf.nested:
             mlf.log_params(
@@ -3840,10 +4140,11 @@ def run_hpo(
                 neg_pair_sources=neg_pair_sources,
                 train_neg_pair_sources=train_neg_pair_sources,
                 dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
-                dynamic_mask_frac=dynamic_mask_frac,
+                dynamic_mask_frac=cfg["negative_mask_frac"],
                 dynamic_mask_prob=dynamic_mask_prob,
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
+                compute_hpo_proxy=True,
                 wandb_ctx=wandb_ctx,
             )
             ok_rows = [r for r in rows if r.get("status") == "ok"]
@@ -3874,72 +4175,79 @@ def run_hpo(
                 trial.set_user_attr("mean_final_dev_loss", float(np.mean(_final_dev_losses)))
             if _overfit_flags:
                 trial.set_user_attr("overfit_signature_rate", float(np.mean(_overfit_flags)))
-            if selection_mode:
-                # HOLDOUT RULE (test-leak fix, 2026-09-12): rank the trial
-                # on the dev quarter's best_dev_ap ONLY. Selection-mode
-                # folds carry NO test metric (test_eval=
-                # skipped_selection_mode) — the test quarter is read
-                # exactly once, by the main train lane, so there is no
-                # per-trial test number to select on even by accident.
-                dev_aps = [
-                    r["best_dev_ap"]
-                    for r in ok_rows
-                    if np.isfinite(r.get("best_dev_ap", float("nan")))
-                ]
-                if not dev_aps:
-                    raise optuna.TrialPruned("no fold produced a finite dev AP")
-                value = float(np.mean(dev_aps))
-                # PostgreSQL mode promotes only from the controller after
-                # Optuna commits COMPLETE and a sealed artifact snapshot is
-                # READY.  Doing it here would let a later storage/tracking
-                # failure delete a valid prior champion.
-                if control_plane is None:
-                    retain_hpo_champion(
-                        model_id=args.model,
-                        run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
-                        value=value,
-                        folds=[int(r["fold"]) for r in ok_rows],
-                    )
-                trial.set_user_attr("dev_selection_ap", value)
-                mlf.log_metrics(
-                    {
-                        "mean_dev_ap": value,
-                        **{
-                            f"fold_{r['fold']}_best_dev_ap": r["best_dev_ap"]
-                            for r in ok_rows
-                        },
-                    }
-                )
-                return value
-            # CV RULE: fold test sides are validation folds — mean fold auc
-            # is the legitimate selection signal there (HPO_OBJECTIVE_CV).
-            aucs = [
-                r["auc"]
-                for r in rows
-                if r.get("status") == "ok" and np.isfinite(r.get("auc", float("nan")))
+            proxy_rows = [
+                r for r in ok_rows
+                if np.isfinite(r.get("calibration_rand_index", float("nan")))
             ]
-            if not aucs:
-                raise optuna.TrialPruned("no fold produced a finite AUC")
-            mean_auc = float(np.mean(aucs))
+            if not proxy_rows:
+                raise optuna.TrialPruned(
+                    "no fold produced a finite calibrated Rand Index proxy"
+                )
+            mean_rand = float(np.mean([r["calibration_rand_index"] for r in proxy_rows]))
+            mean_penalty = float(np.mean([r["collapse_penalty"] for r in proxy_rows]))
+            value = mean_rand - mean_penalty
+            collapse_medians = [
+                float(r["collapse_median_cosine"])
+                for r in proxy_rows
+                if np.isfinite(r.get("collapse_median_cosine", float("nan")))
+            ]
+            guardrail = _hpo_cfg_load()["collapse_guardrail"]
+            if collapse_medians and max(collapse_medians) > float(guardrail["reject_median"]):
+                raise optuna.TrialPruned(
+                    "collapse guardrail rejected trial: "
+                    f"median_cosine={max(collapse_medians):.4f}"
+                )
+            proxy_summary = {
+                "mean_calibration_rand_index": mean_rand,
+                "mean_calibration_adjusted_rand": float(
+                    np.mean([r["calibration_adjusted_rand"] for r in proxy_rows])
+                ),
+                "mean_calibration_precision_at_threshold": float(
+                    np.mean([r["calibration_precision_at_threshold"] for r in proxy_rows])
+                ),
+                "mean_calibration_recall_at_threshold": float(
+                    np.mean([r["calibration_recall_at_threshold"] for r in proxy_rows])
+                ),
+                "mean_calibration_over_merge_rate": float(
+                    np.mean([r["calibration_over_merge_rate"] for r in proxy_rows])
+                ),
+                "mean_calibration_under_merge_rate": float(
+                    np.mean([r["calibration_under_merge_rate"] for r in proxy_rows])
+                ),
+                "mean_calibration_threshold_stable": float(
+                    np.mean([r["calibration_threshold_stable"] for r in proxy_rows])
+                ),
+                "mean_collapse_penalty": mean_penalty,
+                "mean_collapse_median_cosine": float(
+                    np.mean([r["collapse_median_cosine"] for r in proxy_rows])
+                ),
+                "mean_collapse_p90_cosine": float(
+                    np.mean([r["collapse_p90_cosine"] for r in proxy_rows])
+                ),
+                "mean_collapse_cosine_std": float(
+                    np.mean([r["collapse_cosine_std"] for r in proxy_rows])
+                ),
+                "mean_diagnostic_bridge_edge_count": float(
+                    np.mean([r["diagnostic_bridge_edge_count"] for r in proxy_rows])
+                ),
+                "mean_attribute_conflict_error_rate": float(
+                    np.nanmean([r["attribute_conflict_error_rate"] for r in proxy_rows])
+                ),
+            }
+            trial.set_user_attr("rand_index_objective", value)
+            for key, metric in proxy_summary.items():
+                trial.set_user_attr(key, metric)
+            mlf.log_metrics({"hpo_objective": value, **proxy_summary})
+            # PostgreSQL mode promotes only from the controller after Optuna
+            # commits COMPLETE and a sealed artifact snapshot is READY.
             if control_plane is None:
                 retain_hpo_champion(
                     model_id=args.model,
                     run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
-                    value=mean_auc,
-                    folds=[int(r["fold"]) for r in ok_rows],
+                    value=value,
+                    folds=[int(r["fold"]) for r in proxy_rows],
                 )
-            trial.set_user_attr("mean_auc", mean_auc)
-            mlf.log_metrics(
-                {
-                    "mean_auc": mean_auc,
-                    **{
-                        f"fold_{r['fold']}_auc": r["auc"]
-                        for r in rows
-                        if r.get("status") == "ok"
-                    },
-                }
-            )
-            return mean_auc
+            return value
 
     sampler = optuna.samplers.TPESampler(seed=SEED)
     # sqlite storage: the sweep SURVIVES session loss — re-running with the same

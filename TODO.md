@@ -1,0 +1,5 @@
+. Refresh cadence: re-run ANN mining after each fine-tune checkpoint (or every N epochs), not just once pre-training. Static zero-shot embeddings (what you're using now) only find negatives confusable to the base model — as the model improves, the hard negatives that matter shift, and a stale ANN index stops surfacing genuinely hard cases.
+
+3. Keep the mid-cosine band, but validate it against the fine-tuned model's own score distribution, not the zero-shot one — your band (0.45-0.80) was presumably tuned against zero-shot MiniLM; it may need re-centering once negatives are training-active and the model's cosine distribution shifts.
+
+4. Diversity over volume: cap per-canonical/per-brand ANN negatives so mining doesn't just re-surface variants of the same few confusable clusters — otherwise you risk reproducing the same repetition/memorization pattern from earlier in this thread, just via ANN instead of a static gate pool.

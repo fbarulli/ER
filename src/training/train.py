@@ -39,6 +39,7 @@ from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 # and final DVC publishing are CPU/network work and are intentionally deferred
 # until the worker outputs have been downloaded locally.
 _REMOTE_TRAINING = os.environ.get("EUROMONITOR_REMOTE_TRAINING") == "1"
+_UNIFORMITY_CFG = load_config()["training"]["uniformity_regularization"]
 
 # thresholds live in config/paths.yaml (pairs.proceed_sim_threshold /
 # pairs.hardneg_sim_threshold) and are read by pipeline.build_training_data
@@ -878,6 +879,11 @@ def _main_inner(_mlf, _wandb) -> None:
         "max_grad_norm": runtime("max_grad_norm"),
         "patience": ES_PATIENCE,
         "es_threshold": ES_THRESHOLD,
+        "uniformity_weight": (
+            float(_UNIFORMITY_CFG["weight"])
+            if bool(_UNIFORMITY_CFG["enabled"])
+            else 0.0
+        ),
     }
     t0 = time.perf_counter()
     # run_tag carries EVERY varying axis (owner ruling): the run_all

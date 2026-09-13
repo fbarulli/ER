@@ -156,6 +156,11 @@ def run_grid(
             "max_grad_norm": _runtime("max_grad_norm"),
             "patience": ES_PATIENCE,
             "es_threshold": ES_THRESHOLD,
+            "uniformity_weight": (
+                float(_runtime("uniformity_regularization") ["weight"])
+                if bool(_runtime("uniformity_regularization") ["enabled"])
+                else 0.0
+            ),
         }
         # selection signal per split mode (test-leak fix, 2026-09-12):
         # holdout folds carry best_dev_ap and NO test metric; cv fold rows
