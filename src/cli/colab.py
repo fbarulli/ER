@@ -70,6 +70,48 @@ from core.common import (
 from core.manifest import sha256_file
 from core.schemas import StageManifest
 
+
+def _configured_dvc_model_target(root: Path, config: dict) -> Path:
+    """Return the one DVC output that owns the configured model directories.
+
+    The repository ships one monolithic ``artifacts/models`` output from
+    ``dvc.yaml``. Model registry entries are subdirectories inside that
+    output, so asking DVC to pull a registry value directly is invalid. This
+    helper resolves the tracked output explicitly and rejects missing or
+    ambiguous layouts instead of guessing another location.
+    """
+    manifest = root / "dvc.yaml"
+    if not manifest.is_file():
+        raise FileNotFoundError(f"DVC stage manifest is missing: {manifest}")
+    try:
+        import yaml
+
+        document = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise RuntimeError(f"unable to read DVC stage manifest: {manifest}") from exc
+
+    configured_roots = {
+        (root / str(relative)).resolve()
+        for relative in (
+            config["paths"]["models_dir"],
+            config["paths"]["models_dir_sibling"],
+        )
+    }
+    output_paths: list[Path] = []
+    for stage in document.get("stages", {}).values():
+        for output in stage.get("outs", []):
+            raw_path = output.get("path") if isinstance(output, dict) else output
+            if raw_path:
+                output_paths.append((manifest.parent / str(raw_path)).resolve())
+    matches = sorted({path for path in output_paths if path in configured_roots})
+    if len(matches) != 1:
+        raise RuntimeError(
+            "DVC model output contract requires exactly one configured stage "
+            f"output; configured={sorted(map(str, configured_roots))}, "
+            f"stage_outputs={sorted(map(str, set(output_paths)))}"
+        )
+    return matches[0]
+
 # smoke sample size + train defaults: the config SSOT (config/training.yaml
 # sweep: block via lib.common.sweep_cfg / training_cfg) — were inline
 # literals (1000 / 0.25 / 2) that could silently diverge from the configs.
@@ -1732,7 +1774,11 @@ for step in ("src/training/dedupe.py", "src/training/build_second04_pairs.py", "
 
 
 def materialize_remote_models(model_keys: list[str]) -> None:
-    """Pull and validate only the model bundles required by this lane."""
+    """Pull the configured DVC model output and validate requested bundles.
+
+    DVC tracks ``artifacts/models`` as one stage output. The registry values
+    are subdirectories inside that output, not independent DVC targets.
+    """
     keys = sorted(set(model_keys))
     if not keys:
         return
@@ -1741,10 +1787,13 @@ def materialize_remote_models(model_keys: list[str]) -> None:
     unknown = sorted(set(keys) - set(registry))
     if unknown:
         raise KeyError(f"unknown local model registry key(s): {unknown}")
-    model_roots = [
-        str(config["paths"]["models_dir"]),
-        str(config["paths"]["models_dir_sibling"]),
-    ]
+    dvc_model_target = _configured_dvc_model_target(TRAIN_ROOT, config)
+    dvc_model_target_relative = dvc_model_target.relative_to(TRAIN_ROOT)
+    print(
+        f"[models] DVC model target={dvc_model_target_relative} "
+        f"requested={keys} status=layout-validated",
+        flush=True,
+    )
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import subprocess
 from pathlib import Path
@@ -1754,58 +1803,109 @@ from core.common import resolve_model
 root = {REMOTE_ROOT!r}
 cfg = load_config()
 registry = cfg["models"]
-model_roots = [Path(root) / relative for relative in {model_roots!r}]
 requested = {keys!r}
+configured_roots = {{
+    (Path(root) / str(relative)).resolve()
+    for relative in (
+        cfg["paths"]["models_dir"],
+        cfg["paths"]["models_dir_sibling"],
+    )
+}}
+manifest = Path(root) / "dvc.yaml"
+if not manifest.is_file():
+    raise FileNotFoundError(f"DVC stage manifest is missing: {{manifest}}")
+document = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {{}}
+stage_outputs = []
+for stage in document.get("stages", {{}}).values():
+    for output in stage.get("outs", []):
+        raw_path = output.get("path") if isinstance(output, dict) else output
+        if raw_path:
+            stage_outputs.append((manifest.parent / str(raw_path)).resolve())
+model_targets = sorted({{path for path in stage_outputs if path in configured_roots}})
+if len(model_targets) != 1:
+    raise RuntimeError(
+        "DVC model output contract requires exactly one configured stage "
+        f"output; configured={{sorted(map(str, configured_roots))}}, "
+        f"stage_outputs={{sorted(map(str, set(stage_outputs)))}}"
+    )
+dvc_target = model_targets[0]
+if dvc_target != (Path(root) / {str(dvc_model_target_relative)!r}).resolve():
+    raise RuntimeError(
+        "remote DVC model target differs from the launcher-validated target: "
+        f"{{dvc_target}} != {{Path(root) / {str(dvc_model_target_relative)!r}}}"
+    )
+print(
+    f"[models] target={{dvc_target.relative_to(Path(root))}} "
+    f"requested={{requested}} status=layout-validated",
+    flush=True,
+)
 
-def exact_dvc_target(target):
-    pointer = Path(str(target) + ".dvc")
-    if pointer.is_file():
-        return target
-    for dvc_yaml in Path(root).rglob("dvc.yaml"):
-        document = yaml.safe_load(dvc_yaml.read_text(encoding="utf-8")) or {{}}
-        for stage in document.get("stages", {{}}).values():
-            for output in stage.get("outs", []):
-                raw_path = output.get("path") if isinstance(output, dict) else output
-                if raw_path is None:
-                    continue
-                candidate = (dvc_yaml.parent / str(raw_path)).resolve()
-                if candidate == target.resolve():
-                    return target
-    return None
+def bundle_bytes(path):
+    if not path.is_dir():
+        return 0
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
-targets = []
-unavailable = []
+missing = []
 for key in requested:
     try:
-        resolve_model(key)
-        print(f"[models] {{key}} already materialized locally", flush=True)
-        continue
+        path = Path(resolve_model(key))
     except FileNotFoundError:
-        pass
-    candidates = [root / Path(registry[key]) for root in model_roots]
-    addressable = [target for target in candidates if exact_dvc_target(target)]
-    if len(addressable) != 1:
-        unavailable.append((key, [str(target) for target in candidates]))
+        missing.append(key)
         continue
-    targets.append(str(addressable[0].relative_to(Path(root))))
-if unavailable:
-    raise RuntimeError(
-        "requested model bundles are not individually DVC-addressable; "
-        "refusing to pull the monolithic models output: "
-        + repr(unavailable)
+    if dvc_target not in path.parents:
+        raise RuntimeError(
+            f"resolved model {{key}} escapes the DVC model output: {{path}}"
+        )
+    print(
+        f"[models] key={{key}} path={{path.relative_to(Path(root))}} "
+        f"status=already-materialized bytes={{bundle_bytes(path)}}",
+        flush=True,
     )
-if targets:
-    print(f"[models] pulling DVC targets: {{targets}}", flush=True)
-    pull = subprocess.run(
-        ["dvc", "pull", "--jobs", str({int(_COLAB.dvc_jobs)}), *targets],
+if missing:
+    target_arg = str(dvc_target.relative_to(Path(root)))
+    print(
+        f"[models] target={{target_arg}} status=pull-start "
+        f"missing={{missing}} jobs={int(_COLAB.dvc_jobs)}",
+        flush=True,
+    )
+    pull = subprocess.Popen(
+        ["dvc", "pull", "--jobs", str({int(_COLAB.dvc_jobs)}), target_arg],
         cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
+        bufsize=1,
     )
-    if pull.returncode:
-        raise RuntimeError(f"DVC model materialization failed (rc={{pull.returncode}})")
+    assert pull.stdout is not None
+    for line in pull.stdout:
+        print(f"[dvc] {{line}}", end="", flush=True)
+    return_code = pull.wait()
+    print(
+        f"[models] target={{target_arg}} status=pull-finished "
+        f"return_code={{return_code}} bytes={{bundle_bytes(dvc_target)}}",
+        flush=True,
+    )
+    if return_code:
+        raise RuntimeError(
+            f"DVC model materialization failed for target {{target_arg}} "
+            f"(rc={{return_code}})"
+        )
 for key in requested:
-    print(f"[models] validating {{key}}", flush=True)
-    print(f"[models] {{key}} -> {{resolve_model(key)}}", flush=True)
+    path = Path(resolve_model(key))
+    if dvc_target not in path.parents:
+        raise RuntimeError(
+            f"validated model {{key}} is outside the DVC model output: {{path}}"
+        )
+    print(
+        f"[models] key={{key}} path={{path.relative_to(Path(root))}} "
+        f"status=validated bytes={{bundle_bytes(path)}}",
+        flush=True,
+    )
+print(
+    f"[models] target={{dvc_target.relative_to(Path(root))}} "
+    f"status=complete bytes={{bundle_bytes(dvc_target)}}",
+    flush=True,
+)
 """
     run_colab_exec_stream(
         SESSION,
