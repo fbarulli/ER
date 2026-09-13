@@ -23,9 +23,13 @@ results/*
 !results/canonical_records.csv
 !results/gate_results.csv
 results/dvc_refs/
-# Tracked DVC publication pointers; payloads remain in training_results/.
-!/dvc_refs/
-!/dvc_refs/**
+# DVC publication pointers are generated run metadata; payloads remain in
+# training_results/ and the durable DVC state is owned by dvc.lock.
+/dvc_refs/
+
+# Local review/mention exports are generated, not source artifacts.
+DEV_MENTIONS.md
+dev_mentions.csv
 # Reproducible training input: keep the raw export in Git.
 !dataset.csv
 # NER-side derived input; regenerated from the configured source.
