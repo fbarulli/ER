@@ -2482,6 +2482,16 @@ def train_one_config(
 
 
     df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0 = data
+    if len(payload) < len(df):
+        raise ValueError(
+            "training payload is shorter than source SKU dataframe: "
+            f"payload={len(payload)} rows={len(df)}"
+        )
+    # The training payload intentionally appends canonical and masked-copy
+    # entries after the source SKU rows. Uniformity samples unrelated source
+    # SKUs only, so make that boundary explicit instead of allowing a helper
+    # to truncate an extended payload implicitly.
+    collapse_source_payload = payload[: len(df)]
     payload_metadata, gate_lookup = _build_payload_metadata(
         df,
         payload,
@@ -3290,7 +3300,7 @@ def train_one_config(
                     / f"loss_backprop_fold{fold_i}.csv",
                     collapse_model=model,
                     collapse_df=df,
-                    collapse_payload=payload,
+                    collapse_payload=collapse_source_payload,
                     collapse_config=calibration_config,
                     collapse_batch_size=runtime("batch_size_eval"),
                 ),

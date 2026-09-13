@@ -678,7 +678,7 @@ def _collapse_penalty(stats: dict, cfg: dict) -> float:
     guardrail = cfg["collapse_guardrail"]
     if not bool(guardrail["enabled"]):
         return 0.0
-    if stats["collapse_status"] == "not_requested":
+    if stats["collapse_status"] in {"not_requested", "disabled"}:
         return 0.0
     if stats["collapse_status"] in {"insufficient_pairs", "unavailable"}:
         return float(guardrail["penalty_weight"])
