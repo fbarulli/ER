@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 
+from core.common import plot_dpi
+
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
 
@@ -32,6 +34,10 @@ def select_unrelated_pairs(
     seed: int,
 ) -> list[tuple[int, int]]:
     """Select deterministic, payload-disjoint unrelated SKU pairs."""
+    if n_pairs < 0:
+        raise ValueError("n_pairs must be non-negative")
+    if n_pairs == 0:
+        return []
     category_col = "category_path" if "category_path" in df.columns else "category"
     brand = df["brand"].fillna("").astype(str).str.strip().str.lower().tolist()
     category = (
@@ -44,21 +50,29 @@ def select_unrelated_pairs(
         if tokens[i] and brand[i] and category[i]
     ]
     order = list(np.random.default_rng(seed).permutation(valid))
+    order_rank = {row: rank for rank, row in enumerate(order)}
+    by_brand: dict[str, set[int]] = {}
+    by_category: dict[str, set[int]] = {}
+    by_token: dict[str, set[int]] = {}
+    for row in valid:
+        by_brand.setdefault(brand[row], set()).add(row)
+        by_category.setdefault(category[row], set()).add(row)
+        for token in tokens[row]:
+            by_token.setdefault(token, set()).add(row)
     selected: list[tuple[int, int]] = []
-    used: set[int] = set()
+    available = set(valid)
     for left in order:
-        if left in used:
+        if left not in available:
             continue
-        for right in order:
-            if right == left or right in used:
-                continue
-            if brand[left] == brand[right] or category[left] == category[right]:
-                continue
-            if tokens[left] & tokens[right]:
-                continue
-            selected.append((left, right))
-            used.update((left, right))
-            break
+        blocked = {left} | by_brand[brand[left]] | by_category[category[left]]
+        for token in tokens[left]:
+            blocked.update(by_token[token])
+        eligible = available - blocked
+        if not eligible:
+            continue
+        right = min(eligible, key=order_rank.__getitem__)
+        selected.append((left, right))
+        available.difference_update((left, right))
         if len(selected) >= n_pairs:
             return selected
     # This is a diagnostic, not a training or publication gate.  Return the
@@ -187,6 +201,6 @@ def run_uniformity_audit(
     )
     axis.legend()
     fig.tight_layout()
-    fig.savefig(out / "uniformity_cosine_comparison.png", dpi=150)
+    fig.savefig(out / "uniformity_cosine_comparison.png", dpi=plot_dpi())
     plt.close(fig)
     return result

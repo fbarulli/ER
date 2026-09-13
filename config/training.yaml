@@ -93,6 +93,8 @@ split:
   dev_fraction: 0.25    # carved OUT OF THE TRAIN SIDE in cv mode; in holdout
                         # mode it is the q2 component quarter (q0+q1=train)
   calibration_dev_fraction: 0.50  # component-safe share of DEV reserved for Rand threshold calibration
+  calibration_seed_offset: 17     # deterministic per-fold calibration carve offset
+  holdout_component_folds: 4      # q0+q1 train, q2 dev, q3 test
   test_fraction: 0.25
   fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
   cv_folds: 5           # cv mode only
@@ -139,6 +141,7 @@ rand_matching:
   threshold_max: 0.98
   threshold_step: 0.01
   target_recall: 0.90
+  calibration_proxy_source: "dev_component_safe_split"
   plateau_tolerance: 0.005
   plateau_min_points: 3
   # SSOT for the unmatched-SKU ITEM_ID prefix (RM8). rand_matching.py's four

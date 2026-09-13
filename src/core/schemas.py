@@ -213,6 +213,8 @@ class SplitSpec(BaseModel):
     train_fraction: float = Field(ge=0.0, le=1.0)
     dev_fraction: float = Field(ge=0.0, le=1.0)
     calibration_dev_fraction: float = Field(gt=0.0, lt=1.0)
+    calibration_seed_offset: int = Field(ge=0)
+    holdout_component_folds: int = Field(ge=4)
     test_fraction: float = Field(ge=0.0, le=1.0)
     fixed_threshold: float = Field(gt=0.0, lt=1.0)
     cv_folds: int = Field(ge=2)
@@ -314,6 +316,7 @@ class RandMatchingSpec(BaseModel):
     threshold_max: float = Field(ge=-1.0, le=1.0)
     threshold_step: float = Field(gt=0.0)
     target_recall: float = Field(gt=0.0, le=1.0)
+    calibration_proxy_source: str = Field(min_length=1)
     plateau_tolerance: float = Field(gt=0.0)
     plateau_min_points: int = Field(ge=2)
     # SSOT for the unmatched-SKU ITEM_ID prefix. rand_matching.py currently

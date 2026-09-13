@@ -45,111 +45,31 @@
 
 ### 1. Hardcoded Paths That Should Be in Config
 
-- N1 (LOW): `calibration_proxy_source: "dev_component_safe_split"` is a hardcoded
-  string literal in hpo_metrics.py:608. It is a data label, not a path, but it is
-  a magic string that changed value mid-range ("dev_component_safe_subsplit" →
-  "dev_component_safe_split") — a config knob or constant would prevent silent
-  drift between the two calibration producers (hpo_metrics vs rand_matching).
-- N2 (LOW): `_sweep_assignments` / `_assignments_with_trace` tie-break column
-  order `["SKU_ID", "exact_gtin", "score", "attribute_matches", "candidate_gtin"]`
-  is duplicated in TWO places (rand_matching.py:689-692 and :1292-1295) as an
-  inline literal — should be a shared constant (SSOT for the assignment sort).
 - N3 (LOW): `dvc_jobs`/`dvc_workers` split is config-driven (good), but
   `_publish_local_hpo_model_snapshot` hardcodes `optuna_db=None` and the model
   snapshot scope = `model_dir.name` (colab.py:1429-1432) — behavior knobs, not
   paths; minor.
-- N5 (LOW, NEW): `_sha256_path` determinism relies on `sorted(child.rglob("*"))`
-  (rand_matching.py:1786) — symlinks/duplicate paths inside a checkpoint dir can
-  silently change the digest semantics across machines (dir fingerprint is
-  path+content-ordered, but a symlink loop would recurse). Guard with a file-only
-  filter + no-follow; current code `is_file()` follows symlinks.
+
+The remaining N3 item is ANN/DVC publication behavior and is intentionally
+deferred. No training or Rand-metric findings remain open in this review.
 
 ### 2. Missing Pydantic Validation
 
-- P4 (LOW, residual): `candidate_graph_diagnostics` accepts any DataFrame and
-  accesses `gtin_status/exact_gtin/rule_ok/score` columns with raw pandas —
-  no pydantic column contract; a wrong-shaped candidates frame fails with
-  KeyError mid-function rather than a named contract error. Consistent with
-  prior FINDINGS stance; LOW.
 
 ### 3. Gaps in Data Traceability
 
-- T5 (MED, residual): the audit trace merge guards are loud (raise on population
-  mismatch, rand_matching.py:746-755, 767-768, 1252-1260) — GOOD; but
-  `_audit_trace(..., truth=None)` for the final submission labels every row
-  `error_type="unlabeled"` (rand_matching.py:1329) — the FINAL submission CSV is
-  the one artifact that will never carry a label audit; acceptable but the
-  diagnostics CSV for "final" partition has empty `true_*`/`prediction_correct`
-  columns that a downstream consumer could mistake for "correct" — column values
-  are `""` (empty string), not NA — mildly misleading. LOW-MED.
 
 ### 4. SSOT (Single Source of Truth) Violations
 
-- S4 (LOW, NEW): `calibration_fraction` is read from config INSIDE
-  `train_one_config` (training.py:2261-2263 `calibration_config = load_config()`)
-  on every call — `load_config()` is UNCACHED (F7 from FINDINGS still open) and
-  now called per-config in HPO loops (hpo.py grid/tpe → train_one_config per
-  trial). The config re-read is a hot-path redundancy; the value itself could be
-  a module constant like `_TRAIN_CFG` (common.py already caches `_CFG`).
 
 ### 5. Missing Centralized Functions / Duplicated Processes
 
-- D3 (MED, NEW): `_partition_calibration_pairs` (training.py:2142-2189)
-  re-implements a component-safe carve using `component_folds` with a
-  RE-DERIVED fold count `n_folds = max(2, ceil(1/calibration_fraction))` —
-  the calibration "50% of dev" is approximate (rounding + component deal) and
-  duplicates the fold machinery used elsewhere; the actual calibration share
-  can be anywhere near 0.5; empty calibration is now represented explicitly.
-  A single `partition_by_fraction(pairs, barcodes, fraction, seed)` helper
-  shared with the split block would be the SSOT.
-- D4 (LOW, NEW): `_write_calibration_outputs` + `write_outputs` +
-  `_write_final_submission` each re-validate frame contracts with three
-  different spec classes (`_SubmissionColumnSpec`, `_DiagnosticsColumnSpec`,
-  `_MetricColumnSpec`) — all in rand_matching.py:151-189; contract DRY is fine
-  (three distinct shapes), but `_MetricColumnSpec.validate_frame` only checks
-  REQUIRED columns (missing) while `_DiagnosticsColumnSpec` checks exact set —
-  asymmetric strictness; LOW.
 
 ### 6. Redundant Operations
 
-- R1 (MED, NEW): `evaluate_calibration_trial` computes `overall` via
-  `_assignment_metrics(validation_candidate_frame, ..., final_threshold,
-  include_graph_diagnostics=True)` (hpo_metrics.py:577-582) AND THEN the
-  `sensitivity` sweep recomputes `_assignment_metrics(...)` for EVERY threshold
-  INCLUDING final_threshold again (hpo_metrics.py:583-593). The final_threshold
-  row is computed twice per trial.
-- R3 (MED, NEW): `_emit_07_series` calls `agg(field)` for ~55
-  CALIBRATION_AGGREGATE_FIELDS per row across TWO rows (07c + 07d,
-  train.py:109-114 and :137-142) — `agg` is O(n_folds) per field, so the whole
-  block is O(fields × folds) twice; trivial per-run, but the two rows duplicate
-  the entire loop (could compute the means once and reuse).
-- R4 (LOW, residual): RM5 (choose_assignments re-annotates whole frame per
-  threshold) — VERIFIED STILL OPEN in rand_matching: `_sweep_assignments`
-  (rand_matching.py:1263) exists for the calibration lane, but
-  `hpo_metrics._fit_threshold` (hpo_metrics.py:400-403) still calls
-  `_assignment_metrics` → `choose_assignments` → `_assignments_with_trace`
-  (full annotate+sort) PER THRESHOLD inside the fold loop — the HPO lane pays
-  O(thresholds × frame) annotation cost while the final lane got the optimized
-  sweep. Not unified.
-- R5 (LOW): `calibration_threshold_fold_median` is assigned the same value as
-  `calibrated_threshold` (hpo_metrics.py:613-614) — redundant field, always
-  equal by construction.
 
 ### 7. Unexpected Behavior / Silent Errors
 
-- U2 (MED, NEW): `_partition_calibration_pairs` uses `seed + fold_i + 17`
-  (training.py:2514) — a magic RNG offset constant (+17) with no config or
-  constant name; same class as the FINDINGS E "RNG offsets" item.
-- U5 (LOW, NEW): `CalibrationMetricRow` allows NaN floats (e.g.
-  `calibration_youden_threshold` when a fold has no positives → `_youden_threshold`
-  returns NaN, hpo_metrics.py:634-641), and `numeric_calibration_metrics` filters
-  non-finite values SILENTLY (hpo_metrics.py:132-133) — a NaN calibration metric
-  disappears from tracking without a flag. Same class as FINDINGS D "mlflow/wandb
-  drop non-finite silently" — still open, now on the calibration fields.
-- U6 (LOW, residual): the plateau diagnostic flags
-  `degenerate_unmatched_plateau` (rand_matching.py:1498-1501), but selection
-  still prefers the LARGEST threshold on ties (rand_matching.py:1342). The
-  degenerate case is surfaced but not prevented.
 
 ## Cross-Range Root-Cause Analysis
 
@@ -161,28 +81,382 @@ performance risks that were not changed by those closure commits.
 
 ## What the Range Fixed vs Regressed (vs FINDINGS.md)
 
-FIXED: N5-ish dpi (new plot uses config); RM1, RM2, RM6, RM7, RM8, RM9;
-provenance gap (new _SubmissionProvenance with sha256); calibration-unavailable
-fold handling; shared candidate gates and GTIN status; shared canonical-record
-loading; shared threshold fitting; duplicate graph diagnostics; strict fold and
-sensitivity metric contracts; A1 (`_grid_folds` tuple indexes).
+FIXED: training/metric config caching and config-owned labels/seed offsets;
+training plot/threshold settings; provenance symlink handling; graph and metric
+input contracts; calibration-unavailable fold handling; shared component-safe
+calibration partitioning; shared candidate gates and GTIN status; shared
+canonical-record loading; shared threshold fitting; duplicate graph diagnostics;
+strict fold and sensitivity metric contracts; zero-presentation datapoint
+lineage; post-train embedding reuse; uniformity pair selection; A1
+(`_grid_folds` tuple indexes).
 
-STILL OPEN from FINDINGS (not addressed, verified):
-A3/H1/N3 (gate-vs-ann_finetuned mislabel); A4 (datapoint_usage RuntimeError);
-F1 (dev double-encode); F5 (post-train tail re-encode); F7 (uncached
-load_config — now additionally called per-config in train_one_config);
-N6 (refresh encodes masked tail); N7 (uniformity O(n²)); E RNG offsets
-(+new +17); predict_items literals; rerank fold-0 only; NER island.
+STILL OPEN from FINDINGS (outside this pass):
+A3/H1/N3 (ANN gate-slot attribution); N6 (ANN refresh masked-tail encode);
+F1 (trainer evaluator and eval-loss encode paths remain separate);
+predict_items literals; rerank fold-0 only; NER island.
 
 ## Severity Summary
 
 | Severity | Count | Finding IDs |
 |----------|-------|-------------|
 | HIGH     | 0     | — |
-| MED      | 4     | S4/F7, T5, R1, U2 |
-| LOW      | 9     | N1, N2, N5, P4, R3, R4/RM5-residual, R5, U5, U6 |
+| MED      | 0     | — |
+| LOW      | 1     | N3 (ANN/DVC publication behavior) |
 
 ## Recommended next actions (owner stance: fail loudly)
 
-1. Cache `load_config()` (lru_cache) and hoist `calibration_fraction` to a
-   module-level config access to eliminate S4/F7 hot-path re-reads.
+1. Defer N3 and the separate trainer evaluator/eval-loss optimization until the
+   ANN follow-up pass.
+
+---
+
+# Round 2 — Independent Verification Pass
+
+## Scope of this pass
+
+- **Target:** GH HEAD `b8f16fc` (`ER/training`), read from a CLEAN git worktree
+  (`/tmp/er_head`) — deliberately NOT the local checkout, which carries in-flight
+  uncommitted fixes. Every line reference below is **HEAD-relative**.
+  Note the file lengths differ from Round 1's numbers (HEAD: `rand_matching.py`
+  = 2138 ln, `hpo_metrics.py` = 668 ln), so Round 1's line numbers (taken from the
+  local tree) are off by a few.
+- **Range audited:** `c87d785..b8f16fc` — the whole push batch (worker counts →
+  Rand audit traces → graph diagnostics → calibration centralization → MiniLM
+  default → fold-safe calibration → closure commits).
+- **Method:** aggregate range diff read end-to-end; whole-file reads at HEAD of
+  `hpo_metrics.py`, `graph_diagnostics.py`, `folds.py`, the config/spec blocks of
+  `common.py` / `schemas.py`, and every changed function of `rand_matching.py`,
+  `training.py`, `train.py`, `hpo.py`, `colab.py`; then targeted greps for the
+  CONSUMERS of each new field. Two micro-benchmarks were executed against
+  `candidate_graph_diagnostics` itself (numbers in X1/X2).
+- **Relationship to Round 1:** this pass does not repeat Round 1 items; it records
+  what Round 1 missed, plus one correction. Round 1 items re-verified as still open
+  at HEAD: N1 (see X11), N2, R1, R3, R4, R5, S4/F7, U2, U5, P4 (see X5/X12).
+
+### 1. Hardcoded Paths / Values That Should Be in Config
+
+- X10 (MED, NEW): the new `training.base_model` SSOT (6a8d872) is bypassed exactly
+  where it decides which backbone an audit compares against — `colab.py:975`
+  `base_model = Path(resolve_model("minilm_l6"))`, whose failure message claims
+  "configured base model is not materialized locally". Change `training.base_model`
+  and the local uniformity audit silently scores fine-tuned checkpoints against a
+  backbone other than the one trained. Same literal-key class left in the tree:
+  `colab.py:2024` (`"deberta_v3_base"`), `strip_audit.py:202`, `selftest.py:618-620`.
+- X17 (LOW, NEW): `plot_dpi()` (`common.py:291-298`) documents "Every fig.savefig in
+  the tree renders at THIS value", and `selftest.py:729` asserts the accessor, but
+  FIVE call sites still hardcode `dpi=150`: `train.py:1123`, `training.py:3507`,
+  `training.py:4171`, `colab.py:1159`, `uniformity.py:190`. The drift guard
+  (`selftest.py:802-804`) bans the literal in `evaluate_models.py` ONLY — a
+  hand-maintained per-file list that is itself a second SSOT. The range's own new
+  plot is correct (config-driven via `rand_matching.py:1727, :1743`).
+
+### 2. Missing Pydantic Validation
+
+- X12 (LOW, NEW): the strict-contract coverage added by this range does not extend
+  to the artifacts consumers actually read.
+  (a) `CalibrationMetricRow.model_validate(result)` IS enforced on the available path
+  (`hpo_metrics.py:667`, `extra="forbid"`) — good — but
+  `unavailable_calibration_metrics` (`:170-182`) returns a 4-key dict typed
+  `dict[str, str | int]`, so ONE fold-metrics CSV carries two mutually incompatible
+  row schemas whose only discriminator is the free-text `calibration_status`.
+  (b) The new full audit trace has only a column-**SET** contract
+  (`_DiagnosticsColumnSpec`, `rand_matching.py:165-177`): no row model, and no domain
+  constraint on `error_type` / `gtin_status` / `gate_reason` /
+  `evaluation_partition` / `rejection_reason`, while the far smaller calibration
+  tables got `extra="forbid"` row models in the same range.
+  (c) The typed sensitivity rows are flattened into a JSON **string** column
+  (`calibration_sensitivity_table`, `hpo_metrics.py:618-626`; model field `:71`), so
+  their pydantic contract is not enforced at the artifact boundary at all.
+- X5 (MED, NEW, see SSOT section): `candidate_graph_diagnostics` still consumes a raw
+  DataFrame with no column contract (P4, confirmed) — and its key set is now
+  duplicated four ways.
+
+### 3. Gaps in Data Traceability
+
+- X11 (LOW, NEW): `calibration_proxy_source` is WRITE-ONLY metadata — one producer,
+  **zero consumers** anywhere in the repo (`hpo_metrics.py:574` is the only
+  occurrence across `*.py` / `*.yaml`), and it is dropped entirely on the unavailable
+  path (`:170-182`). Worse, the label it asserts (`dev_component_safe_split`)
+  describes the component-safe DEV carve, while the fit/check split that actually
+  produces the metric is ITEM-level: `_fold_ids` (`:366-369`) shuffles
+  `true_item_id` and deals `index % n_folds`. A consumer cannot tell the two
+  granularities apart from the label.
+- X13 (LOW, NEW): `_SubmissionProvenance` (`rand_matching.py:1853-1892`) pins input
+  and config file hashes, `final_threshold`, `unmatched_prefix`, `calibration_folds`
+  and a lineage string — but records NO derivation parameters: the threshold grid
+  (min/max/step), `target_recall`, `plateau_tolerance`/`plateau_min_points`, `top_k`,
+  `batch_size` and the structured-features weight are all absent, and none of the
+  DERIVED artifacts (threshold_selection_by_fold, threshold_sensitivity,
+  plateau_diagnostic, calibration_diagnostics, holdout_*) is fingerprinted.
+  `_write_calibration_outputs` had `target_recall` in hand (`:1706`) and wrote it only
+  into the un-hashed plateau JSON. Reproduction therefore depends on a mutable single
+  config path being identical at the recorded hash. Related: `dataset_deduped`'s
+  `rows=len(submission)` (`:1854-1857`) is correct only by virtue of the
+  SKU-population assertion in `_write_final_submission` (`:1918-1925`) — it should be
+  the dataset's own row count.
+- X14 (LOW, NEW, regression): centralizing the candidate gate record silently changed
+  the recorded GTIN normalization. Pre-range `_candidate_row` set
+  `sku_gtin = self._gtin(row_metadata_text(row, "barcode", "gtin"))`, which blanks
+  `nan`/`none`/`null` (that helper still exists, `rand_matching.py:482-485`). The new
+  `candidate_gate_fields` (`:321`) uses bare
+  `metadata_text(row_metadata_text(row, "barcode", "gtin")).strip()`, so a barcode
+  cell reading `nan` is now written to the diagnostics CSV as the literal `"nan"`
+  where it used to be `""` (FINDINGS L1–L5 flags the same NaN→"nan" collision class in
+  `predict_items`). `sku_gtin_valid` is unaffected. The module now holds THREE GTIN
+  normalizations: `_gtin` (used by `_candidate_indexes`), `trusted_gtin`
+  (`:287-292`), and this inline one.
+- X16 (LOW, NEW): `include_graph_diagnostics=False` returns ZEROS for
+  `diagnostic_*` / `plausible_group_count` (`rand_matching.py:1016-1025`), so "not
+  computed" is indistinguishable from "computed and zero" for every consumer of the
+  metric dict — and that block is a verbatim duplicate of the empty-accepted payload
+  in `graph_diagnostics.py:31-40`.
+
+### 4. SSOT (Single Source of Truth) Violations
+
+- X5 (MED, NEW): the diagnostic metric key set is hand-maintained in FOUR places that
+  must agree exactly — `METRIC_COLUMNS` (`rand_matching.py:77-106`), the two return
+  dicts in `graph_diagnostics.py` (`:31-40`, `:113-122`) and the
+  `include_graph_diagnostics=False` fallback (`rand_matching.py:1016-1025`). A
+  mismatch is a `KeyError` at `:1048-1052` or a `RuntimeError` from the
+  order-sensitive contract check at `:1055`. The SAME range derived
+  `CALIBRATION_AGGREGATE_FIELDS` from `CalibrationMetricRow.model_fields`
+  (`hpo_metrics.py:146-152`) precisely to stop this drift for the calibration
+  fields — the diagnostic set was left hand-rolled. Fix: one
+  `DIAGNOSTIC_METRIC_COLUMNS` tuple + one empty-diagnostics payload builder.
+- X6 (MED, NEW): the calibration fold split is seeded by the **collapse guardrail's**
+  seed — `_fold_ids(truth, n_folds, int(config["hpo"]["collapse_guardrail"]["seed"]))`
+  (`hpo_metrics.py:494`). `config/training.yaml` has `hpo.calibration_folds` (`:304`)
+  but NO calibration seed; `collapse_guardrail.seed: 42` (`:308`) also seeds
+  `select_unrelated_pairs`. Re-tuning the guardrail therefore silently re-deals the
+  calibration folds and changes every calibration metric — including in the MAIN
+  train lane, where the guardrail is `not_requested` (`:394-400`) yet still
+  determines the folds. Fix: add `hpo.calibration_seed`.
+- X9 (MED, NEW): stale validation invariant. `schemas.py:190-197`
+  (`_registry_has_trainer_base`) RAISES unless `models.multilingual_l12` exists,
+  justified as "the trainer base resolves from it (train.py --model default)" — but
+  6a8d872 moved that default to `training.base_model: "minilm_l6"`
+  (`paths.yaml:163-165`, `training.yaml:154-155`, `train.py:314`). The registry is
+  still pinned to a backbone the trainer no longer uses, while the NEW key is only
+  cross-checked in `load_config()` (`base_model not in registry_models`).
+  `paths.yaml:165` also still comments `# trainer base` on `multilingual_l12` — which
+  is why the stale check still looks correct.
+
+### 5. Missing Centralized Functions / Duplicated Processes
+
+- X7 (MED, NEW): the acceptance predicate now exists in THREE copies —
+  `_annotate_candidates` (`rand_matching.py:658-661`), `_sweep_assignments`
+  (`rand_matching.py:1346`) and the NEW `candidate_graph_diagnostics`
+  (`graph_diagnostics.py:20-29`). All three spell
+  `gtin_status != "different" AND (exact_gtin OR (rule_ok AND score >= threshold))`.
+  A gate change now silently diverges the reported diagnostics from the shipped
+  assignment. Fix: one `accepted_mask(frame, threshold)` used by all three.
+- X15 (LOW, NEW): the same "true canonical for this SKU" expression appears THREE
+  times inside `evaluate_calibration_trial` — `hpo_metrics.py:605`, `:613`
+  (pre-existing) and `:657` (ADDED by this range for `attribute_conflict_error_rate`)
+  — while `rand_matching` already owns a shared helper for it, `_candidate_labels`
+  (`:1182-1196`, merge-based rather than map-based). Four spellings of one label rule.
+- X8 (MED, NEW): `hpo_metrics._canonical_record_map` (`:185-190`) and
+  `RandMatcher.record_map` (`rand_matching.py:412-415`) build the identical
+  gtin→record structure from the same artifact with no shared accessor — see also the
+  cost regression in section 6.
+
+### 6. Redundant Operations
+
+- X8 (MED, NEW): "centralize canonical record loading" (0dd4fe2) made this hot path
+  MORE expensive, not less. Before: `@lru_cache(maxsize=1)` over the read. Now
+  `_canonical_record_map` (`hpo_metrics.py:185-190`) is uncached and calls
+  `canonical_records_frame()`, which returns
+  `_canonical_records_frame().copy(deep=True)` (`common.py:433-435`) — a 9.4 MB /
+  13,251-row frame deep-copied and then re-dictified with `iterrows` — on **every**
+  calibration evaluation (per fold, per config, in both grid and TPE). Only the file
+  READ is cached. Fix: `@lru_cache(maxsize=1)` on `_canonical_record_map` (it already
+  hands out per-call copies).
+- X3 (HIGH, NEW): the expensive graph diagnostic is recomputed inside a
+  per-threshold × per-stratum loop. `_fold_sensitivity` (`rand_matching.py:1435-1512`)
+  already sweeps the grid, and both its `prediction_metrics(...)` call (`:1493`) and
+  its `gtin_metrics(...)` call (`:1503` → `:1125`) omit
+  `include_graph_diagnostics=False`, although this range introduced that flag and used
+  it in the fit lanes (`:1375`, `hpo_metrics.py:550-553`). With 19 grid points ×
+  6 GTIN strata rows that is ~114 full graph computations per fold — each one exposed
+  to X1/X2. R4 (above) is the same class in the HPO lane.
+
+### 7. Unexpected Behavior / Silent Errors
+
+- X1 (HIGH, NEW): `src/core/graph_diagnostics.py:66-86` runs Tarjan DFS as PYTHON
+  RECURSION (`visit()` calling itself), so recursion depth = longest path of the
+  accepted candidate component. Measured against the function itself with a synthetic
+  frame of the same shape (20 candidates/SKU, `one_missing`, all `rule_ok`):
+
+      skus= 200 edges= 4000 components= 24 max_comp= 1287 time= 0.012s
+      skus= 400 edges= 8000 components=  5 max_comp= 2562 time= 0.014s
+      skus= 800 edges=16000 components=  1  ->  RecursionError: maximum recursion
+                                                depth exceeded
+
+  The dataset is 71,623 rows, so the real calibration/holdout frames are far past
+  that point. The function is new in this range and `prediction_metrics`
+  (`rand_matching.py:956`, `:1013`) calls it with `include_graph_diagnostics=True`
+  **by default**, reachable from the calibration lane (`hpo_metrics.py:530-535`), the
+  GTIN strata lane (`rand_matching.py:1125`) and the sensitivity sweep (`:1493`,
+  `:1503`). Consequence on a real run: the calibration evaluator raises, X4 converts
+  that into "calibration unavailable", and every HPO trial is pruned. Fix: iterative
+  DFS with an explicit stack (or union-find).
+- X2 (HIGH, NEW): same file — `edge_scores` (`graph_diagnostics.py:93-101`) rebuilds a
+  per-component score list by scanning ALL edges once per component ⇒ O(C × E).
+  Measured on the sparse regime (each SKU its own GTIN, so C == E; recursion limit
+  raised so only cost is visible):
+
+      edges=  4000 components=  4000 time=  1.287s
+      edges=  8000 components=  8000 time=  5.733s    (4.5x per doubling)
+      edges= 16000 components= 16000 time= 27.055s    (4.7x per doubling)
+
+  Sparse acceptance is exactly the high-threshold end of the configured grid
+  (`threshold_min 0.80` / `max 0.98` / `step 0.01`), i.e. where most sensitivity
+  points and the holdout threshold sit. Fix: one `groupby(component_id)` pass.
+- X4 (HIGH, NEW): `training.py:3540-3564` wraps `evaluate_calibration_trial` in
+  `except Exception` and substitutes `unavailable_calibration_metrics(...)` with only
+  a print; `training.py:3588-3592` then maps the fold status to
+  `"calibration_unavailable"`, which (a) `hpo.py:204-209` filters out of `vals`, so
+  the grid CSV is written with a NaN objective and the run continues, and
+  (b) `training.py:4323-4336` leaves `proxy_rows` empty, so EVERY Optuna trial raises
+  `optuna.TrialPruned("no fold completed")` and the study dies at
+  `study.best_params` (`training.py:4476`) with Optuna's "no completed trials" error
+  only after the full GPU budget is spent. A programming error in the metric evaluator
+  is thus reported as a legitimate SELECTION outcome — the opposite of the
+  "fail loudly" stance this file is written to. Fix: catch narrow expected errors only
+  and re-raise the rest; never let an evaluator crash become a selection status.
+- X6 delivers the same class of silent coupling (guardrail seed drives the calibration
+  folds) — see section 4.
+
+## Corrections to Round 1
+
+- **N5's mechanism is wrong.** `_sha256_path` (`rand_matching.py:1822-1833`) cannot hit
+  a symlink loop: pathlib's `rglob` does not descend into symlinked directories. The
+  real exposure is narrower — a symlinked FILE is hashed through its target, and a file
+  plus a symlink to it are both counted. (`path.is_file()` / `is_dir()` on the
+  top-level argument do follow symlinks.)
+- **N1's framing is incomplete.** The proxy literal is not merely a magic string: it is
+  DEAD metadata with a misleading granularity claim (see X11). A config knob alone
+  would not make it verifiable.
+
+## Pre-existing, verified while auditing (NOT introduced by this range)
+
+- **Two threshold-grid builders for one config knob:** `_thresholds`
+  (`hpo_metrics.py:193-200`) rounds to 10 decimals; `rand_matching.main`
+  (`:2093-2101`) rounds to **2**. Identical today at `step=0.01`, but any finer step
+  silently collapses the final lane's grid while the calibration lane keeps it.
+- **Mislabeled provenance counts:** `hpo_best.json`'s `"n_trials": len(study.trials)`
+  (`training.py:4476`) and W&B's `hpo_completed_trials` (`:4496`) both count
+  pruned/failed trials as completed (git blame: `16fc531`, before this range).
+- **The final lane's calibration input has NO in-repo producer:** nothing in `src/`,
+  `scripts/` or `run_all.py` writes a CSV carrying `calibration_fold` — only
+  `rand_matching.py` and `notebooks/final_submission.ipynb` consume it. Its column
+  contract lives inline in `_load_calibration_frame` (`rand_matching.py:1234-1248`)
+  instead of in `schemas.py`, and it is not a `paths.yaml files:` binding. Provenance
+  hashes it (good) but records nothing about how it was produced — while `hpo_metrics`
+  builds its OWN calibration folds internally. Two calibration-fold constructions, one
+  of them untraceable.
+
+## Severity Summary (round 2)
+
+| Severity | Count | Finding IDs |
+|----------|-------|-------------|
+| HIGH     | 4     | X1, X2, X3, X4 |
+| MED      | 6     | X5, X6, X7, X8, X9, X10 |
+| LOW      | 7     | X11, X12, X13, X14, X15, X16, X17 |
+
+## Working-tree delta (NOT in GH)
+
+The local checkout currently carries uncommitted fixes for Round 1 items N1, N2, R1,
+R3, R5, U2, U5, N5, plus `calibration_non_finite_*` fields, an `lru_cache` on the raw
+config read (with a `deepcopy` per call) and a new `folds.partition_component_pairs`.
+**None of X1–X17 is addressed there.** Two cautions on that work:
+`partition_component_pairs` still re-derives `n_folds = max(2, ceil(1/fraction))` (so
+D3's duplicate fold-count rule merely moved module) and contains
+`int(round(n_folds * fraction),)`; and the per-call `deepcopy` in `load_config()`
+preserves S4/F7's hot-path cost in HPO loops (the YAML parse is cached, the copy is
+not). `_sha256_path` gained a symlink guard — correct hardening even though N5's
+stated failure mode is not real.
+
+## Recommended next actions (round 2, ordered by blast radius)
+
+1. **X1/X2/X3** — make `candidate_graph_diagnostics` iterative and single-pass
+   (`groupby(component_id)`), then pass `include_graph_diagnostics=False` in
+   `_fold_sensitivity` and `gtin_metrics` so the diagnostic is computed once per
+   reported population instead of ~114× per fold.
+2. **X4** — narrow the `except Exception` around `evaluate_calibration_trial`; an
+   evaluator crash must fail the fold loudly, not become `pruned`.
+3. **X6** — add `hpo.calibration_seed` (a guardrail knob must not re-deal the
+   calibration folds, and the main lane does not even request the guardrail).
+4. **X5/X7** — single `DIAGNOSTIC_METRIC_COLUMNS` + empty-payload builder, and one
+   shared `accepted_mask` for all three gate lanes.
+5. **X8** — `@lru_cache` the canonical-record MAP, not just the file read.
+6. **X9/X10** — validate `training.base_model` at schema level and make
+   `colab.py:975` read it instead of the `"minilm_l6"` literal.
+
+## Root cause & attribution (round 2, per finding)
+
+**Supersedes the `(NEW)` tags above** for X1, X2, X6, X10, X11, X13, X17: digging for
+the originating commit proved those are *inherited*, not introduced by this range.
+Mechanism was proven for all 17 (by execution for X1/X2, by call-site/status-flow
+traces for X3/X4, by whole-file comparison elsewhere); "root cause" below means the
+originating decision, with its commit as evidence.
+
+| ID | Mechanism (how proven) | Root cause | Origin | Introduced here? |
+|----|------------------------|-----------|--------|------------------|
+| X1 | executed the function; `RecursionError` at 800 SKUs | hand-rolled recursive Tarjan written as exploratory code in `hpo_metrics._graph_diagnostics`, then carried into a shared core module without a scaling review | `c87d785 hpo_metrics.py:286-297` | **No — inherited** (905ac80 moved it; the range only widened the graph: `rule_ok` + bridge set + size distribution) |
+| X2 | executed; 4.5–4.7× per doubling | same origin: one edge pass per component instead of a group-by; the move added `or component_ids[right] == component_id`, making it strictly more expensive | `c87d785 hpo_metrics.py:311-314` | **No — inherited, slightly worsened** |
+| X3 | call-site inventory + grid arithmetic (19 × 6 × folds) | `include_graph_diagnostics: bool = True` promoted a COST-BEARING diagnostic into the shared metric API; a1ab904 then deduplicated only the one instance it could see (2 commits after creating the exposure) | 18b9c81 (flag, default True), extended by 334fb84 | **Yes** |
+| X4 | status-flow trace `3554 → 3592 → hpo.py:207 → training.py:4323` | "record unavailable calibration without dropping train folds" was implemented at the CALLER with a blanket `except` plus an overloaded `status` field, so "completed but unmeasured" became indistinguishable from "did not complete" for every status-filtering consumer | 91f0a1d | **Yes** |
+| X5 | four-way key-list comparison at HEAD | the diagnostic payload has NO pydantic model (P4), so the derive-from-model technique applied to calibration had nothing to derive from; the range added the keys to `METRIC_COLUMNS` + two payload dicts + a fallback | `METRIC_COLUMNS` gained the 8 diagnostic keys in 905ac80 | **Yes** (the 19-key tuple itself is pre-range) |
+| X6 | grep of the seed's readers + config keys | no calibration seed existed, and `_fold_ids` + the collapse guardrail were introduced by the SAME commit, which reused the guardrail's seed | `efcd064 hpo_metrics.py:354` | **No — inherited** |
+| X7 | layering check: `src/core/*` never imports `training/*`; the predicate is private inside the frame-mutating `_annotate_candidates` | structural: core CANNOT import the predicate, and no `accepted_mask` API exists — so any new consumer must re-spell it | 2 copies pre-range, 3rd in 905ac80 | 3rd copy **yes** |
+| X8 | pre/post comparison of `_canonical_record_map`; 9.4 MB / 13,251 rows | cache responsibility moved DOWN to the reader while the expensive DERIVED structure lost its cache in the same commit | 0dd4fe2 | **Yes** |
+| X9 | schema invariant vs the new config key | the default-model change was a call-site migration: no inventory of the other places that encode "the base model" | 6a8d872 | **Yes** |
+| X10 | `git log -S` on the literal | same incomplete migration | literal from f8f36f5; inconsistency created by 6a8d872 | inconsistency **yes**, literal no |
+| X11 | repo-wide consumer grep + full `-S` history | unowned metadata: authored as a report label, never read by any commit | efcd064 (value renamed in 8440738) | **No — inherited** |
+| X12 | contract coverage compared across artifacts | (a) the degraded row was modeled as a DIFFERENT dict instead of the same model with Optional fields (the `collapse_*` fields already used that pattern); (c) the sensitivity rows were serialized into a JSON string column | 91f0a1d (a), 18b9c81 (c) | **Yes** |
+| X13 | `git show c87d785:...` proves model + writer pre-exist | provenance was designed as INPUT pinning only — no output/derivation manifest, so the chain stops at the threshold | fdc547a | **No — pre-existing** (the range refactored it and added config/holdout/calibration pins) |
+| X14 | pre/post `_candidate_row` comparison | the new helper re-derives the field from the RAW row instead of receiving the caller's already-normalized value, so the caller's `_gtin` normalizer was silently dropped | 5ceb913 | **Yes** |
+| X15 | 3 occurrences in one function + the shared helper | interface mismatch: `_candidate_labels` serves threshold fitting (scores + labels arrays), not "is this row the true candidate", so the expression was pasted a third time | 3rd copy in-range | 3rd copy **yes** |
+| X16 | both payloads compared, plus the in-file convention | no NA convention applied: the file's own convention for "no rows" is `np.nan` (`rand_matching.py:1090`), but the flag's false branch used typed zeros because the payload mixes ints with a JSON-string field | 18b9c81 + 905ac80 | **Yes** |
+| X17 | grep + guard history | the dpi migration was executed file-by-file AND guarded file-by-file (a hand-maintained banned-literal list), so 5 sites escaped; FINDINGS.md:135 already documented "5 literals remain" before this range | 16fc531 | **No — pre-existing and already known** |
+
+### Systemic root causes shared by the batch
+
+1. **Instance-fix instead of class-fix.** Every cost/consistency defect that the batch
+   *did* notice was fixed at a single call site: the duplicate diagnostics (a1ab904,
+   one instance), the base-model default (6a8d872, entry point only), the candidate
+   gate (5ceb913, record built but caller normalizer dropped), the fold carve (D3).
+   The class-level audit that would have caught X3/X9/X10/X14 was never run.
+2. **Diagnostics were treated as free metadata.** A diagnostic that was previously
+   computed once per calibration trial was promoted to a DEFAULT-ON argument of the
+   shared metric function (18b9c81) in the same range that was fixing duplicate
+   diagnostics — so cost and duplication were managed in opposite directions.
+3. **Availability conflated with completion.** One `status` field carries both
+   "the fold ran" and "the calibration was measurable" (91f0a1d), and every consumer
+   filters on it — which is exactly how X3/X1 turn into "pruned trial", not an error.
+4. **Missing contracts at the payload boundary.** The diagnostic payload has no model
+   (X5/X12), the seeds/offsets have no registry (X6, U2, FINDINGS E), and the gate
+   predicate has no shared API (X7). Each gap forces the next copy.
+
+### Where the root cause is NOT established
+
+- **X2/X1 authorship.** That the algorithm is inherited is proven; *why* one edge pass
+  per component was written that way is not recoverable from the repo (no commit
+  message, no comment, and the notebook contains none of this code).
+- **X12 (a)/(c)** are design choices, not provable defects — I can show the resulting
+  inconsistency, not the author's intent.
+- **X15's "interface mismatch"** is my reading of the helper's return type; there is no
+  commit evidence for the reason it was pasted rather than shared.
+- **X9/X10's "no inventory was done"** is inferred from the 4-file list of 6a8d872
+  (`config/training.yaml`, `common.py`, `schemas.py`, `train.py`) plus the absence of
+  any record in `TODO.md`, `notes.md` or `FINDINGS.md`. A decision recorded outside
+  the repo would invalidate this one.
+
+### Correction to Round 1
+
+- Round 1's "FIXED: provenance gap (new `_SubmissionProvenance` with sha256)" is
+  **factually wrong**: `_SubmissionProvenance` and its writer exist at `c87d785`
+  (`rand_matching.py:112`, `:1447-1468`). The range refactored the writer into
+  `_file_provenance`/`_write_provenance` and added config/holdout/calibration input
+  pins — an improvement, but not the introduction of provenance (see X13).

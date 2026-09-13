@@ -27,6 +27,7 @@ from core.common import (
     ensure_parent,
     load_config,
     load_dataset_deduped,
+    plot_dpi,
     runtime,
     set_determinism,
     training_cfg,
@@ -94,9 +95,14 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         )
 
     # ---- 07c: one aggregate row per payload variant ----
+    aggregate_cache: dict[str, float] = {}
+
     def agg(field: str) -> float:
-        vals = [r.get(field) for r in ok_rows if r.get(field) is not None]
-        return float(np.mean(vals)) if vals else float("nan")
+        """Compute each fold aggregate once for both 07-series rows."""
+        if field not in aggregate_cache:
+            vals = [r.get(field) for r in ok_rows if r.get(field) is not None]
+            aggregate_cache[field] = float(np.mean(vals)) if vals else float("nan")
+        return aggregate_cache[field]
 
     row_07c = {
         "variant": args.payload,
@@ -711,7 +717,12 @@ def _main_inner(_mlf, _wandb) -> None:
     # rng carve splits 7,808 of 37,445 train-side pair-uses between train/dev).
     # holdout = the owner's 50/25/25: quarters q0+q1 train, q2 dev, q3 test.
     if args.split == "holdout":
-        quarters = component_folds(pos, row_bc, 4, SEED)
+        quarters = component_folds(
+            pos,
+            row_bc,
+            int(cfg["split"]["holdout_component_folds"]),
+            SEED,
+        )
         test_bc, dev_bc = quarters[3], quarters[2]
         folds_override = test_bc  # single-set: train = all others
         dev_override = dev_bc
@@ -1120,7 +1131,7 @@ def _main_inner(_mlf, _wandb) -> None:
             _ax.grid(alpha=0.25)
             _ax.legend()
             _fig.tight_layout()
-            _fig.savefig(_mask_plot, dpi=150)
+            _fig.savefig(_mask_plot, dpi=plot_dpi())
             plt.close(_fig)
             if _wandb is not None:
                 _wandb.log_image(_mask_plot, f"masking/{run_tag}/score_distributions")

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict
 
 from core.attribute_conflicts import sku_attribute_info
 from core.common import canonical_records_frame, row_metadata_text
+from core.graph_diagnostics import candidate_graph_diagnostics
 from core.structured_features import fuse_numpy
 from training.rand_matching import (
     GTIN_STATUSES,
@@ -24,6 +25,7 @@ from training.rand_matching import (
     gtin_status,
     gtin_metrics,
     _fit_fold_threshold,
+    _candidate_labels,
     prediction_metrics,
     _threshold_at_recall,
     _youden_threshold,
@@ -58,7 +60,6 @@ class CalibrationMetricRow(BaseModel):
     calibration_expected_group_count: int
     calibration_plausible_group_count: int
     calibration_unmatched_skus: int
-    calibration_threshold_fold_median: float
     calibration_threshold_fold_min: float
     calibration_threshold_fold_max: float
     calibration_threshold_plateau_points: int
@@ -94,6 +95,8 @@ class CalibrationMetricRow(BaseModel):
     calibration_ALL_rand_index: float
     calibration_ALL_precision: float
     calibration_ALL_recall: float
+    calibration_non_finite_count: int
+    calibration_non_finite_fields: str
     collapse_guardrail_enabled: int | None = None
     collapse_status: str | None = None
     collapse_requested_pairs: int | None = None
@@ -153,6 +156,7 @@ CALIBRATION_AGGREGATE_FIELDS = tuple(
 def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
     """Return finite calibration diagnostics suitable for tracking APIs."""
     metrics: dict[str, float | int] = {}
+    non_finite: list[str] = []
     for key, value in row.items():
         if not key.startswith(
             ("calibration_", "collapse_", "diagnostic_", "attribute_conflict_")
@@ -164,6 +168,9 @@ def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
             continue
         if np.isfinite(value):
             metrics[key] = value
+        else:
+            non_finite.append(key)
+    metrics["calibration_non_finite_count"] = len(non_finite)
     return metrics
 
 
@@ -527,17 +534,21 @@ def evaluate_calibration_trial(
     final_threshold = float(np.median([row.calibrated_threshold for row in fold_rows]))
     validation_candidate_frame = pd.concat(validation_candidates, ignore_index=True)
     validation_truth_frame = pd.concat(validation_truth, ignore_index=True)
-    overall = _assignment_metrics(
-        validation_candidate_frame,
-        validation_truth_frame,
-        final_threshold,
-        include_graph_diagnostics=True,
-    )
-    sensitivity = [
-        CalibrationSensitivityRow.model_validate(
-            {
-                "threshold": float(threshold),
-                **{
+    sensitivity: list[CalibrationSensitivityRow] = []
+    sensitivity_metrics: dict[float, dict[str, float | int | str]] = {}
+    for threshold in thresholds:
+        threshold_value = float(threshold)
+        metrics = _assignment_metrics(
+            validation_candidate_frame,
+            validation_truth_frame,
+            threshold_value,
+            include_graph_diagnostics=False,
+        )
+        sensitivity_metrics[threshold_value] = metrics
+        sensitivity.append(
+            CalibrationSensitivityRow.model_validate(
+                {
+                    "threshold": threshold_value,
                     "rand_index": float(metrics["rand_index"]),
                     "adjusted_rand": float(metrics["adjusted_rand"]),
                     "precision": float(metrics["pairwise_precision"]),
@@ -545,18 +556,21 @@ def evaluate_calibration_trial(
                     "over_merge_rate": float(metrics["over_merge_rate"]),
                     "under_merge_rate": float(metrics["under_merge_rate"]),
                     "predicted_group_count": int(metrics["predicted_group_count"]),
-                },
-            }
+                }
+            )
         )
-        for threshold in thresholds
-        for metrics in [
-            _assignment_metrics(
-                validation_candidate_frame,
-                validation_truth_frame,
-                float(threshold),
-            ),
-        ]
-    ]
+    overall = dict(
+        sensitivity_metrics.get(final_threshold)
+        or _assignment_metrics(
+            validation_candidate_frame,
+            validation_truth_frame,
+            final_threshold,
+            include_graph_diagnostics=False,
+        )
+    )
+    overall.update(
+        candidate_graph_diagnostics(validation_candidate_frame, final_threshold)
+    )
     best_rand = max(row.rand_index for row in sensitivity)
     plateau_count = sum(
         row.rand_index >= best_rand - float(config["rand_matching"]["plateau_tolerance"])
@@ -571,14 +585,15 @@ def evaluate_calibration_trial(
         requested=include_collapse_guardrail,
     )
     result: dict[str, float | int | str] = {
-        "calibration_proxy_source": "dev_component_safe_split",
+        "calibration_proxy_source": str(
+            config["rand_matching"]["calibration_proxy_source"]
+        ),
         "calibration_status": "available",
         "calibration_positive_pairs": int(len(pos_pairs)),
         "calibration_negative_pairs": int(len(neg_pairs)),
         "calibration_sku_count": int(truth["SKU_ID"].nunique()),
         "calibration_candidate_duplicate_rows_removed": duplicate_count,
         "calibrated_threshold": final_threshold,
-        "calibration_threshold_fold_median": final_threshold,
         "calibration_threshold_fold_min": float(min(row.calibrated_threshold for row in fold_rows)),
         "calibration_threshold_fold_max": float(max(row.calibrated_threshold for row in fold_rows)),
         "calibration_threshold_plateau_points": int(plateau_count),
@@ -600,18 +615,12 @@ def evaluate_calibration_trial(
         "calibration_unmatched_skus": int(overall["unmatched_skus"]),
         "calibration_youden_threshold": float(
             _youden_threshold(
-                candidates["score"].to_numpy(float),
-                (candidates["candidate_gtin"] == candidates["SKU_ID"].map(
-                    truth.set_index("SKU_ID")["true_item_id"]
-                )).to_numpy(int),
+                *_candidate_labels(candidates, truth),
             )
         ),
         "calibration_precision_at_target_recall_threshold": float(
             _threshold_at_recall(
-                candidates["score"].to_numpy(float),
-                (candidates["candidate_gtin"] == candidates["SKU_ID"].map(
-                    truth.set_index("SKU_ID")["true_item_id"]
-                )).to_numpy(int),
+                *_candidate_labels(candidates, truth),
                 float(config["rand_matching"]["target_recall"]),
             )
         ),
@@ -664,5 +673,14 @@ def evaluate_calibration_trial(
         true_candidates["attribute_conflict_type"].ne("none").mean()
     )
     result["attribute_conflict_status"] = "true_candidate_gate_check"
+    non_finite_fields = sorted(
+        key
+        for key, value in result.items()
+        if key.startswith(("calibration_", "collapse_", "diagnostic_"))
+        and isinstance(value, (int, float, np.integer, np.floating))
+        and not np.isfinite(value)
+    )
+    result["calibration_non_finite_count"] = len(non_finite_fields)
+    result["calibration_non_finite_fields"] = ",".join(non_finite_fields)
     CalibrationMetricRow.model_validate(result)
     return result

@@ -5,6 +5,30 @@ from __future__ import annotations
 import json
 
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class CandidateGraphFrameSpec(BaseModel):
+    """Input-column contract for candidate graph diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_columns: frozenset[str] = Field(min_length=1)
+
+    def validate_frame(self, frame: pd.DataFrame) -> None:
+        missing = sorted(self.required_columns - set(frame.columns))
+        if missing:
+            raise ValueError(
+                "candidate graph input contract violated: "
+                f"missing={missing}"
+            )
+
+
+_CANDIDATE_GRAPH_FRAME_SPEC = CandidateGraphFrameSpec(
+    required_columns=frozenset(
+        {"SKU_ID", "candidate_gtin", "score", "gtin_status", "exact_gtin", "rule_ok"}
+    )
+)
 
 
 def candidate_graph_diagnostics(
@@ -17,6 +41,7 @@ def candidate_graph_diagnostics(
     one candidate passing the configured gates at ``threshold``.  It is a
     candidate-space diagnostic, not a replacement for direct assignment.
     """
+    _CANDIDATE_GRAPH_FRAME_SPEC.validate_frame(candidates)
     accepted = candidates[
         candidates["gtin_status"].ne("different")
         & (

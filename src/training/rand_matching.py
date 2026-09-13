@@ -110,6 +110,14 @@ GATE_COLUMNS = (
     "threshold_gate",
     "assignment_gate",
 )
+ASSIGNMENT_SORT_COLUMNS = (
+    "SKU_ID",
+    "exact_gtin",
+    "score",
+    "attribute_matches",
+    "candidate_gtin",
+)
+ASSIGNMENT_SORT_ASCENDING = (True, False, False, False, True)
 
 
 def _unmatched_prefix() -> str:
@@ -180,12 +188,19 @@ class _DiagnosticsColumnSpec(BaseModel):
 class _MetricColumnSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     required_columns: frozenset[str] = Field(min_length=1)
+    optional_columns: frozenset[str] = frozenset()
 
     def validate_frame(self, frame: pd.DataFrame, label: str) -> None:
-        missing = sorted(self.required_columns - set(frame.columns))
+        actual = set(frame.columns)
+        missing = sorted(self.required_columns - actual)
         if missing:
             raise ValueError(
                 f"{label} metric contract violated: missing={missing}"
+            )
+        unexpected = sorted(actual - self.required_columns - self.optional_columns)
+        if unexpected:
+            raise ValueError(
+                f"{label} metric contract violated: unexpected={unexpected}"
             )
 
 
@@ -265,7 +280,16 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
     )
 )
 _METRIC_COLUMNS_SPEC = _MetricColumnSpec(
-    required_columns=frozenset(METRIC_COLUMNS)
+    required_columns=frozenset(METRIC_COLUMNS),
+    optional_columns=frozenset(
+        {
+            "check_fold",
+            "threshold",
+            "gtin_status",
+            "selection_method",
+            "sensitivity_reason",
+        }
+    ),
 )
 
 
@@ -729,8 +753,8 @@ def _assignments_with_trace(
         )
     frame = _annotate_candidates(candidates, threshold)
     accepted = frame[frame["accepted"]].sort_values(
-        ["SKU_ID", "exact_gtin", "score", "attribute_matches", "candidate_gtin"],
-        ascending=[True, False, False, False, True],
+        list(ASSIGNMENT_SORT_COLUMNS),
+        ascending=list(ASSIGNMENT_SORT_ASCENDING),
         kind="mergesort",
     )
     selected = accepted.drop_duplicates("SKU_ID", keep="first").copy()
@@ -880,9 +904,9 @@ def _audit_trace(
     diagnostics["predicted_ITEM_ID"] = diagnostics["ITEM_ID"]
 
     if truth is None:
-        diagnostics["true_candidate_retrieved"] = ""
-        diagnostics["true_candidate_accepted"] = ""
-        diagnostics["prediction_correct"] = ""
+        diagnostics["true_candidate_retrieved"] = pd.NA
+        diagnostics["true_candidate_accepted"] = pd.NA
+        diagnostics["prediction_correct"] = pd.NA
         diagnostics["error_type"] = "unlabeled"
         return diagnostics
     summary = _truth_audit_context(candidates, trace, predictions, truth)
@@ -1188,12 +1212,21 @@ def _candidate_labels(
         on="SKU_ID",
         how="inner",
     )
-    return (
-        scored["score"].to_numpy(dtype=float),
-        scored["candidate_gtin"].astype(str).eq(
-            scored["true_item_id"].astype(str)
-        ).to_numpy(dtype=int),
-    )
+    scores = scored["score"].to_numpy(dtype=float)
+    labels = scored["candidate_gtin"].astype(str).eq(
+        scored["true_item_id"].astype(str)
+    ).to_numpy(dtype=int)
+    retrieved = set(scored["SKU_ID"].astype(str))
+    missing = sorted(set(truth["SKU_ID"].astype(str)) - retrieved)
+    if missing:
+        floor = (
+            float(np.nextafter(scores.min(), -np.inf))
+            if len(scores)
+            else -np.inf
+        )
+        scores = np.concatenate([scores, np.full(len(missing), floor)])
+        labels = np.concatenate([labels, np.ones(len(missing), dtype=int)])
+    return scores, labels
 
 
 def _retrieval_diagnostics(
@@ -1332,8 +1365,8 @@ def _sweep_assignments(
     )
     base["gtin_compatible"] = base["gtin_status"].ne("different")
     base = base.sort_values(
-        ["SKU_ID", "exact_gtin", "score", "attribute_matches", "candidate_gtin"],
-        ascending=[True, False, False, False, True],
+        list(ASSIGNMENT_SORT_COLUMNS),
+        ascending=list(ASSIGNMENT_SORT_ASCENDING),
         kind="mergesort",
     )
     exact = base["exact_gtin"].values.astype(bool)
@@ -1382,7 +1415,14 @@ def _fit_fold_threshold(
                 "n": metrics["n"],
             }
         )
-    selected_row = max(fit_rows, key=lambda r: (r["rand_index"], r["threshold"]))
+    selected_row = max(
+        fit_rows,
+        key=lambda row: (
+            row["rand_index"],
+            -row["unmatched_skus"],
+            -row["threshold"],
+        ),
+    )
     fit_unmatched_fraction = float(selected_row["unmatched_skus"]) / max(
         int(selected_row["n"]), 1
     )
@@ -1407,10 +1447,12 @@ def _alternative_thresholds(
         precision_reason = (
             "fitted" if not np.isnan(precision_val) else "target_recall_unreachable"
         )
-    if np.isnan(precision_val):
+    if np.isnan(precision_val) and len(scores):
         achieved_recall = _recall_at_threshold(
             scores, labels, float(np.min(scores))
         )
+    elif np.isnan(precision_val):
+        achieved_recall = float("nan")
     else:
         achieved_recall = _recall_at_threshold(scores, labels, float(precision_val))
     return {
@@ -1704,7 +1746,12 @@ def _write_calibration_outputs(
             "final_threshold": final_threshold,
             "selection_method": "median of fold-selected Rand Index thresholds",
             "target_recall": target_recall,
-            "tie_break": ["exact_gtin", "score", "attribute_matches", "candidate_gtin"],
+            "tie_break": [
+                "rand_index",
+                "fewest_unmatched_skus",
+                "lowest_threshold",
+                *ASSIGNMENT_SORT_COLUMNS[1:],
+            ],
             "unmatched_item_id": _unmatched_prefix() + "<SKU_ID>",
             "no_transitive_chaining": True,
         }
@@ -1821,12 +1868,18 @@ def _evaluate_holdout(
 
 def _sha256_path(path: Path) -> tuple[str, int]:
     """Fingerprint one file or a checkpoint directory deterministically."""
+    if path.is_symlink():
+        raise ValueError(f"provenance path must not be a symlink: {path}")
     if path.is_file():
         return sha256_file(path), 1
     if not path.is_dir():
         raise FileNotFoundError(f"provenance path does not exist: {path}")
     digest = hashlib.sha256()
-    files = sorted(child for child in path.rglob("*") if child.is_file())
+    files = sorted(
+        child
+        for child in path.rglob("*")
+        if child.is_file() and not child.is_symlink()
+    )
     for child in files:
         digest.update(str(child.relative_to(path)).encode("utf-8"))
         digest.update(sha256_file(child).encode("ascii"))

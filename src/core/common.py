@@ -139,7 +139,8 @@ def _read_vocabulary(path: Path) -> dict:
     return vocabulary
 
 
-def load_config() -> dict:
+@lru_cache(maxsize=1)
+def _load_config_cached() -> dict:
     """Load + validate the split-SSOT and deep-merge into ONE view.
 
     Order: paths.yaml is the base; training.yaml
@@ -185,6 +186,11 @@ def load_config() -> dict:
         )
     merged["category_macros"] = vocabulary["category_macros"]
     return merged
+
+
+def load_config() -> dict:
+    """Return a copy of the validated merged config from the SSOT cache."""
+    return copy.deepcopy(_load_config_cached())
 
 
 # ── validated singletons (read once at import; the merge order above) ───────

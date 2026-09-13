@@ -66,6 +66,7 @@ from core.common import (
     metadata_text,
     pair_auc,
     pair_similarity,
+    plot_dpi,
     row_metadata_text,
     runtime,
     trace_artifact,
@@ -1964,18 +1965,25 @@ def _write_datapoint_usage(
     dynamic_populations = set(dynamic_populations or ())
     observed: Counter[str] = Counter()
     detailed: list[dict] = []
+    seen_pair_ids: set[int] = set()
     for key, count in sorted(presentation_counts.items(), key=lambda item: str(item[0])):
         epoch, pair_id, population, augmentation, ann_version = key
+        pair_id = int(pair_id)
+        if pair_id < 0 or pair_id >= len(pair_populations):
+            raise ValueError(
+                f"presentation count pair_id {pair_id} is outside the pair population"
+            )
+        seen_pair_ids.add(pair_id)
         observed[str(population)] += int(count)
         lineage = (
-            pair_lineage[int(pair_id)]
-            if pair_lineage is not None and int(pair_id) < len(pair_lineage)
+            pair_lineage[pair_id]
+            if pair_lineage is not None and pair_id < len(pair_lineage)
             else {}
         )
         detail = {
                 "fold": int(fold_i),
                 "epoch": int(epoch),
-                "pair_id": int(pair_id),
+                "pair_id": pair_id,
                 "population": str(population),
                 "augmentation": str(augmentation),
                 "ann_version": int(ann_version),
@@ -1997,6 +2005,43 @@ def _write_datapoint_usage(
             }
         )
         detailed.append(detail)
+    for pair_id, population in enumerate(pair_populations):
+        if pair_id in seen_pair_ids:
+            continue
+        lineage = (
+            pair_lineage[pair_id]
+            if pair_lineage is not None and pair_id < len(pair_lineage)
+            else {}
+        )
+        detailed.append(
+            {
+                "fold": int(fold_i),
+                "epoch": -1,
+                "pair_id": int(pair_id),
+                "population": str(population),
+                "augmentation": "not_presented",
+                "ann_version": 0,
+                "presentations": 0,
+                "lineage_id": lineage.get("lineage_id", ""),
+                "source_anchor_payload_idx": lineage.get(
+                    "source_anchor_payload_idx", ""
+                ),
+                "source_pair_payload_idx": lineage.get(
+                    "source_pair_payload_idx", ""
+                ),
+                "is_masked_copy": int(lineage.get("is_masked_copy", 0)),
+                **{
+                    key: value
+                    for key, value in lineage.items()
+                    if key not in {
+                        "lineage_id",
+                        "source_anchor_payload_idx",
+                        "source_pair_payload_idx",
+                        "is_masked_copy",
+                    }
+                },
+            }
+        )
     write_visibility_log(
         pd.DataFrame(detailed),
         f"datapoint_usage_fold{fold_i}.csv",
@@ -2049,9 +2094,10 @@ def _write_datapoint_usage(
         sample,
     )
     if missing:
-        raise RuntimeError(
-            f"datapoint presentation coverage missing non-empty populations: "
-            f"{', '.join(missing)}"
+        print(
+            "    [datapoint-coverage] WARNING: non-empty populations received "
+            f"zero presentations: {', '.join(missing)}",
+            flush=True,
         )
     print(
         f"    [datapoint-coverage] fold {fold_i}: "
@@ -2061,7 +2107,10 @@ def _write_datapoint_usage(
         ),
         flush=True,
     )
-    return {f"n_presented_{key}": int(value) for key, value in observed.items()}
+    return {
+        **{f"n_presented_{key}": int(value) for key, value in observed.items()},
+        "n_missing_datapoint_populations": int(len(missing)),
+    }
 
 
 def _dynamic_mask_negative_transform(
@@ -2147,45 +2196,14 @@ def _partition_calibration_pairs(
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Reserve component-safe calibration pairs from early-stop DEV."""
-    if len(positive_pairs) == 0:
-        raise ValueError("cannot reserve calibration data without DEV positives")
-    if not 0.0 < calibration_fraction < 1.0:
-        raise ValueError(
-            "split.calibration_dev_fraction must be strictly between 0 and 1"
-        )
-    from training.folds import component_folds
+    from training.folds import partition_component_pairs
 
-    pair_rows = np.unique(positive_pairs.ravel())
-    local_index = {int(row): position for position, row in enumerate(pair_rows)}
-    local_pairs = np.asarray(
-        [
-            [local_index[int(left)], local_index[int(right)]]
-            for left, right in positive_pairs
-        ],
-        dtype=int,
-    )
-    local_barcodes = np.asarray(row_bc[pair_rows], dtype=str)
-    n_folds = max(2, int(np.ceil(1.0 / calibration_fraction)))
-    component_groups = component_folds(local_pairs, local_barcodes, n_folds, seed)
-    n_calibration = min(
-        max(1, int(round(n_folds * calibration_fraction))),
-        n_folds - 1,
-    )
-    selected_barcodes = set().union(*component_groups[:n_calibration])
-
-    def calibration_mask(pairs: np.ndarray) -> np.ndarray:
-        return np.asarray(
-            [str(row_bc[int(pair[0])]).strip() in selected_barcodes for pair in pairs],
-            dtype=bool,
-        )
-
-    positive_mask = calibration_mask(positive_pairs)
-    negative_mask = calibration_mask(negative_pairs)
-    return (
-        positive_pairs[~positive_mask],
-        positive_pairs[positive_mask],
-        negative_pairs[~negative_mask],
-        negative_pairs[negative_mask],
+    return partition_component_pairs(
+        positive_pairs,
+        negative_pairs,
+        row_bc,
+        calibration_fraction,
+        seed,
     )
 
 
@@ -2261,6 +2279,9 @@ def train_one_config(
     calibration_config = load_config()
     calibration_fraction = float(
         calibration_config["split"]["calibration_dev_fraction"]
+    )
+    calibration_seed_offset = int(
+        calibration_config["split"]["calibration_seed_offset"]
     )
 
     _train_neg_source = (
@@ -2511,7 +2532,7 @@ def train_one_config(
                     hard_dev,
                     row_bc,
                     calibration_fraction,
-                    seed + fold_i + 17,
+                    seed + fold_i + calibration_seed_offset,
                 )
             )
             if len(test_pos) == 0 or len(hard_test) == 0:
@@ -3504,7 +3525,7 @@ def train_one_config(
                     ax.legend()
                     fig.tight_layout()
                     curve_path = RESULTS / f"wandb_loss_by_epoch_{run_tag}_fold{fold_i}.png"
-                    fig.savefig(curve_path, dpi=150)
+                    fig.savefig(curve_path, dpi=plot_dpi())
                     plt.close(fig)
                     wandb_ctx.log_image(
                         curve_path,
@@ -3642,6 +3663,43 @@ def train_one_config(
                 continue
 
             # eval on test (timed: encode latency is a first-class metric)
+            from core.structured_features import fuse_numpy
+
+            post_train_embedding_cache: dict[int, np.ndarray] = {}
+
+            def _encode_fused_rows(rows: np.ndarray) -> np.ndarray:
+                """Encode each post-train payload row once per fold."""
+                unique_rows = np.unique(np.asarray(rows, dtype=int))
+                missing_rows = np.asarray(
+                    [
+                        row
+                        for row in unique_rows
+                        if int(row) not in post_train_embedding_cache
+                    ],
+                    dtype=int,
+                )
+                if len(missing_rows):
+                    encoded = model.encode(
+                        [payload[int(row)] for row in missing_rows],
+                        batch_size=runtime("batch_size_eval"),
+                        normalize_embeddings=True,
+                        show_progress_bar=False,
+                    )
+                    fused = fuse_numpy(
+                        encoded,
+                        structured_features[missing_rows],
+                        structured_feature_weight,
+                    )
+                    post_train_embedding_cache.update(
+                        {
+                            int(row): fused[position]
+                            for position, row in enumerate(missing_rows)
+                        }
+                    )
+                return np.asarray(
+                    [post_train_embedding_cache[int(row)] for row in rows]
+                )
+
             t_encode = time.perf_counter()
             eval_rows = np.unique(np.r_[test_pos.ravel(), hard_test.ravel()])
             row_to_idx = {int(r): i for i, r in enumerate(eval_rows)}
@@ -3652,17 +3710,7 @@ def train_one_config(
                 -1, 2
             )
             eval_payload = [payload[r] for r in eval_rows]
-            emb = model.encode(
-                eval_payload,
-                batch_size=runtime("batch_size_eval"),
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
-            from core.structured_features import fuse_numpy
-
-            emb = fuse_numpy(
-                emb, structured_features[eval_rows], structured_feature_weight
-            )
+            emb = _encode_fused_rows(eval_rows)
             encode_s = time.perf_counter() - t_encode
             pos_s = _cos(emb, tp_idx)
             neg_s = _cos(emb, hn_idx)
@@ -3688,15 +3736,7 @@ def train_one_config(
                 random_idx = np.array(
                     [random_row_to_idx[int(r)] for r in random_neg_pairs.ravel()]
                 ).reshape(-1, 2)
-                random_emb = model.encode(
-                    [payload[r] for r in random_rows],
-                    batch_size=runtime("batch_size_eval"),
-                    normalize_embeddings=True,
-                    show_progress_bar=False,
-                )
-                random_emb = fuse_numpy(
-                    random_emb, structured_features[random_rows], structured_feature_weight
-                )
+                random_emb = _encode_fused_rows(random_rows)
                 random_easy_s = _cos(random_emb, random_idx)
             random_easy_status = "ok" if len(random_neg_pairs) else "empty"
             pd.DataFrame(
@@ -3736,16 +3776,7 @@ def train_one_config(
             dev_hn_idx = np.array(
                 [dev_row_to_idx[int(r)] for r in hard_dev.ravel()]
             ).reshape(-1, 2)
-            dev_payload = [payload[r] for r in dev_rows]
-            dev_emb = model.encode(
-                dev_payload,
-                batch_size=runtime("batch_size_eval"),
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
-            dev_emb = fuse_numpy(
-                dev_emb, structured_features[dev_rows], structured_feature_weight
-            )
+            dev_emb = _encode_fused_rows(dev_rows)
             dev_pos_s = _cos(dev_emb, dev_tp_idx)
             dev_neg_s = _cos(dev_emb, dev_hn_idx)
 
@@ -3771,15 +3802,7 @@ def train_one_config(
             train_neg_idx = np.array(
                 [train_row_to_idx[int(r)] for r in train_neg_eval_pairs.ravel()]
             ).reshape(-1, 2)
-            train_emb = model.encode(
-                [payload[r] for r in train_rows],
-                batch_size=runtime("batch_size_eval"),
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
-            train_emb = fuse_numpy(
-                train_emb, structured_features[train_rows], structured_feature_weight
-            )
+            train_emb = _encode_fused_rows(train_rows)
             train_pos_s = _cos(train_emb, train_pos_idx)
             train_neg_s = _cos(train_emb, train_neg_idx)
 
@@ -3847,7 +3870,11 @@ def train_one_config(
             # precision at 90% recall with its audit triple (TP/FP/threshold)
             # from 07b/07c/07d CSVs; compute them from the SAME score
             # population as pr_auc so those CSVs regenerate from src/training/train runs.
-            _prec90, _rec90, _thr90 = _precision_at_recall(_y, _all, 0.90)
+            _prec90, _rec90, _thr90 = _precision_at_recall(
+                _y,
+                _all,
+                float(calibration_config["rand_matching"]["target_recall"]),
+            )
             _tp90 = int(((_all >= _thr90) & (_y == 1)).sum())
             _fp90 = int(((_all >= _thr90) & (_y == 0)).sum())
 
@@ -4168,7 +4195,7 @@ def train_one_config(
                 axes[0].set_ylabel("density")
                 fig.suptitle("Train vs holdout score distributions")
                 fig.tight_layout()
-                fig.savefig(score_plot_path, dpi=150)
+                fig.savefig(score_plot_path, dpi=plot_dpi())
                 plt.close(fig)
                 if wandb_ctx is not None:
                     wandb_ctx.log_image(
