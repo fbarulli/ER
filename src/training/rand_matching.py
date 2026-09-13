@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 import torch
 from pydantic import BaseModel, ConfigDict, Field
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import util
 from sklearn.metrics import (
     adjusted_rand_score,
     rand_score,
@@ -49,6 +49,7 @@ from core.common import (
     TRAIN_ROOT,
     TRAINING_CONFIG_PATH,
     canonical_records_frame,
+    load_local_sentence_transformer,
     load_config,
     load_dataset_deduped,
     metadata_text,
@@ -513,7 +514,7 @@ class RandMatcher:
                 + (" ..." if len(missing_records) > 10 else "")
             )
 
-        self.model = SentenceTransformer(str(checkpoint))
+        self.model = load_local_sentence_transformer(str(checkpoint), device="cpu")
         self.structured_enabled = bool(self.structured_config["enabled"])
         self.structured_text = (
             self.structured_enabled

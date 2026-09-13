@@ -33,7 +33,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from sentence_transformers import SentenceTransformer
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -47,6 +46,7 @@ from core.common import (
     ensure_parent,
     load_dataset,
     load_config,
+    load_local_sentence_transformer,
     resolve_model,
     training_cfg,
 )
@@ -411,7 +411,7 @@ def main() -> None:
             print(f"--- Model: {model_key} already scored, skip ---", flush=True)
             continue
         print(f"\n--- Model: {model_key} ---", flush=True)
-        model = SentenceTransformer(model_path, device=DEVICE)
+        model = load_local_sentence_transformer(model_key, device=DEVICE)
         model.max_seq_length = int(load_config()["training"]["max_seq_length"])  # SSOT
         embeddings = model.encode(
             model_texts,

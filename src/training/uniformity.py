@@ -15,9 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sentence_transformers import SentenceTransformer
-
-from core.common import plot_dpi
+from core.common import load_local_sentence_transformer, plot_dpi
 
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
@@ -143,8 +141,8 @@ def run_uniformity_audit(
         )
         return result
     texts = [payload[index] for pair in pairs for index in pair]
-    base = SentenceTransformer(str(base_model), device="cpu")
-    fine = SentenceTransformer(str(checkpoint), device="cpu")
+    base = load_local_sentence_transformer(str(base_model), device="cpu")
+    fine = load_local_sentence_transformer(str(checkpoint), device="cpu")
     base_emb = base.encode(
         texts, convert_to_numpy=True, normalize_embeddings=True, show_progress_bar=False
     )

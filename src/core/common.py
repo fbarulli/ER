@@ -634,7 +634,7 @@ def _validate_materialized_model(path: Path, reference: str) -> str:
         raise FileNotFoundError(
             f"model {reference!r} is not materialized locally: {resolved}. "
             "Materialize the project-owned model bundle through DVC; "
-            "Hugging Face downloads are disabled."
+            "external model downloads are disabled."
         )
     if not any((resolved / marker).is_file() for marker in ("modules.json", "config.json")):
         raise ValueError(
@@ -688,8 +688,34 @@ def resolve_model(key_or_sub: str) -> str:
     raise FileNotFoundError(
         f"model {reference!r} is not materialized locally; checked: {checked}. "
         "Materialize the project-owned model bundle through DVC; "
-        "Hugging Face downloads are disabled."
+        "external model downloads are disabled."
     )
+
+
+def load_local_sentence_transformer(
+    key_or_path: str,
+    *,
+    device: str,
+    **kwargs: Any,
+):
+    """Load every bi-encoder through the local registry/DVC contract."""
+    from sentence_transformers import SentenceTransformer
+
+    resolved = resolve_model(key_or_path)
+    return SentenceTransformer(resolved, device=device, **kwargs)
+
+
+def load_local_cross_encoder(
+    key_or_path: str,
+    *,
+    device: str,
+    **kwargs: Any,
+):
+    """Load every cross-encoder through the local registry/DVC contract."""
+    from sentence_transformers import CrossEncoder
+
+    resolved = resolve_model(key_or_path)
+    return CrossEncoder(resolved, device=device, **kwargs)
 
 
 # ── visibility-log writes (owner directive 2026-09-07) ─────────────────────

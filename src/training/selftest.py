@@ -1098,14 +1098,14 @@ def oracle_config_split() -> None:
         key in vocabulary()
         for key in ("STOPWORDS", "MINIMAL_STOPWORDS", "ENGLISH_STOP_WORDS", "CONCEPT_FOLDS", "category_macros")
     ))
-    # Model references are local-only. A Hub identifier must be rejected
+    # Model references are local-only. An external model identifier must be rejected
     # before any encoder can ask the network for weights.
     try:
-        resolve_model("sentence-transformers/all-MiniLM-L6-v2")
+        resolve_model("external-registry/model")
     except KeyError:
-        check("Hub model identifiers are rejected", True)
+        check("external model identifiers are rejected", True)
     else:
-        check("Hub model identifiers are rejected", False)
+        check("external model identifiers are rejected", False)
     # split shares sum to 1 (Pydantic-enforced; values come from config)
     sp = training_cfg().split
     check(

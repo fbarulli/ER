@@ -63,6 +63,7 @@ from core.common import (
     embedding_model_keys,
     sweep_cfg,
     hpo_cfg,
+    load_local_sentence_transformer,
     load_config,
     resolve_model,
     training_cfg,
@@ -1150,9 +1151,7 @@ def generate_local_mask_effect(remote_base: str, workers: int) -> None:
             _post_training_event(run_id, "mask_effect", "skipped", worker=number, reason="no_resolved_targets")
             continue
         try:
-            from sentence_transformers import SentenceTransformer
-
-            model = SentenceTransformer(str(source), device="cpu")
+            model = load_local_sentence_transformer(str(source), device="cpu")
             masked = audit["masked_text"].astype(str).tolist()
             anchors = audit["anchor_text"].astype(str).tolist()
             targets = audit["target_text"].astype(str).tolist()

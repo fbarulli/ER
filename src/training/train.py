@@ -29,6 +29,7 @@ from core.common import (
     ensure_parent,
     load_config,
     load_dataset_deduped,
+    load_local_sentence_transformer,
     plot_dpi,
     recall_column_suffix,
     runtime,
@@ -1181,8 +1182,6 @@ def _main_inner(_mlf, _wandb) -> None:
             and mask_audit
             and _ok
         ):
-            from sentence_transformers import SentenceTransformer as _ST
-
             _best = artifact(
                 "checkpoint_repo",
                 {
@@ -1219,7 +1218,7 @@ def _main_inner(_mlf, _wandb) -> None:
                     _src = _cand
                     break
             print(f"[mask-effect] scoring model from {_src}", flush=True)
-            _model = _ST(str(_src), device="cpu")
+            _model = load_local_sentence_transformer(str(_src), device="cpu")
             _texts = [m["masked_text"] for m in mask_audit]
             _unmasked_texts = [m["anchor_text"] for m in mask_audit]
             _targets = [payload[m["pair_payload_idx"]] for m in mask_audit]

@@ -33,7 +33,7 @@ def encode_corpus(
     fallback literals (every caller passes runtime() values), and a
     future caller could silently get the default instead of the SSOT.
     """
-    from sentence_transformers import SentenceTransformer
+    from core.common import load_local_sentence_transformer
 
     if cache_dir:
         import hashlib
@@ -51,7 +51,7 @@ def encode_corpus(
                 return emb, 0.0
             # size mismatch: stale cache entry, re-encode below
 
-    model = SentenceTransformer(
+    model = load_local_sentence_transformer(
         model_id, device=device, model_kwargs={"torch_dtype": torch.float32}
     )
     model.max_seq_length = max_seq_length

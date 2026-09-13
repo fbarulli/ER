@@ -38,8 +38,6 @@ def rerank_stage(
     outside it the bi-encoder score stands. Reports bi-only vs hybrid AUC.
     """
     import torch
-    from sentence_transformers import CrossEncoder, SentenceTransformer
-
     test_bc = (
         folds_override
         if isinstance(folds_override, (set, frozenset))
@@ -67,12 +65,12 @@ def rerank_stage(
             print(f"[rerank] no checkpoint at {ckpt} — skipping", flush=True)
             return
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    bi = SentenceTransformer(str(ckpt), device=dev)
+    bi = common.load_local_sentence_transformer(str(ckpt), device=dev)
     # max_length SSOT: training.rerank_max_length (config/training.yaml) —
     # was an inline 512 the config could not steer (audit, owner Q27).
     from core.common import runtime as _runtime
 
-    ce = CrossEncoder(
+    ce = common.load_local_cross_encoder(
         args.rerank, device=dev, max_length=int(_runtime("rerank_max_length"))
     )
 

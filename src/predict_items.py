@@ -8,10 +8,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import util
 
 from core.common import (
     F,
+    load_local_sentence_transformer,
     load_config,
     load_dataset_deduped,
     rand_matching_cfg,
@@ -108,7 +109,7 @@ def main() -> None:
         )
         for item_id, info in zip(item_ids, item_infos, strict=True)
     ]
-    model = SentenceTransformer(str(Path(args.model)))
+    model = load_local_sentence_transformer(str(Path(args.model)), device="cpu")
     sku_embeddings = model.encode(
         sku_texts,
         batch_size=128,

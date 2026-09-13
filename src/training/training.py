@@ -63,6 +63,7 @@ from core.common import (
     ensure_parent,
     kfold_barcodes,
     load_config,
+    load_local_sentence_transformer,
     metadata_text,
     pair_auc,
     pair_similarity,
@@ -2313,8 +2314,6 @@ def train_one_config(
     """Train cfg across the group-aware folds. Returns fold metric rows
     (failures included, with traceback)."""
     import torch
-    from sentence_transformers import SentenceTransformer
-
     # BOUNDARY CONTRACT (lib.schemas.TrainConfig): the optimizer/early-stop
     # dict — every key validated (epochs >= 1, lr > 0, warmup in [0,1]...)
     # before a single fold runs. A missing/illegal knob dies HERE with the
@@ -2681,7 +2680,9 @@ def train_one_config(
             # (SKU text, canonical text) pairs; each side is encoded on its
             # own before cosine/loss comparison.  CrossEncoder is optional
             # only in rerank.py after retrieval, never this default path.
-            model = SentenceTransformer(model_id, device="cuda" if on_cuda else "cpu")
+            model = load_local_sentence_transformer(
+                model_id, device="cuda" if on_cuda else "cpu"
+            )
             _align_model_token_ids(model)
             model.max_seq_length = runtime("max_seq_length")  # SSOT, no literal
 
