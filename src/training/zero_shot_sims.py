@@ -67,8 +67,6 @@ SIM_COLUMNS = {k: v for k, v in _cfg["sim_columns"].items()}
 def main() -> None:
     import argparse
 
-
-    models = {key: resolve_model(key) for key in MODEL_KEYS}
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--models",
@@ -77,14 +75,16 @@ def main() -> None:
         help="comma-separated model keys to score (default: all in config)",
     )
     args = ap.parse_args()
+    selected_keys = MODEL_KEYS
     if args.models is not None:
-        sel = [m for m in args.models.split(",") if m]
-        missing = [m for m in sel if m not in MODEL_KEYS]
+        selected_keys = tuple(m for m in args.models.split(",") if m)
+        missing = [m for m in selected_keys if m not in MODEL_KEYS]
         if missing:
             raise SystemExit(
                 f"unknown --models entries: {missing} (have {list(MODEL_KEYS)})"
             )
-        models = {key: resolve_model(key) for key in sel}
+    models = {key: resolve_model(key) for key in selected_keys}
+    if args.models is not None:
         print(f"[models] scoring lanes only: {list(models)}", flush=True)
 
     df_canon_path = F["canonical_records"]

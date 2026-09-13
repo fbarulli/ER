@@ -162,9 +162,15 @@ def oracle_second04_manifest_contract() -> None:
 def oracle_calibration_fold_collapse_contract() -> None:
     from pydantic import ValidationError
 
+    from core.common import data_cfg, load_config, training_cfg
     from training.hpo_metrics import (
+        CALIBRATION_REASON_EMPTY_SPLIT,
         CalibrationFoldMetricRow,
+        CalibrationMetricRow,
         CalibrationSensitivityRow,
+        CalibrationUnavailableReasonCode,
+        numeric_calibration_metrics,
+        unavailable_calibration_metrics,
     )
 
     row = CalibrationFoldMetricRow(
@@ -212,6 +218,51 @@ def oracle_calibration_fold_collapse_contract() -> None:
         check("GTIN-stratified sensitivity rejects unknown status", True)
     else:
         check("GTIN-stratified sensitivity rejects unknown status", False)
+
+    config = load_config()
+    colab = training_cfg().colab
+    registry = data_cfg().models
+    check(
+        "config-load colab.sims_model is a registered embedding model",
+        config["colab"]["sims_model"] in registry
+        and config["colab"]["sims_model"] in data_cfg().embedding_model_keys
+        and colab.sims_model == config["colab"]["sims_model"],
+    )
+
+    check(
+        "calibration diagnostics are typed structures",
+        CalibrationMetricRow.model_fields[
+            "calibration_sensitivity_table"
+        ].annotation
+        == list[CalibrationSensitivityRow]
+        and CalibrationMetricRow.model_fields[
+            "calibration_fold_collapse"
+        ].annotation
+        == list[CalibrationFoldMetricRow],
+    )
+    unavailable = unavailable_calibration_metrics(
+        reason_code=CALIBRATION_REASON_EMPTY_SPLIT,
+        reason="empty calibration split",
+        positive_pairs=0,
+        negative_pairs=0,
+    )
+    check(
+        "calibration unavailable reason code is stable and machine-readable",
+        unavailable["calibration_reason_code"]
+        == CalibrationUnavailableReasonCode.EMPTY_SPLIT
+        and numeric_calibration_metrics(unavailable)[
+            "calibration_unavailable_reason_code"
+        ]
+        == 1,
+    )
+    try:
+        CalibrationMetricRow.model_validate(
+            {"calibration_sensitivity_table": "[]"}
+        )
+    except ValidationError:
+        check("calibration diagnostics reject opaque JSON strings", True)
+    else:
+        check("calibration diagnostics reject opaque JSON strings", False)
 
 
 def oracle_rand_calibration_reconciliation() -> None:
@@ -1084,6 +1135,7 @@ def oracle_no_fallback_ssot() -> None:
         sweep_cfg,
         training_cfg,
     )
+    from core.schemas import RandMatchingSpec, THRESHOLD_TIE_BREAK_CRITERIA
     from training.rand_matching import _threshold_selection_key
 
     # ── hpo: block — the sweep spaces are config data, not module literals
@@ -1134,9 +1186,51 @@ def oracle_no_fallback_ssot() -> None:
         str(r),
     )
     check(
-        "threshold tie-break order is Rand/fewest-unmatched/lower-threshold",
-        rand_matching_cfg()["threshold_tie_break"]
-        == ["rand_index", "fewest_unmatched_skus", "lowest_threshold"],
+        "threshold tie-break has exactly the configured criteria",
+        tuple(sorted(rand_matching_cfg()["threshold_tie_break"]))
+        == tuple(sorted(THRESHOLD_TIE_BREAK_CRITERIA))
+        and len(set(rand_matching_cfg()["threshold_tie_break"]))
+        == len(THRESHOLD_TIE_BREAK_CRITERIA),
+    )
+    rand_spec = training_cfg().rand_matching
+    reordered_policy = [
+        "lowest_threshold",
+        "rand_index",
+        "fewest_unmatched_skus",
+    ]
+    RandMatchingSpec.model_validate(
+        rand_spec.model_dump() | {"threshold_tie_break": reordered_policy}
+    )
+    check(
+        "threshold tie-break accepts a valid configured permutation",
+        True,
+    )
+    try:
+        RandMatchingSpec.model_validate(
+            rand_spec.model_dump()
+            | {
+                "threshold_tie_break": [
+                    "rand_index",
+                    "rand_index",
+                    "lowest_threshold",
+                ]
+            }
+        )
+    except ValueError:
+        check("threshold tie-break rejects duplicate criteria", True)
+    else:
+        check("threshold tie-break rejects duplicate criteria", False)
+    from unittest.mock import patch
+
+    reordered_cfg = rand_matching_cfg()
+    reordered_cfg["threshold_tie_break"] = reordered_policy
+    with patch("training.rand_matching.rand_matching_cfg", return_value=reordered_cfg):
+        reordered_key = _threshold_selection_key(
+            {"rand_index": 0.80, "unmatched_skus": 2, "threshold": 0.90}
+        )
+    check(
+        "threshold selection follows configured permutation",
+        reordered_key == (-0.90, 0.80, -2.0),
     )
     check(
         "threshold median minimum fold support is configured",

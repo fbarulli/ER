@@ -8,7 +8,8 @@ connected components for submission, or pairwise AUC as its objective.
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from enum import Enum
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,27 @@ from training.rand_matching import (
 from training.uniformity import select_unrelated_pairs
 
 
+class CalibrationUnavailableReasonCode(str, Enum):
+    """Stable machine-readable reasons for an unavailable calibration surface."""
+
+    EMPTY_SPLIT = "empty_calibration_split"
+    EVALUATOR_FAILED = "calibration_evaluator_failed"
+
+
+CALIBRATION_UNAVAILABLE_REASON_CODES: dict[CalibrationUnavailableReasonCode, int] = {
+    CalibrationUnavailableReasonCode.EMPTY_SPLIT: 1,
+    CalibrationUnavailableReasonCode.EVALUATOR_FAILED: 2,
+}
+CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED = 0
+
+# Compatibility aliases for callers that use the owned reason constants.  The
+# enum above is the single source of the string values.
+CALIBRATION_REASON_EMPTY_SPLIT = CalibrationUnavailableReasonCode.EMPTY_SPLIT.value
+CALIBRATION_REASON_EVALUATOR_FAILED = (
+    CalibrationUnavailableReasonCode.EVALUATOR_FAILED.value
+)
+
+
 class CalibrationMetricRow(BaseModel):
     """Pydantic contract for the shared train/calibration metric payload."""
 
@@ -42,6 +64,7 @@ class CalibrationMetricRow(BaseModel):
     calibration_proxy_source: str
     calibration_status: str
     calibration_reason: str | None = None
+    calibration_reason_code: CalibrationUnavailableReasonCode | None = None
     calibration_positive_pairs: int
     calibration_negative_pairs: int
     calibration_sku_count: int
@@ -57,7 +80,7 @@ class CalibrationMetricRow(BaseModel):
         default="preserve_all_candidate_rows; assignment_selects_best_per_sku",
     )
     calibrated_threshold: float
-    calibration_threshold_tie_break: str | None = None
+    calibration_threshold_tie_break: list[str] | None = None
     calibration_reconciliation_scope: str
     calibration_threshold_fold_count: int
     calibration_threshold_support_count: int
@@ -86,10 +109,10 @@ class CalibrationMetricRow(BaseModel):
     calibration_precision_at_threshold: float
     calibration_recall_at_threshold: float
     calibration_gtin_strata: int
-    calibration_sensitivity_table: str
-    calibration_sensitivity_by_gtin_status: str
-    calibration_fold_collapse: str
-    diagnostic_component_size_distribution: str
+    calibration_sensitivity_table: list["CalibrationSensitivityRow"]
+    calibration_sensitivity_by_gtin_status: list["CalibrationSensitivityRow"]
+    calibration_fold_collapse: list["CalibrationFoldMetricRow"]
+    diagnostic_component_size_distribution: dict[str, int]
     diagnostic_edge_count: int
     plausible_group_count: int
     diagnostic_component_count: int
@@ -131,88 +154,12 @@ class CalibrationMetricRow(BaseModel):
     collapse_healthy: int | None = None
     collapse_penalty: float | None = None
 
-    @field_validator(
-        "calibration_sensitivity_table",
-        "calibration_sensitivity_by_gtin_status",
-        "calibration_fold_collapse",
-    )
-    @classmethod
-    def _traceable_json_diagnostic(cls, value: str, info: Any) -> str:
-        """Keep the CSV/tracking string interface, but validate its payload."""
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"{info.field_name} must contain JSON text")
-        try:
-            payload = json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{info.field_name} is not valid JSON") from exc
-        if not isinstance(payload, list):
-            raise ValueError(f"{info.field_name} must encode a JSON list")
-        required = {
-            "calibration_fold_collapse": {
-                "calibration_fold",
-                "calibrated_threshold",
-                "reconciliation_scope",
-            },
-            "calibration_sensitivity_table": {
-                "threshold",
-                "gtin_status",
-                "reconciliation_scope",
-            },
-            "calibration_sensitivity_by_gtin_status": {
-                "threshold",
-                "gtin_status",
-                "reconciliation_scope",
-            },
-        }[info.field_name]
-        for index, item in enumerate(payload):
-            if not isinstance(item, dict):
-                raise ValueError(
-                    f"{info.field_name}[{index}] must be a JSON object"
-                )
-            missing = sorted(required - set(item))
-            if missing:
-                raise ValueError(
-                    f"{info.field_name}[{index}] is missing trace fields {missing}"
-                )
-        return value
-
     @field_validator("calibration_candidate_duplicate_reason")
     @classmethod
     def _duplicate_reason_is_explicit(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("duplicate candidate reason must be explicit")
         return value
-
-    @field_validator("calibration_threshold_tie_break")
-    @classmethod
-    def _valid_tie_break_json(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        try:
-            payload = json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise ValueError("calibration_threshold_tie_break is not valid JSON") from exc
-        if not isinstance(payload, list) or any(not isinstance(item, str) for item in payload):
-            raise ValueError(
-                "calibration_threshold_tie_break must encode a JSON list of strings"
-            )
-        return value
-
-    @field_validator("diagnostic_component_size_distribution")
-    @classmethod
-    def _valid_component_distribution_json(cls, value: str) -> str:
-        try:
-            payload = json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "diagnostic_component_size_distribution is not valid JSON"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise ValueError(
-                "diagnostic_component_size_distribution must encode a JSON object"
-            )
-        return value
-
 
 class CalibrationFoldMetricRow(BaseModel):
     """Strict contract for one fit/check calibration fold."""
@@ -266,6 +213,9 @@ class CalibrationSensitivityRow(BaseModel):
                 f"expected ALL or {GTIN_STATUSES}"
             )
         return value
+
+
+CalibrationMetricRow.model_rebuild()
 
 
 # One reporting contract is shared by ordinary train, fixed-grid HPO, and
@@ -325,23 +275,16 @@ NON_FINITE_FIELD_METRIC_PREFIX = "calibration_non_finite/"
 # such a row says so; the producers pass one of the stable reason codes below.
 # The human-readable reason remains available for diagnosis, but no numeric
 # tracking field depends on parsing its wording.
-CALIBRATION_REASON_EMPTY_SPLIT = "empty_calibration_split"
-CALIBRATION_REASON_EVALUATOR_FAILED = "calibration_evaluator_failed"
-CALIBRATION_UNAVAILABLE_REASON_CODES = {
-    CALIBRATION_REASON_EMPTY_SPLIT: 1,
-    CALIBRATION_REASON_EVALUATOR_FAILED: 2,
-}
-CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED = 0
-
-
 def _unavailable_reason_code(row: dict) -> int:
-    """Map a row's free-text ``calibration_reason`` to a stable numeric code."""
+    """Map a typed reason code to its stable numeric tracking code."""
     reason_code = row.get("calibration_reason_code")
-    if isinstance(reason_code, str):
+    try:
         return CALIBRATION_UNAVAILABLE_REASON_CODES.get(
-            reason_code,
+            CalibrationUnavailableReasonCode(reason_code),
             CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED,
         )
+    except (TypeError, ValueError):
+        pass
     return CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED
 
 
@@ -387,17 +330,21 @@ def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
 
 def unavailable_calibration_metrics(
     *,
-    reason_code: str,
+    reason_code: CalibrationUnavailableReasonCode | str,
     reason: str,
     positive_pairs: int,
     negative_pairs: int,
 ) -> dict[str, str | int]:
     """Record an unavailable calibration surface without dropping the fold."""
-    if reason_code not in CALIBRATION_UNAVAILABLE_REASON_CODES:
+    try:
+        normalized_code = CalibrationUnavailableReasonCode(reason_code)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unknown calibration unavailable reason code: {reason_code!r}") from exc
+    if normalized_code not in CALIBRATION_UNAVAILABLE_REASON_CODES:
         raise ValueError(f"unknown calibration unavailable reason code: {reason_code!r}")
     return {
         "calibration_status": "unavailable",
-        "calibration_reason_code": reason_code,
+        "calibration_reason_code": normalized_code,
         "calibration_reason": reason,
         "calibration_positive_pairs": int(positive_pairs),
         "calibration_negative_pairs": int(negative_pairs),
@@ -1014,8 +961,8 @@ def evaluate_calibration_trial(
             "preserve_all_candidate_rows; assignment_selects_best_per_sku"
         ),
         "calibrated_threshold": final_threshold,
-        "calibration_threshold_tie_break": json.dumps(
-            list(config["rand_matching"]["threshold_tie_break"]),
+        "calibration_threshold_tie_break": list(
+            config["rand_matching"]["threshold_tie_break"]
         ),
         "calibration_reconciliation_scope": reconciliation_scope,
         "calibration_threshold_fold_count": n_folds,
@@ -1053,23 +1000,11 @@ def evaluate_calibration_trial(
                 float(config["rand_matching"]["target_recall"]),
             )
         ),
-        "calibration_sensitivity_table": json.dumps(
-            [
-                {
-                    **row.model_dump(),
-                }
-                for row in sensitivity
-            ],
-            sort_keys=True,
-        ),
-        "calibration_sensitivity_by_gtin_status": json.dumps(
-            [row.model_dump() for row in stratified_sensitivity],
-            sort_keys=True,
-        ),
-        "calibration_fold_collapse": json.dumps(
-            [row.model_dump() for row in fold_rows],
-            sort_keys=True,
-        ),
+        "calibration_sensitivity_table": [row.model_dump() for row in sensitivity],
+        "calibration_sensitivity_by_gtin_status": [
+            row.model_dump() for row in stratified_sensitivity
+        ],
+        "calibration_fold_collapse": [row.model_dump() for row in fold_rows],
     }
     calibrated_metrics = overall
     result["calibration_precision_at_threshold"] = float(
@@ -1086,6 +1021,9 @@ def evaluate_calibration_trial(
             for key in METRIC_COLUMNS
             if key.startswith("diagnostic_") or key == "plausible_group_count"
         }
+    )
+    result["diagnostic_component_size_distribution"] = json.loads(
+        str(result["diagnostic_component_size_distribution"])
     )
     validation_predictions = choose_assignments(
         validation_candidate_frame,

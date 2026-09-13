@@ -64,6 +64,7 @@ from core.graph_diagnostics import (
 )
 from core.gtin import is_valid_gtin_checksum
 from core.manifest import sha256_file
+from core.schemas import THRESHOLD_TIE_BREAK_CRITERIA
 from core.structured_features import (
     append_text as append_structured_text,
     canonical_info as canonical_structured_info,
@@ -139,6 +140,10 @@ def _threshold_selection_key(row: dict[str, float | int]) -> tuple[float, ...]:
         "lowest_threshold": -float(row["threshold"]),
     }
     policy = rand_matching_cfg()["threshold_tie_break"]
+    if tuple(sorted(policy)) != tuple(sorted(THRESHOLD_TIE_BREAK_CRITERIA)):
+        raise ValueError(
+            "rand_matching.threshold_tie_break contains an unsupported criterion"
+        )
     return tuple(values[name] for name in policy)
 
 

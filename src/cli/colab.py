@@ -926,7 +926,7 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     local_base = TRAINING_RESULTS / run_id
     from training.generate_training_report import generate_report
-    from core.common import load_dataset_deduped, resolve_model
+    from core.common import load_dataset_deduped
     from pipeline import build_training_data
     from training.uniformity import run_uniformity_audit
 
@@ -1713,12 +1713,17 @@ for step in ("src/training/dedupe.py", "src/training/build_second04_pairs.py", "
 def materialize_remote_models(model_keys: list[str]) -> None:
     """Pull and validate only the model bundles required by this lane."""
     keys = sorted(set(model_keys))
+    if not keys:
+        return
     config = load_config()
     registry = config["models"]
-    model_root = str(config["paths"]["models_dir"])
     unknown = sorted(set(keys) - set(registry))
     if unknown:
         raise KeyError(f"unknown local model registry key(s): {unknown}")
+    model_roots = [
+        str(config["paths"]["models_dir"]),
+        str(config["paths"]["models_dir_sibling"]),
+    ]
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import subprocess
 from pathlib import Path
@@ -1728,7 +1733,7 @@ from core.common import resolve_model
 root = {REMOTE_ROOT!r}
 cfg = load_config()
 registry = cfg["models"]
-model_root = Path(root) / {model_root!r}
+model_roots = [Path(root) / relative for relative in {model_roots!r}]
 requested = {keys!r}
 
 def exact_dvc_target(target):
@@ -1750,17 +1755,18 @@ def exact_dvc_target(target):
 targets = []
 unavailable = []
 for key in requested:
-    target = model_root / Path(registry[key])
     try:
         resolve_model(key)
-        print(f"[models] {{key}} already materialized at {{target}}", flush=True)
+        print(f"[models] {{key}} already materialized locally", flush=True)
         continue
     except FileNotFoundError:
         pass
-    if exact_dvc_target(target) is None:
-        unavailable.append((key, str(target)))
-    else:
-        targets.append(str(target.relative_to(Path(root))))
+    candidates = [root / Path(registry[key]) for root in model_roots]
+    addressable = [target for target in candidates if exact_dvc_target(target)]
+    if len(addressable) != 1:
+        unavailable.append((key, [str(target) for target in candidates]))
+        continue
+    targets.append(str(addressable[0].relative_to(Path(root))))
 if unavailable:
     raise RuntimeError(
         "requested model bundles are not individually DVC-addressable; "

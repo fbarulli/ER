@@ -59,6 +59,13 @@ from pydantic import (
     model_validator,
 )
 
+
+THRESHOLD_TIE_BREAK_CRITERIA = (
+    "rand_index",
+    "fewest_unmatched_skus",
+    "lowest_threshold",
+)
+
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIG CONTRACTS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -442,11 +449,12 @@ class RandMatchingSpec(BaseModel):
             raise ValueError(
                 "rand_matching.threshold_min must not exceed threshold_max"
             )
-        expected = ["rand_index", "fewest_unmatched_skus", "lowest_threshold"]
-        if self.threshold_tie_break != expected:
+        expected = set(THRESHOLD_TIE_BREAK_CRITERIA)
+        configured = set(self.threshold_tie_break)
+        if configured != expected or len(self.threshold_tie_break) != len(configured):
             raise ValueError(
-                "rand_matching.threshold_tie_break must be ordered as "
-                f"{expected}"
+                "rand_matching.threshold_tie_break must contain exactly one of "
+                f"each criterion {sorted(expected)}; order controls priority"
             )
         return self
 
