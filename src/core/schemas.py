@@ -188,6 +188,39 @@ class DvcPublicationManifest(BaseModel):
     pointers: list[DvcPublicationPointer] = Field(min_length=1)
 
 
+class ResultBundleFile(BaseModel):
+    """One file in the verified remote result archive."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    worker: int = Field(ge=1)
+    path: str = Field(min_length=1)
+    size: int = Field(ge=0)
+    sha256: str = Field(min_length=64, max_length=64, pattern=r"[0-9a-f]{64}")
+
+
+class ResultBundleExcludedFile(BaseModel):
+    """One explicitly excluded remote file recorded for transparency."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    worker: int = Field(ge=1)
+    path: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class ResultBundleManifest(BaseModel):
+    """Manifest for one atomic Colab result transfer."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["1"]
+    run_id: str = Field(min_length=1)
+    workers: int = Field(ge=1)
+    included: list[ResultBundleFile] = Field(min_length=1)
+    excluded: list[ResultBundleExcludedFile]
+
+
 class DataConfig(BaseModel):
     """config/paths.yaml — the SHARED data contract (paths, file names, column
     mapping, seed, category-macro taxonomy, model registry, owned layouts).
@@ -1017,6 +1050,9 @@ class ColabSpec(BaseModel):
     worker_timeout_seconds: int = Field(ge=60)
     result_download_timeout_seconds: int = Field(ge=60)
     result_download_heartbeat_seconds: int = Field(ge=1, le=300)
+    result_archive_name: str = Field(min_length=1)
+    result_manifest_name: str = Field(min_length=1)
+    result_download_excluded_dirs: list[str] = Field(min_length=1)
     worker_monitor_seconds: int = Field(ge=1, le=300)
     dvc_workers: int = Field(ge=1, le=3)
     dvc_jobs: int = Field(ge=1, le=32)

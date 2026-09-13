@@ -67,6 +67,13 @@ colab:
   worker_timeout_seconds: 14400
   result_download_timeout_seconds: 3600
   result_download_heartbeat_seconds: 15
+  result_archive_name: "result_bundle.tar.gz"
+  result_manifest_name: "result_bundle_manifest.json"
+  result_download_excluded_dirs:
+    - ".dvc-cache"
+    - ".dvc-site-cache"
+    - "_checkpoint_upload_staging"
+    - "_checkpoints"
   worker_monitor_seconds: 15
   # One lane-level DVC publisher is separate from trainer/HPO workers.
   dvc_workers: 1

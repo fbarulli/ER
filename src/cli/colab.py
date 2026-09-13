@@ -40,11 +40,14 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import nullcontext
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import threading
 import time
 import traceback
@@ -68,7 +71,7 @@ from core.common import (
     training_cfg,
 )
 from core.manifest import sha256_file
-from core.schemas import StageManifest
+from core.schemas import ResultBundleManifest, StageManifest
 
 
 # smoke sample size + train defaults: the config SSOT (config/training.yaml
@@ -109,6 +112,9 @@ _SMOKE_EPOCHS = _COLAB.smoke_epochs
 _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
 _RESULT_DOWNLOAD_TIMEOUT_SECONDS = _COLAB.result_download_timeout_seconds
 _RESULT_DOWNLOAD_HEARTBEAT_SECONDS = _COLAB.result_download_heartbeat_seconds
+_RESULT_ARCHIVE_NAME = _COLAB.result_archive_name
+_RESULT_MANIFEST_NAME = _COLAB.result_manifest_name
+_RESULT_DOWNLOAD_EXCLUDED_DIRS = frozenset(_COLAB.result_download_excluded_dirs)
 _WORKER_MONITOR_SECONDS = _COLAB.worker_monitor_seconds
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
@@ -569,15 +575,16 @@ def _download_file_with_visibility(
     *,
     remote: str,
     local: Path,
-    worker: int,
+    worker: int | None,
     index: int,
     total: int,
     run_id: str,
 ) -> int:
     """Download one result while exposing progress and connection failures."""
     relative = local.relative_to(TRAINING_RESULTS / run_id)
+    worker_label = str(worker) if worker is not None else "all"
     print(
-        f"[download] worker={worker} file={index}/{total} starting "
+        f"[download] worker={worker_label} file={index}/{total} starting "
         f"remote={remote} destination={local}",
         flush=True,
     )
@@ -596,7 +603,7 @@ def _download_file_with_visibility(
         while not stop_heartbeat.wait(_RESULT_DOWNLOAD_HEARTBEAT_SECONDS):
             received = _local_file_size(local)
             print(
-                f"[download] worker={worker} file={index}/{total} active "
+                f"[download] worker={worker_label} file={index}/{total} active "
                 f"received={_format_bytes(received)}; waiting for transfer",
                 flush=True,
             )
@@ -630,7 +637,7 @@ def _download_file_with_visibility(
             error=f"{type(exc).__name__}: {exc}",
         )
         print(
-            f"[download] worker={worker} file={index}/{total} FAILED "
+            f"[download] worker={worker_label} file={index}/{total} FAILED "
             f"received={_format_bytes(received)} error={type(exc).__name__}: {exc}",
             flush=True,
         )
@@ -650,7 +657,7 @@ def _download_file_with_visibility(
         received_bytes=received,
     )
     print(
-        f"[download] worker={worker} file={index}/{total} completed "
+        f"[download] worker={worker_label} file={index}/{total} completed "
         f"received={_format_bytes(received)}",
         flush=True,
     )
@@ -998,64 +1005,208 @@ print(json.dumps(payload), flush=True)
         time.sleep(_LOG_POLL_SECONDS)
 
 
-def download_verified_training_results(remote_base: str, workers: int) -> None:
-    """Materialize raw worker outputs before the VM is released.
+def _sha256_file(path: Path) -> str:
+    """Hash one extracted result for manifest verification."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    This transfers the raw worker bundle only. Reports, mask-effect scoring,
-    and local result publication are separate commands and are not run by the
-    Colab launcher.
-    """
+
+def _prepare_remote_result_archive(remote_base: str, workers: int) -> str:
+    """Build one manifest-backed archive on the VM before transfer."""
+    archive_path = f"{remote_base}/{_RESULT_ARCHIVE_NAME}"
+    script = f"""
+import hashlib, json, pathlib, tarfile
+
+base = pathlib.Path({remote_base!r})
+archive_path = base / {_RESULT_ARCHIVE_NAME!r}
+manifest_path = base / {_RESULT_MANIFEST_NAME!r}
+excluded_dirs = set({_RESULT_DOWNLOAD_EXCLUDED_DIRS!r})
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+included = []
+excluded = []
+for worker in range(1, {workers + 1}):
+    worker_root = base / f"worker_{{worker}}"
+    if not worker_root.is_dir():
+        raise FileNotFoundError(f"missing remote worker directory: {{worker_root}}")
+    for path in sorted(worker_root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(worker_root)
+        blocked = next((part for part in relative.parts if part in excluded_dirs), None)
+        if blocked is not None:
+            excluded.append({{
+                "worker": worker,
+                "path": relative.as_posix(),
+                "reason": "configured_directory:" + blocked,
+            }})
+            continue
+        included.append({{
+            "worker": worker,
+            "path": relative.as_posix(),
+            "size": path.stat().st_size,
+            "sha256": sha256(path),
+        }})
+
+manifest = {{
+    "schema_version": "1",
+    "run_id": base.name.removeprefix("concurrent_train_"),
+    "workers": {workers},
+    "included": included,
+    "excluded": excluded,
+}}
+manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+archive_path.unlink(missing_ok=True)
+with tarfile.open(archive_path, "w:gz") as archive:
+    for entry in included:
+        worker_root = base / f"worker_{{entry['worker']}}"
+        source = worker_root / entry["path"]
+        archive.add(source, arcname=f"worker_{{entry['worker']}}/{{entry['path']}}")
+    archive.add(manifest_path, arcname={_RESULT_MANIFEST_NAME!r})
+print("[result-archive] included={{}} excluded={{}} archive_bytes={{}}".format(
+    len(included), len(excluded), archive_path.stat().st_size
+), flush=True)
+"""
+    print(
+        f"[download] preparing one remote result archive for {workers} worker(s): "
+        f"{archive_path}",
+        flush=True,
+    )
+    run_colab_exec_stream(
+        SESSION,
+        script,
+        timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS,
+        log_name="result_archive",
+    )
+    return archive_path
+
+
+def _verify_result_bundle(root: Path, run_id: str, workers: int) -> ResultBundleManifest:
+    """Validate manifest coverage, paths, sizes, and hashes after extraction."""
+    manifest_path = root / _RESULT_MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise RuntimeError(f"result archive is missing its manifest: {manifest_path}")
+    manifest = ResultBundleManifest.model_validate_json(
+        manifest_path.read_text(encoding="utf-8")
+    )
+    if manifest.run_id != run_id or manifest.workers != workers:
+        raise RuntimeError(
+            f"result manifest identity mismatch: run_id={manifest.run_id!r}, "
+            f"workers={manifest.workers}; expected {run_id!r}, {workers}"
+        )
+    expected: set[str] = set()
+    for entry in manifest.included:
+        relative = Path(entry.path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError(f"unsafe result manifest path: {entry.path!r}")
+        key = Path(f"worker_{entry.worker}") / relative
+        key_text = key.as_posix()
+        if key_text in expected:
+            raise RuntimeError(f"duplicate result manifest path: {key_text}")
+        expected.add(key_text)
+        actual = root / key
+        if not actual.is_file():
+            raise RuntimeError(f"result archive missing manifest file: {key_text}")
+        size = actual.stat().st_size
+        if size != entry.size:
+            raise RuntimeError(
+                f"result size mismatch for {key_text}: {size} != {entry.size}"
+            )
+        digest = _sha256_file(actual)
+        if digest != entry.sha256:
+            raise RuntimeError(f"result SHA-256 mismatch for {key_text}")
+    actual_paths = {
+        path.relative_to(root).as_posix()
+        for worker_root in sorted(root.glob("worker_*"))
+        if worker_root.is_dir()
+        for path in worker_root.rglob("*")
+        if path.is_file()
+    }
+    if actual_paths != expected:
+        missing = sorted(expected - actual_paths)
+        unexpected = sorted(actual_paths - expected)
+        raise RuntimeError(
+            f"result archive coverage mismatch: missing={missing[:5]}, "
+            f"unexpected={unexpected[:5]}"
+        )
+    return manifest
+
+
+def _extract_result_archive(
+    archive_path: Path, local_base: Path, run_id: str, workers: int
+) -> ResultBundleManifest:
+    """Safely extract and atomically replace the worker result directories."""
+    temporary = Path(tempfile.mkdtemp(prefix=f".{run_id}-result-", dir=local_base.parent))
+    try:
+        with tarfile.open(archive_path, "r:gz") as archive:
+            members = archive.getmembers()
+            for member in members:
+                relative = Path(member.name)
+                if (
+                    relative.is_absolute()
+                    or ".." in relative.parts
+                    or not (member.isfile() or member.isdir())
+                ):
+                    raise RuntimeError(f"unsafe result archive member: {member.name!r}")
+            archive.extractall(temporary)
+        manifest = _verify_result_bundle(temporary, run_id, workers)
+        for worker in range(1, workers + 1):
+            source = temporary / f"worker_{worker}"
+            target = local_base / source.name
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+            shutil.move(str(source), str(target))
+        local_manifest = local_base / _RESULT_MANIFEST_NAME
+        local_manifest.unlink(missing_ok=True)
+        shutil.move(str(temporary / _RESULT_MANIFEST_NAME), str(local_manifest))
+        return manifest
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+
+
+def download_verified_training_results(remote_base: str, workers: int) -> None:
+    """Transfer one manifest-backed result archive before VM teardown."""
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     local_base = TRAINING_RESULTS / run_id
+    local_base.mkdir(parents=True, exist_ok=True)
     _result_event(run_id, "download", "started", workers=workers)
-    downloaded = 0
-    for number in range(1, workers + 1):
-        remote_dir = f"{remote_base}/worker_{number}"
-        local_dir = local_base / f"worker_{number}"
-        remote_names = []
-        for name in _list_remote(remote_dir):
-            remote = Path(name)
-            # Checkpoints are part of the deliverable: the local uniformity
-            # audit and final prediction notebook must run against the actual
-            # fine-tuned weights. DVC verification still happens at each save,
-            # but the selected local post-processing lane needs the materialized
-            # checkpoint tree before teardown.
-            if remote.suffix not in {
-                ".csv", ".json", ".log", ".png", ".safetensors", ".bin",
-                ".pt", ".pth", ".npz", ".pkl", ".pickle", ".dvc",
-                ".yaml", ".yml", ".txt", ".jsonl", ".html", ".db", ".sqlite3",
-            }:
-                continue
-            remote_names.append(name)
-        print(
-            f"[download] worker={number} discovered {len(remote_names)} result files "
-            f"under {remote_dir}",
-            flush=True,
-        )
-        for index, name in enumerate(remote_names, start=1):
-            remote = Path(name)
-            rel = remote.relative_to(remote_dir)
-            local = local_dir / rel
-            local.parent.mkdir(parents=True, exist_ok=True)
-            _download_file_with_visibility(
-                remote=name,
-                local=local,
-                worker=number,
-                index=index,
-                total=len(remote_names),
-                run_id=run_id,
-            )
-            downloaded += 1
+    remote_archive = _prepare_remote_result_archive(remote_base, workers)
+    local_archive = local_base / _RESULT_ARCHIVE_NAME
+    _download_file_with_visibility(
+        remote=remote_archive,
+        local=local_archive,
+        worker=None,
+        index=1,
+        total=1,
+        run_id=run_id,
+    )
+    manifest = _extract_result_archive(local_archive, local_base, run_id, workers)
     _result_event(
         run_id,
         "download",
         "completed",
         workers=workers,
-        files=downloaded,
+        files=len(manifest.included),
+        excluded_files=len(manifest.excluded),
+        archive=str(local_archive),
         destination=str(local_base),
     )
-    print(f"[download] raw training outputs -> {local_base} ({downloaded} files)", flush=True)
-
+    print(
+        f"[download] verified result archive -> {local_base} "
+        f"({len(manifest.included)} included, {len(manifest.excluded)} excluded)",
+        flush=True,
+    )
 
 def _publish_local_hpo_model_snapshot(generation: Path, model_dir: Path) -> None:
     """Publish one HPO model snapshot through the DVC publisher lane."""
