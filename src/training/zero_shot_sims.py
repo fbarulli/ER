@@ -32,10 +32,9 @@ from sentence_transformers import SentenceTransformer
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# model dirs resolve via lib.common.resolve_model (config models_dir /
-# models_dir_sibling); hub id is the offline-last-resort fallback. The
-# old local _m() copy was removed 2026-09-08 — ONE registry-aware resolver
-# for the whole tree (TRAIN + run_all).
+# Model directories resolve through the shared local-only registry. The old
+# local _m() copy and Hub fallback were removed; missing DVC bundles fail
+# before any encoder is constructed.
 from core.common import SEED, F, ensure_parent, load_config, resolve_model
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 

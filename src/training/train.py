@@ -312,9 +312,8 @@ def _main_inner(_mlf, _wandb) -> None:
     mask_cfg = cfg["masking"]
     split_cfg = cfg["split"]
 
-    # trainer base resolves through the model REGISTRY (lib.common
-    # .resolve_model): local bundle dir first, hub id fallback. The registry
-    # key is config-owned so the default cannot drift from the training SSOT.
+    # Trainer models resolve through the project-owned registry. Resolution is
+    # local-only: a missing DVC bundle fails before data preparation begins.
     from core.common import resolve_model
 
     default_model = resolve_model(tr["base_model"])
@@ -466,6 +465,13 @@ def _main_inner(_mlf, _wandb) -> None:
         "CLI value always wins.",
     )
     args = ap.parse_args()
+
+    # Resolve both the bi-encoder and optional cross-encoder through the same
+    # local-only registry contract. This prevents SentenceTransformers from
+    # interpreting a registry key or Hub-looking string as a download target.
+    args.model = resolve_model(args.model)
+    if args.rerank:
+        args.rerank = resolve_model(args.rerank)
 
     # An HPO winner must be replayable exactly. These are explicit only for
     # the selected final run; ordinary runs remain config-driven.

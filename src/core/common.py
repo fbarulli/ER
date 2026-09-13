@@ -21,7 +21,7 @@ merged view, so consumers don't care which physical file a knob lives in.
 New accessors:
   training_cfg()  the validated TrainingConfig (typed)
   data_cfg()      the validated DataConfig (typed)
-  resolve_model(key)  registry key -> local bundle dir first, hub id fallback
+  resolve_model(key)  registry key -> materialized local bundle, no Hub fallback
 """
 
 import json
@@ -183,6 +183,12 @@ def _load_config_cached() -> dict:
         raise SystemExit(
             "hpo.models contains unknown config/paths.yaml registry key(s): "
             + ", ".join(unknown_hpo_models)
+        )
+    rerank_model = merged.get("sweep", {}).get("rerank_model")
+    if rerank_model not in registry_models:
+        raise SystemExit(
+            "sweep.rerank_model must be a config/paths.yaml model registry key: "
+            f"{rerank_model!r} not in {sorted(registry_models)}"
         )
     merged["category_macros"] = vocabulary["category_macros"]
     return merged
@@ -573,7 +579,7 @@ def set_determinism(seed: int) -> None:
         flush=True,
     )
 
-# ── model registry + resolution (shared src/training/run_all) ──────────────────────
+# ── model registry + resolution (shared by every model-loading lane) ────────
 MODELS = dict(_CFG["models"])
 _MODEL_DIRS = [
     _path(_CFG["paths"]["models_dir"]),
@@ -581,23 +587,54 @@ _MODEL_DIRS = [
 ]
 
 
-def resolve_model(key_or_sub: str) -> str:
-    """Registry key OR subdir name -> a model id the encoder can load.
+def _validate_materialized_model(path: Path, reference: str) -> str:
+    """Return one owned model directory, rejecting non-materialized inputs."""
+    resolved = path.expanduser().resolve()
+    if not resolved.is_dir():
+        raise FileNotFoundError(
+            f"model {reference!r} is not materialized locally: {resolved}. "
+            "Materialize the project-owned model bundle through DVC; "
+            "Hugging Face downloads are disabled."
+        )
+    if not any((resolved / marker).is_file() for marker in ("modules.json", "config.json")):
+        raise ValueError(
+            f"model {reference!r} is not a supported local transformer bundle: "
+            f"{resolved} lacks modules.json or config.json"
+        )
+    return str(resolved)
 
-    Local bundle dirs (paths.models_dir / models_dir_sibling) win first so
-    offline GPU runs never hit the hub; the hub id is the fallback. A key
-    not in the registry and not on disk resolves like the old run_all
-    helper (sentence-transformers/<sub>, deberta special-cased). Every
-    caller must come through here — never a hardcoded hub string.
-    """
-    sub = MODELS.get(key_or_sub, key_or_sub)
-    for d in _MODEL_DIRS:
-        cand = d / sub
-        if cand.exists():
-            return str(cand.resolve())
-    if "deberta" in sub:
-        return f"microsoft/{sub}"
-    return f"sentence-transformers/{sub}"
+
+def resolve_model(key_or_sub: str) -> str:
+    """Resolve a registry key or explicit local path without network fallback."""
+    reference = str(key_or_sub).strip()
+    if not reference:
+        raise ValueError("model reference must be non-empty")
+
+    if reference in MODELS:
+        relative = Path(MODELS[reference])
+        candidates = [root / relative for root in _MODEL_DIRS]
+    else:
+        direct = Path(reference).expanduser()
+        if direct.is_absolute():
+            candidates = [direct]
+        elif (TRAIN_ROOT / direct).exists():
+            candidates = [TRAIN_ROOT / direct]
+        else:
+            raise KeyError(
+                f"unknown model registry key {reference!r}; "
+                f"expected one of {sorted(MODELS)} or an existing local path"
+            )
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return _validate_materialized_model(candidate, reference)
+
+    checked = ", ".join(str(path.resolve()) for path in candidates)
+    raise FileNotFoundError(
+        f"model {reference!r} is not materialized locally; checked: {checked}. "
+        "Materialize the project-owned model bundle through DVC; "
+        "Hugging Face downloads are disabled."
+    )
 
 
 # ── visibility-log writes (owner directive 2026-09-07) ─────────────────────

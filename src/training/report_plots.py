@@ -45,10 +45,8 @@ MACRO_MAP = category_macros()
 _cfg = load_config()
 # ALL models from the config SSOT — the report is per-model, not
 # minilm-only (each gets its own panels; embeddings are npy-cached).
-# AUDIT 2026-09-09: was "sentence-transformers/" + sub, which FABRICATED a
-# nonexistent hub id for deberta_v3_base (microsoft/deberta-v3-base via
-# resolve_model) — that panel crashed at load. resolve_model is the one
-# registry (local bundle dir first, hub id fallback, deberta special-case).
+# AUDIT 2026-09-09: all report models now resolve through the one local-only
+# registry. Missing DVC bundles fail loudly instead of fabricating a Hub id.
 from core.common import resolve_model as _resolve_model
 
 MODELS = {k: _resolve_model(k) for k in _cfg["models"]}

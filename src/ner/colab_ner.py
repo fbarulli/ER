@@ -30,8 +30,7 @@ placeholders here; set them to the values you actually want.
     ner_training:
       input_jsonl: "${results_dir}/ner_dataset.jsonl"
       output_dir: "${results_dir}/ner_model"
-      model_name: "${base_dir}/models/xlm-roberta-base"
-      model_source_repo: ...
+      model_name: "ner_transformer_base"
 
 ``huggingface.token_file`` points to either a local text file containing the
 HF token or a ``.env`` file containing ``HF_TOKEN``. The token is read only
@@ -65,7 +64,7 @@ Normal execution:
 4. prepares remote directories
 5. installs remote dependencies
 6. uploads config.yaml, ner.py, optional config_loader.py, and ner_dataset.jsonl
-7. downloads the configured base model on Colab if absent
+7. uploads the configured project-owned base model bundle
 8. restores the rolling HF checkpoint if present
 9. launches ner.py detached
 10. monitors ner_train.log until training exits
@@ -91,7 +90,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from core.common import TRAINING_CONFIG_PATH, TRAIN_ROOT, ner_config
+from core.common import TRAINING_CONFIG_PATH, TRAIN_ROOT, ner_config, resolve_model
 
 NER_SOURCE_DIR = Path(__file__).resolve().parent
 ARTIFACT_MANIFEST_NAME = "ner_artifacts_manifest.json"
@@ -151,28 +150,14 @@ def load_settings() -> dict:
     }
 
     colab = require_section(config, "colab")
-    hf = require_section(config, "huggingface")
     ner = require_section(config, "ner_training")
 
     session = str(require_value(colab, "colab", "session")).strip()
     gpu = str(require_value(colab, "colab", "gpu")).strip()
     remote_root = str(require_value(colab, "colab", "remote_root")).rstrip("/")
 
-    hf_repo_id = str(require_value(hf, "huggingface", "ner_repo_id")).strip()
-    token_file_raw = expand_vars(
-        str(require_value(hf, "huggingface", "token_file")), variables
-    )
-    token_file = Path(token_file_raw).expanduser()
-    if not token_file.is_absolute():
-        token_file = (base_dir / token_file).resolve()
-
-    model_source_repo = str(
-        require_value(ner, "ner_training", "model_source_repo")
-    ).strip()
-
-    model_name = Path(
-        expand_vars(str(require_value(ner, "ner_training", "model_name")), variables)
-    )
+    model_key = str(require_value(ner, "ner_training", "model_name")).strip()
+    model_name = Path(resolve_model(model_key))
     input_jsonl = Path(
         expand_vars(str(require_value(ner, "ner_training", "input_jsonl")), variables)
     )
@@ -197,14 +182,14 @@ def load_settings() -> dict:
         "remote_root": remote_root,
         "remote_project_dir": remote_project_dir,
         "remote_results_dir": remote_results_dir,
-        "hf_repo_id": hf_repo_id,
-        "token_file": token_file,
-        "model_source_repo": model_source_repo,
+        "model_key": model_key,
+        "local_model_path": model_name,
         "local_input_jsonl": input_jsonl,
         "local_output_dir": output_dir,
         "remote_input_jsonl": f"{remote_results_dir}/{input_jsonl.name}",
         "remote_output_dir": f"{remote_results_dir}/{output_dir.name}",
         "remote_model_name": remote_model_name,
+        "remote_model_archive": f"{remote_project_dir}/model_bundle.zip",
     }
 
 
@@ -279,42 +264,11 @@ def colab_upload(settings: dict, local_path: Path, remote_path: str) -> None:
     )
 
 
-def read_hf_token(path: Path) -> str:
-    if not path.is_file():
-        fail(f"Hugging Face token file not found: {path}")
-
-    contents = path.read_text(encoding="utf-8").strip()
-    if not contents:
-        fail(f"Hugging Face token file is empty: {path}")
-
-    # A plain token file remains supported. For a .env file, extract only
-    # HF_TOKEN instead of passing the complete environment file as a token.
-    env_entries = [
-        line.strip().removeprefix("export ").strip()
-        for line in contents.splitlines()
-        if line.strip() and not line.lstrip().startswith("#") and "=" in line
-    ]
-    if env_entries:
-        for entry in env_entries:
-            key, _, value = entry.partition("=")
-            if key.strip() != "HF_TOKEN":
-                continue
-            token = value.strip()
-            if len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'}:
-                token = token[1:-1]
-            if token:
-                return token
-        fail(f"HF_TOKEN is missing or empty in environment file: {path}")
-
-    return contents
-
-
 def check_local_files(settings: dict) -> None:
     required = [
         TRAINING_CONFIG_PATH,
         NER_SOURCE_DIR / "ner.py",
         settings["local_input_jsonl"],
-        settings["token_file"],
     ]
 
     missing = [path for path in required if not Path(path).is_file()]
@@ -323,29 +277,11 @@ def check_local_files(settings: dict) -> None:
             "Missing required local files:\n"
             + "\n".join(f"  - {path}" for path in missing)
         )
-
-
-def check_huggingface(settings: dict) -> dict:
-    try:
-        from huggingface_hub import HfApi
-    except ImportError as exc:
-        raise RuntimeError(
-            "Install local package 'huggingface_hub' before running this file"
-        ) from exc
-
-    api = HfApi(token=read_hf_token(settings["token_file"]))
-    repo_id = settings["hf_repo_id"]
-
-    log(f"[hf] checking repo: {repo_id}")
-    api.repo_info(repo_id=repo_id, repo_type="model")
-
-    files = api.list_repo_files(repo_id=repo_id, repo_type="model")
-    checkpoint = "checkpoints/latest_checkpoint.zip"
-
-    return {
-        "checkpoint_path": checkpoint,
-        "has_checkpoint": checkpoint in files,
-    }
+    if not settings["local_model_path"].is_dir():
+        fail(
+            "Project-owned NER model bundle is missing: "
+            f"{settings['local_model_path']}"
+        )
 
 
 def prepare_remote_dirs(settings: dict) -> None:
@@ -395,6 +331,8 @@ def upload_inputs(settings: dict) -> None:
     remote_config = ner_config()
     remote_config["base_dir"] = settings["remote_project_dir"]
     remote_config["results_dir"] = settings["remote_results_dir"]
+    remote_config["ner_training"] = dict(remote_config["ner_training"])
+    remote_config["ner_training"]["model_name"] = settings["remote_model_name"]
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", encoding="utf-8", delete=False
     ) as stream:
@@ -411,60 +349,41 @@ def upload_inputs(settings: dict) -> None:
         settings["remote_input_jsonl"],
     )
 
+    archive_base = Path(tempfile.mkdtemp(prefix="ner_model_")) / "model_bundle"
+    try:
+        archive = Path(
+            shutil.make_archive(
+                str(archive_base),
+                "zip",
+                root_dir=str(settings["local_model_path"]),
+            )
+        )
+        colab_upload(settings, archive, settings["remote_model_archive"])
+    finally:
+        shutil.rmtree(archive_base.parent, ignore_errors=True)
+
 
 def ensure_remote_base_model(settings: dict) -> None:
-    log("[model] checking base transformer")
-
-    code = f'''
-from pathlib import Path
-from huggingface_hub import snapshot_download
-
-target = Path({settings["remote_model_name"]!r})
-
-if (target / "config.json").is_file():
-    print("[model] already present:", target)
-else:
-    target.mkdir(parents=True, exist_ok=True)
-    snapshot_download(
-        repo_id={settings["model_source_repo"]!r},
-        local_dir=str(target),
-    )
-    print("[model] downloaded:", target)
-'''
-    colab_exec(settings, code)
-
-
-def restore_latest_checkpoint(settings: dict, hf_state: dict) -> None:
-    if not hf_state["has_checkpoint"]:
-        log("[checkpoint] none found; starting fresh")
-        return
-
-    token = read_hf_token(settings["token_file"])
+    log("[model] materializing shipped base transformer")
 
     code = f'''
 from pathlib import Path
 import shutil
 import zipfile
-from huggingface_hub import hf_hub_download
 
-output_dir = Path({settings["remote_output_dir"]!r})
+target = Path({settings["remote_model_name"]!r})
+archive = Path({settings["remote_model_archive"]!r})
 
-zip_path = hf_hub_download(
-    repo_id={settings["hf_repo_id"]!r},
-    filename={hf_state["checkpoint_path"]!r},
-    repo_type="model",
-    token={token!r},
-)
-
-if output_dir.exists():
-    shutil.rmtree(output_dir)
-
-output_dir.parent.mkdir(parents=True, exist_ok=True)
-
-with zipfile.ZipFile(zip_path, "r") as archive:
-    archive.extractall(output_dir.parent)
-
-print("[checkpoint] restored:", zip_path)
+if not archive.is_file():
+    raise FileNotFoundError(f"shipped model archive missing: {{archive}}")
+if target.exists():
+    shutil.rmtree(target)
+target.mkdir(parents=True, exist_ok=True)
+with zipfile.ZipFile(archive) as bundle:
+    bundle.extractall(target)
+if not (target / "config.json").is_file():
+    raise RuntimeError(f"shipped model is incomplete: {{target}}/config.json missing")
+print("[model] materialized:", target)
 '''
     colab_exec(settings, code)
 
@@ -716,9 +635,6 @@ def dry_run(settings: dict) -> None:
     exists = session_exists(settings["session"])
     log(f"[dry-run] session={settings['session']} exists={exists}")
 
-    log("[dry-run] checking Hugging Face")
-    hf_state = check_huggingface(settings)
-
     print(
         json.dumps(
             {
@@ -726,12 +642,10 @@ def dry_run(settings: dict) -> None:
                 "gpu": settings["gpu"],
                 "remote_root": settings["remote_root"],
                 "remote_project_dir": settings["remote_project_dir"],
-                "hf_repo_id": settings["hf_repo_id"],
-                "token_file": str(settings["token_file"]),
-                "model_source_repo": settings["model_source_repo"],
+                "model_key": settings["model_key"],
+                "local_model_path": str(settings["local_model_path"]),
                 "remote_model_name": settings["remote_model_name"],
                 "input_jsonl": str(settings["local_input_jsonl"]),
-                "checkpoint_exists": hf_state["has_checkpoint"],
             },
             indent=2,
         )
@@ -743,14 +657,12 @@ def dry_run(settings: dict) -> None:
 def train(settings: dict) -> None:
     check_local_files(settings)
     check_colab_cli()
-    hf_state = check_huggingface(settings)
 
     ensure_session(settings)
     prepare_remote_dirs(settings)
     install_remote_dependencies(settings)
     upload_inputs(settings)
     ensure_remote_base_model(settings)
-    restore_latest_checkpoint(settings, hf_state)
     launch_training(settings)
     monitor_training(settings)
     download_results(settings)

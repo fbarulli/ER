@@ -52,6 +52,7 @@ from core.common import (
     resolve_model,
     runtime,
     strip_ladder_bands,
+    training_cfg,
     trace_artifact,
 )
 from core.nlp import encode_corpus
@@ -195,11 +196,11 @@ def main() -> None:
         if args.semantic:
             # AUDIT 2026-09-09: was a hardcoded hub id + inline batch/seq
             # literals + manual cache path. Registry key (config
-            # models.minilm_l6) via resolve_model; knobs via runtime();
+            # training.base_model via resolve_model; knobs via runtime();
             # cache via lib.common DATA_DIR (the one embeddings cache).
             texts = [e["final"] for e, _, _ in entries] + [c for _, c, _ in entries]
             emb, _ = encode_corpus(
-                resolve_model("minilm_l6"), texts,
+                resolve_model(str(training_cfg().training.base_model)), texts,
                 batch_size=runtime("batch_size_embed"),
                 max_seq_length=runtime("max_seq_length"), device="cpu",
                 cache_dir=str(DATA_DIR / "embeddings_cache"),

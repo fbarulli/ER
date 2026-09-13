@@ -124,6 +124,17 @@ def _unmatched_prefix() -> str:
     return str(rand_matching_cfg()["unmatched_prefix"])
 
 
+def _threshold_selection_key(row: dict[str, float | int]) -> tuple[float, ...]:
+    """Encode the configured threshold tie-break policy for ``max``."""
+    values = {
+        "rand_index": float(row["rand_index"]),
+        "fewest_unmatched_skus": -float(row["unmatched_skus"]),
+        "lowest_threshold": -float(row["threshold"]),
+    }
+    policy = rand_matching_cfg()["threshold_tie_break"]
+    return tuple(values[name] for name in policy)
+
+
 def _fit_recall_column(target_recall: float) -> str:
     return f"fit_threshold_at_{target_recall:.0%}_recall"
 
@@ -1306,8 +1317,15 @@ def _load_calibration_frame(
         raise ValueError(
             "calibration is not canonical-disjoint: an item appears in multiple folds"
         )
-    if calibration["calibration_fold"].nunique() < 2:
-        raise ValueError("calibration requires at least two canonical-disjoint folds")
+    fold_count = int(calibration["calibration_fold"].nunique())
+    minimum_support = int(
+        matcher.config["rand_matching"]["threshold_min_fold_support"]
+    )
+    if fold_count < minimum_support:
+        raise ValueError(
+            "calibration has insufficient fold support for a meaningful median: "
+            f"observed={fold_count}, required={minimum_support}"
+        )
     calibration["gtin_status"] = [
         matcher.gtin_status(row_metadata_text(row, "barcode", "gtin"), row["true_item_id"])
         for _, row in calibration.iterrows()
@@ -1415,14 +1433,7 @@ def _fit_fold_threshold(
                 "n": metrics["n"],
             }
         )
-    selected_row = max(
-        fit_rows,
-        key=lambda row: (
-            row["rand_index"],
-            -row["unmatched_skus"],
-            -row["threshold"],
-        ),
-    )
+    selected_row = max(fit_rows, key=_threshold_selection_key)
     fit_unmatched_fraction = float(selected_row["unmatched_skus"]) / max(
         int(selected_row["n"]), 1
     )
@@ -1745,13 +1756,19 @@ def _write_calibration_outputs(
         {
             "final_threshold": final_threshold,
             "selection_method": "median of fold-selected Rand Index thresholds",
+            "calibration_fold_count": int(selected_df["check_fold"].nunique()),
+            "threshold_support_count": int(
+                selected_df["selected_threshold"].notna().sum()
+            ),
+            "threshold_support_minimum": int(
+                rand_matching_cfg()["threshold_min_fold_support"]
+            ),
+            "threshold_support_sufficient": bool(
+                len(selected_df)
+                >= int(rand_matching_cfg()["threshold_min_fold_support"])
+            ),
             "target_recall": target_recall,
-            "tie_break": [
-                "rand_index",
-                "fewest_unmatched_skus",
-                "lowest_threshold",
-                *ASSIGNMENT_SORT_COLUMNS[1:],
-            ],
+            "tie_break": list(rand_matching_cfg()["threshold_tie_break"]),
             "unmatched_item_id": _unmatched_prefix() + "<SKU_ID>",
             "no_transitive_chaining": True,
         }

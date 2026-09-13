@@ -157,10 +157,13 @@ column_mapping:
 # ── seed (whole tree uses this one value) ───────────────────────────────────
 seed: 42
 
-# ── model registry (shared: TRAIN lane + run_all all resolve
-#    through lib.common.resolve_model — local bundle dir first, hub id as
-#    fallback; no script may hardcode a model string) ────────────────────────
+# ── model registry (shared by every model-loading lane) ─────────────────────
+# Values are relative directories inside paths.models_dir or
+# paths.models_dir_sibling. They are DVC-shipped bundles, never Hub IDs.
 models:
   minilm_l6: "all-MiniLM-L6-v2"
-  multilingual_l12: "paraphrase-multilingual-MiniLM-L12-v2"   # trainer base
+  multilingual_l12: "paraphrase-multilingual-MiniLM-L12-v2"
   deberta_v3_base: "deberta-v3-base"
+  rerank_minilm_l6: "ms-marco-MiniLM-L-6-v2"
+  ner_semantic_base: "paraphrase-multilingual-mpnet-base-v2"
+  ner_transformer_base: "xlm-roberta-base"

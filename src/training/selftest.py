@@ -613,12 +613,14 @@ def oracle_config_split() -> None:
         key in vocabulary()
         for key in ("STOPWORDS", "MINIMAL_STOPWORDS", "ENGLISH_STOP_WORDS", "CONCEPT_FOLDS", "category_macros")
     ))
-    # model registry resolution: shared helper, no hardcoded hub ids
-    check(
-        "resolve_model('multilingual_l12') -> hub id",
-        resolve_model("multilingual_l12").endswith("paraphrase-multilingual-MiniLM-L12-v2"),
-        resolve_model("multilingual_l12"),
-    )
+    # Model references are local-only. A Hub identifier must be rejected
+    # before any encoder can ask the network for weights.
+    try:
+        resolve_model("sentence-transformers/all-MiniLM-L6-v2")
+    except KeyError:
+        check("Hub model identifiers are rejected", True)
+    else:
+        check("Hub model identifiers are rejected", False)
     # split shares sum to 1 (pydantic-enforced; pin the values)
     sp = training_cfg().split
     check(
@@ -638,12 +640,15 @@ def oracle_no_fallback_ssot() -> None:
 
     from core.common import (
         hpo_cfg,
+        load_config,
         plot_dpi,
+        rand_matching_cfg,
         rerank_cfg,
         runtime,
         sweep_cfg,
         training_cfg,
     )
+    from training.rand_matching import _threshold_selection_key
 
     # ── hpo: block — the sweep spaces are config data, not module literals
     h = hpo_cfg()
@@ -692,6 +697,40 @@ def oracle_no_fallback_ssot() -> None:
         0.0 <= r["min_delta_pr_auc"] <= 1.0 and 0.0 <= r["min_delta_f1"] <= 1.0,
         str(r),
     )
+    check(
+        "threshold tie-break order is Rand/fewest-unmatched/lower-threshold",
+        rand_matching_cfg()["threshold_tie_break"]
+        == ["rand_index", "fewest_unmatched_skus", "lowest_threshold"],
+    )
+    check(
+        "threshold median minimum fold support is configured",
+        rand_matching_cfg()["threshold_min_fold_support"] >= 2,
+    )
+    fewer_unmatched = {
+        "rand_index": 0.90,
+        "unmatched_skus": 2,
+        "threshold": 0.90,
+    }
+    more_unmatched = {
+        "rand_index": 0.90,
+        "unmatched_skus": 3,
+        "threshold": 0.80,
+    }
+    lower_threshold = {
+        "rand_index": 0.90,
+        "unmatched_skus": 2,
+        "threshold": 0.80,
+    }
+    check(
+        "threshold tie-break prefers fewer unmatched SKUs",
+        _threshold_selection_key(fewer_unmatched)
+        > _threshold_selection_key(more_unmatched),
+    )
+    check(
+        "threshold tie-break prefers lower threshold after unmatched tie",
+        _threshold_selection_key(lower_threshold)
+        > _threshold_selection_key(fewer_unmatched),
+    )
 
     # ── sweep: run_all's ablation axes
     s = sweep_cfg()
@@ -703,8 +742,8 @@ def oracle_no_fallback_ssot() -> None:
     )
     check("sweep smoke/sweep sample >= 1", s["smoke_sample"] >= 1 and s["sweep_sample"] >= 1)
     check(
-        "sweep.rerank_model names a cross-encoder",
-        "cross-encoder" in s["rerank_model"],
+        "sweep.rerank_model names a local registry model",
+        s["rerank_model"] in load_config()["models"],
         s["rerank_model"],
     )
 

@@ -46,6 +46,11 @@ class CalibrationMetricRow(BaseModel):
     calibration_sku_count: int
     calibration_candidate_duplicate_rows_removed: int
     calibrated_threshold: float
+    calibration_threshold_tie_break: str | None = None
+    calibration_threshold_fold_count: int
+    calibration_threshold_support_count: int
+    calibration_threshold_support_minimum: int
+    calibration_threshold_support_sufficient: int
 
     calibration_rand_index: float
     calibration_adjusted_rand: float
@@ -498,6 +503,12 @@ def evaluate_calibration_trial(
         pos_pairs, neg_pairs, df, row_bc, scores
     )
     n_folds = int(config["hpo"]["calibration_folds"])
+    minimum_support = int(config["rand_matching"]["threshold_min_fold_support"])
+    if n_folds < minimum_support:
+        raise ValueError(
+            "HPO calibration has insufficient fold support for a meaningful median: "
+            f"configured={n_folds}, required={minimum_support}"
+        )
     fold_map = _fold_ids(truth, n_folds, int(config["hpo"]["collapse_guardrail"]["seed"]))
     thresholds = _thresholds(config)
     fold_rows: list[CalibrationFoldMetricRow] = []
@@ -594,6 +605,15 @@ def evaluate_calibration_trial(
         "calibration_sku_count": int(truth["SKU_ID"].nunique()),
         "calibration_candidate_duplicate_rows_removed": duplicate_count,
         "calibrated_threshold": final_threshold,
+        "calibration_threshold_tie_break": json.dumps(
+            list(config["rand_matching"]["threshold_tie_break"]),
+        ),
+        "calibration_threshold_fold_count": n_folds,
+        "calibration_threshold_support_count": len(fold_rows),
+        "calibration_threshold_support_minimum": minimum_support,
+        "calibration_threshold_support_sufficient": int(
+            len(fold_rows) >= minimum_support
+        ),
         "calibration_threshold_fold_min": float(min(row.calibrated_threshold for row in fold_rows)),
         "calibration_threshold_fold_max": float(max(row.calibrated_threshold for row in fold_rows)),
         "calibration_threshold_plateau_points": int(plateau_count),

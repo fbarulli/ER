@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -189,7 +190,16 @@ class DataConfig(BaseModel):
 
     @field_validator("models")
     @classmethod
-    def _registry_has_trainer_base(cls, v: dict[str, str]) -> dict[str, str]:
+    def _registry_is_local(cls, v: dict[str, str]) -> dict[str, str]:
+        for key, reference in v.items():
+            path = Path(reference)
+            if not reference.strip():
+                raise ValueError(f"models.{key} must be a non-empty local path")
+            if path.is_absolute() or "://" in reference or ".." in path.parts:
+                raise ValueError(
+                    f"models.{key} must be a project-owned relative model path, "
+                    f"got {reference!r}"
+                )
         if "multilingual_l12" not in v or not v["multilingual_l12"]:
             raise ValueError(
                 "models.multilingual_l12 missing — the trainer base resolves "
@@ -316,6 +326,10 @@ class RandMatchingSpec(BaseModel):
     threshold_max: float = Field(ge=-1.0, le=1.0)
     threshold_step: float = Field(gt=0.0)
     target_recall: float = Field(gt=0.0, le=1.0)
+    threshold_tie_break: list[
+        Literal["rand_index", "fewest_unmatched_skus", "lowest_threshold"]
+    ] = Field(min_length=3, max_length=3)
+    threshold_min_fold_support: int = Field(ge=2)
     calibration_proxy_source: str = Field(min_length=1)
     plateau_tolerance: float = Field(gt=0.0)
     plateau_min_points: int = Field(ge=2)
@@ -331,6 +345,12 @@ class RandMatchingSpec(BaseModel):
         if self.threshold_min > self.threshold_max:
             raise ValueError(
                 "rand_matching.threshold_min must not exceed threshold_max"
+            )
+        expected = ["rand_index", "fewest_unmatched_skus", "lowest_threshold"]
+        if self.threshold_tie_break != expected:
+            raise ValueError(
+                "rand_matching.threshold_tie_break must be ordered as "
+                f"{expected}"
             )
         return self
 
@@ -858,6 +878,7 @@ class ColabSpec(BaseModel):
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)
     smoke_workers: int = Field(ge=1, le=3)
+    sims_model: str = Field(min_length=1)
     log_poll_seconds: int = Field(ge=1, le=30)
     probe_timeout_seconds: int = Field(ge=60, le=1800)
     probe_retries: int = Field(ge=1, le=10)

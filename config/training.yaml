@@ -45,6 +45,7 @@ colab:
   hpo_workers: 2
   train_workers: 6
   smoke_workers: 1
+  sims_model: "deberta_v3_base"
   log_poll_seconds: 2
   probe_timeout_seconds: 600
   probe_retries: 4
@@ -141,6 +142,11 @@ rand_matching:
   threshold_max: 0.98
   threshold_step: 0.01
   target_recall: 0.90
+  threshold_tie_break:
+    - "rand_index"
+    - "fewest_unmatched_skus"
+    - "lowest_threshold"
+  threshold_min_fold_support: 3
   calibration_proxy_source: "dev_component_safe_split"
   plateau_tolerance: 0.005
   plateau_min_points: 3
@@ -304,7 +310,7 @@ hpo:
   n_trials: 20                # default TPE trial budget (was --n-trials 20)
   n_jobs: 2                   # default parallel HPO trial workers
   persistence: "dvc"         # DVC-backed HPO snapshots
-  calibration_folds: 2        # canonical-disjoint folds for the trial proxy
+  calibration_folds: 3        # canonical-disjoint folds for the trial proxy
   collapse_guardrail:
     enabled: true
     unrelated_pairs: 100
@@ -338,7 +344,7 @@ sweep:
   train_fracs: [0.25, 0.50, 0.75]    # 07d data-scaling curve
   smoke_sample: 1000                  # chain-check sample size (--sample)
   sweep_sample: 2000                  # step-2 smoke sweep size
-  rerank_model: "cross-encoder/ms-marco-MiniLM-L-6-v2"  # 07e stage-2
+  rerank_model: "rerank_minilm_l6"  # local registry key; DVC-shipped bundle
 
 # ── mining band for in-batch negatives ───────────────────────────────────────
 mining:
@@ -391,7 +397,7 @@ ner:
     columns: *ner_columns
   semantic_training:
     INPUT_CSV: "${results_dir}/dataset_model_input.csv"
-    MODEL_NAME: "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+    MODEL_NAME: "ner_semantic_base"
     OUTPUT_DIR: "${results_dir}/model"
     EPOCHS: 3
     BATCH_SIZE: 32
@@ -431,8 +437,7 @@ ner:
   ner_training:
     input_jsonl: "${results_dir}/ner_dataset.jsonl"
     output_dir: "${results_dir}/ner_model"
-    model_name: "${base_dir}/models/xlm-roberta-base"
-    model_source_repo: "FacebookAI/xlm-roberta-base"
+    model_name: "ner_transformer_base"
     epochs: 10
     batch_size: 32
     learning_rate: 2.0e-5

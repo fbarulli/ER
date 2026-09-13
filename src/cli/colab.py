@@ -63,6 +63,7 @@ from core.common import (
     TRAIN_ROOT,
     sweep_cfg,
     hpo_cfg,
+    load_config,
     resolve_model,
     training_cfg,
 )
@@ -80,6 +81,7 @@ _EPOCHS_DEFAULT = int(training_cfg().training.epochs)
 _RERANK_MODEL = str(sweep_cfg()["rerank_model"])
 
 _COLAB = training_cfg().colab
+_SIMS_MODEL = str(_COLAB.sims_model)
 REPOSITORY = _COLAB.repository
 BRANCH = _COLAB.branch
 GIT_REMOTE_NAME = _COLAB.git_remote_name
@@ -972,7 +974,9 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
         if uniformity_cfg.enabled:
             scope = uniformity_cfg.checkpoint_scope
             selected_checkpoints = checkpoints if scope == "all" else [checkpoints[-1]]
-            base_model = Path(resolve_model("minilm_l6"))
+            base_model = Path(
+                resolve_model(str(training_cfg().training.base_model))
+            )
             if not base_model.is_dir():
                 print(
                     f"[report-local] worker {number}: uniformity skipped; "
@@ -1658,17 +1662,6 @@ def _wandb_env_script() -> str:
     return f"os.environ['WANDB_API_KEY'] = {key!r}\n"
 
 
-def _hf_env_script() -> str:
-    """Pass a local HF token into the VM process without persisting it."""
-    for name in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
-        key = _env_value(name)
-        if key:
-            print(f"[huggingface] {name} loaded from local .env and injected into VM process")
-            return f"os.environ['HF_TOKEN'] = {key!r}\n"
-    print("[huggingface] HF_TOKEN absent from .env; Hub requests will be anonymous")
-    return ""
-
-
 def _optuna_env_script() -> str:
     """Inject the shared PostgreSQL control-plane URL into the VM only."""
     url = _env_value("OPTUNA_STORAGE_URL")
@@ -1690,7 +1683,7 @@ def _remote_auth_env_script() -> str:
     else:
         print("[dvc] DVC_API_KEY absent from .env; durable DVC upload will fail")
         dvc = ""
-    return _wandb_env_script() + _hf_env_script() + _optuna_env_script() + dvc
+    return _wandb_env_script() + _optuna_env_script() + dvc
 
 
 def run_data_prep() -> None:
@@ -1712,6 +1705,34 @@ for step in ("src/training/dedupe.py", "src/training/build_reference.py --verify
 """
     # dedupe 1-2 min + reference verify ~3 min + data_prep ~2 min
     run_colab_exec_stream(SESSION, script, timeout=1800, log_name="data_prep")
+
+
+def materialize_remote_models(model_keys: list[str]) -> None:
+    """Pull and validate only the model bundles required by this lane."""
+    keys = sorted(set(model_keys))
+    registry = load_config()["models"]
+    unknown = sorted(set(keys) - set(registry))
+    if unknown:
+        raise KeyError(f"unknown local model registry key(s): {unknown}")
+    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
+import subprocess
+from core.common import resolve_model
+root = {REMOTE_ROOT!r}
+print("[models] materializing DVC-shipped bundles: {keys}", flush=True)
+pull = subprocess.run(["dvc", "pull", "artifacts/models"], cwd=root, text=True)
+if pull.returncode:
+    raise RuntimeError(f"DVC model materialization failed (rc={{pull.returncode}})")
+for key in {keys!r}:
+    print(f"[models] validating {{key}}", flush=True)
+    print(f"[models] {{key}} -> {{resolve_model(key)}}", flush=True)
+"""
+    run_colab_exec_stream(
+        SESSION,
+        script,
+        timeout=3600,
+        log_name="model_materialization",
+        retry_safe=True,
+    )
 
 
 def verify_training_inputs() -> None:
@@ -1754,7 +1775,15 @@ def run_train(
         # the DVC-verified download instead of spending GPU time on them.
         "--no-plot"]
     if model is not None:
-        args.extend(["--model", resolve_model(model)])
+        registry = load_config()["models"]
+        if model not in registry:
+            raise KeyError(
+                f"Colab training model must be a local registry key; "
+                f"got {model!r}, expected one of {sorted(registry)}"
+            )
+        # Resolve inside the remote checkout. A local absolute path would
+        # not exist on the VM and would bypass the DVC-owned model contract.
+        args.extend(["--model", model])
     if sample is not None:
         args.extend(["--sample", str(sample)])
     if not _MASK_EFFECT_AFTER_TRAIN:
@@ -2016,12 +2045,12 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
 
 
 def run_sims_deberta() -> None:
-    """The deberta zero-shot lane (GPU-only) on the VM."""
-    print("[run] zero_shot_sims --models deberta_v3_base on the VM (GPU) ...")
+    """The configured zero-shot model lane on the VM."""
+    print(f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
     script = _BOOTSTRAP + f"""
 import subprocess, sys
 rc = subprocess.run([sys.executable, "{REMOTE_ROOT}/src/training/zero_shot_sims.py",
-                     "--models", "deberta_v3_base"]).returncode
+                     "--models", {_SIMS_MODEL!r}]).returncode
 if rc != 0:
     raise RuntimeError(f"zero-shot similarity subprocess failed (rc={{rc}})")
 """
@@ -2376,6 +2405,19 @@ def main() -> None:
         ensure_session()
         prepare_remote_layout()
         install_deps()
+        if args.what in {"train", "smoke"}:
+            required_models = [
+                args.model or str(training_cfg().training.base_model)
+            ]
+        elif args.what == "hpo":
+            required_models = list(hpo_cfg()["models"])
+            required_models.append(str(sweep_cfg()["rerank_model"]))
+        elif args.what == "sims":
+            required_models = [_SIMS_MODEL]
+        else:
+            required_models = []
+        if required_models:
+            materialize_remote_models(required_models)
         log_gpu_profile()
         if args.refresh_data:
             run_data_prep()
