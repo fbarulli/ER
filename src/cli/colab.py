@@ -110,6 +110,7 @@ _SMOKE_EPOCHS = _COLAB.smoke_epochs
 _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
 _RESULT_DOWNLOAD_TIMEOUT_SECONDS = _COLAB.result_download_timeout_seconds
 _RESULT_DOWNLOAD_HEARTBEAT_SECONDS = _COLAB.result_download_heartbeat_seconds
+_WORKER_MONITOR_SECONDS = _COLAB.worker_monitor_seconds
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
 # config path is supplied. This workspace's home is read-only, so isolate the
@@ -2284,7 +2285,7 @@ def run_mixed(
     ]
     mixed_workers = _MIXED_TRAIN_WORKERS + _MIXED_SIMS_WORKERS
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
-import concurrent.futures, json, os, pathlib, shutil, subprocess, sys
+import concurrent.futures, json, os, pathlib, shutil, subprocess, sys, threading, time
 from core.common import F
 
 root = pathlib.Path({REMOTE_ROOT!r})
@@ -2294,6 +2295,38 @@ worker_specs = [
     ("train", {train_args!r}, {_MIXED_MINING_PROFILE!r}, {_MASKING_ENABLED!r}),
     ("zero_shot", {sims_args!r}, {_MIXED_MINING_PROFILE!r}, False),
 ]
+
+def emit_snapshot(label, out, proc):
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    commands = (
+        ["ps", "-eo", "pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args", "--forest"],
+        ["nvidia-smi", "--query-gpu=index,name,temperature.gpu,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+        ["nvidia-smi", "--query-compute-apps=pid,process_name,used_memory", "--format=csv,noheader,nounits"],
+    )
+    sections = []
+    for command in commands:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            body = (result.stdout or result.stderr or "").rstrip()
+            sections.append("$ " + " ".join(command) + "\\n" + body)
+        except Exception as exc:
+            sections.append("$ " + " ".join(command) + "\\nERROR " + repr(exc))
+    header = (
+        "[mixed-monitor] timestamp=" + stamp
+        + " worker=" + label
+        + " child_pid=" + str(proc.pid)
+        + " child_returncode=" + str(proc.poll())
+        + "\\n"
+    )
+    text = header + "\\n".join(sections) + "\\n"
+    print(text, end="", flush=True)
+    with (out / "processes.log").open("a", encoding="utf-8") as handle:
+        handle.write(text)
+
+def monitor_worker(label, out, proc, stop):
+    emit_snapshot(label, out, proc)
+    while not stop.wait({int(_WORKER_MONITOR_SECONDS)}):
+        emit_snapshot(label, out, proc)
 
 def run_worker(number, label, command_args, profile, masking_applied):
     out = base / f"worker_{{number}}"
@@ -2341,10 +2374,28 @@ def run_worker(number, label, command_args, profile, masking_applied):
             text=True,
             bufsize=1,
         )
+        try:
+            process_group = str(os.getpgid(proc.pid))
+        except ProcessLookupError:
+            process_group = "exited"
+        print(f"[mixed] worker={{label}} pid={{proc.pid}} pgid={{process_group}} monitor_interval={int(_WORKER_MONITOR_SECONDS)}s", flush=True)
+        monitor_stop = threading.Event()
+        monitor = threading.Thread(
+            target=monitor_worker,
+            args=(label, out, proc, monitor_stop),
+            name="mixed-monitor-" + label,
+            daemon=True,
+        )
+        monitor.start()
         assert proc.stdout is not None
-        for line in proc.stdout:
-            print(f"[{{label}}] {{line}}", end="", flush=True)
-            log.write(line)
+        try:
+            for line in proc.stdout:
+                print(f"[{{label}}] {{line}}", end="", flush=True)
+                log.write(line)
+        finally:
+            monitor_stop.set()
+            monitor.join()
+            emit_snapshot(label, out, proc)
     rc = proc.wait()
     (out / "worker.status").write_text(f"{{rc}}\\n", encoding="utf-8")
     if rc:
