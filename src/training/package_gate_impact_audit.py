@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.common import F, RESULTS
+from core.common import F, ensure_parent
 from core.gtin import normalize_and_validate_gtin
 
 
@@ -28,8 +28,8 @@ def _sets(frame: pd.DataFrame, column: str) -> dict[str, set[str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence", type=Path, default=RESULTS / F["title_attribute_evidence"])
-    parser.add_argument("--gates", type=Path, default=RESULTS / F["gate_results"])
+    parser.add_argument("--evidence", type=Path, default=F["title_attribute_evidence"])
+    parser.add_argument("--gates", type=Path, default=F["gate_results"])
     args = parser.parse_args()
     if not args.evidence.is_file() or not args.gates.is_file():
         raise FileNotFoundError("title evidence and gate results must exist before impact auditing")
@@ -55,8 +55,9 @@ def main() -> None:
     changed_proceed = int(impact["old_decision"].eq("proceed").sum()) if not impact.empty else 0
     summary = pd.DataFrame([{"metric": "gate_pairs", "value": len(gate), "detail": "current decision universe"}, {"metric": "pairs_with_package_evidence_mismatch", "value": len(impact), "detail": "live package constraints applied"}, {"metric": "proceed_to_hard_no", "value": changed_proceed, "detail": "must remain zero after live-gate promotion"}])
     for name, frame in ((F["package_gate_impact_summary"], summary), (F["package_gate_impact_pairs"], impact)):
-        frame.to_csv(RESULTS / name, index=False)
-        print(f"[package-impact] wrote {RESULTS / name} ({len(frame):,} rows)")
+        path = ensure_parent(name)
+        frame.to_csv(path, index=False)
+        print(f"[package-impact] wrote {path} ({len(frame):,} rows)")
     print(summary.to_string(index=False))
 
 

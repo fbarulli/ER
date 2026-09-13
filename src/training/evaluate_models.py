@@ -52,6 +52,7 @@ from core.common import (
     RESULTS,
     SEED,
     F,
+    ensure_parent,
     load_config,
     plot_dpi,
     set_determinism,
@@ -67,9 +68,9 @@ from training.folds import component_folds
 # deterministic contract, unchanged).
 set_determinism(SEED)
 
-LABELED_PAIRS_CSV = RESULTS / F["labeled_pairs"]
-EMBED_SIM_CSV = RESULTS / F["embedding_similarities"]
-CANON_CSV = RESULTS / F["canonical_records"]
+LABELED_PAIRS_CSV = F["labeled_pairs"]
+EMBED_SIM_CSV = F["embedding_similarities"]
+CANON_CSV = F["canonical_records"]
 
 # Stage manifest (SILENT_DROPS task 7) — begin BEFORE the work: all three
 # input CSVs are hashed now so the record pins exactly what this stage
@@ -112,7 +113,7 @@ if _n_after == 0:
         "[merge] inner join lost ALL rows — embedding_similarities.csv "
         "does not cover labeled_pairs (rerun src/training/zero_shot_sims.py)"
     )
-gtin_to_canon = dict(zip(canon["gtin"].astype(str), canon["canonical"].astype(str)))
+gtin_to_canon = dict(zip(canon["gtin"].astype(str), canon["canonical"].astype(str), strict=True))
 df["canon1"] = df["gtin1"].map(gtin_to_canon)
 df["canon2"] = df["gtin2"].map(gtin_to_canon)
 
@@ -380,8 +381,8 @@ print(summary_df.to_string(index=False))
 # atomic write (SILENT_DROPS task 7): the summary is published through
 # the same temp-sibling + os.replace mechanism as every other stage
 # output — a crash never leaves a truncated CSV on the final path.
-summary_out = RESULTS / F["model_evaluation_summary"]
-atomic_write_csv(summary_df, summary_out, index=False)
+summary_out = F["model_evaluation_summary"]
+atomic_write_csv(summary_df, ensure_parent(summary_out), index=False)
 print(f"\nSaved summary to {summary_out}")
 
 # ── per-model result plots (zero-shot embedding similarity, TEST half) ────

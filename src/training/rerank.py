@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from core.common import RESULTS, load_config, pair_auc
+from core import common
+from core.common import load_config, pair_auc
 
 
 def rerank_stage(
@@ -49,7 +50,15 @@ def rerank_stage(
         print("[rerank] no trained fold to rerank — skipping", flush=True)
         return
     model_tag = args.model.rstrip("/").rsplit("/", 1)[-1]
-    ckpt = RESULTS / "_checkpoints" / model_tag / f"r{run_tag}_f{ok_rows[0]['fold']}"
+    ckpt = common.artifact(
+        "checkpoint_repo",
+        {
+            "model_tag": model_tag,
+            "run_tag": run_tag,
+            "fold": int(ok_rows[0]["fold"]),
+            "step": 0,
+        },
+    ).parent
     if not ckpt.exists():
         # HF Trainer keeps the final/best model in the checkpoint dir root
         # only with save_only_model; else look one level up for best dir
@@ -132,7 +141,7 @@ def rerank_stage(
             ce.predict(
                 [
                     [payload[a], payload[b]]
-                    for a, b, _ in [p for p, ib in zip(pairs, in_band) if ib]
+                    for a, b, _ in [p for p, ib in zip(pairs, in_band, strict=True) if ib]
                 ]
             )
         )
@@ -148,7 +157,7 @@ def rerank_stage(
             ce.predict(
                 [
                     [payload[a], payload[b]]
-                    for a, b, ib in zip(dev_pairs, dev_in_band) if ib
+                    for a, b, ib in zip(dev_pairs, dev_in_band, strict=True) if ib
                 ]
             )
         )
@@ -245,13 +254,11 @@ def _emit_four_pop(bi, payload, df, row_bc, test_pos, test_neg, pos, neg) -> Non
     """07b_four_pop_scores.csv — four-population cosines (fine-tuned)."""
     import pandas as pd
 
-    from core.common import RESULTS
-
     country = df["country"].fillna("").astype(str).to_numpy()
     if len(row_bc) > len(country):
         by_barcode: dict[str, list[str]] = {}
         for barcode, value in zip(
-            df["barcode"].fillna("").astype(str), country
+            df["barcode"].fillna("").astype(str), country, strict=True
         ):
             if barcode:
                 by_barcode.setdefault(barcode, []).append(value)
@@ -307,10 +314,10 @@ def _emit_four_pop(bi, payload, df, row_bc, test_pos, test_neg, pos, neg) -> Non
         df, SEED, int(_pairs_cfg["max_pos_per_group"]), int(_pairs_cfg["n_neg"])
     )
     rows += [("random_neg", s) for s in pop_scores(rnd_neg, "random_neg")]
-    from core.common import F
 
     out = pd.DataFrame(rows, columns=["population", "cosine"])
-    out.to_csv(RESULTS / F["four_pop_scores"], index=False)
+    common.ensure_parent(common.F["four_pop_scores"])
+    out.to_csv(common.F["four_pop_scores"], index=False)
     print(
         f"[07b] four-population scores written ({len(out):,} rows) — "
         f"report_plots panel 7 is live",

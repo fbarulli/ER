@@ -18,14 +18,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 # Keep local report generation visible and workspace-local; never fall back to
 # the read-only home cache (or an implicit /tmp matplotlib cache).
-_REPORT_ROOT = Path(__file__).resolve().parents[2]
-os.environ.setdefault("MPLCONFIGDIR", str(_REPORT_ROOT / "matplotlib"))
-(_REPORT_ROOT / "matplotlib").mkdir(parents=True, exist_ok=True)
+from core.common import TRAIN_ROOT
 
 import matplotlib
 
@@ -515,7 +512,7 @@ def generate_report(
         distributions = [("train", train_scores), ("holdout", pairs)]
         overlap_rows = []
         fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True, sharey=True)
-        for ax, (split_name, frame) in zip(axes, distributions):
+        for ax, (split_name, frame) in zip(axes, distributions, strict=True):
             if frame.empty:
                 ax.set_title(f"{split_name.title()} scores unavailable")
                 ax.axis("off")
@@ -600,7 +597,7 @@ def generate_report(
             ("hard negative", hard_positive, hard_negative),
             ("random/easy negative", random_positive, random_negative),
         ]
-        for ax, (name, positive, negative) in zip(axes, panels):
+        for ax, (name, positive, negative) in zip(axes, panels, strict=True):
             if not len(positive) or not len(negative):
                 ax.set_title(f"{name}: unavailable")
                 ax.axis("off")

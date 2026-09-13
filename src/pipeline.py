@@ -596,7 +596,7 @@ def extract_discriminative_ngrams(
     phrase_parts = []  # PRE-stopword text: phrase regexes must see 'no',
     # 'with', 'of' — MINIMAL_STOPWORDS deletes them before the keep-token
     # check could ever fire (the live miss on "no sugar"/"free of sugar")
-    for title, attr in zip(titles, attributes):
+    for title, attr in zip(titles, attributes, strict=True):
         text = normalize_text(title) + " " + normalize_text(attr)
         text = re.sub(
             r"\b\d+(\.\d+)?\s*(ml|l|lt|ltr|liter|litre|cl|centiliter|oz|fl oz|qt|gal|ounce|fluid ounce|pack|case|pcs?|pieces?|units?|x)\b",
@@ -916,9 +916,29 @@ def clean_sku_text(title: str, attribute: str = "", brand: str = "") -> str:
 
 def load_canonical_map() -> dict[str, str]:
     """gtin -> canonical string, from the pipeline's canonical_records.csv
-    (file name via config/paths.yaml SSOT)."""
-    df = pd.read_csv(RESULTS / F["canonical_records"], dtype={"gtin": str})
-    return dict(zip(df["gtin"], df["canonical"]))
+    (file name via config/paths.yaml SSOT).
+
+    Reads the file with the SAME string semantics the matching lane's own
+    read uses (dtype=str, keep_default_na=False — rand_matching's
+    record_map): an empty gtin cell becomes the plain key "" in BOTH maps,
+    never the literal "nan" / float-NaN key pandas otherwise fabricates.
+    Blank/whitespace gtin keys are rejected loudly — a "" canonical key
+    would silently capture every barcode-less row in the payload space.
+    """
+    df = pd.read_csv(
+        RESULTS / F["canonical_records"],
+        dtype=str,
+        keep_default_na=False,
+    )
+    blank = df.index[df["gtin"].astype(str).str.strip().eq("")]
+    if len(blank):
+        raise ValueError(
+            f"canonical_records.csv has {len(blank)} blank/whitespace gtin "
+            f"rows (row indices "
+            f"{list(blank[:5])}{' ...' if len(blank) > 5 else ''}) — refusing "
+            f"to key the canonical map by an empty gtin"
+        )
+    return dict(zip(df["gtin"], df["canonical"], strict=True))
 
 
 # tokens that are SEMANTIC despite carrying digits (same whitelist the
@@ -1122,7 +1142,7 @@ def census_texts(df: pd.DataFrame) -> list[str]:
     WITHOUT the final number-token strip, so every digit token in the corpus
     appears in the reference."""
     out = []
-    for t, a in zip(df["title"].fillna(""), df["attributes"].fillna("")):
+    for t, a in zip(df["title"].fillna(""), df["attributes"].fillna(""), strict=True):
         text = normalize_text(t) + " " + normalize_text(a or "")
         text = _VOLUME_PACK_RE.sub(" ", text)
         toks = [x for x in text.split() if x not in MINIMAL_STOPWORDS and len(x) > 1]
@@ -1193,7 +1213,7 @@ def load_verdicts() -> dict[str, str] | None:
     # BOUNDARY CONTRACT (lib.schemas): every verdict must be in the
     # strip/keep_* vocabulary — a typo'd CSV value would silently never
     # match the startswith("keep") branch in strip_number_tokens.
-    _VERDICTS_CACHE = check_verdict_map(dict(zip(df["token"], df["verdict"])))
+    _VERDICTS_CACHE = check_verdict_map(dict(zip(df["token"], df["verdict"], strict=True)))
     _VERDICTS_LOADED = True
     return _VERDICTS_CACHE
 
@@ -1334,7 +1354,7 @@ def run_within_brand_pipeline(
         .agg(
             rows=(
                 "sku_name_eng",
-                lambda x: list(zip(x, df_full.loc[x.index, "attribute"])),
+                lambda x: list(zip(x, df_full.loc[x.index, "attribute"], strict=True)),
             ),
             brand=("brand", lambda x: Counter(x).most_common(1)[0][0]),
             description_evidence=("description_short_eng", _source_evidence),
@@ -1349,7 +1369,7 @@ def run_within_brand_pipeline(
 
     # Precompute within‑brand IDF per brand
     brand_to_gtins = defaultdict(list)
-    for gtin, brand in zip(grouped["gtin"], grouped["brand"]):
+    for gtin, brand in zip(grouped["gtin"], grouped["brand"], strict=True):
         brand_to_gtins[brand.lower().strip()].append(gtin)
 
     # For each brand, build an IDF from that brand's GTINs
@@ -1554,7 +1574,7 @@ def build_training_data(
     # volume/pack work useful for labels but invisible to the embedding.
     sku_structured = [
         sku_structured_info(t, a) if structured_enabled else {"volume": set(), "pack": set()}
-        for t, a in zip(title, attrs)
+        for t, a in zip(title, attrs, strict=True)
     ]
 
     # ── clean sku text per row (variant: full = title+attr, title_only) ──
@@ -1566,7 +1586,7 @@ def build_training_data(
                 strip_schema_words(clean_sku_text(t, a)), info,
                 enabled=structured_append_to_text,
             )
-            for t, a, info in zip(title, attrs, sku_structured)
+            for t, a, info in zip(title, attrs, sku_structured, strict=True)
         ]
     elif payload_variant == "title_only":
         sku_texts = [
@@ -1574,7 +1594,7 @@ def build_training_data(
                 strip_schema_words(clean_sku_text(t)), info,
                 enabled=structured_append_to_text,
             )
-            for t, info in zip(title, sku_structured)
+            for t, info in zip(title, sku_structured, strict=True)
         ]
     else:
         raise SystemExit(f"unknown payload variant: {payload_variant}")
@@ -1607,7 +1627,7 @@ def build_training_data(
             strip_schema_words(canonical_model_text(canon_map[g])), info,
             enabled=structured_append_to_text,
         )
-        for g, info in zip(canon_gtins, canon_structured)
+        for g, info in zip(canon_gtins, canon_structured, strict=True)
     ]
     payload.extend(canon_texts)
     row_bc.extend(canon_gtins)
@@ -1630,7 +1650,7 @@ def build_training_data(
     # in-batch negative is harmless, a positive is not.
     empty_sku = {i for i, s in enumerate(sku_texts) if not s}
     empty_canon_idx = {
-        gtin_to_canon_idx[g] for g, s in zip(canon_gtins, canon_texts) if not s
+        gtin_to_canon_idx[g] for g, s in zip(canon_gtins, canon_texts, strict=True) if not s
     }
 
     # ── positives: every row whose barcode has a canonical ──

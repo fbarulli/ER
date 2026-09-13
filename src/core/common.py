@@ -30,9 +30,33 @@ import os
 from pathlib import Path
 from typing import Any
 
+def _find_project_root() -> Path:
+    """Locate the project from stable markers, never a magic parent offset."""
+    override = os.environ.get("EUROMONITOR_PROJECT_ROOT")
+    if override:
+        root = Path(override).expanduser().resolve()
+        if (root / "config").is_dir() and (root / "pyproject.toml").is_file():
+            return root
+        raise RuntimeError(
+            "EUROMONITOR_PROJECT_ROOT must contain config/ and pyproject.toml: "
+            f"{root}"
+        )
+    source_file = Path(__file__).resolve()
+    for candidate in source_file.parents:
+        if (candidate / "config").is_dir() and (candidate / "pyproject.toml").is_file():
+            return candidate
+    raise RuntimeError(f"Could not locate project root from {source_file}")
+
+
+TRAIN_ROOT = _find_project_root()
+CONFIG_DIR = TRAIN_ROOT / "config"
+CONFIG_PATH = CONFIG_DIR / "paths.yaml"
+TRAINING_CONFIG_PATH = CONFIG_DIR / "training.yaml"
+VOCABULARY_CONFIG_PATH = CONFIG_DIR / "vocabulary.json"
+
 # Keep matplotlib's cache inside the workspace for local and remote runs;
 # importing this module must not fall back to a transient /tmp cache.
-_MPLCONFIGDIR = Path(__file__).resolve().parents[2] / "matplotlib"
+_MPLCONFIGDIR = TRAIN_ROOT / "matplotlib"
 os.environ.setdefault("MPLCONFIGDIR", str(_MPLCONFIGDIR))
 _MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
 
@@ -43,7 +67,7 @@ matplotlib.use("Agg")  # headless; set before pyplot import
 import pandas as pd
 import yaml
 
-from core.schemas import DataConfig, TrainingConfig
+from core.schemas import DataConfig, LayoutSpec, TrainingConfig
 from core.text import extract_volume_ml
 
 
@@ -89,13 +113,6 @@ def _find_project_root() -> Path:
         if (candidate / "config").is_dir() and (candidate / "pyproject.toml").is_file():
             return candidate
     raise RuntimeError(f"Could not locate project root from {source_file}")
-
-
-TRAIN_ROOT = _find_project_root()
-CONFIG_DIR = TRAIN_ROOT / "config"
-CONFIG_PATH = CONFIG_DIR / "paths.yaml"
-TRAINING_CONFIG_PATH = CONFIG_DIR / "training.yaml"
-VOCABULARY_CONFIG_PATH = CONFIG_DIR / "vocabulary.json"
 
 
 def _read_yaml(path: Path) -> dict:
@@ -365,10 +382,117 @@ RESULTS = (
 RESULTS.mkdir(parents=True, exist_ok=True)
 TRAINING_RESULTS = _path(_CFG["paths"]["training_results_dir"])
 TRAINING_RESULTS.mkdir(parents=True, exist_ok=True)
-DATA_PATH = DATA_DIR / _CFG["files"]["dataset"]
 
-# ── file names (SSOT) ────────────────────────────────────────────────────────
-F = _CFG["files"]
+# ── artifact binding roots (SSOT) ────────────────────────────────────────────
+# Every files./layouts. entry is a "root:name" binding. roots resolve here —
+# ONE rule per root, no guessing, no per-lane inference:
+#   repo             → TRAIN_ROOT/name
+#   data             → DATA_DIR/name
+#   results          → RESULTS/name      (honors EUROMONITOR_RESULTS_DIR —
+#                     on a Colab worker this is the WORKER dir, not the repo
+#                     results root — never change this to TRAIN_ROOT-based)
+#   results_training → RESULTS/training/name
+#   results_hpo      → RESULTS/hpo/name
+_BINDING_ROOTS = {
+    "repo": TRAIN_ROOT,
+    "data": DATA_DIR,
+    "results": RESULTS,
+    "results_training": RESULTS / "training",
+    "results_hpo": RESULTS / "hpo",
+}
+_KNOWN_ROOT_TOKENS = tuple(_BINDING_ROOTS)
+
+
+def _resolve_file(binding: str | Path) -> Path:
+    """Resolve a "root:name" SSOT binding to an absolute Path.
+
+    Unknown root or empty name CRASHES here (fail-loud at import, never
+    mid-run).  No fallback, no relative joins downstream.
+    """
+    if isinstance(binding, Path):
+        return binding.resolve()
+    root, sep, name = str(binding).partition(":")
+    if not sep or root not in _BINDING_ROOTS:
+        raise ValueError(
+            f"files/layouts binding {binding!r} must be 'root:name' with root "
+            f"in {sorted(_KNOWN_ROOT_TOKENS)}"
+        )
+    return (_BINDING_ROOTS[root] / name).resolve()
+
+
+# ── file names (SSOT → resolved absolute Paths) ─────────────────────────────
+F = {name: _resolve_file(value) for name, value in _CFG["files"].items()}
+DATA_PATH = F["dataset"]
+
+# ── owned layout templates for generated artifacts (SSOT) ───────────────────
+# paths.yaml `layouts:` entries are validated into LayoutSpec here (import
+# crash on unknown root, bad field type, or undeclared field) — no raw dicts.
+LAYOUTS: dict[str, LayoutSpec] = {
+    name: LayoutSpec.model_validate(spec)
+    for name, spec in (_CFG.get("layouts") or {}).items()
+}
+_UNSET = object()
+
+
+def artifact(key: str, fields: dict[str, object] | None = None) -> Path:
+    """Render a generated-artifact destination from an owned layout template.
+
+    Template placeholders are filled ONLY from the declared fields set; a
+    missing or unexpected field crashes.  Callers must wrap the returned
+    path in the layout's OWNER module (declared in paths.yaml layouts:.owner).
+    """
+    spec = LAYOUTS.get(key)
+    if spec is None:
+        raise KeyError(f"unknown layout {key!r}; declared layouts: {sorted(LAYOUTS)}")
+    declared = set(spec.fields)
+    provided = dict(fields or {})
+    if set(provided) != declared:
+        raise ValueError(
+            f"layout {key!r} requires fields {sorted(declared)}, got {sorted(provided)}"
+        )
+    coerced: dict[str, object] = {}
+    for name, typ in spec.fields.items():
+        raw = provided[name]
+        if typ == "int":
+            coerced[name] = int(raw)
+        elif typ == "float":
+            coerced[name] = float(raw)
+        else:
+            coerced[name] = str(raw)
+    return (_BINDING_ROOTS[spec.root] / spec.template.format(**coerced)).resolve()
+
+
+def ensure_parent(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def trace_artifact(key: str, path: Path, producer: str = "") -> None:
+    """Stamp a generated-artifact write into the artifacts trace manifest."""
+    import json as _json
+    from datetime import datetime as _datetime, timezone as _timezone
+
+    trace_dir = ensure_parent(RESULTS / "manifests")
+    trace_path = trace_dir / "artifacts_trace.json"
+    record = {
+        "layout": key,
+        "path": str(path),
+        "producer": producer or "unknown",
+        "at": _datetime.now(_timezone.utc).isoformat(),
+    }
+    rows = []
+    if trace_path.exists():
+        try:
+            rows = _json.loads(trace_path.read_text(encoding="utf-8"))
+            if isinstance(rows, dict):
+                rows = rows.get("artifacts", [])
+        except Exception:
+            rows = []
+    rows.append(record)
+    tmp = trace_path.with_suffix(".json.tmp")
+    tmp.write_text(_json.dumps({"artifacts": rows}, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(trace_path)
+
 
 # ── column mapping + seed (SSOT, read once) ──────────────────────────────────
 COLUMN_MAPPING = dict(_CFG["column_mapping"])
@@ -472,11 +596,15 @@ def write_visibility_log(
     df: pd.DataFrame, name: str, run_tag: str, sample: bool
 ) -> None:
     """Write a visibility dump under the run-tag dir + latest pointer."""
-    logs = RESULTS / "logs"
-    (logs / run_tag).mkdir(parents=True, exist_ok=True)
-    df.to_csv(logs / run_tag / name, index=False)
+    run_path = artifact("visibility_run", {"run_tag": run_tag, "name": name})
+    ensure_parent(run_path)
+    df.to_csv(run_path, index=False)
+    trace_artifact("visibility_run", run_path)
     if not sample and not os.environ.get("EUROMONITOR_HPO_RETENTION_MODE"):
-        df.to_csv(logs / name, index=False)
+        latest_path = artifact("visibility", {"name": name})
+        ensure_parent(latest_path)
+        df.to_csv(latest_path, index=False)
+        trace_artifact("visibility", latest_path)
 
 
 def _validate_source_export(
@@ -548,7 +676,7 @@ def load_dataset_deduped() -> pd.DataFrame:
     marketplace-listing collapse); the raw export remains the source of
     truth via load_dataset. Columns are already canonical (written by 06).
     """
-    path = DATA_DIR / F["dataset_deduped"]
+    path = F["dataset_deduped"]
     if not path.exists():
         raise FileNotFoundError(f"{path} missing — run src/training/dedupe.py first")
     return pd.read_csv(path, dtype=str)

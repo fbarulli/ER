@@ -2,12 +2,19 @@
 from __future__ import annotations
 import argparse, fcntl, json, os, shutil, subprocess, tempfile, time, traceback
 from pathlib import Path
-from core.common import training_cfg
+from core import common
+
+# The tracking/verify EXCLUSION set — files/dirs whose path parts hit these
+# are skipped in tracking and verification. KEEP the content byte-for-byte.
+DVC_EXCLUDED_DIRS = frozenset({
+    ".dvc", ".dvc-cache", ".dvc-site-cache", ".resume", "_checkpoints",
+    "_checkpoint_upload_staging", "wandb", "mlruns",
+})
 
 def _run(command: list[str], cwd: Path) -> str:
     shown = ["<redacted>" if command[i - 1:i] == ["password"] else part for i, part in enumerate(command)]
     print(f"[dvc] running: {' '.join(shown)}", flush=True)
-    cfg = training_cfg().colab
+    cfg = common.training_cfg().colab
     attempts = cfg.dvc_push_retries if command[:2] == ["dvc", "push"] else 1
     for attempt in range(1, attempts + 1):
         try:
@@ -142,7 +149,7 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
 def _configure(source: Path, token: str) -> str:
     """Configure an isolated, no-SCM DVC workspace for one worker."""
     os.environ["DVC_SITE_CACHE_DIR"] = str(source / ".dvc-site-cache")
-    remote = training_cfg().colab.dvc_remote_url
+    remote = common.training_cfg().colab.dvc_remote_url
     if not (source / ".dvc").is_dir():
         _run(["dvc", "init", "--no-scm"], source)
         _run(["dvc", "config", "cache.dir", str(source / ".dvc-cache")], source)
@@ -174,7 +181,7 @@ def publish_checkpoint(
     restore_root = (restore_root or checkpoint_root).resolve()
     relative_root = checkpoint_root.relative_to(source)
     restore_root.relative_to(source)
-    pointer = source / ".resume" / f"{resume_name or checkpoint_root.name}.dvc"
+    pointer = common.artifact("resume_pointer", {"name": resume_name or checkpoint_root.name})
     # DVC recursively discovers existing .dvc files.  The durable resume
     # pointers are intentionally kept under source/.resume, but they must not
     # participate in discovery while a new output is added.  Temporarily
@@ -189,15 +196,15 @@ def publish_checkpoint(
         try:
             _configure(source, token)
             staged_resume = None
-            resume_dir = source / ".resume"
+            resume_dir = pointer.parent
             if resume_dir.is_dir():
                 staged_resume = Path(tempfile.mkdtemp(prefix=".resume-staging-", dir=source.parent))
-                shutil.move(str(resume_dir), str(staged_resume / ".resume"))
+                shutil.move(str(resume_dir), str(staged_resume / resume_dir.name))
             try:
                 _run(["dvc", "add", str(relative_root)], source)
             finally:
                 if staged_resume is not None:
-                    shutil.move(str(staged_resume / ".resume"), str(resume_dir))
+                    shutil.move(str(staged_resume / resume_dir.name), str(resume_dir))
                     shutil.rmtree(staged_resume, ignore_errors=True)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -313,14 +320,15 @@ def restore_checkpoint(source: Path, checkpoint_root: Path) -> Path:
     source = source.resolve()
     checkpoint_root = checkpoint_root.resolve()
     checkpoint_root.relative_to(source)
-    pointer = source / ".resume" / f"{checkpoint_root.name}.dvc"
+    pointer = common.artifact("resume_pointer", {"name": checkpoint_root.name})
+    resume_dir = pointer.parent
     if not pointer.is_file():
         # New asynchronous publishing writes one durable pointer per immutable
         # ``checkpoint-N`` directory.  Restore the newest published checkpoint
         # beneath this Trainer output root; an unfinished upload has no pointer
         # and therefore can never be selected for resume.
         candidates: list[tuple[int, Path]] = []
-        for candidate in sorted((source / ".resume").glob("checkpoint-*.dvc")):
+        for candidate in sorted(resume_dir.glob("checkpoint-*.dvc")):
             try:
                 outputs = _pointer_outputs(source, candidate)
             except (OSError, ValueError):
@@ -353,10 +361,7 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     tracked_suffixes = {
         ".csv", ".json", ".png", ".log", ".yaml", ".yml", ".txt",
     }
-    excluded_dirs = {
-        ".dvc", ".dvc-cache", ".dvc-site-cache", ".resume", "_checkpoints",
-        "_checkpoint_upload_staging", "wandb", "mlruns",
-    }
+    excluded_dirs = DVC_EXCLUDED_DIRS
     paths = []
     for path in sorted(source.rglob("*")):
         if not path.is_file() or path.suffix not in tracked_suffixes:

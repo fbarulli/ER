@@ -59,6 +59,8 @@ from core.common import (
     F,
     RESULTS,
     SEED,
+    artifact,
+    ensure_parent,
     kfold_barcodes,
     load_config,
     metadata_text,
@@ -66,6 +68,7 @@ from core.common import (
     pair_similarity,
     row_metadata_text,
     runtime,
+    trace_artifact,
 )
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_MARGIN
 from core.common import runtime as _runtime
@@ -1290,14 +1293,21 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         # negative slots. Allocate those slots by configured target share,
         # then fill any unused capacity from the remaining highest scores.
         capacity = len(self.slot_ids)
+        ann_scores = stats.get("scores", [])
+        n_ann_pairs = len(pairs.tolist())
+        if ann_scores and len(ann_scores) != n_ann_pairs:
+            raise ValueError(
+                "ANN refresh score count must match pair count (or be absent "
+                f"for audit recovery): {len(ann_scores)} != {n_ann_pairs}"
+            )
         candidates: dict[str, list[tuple[float, int, int]]] = {
             "ann_finetuned": [
                 (float(score), int(a), int(b))
-                for (a, b), score in zip(pairs.tolist(), stats.get("scores", []))
+                for (a, b), score in zip(pairs.tolist(), ann_scores)
             ],
             "attribute_conflict": [
                 (float(score), int(a), int(b))
-                for (a, b), score in zip(attr_pairs.tolist(), attr_scores.tolist())
+                for (a, b), score in zip(attr_pairs.tolist(), attr_scores.tolist(), strict=True)
             ],
         }
         # refresh_finetuned_ann intentionally returns only pairs plus summary;
@@ -1383,9 +1393,13 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         # find more rows than the current fold's negative population.
         pair_map = self.ann_state["pairs"]
         pair_map.clear()
+        # Miner may find fewer pairs than slot capacity: the assigned subset
+        # is explicit (slice to the available count) and never silently zipped.
         pair_map.update({
             int(slot): (str(self.payload[a]), str(self.payload[b]))
-            for slot, (a, b) in zip(self.slot_ids, pairs.tolist())
+            for slot, (a, b) in zip(
+                self.slot_ids[: len(pairs)], pairs.tolist(), strict=True
+            )
         })
         feature_map = self.ann_state["structured_features"]
         feature_map.clear()
@@ -1395,7 +1409,9 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
                     self.structured_features[int(a)].tolist(),
                     self.structured_features[int(b)].tolist(),
                 ]
-                for slot, (a, b) in zip(self.slot_ids, pairs.tolist())
+                for slot, (a, b) in zip(
+                    self.slot_ids[: len(pairs)], pairs.tolist(), strict=True
+                )
             }
         )
         source_map = self.ann_state["sources"]
@@ -1403,7 +1419,11 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         source_map.update(
             {
                 int(slot): source
-                for slot, source in zip(self.slot_ids, selected_sources)
+                for slot, source in zip(
+                    self.slot_ids[: len(selected_sources)],
+                    selected_sources,
+                    strict=True,
+                )
             }
         )
         self.ann_state["version"] = int(state.global_step)
@@ -1458,14 +1478,17 @@ def retain_hpo_champion(
     import tempfile
 
     model_tag = model_id.rstrip("/").rsplit("/", 1)[-1]
-    checkpoint_base = RESULTS / "_checkpoints" / model_tag
     record = RESULTS / f"hpo_{model_tag}_champion.json"
     lock_path = RESULTS / f".hpo-{model_tag}-retention.lock"
 
     def artifacts(tag: str, fold_numbers: list[int]) -> list[Path]:
         paths = [RESULTS / "logs" / tag]
         paths.extend(
-            checkpoint_base / f"r{tag}_f{fold}" for fold in fold_numbers
+            artifact(
+                "checkpoint_repo",
+                {"model_tag": model_tag, "run_tag": tag, "fold": fold, "step": 0},
+            ).parent
+            for fold in fold_numbers
         )
         paths.extend(RESULTS.glob(f"train_{model_tag}_{tag}_fold*_pairs.csv"))
         return paths
@@ -1551,7 +1574,7 @@ def _discriminative_groups(
 
 def _load_canonical_metadata() -> dict[str, dict]:
     records = pd.read_csv(
-        RESULTS / F["canonical_records"], dtype=str, keep_default_na=False
+        F["canonical_records"], dtype=str, keep_default_na=False
     )
     required = {
         "gtin",
@@ -1629,7 +1652,7 @@ def _canonical_payload_metadata(
 
 
 def _load_gate_lookup() -> dict[tuple[str, str], dict[str, object]]:
-    gate_path = RESULTS / F["gate_results"]
+    gate_path = F["gate_results"]
     if not gate_path.is_file():
         raise FileNotFoundError(f"gate metadata is missing: {gate_path}")
     gates = pd.read_csv(gate_path, dtype=str, keep_default_na=False)
@@ -1788,7 +1811,7 @@ def _dump_train_visibility(
         return str(tr_neg_sources[k - len(train_all)]) if tr_neg_sources is not None else "hard_neg"
 
     rows = []
-    for k, (t1, t2, l) in enumerate(zip(s1, s2, lab)):
+    for k, (t1, t2, l) in enumerate(zip(s1, s2, lab, strict=True)):
         a = int(train_all[k][0]) if l == 1 else int(tr_negs[k - len(train_all)][0])
         b = int(train_all[k][1]) if l == 1 else int(tr_negs[k - len(train_all)][1])
         rows.append(
@@ -2503,15 +2526,22 @@ def train_one_config(
                 )
                 continue
 
-            checkpoint_dir = (
-                RESULTS / "_checkpoints" / model_id.rstrip("/").rsplit("/", 1)[-1]
-                / f"r{run_tag}_f{fold_i}"
-            )
+            checkpoint_dir = artifact(
+                "checkpoint_repo",
+                {
+                    "model_tag": model_id.rstrip("/").rsplit("/", 1)[-1],
+                    "run_tag": run_tag,
+                    "fold": fold_i,
+                    "step": 0,
+                },
+            ).parent
             if resume:
                 from training.dvc_store import restore_checkpoint
 
                 restore_checkpoint(RESULTS, checkpoint_dir)
                 print(f"    [resume] restored {checkpoint_dir} from DVC", flush=True)
+
+            ensure_parent(checkpoint_dir)
 
             # Tied-weight two-tower retrieval model: the trainer receives
             # (SKU text, canonical text) pairs; each side is encoded on its
@@ -2889,6 +2919,7 @@ def train_one_config(
                         trainer_control=self.control,
                         training_args=self.args,
                     )
+                    trace_artifact("checkpoint_repo", checkpoint, producer="training.training")
 
             model_tag = str(model_id).rstrip("/").rsplit("/", 1)[-1]
             args_hf = STArgs(
@@ -3852,10 +3883,10 @@ def train_one_config(
                 conflict_columns,
                 sku_attribute_info,
             )
-            from core.common import F as _F, RESULTS as _RESULTS
+            from core.common import F as _F
 
             _canon_frame = pd.read_csv(
-                _RESULTS / _F["canonical_records"], dtype=str, keep_default_na=False
+                _F["canonical_records"], dtype=str, keep_default_na=False
             )
             _canon_attrs = {
                 str(record["gtin"]): canonical_attribute_info(record)
@@ -4005,7 +4036,7 @@ def train_one_config(
                 lo, hi = float(np.min(all_scores)), float(np.max(all_scores))
                 bins = np.linspace(lo, hi, 31) if hi > lo else 30
                 fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), sharey=True)
-                for ax, split in zip(axes, ("train", "holdout")):
+                for ax, split in zip(axes, ("train", "holdout"), strict=True):
                     for label, color in ((0, "tab:orange"), (1, "tab:blue")):
                         values = finite_groups[f"{split}/label_{label}"]
                         if len(values):
@@ -4167,7 +4198,7 @@ def run_hpo(
             _final_dev_losses = [v[-1] for v in _dev_loss_histories if v]
             _overfit_flags = [
                 int(bool(t) and bool(d) and t[-1] < t[0] and d[-1] > min(d))
-                for t, d in zip(_train_loss_histories, _dev_loss_histories)
+                for t, d in zip(_train_loss_histories, _dev_loss_histories, strict=True)
             ]
             if _best_dev_losses:
                 trial.set_user_attr("mean_best_dev_loss", float(np.mean(_best_dev_losses)))
@@ -4326,7 +4357,10 @@ def run_hpo(
     )
     model_tag = args.model.split("/")[-1]
     era = "-dlr"  # discriminative-LR sweep era (see study_name above)
-    trials_df.to_csv(RESULTS / f"train_{model_tag}{era}_hpo_trials.csv", index=False)
+    trials_path = artifact("hpo_trials", {"model": model_tag, "era": era})
+    ensure_parent(trials_path)
+    trials_df.to_csv(trials_path, index=False)
+    trace_artifact("hpo_trials", trials_path, producer="training.training")
     best = {
         "config": study.best_params,
         "value": study.best_value,
@@ -4339,14 +4373,15 @@ def run_hpo(
             HPO_OBJECTIVE_HOLDOUT if selection_mode else HPO_OBJECTIVE_CV
         ),
     }
-    out_path = RESULTS / f"train_{model_tag}{era}_hpo_best.json"
+    out_path = artifact("hpo_best", {"model": model_tag, "era": era})
+    ensure_parent(out_path)
     with open(out_path, "w") as f:
         json.dump(best, f, indent=2)
+    trace_artifact("hpo_best", out_path, producer="training.training")
     if (
         wandb_ctx is not None
         and os.environ.get("EUROMONITOR_REMOTE_TRAINING") != "1"
     ):
-        trials_path = RESULTS / f"train_{model_tag}{era}_hpo_trials.csv"
         wandb_ctx.log_artifact(trials_path, "hpo-trials")
         wandb_ctx.log_artifact(out_path, "hpo-best")
         wandb_ctx.set_summary(

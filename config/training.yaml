@@ -126,6 +126,13 @@ rand_matching:
   target_recall: 0.90
   plateau_tolerance: 0.005
   plateau_min_points: 3
+  # SSOT for the unmatched-SKU ITEM_ID prefix (RM8). rand_matching.py's four
+  # hardcoded "UNMATCHED_" sites must read this key — REQUIRED by
+  # RandMatchingSpec (extra="forbid"), so a missing/mismatched value fails
+  # every lane at config load, and the lookup vs column-name mismatch on
+  # fit_threshold_at_90pct_recall needs NO config key (the f-string
+  # f"fit_threshold_at_{target_recall:.0%}_recall" is the fix).
+  unmatched_prefix: "UNMATCHED_"
 
 # ── training ────────────────────────────────────────────────────────────────
 training:

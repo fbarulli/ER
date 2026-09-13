@@ -60,7 +60,7 @@ def _candidate_frame(
         raise ValueError("trial proxy scores are not aligned with pair rows")
     records: list[dict[str, object]] = []
     truth: dict[str, str] = {}
-    for pair_index, (pair, score) in enumerate(zip(pairs, scores)):
+    for pair_index, (pair, score) in enumerate(zip(pairs, scores, strict=True)):
         source, target = (int(pair[0]), int(pair[1]))
         sku_id = str(source)
         candidate_gtin = str(row_bc[target]).strip()

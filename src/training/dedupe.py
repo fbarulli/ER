@@ -37,22 +37,23 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from core.common import DATA_DIR, DATA_PATH, RESULTS, SEED, F, load_dataset
+from core.common import DATA_PATH, SEED, F, ensure_parent, load_dataset
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 
 # output paths from the config SSOT (files.*) — were hardcoded here, the
 # only filenames in the tree outside config/paths.yaml
-CSV_SUMMARY = RESULTS / F["dedupe_summary"]
-CSV_OFFERS = RESULTS / F["ambiguous_offer_groups"]
-CSV_REMOVALS = RESULTS / F["removals"]
-DEDUPED_PATH = DATA_DIR / F["dataset_deduped"]
-SKU_TO_REP_PATH = DATA_DIR / F["sku_to_rep"]
+CSV_SUMMARY = F["dedupe_summary"]
+CSV_OFFERS = F["ambiguous_offer_groups"]
+CSV_REMOVALS = F["removals"]
+DEDUPED_PATH = F["dataset_deduped"]
+SKU_TO_REP_PATH = F["sku_to_rep"]
 
 HELPERS = ["_price", "_nonnull", "_has_bc", "_t2_bc", "_bc_valid"]
 
 
 def main() -> None:
-    RESULTS.mkdir(parents=True, exist_ok=True)
+    for _out in (CSV_SUMMARY, CSV_OFFERS, CSV_REMOVALS, DEDUPED_PATH, SKU_TO_REP_PATH):
+        ensure_parent(_out)
     # Stage manifest (SILENT_DROPS task 4) — begin BEFORE the work: the
     # raw export is hashed now (53MB, chunked) so the record pins exactly
     # what this stage read. Seed = the SSOT seed (lib.common.SEED); the
@@ -96,6 +97,7 @@ def main() -> None:
                 zip(
                     ordered.index,
                     ordered.index.to_numpy()[rep_pos.to_numpy()],
+                    strict=True,
                 )
             )
         )
@@ -269,8 +271,9 @@ def main() -> None:
         outputs=[DEDUPED_PATH, SKU_TO_REP_PATH, CSV_SUMMARY, CSV_OFFERS, CSV_REMOVALS],
         row_accounting=row_accounting,
         expected_outputs=[
-            F["dataset_deduped"], F["sku_to_rep"],
-            F["dedupe_summary"], F["ambiguous_offer_groups"], F["removals"],
+            F["dataset_deduped"].name, F["sku_to_rep"].name,
+            F["dedupe_summary"].name, F["ambiguous_offer_groups"].name,
+            F["removals"].name,
         ],
     )
     print(f"wrote {manifest_path} — stage manifest (closure "

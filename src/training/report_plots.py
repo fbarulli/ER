@@ -22,15 +22,17 @@ from sklearn.metrics import average_precision_score, precision_recall_curve
 from core.blocking import build_pairs
 from core.common import (
     DATA_DIR,
-    RESULTS,
     SEED,
     F,
+    artifact,
     category_macros,
+    ensure_parent,
     load_config,
     load_dataset_deduped,
     pair_similarity,
     plot_dpi,
     runtime,
+    trace_artifact,
     training_cfg,
 )
 from core.nlp import encode_corpus
@@ -99,7 +101,7 @@ def main() -> None:
     # AUDIT FIX (round 2 F05, round 3): 07-series CSV names read via the
     # F map (config/paths.yaml files:) — a rename through config now reaches
     # this consumer instead of silently desynchronizing it.
-    fab = RESULTS / F["field_ablation"]
+    fab = F["field_ablation"]
     if fab.exists():
         fdf = pd.read_csv(fab).set_index("variant")
         fig, ax = plt.subplots(figsize=(8, 4.5), constrained_layout=True)
@@ -109,7 +111,9 @@ def main() -> None:
         ax.set_ylabel("score")
         ax.set_xlabel("payload variant")
         ax.set_title("Field ablation — AP and precision@90%recall per variant")
-        fig.savefig(RESULTS / "07_report_field_ablation.png", dpi=plot_dpi())
+        _plot = artifact("report_plot", {"kind": "field_ablation"})
+        fig.savefig(_plot, dpi=plot_dpi())
+        trace_artifact("report_plot", _plot)
         plt.close(fig)
         print(f"field ablation plot written (n={len(fdf)})", flush=True)
         print("field ablation TP/FP/threshold (audit):", flush=True)
@@ -124,7 +128,7 @@ def main() -> None:
         print("field ablation CSV not ready yet", flush=True)
 
     # ---- 6. data-scaling curve (if CSV exists) ----
-    dsc = RESULTS / F["data_scaling"]  # SSOT name (audit round 2 F05)
+    dsc = F["data_scaling"]  # SSOT name (audit round 2 F05)
     if dsc.exists():
         ddf = pd.read_csv(dsc).sort_values("n_triples")
         fig, ax = plt.subplots(figsize=(7, 4.5), constrained_layout=True)
@@ -147,7 +151,9 @@ def main() -> None:
         ax.set_ylabel("score")
         ax.set_title("Data-scaling curve — hard-band performance vs train size")
         ax.legend()
-        fig.savefig(RESULTS / "07_report_data_scaling.png", dpi=plot_dpi())
+        _plot = artifact("report_plot", {"kind": "data_scaling"})
+        fig.savefig(_plot, dpi=plot_dpi())
+        trace_artifact("report_plot", _plot)
         plt.close(fig)
         print(f"data-scaling plot written (n={len(ddf)})", flush=True)
         print("data-scaling TP/FP/threshold (audit):", flush=True)
@@ -165,7 +171,7 @@ def main() -> None:
     # 01h's "cross-country proxy" (silver, brand+category) is NOT the same as
     # 07b's "cross-country positives" (true same-barcode ground truth); keep the
     # two population names distinct so the artifacts are not confused.
-    four = RESULTS / F["four_pop_scores"]  # SSOT name (audit round 2 F05)
+    four = F["four_pop_scores"]  # SSOT name (audit round 2 F05)
     if four.exists():
         fdf = pd.read_csv(four)
         fig, ax = plt.subplots(figsize=(9, 4.5), constrained_layout=True)
@@ -198,7 +204,9 @@ def main() -> None:
         ax.set_ylabel("pairs")
         ax.set_title("Fine-tuned four-population score distribution (07b)")
         ax.legend(fontsize=7)
-        fig.savefig(RESULTS / "07_report_four_pop_dist.png", dpi=plot_dpi())
+        _plot = artifact("report_plot", {"kind": "four_pop_dist"})
+        fig.savefig(_plot, dpi=plot_dpi())
+        trace_artifact("report_plot", _plot)
         plt.close(fig)
         print("four-population distribution plot written", flush=True)
     else:
@@ -256,7 +264,9 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
         f"Score distribution — zero-shot {tag} "
         f"(n: pos={len(pos_s):,} / neg={len(neg_s):,})"
     )
-    fig.savefig(RESULTS / f"07_report_score_dist_{tag}.png", dpi=plot_dpi())
+    _plot = artifact("report_plot", {"kind": f"score_dist_{tag}"})
+    fig.savefig(_plot, dpi=plot_dpi())
+    trace_artifact("report_plot", _plot)
     plt.close(fig)
 
     # ---- 2. precision-recall curve ----
@@ -271,7 +281,9 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
         f"Precision-Recall — {tag} (n: pos={len(pos_s):,} / neg={len(neg_s):,})"
     )
     ax.legend(loc="lower left")
-    fig.savefig(RESULTS / f"07_report_pr_curve_{tag}.png", dpi=plot_dpi())
+    _plot = artifact("report_plot", {"kind": f"pr_curve_{tag}"})
+    fig.savefig(_plot, dpi=plot_dpi())
+    trace_artifact("report_plot", _plot)
     plt.close(fig)
 
     # ---- 3. threshold sweep: precision / recall / F1 ----
@@ -293,7 +305,9 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
     ax.set_ylabel("rate")
     ax.set_title(f"Precision / recall / F1 vs threshold — {tag}")
     ax.legend()
-    fig.savefig(RESULTS / f"07_report_threshold_sweep_{tag}.png", dpi=plot_dpi())
+    _plot = artifact("report_plot", {"kind": f"threshold_sweep_{tag}"})
+    fig.savefig(_plot, dpi=plot_dpi())
+    trace_artifact("report_plot", _plot)
     plt.close(fig)
 
     # ---- 4. error breakdown by attribute ----
@@ -344,7 +358,9 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
     ax.set_title(
         f"Error breakdown by attribute — {tag} (n: FN={n_fn:,} / FP={n_fp:,})"
     )
-    fig.savefig(RESULTS / f"07_report_error_breakdown_{tag}.png", dpi=plot_dpi())
+    _plot = artifact("report_plot", {"kind": f"error_breakdown_{tag}"})
+    fig.savefig(_plot, dpi=plot_dpi())
+    trace_artifact("report_plot", _plot)
     plt.close(fig)
 
     # ---- 4b. FN characterization (missed true matches) + country slice ----
@@ -515,7 +531,9 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
         ]
     ]
     fndf["groups"] = fndf["groups"].astype("Int64")
-    fndf.to_csv(RESULTS / f"07_report_fn_analysis_{tag}.csv", index=False)
+    _csv = ensure_parent(artifact("report_csv", {"kind": f"fn_analysis_{tag}"}))
+    fndf.to_csv(_csv, index=False)
+    trace_artifact("report_csv", _csv)
 
     fig, ax = plt.subplots(figsize=(6.5, 4), constrained_layout=True)
     x = np.arange(len(fn_shares))
@@ -540,7 +558,9 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
         f"(n: FN={int(fn.sum()):,} / TP={len(pos):,})"
     )
     ax.legend()
-    fig.savefig(RESULTS / f"07_report_fn_breakdown_{tag}.png", dpi=plot_dpi())
+    _plot = artifact("report_plot", {"kind": f"fn_breakdown_{tag}"})
+    fig.savefig(_plot, dpi=plot_dpi())
+    trace_artifact("report_plot", _plot)
     plt.close(fig)
 
 

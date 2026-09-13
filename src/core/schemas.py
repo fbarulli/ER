@@ -123,18 +123,69 @@ class DataPathsSpec(BaseModel):
     logs_dir: str
 
 
+class LayoutSpec(BaseModel):
+    """One owned layout template for a GENERATED artifact (training-hpo).
+
+    root is a binding root token: repo | data | results | results_training |
+    results_hpo.  template uses {field} placeholders; fields declares the
+    exact placeholder set (a caller-supplied extra drops in a crash).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    root: str
+    owner: str
+    template: str
+    fields: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("root")
+    @classmethod
+    def _known_root(cls, v: str) -> str:
+        if v not in {"repo", "data", "results", "results_training", "results_hpo"}:
+            raise ValueError(
+                f"unknown layout root {v!r}; must be one of "
+                "repo|data|results|results_training|results_hpo"
+            )
+        return v
+
+    @field_validator("fields")
+    @classmethod
+    def _known_field_types(cls, v: dict[str, str]) -> dict[str, str]:
+        for typ in v.values():
+            if typ not in {"str", "int", "float"}:
+                raise ValueError(f"unsupported layout field type {typ!r}")
+        return v
+
+
 class DataConfig(BaseModel):
     """config/paths.yaml — the SHARED data contract (paths, file names, column
-    mapping, seed, category-macro taxonomy, model registry). Domain knobs
-    live in their own dir: config/training.yaml."""
+    mapping, seed, category-macro taxonomy, model registry, owned layouts).
+    Domain knobs live in their own dir: config/training.yaml."""
 
     model_config = ConfigDict(extra="forbid")
 
     paths: DataPathsSpec
     files: DataFilesSpec
+    layouts: dict[str, LayoutSpec] = Field(default_factory=dict)
     column_mapping: dict[str, str] = Field(min_length=1)
     seed: int
     models: dict[str, str] = Field(min_length=1)
+
+    model_validator(mode="after")
+    @classmethod
+    def _files_roots_resolve(cls, v: "DataConfig") -> "DataConfig":
+        """Every files./layouts. binding must carry a known root token +
+        non-empty name — the resolver needs both; an unknown root would
+        otherwise fail mid-run instead of at import."""
+        known = {"repo", "data", "results", "results_training", "results_hpo"}
+        for key, value in v.files.model_dump().items():
+            root, _, name = str(value).partition(":")
+            if root not in known or not name:
+                raise ValueError(
+                    f"files.{key}={value!r}: must be 'root:name' with root in "
+                    f"{sorted(known)}"
+                )
+        return v
 
     @field_validator("models")
     @classmethod
@@ -259,6 +310,12 @@ class RandMatchingSpec(BaseModel):
     target_recall: float = Field(gt=0.0, le=1.0)
     plateau_tolerance: float = Field(gt=0.0)
     plateau_min_points: int = Field(ge=2)
+    # SSOT for the unmatched-SKU ITEM_ID prefix. rand_matching.py currently
+    # hardcodes "UNMATCHED_" in 4 sites; its consuming agent will read this
+    # key once the schema demands it here (extra="forbid" makes the schema
+    # field itself the contract — a missing yaml key crashes EVERY lane at
+    # import, which is exactly the enforce-your-SSOT blast radius wanted).
+    unmatched_prefix: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def _threshold_range_is_valid(self) -> RandMatchingSpec:

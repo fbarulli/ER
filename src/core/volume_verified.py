@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from core.common import RESULTS, F, canonical_volume
+from core.common import F, canonical_volume
 from core.manifest import count_drop
 
 
@@ -26,7 +26,7 @@ def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
     # AUDIT FIX (round 2 F13, round 3): the name reads the SSOT files map
     # (config/paths.yaml files.second04_pairs_positive) via F — was an inline
     # literal, a second declaration the config could not steer.
-    pairs_csv = RESULTS / F["second04_pairs_positive"]
+    pairs_csv = F["second04_pairs_positive"]
     if not pairs_csv.exists():
         print(
             f"[volume_verified] {F['second04_pairs_positive']} absent — "
@@ -56,7 +56,7 @@ def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
     # shape (0,) not (0, 2) — pairs[:, 0] below then raised IndexError. A
     # manifest with zero resolvable ids (or zero cross-country rows) must
     # return the empty (0, 2) contract, not crash.
-    pairs = np.array(list(zip(a_idx[ok], b_idx[ok])), dtype=int).reshape(-1, 2)
+    pairs = np.array(list(zip(a_idx[ok], b_idx[ok], strict=True)), dtype=int).reshape(-1, 2)
 
     # volume agreement filter (canonical_volume: '330ml' and '0,33 l' collapse)
     vol = canonical_volume(df["title"])["canonical_volume_ml"]

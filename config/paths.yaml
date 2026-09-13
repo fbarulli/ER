@@ -1,83 +1,142 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# paths.yaml — the shared data contract (split-SSOT, 2026-09-11).
+# paths.yaml — the shared data contract (split-SSOT, 2026-09-13).
 #
 # This file holds ONLY what every lane shares: artifact paths, file names,
-# the raw-export column mapping, the seed, and the model registry.
-# Domain knobs live in their OWN dir, validated by a pydantic model
-# in src/core/schemas.py at load time (fail-loud at import, never mid-run):
+# the raw-export column mapping, the seed, the model registry, and the
+# owned-layout templates for generated artifacts. Domain knobs live in their
+# OWN dir, validated by a pydantic model in src/core/schemas.py at load time
+# (fail-loud at import, never mid-run):
 #
-#   config/training.yaml  → TrainingConfig  (loss/split/masking/bands/pairs/
-#                        plots/audit — absorbed the EDA config keys when
-#                        the EDA dir was deleted 2026-09-10)
+#   config/training.yaml  → TrainingConfig
 #
 # src/core/common.py is still the ONLY reader: it deep-merges these files into
 # one view (load_config()) and validates each against its schema. No script
 # reads YAML directly (unchanged SSOT doctrine).
+#
+# FILE BINDING FORMAT  "root:name"
+# Every files./layouts. entry is bound to exactly ONE root and a name within
+# it — the phone book owns the address, code owns only the resolution rule.
+# Roots:
+#   repo              → TRAIN_ROOT/name                     (repo root)
+#   data              → DATA_DIR/name                       (artifacts/data)
+#   results           → RESULTS/name                        (honors
+#                       EUROMONITOR_RESULTS_DIR — on a Colab worker this is
+#                       the worker dir, NEVER the repo results root)
+#   results_training  → RESULTS/training/name               (training family)
+#   results_hpo       → RESULTS/hpo/name                    (hpo family)
+# An unknown root crashes at import — no guessing, no fallback.
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── folder layout (relative to the repo root unless absolute) ──────────────
-# ALL data, results, model tensors and embeddings live under artifacts/ —
-# one place at the root of the lane.
 paths:
   artifacts_dir: "artifacts"            # ONE root: everything lives under it
   data_dir: "artifacts/data"            # raw + deduped dataset live here
-  results_dir: "results"                # ALL generated outputs at repository root
+  results_dir: "results"                # frozen inputs + run-tree parent +
+                                        # shared/orchestration outputs at repo root
   training_results_dir: "training_results" # verified Colab smoke outputs
   models_dir: "artifacts/models"        # local model tensors (bundle)
   models_dir_sibling: "../models"       # bundle layout: models/ beside folder
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
-  mlruns_dir: "artifacts/mlruns"          # mlflow backend + artifact store (local)
+  mlruns_dir: "artifacts/mlruns"        # mlflow backend + artifact store (local)
   logs_dir: "logs"                      # run_all per-step logs
 
-# ── file names (SSOT — nothing else in the tree spells these) ───────────────
+# ── artifact bindings (SSOT — nothing else in the tree spells these) ────────
 files:
-  # The inspected raw export is repository-root dataset.csv.  Keep this
+  # The inspected raw export is repository-root dataset.csv. Keep this
   # explicit rather than silently falling back when artifacts/data is absent.
-  dataset: "../../dataset.csv"
-  dataset_deduped: "dataset_deduped.csv"
-  sku_to_rep: "sku_to_rep.csv"
-  canonical_records: "canonical_records.csv"
-  gate_results: "gate_results.csv"
-  labeled_pairs: "labeled_pairs.csv"
-  embedding_similarities: "embedding_similarities.csv"
-  model_evaluation_summary: "model_evaluation_summary.csv"
-  fold_metrics: "train_fold_metrics.csv"
-  hpo_grid_csv: "hpo_grid.csv"
+  dataset: "repo:dataset.csv"
+  dataset_deduped: "data:dataset_deduped.csv"
+  sku_to_rep: "data:sku_to_rep.csv"
+  canonical_records: "results:canonical_records.csv"   # SHARED frozen input
+  gate_results: "results:gate_results.csv"             # SHARED frozen input
+  labeled_pairs: "results_training:labeled_pairs.csv"
+  embedding_similarities: "results_training:embedding_similarities.csv"
+  model_evaluation_summary: "results_training:model_evaluation_summary.csv"
+  fold_metrics: "results:train_fold_metrics.csv"       # worker-scoped pointer
+  hpo_grid_csv: "results_hpo:hpo_grid.csv"
   # hpo_tpe_best REMOVED (audit round 2 F02, finished round 3): dead key —
   # F["hpo_tpe_best"] had zero readers. The TPE lane writes its best-config
   # JSON under a run-tagged name (train_<model><era>_hpo_best.json) built
   # inline in src/training/training.run_hpo, which prints the actual out_path.
-  dedupe_summary: "06_dedupe_summary.csv"
-  ambiguous_offer_groups: "06_ambiguous_offer_groups.csv"
-  removals: "06_dedupe_removals.csv"
-  four_pop_scores: "07b_four_pop_scores.csv"
-  field_ablation: "07c_field_ablation.csv"
-  data_scaling: "07d_data_scaling.csv"
-  data_quality_summary: "data_quality_summary.csv"
-  data_quality_columns: "data_quality_columns.csv"
-  data_quality_gtin_groups: "data_quality_gtin_groups.csv"
-  title_attribute_evidence: "title_attribute_evidence.csv"
-  title_attribute_summary: "title_attribute_summary.csv"
-  title_removed_tokens: "title_removed_tokens.csv"
-  attribute_agreement_summary: "attribute_agreement_summary.csv"
-  attribute_agreement_conflicts: "attribute_agreement_conflicts.csv"
-  package_gate_impact_summary: "package_gate_impact_summary.csv"
-  package_gate_impact_pairs: "package_gate_impact_pairs.csv"
+  dedupe_summary: "results_training:dedupe_summary.csv"
+  ambiguous_offer_groups: "results_training:ambiguous_offer_groups.csv"
+  removals: "results_training:dedupe_removals.csv"
+  four_pop_scores: "results_training:four_pop_scores.csv"
+  field_ablation: "results_training:field_ablation.csv"
+  data_scaling: "results_training:data_scaling.csv"
+  data_quality_summary: "results_training:data_quality_summary.csv"
+  data_quality_columns: "results_training:data_quality_columns.csv"
+  data_quality_gtin_groups: "results_training:data_quality_gtin_groups.csv"
+  title_attribute_evidence: "results_training:title_attribute_evidence.csv"
+  title_attribute_summary: "results_training:title_attribute_summary.csv"
+  title_removed_tokens: "results_training:title_removed_tokens.csv"
+  attribute_agreement_summary: "results_training:attribute_agreement_summary.csv"
+  attribute_agreement_conflicts: "results_training:attribute_agreement_conflicts.csv"
+  package_gate_impact_summary: "results_training:package_gate_impact_summary.csv"
+  package_gate_impact_pairs: "results_training:package_gate_impact_pairs.csv"
   # cache_dir REMOVED (audit 2026-09-09): dead knob — zero readers; the
   # embeddings cache path is constructed inline (DATA_DIR/embeddings_cache)
   # by its three consumers.
-  number_reference: "number_tokens_reference.csv"
+  number_reference: "data:number_tokens_reference.csv"
   # second04_pairs_positive (audit round 2 F13): the repo-side cross-country
   # gold-pair manifest read by src/core/volume_verified — ABSENT in this lane
   # (the loader prints a loud notice and runs gate-only). Declared here so
   # the name is SSOT-side, not an inline literal.
-  second04_pairs_positive: "second04_pairs_positive.csv"
-  results_pointer: "latest_results.json"  # the ONE file consumers read to
-  # find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
+  second04_pairs_positive: "results_training:second04_pairs_positive.csv"
+  results_pointer: "results:latest_results.json"  # the ONE file consumers read
+  # to find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
   # src/training/train.py rewrites it on every non-sample run; sample runs never
   # touch it
-  colab_live_log: "colab_system.log"      # launcher/system log
-  colab_training_log: "training.log"        # training stdout/stderr only
+  colab_live_log: "repo:colab_system.log"      # launcher/system log
+  colab_training_log: "repo:training.log"      # training stdout/stderr only
+
+# ── owned layout templates for GENERATED artifacts (training-hpo 2026-09-13)
+# Each layout binds a generated artifact to one root, one template, and one
+# owning module.  Consumers render the destination via common.artifact() —
+# placeholders are substituted ONLY from the declared fields; a missing field
+# or an unknown layout crashes.  Nothing in the tree builds these paths by
+# hand (no bare leaves, no "results/" literals, no glob conventions):
+layouts:
+  report_plot:
+    root: results_training
+    owner: training.report_plots
+    template: "report_{kind}.png"
+    fields: {kind: str}
+  report_csv:
+    root: results_training
+    owner: training.report_plots
+    template: "report_{kind}.csv"
+    fields: {kind: str}
+  hpo_trials:
+    root: results_hpo
+    owner: training.training
+    template: "train_{model}{era}_hpo_trials.csv"
+    fields: {model: str, era: str}
+  hpo_best:
+    root: results_hpo
+    owner: training.training
+    template: "train_{model}{era}_hpo_best.json"
+    fields: {model: str, era: str}
+  checkpoint_repo:
+    root: results
+    owner: training.training
+    template: "_checkpoints/{model_tag}/r{run_tag}_f{fold}/checkpoint-{step}"
+    fields: {model_tag: str, run_tag: str, fold: int, step: int}
+  visibility:
+    root: results
+    owner: training.train
+    template: "logs/{name}"
+    fields: {name: str}
+  visibility_run:
+    root: results
+    owner: training.train
+    template: "logs/{run_tag}/{name}"
+    fields: {run_tag: str, name: str}
+  resume_pointer:
+    root: results
+    owner: training.dvc_store
+    template: ".resume/{name}.dvc"
+    fields: {name: str}
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
 column_mapping:

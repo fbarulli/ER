@@ -7,12 +7,38 @@ keep-alive child use the same writable state, history, and logging behavior.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 
-STATE_DIR = Path(__file__).resolve().parents[2] / "colab_cli_state"
+def _find_project_root() -> Path:
+    """Locate the project from stable markers, never a magic parent offset.
+
+    Must stay self-contained: this wrapper is launched with the Colab CLI's
+    own interpreter, which has neither the repo on sys.path nor its deps, so
+    core.common/TRAIN_ROOT cannot be imported here.
+    """
+    override = os.environ.get("EUROMONITOR_PROJECT_ROOT")
+    if override:
+        root = Path(override).expanduser().resolve()
+        if (root / "config").is_dir() and (root / "pyproject.toml").is_file():
+            return root
+        raise RuntimeError(
+            "EUROMONITOR_PROJECT_ROOT must contain config/ and pyproject.toml: "
+            f"{root}"
+        )
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "config").is_dir() and (candidate / "pyproject.toml").is_file():
+            return candidate
+    raise RuntimeError(
+        f"Could not locate project root from {Path(__file__).resolve()}"
+    )
+
+
+ENCLOSURE_ROOT = _find_project_root()
+STATE_DIR = ENCLOSURE_ROOT / "colab_cli_state"
 HISTORY_DIR = STATE_DIR / "history"
 ENTRYPOINT = Path(__file__).resolve()
 

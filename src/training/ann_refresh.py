@@ -155,7 +155,7 @@ def refresh_finetuned_ann(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
-    for pair, score in zip(refreshed.tolist(), refreshed_scores.tolist()):
+    for pair, score in zip(refreshed.tolist(), refreshed_scores.tolist(), strict=True):
         a, b = (int(x) for x in pair)
         rows.append(
             {

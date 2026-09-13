@@ -29,7 +29,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from core.common import RESULTS, SEED, F, set_determinism
+from core.common import SEED, F, set_determinism
 from core.common import SSOT_LOSS as _SSOT_LOSS  # no-fallback SSOT
 
 # second07's grid semantics (epochs x lr x warmup%), SSOT: config/training.yaml
@@ -240,7 +240,7 @@ def run_grid(
             }
         )
 
-    out = RESULTS / F["hpo_grid_csv"]
+    out = F["hpo_grid_csv"]
     pd.DataFrame(rows).to_csv(out, index=False)
     print(
         f"\nwrote {out} ({len(rows)} rows) in {time.perf_counter() - t0:.0f}s",

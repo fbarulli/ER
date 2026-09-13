@@ -10,7 +10,12 @@ import pandas as pd
 import torch
 from sentence_transformers import SentenceTransformer, util
 
-from core.common import F, RESULTS, load_config, load_dataset_deduped
+from core.common import (
+    F,
+    load_config,
+    load_dataset_deduped,
+    rand_matching_cfg,
+)
 from core.structured_features import (
     append_text as append_structured_text,
     canonical_info as canonical_structured_info,
@@ -62,7 +67,7 @@ def main() -> None:
         else 0.0
     )
     canonical_records = pd.read_csv(
-        RESULTS / F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
+        F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
     )
     canonical_record_map = {
         str(row["gtin"]): row.to_dict()
@@ -93,7 +98,7 @@ def main() -> None:
             info,
             enabled=sf_text,
         )
-        for (_, row), info in zip(skus.iterrows(), sku_infos)
+        for (_, row), info in zip(skus.iterrows(), sku_infos, strict=True)
     ]
     item_texts = [
         append_structured_text(
@@ -101,7 +106,7 @@ def main() -> None:
             info,
             enabled=sf_text,
         )
-        for item_id, info in zip(item_ids, item_infos)
+        for item_id, info in zip(item_ids, item_infos, strict=True)
     ]
     model = SentenceTransformer(str(Path(args.model)))
     sku_embeddings = model.encode(
@@ -148,12 +153,13 @@ def main() -> None:
     item_embeddings = torch.as_tensor(item_embeddings)
     nearest = util.semantic_search(sku_embeddings, item_embeddings, top_k=1)
 
+    unmatched_prefix = rand_matching_cfg()["unmatched_prefix"]
     predictions = []
-    for sku_id, hits in zip(skus["SKU_ID"].astype(str), nearest):
+    for sku_id, hits in zip(skus["SKU_ID"].astype(str), nearest, strict=True):
         hit = hits[0]
         item_id = item_ids[hit["corpus_id"]]
         if float(hit["score"]) < args.threshold:
-            item_id = f"UNMATCHED_{sku_id}"
+            item_id = f"{unmatched_prefix}{sku_id}"
         predictions.append((sku_id, str(item_id)))
 
     output = pd.DataFrame(predictions, columns=["SKU_ID", "ITEM_ID"])

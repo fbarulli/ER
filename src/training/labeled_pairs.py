@@ -37,9 +37,9 @@ import pandas as pd
 
 from core.common import (
     PINNED_GATE_FALLBACK_PAIRS,
-    RESULTS,
     SEED,
     F,
+    ensure_parent,
     load_config,
 )
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
@@ -60,7 +60,7 @@ def main() -> None:
     Pure pandas over the gate CSV (~135k rows, <1s); the manifest wraps the
     whole flow — begin at stage start, finish LAST.
     """
-    gate_csv = RESULTS / F["gate_results"]
+    gate_csv = F["gate_results"]
     # Seed: the SSOT seed (lib.common.SEED) — this stage is deterministic
     # (no RNG consumed), recorded so the manifest's environment block
     # pins which seed the lane runs under.
@@ -101,7 +101,8 @@ def main() -> None:
     # FRAME CONTRACT (lib.schemas): columns, label domain, GTIN endpoints, no
     # duplicate (gtin1, gtin2) — asserted at the write boundary.
     check_labeled_pairs_frame(out)
-    out_path = RESULTS / F["labeled_pairs"]
+    out_path = F["labeled_pairs"]
+    ensure_parent(out_path)
     atomic_write_csv(out, out_path, index=False)
 
     # ── row accounting (SILENT_DROPS task 7; capture-only) ───────────────────

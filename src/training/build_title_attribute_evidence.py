@@ -27,7 +27,7 @@ from ner.ner_product_attributes import (
     resolve_candidates,
 )
 from pipeline import clean_sku_text, normalize_text
-from core.common import COLUMN_MAPPING, DATA_PATH, F, RESULTS
+from core.common import COLUMN_MAPPING, DATA_PATH, F, ensure_parent
 
 
 def _sha256(path: Path) -> str:
@@ -156,13 +156,12 @@ def main() -> None:
     parser.add_argument("--input", type=Path, default=DATA_PATH)
     args = parser.parse_args()
     evidence, summary, removed = build(args.input)
-    RESULTS.mkdir(parents=True, exist_ok=True)
     for filename, frame in (
         (F["title_attribute_evidence"], evidence),
         (F["title_attribute_summary"], summary),
         (F["title_removed_tokens"], removed),
     ):
-        path = RESULTS / filename
+        path = ensure_parent(filename)
         frame.to_csv(path, index=False)
         print(f"[title-attributes] wrote {path} ({len(frame):,} rows)", flush=True)
     print(summary.to_string(index=False), flush=True)

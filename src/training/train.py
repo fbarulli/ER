@@ -23,6 +23,8 @@ from core.common import (
     RESULTS,
     SEED,
     F,
+    artifact,
+    ensure_parent,
     load_config,
     load_dataset_deduped,
     runtime,
@@ -66,8 +68,6 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
     the trained embeddings; a plain run notes its absence.
     """
 
-    from core.common import RESULTS
-
     # ---- 07c: one aggregate row per payload variant ----
     def agg(field: str) -> float:
         vals = [r.get(field) for r in ok_rows if r.get(field) is not None]
@@ -91,7 +91,7 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         "n_folds": len(ok_rows),
         "model": args.model,
     }
-    _append_csv(RESULTS / F["field_ablation"], [row_07c], "variant")
+    _append_csv(F["field_ablation"], [row_07c], "variant")
 
     # ---- 07d: one row per train fraction ----
     row_07d = {
@@ -114,7 +114,7 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         "payload": args.payload,
     }
     _append_csv(
-        RESULTS / F["data_scaling"], [row_07d], ["fraction", "payload"]
+        F["data_scaling"], [row_07d], ["fraction", "payload"]
     )
 
 
@@ -128,6 +128,7 @@ def _append_csv(
     it. Idempotent regeneration — the reproducibility contract."""
     import pandas as pd
 
+    ensure_parent(path)
     if isinstance(key_fields, str):
         key_fields = [key_fields]
     new_df = pd.DataFrame(new_rows)
@@ -160,7 +161,7 @@ def _append_csv(
 def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics_path: Path, rows: list[dict]) -> None:
     """Publish every run-scoped result and checkpoint as one downloadable artifact."""
     artifact_paths: list[Path] = [metrics_path]
-    latest_metrics = RESULTS / F["fold_metrics"]
+    latest_metrics = F["fold_metrics"]
     if latest_metrics.is_file() and latest_metrics != metrics_path:
         artifact_paths.append(latest_metrics)
 
@@ -171,7 +172,6 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
     if report_dir.is_dir():
         artifact_paths.append(report_dir)
 
-    checkpoint_root = RESULTS / "_checkpoints" / model_tag
     for row in rows:
         fold = row.get("fold")
         if not isinstance(fold, (int, np.integer)):
@@ -187,11 +187,19 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
             RESULTS / f"wandb_score_distributions_{run_tag}_fold{int(fold)}.png"
         )
         artifact_paths.append(
-            checkpoint_root / f"r{run_tag}_f{int(fold)}"
+            artifact(
+                "checkpoint_repo",
+                {
+                    "model_tag": model_tag,
+                    "run_tag": run_tag,
+                    "fold": int(fold),
+                    "step": 0,
+                },
+            ).parent
         )
     artifact_paths.append(RESULTS / f"mask_effect_{run_tag}.png")
 
-    pointer = RESULTS / F["results_pointer"]
+    pointer = F["results_pointer"]
     if pointer.is_file() and "_sample" not in metrics_path.name:
         artifact_paths.append(pointer)
     dvc_resume = RESULTS / ".resume"
@@ -953,7 +961,15 @@ def _main_inner(_mlf, _wandb) -> None:
         ):
             from sentence_transformers import SentenceTransformer as _ST
 
-            _best = RESULTS / "_checkpoints" / model_tag / f"r{run_tag}_f{_ok[0]['fold']}"
+            _best = artifact(
+                "checkpoint_repo",
+                {
+                    "model_tag": model_tag,
+                    "run_tag": run_tag,
+                    "fold": int(_ok[0]["fold"]),
+                    "step": 0,
+                },
+            ).parent
             # pick the BEST checkpoint (dev-AP), not the highest-numbered
             # one: with save_total_limit=2 the dir holds [best, last] and
             # the last step is NOT the shipped model when early stopping
@@ -1136,7 +1152,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # SAMPLE runs must not move it (same overwrite class as the collision
     # above: a 1k chain check replaced the full run's latest-metrics CSV)
     if not args.sample:
-        pd.DataFrame(all_rows).to_csv(RESULTS / F["fold_metrics"], index=False)
+        pd.DataFrame(all_rows).to_csv(F["fold_metrics"], index=False)
         # results pointer (owner Q21): ONE json always naming the most
         # recent full-run artifacts — consumers never glob for "latest"
         _ok_rows = [r for r in all_rows if r.get("status") == "ok"]
@@ -1163,7 +1179,7 @@ def _main_inner(_mlf, _wandb) -> None:
                 else None
             ),
         }
-        (RESULTS / F["results_pointer"]).write_text(
+        F["results_pointer"].write_text(
             json.dumps(pointer, indent=2, sort_keys=True)
         )
         print(

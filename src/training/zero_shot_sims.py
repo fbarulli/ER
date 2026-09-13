@@ -36,7 +36,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # models_dir_sibling); hub id is the offline-last-resort fallback. The
 # old local _m() copy was removed 2026-09-08 — ONE registry-aware resolver
 # for the whole tree (TRAIN + run_all).
-from core.common import RESULTS, SEED, F, load_config, resolve_model
+from core.common import SEED, F, ensure_parent, load_config, resolve_model
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 
 _cfg = load_config()
@@ -81,9 +81,9 @@ def main() -> None:
         models = {k: v for k, v in MODELS.items() if k in sel}
         print(f"[models] scoring lanes only: {list(models)}", flush=True)
 
-    df_canon_path = RESULTS / F["canonical_records"]
-    df_gate_path = RESULTS / F["gate_results"]
-    out = RESULTS / F["embedding_similarities"]
+    df_canon_path = F["canonical_records"]
+    df_gate_path = F["gate_results"]
+    out = F["embedding_similarities"]
     # Stage manifest (SILENT_DROPS task 7) — begin BEFORE the work. The
     # fresh-resume read below consumes the PREVIOUS run's CSV, so when that
     # read is about to happen it is recorded as an input too (hashed
@@ -105,7 +105,7 @@ def main() -> None:
 
     gtin_to_canon = {
         g: strip_schema_words(canonical_model_text(c))
-        for g, c in zip(df_canon["gtin"].astype(str), df_canon["canonical"].astype(str))
+        for g, c in zip(df_canon["gtin"].astype(str), df_canon["canonical"].astype(str), strict=True)
     }
 
     # score EVERY gate pair (candidates AND hard_no): the evaluation set
@@ -143,8 +143,8 @@ def main() -> None:
     resumed: dict[str, pd.Series] | None = None
     if out.exists():
         done = pd.read_csv(out, dtype={"gtin1": str, "gtin2": str})
-        key_new = list(zip(results["gtin1"], results["gtin2"]))
-        key_old = list(zip(done["gtin1"], done["gtin2"]))
+        key_new = list(zip(results["gtin1"], results["gtin2"], strict=True))
+        key_old = list(zip(done["gtin1"], done["gtin2"], strict=True))
         if key_new != key_old:
             print(
                 "[resume] gate pair sequence changed since the last scoring — "
@@ -228,7 +228,7 @@ def main() -> None:
         keep = ["gtin1", "gtin2", "gate_decision", "gate_reason"] + [
             c for c in results.columns if c.startswith("sim_")
         ]
-        atomic_write_csv(results[keep], out, index=False)
+        atomic_write_csv(results[keep], ensure_parent(out), index=False)
         print(f"    wrote {col} ({len(results):,} rows)", flush=True)
         # per-model fingerprint stamp: certifies THIS column's scores against
         # the exact canonical texts they were computed from. Written after the

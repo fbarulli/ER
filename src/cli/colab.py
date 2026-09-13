@@ -658,11 +658,11 @@ for number in range(1, {workers} + 1):
             (pointer_dir / name).write_bytes(base64.b64decode(encoded))
         print(f"[resume-preflight] worker {{number}}: pointer files written", flush=True)
         for name in (F["canonical_records"], F["gate_results"]):
-            source = root / "results" / name
-            if not (out / name).is_file():
+            source = root / "results" / name.name
+            if not (out / name.name).is_file():
                 if not source.is_file():
                     raise FileNotFoundError(f"resume worker input missing: {{source}}")
-                shutil.copy2(source, out / name)
+                shutil.copy2(source, out / name.name)
         try:
             from training.dvc_store import restore_pointer
             pointers = sorted(pointer_dir.glob("*.dvc"))
@@ -721,10 +721,10 @@ for number in range(1, {workers} + 1):
     else:
         out.mkdir()
         for name in (F["canonical_records"], F["gate_results"]):
-            source = root / "results" / name
+            source = root / "results" / name.name
             if not source.is_file():
                 raise FileNotFoundError(f"worker input missing: {{source}}")
-            shutil.copy2(source, out / name)
+            shutil.copy2(source, out / name.name)
     log_path, status_path = out / "training.log", out / "training.status"
     live_status_path = out / "live_status.json"
     wandb_dir = out / "wandb"
@@ -899,7 +899,7 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
                 f"cannot generate local report for worker {number}: "
                 f"metrics={len(metrics)} pairs={len(pair_paths)} under {worker}"
             )
-        pointer_path = worker / "latest_results.json"
+        pointer_path = worker / F["results_pointer"].name
         run_tag = run_id
         if pointer_path.is_file():
             pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
@@ -972,7 +972,7 @@ def generate_local_mask_effect(remote_base: str, workers: int) -> None:
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     for number in range(1, workers + 1):
         worker = TRAINING_RESULTS / run_id / f"worker_{number}"
-        pointer_path = worker / "latest_results.json"
+        pointer_path = worker / F["results_pointer"].name
         if not pointer_path.is_file():
             continue
         pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
@@ -1008,8 +1008,8 @@ def generate_local_mask_effect(remote_base: str, workers: int) -> None:
                     break
 
         if "target_text" not in audit.columns:
-            canonical = pd.read_csv(worker / "canonical_records.csv", dtype=str)
-            by_gtin = dict(zip(canonical["gtin"].astype(str), canonical["canonical"].astype(str)))
+            canonical = pd.read_csv(worker / F["canonical_records"].name, dtype=str)
+            by_gtin = dict(zip(canonical["gtin"].astype(str), canonical["canonical"].astype(str), strict=True))
             audit["target_text"] = audit["barcode"].astype(str).map(by_gtin)
         audit = audit.dropna(subset=["target_text"])
         if audit.empty:
@@ -1082,7 +1082,7 @@ def generate_local_mask_effect(remote_base: str, workers: int) -> None:
                 for key, value in metrics.items():
                     metrics_frame.loc[metrics_frame["status"].eq("ok"), key] = value
                 metrics_frame.to_csv(metric_paths[-1], index=False)
-                shared = worker / "train_fold_metrics.csv"
+                shared = worker / F["fold_metrics"].name
                 metrics_frame.to_csv(shared, index=False)
             print(f"[mask-effect-local] worker {number}: CPU scoring complete", flush=True)
         except Exception:
@@ -1192,7 +1192,7 @@ def publish_local_wandb_artifacts(remote_base: str, workers: int) -> None:
             artifact = wandb.Artifact(f"run-{run_id}-downloadable", type="training-result")
             selected = []
             for path in sorted(worker.iterdir()):
-                if path.name in {"canonical_records.csv", "gate_results.csv", "wandb", "mlruns"}:
+                if path.name in {F["canonical_records"].name, F["gate_results"].name, "wandb", "mlruns"}:
                     continue
                 if path.is_file() and path.suffix in {
                     ".csv", ".json", ".log", ".png", ".dvc", ".yaml", ".yml", ".txt",
@@ -1258,7 +1258,7 @@ def publish_local_hpo_results(run_id: str, persistence: str) -> None:
         metrics = sorted(model_dir.glob("*_holdout_*_fold_metrics.csv"))
         pairs = sorted(model_dir.glob("*_fold*_pairs.csv"))
         if metrics and pairs:
-            pointer = model_dir / "latest_results.json"
+            pointer = model_dir / F["results_pointer"].name
             pointer_data = json.loads(pointer.read_text(encoding="utf-8")) if pointer.is_file() else {}
             report_tag = str(pointer_data.get("run_tag") or model_dir.name)
             generate_report(
@@ -1304,8 +1304,8 @@ def start_live_log() -> None:
     global _original_stdout, _original_stderr
     if _live_log is not None:
         _live_log.close()
-    LIVE_LOG_PATH = TRAIN_ROOT / F["colab_live_log"]
-    TRAINING_LOG_PATH = TRAIN_ROOT / F["colab_training_log"]
+    LIVE_LOG_PATH = F["colab_live_log"]
+    TRAINING_LOG_PATH = F["colab_training_log"]
     _live_log = LIVE_LOG_PATH.open("w", encoding="utf-8")
     _training_log = TRAINING_LOG_PATH.open("w", encoding="utf-8")
     _original_stdout = sys.stdout
@@ -1380,7 +1380,7 @@ for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
 print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r}, "at", root)
 """
-    run_colab_exec_stream(SESSION, script, timeout=600, log_name="00_checkout", retry_safe=True)
+    run_colab_exec_stream(SESSION, script, timeout=600, log_name="checkout", retry_safe=True)
 
 
 def install_deps() -> None:
@@ -1495,19 +1495,19 @@ for step in ("src/training/dedupe.py", "src/training/build_reference.py --verify
         raise RuntimeError(f"data-prep stage failed: {{step}} (rc={{rc}})")
 """
     # dedupe 1-2 min + reference verify ~3 min + data_prep ~2 min
-    run_colab_exec_stream(SESSION, script, timeout=1800, log_name="01_data_prep")
+    run_colab_exec_stream(SESSION, script, timeout=1800, log_name="data_prep")
 
 
 def verify_training_inputs() -> None:
     """Use the frozen CSV inputs committed on the training branch."""
     print("[data] validating frozen training CSVs from the cloned branch ...")
     script = _BOOTSTRAP + f"""
-from core.common import DATA_DIR, F, RESULTS
+from core.common import F
 required = [
-    DATA_DIR / F["dataset_deduped"],
-    DATA_DIR / F["number_reference"],
-    RESULTS / F["canonical_records"],
-    RESULTS / F["gate_results"],
+    F["dataset_deduped"],
+    F["number_reference"],
+    F["canonical_records"],
+    F["gate_results"],
 ]
 missing = [str(path) for path in required if not path.is_file()]
 if missing:
@@ -1571,10 +1571,10 @@ out = base / "worker_1"
 base.mkdir(parents=True, exist_ok=False)
 out.mkdir()
 for name in (F["canonical_records"], F["gate_results"]):
-    source = root / "results" / name
+    source = root / "results" / name.name
     if not source.is_file():
         raise FileNotFoundError(f"worker input missing: {{source}}")
-    shutil.copy2(source, out / name)
+    shutil.copy2(source, out / name.name)
 wandb_dir = out / "wandb"
 wandb_dir.mkdir(parents=True, exist_ok=True)
 env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
@@ -1604,7 +1604,7 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
         SESSION,
         script,
         timeout=_WORKER_TIMEOUT_SECONDS,
-        log_name="02_train",
+        log_name="train",
         exclude_from_live_log=True,
         training_output=True,
     )
@@ -1719,7 +1719,7 @@ def worker_setup(model_key):
     out = hpo_root / "models" / model_key
     out.mkdir(parents=True, exist_ok=True)
     for name in (F["canonical_records"], F["gate_results"]):
-        source, target = root / "results" / name, out / name
+        source, target = root / "results" / name.name, out / name.name
         if not source.is_file():
             raise FileNotFoundError(f"worker input missing: {{source}}")
         shutil.copy2(source, target)
@@ -1809,7 +1809,7 @@ rc = subprocess.run([sys.executable, "{REMOTE_ROOT}/src/training/zero_shot_sims.
 if rc != 0:
     raise RuntimeError(f"zero-shot similarity subprocess failed (rc={{rc}})")
 """
-    run_colab_exec_stream(SESSION, script, timeout=2 * 3600, log_name="03_sims_deberta")
+    run_colab_exec_stream(SESSION, script, timeout=2 * 3600, log_name="sims_deberta")
 
 
 def _list_remote(pattern_dir: str) -> list[str]:

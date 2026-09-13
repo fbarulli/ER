@@ -8,7 +8,7 @@ canonical_records.csv + gate_results.csv into the config results dir.
 from __future__ import annotations
 
 
-from core.common import DATA_PATH, RESULTS, SEED, F, load_raw_export
+from core.common import DATA_PATH, SEED, F, artifact, load_raw_export
 from core.manifest import begin_manifest, finish_manifest
 from pipeline import run_within_brand_pipeline
 
@@ -41,13 +41,13 @@ def main() -> None:
     # decision (no pair is dropped), so pairs carry no dropped bucket.
     row_accounting = _dp_manifest_accounting(df, pairs, canon)
     out_paths = [
-        RESULTS / F["canonical_records"],
-        RESULTS / F["gate_results"],
-        RESULTS / "logs" / "gate_visibility.csv",
-    ]
-    expected = [
         F["canonical_records"],
         F["gate_results"],
+        artifact("visibility", {"name": "gate_visibility.csv"}),
+    ]
+    expected = [
+        F["canonical_records"].name,
+        F["gate_results"].name,
         "gate_visibility.csv",
     ]
     mpath = finish_manifest(

@@ -13,12 +13,12 @@ from pathlib import Path
 import pandas as pd
 
 from pipeline import extract_all
-from core.common import F, RESULTS
+from core.common import F, ensure_parent
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence", type=Path, default=RESULTS / F["title_attribute_evidence"])
+    parser.add_argument("--evidence", type=Path, default=F["title_attribute_evidence"])
     args = parser.parse_args()
     if not args.evidence.is_file():
         raise FileNotFoundError(f"evidence missing: {args.evidence}; run build_title_attribute_evidence first")
@@ -55,7 +55,7 @@ def main() -> None:
         {"metric": "pack_conflict_rows", "value": int(conflicts["pack_agrees"].eq(False).sum()) if not conflicts.empty else 0, "detail": "inspect before changing pack gate"},
     ])
     for filename, frame in ((F["attribute_agreement_summary"], summary), (F["attribute_agreement_conflicts"], conflicts)):
-        path = RESULTS / filename
+        path = ensure_parent(filename)
         frame.to_csv(path, index=False)
         print(f"[agreement] wrote {path} ({len(frame):,} rows)")
     print(summary.to_string(index=False))

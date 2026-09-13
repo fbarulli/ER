@@ -45,12 +45,14 @@ from pipeline import (
 )
 from core.common import (
     DATA_DIR,
-    RESULTS,
     SEED,
+    artifact,
+    ensure_parent,
     load_dataset_deduped,
     resolve_model,
     runtime,
     strip_ladder_bands,
+    trace_artifact,
 )
 from core.nlp import encode_corpus
 
@@ -147,9 +149,10 @@ def main() -> None:
 
     n = args.sample or int(_training_cfg().audit.strip_audit_sample)
     rows = build_audit(n, SEED)
-    out = RESULTS / "logs"
-    out.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_csv(out / "strip_audit.csv", index=False)
+    out = artifact("visibility", {"name": "strip_audit.csv"})
+    ensure_parent(out)
+    pd.DataFrame(rows).to_csv(out, index=False)
+    trace_artifact("visibility", out)
     n_mismatch = sum(1 for e in rows if not e["final_matches"])
     print(f"[strip-audit] {len(rows):,} SKUs -> results/logs/strip_audit.csv")
     print(f"  ladder mismatches (must be 0): {n_mismatch}")
@@ -171,11 +174,11 @@ def main() -> None:
         # re-derivation; now lib.common RESULTS + the F[] file registry.
         from core.common import F
 
-        canon = pd.read_csv(RESULTS / F["canonical_records"],
+        canon = pd.read_csv(F["canonical_records"],
                             dtype={"gtin": str})
         canon_map = {
             g: strip_schema_words(canonical_model_text(c))
-            for g, c in zip(canon["gtin"], canon["canonical"])
+            for g, c in zip(canon["gtin"], canon["canonical"], strict=True)
         }
         entries = []
         for e in rows:

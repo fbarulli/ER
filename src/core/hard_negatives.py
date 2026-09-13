@@ -38,9 +38,9 @@ def mine_attribute_conflict_negatives(
     if n_target <= 0 or len(df) == 0:
         return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
 
-    from core.common import F, RESULTS
+    from core.common import F
 
-    canon_path = RESULTS / F["canonical_records"]
+    canon_path = F["canonical_records"]
     canon = pd.read_csv(canon_path, dtype=str, keep_default_na=False)
     from core.attribute_conflicts import attribute_conflict_types, canonical_attribute_info
 
@@ -154,7 +154,7 @@ def conflicting_barcode_pairs(df: pd.DataFrame) -> set[tuple[int, int]]:
     cbc = bc[bc["title"].isin(conflicted_titles)]
     for title, g in cbc.groupby("title", sort=False):
         idx = sorted(int(i) for i in g["row"])
-        bc_by_row = dict(zip(g["row"], g["barcode"]))
+        bc_by_row = dict(zip(g["row"], g["barcode"], strict=True))
         for a, b in combinations(idx, 2):
             if bc_by_row[a] != bc_by_row[b]:
                 pairs.add((a, b))
@@ -351,13 +351,13 @@ def mine_hard_negatives(
                 # only check membership for pairs; keep the loop off the hot path
                 # unless exclusions exist for this block's rows
                 ex_rows = excluded  # set of (min,max) global pairs
-                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist()):
+                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
                     if (min(a_, b_), max(a_, b_)) in ex_rows:
                         n_excluded_in_band += 1
                     else:
                         found.append((a_, b_, s_))
             else:
-                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist()):
+                for a_, b_, s_ in zip(ga.tolist(), gb.tolist(), sels.tolist(), strict=True):
                     found.append((a_, b_, s_))
 
     if exclude_conflicting:

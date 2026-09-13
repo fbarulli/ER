@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 
 from pipeline import extract_all, normalize_text
-from core.common import COLUMN_MAPPING, DATA_PATH, F, RESULTS, column_profile
+from core.common import COLUMN_MAPPING, DATA_PATH, F, column_profile, ensure_parent
 from core.gtin import normalize_and_validate_gtin
 from core.manifest import count_drop
 
@@ -171,14 +171,13 @@ def main() -> None:
     parser.add_argument("--input", type=Path, default=DATA_PATH)
     args = parser.parse_args()
     summary, profiles, groups = audit(args.input)
-    RESULTS.mkdir(parents=True, exist_ok=True)
     outputs = {
         F["data_quality_summary"]: summary,
         F["data_quality_columns"]: profiles,
         F["data_quality_gtin_groups"]: groups,
     }
     for name, frame in outputs.items():
-        path = RESULTS / name
+        path = ensure_parent(name)
         frame.to_csv(path, index=False)
         print(f"[quality] wrote {path} ({len(frame):,} rows)", flush=True)
     print(summary.to_string(index=False), flush=True)
