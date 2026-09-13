@@ -70,6 +70,19 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
 
     from training.hpo_metrics import CALIBRATION_AGGREGATE_FIELDS
 
+    missing_fields = sorted(
+        {
+            field
+            for field in CALIBRATION_AGGREGATE_FIELDS
+            if any(field not in row for row in ok_rows)
+        }
+    )
+    if missing_fields:
+        raise ValueError(
+            "calibration metric contract missing from fold rows: "
+            f"{missing_fields}"
+        )
+
     # ---- 07c: one aggregate row per payload variant ----
     def agg(field: str) -> float:
         vals = [r.get(field) for r in ok_rows if r.get(field) is not None]

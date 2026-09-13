@@ -82,7 +82,8 @@ gate:
 
 # ── split (component-aware; no pair ever straddles a boundary) ─────────────
 # train  = 50% of connected components — the ONLY data the model trains on
-# dev    = 25% — early-stopping target; weights are picked here, never trained on
+# dev    = 25% — early-stopping/calibration source; calibration is a GTIN-disjoint
+#          subset reserved from DEV and is not used for early stopping
 # test   = 25% — HOLDOUT: the model NEVER trains on it, directly or via
 #          early stopping. Every reported test metric (AUC, PR-AUC, F1)
 #          comes from this set and nothing else.
@@ -91,6 +92,7 @@ split:
   train_fraction: 0.50
   dev_fraction: 0.25    # carved OUT OF THE TRAIN SIDE in cv mode; in holdout
                         # mode it is the q2 component quarter (q0+q1=train)
+  calibration_dev_fraction: 0.50  # component-safe share of DEV reserved for Rand threshold calibration
   test_fraction: 0.25
   fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
   cv_folds: 5           # cv mode only

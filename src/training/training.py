@@ -2139,6 +2139,56 @@ def _dynamic_mask_negative_transform(
     return transformed
 
 
+def _partition_calibration_pairs(
+    positive_pairs: np.ndarray,
+    negative_pairs: np.ndarray,
+    row_bc: np.ndarray,
+    calibration_fraction: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Reserve component-safe calibration pairs from early-stop DEV."""
+    if len(positive_pairs) == 0:
+        raise ValueError("cannot reserve calibration data without DEV positives")
+    if not 0.0 < calibration_fraction < 1.0:
+        raise ValueError(
+            "split.calibration_dev_fraction must be strictly between 0 and 1"
+        )
+    from training.folds import component_folds
+
+    pair_rows = np.unique(positive_pairs.ravel())
+    local_index = {int(row): position for position, row in enumerate(pair_rows)}
+    local_pairs = np.asarray(
+        [
+            [local_index[int(left)], local_index[int(right)]]
+            for left, right in positive_pairs
+        ],
+        dtype=int,
+    )
+    local_barcodes = np.asarray(row_bc[pair_rows], dtype=str)
+    n_folds = max(2, int(np.ceil(1.0 / calibration_fraction)))
+    component_groups = component_folds(local_pairs, local_barcodes, n_folds, seed)
+    n_calibration = min(
+        max(1, int(round(n_folds * calibration_fraction))),
+        n_folds - 1,
+    )
+    selected_barcodes = set().union(*component_groups[:n_calibration])
+
+    def calibration_mask(pairs: np.ndarray) -> np.ndarray:
+        return np.asarray(
+            [str(row_bc[int(pair[0])]).strip() in selected_barcodes for pair in pairs],
+            dtype=bool,
+        )
+
+    positive_mask = calibration_mask(positive_pairs)
+    negative_mask = calibration_mask(negative_pairs)
+    return (
+        positive_pairs[~positive_mask],
+        positive_pairs[positive_mask],
+        negative_pairs[~negative_mask],
+        negative_pairs[negative_mask],
+    )
+
+
 def train_one_config(
     cfg: dict,
     *,
@@ -2208,6 +2258,10 @@ def train_one_config(
     _TrainConfig.model_validate(cfg)
     if cfg["architecture"] != "two_tower":  # schema keeps this exhaustive
         raise ValueError(f"unsupported training architecture: {cfg['architecture']}")
+    calibration_config = load_config()
+    calibration_fraction = float(
+        calibration_config["split"]["calibration_dev_fraction"]
+    )
 
     _train_neg_source = (
         train_neg_pairs if train_neg_pairs is not None else neg_pairs
@@ -2451,12 +2505,33 @@ def train_one_config(
                     if len(neg_pairs[pairs_in_set(neg_pairs, row_bc, test_bc)])
                     else hard_test
                 )
+            dev_pos, calibration_pos, hard_dev, calibration_neg = (
+                _partition_calibration_pairs(
+                    dev_pos,
+                    hard_dev,
+                    row_bc,
+                    calibration_fraction,
+                    seed + fold_i + 17,
+                )
+            )
             if len(test_pos) == 0 or len(hard_test) == 0:
                 rows.append(
                     {
                         "fold": fold_i,
                         "status": "skipped",
                         "reason": f"empty eval (pos={len(test_pos)}, neg={len(hard_test)})",
+                    }
+                )
+                continue
+            if len(calibration_pos) == 0 or len(calibration_neg) == 0:
+                rows.append(
+                    {
+                        "fold": fold_i,
+                        "status": "skipped",
+                        "reason": (
+                            "empty calibration split — Rand threshold calibration "
+                            f"needs pos={len(calibration_pos)}, neg={len(calibration_neg)}"
+                        ),
                     }
                 )
                 continue
@@ -3466,12 +3541,12 @@ def train_one_config(
                 df=df,
                 payload=payload,
                 structured_features=structured_features,
-                pos_pairs=dev_pos,
-                neg_pairs=hard_dev,
+                pos_pairs=calibration_pos,
+                neg_pairs=calibration_neg,
                 row_bc=row_bc,
                 structured_weight=structured_feature_weight,
                 batch_size=runtime("batch_size_eval"),
-                config=load_config(),
+                config=calibration_config,
             )
 
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────

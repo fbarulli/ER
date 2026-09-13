@@ -203,7 +203,8 @@ class SplitSpec(BaseModel):
 
     train/dev/test are COMPONENT shares over the positive-pair graph —
     asserted to sum to 1.0 (no silent re-normalization: a mis-configured
-    split must CRASH, not quietly produce 60/20/20).
+    split must CRASH, not quietly produce 60/20/20). Calibration is a
+    canonical-disjoint subset of DEV, controlled by calibration_dev_fraction.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -211,6 +212,7 @@ class SplitSpec(BaseModel):
     mode: Literal["holdout", "cv"]
     train_fraction: float = Field(ge=0.0, le=1.0)
     dev_fraction: float = Field(ge=0.0, le=1.0)
+    calibration_dev_fraction: float = Field(gt=0.0, lt=1.0)
     test_fraction: float = Field(ge=0.0, le=1.0)
     fixed_threshold: float = Field(gt=0.0, lt=1.0)
     cv_folds: int = Field(ge=2)

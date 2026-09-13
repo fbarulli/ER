@@ -7,11 +7,17 @@ connected components for submission, or pairwise AUC as its objective.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 import pandas as pd
+from pydantic import BaseModel, ConfigDict
 
 from core.graph_diagnostics import candidate_graph_diagnostics
+from core.attribute_conflicts import canonical_attribute_info, conflict_columns, sku_attribute_info
+from core.common import F, RESULTS, metadata_text, row_metadata_text
 from core.gtin import is_valid_gtin_checksum
+from core.schemas import check_canonical_records_frame
 from core.structured_features import fuse_numpy
 from training.rand_matching import (
     GTIN_STATUSES,
@@ -41,6 +47,9 @@ CALIBRATION_AGGREGATE_FIELDS = (
     "calibration_expected_group_count",
     "calibration_plausible_group_count",
     "calibration_unmatched_skus",
+    "calibration_positive_pairs",
+    "calibration_negative_pairs",
+    "calibration_sku_count",
     "calibration_threshold_fold_median",
     "calibration_threshold_fold_min",
     "calibration_threshold_fold_max",
@@ -57,6 +66,7 @@ CALIBRATION_AGGREGATE_FIELDS = (
     "collapse_embedding_norm_mean",
     "collapse_embedding_norm_std",
     "collapse_penalty",
+    "attribute_conflict_error_rate",
     *tuple(
         f"calibration_{status}_{metric}"
         for status in GTIN_STATUSES
@@ -65,11 +75,46 @@ CALIBRATION_AGGREGATE_FIELDS = (
 )
 
 
+class CalibrationMetricRow(BaseModel):
+    """Pydantic contract for the shared train/calibration metric payload."""
+
+    model_config = ConfigDict(extra="allow")
+
+    calibration_rand_index: float
+    calibration_adjusted_rand: float
+    calibration_group_precision: float
+    calibration_group_recall: float
+    calibration_pairwise_precision: float
+    calibration_pairwise_recall: float
+    calibration_pairwise_f1: float
+    calibration_over_merge_rate: float
+    calibration_under_merge_rate: float
+    calibration_predicted_group_count: int
+    calibration_expected_group_count: int
+    calibration_plausible_group_count: int
+    calibration_unmatched_skus: int
+    calibration_threshold_fold_median: float
+    calibration_threshold_fold_min: float
+    calibration_threshold_fold_max: float
+    calibration_threshold_plateau_points: int
+    calibration_threshold_stable: int
+    diagnostic_component_size_distribution: str
+    diagnostic_component_count: int
+    diagnostic_max_component_size: int
+    diagnostic_score_diameter: float
+    diagnostic_bridge_edge_count: int
+    diagnostic_weakest_bridge_score: float
+    attribute_conflict_error_rate: float
+    calibration_proxy_source: str
+
+
 def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
     """Return finite calibration diagnostics suitable for tracking APIs."""
     metrics: dict[str, float | int] = {}
     for key, value in row.items():
-        if not key.startswith(("calibration_", "collapse_", "diagnostic_")):
+        if not key.startswith(
+            ("calibration_", "collapse_", "diagnostic_", "attribute_conflict_")
+        ):
             continue
         if isinstance(value, (bool, np.bool_)) or not isinstance(
             value, (int, float, np.integer, np.floating)
@@ -78,6 +123,20 @@ def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
         if np.isfinite(value):
             metrics[key] = value
     return metrics
+
+
+@lru_cache(maxsize=1)
+def _canonical_record_map() -> dict[str, dict[str, object]]:
+    records = pd.read_csv(
+        RESULTS / F["canonical_records"],
+        dtype={"gtin": str},
+        keep_default_na=False,
+    )
+    check_canonical_records_frame(records)
+    return {
+        str(row["gtin"]): row.to_dict()
+        for _, row in records.iterrows()
+    }
 
 
 def _trusted_gtin(value: object) -> str:
@@ -108,6 +167,7 @@ def _thresholds(cfg: dict) -> np.ndarray:
 def _candidate_frame(
     pos_pairs: np.ndarray,
     neg_pairs: np.ndarray,
+    df: pd.DataFrame,
     row_bc: np.ndarray,
     scores: np.ndarray,
 ) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
@@ -117,28 +177,70 @@ def _candidate_frame(
         raise ValueError("trial proxy scores are not aligned with pair rows")
     records: list[dict[str, object]] = []
     truth: dict[str, str] = {}
+    truth_sources: dict[str, int] = {}
+    canonical_records = _canonical_record_map()
     for pair_index, (pair, score) in enumerate(zip(pairs, scores, strict=True)):
         source, target = (int(pair[0]), int(pair[1]))
-        sku_id = str(source)
+        if source < 0 or source >= len(df):
+            raise ValueError(f"proxy SKU row {source} is outside dataset rows")
+        if target < 0 or target >= len(row_bc):
+            raise ValueError(f"proxy canonical row {target} is outside row_bc")
+        sku_row = df.iloc[source]
+        sku_id = row_metadata_text(sku_row, "product_id", "SKU_ID")
         candidate_gtin = str(row_bc[target]).strip()
+        if not sku_id:
+            raise ValueError(f"empty SKU identity in proxy source row {source}")
         if not candidate_gtin:
             raise ValueError(f"empty canonical GTIN in proxy payload row {target}")
-        if source < 0 or source >= len(row_bc):
-            raise ValueError(f"proxy SKU row {source} is outside row_bc")
+        candidate_record = canonical_records.get(candidate_gtin)
+        if candidate_record is None:
+            raise ValueError(
+                f"canonical GTIN {candidate_gtin!r} missing from canonical_records.csv"
+            )
+        sku_info = sku_attribute_info(
+            row_metadata_text(sku_row, "title"),
+            row_metadata_text(sku_row, "attributes", "attr"),
+        )
+        candidate_info = canonical_attribute_info(candidate_record)
+        rules = conflict_columns(sku_info, candidate_info)
+        sku_gtin = row_metadata_text(sku_row, "barcode", "gtin")
+        gtin_status = _status(sku_gtin, candidate_gtin)
         if pair_index < n_pos:
             existing = truth.get(sku_id)
             if existing is not None and existing != candidate_gtin:
                 raise ValueError(f"SKU {sku_id} has conflicting proxy truth GTINs")
             truth[sku_id] = candidate_gtin
+            truth_sources[sku_id] = source
         records.append(
             {
                 "SKU_ID": sku_id,
+                "sku_gtin": sku_gtin,
                 "candidate_gtin": candidate_gtin,
                 "score": float(score),
-                "exact_gtin": int(_status(row_bc[source], candidate_gtin) == "both_equal"),
-                "gtin_status": _status(row_bc[source], candidate_gtin),
-                "rule_ok": 1,
-                "attribute_matches": 0,
+                "exact_gtin": int(gtin_status == "both_equal"),
+                "gtin_status": gtin_status,
+                "rule_ok": int(rules["attribute_conflict_type"] == "none"),
+                "attribute_conflict_type": str(rules["attribute_conflict_type"]),
+                "attribute_matches": int(
+                    sum(
+                        not rules[key]
+                        for key in (
+                            "volume_conflict",
+                            "pack_conflict",
+                            "flavor_conflict",
+                        )
+                    )
+                ),
+                "sku_title": row_metadata_text(sku_row, "title"),
+                "sku_brand": row_metadata_text(sku_row, "brand"),
+                "sku_volume": str(sorted(sku_info["volume"])),
+                "sku_pack": str(sorted(sku_info["pack"])),
+                "sku_flavor": str(sku_info["flavor"]),
+                "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
+                "candidate_volume": str(sorted(candidate_info["volume"])),
+                "candidate_pack": str(sorted(candidate_info["pack"])),
+                "candidate_flavor": str(candidate_info["flavor"]),
+                "source_row_index": str(source),
             }
         )
     candidates = pd.DataFrame(records).drop_duplicates(
@@ -156,7 +258,10 @@ def _candidate_frame(
         [{"SKU_ID": sku_id, "true_item_id": item_id} for sku_id, item_id in truth.items()]
     )
     statuses = [
-        _status(row_bc[int(sku_id)], item_id)
+        _status(
+            row_metadata_text(df.iloc[truth_sources[sku_id]], "barcode", "gtin"),
+            item_id,
+        )
         for sku_id, item_id in truth.items()
     ]
     truth_frame["gtin_status"] = statuses
@@ -322,7 +427,9 @@ def evaluate_calibration_trial(
 ) -> dict[str, float | int | str]:
     """Evaluate one trained model on a held-out direct-assignment calibration split."""
     if len(pos_pairs) == 0 or len(neg_pairs) == 0:
-        raise ValueError("HPO calibration proxy requires positive and negative pairs")
+        raise ValueError(
+            "calibration metrics require positive and negative calibration pairs"
+        )
     candidate_pairs = np.vstack([pos_pairs, neg_pairs])
     scores = _score_pairs(
         model,
@@ -333,7 +440,7 @@ def evaluate_calibration_trial(
         batch_size,
     )
     candidates, truth, _ = _candidate_frame(
-        pos_pairs, neg_pairs, row_bc, scores
+        pos_pairs, neg_pairs, df, row_bc, scores
     )
     n_folds = int(config["hpo"]["calibration_folds"])
     fold_map = _fold_ids(truth, n_folds, int(config["hpo"]["collapse_guardrail"]["seed"]))
@@ -376,7 +483,10 @@ def evaluate_calibration_trial(
     )
     collapse = _collapse_stats(model, df, payload, config, batch_size)
     result: dict[str, float | int | str] = {
-        "calibration_proxy_source": "dev_component_safe_subsplit",
+        "calibration_proxy_source": "dev_component_safe_split",
+        "calibration_positive_pairs": int(len(pos_pairs)),
+        "calibration_negative_pairs": int(len(neg_pairs)),
+        "calibration_sku_count": int(truth["SKU_ID"].nunique()),
         "calibrated_threshold": final_threshold,
         "calibration_threshold_fold_median": final_threshold,
         "calibration_threshold_fold_min": float(min(row["calibrated_threshold"] for row in fold_rows)),
@@ -439,6 +549,15 @@ def evaluate_calibration_trial(
         result[f"calibration_{status}_rand_index"] = float(row["rand_index"])
         result[f"calibration_{status}_precision"] = float(row["pairwise_precision"])
         result[f"calibration_{status}_recall"] = float(row["pairwise_recall"])
-    result["attribute_conflict_error_rate"] = float("nan")
-    result["attribute_conflict_status"] = "not_available_in_pair_proxy"
+    truth_by_sku = truth.set_index("SKU_ID")["true_item_id"]
+    true_candidates = candidates.loc[
+        candidates["candidate_gtin"].eq(candidates["SKU_ID"].map(truth_by_sku))
+    ]
+    if true_candidates.empty:
+        raise RuntimeError("calibration proxy lost every true canonical candidate")
+    result["attribute_conflict_error_rate"] = float(
+        true_candidates["attribute_conflict_type"].ne("none").mean()
+    )
+    result["attribute_conflict_status"] = "true_candidate_gate_check"
+    CalibrationMetricRow.model_validate(result)
     return result
