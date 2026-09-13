@@ -128,6 +128,9 @@ rand_matching:
     threshold_comparison: "threshold_comparison.csv"
     plateau_diagnostic: "plateau_diagnostic.json"
     holdout_metrics: "holdout_metrics.csv"
+    calibration_diagnostics: "calibration_diagnostics.csv"
+    holdout_diagnostics: "holdout_diagnostics.csv"
+    provenance: "submission_provenance.json"
   top_k: 20
   batch_size: 128
   threshold_min: 0.80

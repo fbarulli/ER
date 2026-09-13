@@ -294,6 +294,9 @@ class RandMatchingOutputsSpec(BaseModel):
     threshold_comparison: str = Field(min_length=1)
     plateau_diagnostic: str = Field(min_length=1)
     holdout_metrics: str = Field(min_length=1)
+    calibration_diagnostics: str = Field(min_length=1)
+    holdout_diagnostics: str = Field(min_length=1)
+    provenance: str = Field(min_length=1)
 
 
 class RandMatchingSpec(BaseModel):

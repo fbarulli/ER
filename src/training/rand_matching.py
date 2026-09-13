@@ -21,6 +21,7 @@ Example::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -41,9 +42,11 @@ from core.attribute_conflicts import (
     sku_attribute_info,
 )
 from core.common import (
+    CONFIG_PATH,
     F,
     RESULTS,
     TRAIN_ROOT,
+    TRAINING_CONFIG_PATH,
     load_config,
     load_dataset_deduped,
     metadata_text,
@@ -51,6 +54,7 @@ from core.common import (
     row_metadata_text,
 )
 from core.gtin import is_valid_gtin_checksum
+from core.manifest import sha256_file
 from core.structured_features import (
     append_text as append_structured_text,
     canonical_info as canonical_structured_info,
@@ -109,15 +113,28 @@ def _fit_recall_column(target_recall: float) -> str:
 # Pydantic output-contract models (column-set validation at write time)
 # ---------------------------------------------------------------------------
 
+class _FileProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1)
+    sha256: str = Field(min_length=64, max_length=64)
+    rows: int | None = Field(default=None, ge=0)
+
+
 class _SubmissionProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    dataset_deduped: str
-    checkpoint: str
+    dataset_deduped: _FileProvenance
+    canonical_records: _FileProvenance
+    calibration_input: _FileProvenance
+    holdout_input: _FileProvenance
+    paths_config: _FileProvenance
+    training_config: _FileProvenance
+    checkpoint: _FileProvenance
     final_threshold: float
     unmatched_prefix: str
     rows: int
     unique_items: int
     unmatched: int
+    calibration_folds: tuple[str, ...] = Field(min_length=2)
     lineage: str
 
 
@@ -156,7 +173,11 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             # candidate trace (_candidate_row)
             "SKU_ID",
             "sku_gtin",
+            "sku_gtin_present",
+            "sku_gtin_valid",
             "candidate_gtin",
+            "candidate_rank",
+            "retrieval_source",
             "score",
             "exact_gtin",
             "gtin_status",
@@ -171,6 +192,16 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "sku_volume",
             "sku_pack",
             "sku_flavor",
+            "sku_title_present",
+            "sku_attributes_present",
+            "sku_brand_present",
+            "sku_country_present",
+            "sku_category_present",
+            "sku_category_path_present",
+            "sku_retailer_present",
+            "sku_volume_present",
+            "sku_pack_present",
+            "sku_flavor_present",
             "source_row_index",
             "true_item_id",
             "calibration_fold",
@@ -179,6 +210,10 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "candidate_volume",
             "candidate_pack",
             "candidate_flavor",
+            "candidate_brand_present",
+            "candidate_volume_present",
+            "candidate_pack_present",
+            "candidate_flavor_present",
             "rule_ok",
             "attribute_conflict_type",
             "attribute_matches",
@@ -194,9 +229,33 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "ITEM_ID",
             "n_candidates",
             "source_file",
+            # evaluation audit context
+            "evaluation_partition",
+            "evaluation_fold",
+            "evaluation_threshold",
+            "predicted_ITEM_ID",
+            "true_candidate_retrieved",
+            "true_candidate_accepted",
+            "prediction_correct",
+            "error_type",
         }
     )
 )
+
+
+def _field_present(row: pd.Series, primary: str, alias: str | None = None) -> int:
+    """Return a source-field presence flag without changing source values."""
+    if primary in row.index:
+        value = row[primary]
+    elif alias is not None and alias in row.index:
+        value = row[alias]
+    else:
+        return 0
+    return int(bool(metadata_text(value).strip()))
+
+
+def _value_present(value: object) -> int:
+    return int(bool(metadata_text(value).strip()))
 
 
 class RandMatcher:
@@ -379,11 +438,19 @@ class RandMatcher:
         self,
         hits: list[dict],
         sku_gtin: str,
-    ) -> set[int]:
-        indexes = {int(hit["corpus_id"]) for hit in hits}
+    ) -> dict[int, tuple[int | None, str]]:
+        indexes = {
+            int(hit["corpus_id"]): (rank, "semantic_top_k")
+            for rank, hit in enumerate(hits, start=1)
+        }
         trusted_gtin = self._trusted_gtin(sku_gtin)
         if trusted_gtin in self.item_index:
-            indexes.add(self.item_index[trusted_gtin])
+            index = self.item_index[trusted_gtin]
+            if index in indexes:
+                rank, _ = indexes[index]
+                indexes[index] = (rank, "semantic_top_k+exact_gtin")
+            else:
+                indexes[index] = (None, "exact_gtin_rescue")
         return indexes
 
     def _candidate_row(
@@ -392,6 +459,8 @@ class RandMatcher:
         sku_info: dict,
         embedding: np.ndarray,
         candidate_index: int,
+        candidate_rank: int | None,
+        retrieval_source: str,
     ) -> dict[str, object]:
         sku_gtin = self._gtin(row_metadata_text(row, "barcode", "gtin"))
         candidate_gtin = self.item_ids[candidate_index]
@@ -411,7 +480,11 @@ class RandMatcher:
         return {
             "SKU_ID": str(row["SKU_ID"]),
             "sku_gtin": sku_gtin,
+            "sku_gtin_present": _field_present(row, "barcode", "gtin"),
+            "sku_gtin_valid": int(bool(self._trusted_gtin(sku_gtin))),
             "candidate_gtin": candidate_gtin,
+            "candidate_rank": candidate_rank,
+            "retrieval_source": retrieval_source,
             "score": float(np.dot(embedding, self.item_embeddings[candidate_index])),
             "exact_gtin": exact,
             "gtin_status": status,
@@ -426,6 +499,16 @@ class RandMatcher:
             "sku_volume": json.dumps(sorted(sku_info["volume"])),
             "sku_pack": json.dumps(sorted(sku_info["pack"])),
             "sku_flavor": str(sku_info["flavor"]),
+            "sku_title_present": _field_present(row, "title"),
+            "sku_attributes_present": _field_present(row, "attributes", "attr"),
+            "sku_brand_present": _field_present(row, "brand"),
+            "sku_country_present": _field_present(row, "country"),
+            "sku_category_present": _field_present(row, "category"),
+            "sku_category_path_present": _field_present(row, "category_path"),
+            "sku_retailer_present": _field_present(row, "retailer"),
+            "sku_volume_present": int(bool(sku_info["volume"])),
+            "sku_pack_present": int(bool(sku_info["pack"])),
+            "sku_flavor_present": int(bool(sku_info["flavor"])),
             "source_row_index": str(row.name),
             "true_item_id": row_metadata_text(row, "true_item_id"),
             "calibration_fold": row_metadata_text(row, "calibration_fold"),
@@ -434,6 +517,10 @@ class RandMatcher:
             "candidate_volume": json.dumps(sorted(candidate_info["volume"])),
             "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
             "candidate_flavor": str(candidate_info["flavor"]),
+            "candidate_brand_present": _value_present(candidate_record["mode_brand"]),
+            "candidate_volume_present": int(bool(candidate_info["volume"])),
+            "candidate_pack_present": int(bool(candidate_info["pack"])),
+            "candidate_flavor_present": int(bool(candidate_info["flavor"])),
             "rule_ok": int(rules["attribute_conflict_type"] == "none"),
             "attribute_conflict_type": str(rules["attribute_conflict_type"]),
             "attribute_matches": int(
@@ -473,13 +560,17 @@ class RandMatcher:
         rows: list[dict[str, object]] = []
         for position, (_, row) in enumerate(frame.iterrows()):
             sku_gtin = self._gtin(row_metadata_text(row, "barcode", "gtin"))
-            for index in sorted(self._candidate_indexes(hits[position], sku_gtin)):
+            candidate_indexes = self._candidate_indexes(hits[position], sku_gtin)
+            for index in sorted(candidate_indexes):
+                candidate_rank, retrieval_source = candidate_indexes[index]
                 rows.append(
                     self._candidate_row(
                         row,
                         sku_infos[position],
                         embeddings[position],
                         index,
+                        candidate_rank,
+                        retrieval_source,
                     )
                 )
         candidates = pd.DataFrame(rows)
@@ -607,6 +698,135 @@ def _assignments_with_trace(
         prefix + output["SKU_ID"].astype(str)
     )
     return output, trace
+
+
+def _merge_audit_context(
+    candidates: pd.DataFrame,
+    trace: pd.DataFrame,
+    predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    diagnostics = trace.merge(
+        predictions[["SKU_ID", "ITEM_ID"]],
+        on="SKU_ID",
+        how="left",
+        validate="many_to_one",
+    ).merge(
+        candidates.groupby("SKU_ID", as_index=False).agg(
+            n_candidates=("candidate_gtin", "nunique")
+        ),
+        on="SKU_ID",
+        how="left",
+        validate="many_to_one",
+    )
+    if len(diagnostics) != len(trace):
+        raise RuntimeError("audit trace merge changed the candidate population")
+    candidate_ids = set(candidates["SKU_ID"].astype(str))
+    prediction_ids = set(predictions["SKU_ID"].astype(str))
+    if candidate_ids != prediction_ids:
+        raise RuntimeError(
+            "audit candidates and predictions disagree on SKU population: "
+            f"missing={sorted(candidate_ids - prediction_ids)[:10]}, "
+            f"unexpected={sorted(prediction_ids - candidate_ids)[:10]}"
+        )
+    return diagnostics
+
+
+def _truth_audit_context(
+    candidates: pd.DataFrame,
+    trace: pd.DataFrame,
+    predictions: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build one labeled audit summary per SKU for trace enrichment."""
+    truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
+    if truth_frame["SKU_ID"].duplicated().any():
+        raise RuntimeError("audit truth contains duplicate SKU_ID values")
+    expected_ids = set(truth_frame["SKU_ID"].astype(str))
+    actual_ids = set(predictions["SKU_ID"].astype(str))
+    if expected_ids != actual_ids:
+        raise RuntimeError(
+            "audit truth and predictions disagree on SKU population: "
+            f"missing={sorted(expected_ids - actual_ids)[:10]}, "
+            f"unexpected={sorted(actual_ids - expected_ids)[:10]}"
+        )
+
+    true_item_by_sku = truth_frame.set_index("SKU_ID")["true_item_id"]
+    candidate_truth = candidates.assign(
+        true_item_id=candidates["SKU_ID"].map(true_item_by_sku)
+    )
+    retrieved_by_sku = candidate_truth.assign(
+        is_true_candidate=lambda frame: frame["candidate_gtin"].astype(str).eq(
+            frame["true_item_id"].astype(str)
+        )
+    ).groupby("SKU_ID")["is_true_candidate"].any()
+    trace_truth = trace.assign(
+        true_item_id=trace["SKU_ID"].map(true_item_by_sku)
+    )
+    accepted_by_sku = trace_truth.assign(
+        is_true_accepted=lambda frame: frame["candidate_gtin"].astype(str).eq(
+            frame["true_item_id"].astype(str)
+        ) & frame["accepted"].astype(bool)
+    ).groupby("SKU_ID")["is_true_accepted"].any()
+
+    summary = predictions[["SKU_ID", "ITEM_ID"]].copy()
+    summary["true_item_id"] = summary["SKU_ID"].map(true_item_by_sku)
+    summary["true_candidate_retrieved"] = (
+        summary["SKU_ID"].map(retrieved_by_sku).fillna(False).astype("int8")
+    )
+    summary["true_candidate_accepted"] = (
+        summary["SKU_ID"].map(accepted_by_sku).fillna(False).astype("int8")
+    )
+    predicted = summary["ITEM_ID"].astype(str)
+    actual = summary["true_item_id"].astype(str)
+    correct = predicted.eq(actual)
+    summary["prediction_correct"] = correct.astype("int8")
+    summary["error_type"] = np.select(
+        [
+            correct,
+            predicted.str.startswith(_unmatched_prefix()),
+            summary["true_candidate_retrieved"].eq(0),
+            summary["true_candidate_accepted"].eq(0),
+        ],
+        ["correct", "unmatched", "retrieval_miss", "true_candidate_rejected"],
+        default="wrong_assignment",
+    )
+    return summary.drop(columns=["ITEM_ID"])
+
+
+def _audit_trace(
+    candidates: pd.DataFrame,
+    trace: pd.DataFrame,
+    predictions: pd.DataFrame,
+    truth: pd.DataFrame | None,
+    *,
+    partition: str,
+    fold: object,
+    threshold: float,
+) -> pd.DataFrame:
+    """Attach prediction/error context to every retained candidate row."""
+    diagnostics = _merge_audit_context(candidates, trace, predictions)
+
+    diagnostics["source_file"] = str(F["dataset_deduped"])
+    diagnostics["evaluation_partition"] = partition
+    diagnostics["evaluation_fold"] = "" if fold is None else str(fold)
+    diagnostics["evaluation_threshold"] = float(threshold)
+    diagnostics["predicted_ITEM_ID"] = diagnostics["ITEM_ID"]
+
+    if truth is None:
+        diagnostics["true_candidate_retrieved"] = ""
+        diagnostics["true_candidate_accepted"] = ""
+        diagnostics["prediction_correct"] = ""
+        diagnostics["error_type"] = "unlabeled"
+        return diagnostics
+    summary = _truth_audit_context(candidates, trace, predictions, truth)
+    diagnostics = diagnostics.drop(columns=["true_item_id"])
+    diagnostics = diagnostics.merge(
+        summary,
+        on="SKU_ID",
+        how="left",
+        validate="many_to_one",
+    )
+    return diagnostics
 
 
 def choose_assignments(
@@ -1208,7 +1428,7 @@ def calibrate_threshold(
     target_recall: float,
     plateau_tolerance: float,
     plateau_min_points: int,
-) -> tuple[float, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+) -> tuple[float, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict, pd.DataFrame]:
     calibration = _load_calibration_frame(matcher, calibration_input)
     candidates = matcher.score_candidates(calibration)
     truth = calibration[
@@ -1217,6 +1437,7 @@ def calibrate_threshold(
     folds = sorted(calibration["calibration_fold"].unique())
     selected = []
     sensitivity: list[dict] = []
+    audit_traces: list[pd.DataFrame] = []
 
     for fold in folds:
         fit_truth, check_truth, fit_candidates, check_candidates = _fold_partitions(
@@ -1224,6 +1445,36 @@ def calibrate_threshold(
         )
         best_threshold, fit_rows, fit_unmatched_fraction = _fit_fold_threshold(
             fit_candidates, fit_truth, thresholds
+        )
+        fit_predictions, fit_trace = _assignments_with_trace(
+            fit_candidates,
+            best_threshold,
+        )
+        check_predictions, check_trace = _assignments_with_trace(
+            check_candidates,
+            best_threshold,
+        )
+        audit_traces.extend(
+            [
+                _audit_trace(
+                    fit_candidates,
+                    fit_trace,
+                    fit_predictions,
+                    fit_truth,
+                    partition="fit",
+                    fold=fold,
+                    threshold=best_threshold,
+                ),
+                _audit_trace(
+                    check_candidates,
+                    check_trace,
+                    check_predictions,
+                    check_truth,
+                    partition="check",
+                    fold=fold,
+                    threshold=best_threshold,
+                ),
+            ]
         )
         alternatives = _alternative_thresholds(
             fit_candidates, fit_truth, best_threshold, target_recall
@@ -1278,7 +1529,15 @@ def calibrate_threshold(
         sensitivity_df["gtin_status"].eq("ALL")
         & sensitivity_df["selection_method"].ne("sensitivity")
     ].copy()
-    return final_threshold, selected_df, sensitivity_df, alternatives, plateau
+    calibration_trace = pd.concat(audit_traces, ignore_index=True)
+    return (
+        final_threshold,
+        selected_df,
+        sensitivity_df,
+        alternatives,
+        plateau,
+        calibration_trace,
+    )
 
 
 def _write_calibration_outputs(
@@ -1291,6 +1550,7 @@ def _write_calibration_outputs(
     plateau: dict,
     final_threshold: float,
     target_recall: float,
+    calibration_trace: pd.DataFrame,
 ) -> None:
     selected_df.to_csv(output_dir / output_names["threshold_selection_by_fold"], index=False)
     sensitivity_df.to_csv(
@@ -1298,6 +1558,14 @@ def _write_calibration_outputs(
         index=False,
     )
     alternatives_df.to_csv(output_dir / output_names["threshold_comparison"], index=False)
+    _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(
+        calibration_trace,
+        "calibration diagnostics",
+    )
+    calibration_trace.to_csv(
+        output_dir / output_names["calibration_diagnostics"],
+        index=False,
+    )
     plateau.update(
         {
             "final_threshold": final_threshold,
@@ -1371,7 +1639,7 @@ def _evaluate_holdout(
     matcher: RandMatcher,
     holdout_labels: pd.DataFrame,
     final_threshold: float,
-) -> list[dict]:
+) -> tuple[list[dict], pd.DataFrame]:
     base = load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
     base["SKU_ID"] = base["SKU_ID"].astype(str)
     unknown_ids = sorted(
@@ -1398,8 +1666,98 @@ def _evaluate_holdout(
     ]
     candidates = matcher.score_candidates(holdout)
     truth = holdout[["SKU_ID", "true_item_id", "gtin_status"]].drop_duplicates("SKU_ID")
-    predictions = choose_assignments(candidates, final_threshold)
-    return gtin_metrics(predictions, truth, "holdout", final_threshold)
+    predictions, trace = _assignments_with_trace(candidates, final_threshold)
+    metrics = gtin_metrics(predictions, truth, "holdout", final_threshold)
+    diagnostics = _audit_trace(
+        candidates,
+        trace,
+        predictions,
+        truth,
+        partition="holdout",
+        fold="holdout",
+        threshold=final_threshold,
+    )
+    return metrics, diagnostics
+
+
+def _sha256_path(path: Path) -> tuple[str, int]:
+    """Fingerprint one file or a checkpoint directory deterministically."""
+    if path.is_file():
+        return sha256_file(path), 1
+    if not path.is_dir():
+        raise FileNotFoundError(f"provenance path does not exist: {path}")
+    digest = hashlib.sha256()
+    files = sorted(child for child in path.rglob("*") if child.is_file())
+    for child in files:
+        digest.update(str(child.relative_to(path)).encode("utf-8"))
+        digest.update(sha256_file(child).encode("ascii"))
+    return digest.hexdigest(), len(files)
+
+
+def _file_provenance(path: Path, rows: int | None = None) -> _FileProvenance:
+    digest, _ = _sha256_path(path)
+    return _FileProvenance(path=str(path), sha256=digest, rows=rows)
+
+
+def _write_provenance(
+    output_dir: Path,
+    output_name: str,
+    matcher: RandMatcher,
+    submission: pd.DataFrame,
+    calibration_input: Path,
+    holdout_input: Path,
+    calibration_labels: pd.DataFrame,
+    holdout_labels: pd.DataFrame,
+    final_threshold: float,
+) -> None:
+    checkpoint_hash, checkpoint_files = _sha256_path(matcher.checkpoint)
+    provenance = _SubmissionProvenance(
+        dataset_deduped=_file_provenance(
+            F["dataset_deduped"],
+            rows=len(submission),
+        ),
+        canonical_records=_file_provenance(
+            RESULTS / F["canonical_records"],
+            rows=len(matcher.record_map),
+        ),
+        calibration_input=_file_provenance(
+            calibration_input,
+            rows=len(calibration_labels),
+        ),
+        holdout_input=_file_provenance(
+            holdout_input,
+            rows=len(holdout_labels),
+        ),
+        paths_config=_file_provenance(CONFIG_PATH),
+        training_config=_file_provenance(TRAINING_CONFIG_PATH),
+        checkpoint=_FileProvenance(
+            path=str(matcher.checkpoint),
+            sha256=checkpoint_hash,
+            rows=checkpoint_files,
+        ),
+        final_threshold=final_threshold,
+        unmatched_prefix=_unmatched_prefix(),
+        rows=len(submission),
+        unique_items=int(submission["ITEM_ID"].nunique()),
+        unmatched=int(
+            submission["ITEM_ID"].astype(str).str.startswith(_unmatched_prefix()).sum()
+        ),
+        calibration_folds=tuple(
+            sorted(calibration_labels["calibration_fold"].astype(str).unique())
+        ),
+        lineage=(
+            "submission and audit traces derive from dataset_deduped; "
+            "source_row_index links every candidate to its source row; "
+            "candidate_gtin links every decision to canonical_records"
+        ),
+    )
+    provenance_path = output_dir / output_name
+    provenance_path.write_text(
+        json.dumps(provenance.model_dump(mode="json"), indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"provenance: {provenance_path}")
 
 
 def _write_final_submission(
@@ -1427,45 +1785,17 @@ def _write_final_submission(
             f"unexpected={sorted(actual_ids - expected_ids)[:10]}"
         )
     submission.to_csv(output_dir / output_names["submission"], index=False)
-    diagnostics = candidate_trace.merge(
-        predictions[["SKU_ID", "ITEM_ID"]],
-        on="SKU_ID",
-        how="left",
-        validate="many_to_one",
-    ).merge(
-        candidates.groupby("SKU_ID", as_index=False).agg(
-            n_candidates=("candidate_gtin", "nunique")
-        ),
-        on="SKU_ID",
-        how="left",
-        validate="many_to_one",
+    diagnostics = _audit_trace(
+        candidates,
+        candidate_trace,
+        predictions,
+        None,
+        partition="final",
+        fold=None,
+        threshold=final_threshold,
     )
-    diagnostics["source_file"] = str(F["dataset_deduped"])
     _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(diagnostics, "diagnostics")
     diagnostics.to_csv(output_dir / output_names["diagnostics"], index=False)
-    prefix = _unmatched_prefix()
-    provenance = _SubmissionProvenance(
-        dataset_deduped=str(F["dataset_deduped"]),
-        checkpoint=str(matcher.checkpoint),
-        final_threshold=final_threshold,
-        unmatched_prefix=prefix,
-        rows=len(submission),
-        unique_items=int(submission["ITEM_ID"].nunique()),
-        unmatched=int(submission["ITEM_ID"].astype(str).str.startswith(prefix).sum()),
-        lineage=(
-            f"submission+diagnostics derive from {F['dataset_deduped']} "
-            f"(row identity = source_row_index); diagnostics row for SKU X "
-            f"links to ITEM_ID accepted in submission; canonical item text "
-            f"via results/{F['canonical_records']}"
-        ),
-    )
-    provenance_path = output_dir / "submission_provenance.json"
-    provenance_path.write_text(
-        json.dumps(provenance.model_dump(mode="json"), indent=2, sort_keys=True)
-        + "\n",
-        encoding="utf-8",
-    )
-    print(f"provenance: {provenance_path}")
     return submission
 
 
@@ -1493,7 +1823,14 @@ def write_outputs(
         plateau_tolerance=plateau_tolerance,
         plateau_min_points=plateau_min_points,
     )
-    final_threshold, selected, sensitivity, alternatives, plateau = result
+    (
+        final_threshold,
+        selected,
+        sensitivity,
+        alternatives,
+        plateau,
+        calibration_diagnostics,
+    ) = result
     _write_calibration_outputs(
         matcher,
         output_dir,
@@ -1504,14 +1841,39 @@ def write_outputs(
         plateau,
         final_threshold,
         target_recall,
+        calibration_diagnostics,
     )
-    pd.DataFrame(_evaluate_holdout(matcher, holdout_labels, final_threshold)).to_csv(
+    holdout_metrics, holdout_diagnostics = _evaluate_holdout(
+        matcher,
+        holdout_labels,
+        final_threshold,
+    )
+    pd.DataFrame(holdout_metrics).to_csv(
         output_dir / output_names["holdout_metrics"], index=False
+    )
+    _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(
+        holdout_diagnostics,
+        "holdout diagnostics",
+    )
+    holdout_diagnostics.to_csv(
+        output_dir / output_names["holdout_diagnostics"],
+        index=False,
     )
     submission = _write_final_submission(
         matcher,
         output_dir,
         output_names,
+        final_threshold,
+    )
+    _write_provenance(
+        output_dir,
+        output_names["provenance"],
+        matcher,
+        submission,
+        calibration_input,
+        holdout_input,
+        calibration_labels,
+        holdout_labels,
         final_threshold,
     )
     print(
