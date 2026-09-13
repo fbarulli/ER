@@ -389,6 +389,7 @@ class TrainingSpec(BaseModel):
         pack_scale: float = Field(gt=0.0)
         max_set_size: int = Field(ge=1)
 
+    base_model: str = Field(min_length=1)
     uniformity_regularization: UniformityRegularizationSpec
     structured_features: StructuredFeaturesSpec
 

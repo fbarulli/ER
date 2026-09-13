@@ -297,12 +297,11 @@ def _main_inner(_mlf, _wandb) -> None:
     split_cfg = cfg["split"]
 
     # trainer base resolves through the model REGISTRY (lib.common
-    # .resolve_model): local bundle dir first, hub id fallback — no
-    # hardcoded hub strings (models.multilingual_l12 is validated to exist
-    # at config load by DataConfig).
+    # .resolve_model): local bundle dir first, hub id fallback. The registry
+    # key is config-owned so the default cannot drift from the training SSOT.
     from core.common import resolve_model
 
-    default_model = resolve_model("multilingual_l12")
+    default_model = resolve_model(tr["base_model"])
     default_band = str(ann_cfg["band"])
 
     ap = argparse.ArgumentParser(description=__doc__)

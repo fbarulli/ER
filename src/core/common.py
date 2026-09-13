@@ -184,6 +184,12 @@ def load_config() -> dict:
             raise SystemExit(f"config missing: {path}")
     hpo_models = set(merged.get("hpo", {}).get("models", []))
     registry_models = set(base.get("models", {}))
+    base_model = merged["training"]["base_model"]
+    if base_model not in registry_models:
+        raise SystemExit(
+            "training.base_model must be a model registry key: "
+            f"{base_model!r} not in {sorted(registry_models)}"
+        )
     unknown_hpo_models = sorted(hpo_models - registry_models)
     if unknown_hpo_models:
         raise SystemExit(

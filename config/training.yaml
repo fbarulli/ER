@@ -151,6 +151,8 @@ rand_matching:
 
 # ── training ────────────────────────────────────────────────────────────────
 training:
+  # Registry key used when --model is omitted from the training entry point.
+  base_model: "minilm_l6"
   architecture: "two_tower"  # default: shared-weight SKU/canonical retrieval towers
   uniformity_regularization:
     enabled: true
