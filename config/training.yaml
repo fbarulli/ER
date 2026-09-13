@@ -175,6 +175,12 @@ rand_matching:
   threshold_min: 0.80
   threshold_max: 0.98
   threshold_step: 0.01
+  threshold_by_gtin_status:
+    both_equal: 0.80
+    different: 0.80
+    one_missing: 0.60
+    both_missing: 0.80
+  brand_conflict_veto: true
   target_recall: 0.90
   threshold_tie_break:
     - "rand_index"

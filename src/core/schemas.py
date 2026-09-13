@@ -65,6 +65,7 @@ THRESHOLD_TIE_BREAK_CRITERIA = (
     "fewest_unmatched_skus",
     "lowest_threshold",
 )
+GTIN_STATUSES = ("both_equal", "different", "one_missing", "both_missing")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIG CONTRACTS
@@ -465,6 +466,8 @@ class RandMatchingSpec(BaseModel):
     threshold_min: float = Field(ge=-1.0, le=1.0)
     threshold_max: float = Field(ge=-1.0, le=1.0)
     threshold_step: float = Field(gt=0.0)
+    threshold_by_gtin_status: dict[str, float]
+    brand_conflict_veto: bool
     target_recall: float = Field(gt=0.0, le=1.0)
     threshold_tie_break: list[
         Literal["rand_index", "fewest_unmatched_skus", "lowest_threshold"]
@@ -495,6 +498,19 @@ class RandMatchingSpec(BaseModel):
             raise ValueError(
                 "rand_matching.threshold_tie_break must contain exactly one of "
                 f"each criterion {sorted(expected)}; order controls priority"
+            )
+        expected_statuses = set(GTIN_STATUSES)
+        if set(self.threshold_by_gtin_status) != expected_statuses:
+            raise ValueError(
+                "rand_matching.threshold_by_gtin_status must contain exactly "
+                f"{sorted(expected_statuses)}"
+            )
+        if any(
+            not -1.0 <= float(value) <= 1.0
+            for value in self.threshold_by_gtin_status.values()
+        ):
+            raise ValueError(
+                "rand_matching.threshold_by_gtin_status values must be in [-1, 1]"
             )
         return self
 

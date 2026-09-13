@@ -324,9 +324,10 @@ def oracle_rand_calibration_reconciliation() -> None:
 
     candidates = pd.DataFrame(
         [
-            ["sku-gtin", "4006381333931", 0.40, "both_equal", 1, 1, 3],
-            ["sku-gtin", "5901234123457", 0.99, "different", 0, 1, 3],
-            ["sku-attr", "4006381333931", 0.99, "both_missing", 0, 0, 0],
+            ["sku-gtin", "4006381333931", 0.40, "both_equal", 1, 1, 3, 0],
+            ["sku-gtin", "5901234123457", 0.99, "different", 0, 1, 3, 0],
+            ["sku-attr", "4006381333931", 0.99, "both_missing", 0, 0, 0, 0],
+            ["sku-brand", "4006381333931", 0.70, "one_missing", 0, 1, 3, 1],
         ],
         columns=[
             "SKU_ID",
@@ -336,6 +337,7 @@ def oracle_rand_calibration_reconciliation() -> None:
             "exact_gtin",
             "rule_ok",
             "attribute_matches",
+            "brand_conflict",
         ],
     )
     predictions, trace = _assignments_with_trace(candidates, 0.80)
@@ -360,6 +362,31 @@ def oracle_rand_calibration_reconciliation() -> None:
         ),
         str(selected),
     )
+    predictions, trace = _assignments_with_trace(
+        candidates,
+        0.80,
+        threshold_by_gtin_status={
+            "both_equal": 0.80,
+            "different": 0.80,
+            "one_missing": 0.60,
+            "both_missing": 0.80,
+        },
+    )
+    selected = predictions.set_index("SKU_ID")["ITEM_ID"].to_dict()
+    check(
+        "Rand matching applies the one-missing threshold override",
+        selected["sku-brand"].startswith(
+            str(rand_matching_cfg()["unmatched_prefix"])
+        ),
+        str(selected),
+    )
+    check(
+        "Rand matching records brand-conflict veto",
+        trace.loc[
+            trace["SKU_ID"].eq("sku-brand"), "rejection_reason"
+        ].iloc[0]
+        == "brand_conflict",
+    )
     truth = pd.DataFrame(
         {
             "SKU_ID": ["sku-gtin", "sku-attr"],
@@ -367,7 +394,9 @@ def oracle_rand_calibration_reconciliation() -> None:
         }
     )
     threshold, rows, _ = _fit_fold_threshold(
-        candidates, truth, np.asarray([0.80, 0.95], dtype=float)
+        candidates[candidates["SKU_ID"].ne("sku-brand")],
+        truth,
+        np.asarray([0.80, 0.95], dtype=float),
     )
     selected_row = next(row for row in rows if row["threshold"] == threshold)
     check(

@@ -24,6 +24,7 @@ import argparse
 import hashlib
 import json
 import os
+import unicodedata
 from decimal import Decimal
 from pathlib import Path
 
@@ -65,7 +66,7 @@ from core.graph_diagnostics import (
 )
 from core.gtin import is_valid_gtin_checksum
 from core.manifest import sha256_file
-from core.schemas import THRESHOLD_TIE_BREAK_CRITERIA
+from core.schemas import GTIN_STATUSES, THRESHOLD_TIE_BREAK_CRITERIA
 from core.structured_features import (
     append_text as append_structured_text,
     canonical_info as canonical_structured_info,
@@ -81,7 +82,6 @@ from pipeline import (
 )
 
 
-GTIN_STATUSES = ("both_equal", "different", "one_missing", "both_missing")
 ASSIGNMENT_COLUMNS = ("SKU_ID", "ITEM_ID", "score", "gtin_status")
 METRIC_COLUMNS = (
     "n",
@@ -110,6 +110,7 @@ METRIC_COLUMNS = (
 GATE_COLUMNS = (
     "gtin_gate",
     "attribute_gate",
+    "brand_gate",
     "threshold_gate",
     "assignment_gate",
 )
@@ -131,6 +132,29 @@ def _unmatched_prefix() -> str:
 
 def _reconciliation_scope() -> str:
     return str(rand_matching_cfg()["threshold_reconciliation_scope"])
+
+
+def _final_threshold_by_gtin_status() -> dict[str, float]:
+    """Return the config-owned final threshold for every GTIN stratum."""
+    configured = rand_matching_cfg()["threshold_by_gtin_status"]
+    return {str(status): float(value) for status, value in configured.items()}
+
+
+def _normalize_brand(value: object) -> str:
+    """Normalize a brand for equality without treating missing as a value."""
+    normalized = unicodedata.normalize("NFKC", metadata_text(value)).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
+def _brand_conflict(left: object, right: object) -> bool:
+    """Return true only when both brands are present and disagree."""
+    left_normalized = _normalize_brand(left)
+    right_normalized = _normalize_brand(right)
+    return bool(
+        left_normalized
+        and right_normalized
+        and left_normalized != right_normalized
+    )
 
 
 def _threshold_selection_key(row: dict[str, float | int]) -> tuple[float, ...]:
@@ -196,6 +220,8 @@ class _SubmissionProvenance(BaseModel):
     training_config: _FileProvenance
     checkpoint: _FileProvenance
     final_threshold: float
+    threshold_by_gtin_status: dict[str, float]
+    brand_conflict_veto: bool
     unmatched_prefix: str
     rows: int
     unique_items: int
@@ -296,9 +322,12 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "candidate_volume_present",
             "candidate_pack_present",
             "candidate_flavor_present",
+            "brand_conflict",
             "attribute_conflict_type",
             "attribute_matches",
             # annotation (_annotate_candidates)
+            "effective_threshold",
+            "brand_compatible",
             "gtin_compatible",
             "score_pass",
             "accepted",
@@ -414,11 +443,20 @@ def candidate_gate_fields(
     sku_gtin = metadata_text(row_metadata_text(row, "barcode", "gtin")).strip()
     status = gtin_status(sku_gtin, candidate_gtin)
     exact = int(status == "both_equal")
+    brand_conflict = int(
+        bool(rand_matching_cfg()["brand_conflict_veto"])
+        and _brand_conflict(
+            row_metadata_text(row, "brand"),
+            candidate_record.get("mode_brand"),
+        )
+    )
     gate_reason = (
         "gtin_conflict"
         if status == "different"
         else "exact_gtin"
         if exact
+        else "brand_conflict"
+        if brand_conflict
         else "attribute_conflict"
         if rules["attribute_conflict_type"] != "none"
         else "cosine_candidate"
@@ -458,6 +496,7 @@ def candidate_gate_fields(
         "source_row_index": source_row_index,
         "candidate_text": metadata_text(candidate_record.get("canonical")),
         "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
+        "brand_conflict": brand_conflict,
         "candidate_volume": json.dumps(sorted(candidate_info["volume"])),
         "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
         "candidate_flavor": str(candidate_info["flavor"]),
@@ -745,13 +784,43 @@ class RandMatcher:
         return candidates
 
 
-def _annotate_candidates(candidates: pd.DataFrame, threshold: float) -> pd.DataFrame:
+def _annotate_candidates(
+    candidates: pd.DataFrame,
+    threshold: float,
+    *,
+    threshold_by_gtin_status: dict[str, float] | None = None,
+) -> pd.DataFrame:
     frame = candidates.copy()
+    if "brand_conflict" not in frame.columns:
+        raise ValueError("candidate trace is missing required brand_conflict")
     frame["gtin_compatible"] = frame["gtin_status"].ne("different")
-    frame["score_pass"] = frame["score"] >= float(threshold)
+    if threshold_by_gtin_status is None:
+        effective_threshold = pd.Series(
+            float(threshold), index=frame.index, dtype=float
+        )
+    else:
+        effective_threshold = frame["gtin_status"].map(threshold_by_gtin_status)
+        if effective_threshold.isna().any():
+            missing_statuses = sorted(
+                frame.loc[effective_threshold.isna(), "gtin_status"].unique()
+            )
+            raise ValueError(
+                "threshold_by_gtin_status is missing GTIN status values: "
+                f"{missing_statuses}"
+            )
+        effective_threshold = effective_threshold.astype(float)
+    frame["effective_threshold"] = effective_threshold
+    frame["score_pass"] = frame["score"] >= frame["effective_threshold"]
+    frame["brand_compatible"] = frame["brand_conflict"].eq(0) | frame[
+        "exact_gtin"
+    ].astype(bool)
     frame["accepted"] = frame["gtin_compatible"] & (
         frame["exact_gtin"].astype(bool)
-        | (frame["rule_ok"].astype(bool) & frame["score_pass"])
+        | (
+            frame["rule_ok"].astype(bool)
+            & frame["brand_compatible"]
+            & frame["score_pass"]
+        )
     )
     frame["gtin_gate"] = np.select(
         [
@@ -774,6 +843,14 @@ def _annotate_candidates(candidates: pd.DataFrame, threshold: float) -> pd.DataF
         ],
         default="veto_known_conflict",
     )
+    frame["brand_gate"] = np.select(
+        [
+            frame["exact_gtin"].astype(bool),
+            frame["brand_conflict"].astype(bool),
+        ],
+        ["exact_gtin_lock", "veto"],
+        default="allow_equal_or_unknown",
+    )
     frame["threshold_gate"] = np.select(
         [
             frame["exact_gtin"].astype(bool),
@@ -791,12 +868,14 @@ def _annotate_candidates(candidates: pd.DataFrame, threshold: float) -> pd.DataF
         [
             ~frame["gtin_compatible"],
             frame["exact_gtin"].astype(bool),
+            frame["brand_conflict"].astype(bool),
             ~frame["rule_ok"].astype(bool),
             ~frame["score_pass"],
         ],
         [
             "gtin_conflict",
             "exact_gtin_lock",
+            "brand_conflict",
             "attribute_conflict",
             "below_threshold",
         ],
@@ -815,13 +894,19 @@ def _annotate_candidates(candidates: pd.DataFrame, threshold: float) -> pd.DataF
 def _assignments_with_trace(
     candidates: pd.DataFrame,
     threshold: float,
+    *,
+    threshold_by_gtin_status: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if candidates.empty:
         return (
             pd.DataFrame(columns=ASSIGNMENT_COLUMNS),
             candidates.copy(),
         )
-    frame = _annotate_candidates(candidates, threshold)
+    frame = _annotate_candidates(
+        candidates,
+        threshold,
+        threshold_by_gtin_status=threshold_by_gtin_status,
+    )
     accepted = frame[frame["accepted"]].sort_values(
         list(ASSIGNMENT_SORT_COLUMNS),
         ascending=list(ASSIGNMENT_SORT_ASCENDING),
@@ -1892,7 +1977,11 @@ def _evaluate_holdout(
     ]
     candidates = matcher.score_candidates(holdout)
     truth = holdout[["SKU_ID", "true_item_id", "gtin_status"]].drop_duplicates("SKU_ID")
-    predictions, trace = _assignments_with_trace(candidates, final_threshold)
+    predictions, trace = _assignments_with_trace(
+        candidates,
+        final_threshold,
+        threshold_by_gtin_status=_final_threshold_by_gtin_status(),
+    )
     metrics = gtin_metrics(
         predictions,
         truth,
@@ -1978,6 +2067,8 @@ def _write_provenance(
             rows=checkpoint_files,
         ),
         final_threshold=final_threshold,
+        threshold_by_gtin_status=_final_threshold_by_gtin_status(),
+        brand_conflict_veto=bool(rand_matching_cfg()["brand_conflict_veto"]),
         unmatched_prefix=_unmatched_prefix(),
         rows=len(submission),
         unique_items=int(submission["ITEM_ID"].nunique()),
@@ -2013,6 +2104,7 @@ def _write_final_submission(
     predictions, candidate_trace = _assignments_with_trace(
         candidates,
         final_threshold,
+        threshold_by_gtin_status=_final_threshold_by_gtin_status(),
     )
     submission = predictions[["SKU_ID", "ITEM_ID"]].copy()
     _SUBMISSION_COLUMNS_SPEC.validate_frame(submission, "submission")
