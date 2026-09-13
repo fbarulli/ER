@@ -26,6 +26,7 @@ rows; skipping them was the silent class drop that rule closed).
 
 import hashlib
 import json
+import os
 import random
 from pathlib import Path
 
@@ -40,6 +41,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # before any encoder is constructed.
 from core.common import (
     F,
+    RESULTS,
     SEED,
     embedding_model_keys,
     ensure_parent,
@@ -51,6 +53,8 @@ from core.common import (
 )
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 from core.schemas import ZERO_SHOT_TRACE_COLUMNS, check_zero_shot_similarity_frame
+from core.wandb_ctx import WandbCtx
+from core.worker_telemetry import write_worker_live_status
 from training.masking import mask_text
 
 _cfg = load_config()
@@ -241,7 +245,7 @@ def _build_trace_frame(
     return result
 
 
-def main() -> None:
+def _parse_args():
     import argparse
 
     ap = argparse.ArgumentParser(description=__doc__)
@@ -257,7 +261,38 @@ def main() -> None:
         default=None,
         help="debug: cap gate rows for an explicit, traceable smoke run",
     )
-    args = ap.parse_args()
+    return ap.parse_args()
+
+
+def _write_live_status(
+    wandb_ctx: WandbCtx,
+    *,
+    event: str,
+    step: int,
+    max_steps: int,
+    **values: object,
+) -> None:
+    """Publish zero-shot progress through the shared worker contract."""
+    write_worker_live_status(
+        target=RESULTS / "live_status.json",
+        event=event,
+        step=step,
+        max_steps=max_steps,
+        epoch=0.0,
+        wandb_run_id=wandb_ctx.run_id,
+        wandb_url=wandb_ctx.run_url,
+        **values,
+    )
+
+
+def main() -> None:
+    args = _parse_args()
+    run_name = os.environ.get("EUROMONITOR_RUN_ID", "zero_shot_sims")
+    with WandbCtx(run_name) as wandb_ctx:
+        _run_zero_shot(args, wandb_ctx)
+
+
+def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
     if args.sample is not None and args.sample < 1:
         raise SystemExit("--sample must be >= 1 when provided")
     selected_keys = MODEL_KEYS
@@ -279,6 +314,22 @@ def main() -> None:
     }
     if args.models is not None:
         print(f"[models] scoring lanes only: {list(models)}", flush=True)
+    wandb_ctx.log_config(
+        {
+            "lane": "zero_shot_sims",
+            "model_keys": list(selected_keys),
+            "device": DEVICE,
+            "sample": args.sample if args.sample is not None else "full",
+            "masking_enabled": bool(training_cfg().masking.enabled),
+        }
+    )
+    _write_live_status(
+        wandb_ctx,
+        event="zero-shot-started",
+        step=0,
+        max_steps=len(models),
+        model_keys=list(selected_keys),
+    )
 
     df_canon_path = F["canonical_records"]
     df_gate_path = F["gate_results"]
@@ -336,6 +387,23 @@ def main() -> None:
         mask_fp,
     )
     print(f"Unique GTINs to encode: {len(unique_gtins)}")
+    wandb_ctx.log_metrics(
+        {
+            "zero_shot/input_gate_pairs": full_gate_rows,
+            "zero_shot/selected_gate_pairs": len(candidates),
+            "zero_shot/unique_gtins": len(unique_gtins),
+        },
+        step=0,
+    )
+    _write_live_status(
+        wandb_ctx,
+        event="zero-shot-inputs-ready",
+        step=0,
+        max_steps=len(models),
+        input_gate_pairs=full_gate_rows,
+        selected_gate_pairs=len(candidates),
+        unique_gtins=len(unique_gtins),
+    )
 
     # resume: models already scored in a previous (crashed) run are skipped —
     # but ONLY when the stored pair SET matches the current gate rows exactly.
@@ -420,12 +488,43 @@ def main() -> None:
     # this run, so it is not claimed as one)
     manifest_stamps: list[Path] = []
 
-    for model_key, model_path in models.items():
+    for model_index, (model_key, model_path) in enumerate(models.items(), start=1):
         col = SIM_COLUMNS[model_key]
         if col in have:
             print(f"--- Model: {model_key} already scored, skip ---", flush=True)
+            wandb_ctx.log_metrics(
+                {"zero_shot/model_completed": 1, "zero_shot/model_index": model_index},
+                step=model_index,
+            )
+            _write_live_status(
+                wandb_ctx,
+                event="zero-shot-model-skipped",
+                step=model_index,
+                max_steps=len(models),
+                model_key=model_key,
+                sim_column=col,
+            )
             continue
         print(f"\n--- Model: {model_key} ---", flush=True)
+        _write_live_status(
+            wandb_ctx,
+            event="zero-shot-model-started",
+            step=model_index,
+            max_steps=len(models),
+            model_key=model_key,
+            sim_column=col,
+            input_gate_pairs=len(candidates),
+            unique_gtins=len(unique_gtins),
+        )
+        wandb_ctx.log_metrics(
+            {
+                "zero_shot/model_index": model_index,
+                "zero_shot/model_started": 1,
+                "zero_shot/model_input_pairs": len(candidates),
+                "zero_shot/model_unique_gtins": len(unique_gtins),
+            },
+            step=model_index,
+        )
         model = load_local_sentence_transformer(model_key, device=DEVICE)
         model.max_seq_length = int(load_config()["training"]["max_seq_length"])  # SSOT
         embeddings = model.encode(
@@ -467,6 +566,23 @@ def main() -> None:
         stamp_path = out.parent / f"{out.name}.model_fp.{col}"
         stamp_path.write_text(_canon_fp)
         manifest_stamps.append(stamp_path)
+        wandb_ctx.log_metrics(
+            {
+                "zero_shot/model_completed": 1,
+                "zero_shot/model_output_rows": len(results),
+                "zero_shot/model_index": model_index,
+            },
+            step=model_index,
+        )
+        _write_live_status(
+            wandb_ctx,
+            event="zero-shot-model-completed",
+            step=model_index,
+            max_steps=len(models),
+            model_key=model_key,
+            sim_column=col,
+            output_rows=len(results),
+        )
 
     # ---- row accounting (SILENT_DROPS task 7; capture-only) ────────────────
     # CODE TRUTH: the `[keep]` projection above is a COLUMN selection
@@ -530,6 +646,38 @@ def main() -> None:
         f"{sum(row_accounting['dropped'].values()):,} intentionally excluded "
         f"(column-only [keep] projection; sim columns: "
         f"{', '.join(sorted(sim_cols))})"
+    )
+
+    completed_rows = int(row_accounting["output_rows"])
+    intentionally_excluded = int(sum(row_accounting["dropped"].values()))
+    summary = {
+        "zero_shot/input_rows": int(row_accounting["input_rows"]),
+        "zero_shot/output_rows": completed_rows,
+        "zero_shot/intentionally_excluded_rows": intentionally_excluded,
+        "zero_shot/unique_gtins_encoded": int(row_accounting["unique_gtins_encoded"]),
+        "zero_shot/sim_columns_complete": len(row_accounting["sim_columns_complete"]),
+    }
+    wandb_ctx.log_metrics(summary, step=len(models) + 1)
+    wandb_ctx.set_summary(
+        {
+            **summary,
+            "zero_shot/manifest": str(manifest_path),
+            "zero_shot/sim_columns": row_accounting["sim_columns"],
+            "zero_shot/masking_status_counts": row_accounting["masking_status_counts"],
+            "zero_shot/model_provenance": row_accounting["model_provenance"],
+            "zero_shot/lanes_scored": row_accounting["lanes_scored_this_run"],
+        }
+    )
+    _write_live_status(
+        wandb_ctx,
+        event="zero-shot-completed",
+        step=len(models),
+        max_steps=len(models),
+        output_rows=completed_rows,
+        intentionally_excluded_rows=intentionally_excluded,
+        unique_gtins_encoded=int(row_accounting["unique_gtins_encoded"]),
+        sim_columns_complete=row_accounting["sim_columns_complete"],
+        manifest=str(manifest_path),
     )
 
     print(f"\nSaved {out} ({len(results):,} rows)")

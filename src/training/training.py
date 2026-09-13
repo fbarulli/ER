@@ -78,6 +78,7 @@ from core.common import runtime as _runtime
 
 _SSOT_HP = bool(_runtime("hard_positives"))  # no-fallback SSOT
 from core.hard_negatives import mine_hard_negatives, pairs_in_set
+from core.worker_telemetry import write_worker_live_status
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Config
@@ -941,36 +942,16 @@ class ProgressCallback(TrainerCallback):
 
     def _write_live_status(self, state, event: str, **values) -> None:
         """Atomically expose a compact worker heartbeat to the Colab launcher."""
-        import tempfile
-
-        payload = {
-            "updated_at": time.time(),
-            "event": event,
-            "step": int(state.global_step),
-            "max_steps": int(state.max_steps),
-            "epoch": float(state.epoch or 0.0),
-            "wandb_run_id": getattr(self.wandb_ctx, "run_id", None),
-            "wandb_url": getattr(self.wandb_ctx, "run_url", None),
-            **{key: value for key, value in values.items() if value is not None},
-        }
-        target = RESULTS / "live_status.json"
-        # Parallel Optuna trials share a model worker's RESULTS directory.
-        # A fixed ``live_status.json.tmp`` lets one thread replace (remove)
-        # the other thread's temporary file before it reaches os.replace.
-        # Keep the final target shared (latest heartbeat wins), but give every
-        # atomic write a private same-filesystem temporary path.
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-            dir=target.parent,
-            delete=False,
-        ) as handle:
-            handle.write(json.dumps(payload, sort_keys=True) + "\n")
-            temporary = Path(handle.name)
-        os.replace(temporary, target)
+        write_worker_live_status(
+            target=RESULTS / "live_status.json",
+            event=event,
+            step=int(state.global_step),
+            max_steps=int(state.max_steps),
+            epoch=float(state.epoch or 0.0),
+            wandb_run_id=getattr(self.wandb_ctx, "run_id", None),
+            wandb_url=getattr(self.wandb_ctx, "run_url", None),
+            **values,
+        )
 
     def on_train_begin(self, args, state, control, **kwargs):
         if state.is_world_process_zero:

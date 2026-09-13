@@ -1492,7 +1492,7 @@ def publish_local_wandb_artifacts(remote_base: str, workers: int) -> None:
                     selected.append(path)
                 elif path.is_dir() and (
                     path.name.startswith("report_")
-                    or path.name in {"logs", "_checkpoints", ".resume"}
+                    or path.name in {"logs", "training", "_checkpoints", ".resume"}
                 ):
                     selected.append(path)
             if not selected:
@@ -2227,8 +2227,11 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
 def run_sims() -> None:
     """Run the configured zero-shot embedding model lane on the VM."""
     print(f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
-    script = _BOOTSTRAP + f"""
-import subprocess, sys
+    run_id = datetime.now(timezone.utc).strftime("zero_shot_%Y%m%dT%H%M%S%fZ")
+    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
+import os, subprocess, sys
+os.environ["EUROMONITOR_RUN_ID"] = {run_id!r}
+os.environ["WANDB_RUN_NAME"] = {run_id!r}
 rc = subprocess.run(
     [sys.executable, "-m", "training.zero_shot_sims", "--models", {_SIMS_MODEL!r}],
     cwd={REMOTE_ROOT!r},
@@ -2237,6 +2240,8 @@ if rc != 0:
     raise RuntimeError(f"zero-shot similarity subprocess failed (rc={{rc}})")
 """
     run_colab_exec_stream(SESSION, script, timeout=2 * 3600, log_name="sims")
+    print("[sims] remote zero-shot completed; downloading verified results ...", flush=True)
+    download_results(skip_checkpoints=True, require_manifests=True)
 
 
 def run_mixed(
@@ -2293,6 +2298,7 @@ worker_specs = [
 def run_worker(number, label, command_args, profile, masking_applied):
     out = base / f"worker_{{number}}"
     out.mkdir()
+    (out / "wandb").mkdir()
     for name in (F["canonical_records"], F["gate_results"]):
         source = root / "results" / name.name
         if not source.is_file():
@@ -2317,6 +2323,8 @@ def run_worker(number, label, command_args, profile, masking_applied):
         "PYTHONPATH": str(root / "src"),
         "EUROMONITOR_RESULTS_DIR": str(out),
         "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
+        "WANDB_DIR": str(out / "wandb"),
+        "WANDB_RUN_NAME": f"{{base.name}}-{{label}}",
         "EUROMONITOR_RUN_ID": f"{{base.name}}-{{label}}",
         "EUROMONITOR_MINING_PROFILE": profile,
         "EUROMONITOR_REMOTE_TRAINING": "1",
