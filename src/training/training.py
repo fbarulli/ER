@@ -3547,6 +3547,7 @@ def train_one_config(
                 structured_weight=structured_feature_weight,
                 batch_size=runtime("batch_size_eval"),
                 config=calibration_config,
+                include_collapse_guardrail=selection_mode,
             )
 
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────

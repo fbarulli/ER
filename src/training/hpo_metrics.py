@@ -8,6 +8,7 @@ connected components for submission, or pairwise AUC as its objective.
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 
 import numpy as np
 import pandas as pd
@@ -30,55 +31,17 @@ from training.rand_matching import (
 from training.uniformity import select_unrelated_pairs
 
 
-# One reporting contract is shared by ordinary train, fixed-grid HPO, and
-# Optuna.  Fold CSVs keep every returned field; these are the stable numeric
-# fields promoted to aggregate reports and tracking backends.
-CALIBRATION_AGGREGATE_FIELDS = (
-    "calibration_rand_index",
-    "calibration_adjusted_rand",
-    "calibration_group_precision",
-    "calibration_group_recall",
-    "calibration_pairwise_precision",
-    "calibration_pairwise_recall",
-    "calibration_pairwise_f1",
-    "calibration_over_merge_rate",
-    "calibration_under_merge_rate",
-    "calibration_predicted_group_count",
-    "calibration_expected_group_count",
-    "calibration_plausible_group_count",
-    "calibration_unmatched_skus",
-    "calibration_positive_pairs",
-    "calibration_negative_pairs",
-    "calibration_sku_count",
-    "calibration_threshold_fold_median",
-    "calibration_threshold_fold_min",
-    "calibration_threshold_fold_max",
-    "calibration_threshold_plateau_points",
-    "calibration_threshold_stable",
-    "diagnostic_component_count",
-    "diagnostic_max_component_size",
-    "diagnostic_score_diameter",
-    "diagnostic_bridge_edge_count",
-    "diagnostic_weakest_bridge_score",
-    "collapse_median_cosine",
-    "collapse_p90_cosine",
-    "collapse_cosine_std",
-    "collapse_embedding_norm_mean",
-    "collapse_embedding_norm_std",
-    "collapse_penalty",
-    "attribute_conflict_error_rate",
-    *tuple(
-        f"calibration_{status}_{metric}"
-        for status in GTIN_STATUSES
-        for metric in ("rand_index", "precision", "recall")
-    ),
-)
-
-
 class CalibrationMetricRow(BaseModel):
     """Pydantic contract for the shared train/calibration metric payload."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
+
+    calibration_proxy_source: str
+    calibration_positive_pairs: int
+    calibration_negative_pairs: int
+    calibration_sku_count: int
+    calibration_candidate_duplicate_rows_removed: int
+    calibrated_threshold: float
 
     calibration_rand_index: float
     calibration_adjusted_rand: float
@@ -98,14 +61,60 @@ class CalibrationMetricRow(BaseModel):
     calibration_threshold_fold_max: float
     calibration_threshold_plateau_points: int
     calibration_threshold_stable: int
+    calibration_youden_threshold: float
+    calibration_precision_at_target_recall_threshold: float
+    calibration_precision_at_threshold: float
+    calibration_recall_at_threshold: float
+    calibration_gtin_strata: int
+    calibration_sensitivity_table: str
     diagnostic_component_size_distribution: str
+    diagnostic_edge_count: int
+    plausible_group_count: int
     diagnostic_component_count: int
     diagnostic_max_component_size: int
     diagnostic_score_diameter: float
     diagnostic_bridge_edge_count: int
     diagnostic_weakest_bridge_score: float
     attribute_conflict_error_rate: float
-    calibration_proxy_source: str
+    attribute_conflict_status: str
+    calibration_both_equal_rand_index: float
+    calibration_both_equal_precision: float
+    calibration_both_equal_recall: float
+    calibration_different_rand_index: float
+    calibration_different_precision: float
+    calibration_different_recall: float
+    calibration_one_missing_rand_index: float
+    calibration_one_missing_precision: float
+    calibration_one_missing_recall: float
+    calibration_both_missing_rand_index: float
+    calibration_both_missing_precision: float
+    calibration_both_missing_recall: float
+    calibration_ALL_rand_index: float
+    calibration_ALL_precision: float
+    calibration_ALL_recall: float
+    collapse_guardrail_enabled: int | None = None
+    collapse_status: str | None = None
+    collapse_requested_pairs: int | None = None
+    collapse_unrelated_pairs: int | None = None
+    collapse_median_cosine: float | None = None
+    collapse_p90_cosine: float | None = None
+    collapse_cosine_std: float | None = None
+    collapse_embedding_norm_mean: float | None = None
+    collapse_embedding_norm_std: float | None = None
+    collapse_median_flag: int | None = None
+    collapse_p90_flag: int | None = None
+    collapse_penalty: float | None = None
+
+
+# One reporting contract is shared by ordinary train, fixed-grid HPO, and
+# Optuna.  Numeric aggregate fields are derived from the Pydantic contract so
+# adding a metric cannot silently omit it from fold aggregation. Optional
+# collapse fields are intentionally excluded when the guardrail is disabled.
+CALIBRATION_AGGREGATE_FIELDS = tuple(
+    name
+    for name, field in CalibrationMetricRow.model_fields.items()
+    if field.annotation in (int, float)
+)
 
 
 def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
@@ -154,6 +163,46 @@ def _status(left: object, right: object) -> str:
     return "both_equal" if left_gtin == right_gtin else "different"
 
 
+def _source_metadata(row: pd.Series) -> dict[str, str | int]:
+    """Retain every source field used by matching and its presence state."""
+    fields = (
+        "title",
+        "attributes",
+        "brand",
+        "country",
+        "category",
+        "category_path",
+        "retailer",
+    )
+    values = {
+        field: row_metadata_text(row, field)
+        for field in fields
+    }
+    values["record_json"] = json.dumps(
+        {str(key): metadata_text(value) for key, value in row.to_dict().items()},
+        sort_keys=True,
+    )
+    return {
+        **{f"sku_{field}": value for field, value in values.items()},
+        **{
+            f"sku_{field}_present": int(bool(value.strip()))
+            for field, value in values.items()
+            if field != "record_json"
+        },
+    }
+
+
+def _canonical_metadata(record: dict[str, object]) -> dict[str, str | int]:
+    """Retain the complete canonical record alongside parsed gate fields."""
+    return {
+        "candidate_text": metadata_text(record.get("canonical")),
+        "candidate_record_json": json.dumps(
+            {str(key): metadata_text(value) for key, value in record.items()},
+            sort_keys=True,
+        ),
+    }
+
+
 def _thresholds(cfg: dict) -> np.ndarray:
     matcher = cfg["rand_matching"]
     values = np.arange(
@@ -170,7 +219,7 @@ def _candidate_frame(
     df: pd.DataFrame,
     row_bc: np.ndarray,
     scores: np.ndarray,
-) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
+) -> tuple[pd.DataFrame, pd.DataFrame, int]:
     n_pos = len(pos_pairs)
     pairs = np.vstack([pos_pairs, neg_pairs])
     if len(scores) != len(pairs):
@@ -201,6 +250,8 @@ def _candidate_frame(
             row_metadata_text(sku_row, "title"),
             row_metadata_text(sku_row, "attributes", "attr"),
         )
+        source_metadata = _source_metadata(sku_row)
+        candidate_metadata = _canonical_metadata(candidate_record)
         candidate_info = canonical_attribute_info(candidate_record)
         rules = conflict_columns(sku_info, candidate_info)
         sku_gtin = row_metadata_text(sku_row, "barcode", "gtin")
@@ -231,21 +282,46 @@ def _candidate_frame(
                         )
                     )
                 ),
-                "sku_title": row_metadata_text(sku_row, "title"),
+                **source_metadata,
                 "sku_brand": row_metadata_text(sku_row, "brand"),
                 "sku_volume": str(sorted(sku_info["volume"])),
                 "sku_pack": str(sorted(sku_info["pack"])),
                 "sku_flavor": str(sku_info["flavor"]),
+                "sku_volume_present": int(bool(sku_info["volume"])),
+                "sku_pack_present": int(bool(sku_info["pack"])),
+                "sku_flavor_present": int(bool(sku_info["flavor"])),
+                **candidate_metadata,
                 "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
                 "candidate_volume": str(sorted(candidate_info["volume"])),
                 "candidate_pack": str(sorted(candidate_info["pack"])),
                 "candidate_flavor": str(candidate_info["flavor"]),
+                "candidate_brand_present": int(
+                    bool(metadata_text(candidate_record.get("mode_brand")).strip())
+                ),
+                "candidate_volume_present": int(bool(candidate_info["volume"])),
+                "candidate_pack_present": int(bool(candidate_info["pack"])),
+                "candidate_flavor_present": int(bool(candidate_info["flavor"])),
                 "source_row_index": str(source),
             }
         )
-    candidates = pd.DataFrame(records).drop_duplicates(
-        ["SKU_ID", "candidate_gtin"], keep="first"
-    )
+    candidates = pd.DataFrame(records)
+    duplicate_keys = ["SKU_ID", "candidate_gtin"]
+    duplicate_mask = candidates.duplicated(duplicate_keys, keep=False)
+    duplicate_count = int(candidates.duplicated(duplicate_keys, keep="first").sum())
+    if duplicate_count:
+        varying = (
+            candidates.loc[duplicate_mask]
+            .groupby(duplicate_keys, sort=False)
+            .nunique(dropna=False)
+            .gt(1)
+            .any(axis=1)
+        )
+        if varying.any():
+            raise ValueError(
+                "duplicate proxy candidates disagree on score or metadata: "
+                f"{list(varying[varying].index)[:5]}"
+            )
+        candidates = candidates.drop_duplicates(duplicate_keys, keep="first")
     expected = set(truth)
     observed = set(candidates["SKU_ID"])
     if expected != observed:
@@ -265,7 +341,7 @@ def _candidate_frame(
         for sku_id, item_id in truth.items()
     ]
     truth_frame["gtin_status"] = statuses
-    return candidates, truth_frame, np.arange(n_pos)
+    return candidates, truth_frame, duplicate_count
 
 
 def _score_pairs(
@@ -303,6 +379,8 @@ def _assignment_metrics(
     candidates: pd.DataFrame,
     truth: pd.DataFrame,
     threshold: float,
+    *,
+    include_graph_diagnostics: bool = False,
 ) -> dict[str, float | int | str]:
     predicted = choose_assignments(candidates, threshold)
     return prediction_metrics(
@@ -310,6 +388,7 @@ def _assignment_metrics(
         truth[["SKU_ID", "true_item_id"]],
         candidates=candidates,
         threshold=threshold,
+        include_graph_diagnostics=include_graph_diagnostics,
     )
 
 
@@ -345,23 +424,35 @@ def _collapse_stats(
     payload: list[str],
     cfg: dict,
     batch_size: int,
+    *,
+    requested: bool,
 ) -> dict[str, float | int | str]:
     guardrail = cfg["hpo"]["collapse_guardrail"]
-    if not bool(guardrail["enabled"]):
+    if not requested or not bool(guardrail["enabled"]):
         return {
             "collapse_guardrail_enabled": 0,
-            "collapse_status": "disabled",
+            "collapse_status": "not_requested" if not requested else "disabled",
+            "collapse_requested_pairs": int(guardrail["unrelated_pairs"]),
+            "collapse_unrelated_pairs": 0,
         }
+    requested_pairs = int(guardrail["unrelated_pairs"])
     pairs = select_unrelated_pairs(
         df,
         payload,
-        n_pairs=int(guardrail["unrelated_pairs"]),
+        n_pairs=requested_pairs,
         seed=int(guardrail["seed"]),
     )
-    if len(pairs) != int(guardrail["unrelated_pairs"]):
+    if not pairs:
         raise RuntimeError(
             "collapse guardrail could not construct its configured unrelated-pair "
-            f"sample: required={guardrail['unrelated_pairs']} selected={len(pairs)}"
+            f"sample: required={requested_pairs} selected=0"
+        )
+    sample_status = "ok" if len(pairs) == requested_pairs else "insufficient_pairs"
+    if sample_status == "insufficient_pairs":
+        print(
+            "[collapse-guardrail] insufficient unrelated pairs; "
+            f"requested={requested_pairs} selected={len(pairs)}",
+            flush=True,
         )
     pair_array = np.asarray(pairs, dtype=int)
     embeddings = model.encode(
@@ -379,7 +470,8 @@ def _collapse_stats(
     std = float(np.std(scores))
     return {
         "collapse_guardrail_enabled": 1,
-        "collapse_status": "ok",
+        "collapse_status": sample_status,
+        "collapse_requested_pairs": requested_pairs,
         "collapse_unrelated_pairs": int(len(scores)),
         "collapse_median_cosine": median,
         "collapse_p90_cosine": p90,
@@ -395,6 +487,8 @@ def _collapse_penalty(stats: dict, cfg: dict) -> float:
     guardrail = cfg["hpo"]["collapse_guardrail"]
     if not bool(guardrail["enabled"]):
         return 0.0
+    if stats["collapse_status"] == "insufficient_pairs":
+        return float(guardrail["penalty_weight"])
     median_excess = max(
         0.0,
         float(stats["collapse_median_cosine"]) - float(guardrail["median_penalty_start"]),
@@ -424,6 +518,7 @@ def evaluate_calibration_trial(
     structured_weight: float,
     batch_size: int,
     config: dict,
+    include_collapse_guardrail: bool,
 ) -> dict[str, float | int | str]:
     """Evaluate one trained model on a held-out direct-assignment calibration split."""
     if len(pos_pairs) == 0 or len(neg_pairs) == 0:
@@ -439,13 +534,15 @@ def evaluate_calibration_trial(
         structured_weight,
         batch_size,
     )
-    candidates, truth, _ = _candidate_frame(
+    candidates, truth, duplicate_count = _candidate_frame(
         pos_pairs, neg_pairs, df, row_bc, scores
     )
     n_folds = int(config["hpo"]["calibration_folds"])
     fold_map = _fold_ids(truth, n_folds, int(config["hpo"]["collapse_guardrail"]["seed"]))
     thresholds = _thresholds(config)
     fold_rows: list[dict[str, float | int]] = []
+    validation_candidates: list[pd.DataFrame] = []
+    validation_truth: list[pd.DataFrame] = []
     for fold in range(n_folds):
         check_items = {item for item, value in fold_map.items() if value == fold}
         fit_items = set(fold_map) - check_items
@@ -457,6 +554,8 @@ def evaluate_calibration_trial(
             raise ValueError(f"HPO calibration fold {fold} has an empty fit/check side")
         threshold, fit_metrics = _fit_threshold(fit_candidates, fit_truth, thresholds)
         check_metrics = _assignment_metrics(check_candidates, check_truth, threshold)
+        validation_candidates.append(check_candidates)
+        validation_truth.append(check_truth)
         fold_rows.append(
             {
                 "calibration_fold": fold,
@@ -471,9 +570,23 @@ def evaluate_calibration_trial(
             }
         )
     final_threshold = float(np.median([row["calibrated_threshold"] for row in fold_rows]))
-    overall = _assignment_metrics(candidates, truth, final_threshold)
+    validation_candidate_frame = pd.concat(validation_candidates, ignore_index=True)
+    validation_truth_frame = pd.concat(validation_truth, ignore_index=True)
+    overall = _assignment_metrics(
+        validation_candidate_frame,
+        validation_truth_frame,
+        final_threshold,
+        include_graph_diagnostics=True,
+    )
     sensitivity = [
-        (float(threshold), _assignment_metrics(candidates, truth, float(threshold)))
+        (
+            float(threshold),
+            _assignment_metrics(
+                validation_candidate_frame,
+                validation_truth_frame,
+                float(threshold),
+            ),
+        )
         for threshold in thresholds
     ]
     best_rand = max(float(row[1]["rand_index"]) for row in sensitivity)
@@ -481,12 +594,20 @@ def evaluate_calibration_trial(
         float(row[1]["rand_index"]) >= best_rand - float(config["rand_matching"]["plateau_tolerance"])
         for row in sensitivity
     )
-    collapse = _collapse_stats(model, df, payload, config, batch_size)
+    collapse = _collapse_stats(
+        model,
+        df,
+        payload,
+        config,
+        batch_size,
+        requested=include_collapse_guardrail,
+    )
     result: dict[str, float | int | str] = {
         "calibration_proxy_source": "dev_component_safe_split",
         "calibration_positive_pairs": int(len(pos_pairs)),
         "calibration_negative_pairs": int(len(neg_pairs)),
         "calibration_sku_count": int(truth["SKU_ID"].nunique()),
+        "calibration_candidate_duplicate_rows_removed": duplicate_count,
         "calibrated_threshold": final_threshold,
         "calibration_threshold_fold_median": final_threshold,
         "calibration_threshold_fold_min": float(min(row["calibrated_threshold"] for row in fold_rows)),
@@ -524,6 +645,22 @@ def evaluate_calibration_trial(
                 )).to_numpy(int),
                 float(config["rand_matching"]["target_recall"]),
             )
+        ),
+        "calibration_sensitivity_table": json.dumps(
+            [
+                {
+                    "threshold": threshold,
+                    "rand_index": float(metrics["rand_index"]),
+                    "adjusted_rand": float(metrics["adjusted_rand"]),
+                    "precision": float(metrics["pairwise_precision"]),
+                    "recall": float(metrics["pairwise_recall"]),
+                    "over_merge_rate": float(metrics["over_merge_rate"]),
+                    "under_merge_rate": float(metrics["under_merge_rate"]),
+                    "predicted_group_count": int(metrics["predicted_group_count"]),
+                }
+                for threshold, metrics in sensitivity
+            ],
+            sort_keys=True,
         ),
     }
     calibrated_metrics = overall

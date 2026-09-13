@@ -92,27 +92,8 @@ def row_metadata_text(row, primary: str, alias: str | None = None) -> str:
     return ""
 
 # require_keys REMOVED (audit 2026-09-09): zero consumers — the pydantic
-# validation at load (DataConfig/TrainingConfig) already fails
-# loudly on missing keys, with named field errors. This helper duplicated
-# that guarantee and was never called.
-
-
-def _find_project_root() -> Path:
-    """Locate the project from stable markers, never a magic parent offset."""
-    override = os.environ.get("EUROMONITOR_PROJECT_ROOT")
-    if override:
-        root = Path(override).expanduser().resolve()
-        if (root / "config").is_dir() and (root / "pyproject.toml").is_file():
-            return root
-        raise RuntimeError(
-            "EUROMONITOR_PROJECT_ROOT must contain config/ and pyproject.toml: "
-            f"{root}"
-        )
-    source_file = Path(__file__).resolve()
-    for candidate in source_file.parents:
-        if (candidate / "config").is_dir() and (candidate / "pyproject.toml").is_file():
-            return candidate
-    raise RuntimeError(f"Could not locate project root from {source_file}")
+# validation at load (DataConfig/TrainingConfig) already fails loudly with
+# named field errors. The former duplicate helper was never called.
 
 
 def _read_yaml(path: Path) -> dict:

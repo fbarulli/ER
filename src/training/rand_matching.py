@@ -911,6 +911,7 @@ def prediction_metrics(
     *,
     candidates: pd.DataFrame,
     threshold: float,
+    include_graph_diagnostics: bool = True,
 ) -> dict[str, float | int | str]:
     """Return clustering metrics for one assignment population.
 
@@ -967,7 +968,20 @@ def prediction_metrics(
             [float(intersection / true_sizes[true_id])] * int(intersection)
         )
 
-    graph = candidate_graph_diagnostics(candidates, threshold)
+    graph = (
+        candidate_graph_diagnostics(candidates, threshold)
+        if include_graph_diagnostics
+        else {
+            "diagnostic_edge_count": 0,
+            "diagnostic_component_count": 0,
+            "diagnostic_component_size_distribution": "{}",
+            "diagnostic_max_component_size": 0,
+            "diagnostic_score_diameter": 0.0,
+            "diagnostic_bridge_edge_count": 0,
+            "diagnostic_weakest_bridge_score": float("nan"),
+            "plausible_group_count": 0,
+        }
+    )
     metrics = {
         "n": int(len(merged)),
         "rand_index": _safe_ratio(tp + tn, counts["pair_count"]),
