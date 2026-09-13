@@ -1,5 +1,6 @@
 [core]
     no_scm = True
+    site_cache_dir = .dvc-site-cache
     remote = dagshub
 ['remote "dagshub"']
     url = https://dagshub.com/fbarulli/ER.dvc
