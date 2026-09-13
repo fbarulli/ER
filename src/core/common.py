@@ -203,6 +203,12 @@ def _load_config_cached() -> dict:
             "colab.sims_model must be listed in embedding_model_keys: "
             f"{sims_model!r} not in {sorted(embedding_models)}"
         )
+    mixed_profile = merged["colab"]["mixed_mining_profile"]
+    if mixed_profile not in merged["mining_profiles"]:
+        raise SystemExit(
+            "colab.mixed_mining_profile must name a configured mining profile: "
+            f"{mixed_profile!r} not in {sorted(merged['mining_profiles'])}"
+        )
     merged["category_macros"] = vocabulary["category_macros"]
     return merged
 

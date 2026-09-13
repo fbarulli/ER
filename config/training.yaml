@@ -45,7 +45,10 @@ colab:
   hpo_workers: 2
   train_workers: 6
   smoke_workers: 1
-  sims_model: "deberta_v3_base"
+  mixed_train_workers: 1
+  mixed_sims_workers: 1
+  mixed_mining_profile: "masking_only"
+  sims_model: "minilm_l6"
   log_poll_seconds: 2
   probe_timeout_seconds: 600
   probe_retries: 4

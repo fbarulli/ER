@@ -12,10 +12,9 @@ now the src/training/ module chain):
            the T4 does ~1.5-2s/step.
   hpo    — masking-enabled Optuna TPE search. Each trial trains on 50%,
            selects on the dev 25%, and does not read the test 25%.
-  sims   — the deberta zero-shot lane (GPU-only: 3.9s/text on CPU — the
-           CPU lane leaves its column absent by design, see
-           src/training/zero_shot_sims.py). Scores with --models deberta_v3_base
-           against the same canonical fingerprint contract.
+  sims   — the configured zero-shot embedding lane. The current config uses
+           minilm_l6 and scores against the same canonical fingerprint
+           contract as training.
   smoke  — the 1k chain check on GPU (fast verification the remote
            environment reproduces the local results contract).
 
@@ -61,6 +60,7 @@ from core.common import (
     RESULTS,
     TRAINING_RESULTS,
     TRAIN_ROOT,
+    embedding_model_keys,
     sweep_cfg,
     hpo_cfg,
     load_config,
@@ -94,6 +94,10 @@ _HPO_TRIAL_JOBS_DEFAULT = int(hpo_cfg()["n_jobs"])
 _HPO_PERSISTENCE = str(hpo_cfg()["persistence"])
 _TRAIN_WORKERS = _COLAB.train_workers
 _SMOKE_WORKERS = _COLAB.smoke_workers
+_MIXED_TRAIN_WORKERS = _COLAB.mixed_train_workers
+_MIXED_SIMS_WORKERS = _COLAB.mixed_sims_workers
+_MIXED_MINING_PROFILE = _COLAB.mixed_mining_profile
+_MASKING_ENABLED = training_cfg().masking.enabled
 _DVC_WORKERS = _COLAB.dvc_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
@@ -1428,6 +1432,23 @@ def finalize_local_training_run(remote_base: str, workers: int) -> None:
     print("[post-training] DVC and W&B publication verified", flush=True)
 
 
+def finalize_local_mixed_run(remote_base: str) -> None:
+    """Finalize the trained worker and publish both mixed-lane workers."""
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    train_workers = _MIXED_TRAIN_WORKERS
+    total_workers = train_workers + _MIXED_SIMS_WORKERS
+    _post_training_event(run_id, "post_training", "started", workers=total_workers)
+    print("[post-training] finalizing mixed-lane results on local CPU ...", flush=True)
+    _post_training_event(run_id, "mask_effect", "started", workers=train_workers)
+    generate_local_mask_effect(remote_base, train_workers)
+    _post_training_event(run_id, "mask_effect", "completed", workers=train_workers)
+    generate_local_training_reports(remote_base, train_workers)
+    publish_local_training_results(remote_base, total_workers)
+    publish_local_wandb_artifacts(remote_base, total_workers)
+    _post_training_event(run_id, "post_training", "completed", workers=total_workers)
+    print("[post-training] mixed-lane DVC and W&B publication verified", flush=True)
+
+
 def _publish_local_hpo_model_snapshot(generation: Path, model_dir: Path) -> None:
     """Publish one HPO model snapshot through the DVC publisher lane."""
     from training.hpo_persistence import best_effort_dvc_publish, build_snapshot
@@ -2104,8 +2125,8 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
     return run_id
 
 
-def run_sims_deberta() -> None:
-    """The configured zero-shot model lane on the VM."""
+def run_sims() -> None:
+    """Run the configured zero-shot embedding model lane on the VM."""
     print(f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
     script = _BOOTSTRAP + f"""
 import subprocess, sys
@@ -2114,7 +2135,135 @@ rc = subprocess.run([sys.executable, "{REMOTE_ROOT}/src/training/zero_shot_sims.
 if rc != 0:
     raise RuntimeError(f"zero-shot similarity subprocess failed (rc={{rc}})")
 """
-    run_colab_exec_stream(SESSION, script, timeout=2 * 3600, log_name="sims_deberta")
+    run_colab_exec_stream(SESSION, script, timeout=2 * 3600, log_name="sims")
+
+
+def run_mixed(
+    frac: float,
+    epochs: int,
+    *,
+    model: str | None = None,
+) -> tuple[str, int]:
+    """Run one masked trainer and one zero-shot worker on the same VM."""
+    model_key = model or str(training_cfg().training.base_model)
+    if model_key not in set(embedding_model_keys()):
+        raise ValueError(
+            "mixed lane requires an embedding model registry key: "
+            f"{model_key!r}"
+        )
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    remote_base = f"{REMOTE_ROOT}/results/concurrent_train_mixed_{stamp}"
+    train_args = [
+        "-u",
+        "-m",
+        "training.train",
+        "--split",
+        "holdout",
+        "--loss",
+        "contrastive",
+        "--train-frac",
+        str(frac),
+        "--epochs",
+        str(epochs),
+        "--model",
+        model_key,
+        "--no-plot",
+    ]
+    sims_args = [
+        "-u",
+        "src/training/zero_shot_sims.py",
+        "--models",
+        model_key,
+    ]
+    mixed_workers = _MIXED_TRAIN_WORKERS + _MIXED_SIMS_WORKERS
+    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
+import concurrent.futures, json, os, pathlib, shutil, subprocess, sys
+from core.common import F
+
+root = pathlib.Path({REMOTE_ROOT!r})
+base = pathlib.Path({remote_base!r})
+base.mkdir(parents=True, exist_ok=False)
+worker_specs = [
+    ("train", {train_args!r}, {_MIXED_MINING_PROFILE!r}, {_MASKING_ENABLED!r}),
+    ("zero_shot", {sims_args!r}, {_MIXED_MINING_PROFILE!r}, False),
+]
+
+def run_worker(number, label, command_args, profile, masking_applied):
+    out = base / f"worker_{{number}}"
+    out.mkdir()
+    for name in (F["canonical_records"], F["gate_results"]):
+        source = root / "results" / name.name
+        if not source.is_file():
+            raise FileNotFoundError(f"worker input missing: {{source}}")
+        shutil.copy2(source, out / name.name)
+    log_path = out / ("training.log" if label == "train" else "zero_shot.log")
+    (out / "worker_spec.json").write_text(json.dumps({{
+        "label": label,
+        "model_key": {model_key!r},
+        "mining_profile": profile,
+        "masking_requested": {_MASKING_ENABLED!r},
+        "masking_applied": masking_applied,
+        "masking_note": (
+            "training augmentation is applied by training.train"
+            if masking_applied else
+            "zero-shot scoring has no training augmentation stage"
+        ),
+    }}, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+    env = {{
+        **os.environ,
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONPATH": str(root / "src"),
+        "EUROMONITOR_RESULTS_DIR": str(out),
+        "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
+        "EUROMONITOR_RUN_ID": f"{{base.name}}-{{label}}",
+        "EUROMONITOR_MINING_PROFILE": profile,
+        "EUROMONITOR_REMOTE_TRAINING": "1",
+    }}
+    command = [sys.executable, *command_args]
+    print(f"[mixed] starting {{label}}: {{' '.join(command)}}", flush=True)
+    with log_path.open("w", encoding="utf-8", buffering=1) as log:
+        proc = subprocess.Popen(
+            command,
+            cwd=root,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(f"[{{label}}] {{line}}", end="", flush=True)
+            log.write(line)
+    rc = proc.wait()
+    (out / "worker.status").write_text(f"{{rc}}\\n", encoding="utf-8")
+    if rc:
+        raise RuntimeError(f"mixed worker {{label}} failed (rc={{rc}}); log={{log_path}}")
+    return label
+
+with concurrent.futures.ThreadPoolExecutor(max_workers={mixed_workers}) as pool:
+    futures = [
+        pool.submit(run_worker, number, label, command, profile, masking_applied)
+        for number, (label, command, profile, masking_applied) in enumerate(worker_specs, start=1)
+    ]
+    completed = [future.result() for future in futures]
+print(json.dumps({{"base": str(base), "completed": completed}}), flush=True)
+"""
+    print(
+        f"[run] mixed lane: {_MIXED_TRAIN_WORKERS} masked trainer + "
+        f"{_MIXED_SIMS_WORKERS} zero-shot worker on {model_key} ...",
+        flush=True,
+    )
+    run_colab_exec_stream(
+        SESSION,
+        script,
+        timeout=_WORKER_TIMEOUT_SECONDS,
+        log_name="mixed",
+        training_output=True,
+    )
+    download_verified_training_results(remote_base, mixed_workers)
+    print("[mixed] both workers completed; post-training finalization deferred", flush=True)
+    return remote_base, 2
 
 
 def _list_remote(pattern_dir: str) -> list[str]:
@@ -2359,7 +2508,7 @@ def main() -> None:
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", required=True,
-                    choices=["train", "hpo", "sims", "smoke", "stop"],
+                    choices=["train", "hpo", "sims", "mixed", "smoke", "stop"],
                     help="what to run on the VM")
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
@@ -2450,6 +2599,13 @@ def main() -> None:
             f"dvc_transfer_jobs={dvc_jobs}",
             flush=True,
         )
+    elif args.what == "mixed":
+        print(
+            f"[workers] lane=mixed train_workers={_MIXED_TRAIN_WORKERS} "
+            f"zero_shot_workers={_MIXED_SIMS_WORKERS} "
+            f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
+            flush=True,
+        )
 
     if args.what == "stop":
         stop()
@@ -2458,6 +2614,7 @@ def main() -> None:
     start_live_log()
     check_colab_cli()
     local_training_run: tuple[str, int] | None = None
+    local_mixed_run: tuple[str, int] | None = None
     local_hpo_run: str | None = None
     publication_complete = False
 
@@ -2465,7 +2622,7 @@ def main() -> None:
         ensure_session()
         prepare_remote_layout()
         install_deps()
-        if args.what in {"train", "smoke"}:
+        if args.what in {"train", "smoke", "mixed"}:
             required_models = [
                 args.model or str(training_cfg().training.base_model)
             ]
@@ -2485,9 +2642,11 @@ def main() -> None:
             verify_training_inputs()
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
         # (run_train was unconditional) — hours of unintended GPU quota
-        # for a lane that only needs the deberta scoring.
+        # for a lane that only needs the configured zero-shot scoring.
         if args.what == "sims":
-            run_sims_deberta()
+            run_sims()
+        elif args.what == "mixed":
+            local_mixed_run = run_mixed(args.train_frac, args.epochs, model=args.model)
         elif args.what == "smoke":
             local_training_run = run_train(
                 args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE,
@@ -2511,6 +2670,9 @@ def main() -> None:
         if local_training_run is not None:
             remote_base, workers = local_training_run
             finalize_local_training_run(remote_base, workers)
+        if local_mixed_run is not None:
+            remote_base, _ = local_mixed_run
+            finalize_local_mixed_run(remote_base)
         if local_hpo_run is not None:
             print("[post-training] publishing HPO snapshots on local CPU ...", flush=True)
             publish_local_hpo_results(local_hpo_run, args.hpo_persistence)

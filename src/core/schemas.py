@@ -982,6 +982,9 @@ class ColabSpec(BaseModel):
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)
     smoke_workers: int = Field(ge=1, le=3)
+    mixed_train_workers: Literal[1]
+    mixed_sims_workers: Literal[1]
+    mixed_mining_profile: str = Field(min_length=1)
     sims_model: str = Field(min_length=1)
     log_poll_seconds: int = Field(ge=1, le=30)
     probe_timeout_seconds: int = Field(ge=60, le=1800)
