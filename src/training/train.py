@@ -70,17 +70,27 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
 
     from training.hpo_metrics import CALIBRATION_AGGREGATE_FIELDS
 
+    calibration_rows = [
+        row for row in ok_rows
+        if row.get("calibration_status", "available") == "available"
+    ]
     missing_fields = sorted(
         {
             field
             for field in CALIBRATION_AGGREGATE_FIELDS
-            if any(field not in row for row in ok_rows)
+            if any(field not in row for row in calibration_rows)
         }
     )
-    if missing_fields:
+    if missing_fields and calibration_rows:
         raise ValueError(
             "calibration metric contract missing from fold rows: "
             f"{missing_fields}"
+        )
+    if not calibration_rows:
+        print(
+            "[calibration] unavailable for all completed folds; "
+            "07-series calibration aggregates will be NaN",
+            flush=True,
         )
 
     # ---- 07c: one aggregate row per payload variant ----

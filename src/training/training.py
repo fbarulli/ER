@@ -2523,19 +2523,6 @@ def train_one_config(
                     }
                 )
                 continue
-            if len(calibration_pos) == 0 or len(calibration_neg) == 0:
-                rows.append(
-                    {
-                        "fold": fold_i,
-                        "status": "skipped",
-                        "reason": (
-                            "empty calibration split — Rand threshold calibration "
-                            f"needs pos={len(calibration_pos)}, neg={len(calibration_neg)}"
-                        ),
-                    }
-                )
-                continue
-
             train_all = train_pos
             n_gate_kept = len(train_pos)  # gate rows actually in train_all
             if train_frac is not None and train_frac < 1.0 and len(train_all):
@@ -3534,21 +3521,47 @@ def train_one_config(
             # Every lane uses the same component-safe calibration/Rand
             # computation. The holdout population below remains isolated for
             # final reporting and is never used by HPO selection.
-            from training.hpo_metrics import evaluate_calibration_trial
-
-            calibration_metrics = evaluate_calibration_trial(
-                model=model,
-                df=df,
-                payload=payload,
-                structured_features=structured_features,
-                pos_pairs=calibration_pos,
-                neg_pairs=calibration_neg,
-                row_bc=row_bc,
-                structured_weight=structured_feature_weight,
-                batch_size=runtime("batch_size_eval"),
-                config=calibration_config,
-                include_collapse_guardrail=selection_mode,
+            from training.hpo_metrics import (
+                evaluate_calibration_trial,
+                unavailable_calibration_metrics,
             )
+
+            calibration_metrics: dict[str, object]
+            if len(calibration_pos) == 0 or len(calibration_neg) == 0:
+                calibration_metrics = unavailable_calibration_metrics(
+                    reason=(
+                        "empty calibration split — Rand threshold calibration "
+                        f"needs pos={len(calibration_pos)}, neg={len(calibration_neg)}"
+                    ),
+                    positive_pairs=len(calibration_pos),
+                    negative_pairs=len(calibration_neg),
+                )
+            else:
+                try:
+                    calibration_metrics = evaluate_calibration_trial(
+                        model=model,
+                        df=df,
+                        payload=payload,
+                        structured_features=structured_features,
+                        pos_pairs=calibration_pos,
+                        neg_pairs=calibration_neg,
+                        row_bc=row_bc,
+                        structured_weight=structured_feature_weight,
+                        batch_size=runtime("batch_size_eval"),
+                        config=calibration_config,
+                        include_collapse_guardrail=selection_mode,
+                    )
+                except Exception as exc:
+                    calibration_metrics = unavailable_calibration_metrics(
+                        reason=f"calibration evaluator failed: {type(exc).__name__}: {exc}",
+                        positive_pairs=len(calibration_pos),
+                        negative_pairs=len(calibration_neg),
+                    )
+                    print(
+                        f"  [calibration] fold {fold_i}: unavailable; "
+                        f"{calibration_metrics['calibration_reason']}",
+                        flush=True,
+                    )
 
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────
             # Holdout HPO/grid folds STOP HERE: the config is ranked on
@@ -3572,7 +3585,11 @@ def train_one_config(
                 rows.append(
                     {
                         "fold": fold_i,
-                        "status": "ok",
+                        "status": (
+                            "ok"
+                            if calibration_metrics.get("calibration_status") == "available"
+                            else "calibration_unavailable"
+                        ),
                         "test_eval": "skipped_selection_mode",
                         "objective": HPO_OBJECTIVE_HOLDOUT,
                         "best_dev_ap": best_dev_ap,

@@ -37,6 +37,8 @@ class CalibrationMetricRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     calibration_proxy_source: str
+    calibration_status: str
+    calibration_reason: str | None = None
     calibration_positive_pairs: int
     calibration_negative_pairs: int
     calibration_sku_count: int
@@ -132,6 +134,21 @@ def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
         if np.isfinite(value):
             metrics[key] = value
     return metrics
+
+
+def unavailable_calibration_metrics(
+    *,
+    reason: str,
+    positive_pairs: int,
+    negative_pairs: int,
+) -> dict[str, str | int]:
+    """Record an unavailable calibration surface without dropping the fold."""
+    return {
+        "calibration_status": "unavailable",
+        "calibration_reason": reason,
+        "calibration_positive_pairs": int(positive_pairs),
+        "calibration_negative_pairs": int(negative_pairs),
+    }
 
 
 @lru_cache(maxsize=1)
@@ -606,6 +623,7 @@ def evaluate_calibration_trial(
     )
     result: dict[str, float | int | str] = {
         "calibration_proxy_source": "dev_component_safe_split",
+        "calibration_status": "available",
         "calibration_positive_pairs": int(len(pos_pairs)),
         "calibration_negative_pairs": int(len(neg_pairs)),
         "calibration_sku_count": int(truth["SKU_ID"].nunique()),
