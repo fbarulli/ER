@@ -25,6 +25,7 @@ from training.rand_matching import (
     choose_assignments,
     gtin_status,
     gtin_metrics,
+    _fit_fold_threshold,
     prediction_metrics,
     _threshold_at_recall,
     _youden_threshold,
@@ -331,19 +332,12 @@ def _fit_threshold(
     truth: pd.DataFrame,
     thresholds: np.ndarray,
 ) -> tuple[float, dict[str, float | int | str]]:
-    rows = [
-        (float(threshold), _assignment_metrics(candidates, truth, float(threshold)))
-        for threshold in thresholds
-    ]
-    threshold, metrics = max(
-        rows,
-        key=lambda item: (
-            float(item[1]["rand_index"]),
-            float(item[1]["adjusted_rand"]),
-            -item[0],
-        ),
+    threshold, _, _ = _fit_fold_threshold(
+        candidates,
+        truth,
+        thresholds,
     )
-    return threshold, metrics
+    return threshold, _assignment_metrics(candidates, truth, threshold)
 
 
 def _fold_ids(truth: pd.DataFrame, n_folds: int, seed: int) -> dict[str, int]:

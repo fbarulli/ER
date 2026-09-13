@@ -1375,6 +1375,7 @@ def _fit_fold_threshold(
             fit_truth,
             candidates=fit_candidates,
             threshold=t,
+            include_graph_diagnostics=False,
         )
         fit_rows.append(
             {
