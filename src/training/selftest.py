@@ -153,7 +153,12 @@ def oracle_second04_manifest_contract() -> None:
 
 
 def oracle_calibration_fold_collapse_contract() -> None:
-    from training.hpo_metrics import CalibrationFoldMetricRow
+    from pydantic import ValidationError
+
+    from training.hpo_metrics import (
+        CalibrationFoldMetricRow,
+        CalibrationSensitivityRow,
+    )
 
     row = CalibrationFoldMetricRow(
         calibration_fold=0,
@@ -176,6 +181,30 @@ def oracle_calibration_fold_collapse_contract() -> None:
         "calibration fold reports collapse availability and health",
         row.collapse_diagnostics_available == 1 and row.collapse_healthy == 0,
     )
+    sensitivity = CalibrationSensitivityRow(
+        threshold=0.7,
+        gtin_status="both_missing",
+        reconciliation_scope="final_assignment_gtin_and_attribute_gates",
+        rand_index=0.8,
+        adjusted_rand=0.6,
+        precision=0.8,
+        recall=0.7,
+        over_merge_rate=0.1,
+        under_merge_rate=0.2,
+        predicted_group_count=4,
+    )
+    check(
+        "GTIN-stratified sensitivity row accepts configured status",
+        sensitivity.gtin_status == "both_missing",
+    )
+    try:
+        CalibrationSensitivityRow.model_validate(
+            sensitivity.model_dump() | {"gtin_status": "unknown"}
+        )
+    except ValidationError:
+        check("GTIN-stratified sensitivity rejects unknown status", True)
+    else:
+        check("GTIN-stratified sensitivity rejects unknown status", False)
 
 
 def oracle_cleaning() -> None:

@@ -12,7 +12,7 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from core.attribute_conflicts import sku_attribute_info
 from core.common import canonical_records_frame, row_metadata_text
@@ -77,6 +77,7 @@ class CalibrationMetricRow(BaseModel):
     calibration_recall_at_threshold: float
     calibration_gtin_strata: int
     calibration_sensitivity_table: str
+    calibration_sensitivity_by_gtin_status: str
     calibration_fold_collapse: str
     diagnostic_component_size_distribution: str
     diagnostic_edge_count: int
@@ -149,11 +150,12 @@ class CalibrationFoldMetricRow(BaseModel):
 
 
 class CalibrationSensitivityRow(BaseModel):
-    """Strict contract for one held-out threshold sensitivity point."""
+    """Strict contract for one held-out threshold/status sensitivity point."""
 
     model_config = ConfigDict(extra="forbid")
 
     threshold: float
+    gtin_status: str = Field(min_length=1)
     reconciliation_scope: str
     rand_index: float
     adjusted_rand: float
@@ -162,6 +164,16 @@ class CalibrationSensitivityRow(BaseModel):
     over_merge_rate: float
     under_merge_rate: float
     predicted_group_count: int
+
+    @field_validator("gtin_status")
+    @classmethod
+    def _known_gtin_status(cls, value: str) -> str:
+        if value != "ALL" and value not in GTIN_STATUSES:
+            raise ValueError(
+                f"unknown GTIN sensitivity status {value!r}; "
+                f"expected ALL or {GTIN_STATUSES}"
+            )
+        return value
 
 
 # One reporting contract is shared by ordinary train, fixed-grid HPO, and
@@ -377,6 +389,41 @@ def _assignment_metrics(
         threshold=threshold,
         include_graph_diagnostics=include_graph_diagnostics,
     )
+
+
+def _stratified_sensitivity_rows(
+    candidates: pd.DataFrame,
+    truth: pd.DataFrame,
+    threshold: float,
+    reconciliation_scope: str,
+    prediction: pd.DataFrame,
+) -> list[CalibrationSensitivityRow]:
+    """Measure one threshold through the same assignment/gate path per GTIN stratum."""
+    rows: list[CalibrationSensitivityRow] = []
+    for metrics in gtin_metrics(
+        prediction,
+        truth,
+        "calibration_sensitivity",
+        threshold,
+        candidates,
+    ):
+        rows.append(
+            CalibrationSensitivityRow.model_validate(
+                {
+                    "threshold": float(threshold),
+                    "gtin_status": str(metrics["gtin_status"]),
+                    "reconciliation_scope": reconciliation_scope,
+                    "rand_index": float(metrics["rand_index"]),
+                    "adjusted_rand": float(metrics["adjusted_rand"]),
+                    "precision": float(metrics["pairwise_precision"]),
+                    "recall": float(metrics["pairwise_recall"]),
+                    "over_merge_rate": float(metrics["over_merge_rate"]),
+                    "under_merge_rate": float(metrics["under_merge_rate"]),
+                    "predicted_group_count": int(metrics["predicted_group_count"]),
+                }
+            )
+        )
+    return rows
 
 
 def _fit_threshold(
@@ -646,13 +693,19 @@ def evaluate_calibration_trial(
     validation_candidate_frame = pd.concat(validation_candidates, ignore_index=True)
     validation_truth_frame = pd.concat(validation_truth, ignore_index=True)
     sensitivity: list[CalibrationSensitivityRow] = []
+    stratified_sensitivity: list[CalibrationSensitivityRow] = []
     sensitivity_metrics: dict[float, dict[str, float | int | str]] = {}
     for threshold in thresholds:
         threshold_value = float(threshold)
-        metrics = _assignment_metrics(
+        prediction = choose_assignments(
             validation_candidate_frame,
-            validation_truth_frame,
             threshold_value,
+        )
+        metrics = prediction_metrics(
+            prediction,
+            validation_truth_frame[["SKU_ID", "true_item_id"]],
+            candidates=validation_candidate_frame,
+            threshold=threshold_value,
             include_graph_diagnostics=False,
         )
         sensitivity_metrics[threshold_value] = metrics
@@ -660,6 +713,7 @@ def evaluate_calibration_trial(
             CalibrationSensitivityRow.model_validate(
                 {
                     "threshold": threshold_value,
+                    "gtin_status": "ALL",
                     "reconciliation_scope": reconciliation_scope,
                     "rand_index": float(metrics["rand_index"]),
                     "adjusted_rand": float(metrics["adjusted_rand"]),
@@ -669,6 +723,15 @@ def evaluate_calibration_trial(
                     "under_merge_rate": float(metrics["under_merge_rate"]),
                     "predicted_group_count": int(metrics["predicted_group_count"]),
                 }
+            )
+        )
+        stratified_sensitivity.extend(
+            _stratified_sensitivity_rows(
+                validation_candidate_frame,
+                validation_truth_frame,
+                threshold_value,
+                reconciliation_scope,
+                prediction,
             )
         )
     overall = dict(
@@ -753,6 +816,10 @@ def evaluate_calibration_trial(
                 }
                 for row in sensitivity
             ],
+            sort_keys=True,
+        ),
+        "calibration_sensitivity_by_gtin_status": json.dumps(
+            [row.model_dump() for row in stratified_sensitivity],
             sort_keys=True,
         ),
         "calibration_fold_collapse": json.dumps(
