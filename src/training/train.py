@@ -750,14 +750,19 @@ def _main_inner(_mlf, _wandb) -> None:
         print(f"[cv] {args.folds} component folds", flush=True)
 
     # ── HARD POSITIVES  ─────────────────────────
-    # Two hard-positive sources, both wired and loud:
-    #   (a) volume-verified cross-country pairs (second04 manifest when
-    #       present — loud notice when absent, see src/core/volume_verified.py);
-    #   (b) the pipeline's proceed-pairs (gate-confirmed same volume+pack) —
-    #       these ARE train_all's positives by construction.
+    # The manifest is regenerated from the frozen deduplicated dataset before
+    # the existing volume verifier consumes it, so this lane cannot silently
+    # train with zero volume-verified cross-country positives.
+    from training.build_second04_pairs import write_manifest
     from core.volume_verified import volume_verified_cross_country
 
-    hp_pairs = volume_verified_cross_country(df)
+    hard_positives_enabled = bool(training_cfg().training.hard_positives)
+    if hard_positives_enabled:
+        write_manifest(Path(F["second04_pairs_positive"]))
+        hp_pairs = volume_verified_cross_country(df)
+    else:
+        hp_pairs = np.empty((0, 2), dtype=int)
+        print("[hard-positives] disabled by training.hard_positives", flush=True)
     if len(hp_pairs):
         print(
             f"[hard-positives] volume-verified cross-country: {len(hp_pairs):,} "
@@ -964,7 +969,7 @@ def _main_inner(_mlf, _wandb) -> None:
         model_id=args.model,
         # hard positives ride in the data tuple (position 5, set above);
         # hard negatives ride in neg_pairs — ONE channel each, no shadow copies
-        use_hp=len(hp_pairs) > 0,
+        use_hp=hard_positives_enabled and len(hp_pairs) > 0,
         band=band,
         data=data,
         seed=SEED,

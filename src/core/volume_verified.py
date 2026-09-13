@@ -9,6 +9,7 @@ import pandas as pd
 
 from core.common import F, canonical_volume
 from core.manifest import count_drop
+from core.schemas import check_cross_country_pair_frame
 
 
 def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
@@ -18,40 +19,42 @@ def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
     country, same physical volume — hard positives by construction.
     Returns (N, 2) row-index pairs into df.
     """
-    # the second04 cross-country manifest is repo-side history; TRAIN_GPU
-    # runs without it (the lane's hard-positive signal is the pipeline's
-    # proceed-pairs). Missing manifest -> zero pairs, not a crash — but
-    # LOUDLY: a "hard_positives=on" run silently training on zero hard
-    # positives is a config the operator thinks they have and don't.
-    # AUDIT FIX (round 2 F13, round 3): the name reads the SSOT files map
-    # (config/paths.yaml files.second04_pairs_positive) via F — was an inline
-    # literal, a second declaration the config could not steer.
+    # The name reads the SSOT files map (config/paths.yaml
+    # files.second04_pairs_positive). Training materializes this manifest
+    # immediately before calling this consumer; a missing file is therefore
+    # an incomplete data-prep stage, not an empty training population.
     pairs_csv = F["second04_pairs_positive"]
     if not pairs_csv.exists():
-        print(
-            f"[volume_verified] {F['second04_pairs_positive']} absent — "
-            "hard-positive lane runs EMPTY (0 cross-country gold pairs). "
-            "This is expected for the standalone lane; not an error.",
-            flush=True,
+        raise FileNotFoundError(
+            "volume-verified manifest is not materialized: "
+            f"{pairs_csv}. Run python -m training.build_second04_pairs first."
         )
-        return np.empty((0, 2), dtype=int)
-    manifest = pd.read_csv(pairs_csv, dtype={"sku_id_a": str, "sku_id_b": str})
-    cross_country = manifest[manifest["cross_country"]]
-    cross_country_drop = count_drop(
-        len(manifest), len(cross_country), "volume_verified_not_cross_country"
+    manifest = pd.read_csv(
+        pairs_csv,
+        dtype={
+            "sku_id_a": "string",
+            "sku_id_b": "string",
+            "gtin": "string",
+            "country_a": "string",
+            "country_b": "string",
+        },
     )
-    print(
-        f"[volume_verified] {cross_country_drop['reason']}: "
-        f"{cross_country_drop['dropped']:,} removed "
-        f"({cross_country_drop['before']:,} -> {cross_country_drop['after']:,})",
-        flush=True,
-    )
-    manifest = cross_country
+    check_cross_country_pair_frame(manifest)
 
     pid_to_idx = {str(pid): i for i, pid in enumerate(df["product_id"].astype(str))}
     a_idx = manifest["sku_id_a"].map(pid_to_idx)
     b_idx = manifest["sku_id_b"].map(pid_to_idx)
     ok = a_idx.notna() & b_idx.notna()
+    resolution_drop = count_drop(
+        len(manifest), int(ok.sum()), "volume_verified_unresolved_manifest_ids"
+    )
+    if resolution_drop["dropped"]:
+        print(
+            f"[volume_verified] {resolution_drop['reason']}: "
+            f"{resolution_drop['dropped']:,} removed "
+            f"({resolution_drop['before']:,} -> {resolution_drop['after']:,})",
+            flush=True,
+        )
     # AUDIT 2026-09-09: np.array(list(zip(...))) of an EMPTY selection is
     # shape (0,) not (0, 2) — pairs[:, 0] below then raised IndexError. A
     # manifest with zero resolvable ids (or zero cross-country rows) must

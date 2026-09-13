@@ -85,6 +85,99 @@ def oracle_gtin() -> None:
     )
 
 
+def oracle_second04_manifest_contract() -> None:
+    from pydantic import ValidationError
+
+    from core.schemas import (
+        CROSS_COUNTRY_PAIR_COLUMNS,
+        check_cross_country_pair_frame,
+    )
+
+    valid = pd.DataFrame(
+        [["sku-a", "sku-b", True, "4006381333931", "DE", "FR"]],
+        columns=CROSS_COUNTRY_PAIR_COLUMNS,
+    )
+    check_cross_country_pair_frame(valid)
+    check("second04 valid frame passes the shared contract", True)
+    for label, changes in (
+        ("rejects self-pair", {"sku_id_b": "sku-a"}),
+        ("rejects same-country pair", {"country_b": "DE"}),
+        ("rejects invalid GTIN", {"gtin": "4006381333930"}),
+    ):
+        bad = valid.copy()
+        for column, value in changes.items():
+            bad.loc[0, column] = value
+        try:
+            check_cross_country_pair_frame(bad)
+        except (ValidationError, ValueError):
+            check(label, True)
+        else:
+            check(label, False)
+    extra = valid.assign(unexpected="must fail")
+    try:
+        check_cross_country_pair_frame(extra)
+    except ValueError:
+        check("second04 rejects unexpected columns", True)
+    else:
+        check("second04 rejects unexpected columns", False)
+
+    from unittest.mock import patch
+
+    from core.volume_verified import volume_verified_cross_country
+
+    with tempfile.TemporaryDirectory() as directory:
+        manifest_path = Path(directory) / "second04_pairs_positive.csv"
+        pd.DataFrame(
+            [
+                ["sku-a", "sku-b", True, "4006381333931", "DE", "FR"],
+                ["sku-a", "sku-c", True, "4006381333931", "DE", "ES"],
+            ],
+            columns=CROSS_COUNTRY_PAIR_COLUMNS,
+        ).to_csv(manifest_path, index=False)
+        source = pd.DataFrame(
+            {
+                "product_id": ["sku-a", "sku-b"],
+                "title": ["Water 500ml", "Eau 500ml"],
+            }
+        )
+        with patch(
+            "core.volume_verified.F",
+            {"second04_pairs_positive": manifest_path},
+        ):
+            pairs = volume_verified_cross_country(source)
+        check(
+            "volume verifier accounts for unresolved manifest IDs",
+            pairs.tolist() == [[0, 1]],
+            f"got {pairs.tolist()}",
+        )
+
+
+def oracle_calibration_fold_collapse_contract() -> None:
+    from training.hpo_metrics import CalibrationFoldMetricRow
+
+    row = CalibrationFoldMetricRow(
+        calibration_fold=0,
+        calibrated_threshold=0.7,
+        fit_rand_index=0.9,
+        check_rand_index=0.8,
+        check_adjusted_rand=0.6,
+        check_group_precision=0.8,
+        check_group_recall=0.7,
+        check_over_merge_rate=0.1,
+        check_under_merge_rate=0.2,
+        reconciliation_scope="final_assignment_gtin_and_attribute_gates",
+        collapse_status="ok",
+        collapse_diagnostics_available=1,
+        collapse_healthy=0,
+        collapse_penalty=0.1,
+        fit_rand_index_minus_collapse_penalty=0.8,
+    )
+    check(
+        "calibration fold reports collapse availability and health",
+        row.collapse_diagnostics_available == 1 and row.collapse_healthy == 0,
+    )
+
+
 def oracle_cleaning() -> None:
     from pipeline import (
         MODEL_PAYLOAD_SOFT_STOP,
@@ -1149,7 +1242,7 @@ def oracle_round3_pins() -> None:
     # ── F13 pin: the second04 manifest name is SSOT-side
     check(
         "files.second04_pairs_positive declared in the files map",
-        F.get("second04_pairs_positive") == "second04_pairs_positive.csv",
+        Path(F["second04_pairs_positive"]).name == "second04_pairs_positive.csv",
         str(F.get("second04_pairs_positive")),
     )
 
@@ -1238,6 +1331,13 @@ def oracle_schemas() -> None:
             "n_empty_sku_texts": 0, "n_empty_canon_texts": 0, "n_canonicals": 1,
             "n_pos_gate_rows": 1, "n_neg_same_canonical_dropped": 0,
             "n_neg_gate_rows": 0, "n_neg_resolved": 0,
+            "n_neg_hard_no_band": 0, "n_neg_forward_resolved": 0,
+            "n_neg_reverse_resolved": 0,
+            "n_neg_forward_source_unresolved": 0,
+            "n_neg_forward_target_unresolved": 0,
+            "n_neg_reverse_source_unresolved": 0,
+            "n_neg_reverse_target_unresolved": 0,
+            "n_neg_resolution_dropped": 0,
             "n_neg_dropped": 0,
         },
     )
@@ -1576,6 +1676,10 @@ def oracle_manifest() -> None:
 def main() -> None:
     print("== 1. GS1 checksum ==")
     oracle_gtin()
+    print("== 1b. second04 manifest contract ==")
+    oracle_second04_manifest_contract()
+    print("== 1c. calibration fold collapse contract ==")
+    oracle_calibration_fold_collapse_contract()
     print("== 2. cleaning / soft-stop ==")
     oracle_cleaning()
     print("== 3. number-token reference ==")

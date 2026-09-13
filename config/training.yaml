@@ -146,6 +146,7 @@ rand_matching:
     - "rand_index"
     - "fewest_unmatched_skus"
     - "lowest_threshold"
+  threshold_reconciliation_scope: "final_assignment_gtin_and_attribute_gates"
   threshold_min_fold_support: 3
   calibration_proxy_source: "dev_component_safe_split"
   plateau_tolerance: 0.005
@@ -181,9 +182,8 @@ training:
   # mnrl = MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
   loss: "contrastive"
   contrastive_margin: 0.2     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
-  hard_positives: true        # volume-verified cross-country pairs join train
-                              # when the second04 manifest exists (absent ->
-                              # loud notice, lane runs gate-only)
+  hard_positives: true        # generate volume-verified cross-country pairs
+                              # and join them to the training positives
   epochs: 10
   lr: 0.00002
   warmup_ratio: 0.05

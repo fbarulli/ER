@@ -1697,7 +1697,7 @@ def run_data_prep() -> None:
     print("[run] dedupe + reference-verify + data_prep on the VM ...")
     script = _BOOTSTRAP + f"""
 import subprocess, sys
-for step in ("src/training/dedupe.py", "src/training/build_reference.py --verify", "src/training/data_prep.py"):
+for step in ("src/training/dedupe.py", "src/training/build_second04_pairs.py", "src/training/build_reference.py --verify", "src/training/data_prep.py", "src/training/labeled_pairs.py"):
     print("== " + step, flush=True)
     rc = subprocess.run([sys.executable, "{REMOTE_ROOT}/" + step.split()[0]] + step.split()[1:]).returncode
     if rc != 0:

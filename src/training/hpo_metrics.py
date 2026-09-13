@@ -8,10 +8,11 @@ connected components for submission, or pairwise AUC as its objective.
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.attribute_conflicts import sku_attribute_info
 from core.common import canonical_records_frame, row_metadata_text
@@ -47,6 +48,7 @@ class CalibrationMetricRow(BaseModel):
     calibration_candidate_duplicate_rows_removed: int
     calibrated_threshold: float
     calibration_threshold_tie_break: str | None = None
+    calibration_reconciliation_scope: str
     calibration_threshold_fold_count: int
     calibration_threshold_support_count: int
     calibration_threshold_support_minimum: int
@@ -75,6 +77,7 @@ class CalibrationMetricRow(BaseModel):
     calibration_recall_at_threshold: float
     calibration_gtin_strata: int
     calibration_sensitivity_table: str
+    calibration_fold_collapse: str
     diagnostic_component_size_distribution: str
     diagnostic_edge_count: int
     plausible_group_count: int
@@ -113,6 +116,8 @@ class CalibrationMetricRow(BaseModel):
     collapse_embedding_norm_std: float | None = None
     collapse_median_flag: int | None = None
     collapse_p90_flag: int | None = None
+    collapse_diagnostics_available: int | None = None
+    collapse_healthy: int | None = None
     collapse_penalty: float | None = None
 
 
@@ -123,6 +128,7 @@ class CalibrationFoldMetricRow(BaseModel):
 
     calibration_fold: int
     calibrated_threshold: float
+    reconciliation_scope: str
     fit_rand_index: float
     check_rand_index: float
     check_adjusted_rand: float
@@ -130,6 +136,16 @@ class CalibrationFoldMetricRow(BaseModel):
     check_group_recall: float
     check_over_merge_rate: float
     check_under_merge_rate: float
+    collapse_status: Literal[
+        "not_requested", "disabled", "unavailable", "ok", "insufficient_pairs"
+    ]
+    collapse_diagnostics_available: int = Field(ge=0, le=1)
+    collapse_healthy: int = Field(ge=0, le=1)
+    collapse_median_cosine: float | None = None
+    collapse_p90_cosine: float | None = None
+    collapse_cosine_std: float | None = None
+    collapse_penalty: float = Field(ge=0.0)
+    fit_rand_index_minus_collapse_penalty: float
 
 
 class CalibrationSensitivityRow(BaseModel):
@@ -138,6 +154,7 @@ class CalibrationSensitivityRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     threshold: float
+    reconciliation_scope: str
     rand_index: float
     adjusted_rand: float
     precision: float
@@ -389,6 +406,7 @@ def _collapse_stats(
     batch_size: int,
     *,
     requested: bool,
+    allow_unavailable: bool = False,
 ) -> dict[str, float | int | str]:
     guardrail = cfg["hpo"]["collapse_guardrail"]
     if not requested or not bool(guardrail["enabled"]):
@@ -397,6 +415,8 @@ def _collapse_stats(
             "collapse_status": "not_requested" if not requested else "disabled",
             "collapse_requested_pairs": int(guardrail["unrelated_pairs"]),
             "collapse_unrelated_pairs": 0,
+            "collapse_diagnostics_available": 0,
+            "collapse_healthy": 0,
         }
     requested_pairs = int(guardrail["unrelated_pairs"])
     pairs = select_unrelated_pairs(
@@ -406,6 +426,15 @@ def _collapse_stats(
         seed=int(guardrail["seed"]),
     )
     if not pairs:
+        if allow_unavailable:
+            return {
+                "collapse_guardrail_enabled": 1,
+                "collapse_status": "unavailable",
+                "collapse_requested_pairs": requested_pairs,
+                "collapse_unrelated_pairs": 0,
+                "collapse_diagnostics_available": 0,
+                "collapse_healthy": 0,
+            }
         raise RuntimeError(
             "collapse guardrail could not construct its configured unrelated-pair "
             f"sample: required={requested_pairs} selected=0"
@@ -431,6 +460,12 @@ def _collapse_stats(
     median = float(np.median(scores))
     p90 = float(np.quantile(scores, 0.90))
     std = float(np.std(scores))
+    healthy = int(
+        sample_status == "ok"
+        and median <= float(guardrail["median_penalty_start"])
+        and p90 <= float(guardrail["p90_penalty_start"])
+        and std >= float(guardrail["cosine_std_floor"])
+    )
     return {
         "collapse_guardrail_enabled": 1,
         "collapse_status": sample_status,
@@ -443,7 +478,42 @@ def _collapse_stats(
         "collapse_embedding_norm_std": float(np.std(norms)),
         "collapse_median_flag": int(median > float(guardrail["median_penalty_start"])),
         "collapse_p90_flag": int(p90 > float(guardrail["p90_penalty_start"])),
+        "collapse_diagnostics_available": 1,
+        "collapse_healthy": healthy,
     }
+
+
+def _fold_collapse_stats(
+    *,
+    model,
+    df: pd.DataFrame,
+    payload: list[str],
+    candidates: pd.DataFrame,
+    truth: pd.DataFrame,
+    cfg: dict,
+    batch_size: int,
+    requested: bool,
+) -> dict[str, float | int | str]:
+    """Run the shared collapse diagnostic on one calibration check fold."""
+    fold_candidates = candidates[candidates["SKU_ID"].isin(truth["SKU_ID"])]
+    source_rows = pd.to_numeric(
+        fold_candidates[["SKU_ID", "source_row_index"]]
+        .drop_duplicates("SKU_ID")["source_row_index"],
+        errors="raise",
+    ).astype(int)
+    if len(source_rows) != truth["SKU_ID"].nunique():
+        raise ValueError("calibration fold lost SKU source-row metadata")
+    fold_df = df.iloc[source_rows.to_numpy()].reset_index(drop=True)
+    fold_payload = [payload[int(row)] for row in source_rows]
+    return _collapse_stats(
+        model,
+        fold_df,
+        fold_payload,
+        cfg,
+        batch_size,
+        requested=requested,
+        allow_unavailable=True,
+    )
 
 
 def _collapse_penalty(stats: dict, cfg: dict) -> float:
@@ -452,7 +522,7 @@ def _collapse_penalty(stats: dict, cfg: dict) -> float:
         return 0.0
     if stats["collapse_status"] == "not_requested":
         return 0.0
-    if stats["collapse_status"] == "insufficient_pairs":
+    if stats["collapse_status"] in {"insufficient_pairs", "unavailable"}:
         return float(guardrail["penalty_weight"])
     median_excess = max(
         0.0,
@@ -514,6 +584,9 @@ def evaluate_calibration_trial(
     fold_rows: list[CalibrationFoldMetricRow] = []
     validation_candidates: list[pd.DataFrame] = []
     validation_truth: list[pd.DataFrame] = []
+    reconciliation_scope = str(
+        config["rand_matching"]["threshold_reconciliation_scope"]
+    )
     for fold in range(n_folds):
         check_items = {item for item, value in fold_map.items() if value == fold}
         fit_items = set(fold_map) - check_items
@@ -525,13 +598,25 @@ def evaluate_calibration_trial(
             raise ValueError(f"HPO calibration fold {fold} has an empty fit/check side")
         threshold, fit_metrics = _fit_threshold(fit_candidates, fit_truth, thresholds)
         check_metrics = _assignment_metrics(check_candidates, check_truth, threshold)
+        fold_collapse = _fold_collapse_stats(
+            model=model,
+            df=df,
+            payload=payload,
+            candidates=candidates,
+            truth=check_truth,
+            cfg=config,
+            batch_size=batch_size,
+            requested=include_collapse_guardrail,
+        )
         validation_candidates.append(check_candidates)
         validation_truth.append(check_truth)
+        fold_penalty = _collapse_penalty(fold_collapse, config)
         fold_rows.append(
             CalibrationFoldMetricRow.model_validate(
                 {
                 "calibration_fold": fold,
                 "calibrated_threshold": threshold,
+                "reconciliation_scope": reconciliation_scope,
                 "fit_rand_index": float(fit_metrics["rand_index"]),
                 "check_rand_index": float(check_metrics["rand_index"]),
                 "check_adjusted_rand": float(check_metrics["adjusted_rand"]),
@@ -539,6 +624,21 @@ def evaluate_calibration_trial(
                 "check_group_recall": float(check_metrics["group_recall"]),
                 "check_over_merge_rate": float(check_metrics["over_merge_rate"]),
                 "check_under_merge_rate": float(check_metrics["under_merge_rate"]),
+                "collapse_status": str(fold_collapse["collapse_status"]),
+                "collapse_diagnostics_available": int(
+                    fold_collapse["collapse_diagnostics_available"]
+                ),
+                "collapse_healthy": int(fold_collapse["collapse_healthy"]),
+                "collapse_median_cosine": fold_collapse.get(
+                    "collapse_median_cosine"
+                ),
+                "collapse_p90_cosine": fold_collapse.get("collapse_p90_cosine"),
+                "collapse_cosine_std": fold_collapse.get("collapse_cosine_std"),
+                "collapse_penalty": fold_penalty,
+                "fit_rand_index_minus_collapse_penalty": float(
+                    fit_metrics["rand_index"]
+                )
+                - fold_penalty,
                 }
             )
         )
@@ -560,6 +660,7 @@ def evaluate_calibration_trial(
             CalibrationSensitivityRow.model_validate(
                 {
                     "threshold": threshold_value,
+                    "reconciliation_scope": reconciliation_scope,
                     "rand_index": float(metrics["rand_index"]),
                     "adjusted_rand": float(metrics["adjusted_rand"]),
                     "precision": float(metrics["pairwise_precision"]),
@@ -608,6 +709,7 @@ def evaluate_calibration_trial(
         "calibration_threshold_tie_break": json.dumps(
             list(config["rand_matching"]["threshold_tie_break"]),
         ),
+        "calibration_reconciliation_scope": reconciliation_scope,
         "calibration_threshold_fold_count": n_folds,
         "calibration_threshold_support_count": len(fold_rows),
         "calibration_threshold_support_minimum": minimum_support,
@@ -651,6 +753,10 @@ def evaluate_calibration_trial(
                 }
                 for row in sensitivity
             ],
+            sort_keys=True,
+        ),
+        "calibration_fold_collapse": json.dumps(
+            [row.model_dump() for row in fold_rows],
             sort_keys=True,
         ),
     }

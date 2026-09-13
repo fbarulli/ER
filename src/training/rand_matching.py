@@ -124,6 +124,10 @@ def _unmatched_prefix() -> str:
     return str(rand_matching_cfg()["unmatched_prefix"])
 
 
+def _reconciliation_scope() -> str:
+    return str(rand_matching_cfg()["threshold_reconciliation_scope"])
+
+
 def _threshold_selection_key(row: dict[str, float | int]) -> tuple[float, ...]:
     """Encode the configured threshold tie-break policy for ``max``."""
     values = {
@@ -299,6 +303,7 @@ _METRIC_COLUMNS_SPEC = _MetricColumnSpec(
             "gtin_status",
             "selection_method",
             "sensitivity_reason",
+            "reconciliation_scope",
         }
     ),
 )
@@ -1357,55 +1362,14 @@ def _sweep_assignments(
     candidates: pd.DataFrame,
     thresholds: np.ndarray,
 ) -> dict[float, pd.DataFrame]:
-    """Compute assignments for many thresholds with one annotation + sort.
-
-    Threshold-independent candidate columns are annotated once; the
-    accepted-subset is pre-sorted once with the exact tie-break order used by
-    ``_assignments_with_trace``; per threshold only ``score_pass`` /
-    ``accepted`` are recomputed before the SKU dedup and the UNMATCHED fill.
-    """
+    """Compute threshold assignments through the final gate/reconciliation path."""
     if candidates.empty:
         return {float(t): pd.DataFrame(columns=ASSIGNMENT_COLUMNS) for t in thresholds}
-    all_skus = candidates[["SKU_ID"]].drop_duplicates()
-    base = (
-        candidates[
-            [
-                "SKU_ID",
-                "candidate_gtin",
-                "score",
-                "exact_gtin",
-                "gtin_status",
-                "rule_ok",
-                "attribute_matches",
-            ]
-        ]
-        .copy()
-    )
-    base["gtin_compatible"] = base["gtin_status"].ne("different")
-    base = base.sort_values(
-        list(ASSIGNMENT_SORT_COLUMNS),
-        ascending=list(ASSIGNMENT_SORT_ASCENDING),
-        kind="mergesort",
-    )
-    exact = base["exact_gtin"].values.astype(bool)
-    rule_ok = base["rule_ok"].values.astype(bool)
-    compatible = base["gtin_compatible"].values
-    scores = base["score"].values
     result: dict[float, pd.DataFrame] = {}
     for threshold in thresholds:
-        t = float(threshold)
-        accepted = compatible & (exact | (rule_ok & (scores >= t)))
-        selected = base[accepted].drop_duplicates("SKU_ID", keep="first")
-        best = selected[
-            ["SKU_ID", "candidate_gtin", "score", "gtin_status"]
-        ].rename(columns={"candidate_gtin": "ITEM_ID"})
-        best = best.loc[:, list(ASSIGNMENT_COLUMNS)]
-        output = all_skus.merge(best, on="SKU_ID", how="left")
-        prefix = _unmatched_prefix()
-        output["ITEM_ID"] = output["ITEM_ID"].fillna(
-            prefix + output["SKU_ID"].astype(str)
-        )
-        result[t] = output
+        result[float(threshold)] = _assignments_with_trace(
+            candidates, float(threshold)
+        )[0]
     return result
 
 
@@ -1682,6 +1646,7 @@ def calibrate_threshold(
                 "without_candidate_gtin_trusted": retrieval[
                     "without_candidate_gtin_trusted"
                 ],
+                "reconciliation_scope": _reconciliation_scope(),
             }
         )
         sensitivity.extend(
@@ -1769,6 +1734,7 @@ def _write_calibration_outputs(
             ),
             "target_recall": target_recall,
             "tie_break": list(rand_matching_cfg()["threshold_tie_break"]),
+            "reconciliation_scope": _reconciliation_scope(),
             "unmatched_item_id": _unmatched_prefix() + "<SKU_ID>",
             "no_transitive_chaining": True,
         }

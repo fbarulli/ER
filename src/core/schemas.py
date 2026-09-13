@@ -52,6 +52,8 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
+    StrictStr,
     TypeAdapter,
     field_validator,
     model_validator,
@@ -329,6 +331,9 @@ class RandMatchingSpec(BaseModel):
     threshold_tie_break: list[
         Literal["rand_index", "fewest_unmatched_skus", "lowest_threshold"]
     ] = Field(min_length=3, max_length=3)
+    threshold_reconciliation_scope: Literal[
+        "final_assignment_gtin_and_attribute_gates"
+    ]
     threshold_min_fold_support: int = Field(ge=2)
     calibration_proxy_source: str = Field(min_length=1)
     plateau_tolerance: float = Field(gt=0.0)
@@ -1418,6 +1423,57 @@ GATE_RESULTS_COLUMNS: tuple[str, ...] = (
 )
 
 LABELED_PAIRS_COLUMNS: tuple[str, ...] = ("gtin1", "gtin2", "true_label")
+
+CROSS_COUNTRY_PAIR_COLUMNS: tuple[str, ...] = (
+    "sku_id_a",
+    "sku_id_b",
+    "cross_country",
+    "gtin",
+    "country_a",
+    "country_b",
+)
+
+
+class CrossCountryPairRow(BaseModel):
+    """One generated second04 cross-country hard-positive manifest row."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    sku_id_a: StrictStr = Field(min_length=1)
+    sku_id_b: StrictStr = Field(min_length=1)
+    cross_country: StrictBool
+    gtin: StrictStr = Field(min_length=1)
+    country_a: StrictStr = Field(min_length=1)
+    country_b: StrictStr = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _valid_cross_country_pair(self) -> "CrossCountryPairRow":
+        from core.gtin import is_valid_gtin_checksum
+
+        if self.sku_id_a == self.sku_id_b:
+            raise ValueError("cross-country manifest cannot contain self-pairs")
+        if not self.cross_country or self.country_a == self.country_b:
+            raise ValueError("manifest rows must represent different countries")
+        if not is_valid_gtin_checksum(self.gtin):
+            raise ValueError(f"manifest GTIN is invalid: {self.gtin!r}")
+        return self
+
+
+def check_cross_country_pair_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Validate the complete second04 CSV frame without dropping rows."""
+    columns = tuple(df.columns)
+    if columns != CROSS_COUNTRY_PAIR_COLUMNS:
+        raise ValueError(
+            f"cross-country pair frame columns {columns} != contract "
+            f"{CROSS_COUNTRY_PAIR_COLUMNS}"
+        )
+    rows = [CrossCountryPairRow.model_validate(row) for row in df.to_dict("records")]
+    if len(rows) != len(df):
+        raise ValueError(
+            f"validated {len(rows)} rows but frame has {len(df)} — "
+            "manifest validation dropped rows"
+        )
+    return df
 
 
 def check_canonical_records_frame(df: pd.DataFrame) -> pd.DataFrame:
