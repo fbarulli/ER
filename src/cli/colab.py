@@ -959,9 +959,14 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
 
 
 def generate_local_mask_effect(remote_base: str, workers: int) -> None:
-    """Run optional masked-vs-unmasked scoring on CPU after teardown."""
-    if not _MASK_EFFECT_AFTER_TRAIN:
-        return
+    """Run masked-vs-unmasked scoring on local CPU after teardown.
+
+    mask_effect_after_train only controls whether the VM spends remote GPU
+    time on it (--mask-effect vs --no-mask-effect in the worker launch;
+    blocked on the VM anyway by the remote-training gate). The downloaded
+    results are always scored here on CPU; workers without a visibility log
+    or checkpoint are skipped per worker with a message, never silently.
+    """
     import numpy as np
     import pandas as pd
 

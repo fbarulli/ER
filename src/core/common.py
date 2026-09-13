@@ -472,7 +472,8 @@ def trace_artifact(key: str, path: Path, producer: str = "") -> None:
     import json as _json
     from datetime import datetime as _datetime, timezone as _timezone
 
-    trace_dir = ensure_parent(RESULTS / "manifests")
+    trace_dir = RESULTS / "manifests"
+    trace_dir.mkdir(parents=True, exist_ok=True)
     trace_path = trace_dir / "artifacts_trace.json"
     record = {
         "layout": key,
