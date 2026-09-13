@@ -38,7 +38,13 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from core.common import plot_dpi
+from core.common import plot_dpi, rand_matching_cfg, recall_column_suffix
+
+# 05-03/06-3: the recall-tied fold-metric column follows the config SSOT
+# (rand_matching.target_recall) with the producer's own helper — a hardcoded
+# recall suffix would silently miss the column of a retuned lane.
+_RECALL_KEY = recall_column_suffix(float(rand_matching_cfg()["target_recall"]))
+_RECALL_THRESHOLD_COL = f"threshold_at_{_RECALL_KEY}_recall"
 
 
 def _json_list(value) -> list[float]:
@@ -435,13 +441,14 @@ def generate_report(
                 )
             thresholds = {"dev_youden": float(row["youden_thr"])}
             # The configured fixed operating threshold is encoded in the
-            # f1/precision/recall column suffix, not the 90%-recall threshold.
+            # f1/precision/recall column suffix, not the recall-target
+            # threshold.
             if f1_col and "_at_" in f1_col:
                 thresholds["fixed"] = float(f1_col.rsplit("_at_", 1)[1])
-            elif "threshold_at_90pct_recall" in row and pd.notna(
-                row["threshold_at_90pct_recall"]
+            elif _RECALL_THRESHOLD_COL in row and pd.notna(
+                row[_RECALL_THRESHOLD_COL]
             ):
-                thresholds["fixed"] = float(row["threshold_at_90pct_recall"])
+                thresholds["fixed"] = float(row[_RECALL_THRESHOLD_COL])
             else:
                 raise ValueError(
                     f"fold {fold}: no fixed operating threshold is present; "

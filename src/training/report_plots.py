@@ -31,12 +31,26 @@ from core.common import (
     load_dataset_deduped,
     pair_similarity,
     plot_dpi,
+    rand_matching_cfg,
+    recall_column_suffix,
     runtime,
     trace_artifact,
     training_cfg,
 )
 from core.nlp import encode_corpus
 from core.text import extract_volume_ml
+
+# 05-03/06-3: the 07c/07d recall-tied column name and its labels follow the
+# config SSOT (rand_matching.target_recall) — the same derivation the producer
+# (training.py) uses — so a retune cannot leave this consumer reading the old
+# fixed-suffix column or printing a stale recall target.
+_RECALL_TARGET = float(rand_matching_cfg()["target_recall"])
+_RECALL_KEY = recall_column_suffix(_RECALL_TARGET)
+_RECALL_LABEL = f"{_RECALL_TARGET:.0%}"
+_RECALL_PREC_COL = f"precision_at_{_RECALL_KEY}_recall"
+_RECALL_TP_COL = f"tp_at_{_RECALL_KEY}_recall"
+_RECALL_FP_COL = f"fp_at_{_RECALL_KEY}_recall"
+_RECALL_THR_COL = f"threshold_at_{_RECALL_KEY}_recall"
 
 # MACRO_MAP moved to config (SSOT): config/paths.yaml category_macros —
 # read via lib.common.category_macros(), never a module-level copy.
@@ -103,12 +117,14 @@ def main() -> None:
     if fab.exists():
         fdf = pd.read_csv(fab).set_index("variant")
         fig, ax = plt.subplots(figsize=(8, 4.5), constrained_layout=True)
-        fdf[["average_precision", "precision_at_90pct_recall"]].plot(
+        fdf[["average_precision", _RECALL_PREC_COL]].plot(
             kind="bar", ax=ax, rot=0
         )
         ax.set_ylabel("score")
         ax.set_xlabel("payload variant")
-        ax.set_title("Field ablation — AP and precision@90%recall per variant")
+        ax.set_title(
+            f"Field ablation — AP and precision@{_RECALL_LABEL}recall per variant"
+        )
         _plot = artifact("report_plot", {"kind": "field_ablation"})
         fig.savefig(_plot, dpi=plot_dpi())
         trace_artifact("report_plot", _plot)
@@ -117,9 +133,9 @@ def main() -> None:
         print("field ablation TP/FP/threshold (audit):", flush=True)
         for variant, row in fdf.iterrows():
             print(
-                f"  {variant:<22} TP@90R={row['tp_at_90pct_recall']:.0f} "
-                f"FP@90R={row['fp_at_90pct_recall']:.0f} "
-                f"thr={row['threshold_at_90pct_recall']:.4f}",
+                f"  {variant:<22} TP@{_RECALL_LABEL}R={row[_RECALL_TP_COL]:.0f} "
+                f"FP@{_RECALL_LABEL}R={row[_RECALL_FP_COL]:.0f} "
+                f"thr={row[_RECALL_THR_COL]:.4f}",
                 flush=True,
             )
     else:
@@ -139,10 +155,10 @@ def main() -> None:
         )
         ax.plot(
             ddf["n_triples"],
-            ddf["precision_at_90pct_recall"],
+            ddf[_RECALL_PREC_COL],
             marker="s",
             color="#C44E52",
-            label="precision@90%recall",
+            label=f"precision@{_RECALL_LABEL}recall",
         )
         ax.set_xscale("log")
         ax.set_xlabel("n_triples (log)")
@@ -157,9 +173,9 @@ def main() -> None:
         print("data-scaling TP/FP/threshold (audit):", flush=True)
         for _, row in ddf.iterrows():
             print(
-                f"  n_triples={int(row['n_triples']):<6} TP@90R={row['tp_at_90pct_recall']:.0f} "
-                f"FP@90R={row['fp_at_90pct_recall']:.0f} "
-                f"thr={row['threshold_at_90pct_recall']:.4f}",
+                f"  n_triples={int(row['n_triples']):<6} TP@{_RECALL_LABEL}R={row[_RECALL_TP_COL]:.0f} "
+                f"FP@{_RECALL_LABEL}R={row[_RECALL_FP_COL]:.0f} "
+                f"thr={row[_RECALL_THR_COL]:.4f}",
                 flush=True,
             )
     else:

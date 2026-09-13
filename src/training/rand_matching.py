@@ -54,7 +54,10 @@ from core.common import (
     rand_matching_cfg,
     row_metadata_text,
 )
-from core.graph_diagnostics import candidate_graph_diagnostics
+from core.graph_diagnostics import (
+    CANDIDATE_GATE_COLUMNS,
+    candidate_graph_diagnostics,
+)
 from core.gtin import is_valid_gtin_checksum
 from core.manifest import sha256_file
 from core.structured_features import (
@@ -137,6 +140,11 @@ def _threshold_selection_key(row: dict[str, float | int]) -> tuple[float, ...]:
     }
     policy = rand_matching_cfg()["threshold_tie_break"]
     return tuple(values[name] for name in policy)
+
+
+def fit_threshold_key(row: dict[str, float | int]) -> tuple[float, ...]:
+    """Public notebook/shared-lane name for the config-driven fit rule."""
+    return _threshold_selection_key(row)
 
 
 def _fit_recall_column(target_recall: float) -> str:
@@ -223,17 +231,14 @@ _SUBMISSION_COLUMNS_SPEC = _SubmissionColumnSpec(columns=("SKU_ID", "ITEM_ID"))
 _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
     expected_columns=frozenset(
         {
-            # candidate trace (_candidate_row)
-            "SKU_ID",
+            # candidate trace (_candidate_row); gate columns are owned by the
+            # shared graph-diagnostic contract below.
+            *CANDIDATE_GATE_COLUMNS,
             "sku_gtin",
             "sku_gtin_present",
             "sku_gtin_valid",
-            "candidate_gtin",
             "candidate_rank",
             "retrieval_source",
-            "score",
-            "exact_gtin",
-            "gtin_status",
             "gate_reason",
             "sku_title",
             "sku_attributes",
@@ -267,7 +272,6 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "candidate_volume_present",
             "candidate_pack_present",
             "candidate_flavor_present",
-            "rule_ok",
             "attribute_conflict_type",
             "attribute_matches",
             # annotation (_annotate_candidates)
@@ -1735,6 +1739,14 @@ def _write_calibration_outputs(
             "target_recall": target_recall,
             "tie_break": list(rand_matching_cfg()["threshold_tie_break"]),
             "reconciliation_scope": _reconciliation_scope(),
+            "assignment_tie_break": [
+                f"{column} {'asc' if ascending else 'desc'}"
+                for column, ascending in zip(
+                    ASSIGNMENT_SORT_COLUMNS,
+                    ASSIGNMENT_SORT_ASCENDING,
+                    strict=True,
+                )
+            ],
             "unmatched_item_id": _unmatched_prefix() + "<SKU_ID>",
             "no_transitive_chaining": True,
         }

@@ -217,6 +217,23 @@ class SplitSpec(BaseModel):
     asserted to sum to 1.0 (no silent re-normalization: a mis-configured
     split must CRASH, not quietly produce 60/20/20). Calibration is a
     canonical-disjoint subset of DEV, controlled by calibration_dev_fraction.
+    In mode "holdout" the realized split comes from holdout_component_folds
+    through the single derivation folds.holdout_split: component_folds deals
+    whole COMPONENTS round-robin over that many groups, test is the last
+    group, dev the one before it and train the rest. Each group therefore
+    holds APPROXIMATELY — never exactly — 1.0 / holdout_component_folds of the
+    graph: the deal is per component and components differ in size (measured
+    on real data, the four quarter shares are 0.2500/0.2500/0.2499/0.2499 of
+    barcodes and 0.2488/0.2513/0.2498/0.2502 of positive pairs). What this
+    model pins exactly is the DECLARED quarter, and only when mode is
+    "holdout": dev_fraction and test_fraction must each be within 1e-9 of
+    1.0 / holdout_component_folds (4 -> 0.25/0.25), so a knob the lane cannot
+    honour is a load error and not a mid-lane crash. In mode "cv" that gate
+    does not apply and no quarter is built — the lane deals cv_folds
+    component folds and carves dev out of the TRAIN side with
+    training.dev_fraction — so these three fractions are not realized as
+    quarter shares there. The same disagreement re-raises inside
+    folds.holdout_split, which remains the runtime backstop.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -224,9 +241,9 @@ class SplitSpec(BaseModel):
     mode: Literal["holdout", "cv"]
     train_fraction: float = Field(ge=0.0, le=1.0)
     dev_fraction: float = Field(ge=0.0, le=1.0)
-    calibration_dev_fraction: float = Field(gt=0.0, lt=1.0)
+    calibration_dev_fraction: float = Field(gt=0.0, le=0.5)
     calibration_seed_offset: int = Field(ge=0)
-    holdout_component_folds: int = Field(ge=4)
+    holdout_component_folds: Literal[4]
     test_fraction: float = Field(ge=0.0, le=1.0)
     fixed_threshold: float = Field(gt=0.0, lt=1.0)
     cv_folds: int = Field(ge=2)
@@ -239,6 +256,45 @@ class SplitSpec(BaseModel):
                 f"split fractions must sum to 1.0, got {s} "
                 f"({self.train_fraction}+{self.dev_fraction}+"
                 f"{self.test_fraction})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _quarters_match_declared_fractions(self) -> SplitSpec:
+        """05-01 (load-time): the declared DEV/TEST fractions must equal the
+        quarter the split actually deals.
+
+        folds.holdout_split derives the roles from holdout_component_folds
+        (component_folds deals the components round-robin over that many
+        groups, so DEV and TEST are one group each = 1.0/n_folds of the
+        graph); it then RAISES when dev_fraction/test_fraction disagree with
+        that quarter. A config the lane refuses is a config error, so it is
+        rejected here at load with the knob and the declared fractions named
+        — the same check inside folds.holdout_split remains the backstop.
+
+        GATED ON mode == "holdout": in cv mode the lane deals cv_folds
+        component folds and carves dev out of the TRAIN side using the
+        runtime training.dev_fraction, so split.dev_fraction/test_fraction are
+        not realized as quarters there and a 1.0/n_folds agreement would be a
+        false alarm (the schema knows the mode, so it can tell the two apart).
+        """
+        if self.mode != "holdout":
+            return self
+        # Literal[4] is the only arity the 50/25/25 contract supports, but the
+        # check is written for any n_folds (the runtime helper accepts them).
+        n_folds = int(self.holdout_component_folds)
+        quarter = 1.0 / n_folds
+        if (
+            abs(self.dev_fraction - quarter) > 1e-9
+            or abs(self.test_fraction - quarter) > 1e-9
+        ):
+            raise ValueError(
+                f"holdout split contract violated: mode=holdout with "
+                f"holdout_component_folds={n_folds} deals quarters of "
+                f"{quarter:.4f} each, but the split declares dev_fraction="
+                f"{self.dev_fraction} and test_fraction={self.test_fraction} "
+                f"(the 50/25/25 contract requires dev_fraction == "
+                f"test_fraction == 1.0/holdout_component_folds = {quarter})"
             )
         return self
 
@@ -1384,6 +1440,89 @@ class FoldSets(BaseModel):
                     f"folds (e.g. {sorted(overlap)[:3]})"
                 )
             seen |= fold
+        return self
+
+
+class CalibrationPartition(BaseModel):
+    """folds.partition_component_pairs output — the DEV split into a fit half
+    and a component-safe calibration half.
+
+    All four pools are same-shaped ``(n, 2)`` int arrays and their ORDER is
+    the producer's positional contract, so a wrong-order unpack at the call
+    site is invisible without this model; ``pools()`` is the single accessor.
+    Validated on construction (the sibling FoldSets boundary is validated the
+    same way): the populations are conserved, and no identity crosses the
+    calibration boundary. The boundary is stated two ways because the two
+    pools are not the same shape of graph — a positive pair sits inside ONE
+    component (both endpoints share its barcode), so its barcodes must be
+    disjoint across the halves, while a negative pair BY CONSTRUCTION links
+    two different components, so the same guarantee can only hold at the
+    granularity of the unordered identity pair: both endpoints of a negative
+    must be reserved together, otherwise the mirrored orientation of the same
+    product pair stays behind in the fit half.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    positive_fit: np.ndarray
+    positive_reserved: np.ndarray
+    negative_fit: np.ndarray
+    negative_reserved: np.ndarray
+    # the barcode vector the boundary contract is stated over (not payload)
+    row_bc: np.ndarray = Field(exclude=True, repr=False)
+    n_positive_pairs: int = Field(ge=0)
+    n_negative_pairs: int = Field(ge=0)
+
+    def pools(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """The positional contract, in declaration order."""
+        return (
+            self.positive_fit,
+            self.positive_reserved,
+            self.negative_fit,
+            self.negative_reserved,
+        )
+
+    def _identity(self, row: object) -> str:
+        return str(self.row_bc[int(row)]).strip()
+
+    def identities(self, pool: np.ndarray) -> set[str]:
+        """Barcode identities touched by one pool."""
+        return {self._identity(row) for row in pool.ravel()}
+
+    def identity_pairs(self, pool: np.ndarray) -> set[frozenset[str]]:
+        """Unordered identity pair of every pair in one pool."""
+        return {frozenset((self._identity(a), self._identity(b))) for a, b in pool}
+
+    @model_validator(mode="after")
+    def _populations_and_disjoint_identities(self) -> CalibrationPartition:
+        for name, pool in zip(
+            ("positive_fit", "positive_reserved", "negative_fit", "negative_reserved"),
+            self.pools(),
+        ):
+            if pool.ndim != 2 or pool.shape[1] != 2:
+                raise ValueError(
+                    f"{name} must be an (n, 2) pair array, got shape {pool.shape}"
+                )
+        if len(self.positive_fit) + len(self.positive_reserved) != self.n_positive_pairs:
+            raise ValueError("positive calibration partition changed its population")
+        if len(self.negative_fit) + len(self.negative_reserved) != self.n_negative_pairs:
+            raise ValueError("negative calibration partition changed its population")
+        shared = self.identities(self.positive_fit) & self.identities(
+            self.positive_reserved
+        )
+        if shared:
+            raise ValueError(
+                f"{len(shared)} positive identities cross the calibration "
+                f"boundary (e.g. {sorted(shared)[:3]})"
+            )
+        crossed = self.identity_pairs(self.negative_fit) & self.identity_pairs(
+            self.negative_reserved
+        )
+        if crossed:
+            raise ValueError(
+                f"{len(crossed)} negative identity pairs cross the calibration "
+                f"boundary (e.g. {sorted(sorted(pair) for pair in crossed)[:2]})"
+            )
         return self
 
 

@@ -117,7 +117,10 @@ def run_uniformity_audit(
     pairs = select_unrelated_pairs(
         df, payload, n_pairs=n_pairs, seed=seed
     )
-    if len(pairs) < n_pairs:
+    # n_pairs == 0 selects nothing (see select_unrelated_pairs), so the strict
+    # comparison used to fall through to _summary() with empty score arrays and
+    # die in np.quantile; ask for at least one pair to report a selection.
+    if len(pairs) < max(1, n_pairs):
         frame = pd.DataFrame(
             [
                 {"pair": i, "row_a": left, "row_b": right}

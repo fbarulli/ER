@@ -24,10 +24,31 @@ class CandidateGraphFrameSpec(BaseModel):
             )
 
 
+#: The gate columns :func:`candidate_graph_diagnostics` requires of the frame it
+#: is handed.
+#:
+#: This tuple is this module's definition of that contract; the frame spec below
+#: derives its required set from it instead of re-spelling the names.
+#:
+#: The producer of those frames, ``training.rand_matching``, imports this tuple
+#: and derives its candidate-gate contract from it, so the required set has one
+#: definition.  The import runs in the legal ``training`` -> ``core`` direction;
+#: the reverse would be an import cycle, because ``training.rand_matching``
+#: imports this module at module level while no ``core`` module imports
+#: ``training``.  A producer-side rename or drop still makes ``validate_frame``
+#: fail loudly here instead of quietly changing the diagnostic.
+CANDIDATE_GATE_COLUMNS: tuple[str, ...] = (
+    "SKU_ID",
+    "candidate_gtin",
+    "score",
+    "gtin_status",
+    "exact_gtin",
+    "rule_ok",
+)
+
+
 _CANDIDATE_GRAPH_FRAME_SPEC = CandidateGraphFrameSpec(
-    required_columns=frozenset(
-        {"SKU_ID", "candidate_gtin", "score", "gtin_status", "exact_gtin", "rule_ok"}
-    )
+    required_columns=frozenset(CANDIDATE_GATE_COLUMNS)
 )
 
 

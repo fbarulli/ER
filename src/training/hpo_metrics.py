@@ -187,14 +187,93 @@ CALIBRATION_AGGREGATE_FIELDS = tuple(
 )
 
 
+# The metric keys a calibration row owns. The artifact row (written to the
+# fold-metrics CSV) and the tracking lane (MLflow/W&B) must agree on which
+# keys they scan for non-finite values: they previously spelled this set twice
+# with different prefixes under the single name
+# `calibration_non_finite_count`, so one artifact could call a row dirty while
+# the other called it clean.
+CALIBRATION_METRIC_PREFIXES = (
+    "calibration_",
+    "collapse_",
+    "diagnostic_",
+    "attribute_conflict_",
+)
+
+
+def calibration_non_finite_fields(row: dict) -> list[str]:
+    """Return the sorted numeric calibration metric keys that are not finite.
+
+    Single definition of the non-finite rule, shared by the artifact row and
+    the tracking lane (see CALIBRATION_METRIC_PREFIXES).
+    """
+    return sorted(
+        key
+        for key, value in row.items()
+        if key.startswith(CALIBRATION_METRIC_PREFIXES)
+        and not isinstance(value, (bool, np.bool_))
+        and isinstance(value, (int, float, np.integer, np.floating))
+        and not np.isfinite(value)
+    )
+
+
+# 06-4: the artifact row names WHICH calibration metrics were not finite, but
+# that list is a `str`, so the numeric filter drops it and the tracked count
+# has no cause beside it.  Each named field is re-emitted as a numeric flag so
+# count and cause travel together through MLflow/W&B.  A row that names no
+# field adds no key.
+NON_FINITE_FIELD_METRIC_PREFIX = "calibration_non_finite/"
+
+# 03-3: a fold whose calibration never ran carries no MEASURED calibration
+# metric — no calibration_non_finite_count and no aggregate diagnostic — so
+# "never measured" was indistinguishable from "measured clean" in the tracking
+# lane.  (Its payload does carry the two SIZE counts,
+# calibration_positive_pairs/calibration_negative_pairs, which report how big
+# the calibration split was, not what it scored.)  These numeric codes are how
+# such a row says so; the prefixes match the two reason strings the producers
+# write (the unavailable_calibration_metrics call sites in training.py).  The
+# code is needed because the reason itself is free text and never reaches the
+# metrics API.
+CALIBRATION_UNAVAILABLE_REASON_CODES = (
+    ("empty calibration split", 1),
+    ("calibration evaluator failed", 2),
+)
+CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED = 0
+
+
+def _unavailable_reason_code(row: dict) -> int:
+    """Map a row's free-text ``calibration_reason`` to a stable numeric code."""
+    reason = row.get("calibration_reason")
+    if isinstance(reason, str):
+        for prefix, code in CALIBRATION_UNAVAILABLE_REASON_CODES:
+            if reason.startswith(prefix):
+                return code
+    return CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED
+
+
 def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
-    """Return finite calibration diagnostics suitable for tracking APIs."""
+    """Return finite calibration diagnostics suitable for tracking APIs.
+
+    The non-finite count is NOT re-derived here.  The artifact row already
+    carries the value measured by ``calibration_non_finite_fields`` over the
+    one shared prefix set, and the loop below forwards it, so the tracked
+    number and the fold-metrics CSV number are the same measurement.  A row
+    without that measurement — a fold whose calibration never ran — therefore
+    reports no count at all instead of a clean-looking 0.
+
+    Two things travel with the count so the tracking lane can tell the three
+    states apart without the CSV (06-4, 03-3):
+
+    * ``calibration_non_finite/<field>`` = 1 for every field the row named, so
+      a non-zero count can be resolved to the metrics that caused it;
+    * ``calibration_available`` = 0 plus ``calibration_unavailable_reason_code``
+      for a row that carries no measured count at all, i.e. a fold whose
+      calibration surface does not exist.  Available rows are unchanged: they
+      are identified by carrying the count, so no key is added for them.
+    """
     metrics: dict[str, float | int] = {}
-    non_finite: list[str] = []
     for key, value in row.items():
-        if not key.startswith(
-            ("calibration_", "collapse_", "diagnostic_", "attribute_conflict_")
-        ):
+        if not key.startswith(CALIBRATION_METRIC_PREFIXES):
             continue
         if isinstance(value, (bool, np.bool_)) or not isinstance(
             value, (int, float, np.integer, np.floating)
@@ -202,9 +281,13 @@ def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
             continue
         if np.isfinite(value):
             metrics[key] = value
-        else:
-            non_finite.append(key)
-    metrics["calibration_non_finite_count"] = len(non_finite)
+    recorded = row.get("calibration_non_finite_fields")
+    for field in recorded.split(",") if isinstance(recorded, str) else ():
+        if field:
+            metrics[f"{NON_FINITE_FIELD_METRIC_PREFIX}{field}"] = 1
+    if "calibration_non_finite_count" not in metrics:
+        metrics["calibration_available"] = 0
+        metrics["calibration_unavailable_reason_code"] = _unavailable_reason_code(row)
     return metrics
 
 
@@ -759,6 +842,10 @@ def evaluate_calibration_trial(
         batch_size,
         requested=include_collapse_guardrail,
     )
+    # _candidate_labels merges the whole candidate frame against truth; the
+    # Youden and target-recall thresholds below are fitted on the same
+    # (scores, labels) pair, so compute it once per evaluation.
+    calibration_scores, calibration_labels = _candidate_labels(candidates, truth)
     result: dict[str, float | int | str] = {
         "calibration_proxy_source": str(
             config["rand_matching"]["calibration_proxy_source"]
@@ -799,13 +886,12 @@ def evaluate_calibration_trial(
         "calibration_plausible_group_count": int(overall["plausible_group_count"]),
         "calibration_unmatched_skus": int(overall["unmatched_skus"]),
         "calibration_youden_threshold": float(
-            _youden_threshold(
-                *_candidate_labels(candidates, truth),
-            )
+            _youden_threshold(calibration_scores, calibration_labels)
         ),
         "calibration_precision_at_target_recall_threshold": float(
             _threshold_at_recall(
-                *_candidate_labels(candidates, truth),
+                calibration_scores,
+                calibration_labels,
                 float(config["rand_matching"]["target_recall"]),
             )
         ),
@@ -866,13 +952,7 @@ def evaluate_calibration_trial(
         true_candidates["attribute_conflict_type"].ne("none").mean()
     )
     result["attribute_conflict_status"] = "true_candidate_gate_check"
-    non_finite_fields = sorted(
-        key
-        for key, value in result.items()
-        if key.startswith(("calibration_", "collapse_", "diagnostic_"))
-        and isinstance(value, (int, float, np.integer, np.floating))
-        and not np.isfinite(value)
-    )
+    non_finite_fields = calibration_non_finite_fields(result)
     result["calibration_non_finite_count"] = len(non_finite_fields)
     result["calibration_non_finite_fields"] = ",".join(non_finite_fields)
     CalibrationMetricRow.model_validate(result)

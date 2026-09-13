@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from core.schemas import FoldSets
+from core.schemas import CalibrationPartition, FoldSets
 
 
 def component_folds(
@@ -90,6 +90,41 @@ def component_folds(
     return FoldSets(folds=folds).folds
 
 
+def holdout_split(
+    pos: np.ndarray,
+    row_bc: np.ndarray,
+    *,
+    n_folds: int,
+    seed: int,
+    dev_fraction: float,
+    test_fraction: float,
+) -> tuple[set[str], set[str], set[str]]:
+    """The SINGLE derivation of the holdout split: (train, dev, test) barcodes.
+
+    Roles come from ``n_folds``, not from hardcoded indices: ``test =
+    quarters[-1]``, ``dev = quarters[-2]``, ``train = the remaining
+    quarters``.  ``component_folds`` deals the components round-robin over
+    ``n_folds`` groups, so each quarter is ``1.0 / n_folds`` of the graph and
+    the realized shares are fixed by the arity.  A configured
+    ``dev_fraction``/``test_fraction`` that does not match that share is a
+    mis-configured 50/25/25 contract (the schema pins
+    ``holdout_component_folds`` at 4 = 0.25/0.25); it raises here instead of
+    silently producing 60/20/20 under a "50/25/25" label.
+    """
+    if n_folds < 2:
+        raise ValueError(f"holdout split needs at least 2 component folds, got {n_folds}")
+    quarter = 1.0 / n_folds
+    if abs(dev_fraction - quarter) > 1e-9 or abs(test_fraction - quarter) > 1e-9:
+        raise ValueError(
+            f"holdout split contract violated: n_folds={n_folds} deals quarters "
+            f"of {quarter:.4f} each, but the split declares dev_fraction="
+            f"{dev_fraction} and test_fraction={test_fraction} "
+            f"(the 50/25/25 contract requires n_folds=4)"
+        )
+    quarters = component_folds(pos, row_bc, n_folds, seed)
+    return set().union(*quarters[:-2]), quarters[-2], quarters[-1]
+
+
 def partition_component_pairs(
     positive_pairs: np.ndarray,
     negative_pairs: np.ndarray,
@@ -100,13 +135,24 @@ def partition_component_pairs(
     """Partition pair pools by positive-pair components without leakage.
 
     The returned tuple is ``(positive_fit, positive_reserved,
-    negative_fit, negative_reserved)``.  The reservation is made by whole
-    components, so no canonical identity crosses the calibration boundary.
+    negative_fit, negative_reserved)`` — see ``CalibrationPartition``, which
+    validates the populations and the boundary contract on construction.  The
+    reservation is made by whole components AND a pair is reserved only when
+    BOTH of its endpoints are reserved: a positive sits inside one component
+    (so it is unaffected), but a negative links two DIFFERENT components, and
+    a left-endpoint-only rule deals the two mirrored orientations of the same
+    product pair to opposite sides of the calibration boundary — the fit half
+    keeps ``(rep(g1), canon(g2))`` for early stopping while the calibration
+    half keeps ``(rep(g2), canon(g1))``.
     """
     if len(positive_pairs) == 0:
         raise ValueError("cannot reserve calibration data without DEV positives")
-    if not 0.0 < fraction < 1.0:
-        raise ValueError("calibration fraction must be strictly between 0 and 1")
+    if not 0.0 < fraction <= 0.5:
+        raise ValueError(
+            "calibration fraction must be in (0, 0.5]: the component grid "
+            "reserves a whole number of folds and can never reserve a "
+            f"majority of DEV, got {fraction}"
+        )
     pair_rows = np.unique(positive_pairs.ravel())
     local_index = {int(row): position for position, row in enumerate(pair_rows)}
     local_pairs = np.asarray(
@@ -116,7 +162,12 @@ def partition_component_pairs(
         ],
         dtype=int,
     )
-    local_barcodes = np.asarray(row_bc[pair_rows], dtype=str)
+    # the identity a barcode is matched by is the STRIPPED one on both the
+    # component side and the mask side (a padded barcode used to build a
+    # component it could never be reserved by)
+    local_barcodes = np.asarray(
+        [str(row_bc[int(row)]).strip() for row in pair_rows], dtype=str
+    )
     n_folds = max(2, int(np.ceil(1.0 / fraction)))
     component_groups = component_folds(local_pairs, local_barcodes, n_folds, seed)
     n_reserved = min(max(1, int(round(n_folds * fraction))), n_folds - 1)
@@ -124,22 +175,38 @@ def partition_component_pairs(
 
     def reserved_mask(pairs: np.ndarray) -> np.ndarray:
         return np.asarray(
-            [str(row_bc[int(pair[0])]).strip() in selected_barcodes for pair in pairs],
+            [
+                str(row_bc[int(pair[0])]).strip() in selected_barcodes
+                and str(row_bc[int(pair[1])]).strip() in selected_barcodes
+                for pair in pairs
+            ],
             dtype=bool,
         )
 
     positive_mask = reserved_mask(positive_pairs)
     negative_mask = reserved_mask(negative_pairs)
-    result = (
-        positive_pairs[~positive_mask],
-        positive_pairs[positive_mask],
-        negative_pairs[~negative_mask],
-        negative_pairs[negative_mask],
+    partition = CalibrationPartition(
+        positive_fit=positive_pairs[~positive_mask],
+        positive_reserved=positive_pairs[positive_mask],
+        negative_fit=negative_pairs[~negative_mask],
+        negative_reserved=negative_pairs[negative_mask],
+        row_bc=row_bc,
+        n_positive_pairs=len(positive_pairs),
+        n_negative_pairs=len(negative_pairs),
     )
-    if sum(len(part) for part in result[:2]) != len(positive_pairs):
-        raise RuntimeError("positive calibration partition changed its population")
-    if sum(len(part) for part in result[2:]) != len(negative_pairs):
-        raise RuntimeError("negative calibration partition changed its population")
-    return result
+    # checks that can actually fail: the two "population" guards that used to
+    # sit here compared pairs[~m] + pairs[m] against len(pairs) for one and the
+    # same boolean mask, i.e. they held identically for ANY mask.
+    if len(partition.positive_reserved) == 0:
+        raise RuntimeError(
+            "calibration reservation is empty: no positive-pair component was "
+            "reserved — the component identity is broken (check row_bc)"
+        )
+    if len(negative_pairs) and len(partition.negative_reserved) == 0:
+        raise RuntimeError(
+            "calibration reservation kept no negative pair: no negative pair "
+            "has both endpoints inside a reserved component"
+        )
+    return partition.pools()
 # (trailing HARDNEG_SIM_THRESHOLD removed — dead constant, no readers; the
 # threshold lives in config/training.yaml pairs.hardneg_sim_threshold)

@@ -67,6 +67,7 @@ from core.common import (
     pair_auc,
     pair_similarity,
     plot_dpi,
+    recall_column_suffix,
     row_metadata_text,
     runtime,
     trace_artifact,
@@ -1941,6 +1942,44 @@ def _training_pair_populations(
     return populations
 
 
+def _usage_row(
+    *,
+    fold_i: int,
+    epoch: int,
+    pair_id: int,
+    population: str,
+    augmentation: str,
+    ann_version: int,
+    presentations: int,
+    lineage: dict,
+) -> dict:
+    """Build one datapoint_usage row.
+
+    Shared by the presented and the synthetic ``not_presented`` rows so the
+    two key sets cannot drift apart: lineage fields may only FILL a key the
+    base row does not already declare (``if key not in detail``). Spreading
+    lineage over the base dict instead would let its mask-audit ``population``
+    ("positive"/"negative") overwrite the real pair population label.
+    """
+    detail = {
+        "fold": int(fold_i),
+        "epoch": int(epoch),
+        "pair_id": int(pair_id),
+        "population": str(population),
+        "augmentation": str(augmentation),
+        "ann_version": int(ann_version),
+        "presentations": int(presentations),
+        "lineage_id": lineage.get("lineage_id", ""),
+        "source_anchor_payload_idx": lineage.get("source_anchor_payload_idx", ""),
+        "source_pair_payload_idx": lineage.get("source_pair_payload_idx", ""),
+        "is_masked_copy": int(lineage.get("is_masked_copy", 0)),
+    }
+    detail.update(
+        {key: value for key, value in lineage.items() if key not in detail}
+    )
+    return detail
+
+
 def _write_datapoint_usage(
     *,
     fold_i: int,
@@ -1955,16 +1994,24 @@ def _write_datapoint_usage(
 
     A configured source with no rows is recorded as ``unavailable``. A
     dynamic source that has not had a chance to run before early stopping is
-    recorded as ``not_reached``. Non-empty training populations are still
-    hard failures when they receive zero presentations.
+    recorded as ``not_reached``. A non-empty training population that receives
+    zero presentations is recorded as ``missing``, warned about and counted in
+    the returned ``n_missing_datapoint_populations``; the fold continues
+    (audit A4 — this is no longer a hard failure).
     """
     from collections import Counter
     from core.common import write_visibility_log
+
+    def _lineage_at(pair_id: int) -> dict:
+        if pair_lineage is not None and pair_id < len(pair_lineage):
+            return pair_lineage[pair_id]
+        return {}
 
     expected = Counter(pair_populations)
     dynamic_populations = set(dynamic_populations or ())
     observed: Counter[str] = Counter()
     detailed: list[dict] = []
+    by_population: dict[str, dict[str, object]] = {}
     seen_pair_ids: set[int] = set()
     for key, count in sorted(presentation_counts.items(), key=lambda item: str(item[0])):
         epoch, pair_id, population, augmentation, ann_version = key
@@ -1975,72 +2022,41 @@ def _write_datapoint_usage(
             )
         seen_pair_ids.add(pair_id)
         observed[str(population)] += int(count)
-        lineage = (
-            pair_lineage[pair_id]
-            if pair_lineage is not None and pair_id < len(pair_lineage)
-            else {}
+        # Coverage counters describe PRESENTATIONS, so they are aggregated
+        # here and never from the synthetic zero-presentation rows below
+        # (01-2: those rows made distinct_pairs_presented count pairs that
+        # were never presented — "0 presentations, 1 pair presented").
+        coverage = by_population.setdefault(
+            str(population), {"presentations": 0, "pair_ids": set()}
         )
-        detail = {
-                "fold": int(fold_i),
-                "epoch": int(epoch),
-                "pair_id": pair_id,
-                "population": str(population),
-                "augmentation": str(augmentation),
-                "ann_version": int(ann_version),
-                "presentations": int(count),
-                "lineage_id": lineage.get("lineage_id", ""),
-                "source_anchor_payload_idx": lineage.get(
-                    "source_anchor_payload_idx", ""
-                ),
-                "source_pair_payload_idx": lineage.get(
-                    "source_pair_payload_idx", ""
-                ),
-                "is_masked_copy": int(lineage.get("is_masked_copy", 0)),
-            }
-        detail.update(
-            {
-                key: value
-                for key, value in lineage.items()
-                if key not in detail
-            }
+        coverage["presentations"] += int(count)
+        coverage["pair_ids"].add(pair_id)
+        detailed.append(
+            _usage_row(
+                fold_i=fold_i,
+                epoch=epoch,
+                pair_id=pair_id,
+                population=population,
+                augmentation=augmentation,
+                ann_version=ann_version,
+                presentations=count,
+                lineage=_lineage_at(pair_id),
+            )
         )
-        detailed.append(detail)
     for pair_id, population in enumerate(pair_populations):
         if pair_id in seen_pair_ids:
             continue
-        lineage = (
-            pair_lineage[pair_id]
-            if pair_lineage is not None and pair_id < len(pair_lineage)
-            else {}
-        )
         detailed.append(
-            {
-                "fold": int(fold_i),
-                "epoch": -1,
-                "pair_id": int(pair_id),
-                "population": str(population),
-                "augmentation": "not_presented",
-                "ann_version": 0,
-                "presentations": 0,
-                "lineage_id": lineage.get("lineage_id", ""),
-                "source_anchor_payload_idx": lineage.get(
-                    "source_anchor_payload_idx", ""
-                ),
-                "source_pair_payload_idx": lineage.get(
-                    "source_pair_payload_idx", ""
-                ),
-                "is_masked_copy": int(lineage.get("is_masked_copy", 0)),
-                **{
-                    key: value
-                    for key, value in lineage.items()
-                    if key not in {
-                        "lineage_id",
-                        "source_anchor_payload_idx",
-                        "source_pair_payload_idx",
-                        "is_masked_copy",
-                    }
-                },
-            }
+            _usage_row(
+                fold_i=fold_i,
+                epoch=-1,
+                pair_id=pair_id,
+                population=population,
+                augmentation="not_presented",
+                ann_version=0,
+                presentations=0,
+                lineage=_lineage_at(pair_id),
+            )
         )
     write_visibility_log(
         pd.DataFrame(detailed),
@@ -2048,13 +2064,6 @@ def _write_datapoint_usage(
         run_tag,
         sample,
     )
-    by_population: dict[str, dict[str, object]] = {}
-    for row in detailed:
-        item = by_population.setdefault(
-            row["population"], {"presentations": 0, "pair_ids": set()}
-        )
-        item["presentations"] += int(row["presentations"])
-        item["pair_ids"].add(int(row["pair_id"]))
     coverage_rows: list[dict] = []
     missing: list[str] = []
     dynamic_names = {"ann_finetuned", "attribute_conflict"}
@@ -3709,7 +3718,6 @@ def train_one_config(
             hn_idx = np.array([row_to_idx[int(r)] for r in hard_test.ravel()]).reshape(
                 -1, 2
             )
-            eval_payload = [payload[r] for r in eval_rows]
             emb = _encode_fused_rows(eval_rows)
             encode_s = time.perf_counter() - t_encode
             pos_s = _cos(emb, tp_idx)
@@ -3810,7 +3818,7 @@ def train_one_config(
             train_s = time.perf_counter() - t_fold - encode_s
             steps_run = trainer.state.global_step
             s_per_step = train_s / steps_run if steps_run else float("nan")
-            texts_per_s = len(eval_payload) / encode_s if encode_s else float("nan")
+            texts_per_s = len(eval_rows) / encode_s if encode_s else float("nan")
             # steps saved by early stopping (epochs requested vs run)
             steps_full = n_steps_per_epoch * cfg["epochs"]
             es_saved_pct = (
@@ -3870,13 +3878,16 @@ def train_one_config(
             # precision at 90% recall with its audit triple (TP/FP/threshold)
             # from 07b/07c/07d CSVs; compute them from the SAME score
             # population as pr_auc so those CSVs regenerate from src/training/train runs.
-            _prec90, _rec90, _thr90 = _precision_at_recall(
-                _y,
-                _all,
-                float(calibration_config["rand_matching"]["target_recall"]),
+            _target_recall = float(
+                calibration_config["rand_matching"]["target_recall"]
             )
+            _prec90, _rec90, _thr90 = _precision_at_recall(_y, _all, _target_recall)
             _tp90 = int(((_all >= _thr90) & (_y == 1)).sum())
             _fp90 = int(((_all >= _thr90) & (_y == 0)).sum())
+            # Same SSOT doctrine as _thr_key above: the recall-tied KEYS must
+            # follow the configured target_recall, not a literal "90pct" —
+            # otherwise a retune writes a 95%-recall number under a 90% header.
+            _recall_key = recall_column_suffix(_target_recall)
 
             row = {
                 "fold": fold_i,
@@ -3893,10 +3904,10 @@ def train_one_config(
                 # 07-schema: AP under the same name the plots expect
                 "average_precision": _pr_auc,
                 **_ranking,
-                "precision_at_90pct_recall": _prec90,
-                "tp_at_90pct_recall": _tp90,
-                "fp_at_90pct_recall": _fp90,
-                "threshold_at_90pct_recall": _thr90,
+                f"precision_at_{_recall_key}_recall": _prec90,
+                f"tp_at_{_recall_key}_recall": _tp90,
+                f"fp_at_{_recall_key}_recall": _fp90,
+                f"threshold_at_{_recall_key}_recall": _thr90,
                 f"f1_at_{_thr_key}": _f1_fixed,
                 f"precision_at_{_thr_key}": _prec_fixed,
                 f"recall_at_{_thr_key}": _rec_fixed,
@@ -4148,8 +4159,8 @@ def train_one_config(
                     f"metrics/fold_{fold_i}/f1_at_{_thr_key}": _f1_fixed,
                     f"metrics/fold_{fold_i}/precision_at_{_thr_key}": _prec_fixed,
                     f"metrics/fold_{fold_i}/recall_at_{_thr_key}": _rec_fixed,
-                    f"metrics/fold_{fold_i}/precision_at_90pct_recall": _prec90,
-                    f"metrics/fold_{fold_i}/threshold_at_90pct_recall": _thr90,
+                    f"metrics/fold_{fold_i}/precision_at_{_recall_key}_recall": _prec90,
+                    f"metrics/fold_{fold_i}/threshold_at_{_recall_key}_recall": _thr90,
                 }
             )
             if wandb_ctx is not None and score_metrics:

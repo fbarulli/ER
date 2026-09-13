@@ -28,13 +28,14 @@ from core.common import (
     load_config,
     load_dataset_deduped,
     plot_dpi,
+    recall_column_suffix,
     runtime,
     set_determinism,
     training_cfg,
 )
 from core.common import SSOT_LOSS as _SSOT_LOSS
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_CONTRASTIVE_MARGIN
-from training.folds import component_folds
+from training.folds import component_folds, holdout_split
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 
 # Colab workers should spend GPU time only on training and the score exports
@@ -70,6 +71,32 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
     """
 
     from training.hpo_metrics import CALIBRATION_AGGREGATE_FIELDS
+
+    # 05-03/06-3: the recall-tied aggregates below are a function of the
+    # CONFIGURED recall target, so their column names are derived from it with
+    # the same SSOT helper training.py's producer uses — a retune renames both
+    # sides at once instead of filing a 95%-recall number under the old
+    # fixed-suffix header (the literal stayed put while
+    # rand_matching.target_recall became config-driven in 41cd50e).
+    _train_cfg = training_cfg()
+    _recall_key = recall_column_suffix(
+        float(_train_cfg.rand_matching.target_recall)
+    )
+    _prec_col = f"precision_at_{_recall_key}_recall"
+    _tp_col = f"tp_at_{_recall_key}_recall"
+    _fp_col = f"fp_at_{_recall_key}_recall"
+    _thr_col = f"threshold_at_{_recall_key}_recall"
+    # 05-05: every aggregate in these rows is a function of the split and the
+    # seed, and 41cd50e is the commit that made both steerable from config.
+    # Record them, and (below) key on them: two runs that differ only in these
+    # inputs must not merge into one row whose numbers cannot be attributed.
+    _split = _train_cfg.split
+    _provenance = {
+        "split": args.split,
+        "holdout_component_folds": int(_split.holdout_component_folds),
+        "calibration_seed_offset": int(_split.calibration_seed_offset),
+        "seed": int(SEED),
+    }
 
     calibration_rows = [
         row for row in ok_rows
@@ -114,13 +141,14 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         "precision_at_10": round(agg("precision_at_10"), 4),
         "recall_at_10": round(agg("recall_at_10"), 4),
         "hits_at_1": round(agg("hits_at_1"), 4),
-        "precision_at_90pct_recall": round(agg("precision_at_90pct_recall"), 4),
-        "tp_at_90pct_recall": round(agg("tp_at_90pct_recall"), 1),
-        "fp_at_90pct_recall": round(agg("fp_at_90pct_recall"), 1),
-        "threshold_at_90pct_recall": round(agg("threshold_at_90pct_recall"), 4),
+        _prec_col: round(agg(_prec_col), 4),
+        _tp_col: round(agg(_tp_col), 1),
+        _fp_col: round(agg(_fp_col), 1),
+        _thr_col: round(agg(_thr_col), 4),
         "auc": round(agg("auc"), 4),
         "n_folds": len(ok_rows),
         "model": args.model,
+        **_provenance,
     }
     row_07c.update(
         {
@@ -128,7 +156,7 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
             for field in CALIBRATION_AGGREGATE_FIELDS
         }
     )
-    _append_csv(F["field_ablation"], [row_07c], "variant")
+    _append_csv(F["field_ablation"], [row_07c], ["variant", *_provenance])
 
     # ---- 07d: one row per train fraction ----
     row_07d = {
@@ -142,13 +170,14 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         "precision_at_10": round(agg("precision_at_10"), 4),
         "recall_at_10": round(agg("recall_at_10"), 4),
         "hits_at_1": round(agg("hits_at_1"), 4),
-        "precision_at_90pct_recall": round(agg("precision_at_90pct_recall"), 4),
-        "tp_at_90pct_recall": round(agg("tp_at_90pct_recall"), 1),
-        "fp_at_90pct_recall": round(agg("fp_at_90pct_recall"), 1),
-        "threshold_at_90pct_recall": round(agg("threshold_at_90pct_recall"), 4),
+        _prec_col: round(agg(_prec_col), 4),
+        _tp_col: round(agg(_tp_col), 1),
+        _fp_col: round(agg(_fp_col), 1),
+        _thr_col: round(agg(_thr_col), 4),
         "repeat": "single",
         "model": args.model,
         "payload": args.payload,
+        **_provenance,
     }
     row_07d.update(
         {
@@ -157,7 +186,7 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         }
     )
     _append_csv(
-        F["data_scaling"], [row_07d], ["fraction", "payload"]
+        F["data_scaling"], [row_07d], ["fraction", "payload", *_provenance]
     )
 
 
@@ -181,8 +210,20 @@ def _append_csv(
     old = pd.read_csv(path)
     key = [k for k in key_fields if k in old.columns and k in new_df.columns]
     if not key:
-        pd.concat([old, new_df], ignore_index=True).to_csv(path, index=False)
-        return
+        raise ValueError(
+            f"{path} has no shared replace key from {key_fields}; refusing "
+            "to append without provenance identity"
+        )
+    # 05-05: a key field that exists in the incoming row but not in the file
+    # (a CSV written before those columns existed) would narrow the key
+    # SILENTLY and let two runs that differ in exactly that input overwrite
+    # each other. Say so instead of replacing quietly.
+    dropped = [k for k in key_fields if k not in key]
+    if dropped:
+        raise ValueError(
+            f"{path} is missing required replace-key fields {dropped}; "
+            "refusing to narrow the key and overwrite indistinguishable runs"
+        )
     # index the old rows by key tuple -> row position. Keys compare on
     # STR — pandas reads "0.25" back as float 0.25, so a raw-tuple match
     # would miss on every numeric-looking key (07d's fraction column).
@@ -330,11 +371,19 @@ def _main_inner(_mlf, _wandb) -> None:
         "--weight-decay", type=float, default=None,
         help="final selected-run override; omitted values use training.yaml",
     )
+    # 05-01: the holdout shares are CONFIG-owned, so the help text reports the
+    # configured shares instead of restating literals. argparse %-formats help
+    # strings — a bare percent must be doubled or --help raises.
+    dev_share = float(split_cfg["dev_fraction"])
+    test_share = float(split_cfg["test_fraction"])
+    _share_pct = (
+        f"{1.0 - dev_share - test_share:.0%}/{dev_share:.0%}/{test_share:.0%}"
+    ).replace("%", "%%")
     ap.add_argument(
         "--split",
         choices=["holdout", "cv"],
         default=str(split_cfg["mode"]),
-        help="holdout: ONE component-aware 50/25/25 "
+        help=f"holdout: ONE component-aware {_share_pct} "
         "train/dev/test split (the owner's spec) | "
         "cv: k component folds (research mode)",
     )
@@ -721,30 +770,35 @@ def _main_inner(_mlf, _wandb) -> None:
     # pairs. The split unit is the CONNECTED COMPONENT of the positive-pair
     # graph; the dev boundary must ALSO be component-aligned (a barcode-level
     # rng carve splits 7,808 of 37,445 train-side pair-uses between train/dev).
-    # holdout = the owner's 50/25/25: quarters q0+q1 train, q2 dev, q3 test.
+    # holdout = ONE component-aware split, derived by folds.holdout_split:
+    # test = the LAST component group, dev = the one before it, train = the
+    # rest — no hardcoded quarter indices (05-01/05-02). The helper raises
+    # unless 1/n_folds equals the configured dev/test_fraction, so a knob that
+    # cannot be honoured fails loudly instead of quietly building a 60/20/20
+    # split under the banner of another share; the banner below prints the
+    # CONFIGURED shares.
     if args.split == "holdout":
-        quarters = component_folds(
+        train_bc, dev_bc, test_bc = holdout_split(
             pos,
             row_bc,
-            int(cfg["split"]["holdout_component_folds"]),
-            SEED,
+            n_folds=int(split_cfg["holdout_component_folds"]),
+            seed=SEED,
+            dev_fraction=float(split_cfg["dev_fraction"]),
+            test_fraction=float(split_cfg["test_fraction"]),
         )
-        test_bc, dev_bc = quarters[3], quarters[2]
         folds_override = test_bc  # single-set: train = all others
         dev_override = dev_bc
         from core.hard_negatives import pairs_in_set
 
-        n_tr = len({b for b in row_bc if b and b not in test_bc and b not in dev_bc})
-        tr_pos = len(
-            pos[pairs_in_set(pos, row_bc, set(row_bc.tolist()) - test_bc - dev_bc)]
-        )
+        n_tr = len(train_bc)
+        tr_pos = len(pos[pairs_in_set(pos, row_bc, train_bc)])
         print(
-            f"[holdout 50/25/25] train≈{n_tr:,} / dev {len(dev_bc):,} / "
+            f"[holdout {1.0 - dev_share - test_share:.0%}/{dev_share:.0%}/"
+            f"{test_share:.0%}] train≈{n_tr:,} / dev {len(dev_bc):,} / "
             f"test {len(test_bc):,} barcodes | train_pos {tr_pos:,} (component-aware)",
             flush=True,
         )
     else:
-        quarters = None
         folds_override = component_folds(pos, row_bc, args.folds, SEED)
         dev_override = None
         print(f"[cv] {args.folds} component folds", flush=True)

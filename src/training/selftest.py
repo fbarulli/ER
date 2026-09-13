@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 FAILED: list[str] = []
+SKIPPED: list[str] = []
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -36,6 +37,12 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     print(f"  [{tag}] {name}" + (f" — {detail}" if detail and not cond else ""))
     if not cond:
         FAILED.append(name)
+
+
+def skip(name: str, reason: str) -> None:
+    """Record an oracle that is not applicable to the loaded configuration."""
+    print(f"  [SKIP] {name} — {reason}")
+    SKIPPED.append(name)
 
 
 def oracle_gtin() -> None:
@@ -424,19 +431,32 @@ def oracle_folds() -> None:
 
 
 def oracle_holdout_integrity() -> None:
-    """REAL-data holdout discipline: the 50/25/25 component split must be
-    pairwise disjoint AND every positive pair must live entirely inside
-    one side (no pair, hence no product, straddles a boundary)."""
+    """Validate the configured holdout split, or skip in CV mode."""
+    from core.common import SEED, load_dataset_deduped, training_cfg
+
+    split = training_cfg().split
+    if split.mode != "holdout":
+        skip(
+            "real-data holdout integrity",
+            f"split.mode={split.mode!r} does not derive a holdout split",
+        )
+        return
+
     import pipeline
-    from core.common import SEED, load_dataset_deduped
-    from training.folds import component_folds
+    from training.folds import holdout_split
 
     df = load_dataset_deduped()
     d = pipeline.build_training_data(df)
     pos, row_bc = d["pos"], d["row_bc"]
 
-    quarters = component_folds(pos, row_bc, 4, SEED)
-    train_bc, dev_bc, test_bc = quarters[0] | quarters[1], quarters[2], quarters[3]
+    train_bc, dev_bc, test_bc = holdout_split(
+        pos,
+        row_bc,
+        n_folds=int(split.holdout_component_folds),
+        seed=SEED,
+        dev_fraction=float(split.dev_fraction),
+        test_fraction=float(split.test_fraction),
+    )
 
     check(
         "train/dev/test barcode sets pairwise disjoint",
@@ -457,13 +477,15 @@ def oracle_holdout_integrity() -> None:
         straddle == 0,
         f"{straddle} straddling pairs",
     )
-    # measured split sizes (25/25/25 by construction; train = q0+q1 = 50%)
+    dev_share = float(split.dev_fraction)
+    test_share = float(split.test_fraction)
+    train_share = 1.0 - dev_share - test_share
     n_bc = len(set(row_bc.tolist()))
     check(
-        "split sizes 50/25/25 (±2pp) over barcodes",
-        abs(len(train_bc) / n_bc - 0.50) < 0.02
-        and abs(len(dev_bc) / n_bc - 0.25) < 0.02
-        and abs(len(test_bc) / n_bc - 0.25) < 0.02,
+        f"split sizes {train_share:.0%}/{dev_share:.0%}/{test_share:.0%} (±2pp) over barcodes",
+        abs(len(train_bc) / n_bc - train_share) < 0.02
+        and abs(len(dev_bc) / n_bc - dev_share) < 0.02
+        and abs(len(test_bc) / n_bc - test_share) < 0.02,
         f"got {len(train_bc)}/{len(dev_bc)}/{len(test_bc)} of {n_bc}",
     )
     print(
@@ -495,11 +517,12 @@ def oracle_precision_at_recall() -> None:
     y2 = rng.integers(0, 2, 500)
     s2 = rng.random(500)
     prec, rec, _ = precision_recall_curve(y2, s2)
-    mask = rec[:-1] >= 0.9
+    fixture_recall = 0.9
+    mask = rec[:-1] >= fixture_recall
     sk = prec[:-1][mask].max() if mask.any() else float("nan")
-    p2, _r2, _ = _precision_at_recall(y2, s2, 0.9)
+    p2, _r2, _ = _precision_at_recall(y2, s2, fixture_recall)
     check(
-        "P@90R <= sklearn max-at-recall (boundary point)",
+        f"P@{fixture_recall:.0%}R <= sklearn max-at-recall (boundary point)",
         p2 <= sk + 1e-9,
         f"ours {p2:.4f} vs sklearn {sk:.4f}",
     )
@@ -806,10 +829,10 @@ def oracle_config_split() -> None:
         check("Hub model identifiers are rejected", True)
     else:
         check("Hub model identifiers are rejected", False)
-    # split shares sum to 1 (pydantic-enforced; pin the values)
+    # split shares sum to 1 (Pydantic-enforced; values come from config)
     sp = training_cfg().split
     check(
-        "split 50/25/25 sums to 1",
+        f"split {sp.train_fraction:.0%}/{sp.dev_fraction:.0%}/{sp.test_fraction:.0%} sums to 1",
         abs(sp.train_fraction + sp.dev_fraction + sp.test_fraction - 1.0) < 1e-9,
     )
 
@@ -1784,7 +1807,15 @@ def main() -> None:
     oracle_mining()
     print("== 6. component folds ==")
     oracle_folds()
-    print("== 6b. real-data holdout integrity (50/25/25) ==")
+    from core.common import training_cfg as _training_cfg
+
+    _sp = _training_cfg().split
+    print(
+        "== 6b. real-data holdout integrity "
+        f"[mode={_sp.mode}] "
+        f"({1.0 - _sp.dev_fraction - _sp.test_fraction:.0%}/"
+        f"{_sp.dev_fraction:.0%}/{_sp.test_fraction:.0%}) =="
+    )
     oracle_holdout_integrity()
     print("== 7. precision-at-recall ==")
     oracle_precision_at_recall()
@@ -1815,12 +1846,17 @@ def main() -> None:
     print("== 9b. per-stage manifest guardrail (silent-drop layer) ==")
     oracle_manifest()
     print()
+    if SKIPPED:
+        print(f"{len(SKIPPED)} oracle(s) skipped: {', '.join(SKIPPED)}")
     if FAILED:
         print(f"SELFTEST FAILED: {len(FAILED)} oracle(s):")
         for f in FAILED:
             print(f"  - {f}")
         raise SystemExit(1)
-    print("SELFTEST PASSED — all oracles green")
+    print(
+        "SELFTEST PASSED — all oracles green"
+        + (f" ({len(SKIPPED)} skipped)" if SKIPPED else "")
+    )
 
 
 if __name__ == "__main__":

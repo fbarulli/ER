@@ -310,6 +310,18 @@ def plot_dpi() -> int:
     return int(_CFG["plots"]["dpi"])
 
 
+def recall_column_suffix(target_recall: float) -> str:
+    """SSOT label for recall-tied metric keys: "90pct" for 0.90.
+
+    The label half of every key tied to
+    ``config/training.yaml rand_matching.target_recall`` was spelled as a
+    literal ("90pct") while the value was already config-driven, so a retune
+    wrote a 95%-recall number under a 90% header. Consumers import this
+    instead of re-declaring the suffix.
+    """
+    return f"{target_recall:.0%}".replace("%", "pct")
+
+
 def strip_ladder_bands() -> list[tuple[float, float]]:
     """SSOT accessor for the strip-audit similarity ladder's Jaccard band
     edges (config/training.yaml audit.strip_ladder_bands).
