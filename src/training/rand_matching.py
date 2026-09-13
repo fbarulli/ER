@@ -57,7 +57,10 @@ from core.common import (
 )
 from core.graph_diagnostics import (
     CANDIDATE_GATE_COLUMNS,
+    CANDIDATE_GRAPH_DIAGNOSTIC_COLUMNS,
+    PLAUSIBLE_GROUP_COUNT_COLUMN,
     candidate_graph_diagnostics,
+    empty_candidate_graph_diagnostics,
 )
 from core.gtin import is_valid_gtin_checksum
 from core.manifest import sha256_file
@@ -93,15 +96,9 @@ METRIC_COLUMNS = (
     "predicted_group_count",
     "true_group_count",
     "expected_group_count",
-    "plausible_group_count",
+    PLAUSIBLE_GROUP_COUNT_COLUMN,
     "unmatched_skus",
-    "diagnostic_edge_count",
-    "diagnostic_component_count",
-    "diagnostic_component_size_distribution",
-    "diagnostic_max_component_size",
-    "diagnostic_score_diameter",
-    "diagnostic_bridge_edge_count",
-    "diagnostic_weakest_bridge_score",
+    *CANDIDATE_GRAPH_DIAGNOSTIC_COLUMNS,
     "tp",
     "tn",
     "fp",
@@ -1104,16 +1101,7 @@ def prediction_metrics(
     graph = (
         candidate_graph_diagnostics(candidates, threshold)
         if include_graph_diagnostics
-        else {
-            "diagnostic_edge_count": 0,
-            "diagnostic_component_count": 0,
-            "diagnostic_component_size_distribution": "{}",
-            "diagnostic_max_component_size": 0,
-            "diagnostic_score_diameter": 0.0,
-            "diagnostic_bridge_edge_count": 0,
-            "diagnostic_weakest_bridge_score": float("nan"),
-            "plausible_group_count": 0,
-        }
+        else empty_candidate_graph_diagnostics()
     )
     metrics = {
         "n": int(len(merged)),
@@ -1195,15 +1183,8 @@ def gtin_metrics(
                     "predicted_group_count": 0,
                     "true_group_count": 0,
                     "expected_group_count": 0,
-                    "plausible_group_count": 0,
                     "unmatched_skus": 0,
-                    "diagnostic_edge_count": 0,
-                    "diagnostic_component_count": 0,
-                    "diagnostic_component_size_distribution": "{}",
-                    "diagnostic_max_component_size": 0,
-                    "diagnostic_score_diameter": 0.0,
-                    "diagnostic_bridge_edge_count": 0,
-                    "diagnostic_weakest_bridge_score": float("nan"),
+                    **empty_candidate_graph_diagnostics(),
                     "tp": 0,
                     "tn": 0,
                     "fp": 0,

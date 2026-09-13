@@ -81,8 +81,9 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
     # fixed-suffix header (the literal stayed put while
     # rand_matching.target_recall became config-driven in 41cd50e).
     _train_cfg = training_cfg()
+    _target_recall = float(_train_cfg.rand_matching.target_recall)
     _recall_key = recall_column_suffix(
-        float(_train_cfg.rand_matching.target_recall)
+        _target_recall
     )
     _prec_col = f"precision_at_{_recall_key}_recall"
     _tp_col = f"tp_at_{_recall_key}_recall"
@@ -98,7 +99,11 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         "holdout_component_folds": int(_split.holdout_component_folds),
         "calibration_seed_offset": int(_split.calibration_seed_offset),
         "seed": int(SEED),
-        "target_recall": float(_train_cfg.rand_matching.target_recall),
+        # Keep the numeric value for analysis, but key rows on the canonical
+        # label.  CSV round-tripping can coerce numeric values and erase the
+        # identity boundary between closely spaced recall targets.
+        "target_recall": _target_recall,
+        "target_recall_key": _recall_key,
     }
 
     calibration_rows = [
@@ -223,41 +228,47 @@ def _append_csv(
     ensure_parent(path)
     if isinstance(key_fields, str):
         key_fields = [key_fields]
+    if not key_fields or len(set(key_fields)) != len(key_fields):
+        raise ValueError(f"replace key must contain unique fields: {key_fields!r}")
     new_df = pd.DataFrame(new_rows)
+    missing_incoming = [field for field in key_fields if field not in new_df.columns]
+    if missing_incoming:
+        raise ValueError(
+            f"incoming rows for {path} are missing replace-key fields "
+            f"{missing_incoming}"
+        )
     if not path.exists():
         new_df.to_csv(path, index=False)
         return
     old = pd.read_csv(path)
-    key = [k for k in key_fields if k in old.columns and k in new_df.columns]
+    missing_legacy = [field for field in key_fields if field not in old.columns]
+    if missing_legacy:
+        legacy_marker = "__legacy_unknown__"
+        for field in missing_legacy:
+            old[field] = [
+                f"{legacy_marker}:{field}:{record_number}"
+                for record_number in range(len(old))
+            ]
+        print(
+            f"[07-migration] {path}: retained {len(old):,} pre-existing row(s); "
+            f"marked missing replace-key field(s) {missing_legacy} as "
+            f"{legacy_marker}:<field>:<row>",
+            flush=True,
+        )
+    key = list(key_fields)
     if not key:
         raise ValueError(
             f"{path} has no shared replace key from {key_fields}; refusing "
             "to append without provenance identity"
         )
-    dropped = [k for k in key_fields if k not in key]
-    if dropped:
-        legacy_marker = "__legacy_unknown__"
-        for row_number, field in enumerate(dropped):
-            old[field] = [
-                f"{legacy_marker}:{row_number}:{record_number}"
-                for record_number in range(len(old))
-            ]
-        print(
-            f"[07-migration] {path}: retained {len(old):,} pre-existing row(s); "
-            f"marked missing replace-key field(s) {dropped} as "
-            f"{legacy_marker}:<field>:<row>",
-            flush=True,
-        )
-        key = list(key_fields)
-        if any(field not in new_df.columns for field in key):
-            raise ValueError(
-                f"incoming rows for {path} are missing replace-key fields "
-                f"{[field for field in key if field not in new_df.columns]}"
-            )
     # index the old rows by key tuple -> row position. Keys compare on
     # STR — pandas reads "0.25" back as float 0.25, so a raw-tuple match
     # would miss on every numeric-looking key (07d's fraction column).
     old_rows = old.to_dict("records")
+    for row_number, row in enumerate(old_rows):
+        for field in key:
+            if pd.isna(row[field]):
+                row[field] = f"__legacy_unknown__:{field}:{row_number}"
     old_keys = [tuple(str(row[k]) for k in key) for row in old_rows]
     duplicate_old_keys = {
         item for item, count in Counter(old_keys).items() if count > 1
@@ -271,6 +282,17 @@ def _append_csv(
     out_rows = old_rows
     appended = []
     new_rows_records = new_df.to_dict("records")
+    missing_values = [
+        (row_number, field)
+        for row_number, row in enumerate(new_rows_records)
+        for field in key
+        if pd.isna(row[field])
+    ]
+    if missing_values:
+        raise ValueError(
+            f"incoming rows for {path} contain null replace-key values: "
+            f"{missing_values[:3]}"
+        )
     new_keys = [tuple(str(r[k]) for k in key) for r in new_rows_records]
     duplicate_new_keys = {
         item for item, count in Counter(new_keys).items() if count > 1
@@ -285,7 +307,14 @@ def _append_csv(
             out_rows[pos[key_value]] = {**out_rows[pos[key_value]], **r}
         else:
             appended.append(r)
+    expected_rows = len(out_rows) + len(appended)
     pd.DataFrame(out_rows + appended).to_csv(path, index=False)
+    written = pd.read_csv(path)
+    if len(written) != expected_rows:
+        raise RuntimeError(
+            f"{path} row-count changed during append: expected "
+            f"{expected_rows}, wrote {len(written)}"
+        )
 
 
 def _nonnumeric_calibration_fields() -> tuple[str, ...]:
@@ -438,7 +467,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # local-only: a missing DVC bundle fails before data preparation begins.
     from core.common import resolve_model
 
-    default_model = resolve_model(tr["base_model"])
+    default_model = str(tr["base_model"])
     default_band = str(ann_cfg["band"])
 
     ap = argparse.ArgumentParser(description=__doc__)
@@ -478,7 +507,7 @@ def _main_inner(_mlf, _wandb) -> None:
         "--model",
         type=str,
         default=default_model,
-        help="model id OR local path inside the bundle (models/...)",
+        help="registry key or local path to the bundled model directory",
     )
     ap.add_argument(
         "--band",

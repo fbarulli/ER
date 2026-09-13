@@ -494,6 +494,50 @@ def oracle_holdout_integrity() -> None:
     )
 
 
+def oracle_holdout_validation() -> None:
+    """Reject holdout configurations that cannot produce a train split."""
+    from training.folds import holdout_split
+
+    empty_pos = np.empty((0, 2), dtype=int)
+    empty_row_bc = np.empty(0, dtype=str)
+
+    try:
+        holdout_split(
+            empty_pos,
+            empty_row_bc,
+            n_folds=2,
+            seed=0,
+            dev_fraction=0.5,
+            test_fraction=0.5,
+        )
+    except ValueError as exc:
+        check(
+            "holdout rejects n_folds=2 before deriving an empty train split",
+            "at least 3 component folds" in str(exc),
+            str(exc),
+        )
+    else:
+        check("holdout rejects n_folds=2", False, "no error raised")
+
+    try:
+        holdout_split(
+            empty_pos,
+            empty_row_bc,
+            n_folds=3,
+            seed=0,
+            dev_fraction=1.0 / 3.0,
+            test_fraction=1.0 / 3.0,
+        )
+    except ValueError as exc:
+        check(
+            "holdout rejects a degenerate empty train split",
+            "empty train barcode set" in str(exc),
+            str(exc),
+        )
+    else:
+        check("holdout rejects a degenerate empty train split", False, "no error raised")
+
+
 def oracle_precision_at_recall() -> None:
     from sklearn.metrics import precision_recall_curve
 
@@ -593,6 +637,140 @@ def oracle_append_csv() -> None:
             len(df) == 2
             and df[df.variant == "full"].ap.iloc[0] == 0.95,
             f"got {df.to_dict('records')}",
+        )
+
+        legacy = Path(d) / "legacy_07c.csv"
+        pd.DataFrame([{"variant": "full", "ap": 0.9}]).to_csv(
+            legacy, index=False
+        )
+        _append_csv(
+            legacy,
+            [{"variant": "full", "ap": 0.95, "split": "holdout", "seed": 7}],
+            ["variant", "split", "seed"],
+        )
+        migrated = pd.read_csv(legacy)
+        check(
+            "_append_csv migrates legacy 07c rows without overwrite",
+            len(migrated) == 2
+            and float(migrated.iloc[0]["ap"]) == 0.9
+            and float(migrated.iloc[1]["ap"]) == 0.95
+            and migrated.iloc[0]["split"].startswith("__legacy_unknown__"),
+            f"got {migrated.to_dict('records')}",
+        )
+
+        legacy_07d = Path(d) / "legacy_07d.csv"
+        pd.DataFrame([{"fraction": 1.0, "payload": "full", "ap": 0.8}]).to_csv(
+            legacy_07d, index=False
+        )
+        _append_csv(
+            legacy_07d,
+            [
+                {
+                    "fraction": 1.0,
+                    "payload": "full",
+                    "split": "holdout",
+                    "seed": 7,
+                    "ap": 0.85,
+                }
+            ],
+            ["fraction", "payload", "split", "seed"],
+        )
+        migrated_07d = pd.read_csv(legacy_07d)
+        check(
+            "_append_csv migrates legacy 07d rows without overwrite",
+            len(migrated_07d) == 2
+            and float(migrated_07d.iloc[0]["ap"]) == 0.8
+            and float(migrated_07d.iloc[1]["ap"]) == 0.85,
+            f"got {migrated_07d.to_dict('records')}",
+        )
+
+        before = legacy.read_bytes()
+        try:
+            _append_csv(
+                legacy,
+                [{"variant": "full", "ap": 0.99}],
+                ["variant", "split", "seed"],
+            )
+        except ValueError:
+            check("_append_csv rejects incomplete incoming provenance", True)
+        else:
+            check("_append_csv rejects incomplete incoming provenance", False)
+        check(
+            "_append_csv leaves file unchanged after rejected append",
+            legacy.read_bytes() == before,
+        )
+
+
+def oracle_recall_provenance_identity() -> None:
+    """Recall labels and 07-series keys must preserve sub-percent targets."""
+    from core.common import recall_column_suffix
+    from training.train import _append_csv
+
+    expected = {
+        0.90: "90pct",
+        0.904: "90p4pct",
+        0.9001: "90p01pct",
+        0.999: "99p9pct",
+    }
+    for target, label in expected.items():
+        check(
+            f"recall suffix preserves {target:g}",
+            recall_column_suffix(target) == label,
+            f"got {recall_column_suffix(target)!r}",
+        )
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "07c.csv"
+        rows = [
+            {
+                "variant": "full",
+                "split": "holdout",
+                "seed": 7,
+                "target_recall": target,
+                "target_recall_key": recall_column_suffix(target),
+                "ap": target,
+            }
+            for target in (0.90, 0.904)
+        ]
+        _append_csv(
+            path,
+            rows,
+            [
+                "variant",
+                "split",
+                "seed",
+                "target_recall_key",
+            ],
+        )
+        _append_csv(
+            path,
+            [
+                {
+                    **rows[0],
+                    "ap": 0.95,
+                }
+            ],
+            [
+                "variant",
+                "split",
+                "seed",
+                "target_recall_key",
+            ],
+        )
+        result = pd.read_csv(path)
+        check(
+            "07c provenance does not overwrite distinct recall targets",
+            len(result) == 2
+            and set(result["target_recall_key"]) == {"90pct", "90p4pct"}
+            and float(
+                result.loc[result["target_recall_key"] == "90pct", "ap"].iloc[0]
+            )
+            == 0.95
+            and float(
+                result.loc[result["target_recall_key"] == "90p4pct", "ap"].iloc[0]
+            )
+            == 0.904,
+            f"got {result.to_dict('records')}",
         )
 
 
@@ -835,6 +1013,56 @@ def oracle_config_split() -> None:
         f"split {sp.train_fraction:.0%}/{sp.dev_fraction:.0%}/{sp.test_fraction:.0%} sums to 1",
         abs(sp.train_fraction + sp.dev_fraction + sp.test_fraction - 1.0) < 1e-9,
     )
+
+
+def oracle_model_resolution_contract() -> None:
+    """Registry keys and configured subdirectories resolve identically."""
+    import core.common as common
+
+    key = next(iter(common.MODELS))
+    subdirectory = common.MODELS[key]
+    with tempfile.TemporaryDirectory() as tmp:
+        model_root = Path(tmp)
+        bundle = model_root / subdirectory
+        bundle.mkdir(parents=True)
+        (bundle / "modules.json").write_text("{}", encoding="utf-8")
+        previous_dirs = common._MODEL_DIRS
+        common._MODEL_DIRS = [model_root]
+        try:
+            resolved_by_key = common.resolve_model(key)
+            resolved_by_subdirectory = common.resolve_model(subdirectory)
+        finally:
+            common._MODEL_DIRS = previous_dirs
+    check(
+        "model registry key and configured subdirectory resolve identically",
+        resolved_by_key == resolved_by_subdirectory == str(bundle.resolve()),
+        f"key={resolved_by_key!r}, subdirectory={resolved_by_subdirectory!r}",
+    )
+
+
+def oracle_embedding_consumer_allowlist() -> None:
+    """Embedding consumers never iterate non-encoder registry entries."""
+    import importlib
+
+    from core.common import embedding_model_keys, load_config
+
+    allowed = set(embedding_model_keys())
+    registry = set(load_config()["models"])
+    incompatible = registry - allowed
+    check(
+        "model registry has non-embedding entries outside the encoder allowlist",
+        bool(incompatible),
+        f"registry={sorted(registry)}, embedding={sorted(allowed)}",
+    )
+    for module_name in ("training.report_plots", "training.zero_shot_sims"):
+        module = importlib.import_module(module_name)
+        consumer_keys = set(module.MODEL_KEYS)
+        check(
+            f"{module_name} iterates only configured embedding model keys",
+            consumer_keys == allowed and consumer_keys.isdisjoint(incompatible),
+            f"consumer={sorted(consumer_keys)}, embedding={sorted(allowed)}, "
+            f"incompatible={sorted(incompatible)}",
+        )
 
 
 def oracle_no_fallback_ssot() -> None:
@@ -1817,6 +2045,8 @@ def main() -> None:
         f"{_sp.dev_fraction:.0%}/{_sp.test_fraction:.0%}) =="
     )
     oracle_holdout_integrity()
+    print("== 6a. holdout validation ==")
+    oracle_holdout_validation()
     print("== 7. precision-at-recall ==")
     oracle_precision_at_recall()
     print("== 7a. ranking metrics ==")
@@ -1825,12 +2055,18 @@ def main() -> None:
     oracle_youden_discipline()
     print("== 8. _append_csv ==")
     oracle_append_csv()
+    print("== 8a. recall provenance identity ==")
+    oracle_recall_provenance_identity()
     print("== 10. diet/pulp phrase variations ==")
     oracle_phrase_variants()
     print("== 11. word-once canonical discipline ==")
     oracle_word_once()
     print("== 12. config split (SSOT files) ==")
     oracle_config_split()
+    print("== 12a. model resolution contract ==")
+    oracle_model_resolution_contract()
+    print("== 12a2. embedding consumer model allowlist ==")
+    oracle_embedding_consumer_allowlist()
     print("== 12b. no-fallback SSOT (inline literals -> config) ==")
     oracle_no_fallback_ssot()
     print("== 12c. round-3 fix pins (audit F01-F21 remediation) ==")

@@ -47,6 +47,42 @@ CANDIDATE_GATE_COLUMNS: tuple[str, ...] = (
 )
 
 
+CANDIDATE_GRAPH_DIAGNOSTIC_COLUMNS: tuple[str, ...] = (
+    "diagnostic_edge_count",
+    "diagnostic_component_count",
+    "diagnostic_component_size_distribution",
+    "diagnostic_max_component_size",
+    "diagnostic_score_diameter",
+    "diagnostic_bridge_edge_count",
+    "diagnostic_weakest_bridge_score",
+)
+PLAUSIBLE_GROUP_COUNT_COLUMN = "plausible_group_count"
+CANDIDATE_GRAPH_METRIC_COLUMNS: tuple[str, ...] = (
+    *CANDIDATE_GRAPH_DIAGNOSTIC_COLUMNS,
+    PLAUSIBLE_GROUP_COUNT_COLUMN,
+)
+
+
+def empty_candidate_graph_diagnostics() -> dict[str, float | int | str]:
+    """Return the stable empty payload for candidate-graph diagnostics."""
+    return dict(
+        zip(
+            CANDIDATE_GRAPH_METRIC_COLUMNS,
+            (
+                0,
+                0,
+                "{}",
+                0,
+                0.0,
+                0,
+                float("nan"),
+                0,
+            ),
+            strict=True,
+        )
+    )
+
+
 _CANDIDATE_GRAPH_FRAME_SPEC = CandidateGraphFrameSpec(
     required_columns=frozenset(CANDIDATE_GATE_COLUMNS)
 )
@@ -74,16 +110,7 @@ def candidate_graph_diagnostics(
         )
     ]
     if accepted.empty:
-        return {
-            "diagnostic_edge_count": 0,
-            "diagnostic_component_count": 0,
-            "diagnostic_component_size_distribution": "{}",
-            "diagnostic_max_component_size": 0,
-            "diagnostic_score_diameter": 0.0,
-            "diagnostic_bridge_edge_count": 0,
-            "diagnostic_weakest_bridge_score": float("nan"),
-            "plausible_group_count": 0,
-        }
+        return empty_candidate_graph_diagnostics()
 
     nodes = sorted(
         {
@@ -165,13 +192,19 @@ def candidate_graph_diagnostics(
         if bridge_edge_ids
         else float("nan")
     )
-    return {
-        "diagnostic_edge_count": int(len(edges)),
-        "diagnostic_component_count": int(len(components)),
-        "diagnostic_component_size_distribution": size_distribution,
-        "diagnostic_max_component_size": int(max(map(len, components))),
-        "diagnostic_score_diameter": float(max(diameters)) if diameters else 0.0,
-        "diagnostic_bridge_edge_count": int(len(bridge_edge_ids)),
-        "diagnostic_weakest_bridge_score": float(weakest_bridge),
-        "plausible_group_count": int(accepted["candidate_gtin"].nunique()),
-    }
+    return dict(
+        zip(
+            CANDIDATE_GRAPH_METRIC_COLUMNS,
+            (
+                int(len(edges)),
+                int(len(components)),
+                size_distribution,
+                int(max(map(len, components))),
+                float(max(diameters)) if diameters else 0.0,
+                int(len(bridge_edge_ids)),
+                float(weakest_bridge),
+                int(accepted["candidate_gtin"].nunique()),
+            ),
+            strict=True,
+        )
+    )

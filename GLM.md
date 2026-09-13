@@ -472,3 +472,83 @@ originating decision, with its commit as evidence.
   graph diagnostics; final requested diagnostics remain enabled.
 - X4: **verified fixed** — unexpected calibration evaluator failures now raise
   with fold context instead of becoming an unavailable/selection result.
+
+
+
+
+
+
+
+
+I reviewed the 6 commits after the last audit round (`41cd50e`), pinned at **`df736a8`** ("reconcile training and rand review fixes"). Method: full diff read, then empirical verification (live repros + `python -m training.selftest`), plus a clean lint delta (HEAD vs `41cd50e`) to avoid reporting pre-existing noise.
+
+**Two important context notes first:**
+1. `python -m training.selftest` at `df736a8` → **exit 0, all oracles green** (255 lines, no skips). The new oracles do run.
+2. **Another writer is editing this repo right now** — `build_second04_pairs.py`, `rand_matching.py`, `training.py` became dirty at 18:15–18:16 while I worked (nothing was dirty at session start). One of my findings is already being fixed in-flight; I flag that below. Line numbers are for `df736a8`.
+
+---
+
+## HIGH — verified regressions
+
+**H1. `resolve_model` lost its "key *or* subdir" contract; 5 call sites still pass registry *values* → unconditional `KeyError`.**
+`common.py:619` now only accepts a registry key or an existing path. Callers that pass the map's *value*:
+- `src/training/zero_shot_sims.py:43` — `MODELS = {k: resolve_model(sub) for k, sub in _cfg["models"].items()}`
+- `run_all.py:140, 168, 186, 215, 257` — `resolve_model(sub)` / `resolve_model(MODELS["multilingual_l12"])`
+
+Verified live: importing `training.zero_shot_sims` → `KeyError: unknown model registry key 'all-MiniLM-L6-v2'`. This fires **regardless of whether DVC bundles exist** (the value is never a key, so it falls to the `TRAIN_ROOT/<value>` probe at `common.py:632`). The old code did `sub = MODELS.get(key_or_sub, key_or_sub)`, which is why this worked before. Impact: `--what sims` (`colab.py:2052`) and every `run_all.py` step die at import.
+
+**H2. `colab.py:977` — the graceful "uniformity skipped" branch is now dead, and local finalization hard-fails.**
+```python
+base_model = Path(resolve_model(str(training_cfg().training.base_model)))
+if not base_model.is_dir():      # ← unreachable: resolve_model raises instead
+    ... "status": "skipped_base_model_unavailable"
+```
+`resolve_model` can no longer return a non-directory, so `base_model.is_dir()` is always true. Verified: `artifacts/models/` is empty locally and `resolve_model('minilm_l6')` raises `FileNotFoundError`. Since `uniformity.enabled: true`, `finalize_local_training_run` (`colab.py:1421`) now aborts before `publish_local_training_results`/`publish_local_wandb_artifacts`, and `main()`'s `except BaseException` keeps the VM alive for recovery — the same "quota burn" class as the previously-reported N1. Before this series: hub id → `Path(hub).is_dir()` false → skip branch → report still generated.
+
+**H3. 07c/07d are now un-appendable against any existing artifact (`train.py:159, 193-226`).**
+`_append_csv` raises when a key field in `key_fields` is absent from the *old* file. The new calls pass `["variant", *_provenance]` / `["fraction", "payload", *_provenance]`, and pre-existing files lack those columns. Verified against the repo's own files:
+```
+training_results/20260912T152315Z/worker_1/07c_field_ablation.csv →
+ValueError: ... is missing required replace-key fields
+['split','holdout_component_folds','calibration_seed_offset','seed']
+```
+Same for `07d_data_scaling.csv`. There is no backfill/migration, so the 07c/07d emission crashes mid-run on every pre-existing results tree. (The fresh-file path works; only pre-existing files break.) Note the existing `model` column holds `sentence-transformers/all-MiniLM-L6-v2` — evidence of the old resolution contract.
+
+---
+
+## MED
+
+**M1. The recall-label fix is lossy and the provenance key omits the value that matters.** `recall_column_suffix` (`common.py:313`) rounds to whole percent — verified: `0.895/0.899/0.904 → '90pct'`, `0.995/0.999 → '100pct'`. `_provenance` (`train.py:94`) records `split`, `holdout_component_folds`, `calibration_seed_offset`, `seed` but **not `target_recall`**. So a sub-percent retune (0.90 → 0.904) keeps the same column names *and* the same replace key → the new numbers silently overwrite the old row under the old header. That is exactly the mislabeling the change claims to have closed (it only closes it for changes that cross a whole-percent boundary).
+
+**M2. `holdout_split` silently yields an EMPTY train split for `n_folds=2` (`folds.py:93-125`).** The guard is `if n_folds < 2: raise`, but the derivation is `set().union(*quarters[:-2])` — for `n_folds=2` that is `set()` (empty). Verified: `n_folds=2 → train=0 dev=4 test=4`, no error. `Literal[4]` pins it in config today, but the helper documents/accepts any `n_folds` and both `train.py` and the selftest pass the config value straight through. Guard should be `< 3` or assert a non-empty train.
+
+**M3. The registry is now heterogeneous but two consumers iterate it wholesale.** `paths.yaml` adds `rerank_minilm_l6` (ms-marco **cross-encoder**), `ner_semantic_base`, `ner_transformer_base` to the same `models` map that `report_plots.py:66` and `zero_shot_sims.py:43` expand over and feed to `encode_corpus`/`SentenceTransformer`. Consequences: (a) `report_plots` now requires all 6 bundles at import — verified it fails at import today; (b) NER/cross-encoder bundles get encoded as bi-encoders (wrong panels or a load failure). Compounding it, `_validate_materialized_model` accepts `modules.json` **or** `config.json`, so a plain HF dir (`xlm-roberta-base`) passes the gate the consumers actually need.
+
+**M4. `materialize_remote_models` docstring ≠ behavior (`colab.py:1710-1722`).** "Pull and validate only the model bundles required by this lane", but the body runs `dvc pull artifacts/models` (the whole tree); the per-key loop only *validates* resolution afterwards. The stated locality contract isn't enforced.
+
+**M5. `sims_model` is the only model knob not registry-checked at config load.** `ColabSpec.sims_model` is `Field(min_length=1)` (`schemas.py:942`), while `training.base_model` (`common.py:176`), `hpo.models` (`:181`) and `sweep.rerank_model` (`:188`) are all validated against the registry. A typo now surfaces late (on the VM path via `materialize_remote_models`) instead of at load.
+
+**M6. Pydantic coverage gaps in the *new* code:**
+- `CalibrationPartition` (`schemas.py:1446`) has no `extra="forbid"`, and `zip(("positive_fit", …), self.pools())` (`:1498`) lacks `strict=True` — if `pools()` ever returned fewer than 4 arrays, the per-pool shape check would silently skip the tail (this is one of the two *new* lint errors).
+- `check_cross_country_pair_frame`'s `if len(rows) != len(df)` (`schemas.py:1611-1614`) is **vacuous** — `rows` is built 1:1 from `df.to_dict("records")`, so it can never fire. It is precisely the "guard that cannot fail" that the same commit deleted from `folds.py` with a comment about vacuous checks.
+- `CalibrationMetricRow` embeds the new diagnostics as JSON **strings** (`calibration_sensitivity_by_gtin_status`, `calibration_fold_collapse`, `calibration_threshold_tie_break`), so a malformed payload is unvalidatable at the aggregate boundary.
+- `CALIBRATION_UNAVAILABLE_REASON_CODES` (`hpo_metrics.py:237`) maps numeric codes from free-text prefixes duplicated from `training.py:3563/3586`. Any wording change silently degrades to code 0 ("unclassified") — no failure, no warning.
+
+---
+
+## LOW / hygiene
+
+- **`threshold_tie_break` is a decorative config knob.** `RandMatchingSpec` (`schemas.py:413`) hard-rejects any order other than `["rand_index","fewest_unmatched_skus","lowest_threshold"]`, and `_threshold_selection_key` hardcodes that exact mapping (`values[name]`, `KeyError` on any new name). Configurable in name only.
+- **3 new lint errors** (clean HEAD-vs-base comparison on the changed files): `colab.py` F401 + F811 (module-level `resolve_model` at `:67` is unused because `:929` re-imports it locally), `schemas.py` B905. Two were fixed (`hpo_metrics` GTIN_STATUSES, `train.py` training_cfg now used).
+- **Dead branch:** `_validate_materialized_model`'s inner `if not resolved.is_dir(): raise FileNotFoundError` is unreachable — callers only invoke it on `candidate.is_dir()`.
+- **Metric provenance drift:** `args.model` is now an absolute local path (`train.py:521`), so `row_07c["model"]`, the MLflow `model` param and the run tag now embed machine-specific paths instead of a portable id.
+- **CLI contract divergence:** `train.py --model` accepts a key *or* a local path; `colab.py --what train --model` accepts a registry **key** only (and passes the key through). Same flag, two contracts.
+- **Solid, not a finding:** `_write_datapoint_usage`'s A4 fix is correct (coverage aggregated from presentations only; `missing` status + `n_missing_datapoint_populations`); `_usage_row`'s "fill only absent keys" merge is correct; `build_second04_pairs` is deterministic (`mergesort` on `barcode,product_id,country`); `volume_verified` now counts unresolved ids and the volume gate is counted (no silent drops there); RM1/RM3/RM8/RM9 are genuinely closed; `_fold_collapse_stats`'s payload/row alignment and its `source_rows` guard are sound.
+
+---
+
+## On the uncommitted, concurrent edits
+
+`build_second04_pairs.py`, `rand_matching.py` and `training.py` were modified (18:15–18:16) while I reviewed. That in-flight work adds: an `ExclusionCensus` closing the invalid-GTIN/blank-field drops I had flagged as an unaccounted silent filter (so that item is already being fixed), `source_row_index` identity preservation through merges, a `Decimal`-based threshold grid, and `RequiredCalibrationError` making unavailable calibration **fatal in non-selection mode** (`training.py:3573-3612`). That last one is a significant new fail-loud path — worth confirming it can't strand a holdout run when DEV has too few positives, and none of it is covered by the oracles I ran (those were at `df736a8`).
+
+Suggested order if you want fixes: **H1/H2** (broken lanes, VM-strand risk) → **H3** (un-appendable artifacts) → **M1/M2** (silent mislabel + degenerate split) → M5/M6 (schema coverage). I did not modify any repository file; all repro artifacts are under `/tmp/repro/`.
