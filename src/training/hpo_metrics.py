@@ -14,13 +14,13 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
-from core.graph_diagnostics import candidate_graph_diagnostics
 from core.attribute_conflicts import sku_attribute_info
 from core.common import F, RESULTS, row_metadata_text
 from core.schemas import check_canonical_records_frame
 from core.structured_features import fuse_numpy
 from training.rand_matching import (
     GTIN_STATUSES,
+    METRIC_COLUMNS,
     candidate_gate_fields,
     choose_assignments,
     gtin_status,
@@ -603,7 +603,13 @@ def evaluate_calibration_trial(
     )
     result.update(collapse)
     result["collapse_penalty"] = _collapse_penalty(result, config)
-    result.update(candidate_graph_diagnostics(candidates, final_threshold))
+    result.update(
+        {
+            key: overall[key]
+            for key in METRIC_COLUMNS
+            if key.startswith("diagnostic_") or key == "plausible_group_count"
+        }
+    )
     strata_rows = gtin_metrics(
         choose_assignments(candidates, final_threshold),
         truth,
