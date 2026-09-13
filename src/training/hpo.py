@@ -248,8 +248,8 @@ def _grid_folds(
     """CV folds for the grid (second07 used k-fold; component folds here)."""
     from training.folds import component_folds
 
-    row_bc = data[2]
-    pos = data[4]
+    row_bc = data[3]
+    pos = data[5]
     return component_folds(pos, row_bc, args.folds, SEED)
 
 
