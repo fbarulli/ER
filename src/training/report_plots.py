@@ -61,7 +61,7 @@ MACRO_MAP = category_macros()
 _cfg = load_config()
 # Only config-declared bi-encoder keys are valid inputs to encode_corpus. Model
 # paths are resolved when the report actually runs so importing this module
-# remains possible on a checkout whose DVC model bundles are not materialized.
+# remains possible on a checkout whose Git-shipped model bundle is absent.
 MODEL_KEYS = embedding_model_keys()
 CACHE = str(DATA_DIR / "embeddings_cache")
 

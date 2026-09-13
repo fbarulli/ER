@@ -1155,13 +1155,13 @@ def oracle_model_resolution_contract() -> None:
         bundle = model_root / subdirectory
         bundle.mkdir(parents=True)
         (bundle / "modules.json").write_text("{}", encoding="utf-8")
-        previous_dirs = common._MODEL_DIRS
-        common._MODEL_DIRS = [model_root]
+        previous_root = common._MODEL_ROOT
+        common._MODEL_ROOT = model_root
         try:
             resolved_by_key = common.resolve_model(key)
             resolved_by_subdirectory = common.resolve_model(subdirectory)
         finally:
-            common._MODEL_DIRS = previous_dirs
+            common._MODEL_ROOT = previous_root
     check(
         "model registry key and configured subdirectory resolve identically",
         resolved_by_key == resolved_by_subdirectory == str(bundle.resolve()),

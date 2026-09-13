@@ -39,6 +39,11 @@ dataset_model_input.csv
 *.ckpt
 *.parquet
 *.zip
+# The production MiniLM bundle is shipped with the repository. Keep all
+# other generated model bundles ignored.
+!artifacts/models/
+!artifacts/models/all-MiniLM-L6-v2/
+!artifacts/models/all-MiniLM-L6-v2/**
 training.log
 training_results/
 # Colab CLI session state and local runtime logs/cache.

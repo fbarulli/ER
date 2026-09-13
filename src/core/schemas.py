@@ -127,7 +127,6 @@ class DataPathsSpec(BaseModel):
     results_dir: str
     training_results_dir: str
     models_dir: str
-    models_dir_sibling: str
     embeddings_dir: str
     mlruns_dir: str
     logs_dir: str

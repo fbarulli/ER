@@ -5,5 +5,4 @@ stages:
     - config
     - src
     outs:
-    - artifacts/models
     - results

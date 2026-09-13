@@ -621,10 +621,7 @@ def set_determinism(seed: int) -> None:
 
 # ── model registry + resolution (shared by every model-loading lane) ────────
 MODELS = dict(_CFG["models"])
-_MODEL_DIRS = [
-    _path(_CFG["paths"]["models_dir"]),
-    _path(_CFG["paths"]["models_dir_sibling"]),
-]
+_MODEL_ROOT = _path(_CFG["paths"]["models_dir"])
 
 
 def _validate_materialized_model(path: Path, reference: str) -> str:
@@ -633,7 +630,7 @@ def _validate_materialized_model(path: Path, reference: str) -> str:
     if not resolved.is_dir():
         raise FileNotFoundError(
             f"model {reference!r} is not materialized locally: {resolved}. "
-            "Materialize the project-owned model bundle through DVC; "
+            "The Git-shipped project-owned model bundle is missing; "
             "external model downloads are disabled."
         )
     if not any((resolved / marker).is_file() for marker in ("modules.json", "config.json")):
@@ -659,10 +656,10 @@ def resolve_model(key_or_sub: str) -> str:
     registry_keys = [key for key, value in MODELS.items() if value == reference]
     if reference in MODELS:
         relative = Path(MODELS[reference])
-        candidates = [root / relative for root in _MODEL_DIRS]
+        candidates = [_MODEL_ROOT / relative]
     elif len(registry_keys) == 1:
         relative = Path(reference)
-        candidates = [root / relative for root in _MODEL_DIRS]
+        candidates = [_MODEL_ROOT / relative]
     elif len(registry_keys) > 1:
         raise ValueError(
             f"model registry value {reference!r} is ambiguous; matching keys: "
@@ -687,7 +684,7 @@ def resolve_model(key_or_sub: str) -> str:
     checked = ", ".join(str(path.resolve()) for path in candidates)
     raise FileNotFoundError(
         f"model {reference!r} is not materialized locally; checked: {checked}. "
-        "Materialize the project-owned model bundle through DVC; "
+        "The Git-shipped project-owned model bundle is missing; "
         "external model downloads are disabled."
     )
 

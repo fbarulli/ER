@@ -72,47 +72,6 @@ from core.manifest import sha256_file
 from core.schemas import StageManifest
 
 
-def _configured_dvc_model_target(root: Path, config: dict) -> Path:
-    """Return the one DVC output that owns the configured model directories.
-
-    The repository ships one monolithic ``artifacts/models`` output from
-    ``dvc.yaml``. Model registry entries are subdirectories inside that
-    output, so asking DVC to pull a registry value directly is invalid. This
-    helper resolves the tracked output explicitly and rejects missing or
-    ambiguous layouts instead of guessing another location.
-    """
-    manifest = root / "dvc.yaml"
-    if not manifest.is_file():
-        raise FileNotFoundError(f"DVC stage manifest is missing: {manifest}")
-    try:
-        import yaml
-
-        document = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
-    except Exception as exc:
-        raise RuntimeError(f"unable to read DVC stage manifest: {manifest}") from exc
-
-    configured_roots = {
-        (root / str(relative)).resolve()
-        for relative in (
-            config["paths"]["models_dir"],
-            config["paths"]["models_dir_sibling"],
-        )
-    }
-    output_paths: list[Path] = []
-    for stage in document.get("stages", {}).values():
-        for output in stage.get("outs", []):
-            raw_path = output.get("path") if isinstance(output, dict) else output
-            if raw_path:
-                output_paths.append((manifest.parent / str(raw_path)).resolve())
-    matches = sorted({path for path in output_paths if path in configured_roots})
-    if len(matches) != 1:
-        raise RuntimeError(
-            "DVC model output contract requires exactly one configured stage "
-            f"output; configured={sorted(map(str, configured_roots))}, "
-            f"stage_outputs={sorted(map(str, set(output_paths)))}"
-        )
-    return matches[0]
-
 # smoke sample size + train defaults: the config SSOT (config/training.yaml
 # sweep: block via lib.common.sweep_cfg / training_cfg) — were inline
 # literals (1000 / 0.25 / 2) that could silently diverge from the configs.
@@ -1772,12 +1731,8 @@ for step in ("src/training/dedupe.py", "src/training/build_second04_pairs.py", "
     run_colab_exec_stream(SESSION, script, timeout=1800, log_name="data_prep")
 
 
-def materialize_remote_models(model_keys: list[str]) -> None:
-    """Pull the configured DVC model output and validate requested bundles.
-
-    DVC tracks ``artifacts/models`` as one stage output. The registry values
-    are subdirectories inside that output, not independent DVC targets.
-    """
+def verify_remote_models(model_keys: list[str]) -> None:
+    """Validate the Git-shipped model bundles before starting any worker."""
     keys = sorted(set(model_keys))
     if not keys:
         return
@@ -1786,114 +1741,28 @@ def materialize_remote_models(model_keys: list[str]) -> None:
     unknown = sorted(set(keys) - set(registry))
     if unknown:
         raise KeyError(f"unknown local model registry key(s): {unknown}")
-    dvc_model_target = _configured_dvc_model_target(TRAIN_ROOT, config)
-    dvc_model_target_relative = dvc_model_target.relative_to(TRAIN_ROOT)
+    model_root_relative = str(config["paths"]["models_dir"])
     print(
-        f"[models] DVC model target={dvc_model_target_relative} "
-        f"requested={keys} status=layout-validated",
+        f"[models] source=git-shipped requested={keys} status=validation-start",
         flush=True,
     )
-    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
-import subprocess
+    script = _BOOTSTRAP + f"""
 from pathlib import Path
-import yaml
-from core.common import load_config
 from core.common import resolve_model
 root = {REMOTE_ROOT!r}
-cfg = load_config()
-registry = cfg["models"]
 requested = {keys!r}
-configured_roots = {{
-    (Path(root) / str(relative)).resolve()
-    for relative in (
-        cfg["paths"]["models_dir"],
-        cfg["paths"]["models_dir_sibling"],
-    )
-}}
-manifest = Path(root) / "dvc.yaml"
-if not manifest.is_file():
-    raise FileNotFoundError(f"DVC stage manifest is missing: {{manifest}}")
-document = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {{}}
-stage_outputs = []
-for stage in document.get("stages", {{}}).values():
-    for output in stage.get("outs", []):
-        raw_path = output.get("path") if isinstance(output, dict) else output
-        if raw_path:
-            stage_outputs.append((manifest.parent / str(raw_path)).resolve())
-model_targets = sorted({{path for path in stage_outputs if path in configured_roots}})
-if len(model_targets) != 1:
-    raise RuntimeError(
-        "DVC model output contract requires exactly one configured stage "
-        f"output; configured={{sorted(map(str, configured_roots))}}, "
-        f"stage_outputs={{sorted(map(str, set(stage_outputs)))}}"
-    )
-dvc_target = model_targets[0]
-if dvc_target != (Path(root) / {str(dvc_model_target_relative)!r}).resolve():
-    raise RuntimeError(
-        "remote DVC model target differs from the launcher-validated target: "
-        f"{{dvc_target}} != {{Path(root) / {str(dvc_model_target_relative)!r}}}"
-    )
-print(
-    f"[models] target={{dvc_target.relative_to(Path(root))}} "
-    f"requested={{requested}} status=layout-validated",
-    flush=True,
-)
+model_root = (Path(root) / {model_root_relative!r}).resolve()
 
 def bundle_bytes(path):
     if not path.is_dir():
         return 0
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
-missing = []
-for key in requested:
-    try:
-        path = Path(resolve_model(key))
-    except FileNotFoundError:
-        missing.append(key)
-        continue
-    if dvc_target not in path.parents:
-        raise RuntimeError(
-            f"resolved model {{key}} escapes the DVC model output: {{path}}"
-        )
-    print(
-        f"[models] key={{key}} path={{path.relative_to(Path(root))}} "
-        f"status=already-materialized bytes={{bundle_bytes(path)}}",
-        flush=True,
-    )
-if missing:
-    target_arg = str(dvc_target.relative_to(Path(root)))
-    print(
-        f"[models] target={{target_arg}} status=pull-start "
-        f"missing={{missing}} jobs={int(_COLAB.dvc_jobs)}",
-        flush=True,
-    )
-    pull = subprocess.Popen(
-        ["dvc", "pull", "--jobs", str({int(_COLAB.dvc_jobs)}), target_arg],
-        cwd=root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    assert pull.stdout is not None
-    for line in pull.stdout:
-        print(f"[dvc] {{line}}", end="", flush=True)
-    return_code = pull.wait()
-    print(
-        f"[models] target={{target_arg}} status=pull-finished "
-        f"return_code={{return_code}} bytes={{bundle_bytes(dvc_target)}}",
-        flush=True,
-    )
-    if return_code:
-        raise RuntimeError(
-            f"DVC model materialization failed for target {{target_arg}} "
-            f"(rc={{return_code}})"
-        )
 for key in requested:
     path = Path(resolve_model(key))
-    if dvc_target not in path.parents:
+    if model_root not in path.parents:
         raise RuntimeError(
-            f"validated model {{key}} is outside the DVC model output: {{path}}"
+            f"resolved Git-shipped model {{key}} escapes {{model_root}}: {{path}}"
         )
     print(
         f"[models] key={{key}} path={{path.relative_to(Path(root))}} "
@@ -1901,17 +1770,16 @@ for key in requested:
         flush=True,
     )
 print(
-    f"[models] target={{dvc_target.relative_to(Path(root))}} "
-    f"status=complete bytes={{bundle_bytes(dvc_target)}}",
+    f"[models] source=git-shipped requested={{requested}} status=validated",
     flush=True,
 )
 """
     run_colab_exec_stream(
         SESSION,
         script,
-        timeout=3600,
-        log_name="model_materialization",
-        retry_safe=True,
+        timeout=600,
+        log_name="model_validation",
+        retry_safe=False,
     )
 
 
@@ -1952,7 +1820,7 @@ def run_train(
         "--train-frac", str(frac),
         "--epochs", str(epochs),
         # Reports and plots are CPU-side post-processing. Generate them after
-        # the DVC-verified download instead of spending GPU time on them.
+        # the training run instead of spending GPU time on them.
         "--no-plot"]
     if model is not None:
         registry = load_config()["models"]
@@ -1962,7 +1830,7 @@ def run_train(
                 f"got {model!r}, expected one of {sorted(registry)}"
             )
         # Resolve inside the remote checkout. A local absolute path would
-        # not exist on the VM and would bypass the DVC-owned model contract.
+        # not exist on the VM and would bypass the Git-shipped model contract.
         args.extend(["--model", model])
     if sample is not None:
         args.extend(["--sample", str(sample)])
@@ -2733,7 +2601,7 @@ def main() -> None:
         else:
             required_models = []
         if required_models:
-            materialize_remote_models(required_models)
+            verify_remote_models(required_models)
         log_gpu_profile()
         if args.refresh_data:
             run_data_prep()

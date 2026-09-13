@@ -34,8 +34,7 @@ paths:
   results_dir: "results"                # frozen inputs + run-tree parent +
                                         # shared/orchestration outputs at repo root
   training_results_dir: "training_results" # verified Colab smoke outputs
-  models_dir: "artifacts/models"        # local model tensors (bundle)
-  models_dir_sibling: "../models"       # bundle layout: models/ beside folder
+  models_dir: "artifacts/models"        # Git-shipped production model bundle
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
   mlruns_dir: "artifacts/mlruns"        # mlflow backend + artifact store (local)
   logs_dir: "logs"                      # run_all per-step logs
@@ -166,8 +165,9 @@ column_mapping:
 seed: 42
 
 # ── model registry (shared by every model-loading lane) ─────────────────────
-# Values are relative directories inside paths.models_dir or
-# paths.models_dir_sibling. They are DVC-shipped bundles, never Hub IDs.
+# Values are relative directories inside the configured model roots. The
+# production bundle is shipped in paths.models_dir with the repository;
+# values are never Hub IDs.
 models:
   minilm_l6: "all-MiniLM-L6-v2"
   multilingual_l12: "paraphrase-multilingual-MiniLM-L12-v2"
