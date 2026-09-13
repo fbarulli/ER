@@ -460,3 +460,15 @@ originating decision, with its commit as evidence.
   (`rand_matching.py:112`, `:1447-1468`). The range refactored the writer into
   `_file_provenance`/`_write_provenance` and added config/holdout/calibration input
   pins — an improvement, but not the introduction of provenance (see X13).
+
+## Remediation tracking — current pass
+
+- X1: **verified fixed** — recursive graph traversal replaced with iterative
+  low-link traversal; large-graph, randomized-equivalence, cycle, and
+  parallel-edge checks passed.
+- X2: **verified fixed** — edge-score collection now uses one edge-to-component
+  pass; randomized equivalence and scaling checks passed.
+- X3: **verified fixed** — sensitivity and GTIN-stratified metric calls disable
+  graph diagnostics; final requested diagnostics remain enabled.
+- X4: **verified fixed** — unexpected calibration evaluator failures now raise
+  with fold context instead of becoming an unavailable/selection result.

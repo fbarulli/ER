@@ -1161,6 +1161,8 @@ def gtin_metrics(
     fold: object,
     threshold: float,
     candidates: pd.DataFrame,
+    *,
+    include_graph_diagnostics: bool = True,
 ) -> list[dict[str, float | int | str]]:
     truth_frame = truth[["SKU_ID", "true_item_id", "gtin_status"]].copy()
     pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
@@ -1224,6 +1226,7 @@ def gtin_metrics(
                         candidates["SKU_ID"].isin(group["SKU_ID"])
                     ],
                     threshold=threshold,
+                    include_graph_diagnostics=include_graph_diagnostics,
                 ),
             }
         )
@@ -1571,6 +1574,7 @@ def _fold_sensitivity(
                 check_truth,
                 candidates=check_candidates,
                 threshold=threshold,
+                include_graph_diagnostics=False,
             ),
         }
         rows.append(row_data)
@@ -1582,6 +1586,7 @@ def _fold_sensitivity(
             fold,
             float(threshold),
             check_candidates,
+            include_graph_diagnostics=False,
         ):
             row_data.setdefault("sensitivity_reason", "fitted")
             rows.append(row_data)

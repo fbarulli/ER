@@ -139,6 +139,10 @@ class RequiredCalibrationError(RuntimeError):
     """Signal that normal training cannot complete without Rand calibration."""
 
 
+class CalibrationEvaluatorError(RuntimeError):
+    """Signal an unexpected calibration evaluator failure with fold context."""
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # MLflow — SSOT src/core/mlflow_ctx (audit 2026-09-09: this module used to carry
 # its own MlflowCtx duplicate with CONFLICTING semantics — "off unless
@@ -3557,7 +3561,6 @@ def train_one_config(
             # final reporting and is never used by HPO selection.
             from training.hpo_metrics import (
                 CALIBRATION_REASON_EMPTY_SPLIT,
-                CALIBRATION_REASON_EVALUATOR_FAILED,
                 evaluate_calibration_trial,
                 unavailable_calibration_metrics,
             )
@@ -3583,6 +3586,11 @@ def train_one_config(
                         calibration_metrics["calibration_reason"]
                     )
             else:
+                # The explicit empty-population branch above is the only
+                # expected unavailable-calibration condition.  An exception
+                # from the evaluator is a programming/data-contract failure,
+                # including in selection mode, and must retain its traceback
+                # instead of becoming a prunable/unavailable result.
                 try:
                     calibration_metrics = evaluate_calibration_trial(
                         model=model,
@@ -3598,21 +3606,9 @@ def train_one_config(
                         include_collapse_guardrail=selection_mode,
                     )
                 except Exception as exc:
-                    calibration_metrics = unavailable_calibration_metrics(
-                        reason_code=CALIBRATION_REASON_EVALUATOR_FAILED,
-                        reason=f"calibration evaluator failed: {type(exc).__name__}: {exc}",
-                        positive_pairs=len(calibration_pos),
-                        negative_pairs=len(calibration_neg),
-                    )
-                    print(
-                        f"  [calibration] fold {fold_i}: unavailable; "
-                        f"{calibration_metrics['calibration_reason']}",
-                        flush=True,
-                    )
-                    if not selection_mode:
-                        raise RequiredCalibrationError(
-                            calibration_metrics["calibration_reason"]
-                        ) from exc
+                    raise CalibrationEvaluatorError(
+                        f"calibration evaluator failed on fold {fold_i}"
+                    ) from exc
 
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────
             # Holdout HPO/grid folds STOP HERE: the config is ranked on
@@ -4254,7 +4250,7 @@ def train_one_config(
             if "out of memory" in str(exc).lower():
                 print(f"  [cuda-oom] fold {fold_i} | {_format_telemetry(_runtime_telemetry())}\n{tb}", flush=True)
             print(f"  fold {fold_i}: FAILED\n{tb}", flush=True)
-            if isinstance(exc, RequiredCalibrationError):
+            if isinstance(exc, (RequiredCalibrationError, CalibrationEvaluatorError)):
                 raise
             rows.append({"fold": fold_i, "status": "failed", "traceback": tb})
 

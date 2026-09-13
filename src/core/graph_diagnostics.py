@@ -109,42 +109,51 @@ def candidate_graph_diagnostics(
     components: list[list[int]] = []
     time_counter = 0
 
-    def visit(node: int, parent_edge: int, component: list[int]) -> None:
-        nonlocal time_counter
-        discovery[node] = low[node] = time_counter
-        time_counter += 1
-        component.append(node)
-        for neighbour, edge_id in adjacency[node]:
-            if edge_id == parent_edge:
-                continue
-            if discovery[neighbour] < 0:
-                visit(neighbour, edge_id, component)
-                low[node] = min(low[node], low[neighbour])
-                if low[neighbour] > discovery[node]:
-                    bridge_edge_ids.add(edge_id)
-            else:
-                low[node] = min(low[node], discovery[neighbour])
+    for root in range(len(nodes)):
+        if discovery[root] >= 0:
+            continue
 
-    for node in range(len(nodes)):
-        if discovery[node] < 0:
-            component: list[int] = []
-            visit(node, -1, component)
-            components.append(component)
+        component: list[int] = []
+        discovery[root] = low[root] = time_counter
+        time_counter += 1
+        component.append(root)
+        # Each frame stores the node, the edge used to enter it, and the next
+        # adjacency position to inspect. Completing a frame performs the
+        # recursive function's post-order low-link update before returning to
+        # its parent.
+        stack: list[tuple[int, int, int]] = [(root, -1, 0)]
+        while stack:
+            node, parent_edge, next_adjacency = stack[-1]
+            if next_adjacency < len(adjacency[node]):
+                neighbour, edge_id = adjacency[node][next_adjacency]
+                stack[-1] = (node, parent_edge, next_adjacency + 1)
+                if edge_id == parent_edge:
+                    continue
+                if discovery[neighbour] < 0:
+                    discovery[neighbour] = low[neighbour] = time_counter
+                    time_counter += 1
+                    component.append(neighbour)
+                    stack.append((neighbour, edge_id, 0))
+                else:
+                    low[node] = min(low[node], discovery[neighbour])
+                continue
+
+            stack.pop()
+            if parent_edge >= 0 and stack:
+                parent = stack[-1][0]
+                low[parent] = min(low[parent], low[node])
+                if low[node] > discovery[parent]:
+                    bridge_edge_ids.add(parent_edge)
+        components.append(component)
 
     component_ids = {
         node: component_id
         for component_id, component in enumerate(components)
         for node in component
     }
-    edge_scores = [
-        [
-            score
-            for left, right, score in edges
-            if component_ids[left] == component_id
-            or component_ids[right] == component_id
-        ]
-        for component_id in range(len(components))
-    ]
+    edge_scores = [[] for _ in components]
+    for left, _, score in edges:
+        edge_scores[component_ids[left]].append(score)
     diameters = [max(scores) - min(scores) for scores in edge_scores if scores]
     sizes = pd.Series([len(component) for component in components]).value_counts()
     size_distribution = json.dumps(
