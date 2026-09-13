@@ -80,6 +80,8 @@ def augment_pairs(
     mask_prob: float | None = None,
     seed: int = 0,
     population: str = "positive",
+    lo: float | None = None,
+    hi: float | None = None,
 ) -> tuple[
     np.ndarray, list[str], np.ndarray, int, list[dict]
 ]:  # (pos', payload', row_bc', n_added, audit dicts)
@@ -115,9 +117,11 @@ def augment_pairs(
     new_bc = [str(x) for x in row_bc]
     extra = []
     base = len(payload)
+    effective_lo = _MASK_LO if lo is None else float(lo)
+    effective_hi = _MASK_HI if hi is None else float(hi)
     for i in mask_idx:
         a, b = int(pos[i][0]), int(pos[i][1])
-        masked, extent = mask_text(payload[a], mask_prob, rng)
+        masked, extent = mask_text(payload[a], mask_prob, rng, lo=lo, hi=hi)
         new_payload.append(masked)
         new_bc.append(str(row_bc[a]))
         copy_idx = base + len(extra)
@@ -129,6 +133,9 @@ def augment_pairs(
                 "pair_payload_idx": b,
                 "barcode": str(row_bc[a]),
                 "realized_extent": round(extent, 4),
+                "configured_mask_lo": effective_lo,
+                "configured_mask_hi": effective_hi,
+                "mask_prob": mask_prob,
                 "anchor_text": payload[a],
                 "masked_text": masked,
                 "population": population,
@@ -169,9 +176,17 @@ def augment_hard_negatives(
     frac: float,
     mask_prob: float | None = None,
     seed: int = 0,
+    lo: float | None = None,
+    hi: float | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Append masked-anchor copies while preserving label-0 semantics."""
+    mask_cfg = training_cfg().masking
     return augment_pairs(
         neg, payload, row_bc,
-        frac=frac, mask_prob=mask_prob, seed=seed, population="hard_negative",
+        frac=frac,
+        mask_prob=mask_prob,
+        seed=seed,
+        population="hard_negative",
+        lo=mask_cfg.hard_negative_mask_lo if lo is None else lo,
+        hi=mask_cfg.hard_negative_mask_hi if hi is None else hi,
     )

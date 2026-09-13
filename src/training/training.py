@@ -2256,6 +2256,8 @@ def _dynamic_mask_negative_transform(
     rng,
     frac: float,
     mask_prob: float | None,
+    mask_lo: float,
+    mask_hi: float,
     counts: dict[int, int],
     counts_by_epoch: dict[int, dict[int, int]],
     stats_by_epoch: dict[int, dict[str, float]],
@@ -2266,6 +2268,8 @@ def _dynamic_mask_negative_transform(
     ann_state: dict[str, object] | None = None,
     pair_populations: list[str] | None = None,
     presentation_counts: dict[tuple, int] | None = None,
+    mask_audit: list[dict] | None = None,
+    fold: int | None = None,
 ):
     """Freshly mask selected label-0 anchors whenever a batch is materialized."""
     from training.masking import mask_text
@@ -2311,7 +2315,14 @@ def _dynamic_mask_negative_transform(
                 key = (int(epoch_ref["epoch"]), pair_id, base_population, augmentation, ann_version)
                 presentation_counts[key] = presentation_counts.get(key, 0) + 1
             continue
-        masked, _extent = mask_text(str(transformed["sentence1"][i]), mask_prob, rng)
+        original_text = str(transformed["sentence1"][i])
+        masked, _extent = mask_text(
+            original_text,
+            mask_prob,
+            rng,
+            lo=mask_lo,
+            hi=mask_hi,
+        )
         transformed["sentence1"][i] = masked
         augmentation = "dynamic_mask"
         epoch_stats["masked_count"] += 1.0
@@ -2322,6 +2333,22 @@ def _dynamic_mask_negative_transform(
         if presentation_counts is not None:
             key = (int(epoch_ref["epoch"]), pair_id, base_population, augmentation, ann_version)
             presentation_counts[key] = presentation_counts.get(key, 0) + 1
+        if mask_audit is not None:
+            mask_audit.append(
+                {
+                    "fold": fold,
+                    "epoch": int(epoch_ref["epoch"]),
+                    "pair_id": pair_id,
+                    "population": base_population,
+                    "augmentation": augmentation,
+                    "anchor_text": original_text,
+                    "masked_text": masked,
+                    "realized_extent": round(float(_extent), 4),
+                    "configured_mask_lo": float(mask_lo),
+                    "configured_mask_hi": float(mask_hi),
+                    "mask_prob": mask_prob,
+                }
+            )
     return transformed
 
 
@@ -2377,6 +2404,8 @@ def train_one_config(
     dynamic_mask_hard_negatives: bool = False,
     dynamic_mask_frac: float = 0.0,
     dynamic_mask_prob: float | None = None,
+    dynamic_mask_lo: float | None = None,
+    dynamic_mask_hi: float | None = None,
     mask_audit: list[dict] | None = None,
     hard_negative_mask_audit: list[dict] | None = None,
     ann_refresh_enabled: bool = False,
@@ -2402,6 +2431,12 @@ def train_one_config(
     """Train cfg across the group-aware folds. Returns fold metric rows
     (failures included, with traceback)."""
     import torch
+    if dynamic_mask_lo is None or dynamic_mask_hi is None:
+        raise ValueError(
+            "dynamic hard-negative masking requires its configured extent band"
+        )
+    dynamic_mask_lo = float(dynamic_mask_lo)
+    dynamic_mask_hi = float(dynamic_mask_hi)
     # BOUNDARY CONTRACT (lib.schemas.TrainConfig): the optimizer/early-stop
     # dict — every key validated (epochs >= 1, lr > 0, warmup in [0,1]...)
     # before a single fold runs. A missing/illegal knob dies HERE with the
@@ -2855,6 +2890,8 @@ def train_one_config(
                             rng=_mask_rng,
                             frac=dynamic_mask_frac,
                             mask_prob=dynamic_mask_prob,
+                            mask_lo=dynamic_mask_lo,
+                            mask_hi=dynamic_mask_hi,
                             counts=dynamic_mask_counts,
                             counts_by_epoch=dynamic_mask_counts_by_epoch,
                             stats_by_epoch=dynamic_mask_stats_by_epoch,
@@ -2871,6 +2908,8 @@ def train_one_config(
                                 if TRACK_DATAPOINT_USAGE
                                 else None
                             ),
+                            mask_audit=hard_negative_mask_audit,
+                            fold=fold_i,
                         )
                     )
                 # ── TRAIN VISIBILITY (owner directive 2026-09-07): the
@@ -3384,6 +3423,8 @@ def train_one_config(
                                 float(stats["extent_sum"]) / masked_count
                                 if masked_count else 0.0
                             ),
+                            "configured_mask_lo": float(dynamic_mask_lo),
+                            "configured_mask_hi": float(dynamic_mask_hi),
                             "static_positive_masked": int(static_masked_pos),
                             "static_positive_total": int(len(train_all)),
                             "static_positive_masked_pct": float(static_positive_pct),
@@ -4407,6 +4448,8 @@ def run_hpo(
     dynamic_mask_hard_negatives: bool = False,
     dynamic_mask_frac: float = 0.0,
     dynamic_mask_prob: float | None = None,
+    dynamic_mask_lo: float | None = None,
+    dynamic_mask_hi: float | None = None,
     mask_audit: list[dict] | None = None,
     hard_negative_mask_audit: list[dict] | None = None,
     wandb_ctx=None,
@@ -4469,6 +4512,8 @@ def run_hpo(
                 dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
                 dynamic_mask_frac=cfg["negative_mask_frac"],
                 dynamic_mask_prob=dynamic_mask_prob,
+                dynamic_mask_lo=dynamic_mask_lo,
+                dynamic_mask_hi=dynamic_mask_hi,
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
                 wandb_ctx=wandb_ctx,

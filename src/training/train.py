@@ -8,7 +8,7 @@ Run:  python train.py --model models/<name> [--split holdout|cv ...]
 """
 
 from __future__ import annotations
-
+import traceback
 import argparse
 from collections import Counter
 import json
@@ -61,6 +61,26 @@ def load_training_data(df: pd.DataFrame, payload_variant: str = "full") -> dict:
     from pipeline import build_training_data
 
     return build_training_data(df, payload_variant=payload_variant)
+
+
+def _write_hard_negative_mask_trace(
+    audit: list[dict],
+    *,
+    run_tag: str,
+    sample: bool,
+    enabled: bool,
+) -> None:
+    """Persist each dynamic negative-mask presentation with its extent."""
+    if not enabled or not audit:
+        return
+    from core.common import write_visibility_log
+
+    write_visibility_log(
+        pd.DataFrame(audit),
+        "mask_hard_negative_presentations.csv",
+        run_tag,
+        sample,
+    )
 
 
 def _emit_07_series(ok_rows: list[dict], args) -> None:
@@ -652,6 +672,14 @@ def _main_inner(_mlf, _wandb) -> None:
     )
     mask_prob = mask_cfg["mask_prob"]
     mask_prob = float(mask_prob) if mask_prob is not None else None
+    hard_negative_mask_prob = mask_cfg["hard_negative_mask_prob"]
+    hard_negative_mask_prob = (
+        float(hard_negative_mask_prob)
+        if hard_negative_mask_prob is not None
+        else None
+    )
+    hard_negative_mask_lo = float(mask_cfg["hard_negative_mask_lo"])
+    hard_negative_mask_hi = float(mask_cfg["hard_negative_mask_hi"])
 
     import torch
 
@@ -710,6 +738,9 @@ def _main_inner(_mlf, _wandb) -> None:
             "mask_prob": mask_prob,
             "mask_lo": float(mask_cfg["mask_lo"]),
             "mask_hi": float(mask_cfg["mask_hi"]),
+            "hard_negative_mask_prob": hard_negative_mask_prob,
+            "hard_negative_mask_lo": hard_negative_mask_lo,
+            "hard_negative_mask_hi": hard_negative_mask_hi,
             "mask_track_visibility": bool(mask_cfg["track_visibility"]),
             "mask_track_per_epoch": bool(mask_cfg["track_per_epoch"]),
             "structured_features_enabled": bool(
@@ -838,13 +869,6 @@ def _main_inner(_mlf, _wandb) -> None:
         _ma = _pd.DataFrame(mask_audit)
         if bool(mask_cfg["track_visibility"]):
             _wvl(_ma, "mask_visibility.csv", run_tag, bool(args.sample))
-        if hard_negative_mask_audit:
-            _wvl(
-                _pd.DataFrame(hard_negative_mask_audit),
-                "mask_hard_negative_visibility.csv",
-                run_tag,
-                bool(args.sample),
-            )
         # high/low halves of the extent distribution — the split point is
         # the MIDPOINT of the config extent band (masking.mask_lo..
         # mask_hi), derived here so a band change can never leave the
@@ -1074,7 +1098,9 @@ def _main_inner(_mlf, _wandb) -> None:
                 train_neg_pair_sources=train_neg_sources,
                 dynamic_mask_hard_negatives=mask_hard_negatives,
                 dynamic_mask_frac=mask_hard_negative_frac,
-                dynamic_mask_prob=mask_prob,
+                dynamic_mask_prob=hard_negative_mask_prob,
+                dynamic_mask_lo=hard_negative_mask_lo,
+                dynamic_mask_hi=hard_negative_mask_hi,
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
             )
@@ -1087,12 +1113,20 @@ def _main_inner(_mlf, _wandb) -> None:
                 train_neg_pair_sources=train_neg_sources,
                 dynamic_mask_hard_negatives=mask_hard_negatives,
                 dynamic_mask_frac=mask_hard_negative_frac,
-                dynamic_mask_prob=mask_prob,
+                dynamic_mask_prob=hard_negative_mask_prob,
+                dynamic_mask_lo=hard_negative_mask_lo,
+                dynamic_mask_hi=hard_negative_mask_hi,
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
                 wandb_ctx=_wandb,
                 mlf_ctx=_mlf,
             )
+        _write_hard_negative_mask_trace(
+            hard_negative_mask_audit,
+            run_tag=run_tag,
+            sample=bool(args.sample),
+            enabled=bool(mask_cfg["track_visibility"]),
+        )
         return
 
     # src/training/training's DEFAULT_CFG key set (train_one_config reads these)
@@ -1149,7 +1183,9 @@ def _main_inner(_mlf, _wandb) -> None:
         train_neg_pair_sources=train_neg_sources,
         dynamic_mask_hard_negatives=mask_hard_negatives,
         dynamic_mask_frac=mask_hard_negative_frac,
-        dynamic_mask_prob=mask_prob,
+        dynamic_mask_prob=hard_negative_mask_prob,
+        dynamic_mask_lo=hard_negative_mask_lo,
+        dynamic_mask_hi=hard_negative_mask_hi,
         mask_audit=mask_audit,
         hard_negative_mask_audit=hard_negative_mask_audit,
         ann_refresh_enabled=ann_mining_enabled,
@@ -1159,6 +1195,12 @@ def _main_inner(_mlf, _wandb) -> None:
         sample=bool(args.sample),
         resume=args.resume,
         wandb_ctx=_wandb,
+    )
+    _write_hard_negative_mask_trace(
+        hard_negative_mask_audit,
+        run_tag=run_tag,
+        sample=bool(args.sample),
+        enabled=bool(mask_cfg["track_visibility"]),
     )
     elapsed = time.perf_counter() - t0
 

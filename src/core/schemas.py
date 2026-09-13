@@ -478,6 +478,9 @@ class MaskingSpec(BaseModel):
     mask_prob: float | None = Field(default=None, ge=0.0, le=1.0)
     mask_lo: float = Field(ge=0.0, lt=1.0)
     mask_hi: float = Field(gt=0.0, le=1.0)
+    hard_negative_mask_prob: float | None = Field(default=None, ge=0.0, le=1.0)
+    hard_negative_mask_lo: float = Field(ge=0.0, lt=1.0)
+    hard_negative_mask_hi: float = Field(gt=0.0, le=1.0)
     track_visibility: bool
     track_per_epoch: bool
 
@@ -487,6 +490,12 @@ class MaskingSpec(BaseModel):
             raise ValueError(
                 f"masking.mask_lo must be < mask_hi, got "
                 f"{self.mask_lo} >= {self.mask_hi}"
+            )
+        if self.hard_negative_mask_lo >= self.hard_negative_mask_hi:
+            raise ValueError(
+                "masking.hard_negative_mask_lo must be < "
+                f"hard_negative_mask_hi, got {self.hard_negative_mask_lo} >= "
+                f"{self.hard_negative_mask_hi}"
             )
         return self
 
@@ -1294,6 +1303,9 @@ class MaskAuditEntry(BaseModel):
     pair_payload_idx: int = Field(ge=0)
     barcode: str
     realized_extent: float = Field(ge=0.0, le=1.0)
+    configured_mask_lo: float | None = Field(default=None, ge=0.0, le=1.0)
+    configured_mask_hi: float | None = Field(default=None, ge=0.0, le=1.0)
+    mask_prob: float | None = Field(default=None, ge=0.0, le=1.0)
     anchor_text: str
     masked_text: str
     population: str = "positive"
