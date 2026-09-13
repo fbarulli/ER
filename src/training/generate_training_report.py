@@ -17,6 +17,7 @@ Example::
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 from pathlib import Path
 
@@ -207,6 +208,73 @@ def _numeric_tree(value):
     if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
         return float(value) if np.isfinite(value) else None
     return None
+
+
+def _report_safe_tree(value):
+    """Convert metric payloads to JSON-safe scalars without losing numbers."""
+    if isinstance(value, dict):
+        return {
+            str(key): _report_safe_tree(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_report_safe_tree(child) for child in value]
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return _finite_number(value)
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    return str(value)
+
+
+def _parse_metric_payload(value: object) -> object:
+    """Parse JSON/Python-literal metric payloads emitted by fold CSVs."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return None
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            return parser(text)
+        except (ValueError, SyntaxError, TypeError, json.JSONDecodeError):
+            continue
+    return value
+
+
+def _rand_metric_tree(row: pd.Series) -> dict[str, object]:
+    """Retain every Rand/calibration number, including nested fold tables."""
+    prefixes = (
+        "calibration_",
+        "collapse_",
+        "diagnostic_",
+        "attribute_conflict_",
+    )
+    exact = {"calibrated_threshold", "plausible_group_count"}
+    return {
+        str(key): _report_safe_tree(_parse_metric_payload(value))
+        for key, value in row.items()
+        if str(key).startswith(prefixes) or str(key) in exact
+    }
+
+
+def _rand_metric_aggregate(rows: list[dict[str, object]]) -> dict[str, dict[str, int | float]]:
+    """Aggregate scalar Rand fields while preserving the per-fold values."""
+    numeric: dict[str, list[float]] = {}
+    for row in rows:
+        for key, value in row.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if value is None or not np.isfinite(float(value)):
+                continue
+            numeric.setdefault(key, []).append(float(value))
+    return {
+        key: {
+            "mean": _finite_number(np.mean(values)),
+            "std": _finite_number(np.std(values)),
+            "n": len(values),
+        }
+        for key, values in sorted(numeric.items())
+    }
 
 
 def generate_report(
@@ -669,10 +737,10 @@ def generate_report(
             fig.tight_layout()
             _save(fig, out / "auc_vs_encode_time.png")
 
-    # report.json is deliberately a numbers-only summary. Artifact locations
-    # belong to the filesystem/W&B manifest, not the metric contract consumed
-    # by downstream analysis.
+    # report.json is a metric summary. Artifact locations belong to the
+    # filesystem/W&B manifest, not the metric contract consumed downstream.
     numeric_metrics: dict[str, dict] = {}
+    rand_metric_folds: dict[str, dict[str, object]] = {}
     histories: dict[str, dict[str, list[float]]] = {}
     history_columns = {
         "train_loss_hist": "train_loss",
@@ -691,6 +759,7 @@ def generate_report(
             metric_row,
             exclude={"status", "model", "payload", *history_columns},
         )
+        rand_metric_folds[fold_key] = _rand_metric_tree(metric_row)
         histories[fold_key] = {
             target: [
                 number
@@ -713,7 +782,7 @@ def generate_report(
         return output
 
     report = {
-        "report_version": 2,
+        "report_version": 3,
         "folds": int(len(ok)),
         "metrics": numeric_metrics,
         "histories": histories,
@@ -731,6 +800,19 @@ def generate_report(
         "random_easy": _numeric_csv(out / "random_easy_metrics.csv", ("population", "label")),
         "attribute_errors": _numeric_csv(out / "attribute_error_breakdown.csv", ("attribute_bucket", "label")),
         "uniformity": _numeric_tree(uniformity_summary or {}),
+        "rand_matching": {
+            "folds": rand_metric_folds,
+            "aggregate": _rand_metric_aggregate(
+                [
+                    {
+                        key: value
+                        for key, value in metrics.items()
+                        if isinstance(value, (int, float))
+                    }
+                    for metrics in rand_metric_folds.values()
+                ]
+            ),
+        },
     }
     (out / "report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
