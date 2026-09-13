@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from core.graph_diagnostics import candidate_graph_diagnostics
 from core.gtin import is_valid_gtin_checksum
 from core.structured_features import fuse_numpy
 from training.rand_matching import (
@@ -141,16 +142,21 @@ def _assignment_metrics(
     candidates: pd.DataFrame,
     truth: pd.DataFrame,
     threshold: float,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | str]:
     predicted = choose_assignments(candidates, threshold)
-    return prediction_metrics(predicted, truth[["SKU_ID", "true_item_id"]])
+    return prediction_metrics(
+        predicted,
+        truth[["SKU_ID", "true_item_id"]],
+        candidates=candidates,
+        threshold=threshold,
+    )
 
 
 def _fit_threshold(
     candidates: pd.DataFrame,
     truth: pd.DataFrame,
     thresholds: np.ndarray,
-) -> tuple[float, dict[str, float | int]]:
+) -> tuple[float, dict[str, float | int | str]]:
     rows = [
         (float(threshold), _assignment_metrics(candidates, truth, float(threshold)))
         for threshold in thresholds
@@ -245,83 +251,6 @@ def _collapse_penalty(stats: dict, cfg: dict) -> float:
     )
 
 
-def _graph_diagnostics(candidates: pd.DataFrame, threshold: float) -> dict[str, float | int]:
-    """Describe the diagnostic SKU↔canonical graph without using it to assign."""
-    accepted = candidates[
-        candidates["gtin_status"].ne("different")
-        & (
-            candidates["exact_gtin"].astype(bool)
-            | candidates["score"].ge(float(threshold))
-        )
-    ]
-    if accepted.empty:
-        return {
-            "diagnostic_edge_count": 0,
-            "diagnostic_component_count": 0,
-            "diagnostic_max_component_size": 0,
-            "diagnostic_score_diameter": 0.0,
-            "diagnostic_bridge_edge_count": 0,
-        }
-    nodes = sorted(
-        {
-            *(f"sku:{value}" for value in accepted["SKU_ID"].astype(str)),
-            *(f"gtin:{value}" for value in accepted["candidate_gtin"].astype(str)),
-        }
-    )
-    index = {node: number for number, node in enumerate(nodes)}
-    edges = [
-        (index[f"sku:{sku}"], index[f"gtin:{gtin}"], float(score))
-        for sku, gtin, score in accepted[["SKU_ID", "candidate_gtin", "score"]].itertuples(index=False)
-    ]
-    adjacency: list[list[tuple[int, int]]] = [[] for _ in nodes]
-    for edge_id, (left, right, _) in enumerate(edges):
-        adjacency[left].append((right, edge_id))
-        adjacency[right].append((left, edge_id))
-    discovery = [-1] * len(nodes)
-    low = [-1] * len(nodes)
-    bridges = 0
-    components: list[list[int]] = []
-    time_counter = 0
-
-    def visit(node: int, parent_edge: int, component: list[int]) -> None:
-        nonlocal bridges, time_counter
-        discovery[node] = low[node] = time_counter
-        time_counter += 1
-        component.append(node)
-        for neighbour, edge_id in adjacency[node]:
-            if edge_id == parent_edge:
-                continue
-            if discovery[neighbour] < 0:
-                visit(neighbour, edge_id, component)
-                low[node] = min(low[node], low[neighbour])
-                bridges += int(low[neighbour] > discovery[node])
-            else:
-                low[node] = min(low[node], discovery[neighbour])
-
-    for node in range(len(nodes)):
-        if discovery[node] < 0:
-            component: list[int] = []
-            visit(node, -1, component)
-            components.append(component)
-    component_ids = {
-        node: component_id
-        for component_id, component in enumerate(components)
-        for node in component
-    }
-    edge_scores = [
-        [score for left, right, score in edges if component_ids[left] == component_id]
-        for component_id in range(len(components))
-    ]
-    diameters = [max(scores) - min(scores) for scores in edge_scores if scores]
-    return {
-        "diagnostic_edge_count": int(len(edges)),
-        "diagnostic_component_count": int(len(components)),
-        "diagnostic_max_component_size": int(max(map(len, components))),
-        "diagnostic_score_diameter": float(max(diameters)) if diameters else 0.0,
-        "diagnostic_bridge_edge_count": int(bridges),
-    }
-
-
 def evaluate_hpo_trial(
     *,
     model,
@@ -410,6 +339,8 @@ def evaluate_hpo_trial(
         "calibration_over_merge_rate": float(overall["over_merge_rate"]),
         "calibration_under_merge_rate": float(overall["under_merge_rate"]),
         "calibration_predicted_group_count": int(overall["predicted_group_count"]),
+        "calibration_expected_group_count": int(overall["expected_group_count"]),
+        "calibration_plausible_group_count": int(overall["plausible_group_count"]),
         "calibration_unmatched_skus": int(overall["unmatched_skus"]),
         "calibration_youden_threshold": float(
             _youden_threshold(
@@ -438,12 +369,13 @@ def evaluate_hpo_trial(
     )
     result.update(collapse)
     result["collapse_penalty"] = _collapse_penalty(result, config)
-    result.update(_graph_diagnostics(candidates, final_threshold))
+    result.update(candidate_graph_diagnostics(candidates, final_threshold))
     strata_rows = gtin_metrics(
         choose_assignments(candidates, final_threshold),
         truth,
         "trial",
         final_threshold,
+        candidates,
     )
     result["calibration_gtin_strata"] = len(strata_rows)
     for row in strata_rows:

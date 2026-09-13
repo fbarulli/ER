@@ -53,6 +53,7 @@ from core.common import (
     rand_matching_cfg,
     row_metadata_text,
 )
+from core.graph_diagnostics import candidate_graph_diagnostics
 from core.gtin import is_valid_gtin_checksum
 from core.manifest import sha256_file
 from core.structured_features import (
@@ -86,7 +87,16 @@ METRIC_COLUMNS = (
     "under_merge_rate",
     "predicted_group_count",
     "true_group_count",
+    "expected_group_count",
+    "plausible_group_count",
     "unmatched_skus",
+    "diagnostic_edge_count",
+    "diagnostic_component_count",
+    "diagnostic_component_size_distribution",
+    "diagnostic_max_component_size",
+    "diagnostic_score_diameter",
+    "diagnostic_bridge_edge_count",
+    "diagnostic_weakest_bridge_score",
     "tp",
     "tn",
     "fp",
@@ -166,6 +176,18 @@ class _DiagnosticsColumnSpec(BaseModel):
             )
 
 
+class _MetricColumnSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    required_columns: frozenset[str] = Field(min_length=1)
+
+    def validate_frame(self, frame: pd.DataFrame, label: str) -> None:
+        missing = sorted(self.required_columns - set(frame.columns))
+        if missing:
+            raise ValueError(
+                f"{label} metric contract violated: missing={missing}"
+            )
+
+
 _SUBMISSION_COLUMNS_SPEC = _SubmissionColumnSpec(columns=("SKU_ID", "ITEM_ID"))
 _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
     expected_columns=frozenset(
@@ -240,6 +262,9 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "error_type",
         }
     )
+)
+_METRIC_COLUMNS_SPEC = _MetricColumnSpec(
+    required_columns=frozenset(METRIC_COLUMNS)
 )
 
 
@@ -880,7 +905,13 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
     return float(numerator / denominator) if denominator else 0.0
 
 
-def prediction_metrics(pred: pd.DataFrame, truth: pd.DataFrame) -> dict[str, float | int]:
+def prediction_metrics(
+    pred: pd.DataFrame,
+    truth: pd.DataFrame,
+    *,
+    candidates: pd.DataFrame,
+    threshold: float,
+) -> dict[str, float | int | str]:
     """Return clustering metrics for one assignment population.
 
     ``group_precision`` and ``group_recall`` are B-cubed, item-weighted
@@ -936,6 +967,7 @@ def prediction_metrics(pred: pd.DataFrame, truth: pd.DataFrame) -> dict[str, flo
             [float(intersection / true_sizes[true_id])] * int(intersection)
         )
 
+    graph = candidate_graph_diagnostics(candidates, threshold)
     metrics = {
         "n": int(len(merged)),
         "rand_index": _safe_ratio(tp + tn, counts["pair_count"]),
@@ -952,9 +984,16 @@ def prediction_metrics(pred: pd.DataFrame, truth: pd.DataFrame) -> dict[str, flo
         "under_merge_rate": _safe_ratio(fn, tp + fn),
         "predicted_group_count": int(merged["ITEM_ID"].nunique()),
         "true_group_count": int(merged["true_item_id"].nunique()),
+        "expected_group_count": int(merged["true_item_id"].nunique()),
+        "plausible_group_count": int(graph["plausible_group_count"]),
         "unmatched_skus": int(
             merged["ITEM_ID"].astype(str).str.startswith(_unmatched_prefix()).sum()
         ),
+        **{
+            key: graph[key]
+            for key in METRIC_COLUMNS
+            if key.startswith("diagnostic_")
+        },
         **counts,
     }
     if tuple(metrics) != METRIC_COLUMNS:
@@ -970,6 +1009,7 @@ def gtin_metrics(
     truth: pd.DataFrame,
     fold: object,
     threshold: float,
+    candidates: pd.DataFrame,
 ) -> list[dict[str, float | int | str]]:
     truth_frame = truth[["SKU_ID", "true_item_id", "gtin_status"]].copy()
     pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
@@ -1001,7 +1041,16 @@ def gtin_metrics(
                     "n": 0,
                     "predicted_group_count": 0,
                     "true_group_count": 0,
+                    "expected_group_count": 0,
+                    "plausible_group_count": 0,
                     "unmatched_skus": 0,
+                    "diagnostic_edge_count": 0,
+                    "diagnostic_component_count": 0,
+                    "diagnostic_component_size_distribution": "{}",
+                    "diagnostic_max_component_size": 0,
+                    "diagnostic_score_diameter": 0.0,
+                    "diagnostic_bridge_edge_count": 0,
+                    "diagnostic_weakest_bridge_score": float("nan"),
                     "tp": 0,
                     "tn": 0,
                     "fp": 0,
@@ -1020,9 +1069,14 @@ def gtin_metrics(
                 **prediction_metrics(
                     group[["SKU_ID", "ITEM_ID"]],
                     group[["SKU_ID", "true_item_id"]],
+                    candidates=candidates[
+                        candidates["SKU_ID"].isin(group["SKU_ID"])
+                    ],
+                    threshold=threshold,
                 ),
             }
         )
+    _METRIC_COLUMNS_SPEC.validate_frame(pd.DataFrame(rows), "GTIN metrics")
     return rows
 
 
@@ -1257,7 +1311,12 @@ def _fit_fold_threshold(
     fit_rows: list[dict[str, float]] = []
     for threshold in thresholds:
         t = float(threshold)
-        metrics = prediction_metrics(sweep[t], fit_truth)
+        metrics = prediction_metrics(
+            sweep[t],
+            fit_truth,
+            candidates=fit_candidates,
+            threshold=t,
+        )
         fit_rows.append(
             {
                 "threshold": t,
@@ -1374,13 +1433,22 @@ def _fold_sensitivity(
             "gtin_status": "ALL",
             "selection_method": method,
             "sensitivity_reason": "fitted",
-            **prediction_metrics(prediction, check_truth),
+            **prediction_metrics(
+                prediction,
+                check_truth,
+                candidates=check_candidates,
+                threshold=threshold,
+            ),
         }
         rows.append(row_data)
     for threshold in thresholds:
         prediction = sweep[float(threshold)]
         for row_data in gtin_metrics(
-            prediction, check_truth, fold, float(threshold)
+            prediction,
+            check_truth,
+            fold,
+            float(threshold),
+            check_candidates,
         ):
             row_data.setdefault("sensitivity_reason", "fitted")
             rows.append(row_data)
@@ -1552,6 +1620,14 @@ def _write_calibration_outputs(
     target_recall: float,
     calibration_trace: pd.DataFrame,
 ) -> None:
+    _METRIC_COLUMNS_SPEC.validate_frame(
+        sensitivity_df,
+        "threshold sensitivity metrics",
+    )
+    _METRIC_COLUMNS_SPEC.validate_frame(
+        alternatives_df,
+        "threshold comparison metrics",
+    )
     selected_df.to_csv(output_dir / output_names["threshold_selection_by_fold"], index=False)
     sensitivity_df.to_csv(
         output_dir / output_names["threshold_sensitivity_by_gtin_status"],
@@ -1667,7 +1743,13 @@ def _evaluate_holdout(
     candidates = matcher.score_candidates(holdout)
     truth = holdout[["SKU_ID", "true_item_id", "gtin_status"]].drop_duplicates("SKU_ID")
     predictions, trace = _assignments_with_trace(candidates, final_threshold)
-    metrics = gtin_metrics(predictions, truth, "holdout", final_threshold)
+    metrics = gtin_metrics(
+        predictions,
+        truth,
+        "holdout",
+        final_threshold,
+        candidates,
+    )
     diagnostics = _audit_trace(
         candidates,
         trace,
@@ -1848,7 +1930,12 @@ def write_outputs(
         holdout_labels,
         final_threshold,
     )
-    pd.DataFrame(holdout_metrics).to_csv(
+    holdout_metrics_frame = pd.DataFrame(holdout_metrics)
+    _METRIC_COLUMNS_SPEC.validate_frame(
+        holdout_metrics_frame,
+        "holdout metrics",
+    )
+    holdout_metrics_frame.to_csv(
         output_dir / output_names["holdout_metrics"], index=False
     )
     _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(
