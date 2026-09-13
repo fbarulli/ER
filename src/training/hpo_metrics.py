@@ -32,7 +32,7 @@ from training.rand_matching import (
     _threshold_at_recall,
     _youden_threshold,
 )
-from training.uniformity import select_unrelated_pairs
+from training.uniformity import collapse_diagnostics
 
 
 class CalibrationUnavailableReasonCode(str, Enum):
@@ -150,6 +150,10 @@ class CalibrationMetricRow(BaseModel):
     collapse_embedding_norm_std: float | None = None
     collapse_median_flag: int | None = None
     collapse_p90_flag: int | None = None
+    collapse_operating_threshold: float | None = None
+    collapse_crossing_rate: float | None = None
+    collapse_crossing_rate_ceiling: float | None = None
+    collapse_crossing_rate_flag: int | None = None
     collapse_diagnostics_available: int | None = None
     collapse_healthy: int | None = None
     collapse_penalty: float | None = None
@@ -184,6 +188,10 @@ class CalibrationFoldMetricRow(BaseModel):
     collapse_median_cosine: float | None = None
     collapse_p90_cosine: float | None = None
     collapse_cosine_std: float | None = None
+    collapse_operating_threshold: float | None = None
+    collapse_crossing_rate: float | None = None
+    collapse_crossing_rate_ceiling: float | None = None
+    collapse_crossing_rate_flag: int | None = None
     collapse_penalty: float = Field(ge=0.0)
     fit_rand_index_minus_collapse_penalty: float
 
@@ -621,91 +629,6 @@ def _fold_ids(truth: pd.DataFrame, n_folds: int, seed: int) -> dict[str, int]:
     return {str(items[position]): int(index % n_folds) for index, position in enumerate(order)}
 
 
-def _collapse_stats(
-    model,
-    df: pd.DataFrame,
-    payload: list[str],
-    cfg: dict,
-    batch_size: int,
-    *,
-    requested: bool,
-    allow_unavailable: bool = False,
-) -> dict[str, float | int | str]:
-    guardrail = cfg["hpo"]["collapse_guardrail"]
-    if not requested or not bool(guardrail["enabled"]):
-        return {
-            "collapse_guardrail_enabled": 0,
-            "collapse_status": "not_requested" if not requested else "disabled",
-            "collapse_requested_pairs": int(guardrail["unrelated_pairs"]),
-            "collapse_unrelated_pairs": 0,
-            "collapse_diagnostics_available": 0,
-            "collapse_healthy": 0,
-        }
-    requested_pairs = int(guardrail["unrelated_pairs"])
-    pairs = select_unrelated_pairs(
-        df,
-        payload,
-        n_pairs=requested_pairs,
-        seed=int(guardrail["seed"]),
-    )
-    if not pairs:
-        if allow_unavailable:
-            return {
-                "collapse_guardrail_enabled": 1,
-                "collapse_status": "unavailable",
-                "collapse_requested_pairs": requested_pairs,
-                "collapse_unrelated_pairs": 0,
-                "collapse_diagnostics_available": 0,
-                "collapse_healthy": 0,
-            }
-        raise RuntimeError(
-            "collapse guardrail could not construct its configured unrelated-pair "
-            f"sample: required={requested_pairs} selected=0"
-        )
-    sample_status = "ok" if len(pairs) == requested_pairs else "insufficient_pairs"
-    if sample_status == "insufficient_pairs":
-        print(
-            "[collapse-guardrail] insufficient unrelated pairs; "
-            f"requested={requested_pairs} selected={len(pairs)}",
-            flush=True,
-        )
-    pair_array = np.asarray(pairs, dtype=int)
-    embeddings = model.encode(
-        [payload[int(row)] for row in pair_array.ravel()],
-        batch_size=batch_size,
-        convert_to_numpy=True,
-        normalize_embeddings=False,
-        show_progress_bar=False,
-    )
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    normalized = embeddings / np.maximum(norms, np.finfo(float).eps)
-    scores = np.sum(normalized[0::2] * normalized[1::2], axis=1)
-    median = float(np.median(scores))
-    p90 = float(np.quantile(scores, 0.90))
-    std = float(np.std(scores))
-    healthy = int(
-        sample_status == "ok"
-        and median <= float(guardrail["median_penalty_start"])
-        and p90 <= float(guardrail["p90_penalty_start"])
-        and std >= float(guardrail["cosine_std_floor"])
-    )
-    return {
-        "collapse_guardrail_enabled": 1,
-        "collapse_status": sample_status,
-        "collapse_requested_pairs": requested_pairs,
-        "collapse_unrelated_pairs": int(len(scores)),
-        "collapse_median_cosine": median,
-        "collapse_p90_cosine": p90,
-        "collapse_cosine_std": std,
-        "collapse_embedding_norm_mean": float(np.mean(norms)),
-        "collapse_embedding_norm_std": float(np.std(norms)),
-        "collapse_median_flag": int(median > float(guardrail["median_penalty_start"])),
-        "collapse_p90_flag": int(p90 > float(guardrail["p90_penalty_start"])),
-        "collapse_diagnostics_available": 1,
-        "collapse_healthy": healthy,
-    }
-
-
 def _fold_collapse_stats(
     *,
     model,
@@ -728,19 +651,31 @@ def _fold_collapse_stats(
         raise ValueError("calibration fold lost SKU source-row metadata")
     fold_df = df.iloc[source_rows.to_numpy()].reset_index(drop=True)
     fold_payload = [payload[int(row)] for row in source_rows]
-    return _collapse_stats(
-        model,
-        fold_df,
-        fold_payload,
-        cfg,
-        batch_size,
-        requested=requested,
-        allow_unavailable=True,
+    if not requested:
+        return collapse_diagnostics(
+            model=model,
+            df=fold_df,
+            payload=fold_payload,
+            config={
+                **cfg,
+                "collapse_guardrail": {
+                    **cfg["collapse_guardrail"],
+                    "enabled": False,
+                },
+            },
+            batch_size=batch_size,
+        )
+    return collapse_diagnostics(
+        model=model,
+        df=fold_df,
+        payload=fold_payload,
+        config=cfg,
+        batch_size=batch_size,
     )
 
 
 def _collapse_penalty(stats: dict, cfg: dict) -> float:
-    guardrail = cfg["hpo"]["collapse_guardrail"]
+    guardrail = cfg["collapse_guardrail"]
     if not bool(guardrail["enabled"]):
         return 0.0
     if stats["collapse_status"] == "not_requested":
@@ -759,8 +694,13 @@ def _collapse_penalty(stats: dict, cfg: dict) -> float:
         0.0,
         float(guardrail["cosine_std_floor"]) - float(stats["collapse_cosine_std"]),
     )
+    crossing_excess = max(
+        0.0,
+        float(stats["collapse_crossing_rate"])
+        - float(guardrail["crossing_rate_ceiling"]),
+    )
     return float(guardrail["penalty_weight"]) * (
-        median_excess + p90_excess + variance_excess
+        median_excess + p90_excess + variance_excess + crossing_excess
     )
 
 
@@ -804,7 +744,7 @@ def evaluate_calibration_trial(
             "HPO calibration has insufficient fold support for a meaningful median: "
             f"configured={n_folds}, required={minimum_support}"
         )
-    fold_map = _fold_ids(truth, n_folds, int(config["hpo"]["collapse_guardrail"]["seed"]))
+    fold_map = _fold_ids(truth, n_folds, int(config["collapse_guardrail"]["seed"]))
     thresholds = _thresholds(config)
     fold_rows: list[CalibrationFoldMetricRow] = []
     validation_candidates: list[pd.DataFrame] = []
@@ -859,6 +799,18 @@ def evaluate_calibration_trial(
                 ),
                 "collapse_p90_cosine": fold_collapse.get("collapse_p90_cosine"),
                 "collapse_cosine_std": fold_collapse.get("collapse_cosine_std"),
+                "collapse_operating_threshold": fold_collapse.get(
+                    "collapse_operating_threshold"
+                ),
+                "collapse_crossing_rate": fold_collapse.get(
+                    "collapse_crossing_rate"
+                ),
+                "collapse_crossing_rate_ceiling": fold_collapse.get(
+                    "collapse_crossing_rate_ceiling"
+                ),
+                "collapse_crossing_rate_flag": fold_collapse.get(
+                    "collapse_crossing_rate_flag"
+                ),
                 "collapse_penalty": fold_penalty,
                 "fit_rand_index_minus_collapse_penalty": float(
                     fit_metrics["rand_index"]
@@ -929,12 +881,21 @@ def evaluate_calibration_trial(
         row.rand_index >= best_rand - float(config["rand_matching"]["plateau_tolerance"])
         for row in sensitivity
     )
-    collapse = _collapse_stats(
-        model,
-        df,
-        payload,
-        config,
-        batch_size,
+    collapse_config = config
+    if not include_collapse_guardrail:
+        collapse_config = {
+            **config,
+            "collapse_guardrail": {
+                **config["collapse_guardrail"],
+                "enabled": False,
+            },
+        }
+    collapse = collapse_diagnostics(
+        model=model,
+        df=df,
+        payload=payload,
+        config=collapse_config,
+        batch_size=batch_size,
         requested=include_collapse_guardrail,
     )
     # Alternative thresholds are reported on the same untouched check-fold

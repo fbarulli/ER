@@ -124,8 +124,21 @@ evaluation:
     enabled: true
     sample_pairs: 100
     seed: 42
-    threshold: 0.70
     checkpoint_scope: "final"
+
+# Shared unrelated-pair collapse monitoring and HPO penalty contract.
+collapse_guardrail:
+  enabled: true
+  unrelated_pairs: 100
+  seed: 42
+  median_penalty_start: 0.50
+  p90_penalty_start: 0.70
+  cosine_std_floor: 0.05
+  penalty_weight: 1.0
+  reject_median: 0.80
+  max_token_frequency: 0.05
+  operating_threshold: 0.85
+  crossing_rate_ceiling: 0.02
 
 # ── final Rand Index matching lane ─────────────────────────────────────────
 # Runtime input files are required CLI arguments; all matcher behavior and
@@ -319,15 +332,6 @@ hpo:
   n_jobs: 2                   # default parallel HPO trial workers
   persistence: "dvc"         # DVC-backed HPO snapshots
   calibration_folds: 3        # canonical-disjoint folds for the trial proxy
-  collapse_guardrail:
-    enabled: true
-    unrelated_pairs: 100
-    seed: 42
-    median_penalty_start: 0.50
-    p90_penalty_start: 0.70
-    cosine_std_floor: 0.05
-    penalty_weight: 1.0
-    reject_median: 0.80
   # ── selection protocol (test-leak fix, 2026-09-12) ─────────────────────
   # WHICH signal a sweep ranks configs on, per split mode. Holdout sweeps
   # train q0+q1, early-stop + select on the dev quarter q2's component-safe

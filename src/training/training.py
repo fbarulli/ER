@@ -621,10 +621,11 @@ def _tracking_contrastive_loss(
             negative_hinge = F.relu(self.margin - negative_pairs)
             negative_loss = negative_hinge.pow(2).sum()
             uniformity_loss = self._uniformity_penalty(embeddings)
+            anti_collapse_loss = uniformity_weight * uniformity_loss
             loss_value = (
                 positive_loss
                 + negative_loss
-                + uniformity_weight * uniformity_loss
+                + anti_collapse_loss
             )
 
             # Evaluator forwards are no-grad; only optimizer-facing forwards
@@ -680,6 +681,7 @@ def _tracking_contrastive_loss(
                     "positive_loss": float(positive_loss.detach().item()),
                     "negative_loss": float(negative_loss.detach().item()),
                     "uniformity_loss": float(uniformity_loss.detach().item()),
+                    "anti_collapse_loss": float(anti_collapse_loss.detach().item()),
                 }
                 for key, value in values.items():
                     self._tracking_totals[key] = (
@@ -707,6 +709,7 @@ def _tracking_contrastive_loss(
                 "positive_loss": totals.get("positive_loss", 0.0),
                 "negative_loss": totals.get("negative_loss", 0.0),
                 "uniformity_loss": totals.get("uniformity_loss", 0.0),
+                "anti_collapse_loss": totals.get("anti_collapse_loss", 0.0),
                 "tracking_batches": float(batches),
             }
             result["margin_active_negative_fraction"] = (
@@ -864,13 +867,77 @@ class ProgressCallback(TrainerCallback):
     early-stopper is actually watching.
     """
 
-    def __init__(self, wandb_ctx=None, tracked_loss=None, trace_path=None):
+    def __init__(
+        self,
+        wandb_ctx=None,
+        tracked_loss=None,
+        trace_path=None,
+        *,
+        collapse_model=None,
+        collapse_df=None,
+        collapse_payload=None,
+        collapse_config=None,
+        collapse_batch_size=None,
+    ):
         self.wandb_ctx = wandb_ctx
         self.tracked_loss = tracked_loss
         self.trace_path = Path(trace_path) if trace_path is not None else None
-        self._trace_rows: list[dict[str, float]] = []
+        self._trace_rows: list[dict[str, object]] = []
         self.latest_train_loss: float | None = None
         self.latest_dev_accuracy: float | None = None
+        collapse_values = (
+            collapse_model,
+            collapse_df,
+            collapse_payload,
+            collapse_config,
+            collapse_batch_size,
+        )
+        if any(value is not None for value in collapse_values) and not all(
+            value is not None for value in collapse_values
+        ):
+            raise ValueError(
+                "collapse monitoring requires model, dataframe, payload, "
+                "config, and batch size together"
+            )
+        self.collapse_model = collapse_model
+        self.collapse_df = collapse_df
+        self.collapse_payload = collapse_payload
+        self.collapse_config = collapse_config
+        self.collapse_batch_size = collapse_batch_size
+
+    def _collapse_metrics(self, evaluation_step: int) -> dict[str, float | int | str]:
+        """Run the shared unrelated-pair diagnostic on the current model."""
+        if self.collapse_model is None:
+            return {}
+        from training.uniformity import collapse_diagnostics
+
+        return collapse_diagnostics(
+            model=self.collapse_model,
+            df=self.collapse_df,
+            payload=self.collapse_payload,
+            config=self.collapse_config,
+            batch_size=int(self.collapse_batch_size),
+            trace_path=(
+                self.trace_path.with_name(f"{self.trace_path.stem}_collapse_pairs.csv")
+                if self.trace_path is not None
+                else None
+            ),
+            evaluation_step=evaluation_step,
+        )
+
+    @staticmethod
+    def _collapse_wandb_metrics(
+        metrics: dict[str, float | int | str],
+    ) -> dict[str, float | int | str]:
+        return {
+            f"live/{key}": value
+            for key, value in metrics.items()
+            if key != "collapse_status" and isinstance(value, (float, int))
+        } | (
+            {"live/collapse_status": metrics["collapse_status"]}
+            if "collapse_status" in metrics
+            else {}
+        )
 
     def _write_live_status(self, state, event: str, **values) -> None:
         """Atomically expose a compact worker heartbeat to the Colab launcher."""
@@ -1004,6 +1071,16 @@ class ProgressCallback(TrainerCallback):
         acc_key = next((k for k in metrics if k.endswith("_cosine_accuracy")), None)
         if acc_key is not None:
             self.latest_dev_accuracy = float(metrics[acc_key])
+        collapse_metrics = self._collapse_metrics(int(state.global_step))
+        if collapse_metrics:
+            self._trace_rows.append(
+                {
+                    "step": float(state.global_step),
+                    "epoch": float(state.epoch or 0.0),
+                    "event": "evaluation",
+                    **collapse_metrics,
+                }
+            )
         telemetry = _runtime_telemetry()
         parts = [f"dev_ap {float(ap):.4f}"] if ap is not None else []
         if auc_key is not None:
@@ -1013,6 +1090,15 @@ class ProgressCallback(TrainerCallback):
         f1_key = next((k for k in metrics if k.endswith("_f1")), None)
         if f1_key is not None:
             parts.append(f"dev_f1 {float(metrics[f1_key]):.4f}")
+        if collapse_metrics:
+            parts.append(
+                "collapse "
+                f"status={collapse_metrics['collapse_status']} "
+                f"median={collapse_metrics.get('collapse_median_cosine', float('nan')):.4f} "
+                f"p90={collapse_metrics.get('collapse_p90_cosine', float('nan')):.4f} "
+                f"std={collapse_metrics.get('collapse_cosine_std', float('nan')):.4f} "
+                f"healthy={collapse_metrics['collapse_healthy']}"
+            )
         parts.append(_format_telemetry(telemetry))
         if parts:
             total_epochs = float(args.num_train_epochs)
@@ -1047,6 +1133,7 @@ class ProgressCallback(TrainerCallback):
                     "live/dev_recall": float(metrics[recall_key])
                     if recall_key is not None else None,
                     "live/epoch": float(state.epoch or 0.0),
+                    **self._collapse_wandb_metrics(collapse_metrics),
                     **_wandb_memory_metrics(telemetry),
                 },
             )
@@ -1063,6 +1150,7 @@ class ProgressCallback(TrainerCallback):
                 float(metrics[precision_key]) if precision_key is not None else None
             ),
             dev_recall=(float(metrics[recall_key]) if recall_key is not None else None),
+            **collapse_metrics,
             **telemetry,
         )
 
@@ -3161,6 +3249,11 @@ def train_one_config(
                     / "logs"
                     / run_tag
                     / f"loss_backprop_fold{fold_i}.csv",
+                    collapse_model=model,
+                    collapse_df=df,
+                    collapse_payload=payload,
+                    collapse_config=calibration_config,
+                    collapse_batch_size=runtime("batch_size_eval"),
                 ),
                 DvcCheckpointCallback(),
                 EarlyStoppingCallback(
@@ -4423,11 +4516,24 @@ def run_hpo(
                 for r in proxy_rows
                 if np.isfinite(r.get("collapse_median_cosine", float("nan")))
             ]
-            guardrail = _hpo_cfg_load()["collapse_guardrail"]
+            collapse_crossing_rates = [
+                float(r["collapse_crossing_rate"])
+                for r in proxy_rows
+                if np.isfinite(r.get("collapse_crossing_rate", float("nan")))
+            ]
+            guardrail = load_config()["collapse_guardrail"]
             if collapse_medians and max(collapse_medians) > float(guardrail["reject_median"]):
                 raise optuna.TrialPruned(
                     "collapse guardrail rejected trial: "
                     f"median_cosine={max(collapse_medians):.4f}"
+                )
+            if collapse_crossing_rates and max(collapse_crossing_rates) > float(
+                guardrail["crossing_rate_ceiling"]
+            ):
+                raise optuna.TrialPruned(
+                    "collapse guardrail rejected trial: "
+                    f"crossing_rate={max(collapse_crossing_rates):.4f} "
+                    f"ceiling={float(guardrail['crossing_rate_ceiling']):.4f}"
                 )
             proxy_summary = {
                 "mean_calibration_rand_index": mean_rand,
@@ -4458,6 +4564,12 @@ def run_hpo(
                 ),
                 "mean_collapse_cosine_std": float(
                     np.mean([r["collapse_cosine_std"] for r in proxy_rows])
+                ),
+                "mean_collapse_crossing_rate": float(
+                    np.mean([r["collapse_crossing_rate"] for r in proxy_rows])
+                ),
+                "collapse_crossing_rate_ceiling": float(
+                    guardrail["crossing_rate_ceiling"]
                 ),
                 "mean_diagnostic_bridge_edge_count": float(
                     np.mean([r["diagnostic_bridge_edge_count"] for r in proxy_rows])

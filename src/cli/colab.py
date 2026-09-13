@@ -939,6 +939,7 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
     # These inputs are identical for every downloaded worker. Build them once
     # so report generation does not rewrite the same payload audit repeatedly.
     uniformity_cfg = training_cfg().evaluation.uniformity
+    collapse_cfg = training_cfg().collapse_guardrail
     _post_training_event(run_id, "report_inputs", "started")
     data = load_dataset_deduped()
     payload = build_training_data(data, payload_variant="full")["payload"]
@@ -1007,7 +1008,9 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
                         payload=payload,
                         n_pairs=uniformity_cfg.sample_pairs,
                         seed=uniformity_cfg.seed,
-                        threshold=uniformity_cfg.threshold,
+                        operating_threshold=collapse_cfg.operating_threshold,
+                        crossing_rate_ceiling=collapse_cfg.crossing_rate_ceiling,
+                        max_token_frequency=collapse_cfg.max_token_frequency,
                     )
                 except Exception as exc:
                     # Uniformity is an optional diagnostic. Record a named

@@ -357,7 +357,6 @@ class UniformitySpec(BaseModel):
     enabled: bool
     sample_pairs: int = Field(ge=1)
     seed: int
-    threshold: float = Field(ge=-1.0, le=1.0)
     checkpoint_scope: Literal["all", "final"]
 
 
@@ -862,8 +861,8 @@ class ObjectiveSpec(BaseModel):
     cv: Literal["rand_index_proxy"]
 
 
-class HpoCollapseGuardrailSpec(BaseModel):
-    """Per-trial embedding-collapse guardrail and penalty contract."""
+class CollapseGuardrailSpec(BaseModel):
+    """Shared embedding-collapse monitoring and penalty contract."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -875,17 +874,20 @@ class HpoCollapseGuardrailSpec(BaseModel):
     cosine_std_floor: float = Field(gt=0.0)
     penalty_weight: float = Field(ge=0.0)
     reject_median: float = Field(ge=-1.0, le=1.0)
+    max_token_frequency: float = Field(gt=0.0, le=1.0)
+    operating_threshold: float = Field(ge=-1.0, le=1.0)
+    crossing_rate_ceiling: float = Field(ge=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def _ordered(self) -> HpoCollapseGuardrailSpec:
+    def _ordered(self) -> CollapseGuardrailSpec:
         if self.median_penalty_start > self.reject_median:
             raise ValueError(
-                "hpo.collapse_guardrail.median_penalty_start must not exceed "
+                "collapse_guardrail.median_penalty_start must not exceed "
                 "reject_median"
             )
         if self.p90_penalty_start < self.median_penalty_start:
             raise ValueError(
-                "hpo.collapse_guardrail.p90_penalty_start must be >= "
+                "collapse_guardrail.p90_penalty_start must be >= "
                 "median_penalty_start"
             )
         return self
@@ -903,7 +905,6 @@ class HpoSpec(BaseModel):
     quick: list[HpoGridRowSpec] = Field(min_length=1)
     tpe_space: HpoSpaceSpec
     calibration_folds: int = Field(ge=2)
-    collapse_guardrail: HpoCollapseGuardrailSpec
     n_trials: int = Field(ge=1)
     n_jobs: int = Field(ge=1)
     persistence: Literal["dvc", "local", "none"]
@@ -1029,6 +1030,7 @@ class TrainingConfig(BaseModel):
     masking: MaskingSpec
     split: SplitSpec
     evaluation: EvaluationSpec
+    collapse_guardrail: CollapseGuardrailSpec
     gate: GateSpec
     training: TrainingSpec
     pairs: PairsSpec
