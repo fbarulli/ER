@@ -44,6 +44,7 @@ colab:
   hpo_mode: "sequential"
   hpo_workers: 2
   train_workers: 6
+  smoke_workers: 1
   log_poll_seconds: 2
   probe_timeout_seconds: 600
   probe_retries: 4
@@ -57,8 +58,10 @@ colab:
   dvc_remote_url: "https://dagshub.com/fbarulli/ER.dvc"
   dagshub_repo: "fbarulli/ER"
   worker_timeout_seconds: 14400
-  # DVC's content transfer workers. This is separate from train_workers:
-  # each isolated worker owns its metadata, while DVC parallelizes uploads.
+  # One lane-level DVC publisher is separate from trainer/HPO workers.
+  dvc_workers: 1
+  # DVC's internal content-transfer jobs. This controls parallel object
+  # transfers inside one DVC command; it is not another trainer process.
   dvc_jobs: 4
   post_training_events_file: "post_training_events.jsonl"
   dvc_events_file: "dvc_events.jsonl"

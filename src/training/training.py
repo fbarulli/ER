@@ -1031,8 +1031,9 @@ class DvcCheckpointCallback(TrainerCallback):
     def __init__(self):
         from concurrent.futures import ThreadPoolExecutor
 
-        # One publisher per worker prevents concurrent DVC metadata mutations.
-        # Training itself continues while this worker performs network I/O.
+        # One checkpoint publisher thread is attached to each trainer so its
+        # worker-local DVC metadata stays serialized while training continues.
+        # This is not the lane-level final DVC publisher configured in colab.
         self._publisher = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="checkpoint-dvc"
         )

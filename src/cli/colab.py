@@ -91,6 +91,8 @@ _HPO_WORKERS = _COLAB.hpo_workers
 _HPO_TRIAL_JOBS_DEFAULT = int(hpo_cfg()["n_jobs"])
 _HPO_PERSISTENCE = str(hpo_cfg()["persistence"])
 _TRAIN_WORKERS = _COLAB.train_workers
+_SMOKE_WORKERS = _COLAB.smoke_workers
+_DVC_WORKERS = _COLAB.dvc_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
 _PROBE_RETRIES = _COLAB.probe_retries
@@ -1244,13 +1246,14 @@ def publish_local_training_results(remote_base: str, workers: int) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    publisher_workers = min(workers, int(training_cfg().colab.dvc_jobs))
+    publisher_workers = min(workers, _DVC_WORKERS)
     _post_training_event(
         run_id,
         "dvc_publish",
         "dispatching",
         workers=workers,
         publisher_workers=publisher_workers,
+        dvc_workers=_DVC_WORKERS,
         dvc_jobs=int(training_cfg().colab.dvc_jobs),
     )
     with ThreadPoolExecutor(max_workers=publisher_workers, thread_name_prefix="dvc-worker") as pool:
@@ -1418,6 +1421,22 @@ def finalize_local_training_run(remote_base: str, workers: int) -> None:
     print("[post-training] DVC and W&B publication verified", flush=True)
 
 
+def _publish_local_hpo_model_snapshot(generation: Path, model_dir: Path) -> None:
+    """Publish one HPO model snapshot through the DVC publisher lane."""
+    from training.hpo_persistence import best_effort_dvc_publish, build_snapshot
+
+    snapshot = build_snapshot(
+        generation=generation,
+        sequence=time.time_ns(),
+        optuna_db=None,
+        include=[model_dir],
+        scope=model_dir.name,
+    )
+    if not best_effort_dvc_publish(snapshot):
+        raise RuntimeError(f"local HPO DVC publication failed: {snapshot}")
+    print(f"[hpo-durability-local] published {model_dir.name}", flush=True)
+
+
 def publish_local_hpo_results(run_id: str, persistence: str) -> None:
     """Generate HPO reports and persist snapshots before VM teardown."""
     from training.generate_training_report import generate_report
@@ -1441,8 +1460,8 @@ def publish_local_hpo_results(run_id: str, persistence: str) -> None:
             )
             print(f"[report-local] HPO {model_dir.name}: report generated", flush=True)
     if persistence != "dvc":
+        print(f"[hpo-dvc] skipped: persistence={persistence}", flush=True)
         return
-    from training.hpo_persistence import best_effort_dvc_publish, build_snapshot
 
     env = _local_auth_env()
     previous = {key: os.environ.get(key) for key in ("DVC_API_KEY", "DAGSHUB_USER_TOKEN")}
@@ -1450,19 +1469,27 @@ def publish_local_hpo_results(run_id: str, persistence: str) -> None:
         for key in ("DVC_API_KEY", "DAGSHUB_USER_TOKEN"):
             if key in env:
                 os.environ[key] = env[key]
-        for model_dir in sorted((generation / "models").iterdir()):
-            if not model_dir.is_dir():
-                continue
-            snapshot = build_snapshot(
-                generation=generation,
-                sequence=time.time_ns(),
-                optuna_db=None,
-                include=[model_dir],
-                scope=model_dir.name,
-            )
-            if not best_effort_dvc_publish(snapshot):
-                raise RuntimeError(f"local HPO DVC publication failed: {snapshot}")
-            print(f"[hpo-durability-local] published {model_dir.name}", flush=True)
+        model_dirs = [
+            model_dir
+            for model_dir in sorted((generation / "models").iterdir())
+            if model_dir.is_dir()
+        ]
+        print(
+            f"[hpo-dvc] publishing with {_DVC_WORKERS} DVC worker(s); "
+            "HPO model/trial workers remain separate",
+            flush=True,
+        )
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(
+            max_workers=_DVC_WORKERS, thread_name_prefix="hpo-dvc"
+        ) as pool:
+            futures = [
+                pool.submit(_publish_local_hpo_model_snapshot, generation, model_dir)
+                for model_dir in model_dirs
+            ]
+            for future in futures:
+                future.result()
     finally:
         for key, value in previous.items():
             if value is None:
@@ -2314,6 +2341,27 @@ def main() -> None:
 
     GPU = args.gpu
 
+    dvc_jobs = int(training_cfg().colab.dvc_jobs)
+    if args.what == "train":
+        print(
+            f"[workers] lane=train trainers={args.workers} "
+            f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
+            flush=True,
+        )
+    elif args.what == "smoke":
+        print(
+            f"[workers] lane=smoke trainers={_SMOKE_WORKERS} "
+            f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
+            flush=True,
+        )
+    elif args.what == "hpo":
+        print(
+            f"[workers] lane=hpo model_workers={_HPO_WORKERS} "
+            f"trial_jobs={args.hpo_jobs} dvc_publishers={_DVC_WORKERS} "
+            f"dvc_transfer_jobs={dvc_jobs}",
+            flush=True,
+        )
+
     if args.what == "stop":
         stop()
         return
@@ -2341,7 +2389,7 @@ def main() -> None:
         elif args.what == "smoke":
             local_training_run = run_train(
                 args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE,
-                workers=_TRAIN_WORKERS, run_label=args.run_label,
+                workers=_SMOKE_WORKERS, run_label=args.run_label,
             )
         elif args.what == "hpo":
             if args.hpo_jobs < 1:

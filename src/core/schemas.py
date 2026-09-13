@@ -850,6 +850,7 @@ class ColabSpec(BaseModel):
     hpo_mode: Literal["sequential", "parallel_same_vm"]
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)
+    smoke_workers: int = Field(ge=1, le=3)
     log_poll_seconds: int = Field(ge=1, le=30)
     probe_timeout_seconds: int = Field(ge=60, le=1800)
     probe_retries: int = Field(ge=1, le=10)
@@ -861,6 +862,7 @@ class ColabSpec(BaseModel):
     dvc_remote_url: str = Field(min_length=1)
     dagshub_repo: str = Field(min_length=1)
     worker_timeout_seconds: int = Field(ge=60)
+    dvc_workers: int = Field(ge=1, le=3)
     dvc_jobs: int = Field(ge=1, le=32)
     post_training_events_file: str = Field(min_length=1)
     dvc_events_file: str = Field(min_length=1)
