@@ -15,14 +15,13 @@ results/manifests/zero_shot_sims.json LAST. The per-model `.model_fp`
 fingerprint stamps become manifest OUTPUTS (sha256-pinned), so a torn or
 tampered stamp is detectable without a re-run.
 
-ROW ACCOUNTING (code truth): every gate pair in gate_results.csv is
-scored and every scored pair is written — the `[keep]` projection at the
-write is a COLUMN selection (identity columns + every sim_* column), not
-a row filter, so no row ever vanishes between input and output and
-`dropped` is EMPTY (closure input == output). The docstring's historic
-"non-hard_no" phrasing is stale: the code scores EVERY pair (hard_no
-included — the eval lane draws its negatives from hard_no rows; skipping
-them was the silent class drop that rule closed).
+ROW ACCOUNTING (code truth): every selected gate pair is scored and every
+selected pair is written — the `[keep]` projection at the write is a COLUMN
+selection (identity columns + every sim_* column), not a row filter. A
+`--sample` run records the intentionally excluded tail as `sample_cap` in
+the manifest; a full run has no dropped rows. The code scores EVERY selected
+pair (hard_no included — the eval lane draws its negatives from hard_no
+rows; skipping them was the silent class drop that rule closed).
 """
 
 import hashlib
@@ -252,7 +251,15 @@ def main() -> None:
         default=None,
         help="comma-separated model keys to score (default: all in config)",
     )
+    ap.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help="debug: cap gate rows for an explicit, traceable smoke run",
+    )
     args = ap.parse_args()
+    if args.sample is not None and args.sample < 1:
+        raise SystemExit("--sample must be >= 1 when provided")
     selected_keys = MODEL_KEYS
     if args.models is not None:
         selected_keys = tuple(m for m in args.models.split(",") if m)
@@ -303,7 +310,15 @@ def main() -> None:
     # score EVERY gate pair (candidates AND hard_no): the evaluation set
     # (labeled_pairs) draws its negatives from hard_no rows — skipping them
     # would leave 04 with positives only (silent class drop)
+    full_gate_rows = len(df_gate)
     candidates = df_gate.copy()
+    if args.sample is not None:
+        candidates = candidates.head(args.sample).reset_index(drop=True)
+        print(
+            f"SAMPLE MODE: selected first {len(candidates):,} of "
+            f"{full_gate_rows:,} gate pairs",
+            flush=True,
+        )
     print(f"Total gate pairs to score: {len(candidates)}")
 
     unique_gtins = sorted(set(candidates["gtin1"]).union(set(candidates["gtin2"])))
@@ -467,9 +482,15 @@ def main() -> None:
     check_zero_shot_similarity_frame(final)
     sim_cols = [c for c in final.columns if c.startswith("sim_")]
     row_accounting = {
-        "input_rows": len(candidates),
+        "input_rows": full_gate_rows,
         "output_rows": len(final),
-        "dropped": {},
+        "dropped": (
+            {"sample_cap": full_gate_rows - len(candidates)}
+            if args.sample is not None
+            else {}
+        ),
+        "sample": args.sample or "full",
+        "selected_rows": len(candidates),
         # coverage census (not drops): which sim columns are on disk and
         # fully populated after this run
         "sim_columns": sorted(sim_cols),
@@ -505,7 +526,8 @@ def main() -> None:
     print(
         f"[manifest] zero_shot_sims complete -> {manifest_path} | "
         f"closure {row_accounting['input_rows']:,} == "
-        f"{row_accounting['output_rows']:,} kept + 0 dropped "
+        f"{row_accounting['output_rows']:,} kept + "
+        f"{sum(row_accounting['dropped'].values()):,} intentionally excluded "
         f"(column-only [keep] projection; sim columns: "
         f"{', '.join(sorted(sim_cols))})"
     )
