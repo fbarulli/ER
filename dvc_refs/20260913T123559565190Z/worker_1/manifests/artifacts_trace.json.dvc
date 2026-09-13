@@ -1,0 +1,5 @@
+outs:
+- md5: 4ce2e481b02d53c409827d1b04b49ddc
+  size: 3359
+  hash: md5
+  path: ../../../../training_results/20260913T123559565190Z/worker_1/manifests/artifacts_trace.json

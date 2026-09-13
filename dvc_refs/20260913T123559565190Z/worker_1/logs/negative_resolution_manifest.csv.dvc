@@ -1,0 +1,5 @@
+outs:
+- md5: 06ef75e6fa9f8c90baa09e7871bbd8e8
+  size: 490
+  hash: md5
+  path: ../../../../training_results/20260913T123559565190Z/worker_1/logs/negative_resolution_manifest.csv

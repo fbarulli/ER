@@ -1,0 +1,5 @@
+outs:
+- md5: 9e9b477fb534469cb21db8779ee4b76c
+  size: 2784
+  hash: md5
+  path: ../../../training_results/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_holdout_full_frac0.25_sample1000_fold_metrics.csv

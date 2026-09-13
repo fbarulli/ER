@@ -22,6 +22,10 @@ results/*
 # Frozen training inputs consumed directly by train.py.
 !results/canonical_records.csv
 !results/gate_results.csv
+results/dvc_refs/
+# Tracked DVC publication pointers; payloads remain in training_results/.
+!/dvc_refs/
+!/dvc_refs/**
 # Reproducible training input: keep the raw export in Git.
 !dataset.csv
 # NER-side derived input; regenerated from the configured source.

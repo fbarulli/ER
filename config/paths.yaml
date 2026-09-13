@@ -135,6 +135,16 @@ layouts:
     owner: training.dvc_store
     template: ".resume/{name}.dvc"
     fields: {name: str}
+  dvc_publication_pointer:
+    root: repo
+    owner: training.dvc_store
+    template: "dvc_refs/{run_id}/worker_{worker}/{pointer}"
+    fields: {run_id: str, worker: int, pointer: str}
+  dvc_publication_manifest:
+    root: repo
+    owner: training.dvc_store
+    template: "dvc_refs/{run_id}/worker_{worker}/publication_manifest.json"
+    fields: {run_id: str, worker: int}
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
 column_mapping:
@@ -165,3 +175,11 @@ models:
   rerank_minilm_l6: "ms-marco-MiniLM-L-6-v2"
   ner_semantic_base: "paraphrase-multilingual-mpnet-base-v2"
   ner_transformer_base: "xlm-roberta-base"
+
+# Bi-encoder bundles consumed by embedding/similarity/report lanes. The model
+# registry also contains cross-encoder and NER bundles; those are not valid
+# inputs to SentenceTransformer.encode and must never be iterated as encoders.
+embedding_model_keys:
+  - minilm_l6
+  - multilingual_l12
+  - deberta_v3_base

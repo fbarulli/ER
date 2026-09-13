@@ -1,0 +1,5 @@
+outs:
+- md5: 53e97789b654bfc24f704814c2a6674e
+  size: 1185
+  hash: md5
+  path: ../../../../training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/metrics_aggregate.json

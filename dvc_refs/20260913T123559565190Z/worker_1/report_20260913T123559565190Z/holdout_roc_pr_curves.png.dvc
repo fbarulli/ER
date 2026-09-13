@@ -1,0 +1,5 @@
+outs:
+- md5: 5be99bb1c710593aef567d5976e9a8d2
+  size: 82264
+  hash: md5
+  path: ../../../../training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_roc_pr_curves.png

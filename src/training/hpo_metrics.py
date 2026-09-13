@@ -8,7 +8,7 @@ connected components for submission, or pairwise AUC as its objective.
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -45,7 +45,17 @@ class CalibrationMetricRow(BaseModel):
     calibration_positive_pairs: int
     calibration_negative_pairs: int
     calibration_sku_count: int
-    calibration_candidate_duplicate_rows_removed: int
+    calibration_candidate_duplicate_rows_removed: int = Field(ge=0, default=0)
+    calibration_candidate_duplicate_rows: int = Field(ge=0, default=0)
+    calibration_candidate_duplicate_groups: int = Field(ge=0, default=0)
+    calibration_candidate_duplicate_reason: str = Field(
+        min_length=1,
+        default="none",
+    )
+    calibration_candidate_duplicate_policy: str = Field(
+        min_length=1,
+        default="preserve_all_candidate_rows; assignment_selects_best_per_sku",
+    )
     calibrated_threshold: float
     calibration_threshold_tie_break: str | None = None
     calibration_reconciliation_scope: str
@@ -120,6 +130,88 @@ class CalibrationMetricRow(BaseModel):
     collapse_diagnostics_available: int | None = None
     collapse_healthy: int | None = None
     collapse_penalty: float | None = None
+
+    @field_validator(
+        "calibration_sensitivity_table",
+        "calibration_sensitivity_by_gtin_status",
+        "calibration_fold_collapse",
+    )
+    @classmethod
+    def _traceable_json_diagnostic(cls, value: str, info: Any) -> str:
+        """Keep the CSV/tracking string interface, but validate its payload."""
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{info.field_name} must contain JSON text")
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{info.field_name} is not valid JSON") from exc
+        if not isinstance(payload, list):
+            raise ValueError(f"{info.field_name} must encode a JSON list")
+        required = {
+            "calibration_fold_collapse": {
+                "calibration_fold",
+                "calibrated_threshold",
+                "reconciliation_scope",
+            },
+            "calibration_sensitivity_table": {
+                "threshold",
+                "gtin_status",
+                "reconciliation_scope",
+            },
+            "calibration_sensitivity_by_gtin_status": {
+                "threshold",
+                "gtin_status",
+                "reconciliation_scope",
+            },
+        }[info.field_name]
+        for index, item in enumerate(payload):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"{info.field_name}[{index}] must be a JSON object"
+                )
+            missing = sorted(required - set(item))
+            if missing:
+                raise ValueError(
+                    f"{info.field_name}[{index}] is missing trace fields {missing}"
+                )
+        return value
+
+    @field_validator("calibration_candidate_duplicate_reason")
+    @classmethod
+    def _duplicate_reason_is_explicit(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("duplicate candidate reason must be explicit")
+        return value
+
+    @field_validator("calibration_threshold_tie_break")
+    @classmethod
+    def _valid_tie_break_json(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("calibration_threshold_tie_break is not valid JSON") from exc
+        if not isinstance(payload, list) or any(not isinstance(item, str) for item in payload):
+            raise ValueError(
+                "calibration_threshold_tie_break must encode a JSON list of strings"
+            )
+        return value
+
+    @field_validator("diagnostic_component_size_distribution")
+    @classmethod
+    def _valid_component_distribution_json(cls, value: str) -> str:
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "diagnostic_component_size_distribution is not valid JSON"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "diagnostic_component_size_distribution must encode a JSON object"
+            )
+        return value
 
 
 class CalibrationFoldMetricRow(BaseModel):
@@ -230,24 +322,26 @@ NON_FINITE_FIELD_METRIC_PREFIX = "calibration_non_finite/"
 # lane.  (Its payload does carry the two SIZE counts,
 # calibration_positive_pairs/calibration_negative_pairs, which report how big
 # the calibration split was, not what it scored.)  These numeric codes are how
-# such a row says so; the prefixes match the two reason strings the producers
-# write (the unavailable_calibration_metrics call sites in training.py).  The
-# code is needed because the reason itself is free text and never reaches the
-# metrics API.
-CALIBRATION_UNAVAILABLE_REASON_CODES = (
-    ("empty calibration split", 1),
-    ("calibration evaluator failed", 2),
-)
+# such a row says so; the producers pass one of the stable reason codes below.
+# The human-readable reason remains available for diagnosis, but no numeric
+# tracking field depends on parsing its wording.
+CALIBRATION_REASON_EMPTY_SPLIT = "empty_calibration_split"
+CALIBRATION_REASON_EVALUATOR_FAILED = "calibration_evaluator_failed"
+CALIBRATION_UNAVAILABLE_REASON_CODES = {
+    CALIBRATION_REASON_EMPTY_SPLIT: 1,
+    CALIBRATION_REASON_EVALUATOR_FAILED: 2,
+}
 CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED = 0
 
 
 def _unavailable_reason_code(row: dict) -> int:
     """Map a row's free-text ``calibration_reason`` to a stable numeric code."""
-    reason = row.get("calibration_reason")
-    if isinstance(reason, str):
-        for prefix, code in CALIBRATION_UNAVAILABLE_REASON_CODES:
-            if reason.startswith(prefix):
-                return code
+    reason_code = row.get("calibration_reason_code")
+    if isinstance(reason_code, str):
+        return CALIBRATION_UNAVAILABLE_REASON_CODES.get(
+            reason_code,
+            CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED,
+        )
     return CALIBRATION_UNAVAILABLE_REASON_UNCLASSIFIED
 
 
@@ -293,13 +387,17 @@ def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
 
 def unavailable_calibration_metrics(
     *,
+    reason_code: str,
     reason: str,
     positive_pairs: int,
     negative_pairs: int,
 ) -> dict[str, str | int]:
     """Record an unavailable calibration surface without dropping the fold."""
+    if reason_code not in CALIBRATION_UNAVAILABLE_REASON_CODES:
+        raise ValueError(f"unknown calibration unavailable reason code: {reason_code!r}")
     return {
         "calibration_status": "unavailable",
+        "calibration_reason_code": reason_code,
         "calibration_reason": reason,
         "calibration_positive_pairs": int(positive_pairs),
         "calibration_negative_pairs": int(negative_pairs),
@@ -312,6 +410,42 @@ def _canonical_record_map() -> dict[str, dict[str, object]]:
         str(row["gtin"]): row.to_dict()
         for _, row in records.iterrows()
     }
+
+
+def _json_safe(value: object) -> object:
+    """Convert source/canonical metadata to lossless JSON-compatible values."""
+    if value is None:
+        return None
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if isinstance(value, np.ndarray):
+        return _json_safe(value.tolist())
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    if isinstance(value, (pd.Timestamp, pd.Timedelta)):
+        return value.isoformat()
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError):
+        return str(value)
+    return value
+
+
+def _metadata_json(values: dict[object, object]) -> str:
+    """Serialize complete row metadata without coercing every value to text."""
+    return json.dumps(
+        _json_safe(values),
+        sort_keys=True,
+        allow_nan=False,
+    )
 
 
 def _thresholds(cfg: dict) -> np.ndarray:
@@ -365,6 +499,12 @@ def _candidate_frame(
             existing = truth.get(sku_id)
             if existing is not None and existing != candidate_gtin:
                 raise ValueError(f"SKU {sku_id} has conflicting proxy truth GTINs")
+            existing_source = truth_sources.get(sku_id)
+            if existing_source is not None and existing_source != source:
+                raise ValueError(
+                    f"SKU {sku_id} maps to multiple source rows in proxy pairs: "
+                    f"{existing_source} and {source}"
+                )
             truth[sku_id] = candidate_gtin
             truth_sources[sku_id] = source
         record = candidate_gate_fields(
@@ -377,19 +517,19 @@ def _candidate_frame(
             source_row_index=str(source),
             retrieval_source="calibration_pair",
         )
-        record["sku_record_json"] = json.dumps(
-            {str(key): str(value) for key, value in sku_row.to_dict().items()},
-            sort_keys=True,
-        )
-        record["candidate_record_json"] = json.dumps(
-            {str(key): str(value) for key, value in candidate_record.items()},
-            sort_keys=True,
-        )
+        record["sku_record_json"] = _metadata_json(sku_row.to_dict())
+        record["candidate_record_json"] = _metadata_json(candidate_record)
         records.append(record)
     candidates = pd.DataFrame(records)
     duplicate_keys = ["SKU_ID", "candidate_gtin"]
     duplicate_mask = candidates.duplicated(duplicate_keys, keep=False)
     duplicate_count = int(candidates.duplicated(duplicate_keys, keep="first").sum())
+    duplicate_groups = int(
+        candidates.loc[duplicate_mask, duplicate_keys]
+        .drop_duplicates()
+        .shape[0]
+    )
+    varying = pd.Series(dtype=bool)
     if duplicate_count:
         varying = (
             candidates.loc[duplicate_mask]
@@ -398,12 +538,18 @@ def _candidate_frame(
             .gt(1)
             .any(axis=1)
         )
-        if varying.any():
-            raise ValueError(
-                "duplicate proxy candidates disagree on score or metadata: "
-                f"{list(varying[varying].index)[:5]}"
-            )
-        candidates = candidates.drop_duplicates(duplicate_keys, keep="first")
+    if duplicate_count and varying.any():
+        duplicate_reason = "repeated_sku_canonical_candidate_with_metadata_conflict"
+    elif duplicate_count:
+        duplicate_reason = "repeated_sku_canonical_candidate"
+    else:
+        duplicate_reason = "none"
+    # Preserve every scored pair.  The final assignment helper deliberately
+    # selects one accepted canonical per SKU, while the trace retains every
+    # candidate row and its complete source/canonical metadata.
+    candidates.attrs["duplicate_rows"] = duplicate_count
+    candidates.attrs["duplicate_groups"] = duplicate_groups
+    candidates.attrs["duplicate_reason"] = duplicate_reason
     expected = set(truth)
     observed = set(candidates["SKU_ID"])
     if expected != observed:
@@ -702,6 +848,8 @@ def evaluate_calibration_trial(
     candidates, truth, duplicate_count = _candidate_frame(
         pos_pairs, neg_pairs, df, row_bc, scores
     )
+    duplicate_groups = int(candidates.attrs.get("duplicate_groups", 0))
+    duplicate_reason = str(candidates.attrs.get("duplicate_reason", "none"))
     n_folds = int(config["hpo"]["calibration_folds"])
     minimum_support = int(config["rand_matching"]["threshold_min_fold_support"])
     if n_folds < minimum_support:
@@ -842,10 +990,14 @@ def evaluate_calibration_trial(
         batch_size,
         requested=include_collapse_guardrail,
     )
-    # _candidate_labels merges the whole candidate frame against truth; the
-    # Youden and target-recall thresholds below are fitted on the same
-    # (scores, labels) pair, so compute it once per evaluation.
-    calibration_scores, calibration_labels = _candidate_labels(candidates, truth)
+    # Alternative thresholds are reported on the same untouched check-fold
+    # population as the primary calibration result.  The fold fit data was
+    # used only to choose each fold threshold; the full calibration population
+    # must never be used to recompute the reported objective.
+    calibration_scores, calibration_labels = _candidate_labels(
+        validation_candidate_frame,
+        validation_truth_frame,
+    )
     result: dict[str, float | int | str] = {
         "calibration_proxy_source": str(
             config["rand_matching"]["calibration_proxy_source"]
@@ -854,7 +1006,13 @@ def evaluate_calibration_trial(
         "calibration_positive_pairs": int(len(pos_pairs)),
         "calibration_negative_pairs": int(len(neg_pairs)),
         "calibration_sku_count": int(truth["SKU_ID"].nunique()),
-        "calibration_candidate_duplicate_rows_removed": duplicate_count,
+        "calibration_candidate_duplicate_rows_removed": 0,
+        "calibration_candidate_duplicate_rows": duplicate_count,
+        "calibration_candidate_duplicate_groups": duplicate_groups,
+        "calibration_candidate_duplicate_reason": duplicate_reason,
+        "calibration_candidate_duplicate_policy": (
+            "preserve_all_candidate_rows; assignment_selects_best_per_sku"
+        ),
         "calibrated_threshold": final_threshold,
         "calibration_threshold_tie_break": json.dumps(
             list(config["rand_matching"]["threshold_tie_break"]),
@@ -929,12 +1087,16 @@ def evaluate_calibration_trial(
             if key.startswith("diagnostic_") or key == "plausible_group_count"
         }
     )
+    validation_predictions = choose_assignments(
+        validation_candidate_frame,
+        final_threshold,
+    )
     strata_rows = gtin_metrics(
-        choose_assignments(candidates, final_threshold),
-        truth,
+        validation_predictions,
+        validation_truth_frame,
         "trial",
         final_threshold,
-        candidates,
+        validation_candidate_frame,
     )
     result["calibration_gtin_strata"] = len(strata_rows)
     for row in strata_rows:
@@ -942,9 +1104,11 @@ def evaluate_calibration_trial(
         result[f"calibration_{status}_rand_index"] = float(row["rand_index"])
         result[f"calibration_{status}_precision"] = float(row["pairwise_precision"])
         result[f"calibration_{status}_recall"] = float(row["pairwise_recall"])
-    truth_by_sku = truth.set_index("SKU_ID")["true_item_id"]
-    true_candidates = candidates.loc[
-        candidates["candidate_gtin"].eq(candidates["SKU_ID"].map(truth_by_sku))
+    truth_by_sku = validation_truth_frame.set_index("SKU_ID")["true_item_id"]
+    true_candidates = validation_candidate_frame.loc[
+        validation_candidate_frame["candidate_gtin"].eq(
+            validation_candidate_frame["SKU_ID"].map(truth_by_sku)
+        )
     ]
     if true_candidates.empty:
         raise RuntimeError("calibration proxy lost every true canonical candidate")

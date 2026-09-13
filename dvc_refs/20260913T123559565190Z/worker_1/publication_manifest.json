@@ -1,0 +1,255 @@
+{
+  "schema_version": "1",
+  "run_id": "20260913T123559565190Z",
+  "worker": 1,
+  "remote": "https://dagshub.com/fbarulli/ER.dvc",
+  "verified_download": true,
+  "pointers": [
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/.resume/checkpoint-10--f4d430d8b895f350.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/_checkpoints/paraphrase-multilingual-MiniLM-L12-v2/r20260913T123559565190Z-masking_only_f0/checkpoint-10"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/.resume/checkpoint-15--f4d430d8b895f350.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/_checkpoints/paraphrase-multilingual-MiniLM-L12-v2/r20260913T123559565190Z-masking_only_f0/checkpoint-15"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/.resume/checkpoint-20--f4d430d8b895f350.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/_checkpoints/paraphrase-multilingual-MiniLM-L12-v2/r20260913T123559565190Z-masking_only_f0/checkpoint-20"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/.resume/checkpoint-5--f4d430d8b895f350.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/_checkpoints/paraphrase-multilingual-MiniLM-L12-v2/r20260913T123559565190Z-masking_only_f0/checkpoint-5"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/live_status.json.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/live_status.json"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/datapoint_type_coverage_fold0.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/datapoint_type_coverage_fold0.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/datapoint_usage_fold0.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/datapoint_usage_fold0.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/loss_backprop_fold0.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/loss_backprop_fold0.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/mask_hard_negative_visibility.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/mask_hard_negative_visibility.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/mask_visibility.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/mask_visibility.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/masking_per_epoch_fold0.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/masking_per_epoch_fold0.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/pair_backprop_fold0.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/pair_backprop_fold0.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/train_rows_fold0.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/20260913T123559565190Z-masking_only/train_rows_fold0.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/negative_resolution_manifest.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/negative_resolution_manifest.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/logs/payload_pairs.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/logs/payload_pairs.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/manifests/artifacts_trace.json.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/manifests/artifacts_trace.json"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/attribute_error_breakdown.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/attribute_error_breakdown.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/attribute_error_breakdown.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/attribute_error_breakdown.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/auc_vs_encode_time.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/auc_vs_encode_time.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/confusion_matrices.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/confusion_matrices.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_confusion_matrix.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_confusion_matrix.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_operating_metrics.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_operating_metrics.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_ranking_metrics.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_ranking_metrics.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_roc_pr_curves.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_roc_pr_curves.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_score_distributions.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_score_distributions.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/metrics_aggregate.json.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/metrics_aggregate.json"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/metrics_summary.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/metrics_summary.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/random_easy_metrics.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/random_easy_metrics.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/random_easy_score_distributions.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/random_easy_score_distributions.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/ranking_hits_at_k.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/ranking_hits_at_k.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/ranking_quality_by_epoch.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/ranking_quality_by_epoch.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/report.json.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/report.json"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/score_distribution_overlap.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/score_distribution_overlap.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/train_holdout_score_distributions.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/train_holdout_score_distributions.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/training_vs_dev_loss.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/training_vs_dev_loss.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/training_vs_dev_loss_by_epoch.png.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/training_vs_dev_loss_by_epoch.png"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_20260913T123559565190Z-masking_only_fold0_pairs.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_20260913T123559565190Z-masking_only_fold0_pairs.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_20260913T123559565190Z-masking_only_fold0_random_easy_scores.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_20260913T123559565190Z-masking_only_fold0_random_easy_scores.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_20260913T123559565190Z-masking_only_fold0_train_scores.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_20260913T123559565190Z-masking_only_fold0_train_scores.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_holdout_full_frac0.25_sample1000_fold_metrics.csv.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_holdout_full_frac0.25_sample1000_fold_metrics.csv"
+      ]
+    },
+    {
+      "pointer": "dvc_refs/20260913T123559565190Z/worker_1/training.log.dvc",
+      "outputs": [
+        "training_results/20260913T123559565190Z/worker_1/training.log"
+      ]
+    }
+  ]
+}

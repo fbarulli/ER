@@ -330,6 +330,81 @@ def _pointer_outputs(source: Path, pointer: Path) -> list[Path]:
     return outputs
 
 
+def _publish_tracked_pointer_index(
+    source: Path,
+    run_id: str,
+    worker: int,
+    remote: str,
+) -> Path:
+    """Expose worker pointers under tracked repository metadata.
+
+    Worker output trees remain ignored and DVC-backed.  The tracked copies are
+    only pointer metadata; each copied pointer is rewritten to restore its
+    original ``training_results/...`` target from a clean checkout.
+    """
+    import yaml
+
+    from core.schemas import DvcPublicationManifest, DvcPublicationPointer
+
+    source = source.resolve()
+    repo_root = common.TRAIN_ROOT.resolve()
+    source.relative_to(repo_root)
+    pointer_records: list[DvcPublicationPointer] = []
+    pointers = sorted(source.rglob("*.dvc"))
+    if not pointers:
+        raise RuntimeError(f"no DVC pointers found under {source}")
+    for pointer in pointers:
+        if not pointer.is_file():
+            continue
+        data = yaml.safe_load(pointer.read_text(encoding="utf-8")) or {}
+        outputs = data.get("outs", [])
+        if not outputs:
+            raise RuntimeError(f"DVC pointer has no outputs: {pointer}")
+        output_paths: list[str] = []
+        output_sources: list[Path] = []
+        for entry in outputs:
+            original = (pointer.parent / str(entry["path"])).resolve()
+            original.relative_to(repo_root)
+            output_rel = original.relative_to(repo_root).as_posix()
+            output_paths.append(output_rel)
+            output_sources.append(original)
+        relative_pointer = pointer.relative_to(source).as_posix()
+        tracked_pointer = common.artifact(
+            "dvc_publication_pointer",
+            {"run_id": run_id, "worker": worker, "pointer": relative_pointer},
+        )
+        for entry, original in zip(outputs, output_sources, strict=True):
+            entry["path"] = os.path.relpath(original, tracked_pointer.parent)
+        tracked_pointer.parent.mkdir(parents=True, exist_ok=True)
+        tracked_pointer.write_text(
+            yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+        )
+        pointer_records.append(
+            DvcPublicationPointer(
+                pointer=tracked_pointer.relative_to(repo_root).as_posix(),
+                outputs=output_paths,
+            )
+        )
+    if not pointer_records:
+        raise RuntimeError(f"no usable DVC pointers found under {source}")
+    manifest = DvcPublicationManifest(
+        schema_version="1",
+        run_id=run_id,
+        worker=int(worker),
+        remote=remote,
+        verified_download=True,
+        pointers=pointer_records,
+    )
+    manifest_path = common.artifact(
+        "dvc_publication_manifest", {"run_id": run_id, "worker": worker}
+    )
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    return manifest_path
+
+
 def restore_pointer(source: Path, pointer: Path) -> list[Path]:
     """Pull and verify one previously published resume pointer.
 
@@ -446,12 +521,16 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     (source / "dvc_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    publication_manifest = _publish_tracked_pointer_index(
+        source, run_id, worker, remote
+    )
     _write_dvc_event(
         source,
         "worker_publish_verified",
         run_id=run_id,
         worker=int(worker),
         output_count=len(outputs),
+        publication_manifest=str(publication_manifest),
     )
     print("[dvc] clean pull verified; DagsHub DVC remote is authoritative", flush=True)
 

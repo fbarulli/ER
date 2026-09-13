@@ -160,6 +160,28 @@ class LayoutSpec(BaseModel):
         return v
 
 
+class DvcPublicationPointer(BaseModel):
+    """One tracked pointer exposed for clean-checkout DVC recovery."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pointer: str = Field(min_length=1)
+    outputs: list[str] = Field(min_length=1)
+
+
+class DvcPublicationManifest(BaseModel):
+    """Pydantic contract for the tracked DVC publication index."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1"]
+    run_id: str = Field(min_length=1)
+    worker: int = Field(ge=1)
+    remote: str = Field(min_length=1)
+    verified_download: bool
+    pointers: list[DvcPublicationPointer] = Field(min_length=1)
+
+
 class DataConfig(BaseModel):
     """config/paths.yaml — the SHARED data contract (paths, file names, column
     mapping, seed, category-macro taxonomy, model registry, owned layouts).
@@ -173,6 +195,7 @@ class DataConfig(BaseModel):
     column_mapping: dict[str, str] = Field(min_length=1)
     seed: int
     models: dict[str, str] = Field(min_length=1)
+    embedding_model_keys: list[str] = Field(min_length=1)
 
     model_validator(mode="after")
     @classmethod
@@ -208,6 +231,18 @@ class DataConfig(BaseModel):
                 "from it (train.py --model default; no-fallback doctrine)"
             )
         return v
+
+    @model_validator(mode="after")
+    def _embedding_models_are_registered(self) -> "DataConfig":
+        unknown = sorted(set(self.embedding_model_keys) - set(self.models))
+        if unknown:
+            raise ValueError(
+                "embedding_model_keys contains unknown model registry key(s): "
+                + ", ".join(unknown)
+            )
+        if len(set(self.embedding_model_keys)) != len(self.embedding_model_keys):
+            raise ValueError("embedding_model_keys must not contain duplicates")
+        return self
 
 
 class SplitSpec(BaseModel):
@@ -1462,7 +1497,7 @@ class CalibrationPartition(BaseModel):
     product pair stays behind in the fit half.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     positive_fit: np.ndarray
     positive_reserved: np.ndarray
@@ -1498,6 +1533,7 @@ class CalibrationPartition(BaseModel):
         for name, pool in zip(
             ("positive_fit", "positive_reserved", "negative_fit", "negative_reserved"),
             self.pools(),
+            strict=True,
         ):
             if pool.ndim != 2 or pool.shape[1] != 2:
                 raise ValueError(
@@ -1607,11 +1643,6 @@ def check_cross_country_pair_frame(df: pd.DataFrame) -> pd.DataFrame:
             f"{CROSS_COUNTRY_PAIR_COLUMNS}"
         )
     rows = [CrossCountryPairRow.model_validate(row) for row in df.to_dict("records")]
-    if len(rows) != len(df):
-        raise ValueError(
-            f"validated {len(rows)} rows but frame has {len(df)} — "
-            "manifest validation dropped rows"
-        )
     return df
 
 

@@ -111,8 +111,11 @@ def holdout_split(
     ``holdout_component_folds`` at 4 = 0.25/0.25); it raises here instead of
     silently producing 60/20/20 under a "50/25/25" label.
     """
-    if n_folds < 2:
-        raise ValueError(f"holdout split needs at least 2 component folds, got {n_folds}")
+    if n_folds < 3:
+        raise ValueError(
+            "holdout split needs at least 3 component folds so train, dev, "
+            f"and test are all represented, got {n_folds}"
+        )
     quarter = 1.0 / n_folds
     if abs(dev_fraction - quarter) > 1e-9 or abs(test_fraction - quarter) > 1e-9:
         raise ValueError(
@@ -122,7 +125,13 @@ def holdout_split(
             f"(the 50/25/25 contract requires n_folds=4)"
         )
     quarters = component_folds(pos, row_bc, n_folds, seed)
-    return set().union(*quarters[:-2]), quarters[-2], quarters[-1]
+    train = set().union(*quarters[:-2])
+    if not train:
+        raise ValueError(
+            "holdout split produced an empty train barcode set; "
+            f"n_folds={n_folds} has insufficient component coverage"
+        )
+    return train, quarters[-2], quarters[-1]
 
 
 def partition_component_pairs(

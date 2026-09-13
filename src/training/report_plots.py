@@ -26,12 +26,14 @@ from core.common import (
     F,
     artifact,
     category_macros,
+    embedding_model_keys,
     ensure_parent,
     load_config,
     load_dataset_deduped,
     pair_similarity,
     plot_dpi,
     rand_matching_cfg,
+    resolve_model,
     recall_column_suffix,
     runtime,
     trace_artifact,
@@ -57,13 +59,10 @@ _RECALL_THR_COL = f"threshold_at_{_RECALL_KEY}_recall"
 MACRO_MAP = category_macros()
 
 _cfg = load_config()
-# ALL models from the config SSOT — the report is per-model, not
-# minilm-only (each gets its own panels; embeddings are npy-cached).
-# AUDIT 2026-09-09: all report models now resolve through the one local-only
-# registry. Missing DVC bundles fail loudly instead of fabricating a Hub id.
-from core.common import resolve_model as _resolve_model
-
-MODELS = {k: _resolve_model(k) for k in _cfg["models"]}
+# Only config-declared bi-encoder keys are valid inputs to encode_corpus. Model
+# paths are resolved when the report actually runs so importing this module
+# remains possible on a checkout whose DVC model bundles are not materialized.
+MODEL_KEYS = embedding_model_keys()
 CACHE = str(DATA_DIR / "embeddings_cache")
 
 
@@ -78,9 +77,17 @@ def main() -> None:
         help="subset of config model keys (default: all; e.g. --models minilm_l6)",
     )
     args = ap.parse_args()
-    models = (
-        {k: v for k, v in MODELS.items() if k in args.models} if args.models else MODELS
+    selected_keys = (
+        tuple(key for key in MODEL_KEYS if key in args.models)
+        if args.models
+        else MODEL_KEYS
     )
+    unknown = sorted(set(args.models or ()) - set(MODEL_KEYS))
+    if unknown:
+        raise SystemExit(
+            f"unknown --models entries: {unknown} (have {list(MODEL_KEYS)})"
+        )
+    models = {key: resolve_model(key) for key in selected_keys}
     print(f"report models: {list(models)}", flush=True)
 
     df = load_dataset_deduped()

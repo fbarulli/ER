@@ -974,21 +974,24 @@ def generate_local_training_reports(remote_base: str, workers: int) -> None:
         if uniformity_cfg.enabled:
             scope = uniformity_cfg.checkpoint_scope
             selected_checkpoints = checkpoints if scope == "all" else [checkpoints[-1]]
-            base_model = Path(
-                resolve_model(str(training_cfg().training.base_model))
-            )
-            if not base_model.is_dir():
+            base_model_ref = str(training_cfg().training.base_model)
+            try:
+                base_model = Path(resolve_model(base_model_ref))
+            except FileNotFoundError as exc:
+                base_model = None
                 print(
                     f"[report-local] worker {number}: uniformity skipped; "
-                    f"configured base model is not materialized locally: {base_model}",
+                    f"configured base model is not materialized locally: "
+                    f"{base_model_ref} ({exc})",
                     flush=True,
                 )
+            if base_model is None:
                 for checkpoint in selected_checkpoints:
                     uniformity[checkpoint.name] = {
                         "status": "skipped_base_model_unavailable",
-                        "base_model": str(base_model),
+                        "base_model": base_model_ref,
                     }
-            for checkpoint in (selected_checkpoints if base_model.is_dir() else []):
+            for checkpoint in (selected_checkpoints if base_model is not None else []):
                 try:
                     uniformity[checkpoint.name] = run_uniformity_audit(
                         checkpoint,
@@ -1710,19 +1713,70 @@ for step in ("src/training/dedupe.py", "src/training/build_second04_pairs.py", "
 def materialize_remote_models(model_keys: list[str]) -> None:
     """Pull and validate only the model bundles required by this lane."""
     keys = sorted(set(model_keys))
-    registry = load_config()["models"]
+    config = load_config()
+    registry = config["models"]
+    model_root = str(config["paths"]["models_dir"])
     unknown = sorted(set(keys) - set(registry))
     if unknown:
         raise KeyError(f"unknown local model registry key(s): {unknown}")
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import subprocess
+from pathlib import Path
+import yaml
+from core.common import load_config
 from core.common import resolve_model
 root = {REMOTE_ROOT!r}
-print("[models] materializing DVC-shipped bundles: {keys}", flush=True)
-pull = subprocess.run(["dvc", "pull", "artifacts/models"], cwd=root, text=True)
-if pull.returncode:
-    raise RuntimeError(f"DVC model materialization failed (rc={{pull.returncode}})")
-for key in {keys!r}:
+cfg = load_config()
+registry = cfg["models"]
+model_root = Path(root) / {model_root!r}
+requested = {keys!r}
+
+def exact_dvc_target(target):
+    pointer = Path(str(target) + ".dvc")
+    if pointer.is_file():
+        return target
+    for dvc_yaml in Path(root).rglob("dvc.yaml"):
+        document = yaml.safe_load(dvc_yaml.read_text(encoding="utf-8")) or {{}}
+        for stage in document.get("stages", {{}}).values():
+            for output in stage.get("outs", []):
+                raw_path = output.get("path") if isinstance(output, dict) else output
+                if raw_path is None:
+                    continue
+                candidate = (dvc_yaml.parent / str(raw_path)).resolve()
+                if candidate == target.resolve():
+                    return target
+    return None
+
+targets = []
+unavailable = []
+for key in requested:
+    target = model_root / Path(registry[key])
+    try:
+        resolve_model(key)
+        print(f"[models] {{key}} already materialized at {{target}}", flush=True)
+        continue
+    except FileNotFoundError:
+        pass
+    if exact_dvc_target(target) is None:
+        unavailable.append((key, str(target)))
+    else:
+        targets.append(str(target.relative_to(Path(root))))
+if unavailable:
+    raise RuntimeError(
+        "requested model bundles are not individually DVC-addressable; "
+        "refusing to pull the monolithic models output: "
+        + repr(unavailable)
+    )
+if targets:
+    print(f"[models] pulling DVC targets: {{targets}}", flush=True)
+    pull = subprocess.run(
+        ["dvc", "pull", "--jobs", str({int(_COLAB.dvc_jobs)}), *targets],
+        cwd=root,
+        text=True,
+    )
+    if pull.returncode:
+        raise RuntimeError(f"DVC model materialization failed (rc={{pull.returncode}})")
+for key in requested:
     print(f"[models] validating {{key}}", flush=True)
     print(f"[models] {{key}} -> {{resolve_model(key)}}", flush=True)
 """

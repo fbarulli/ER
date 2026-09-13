@@ -1,0 +1,5 @@
+outs:
+- md5: db6b09f360166b4eb95e93ed86d6b3fc
+  size: 46075
+  hash: md5
+  path: ../../../../training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/attribute_error_breakdown.png

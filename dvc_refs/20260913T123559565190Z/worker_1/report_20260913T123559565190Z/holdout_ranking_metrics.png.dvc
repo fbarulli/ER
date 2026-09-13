@@ -1,0 +1,5 @@
+outs:
+- md5: 0ea405eaefac1b30485606d0c530a37e
+  size: 42951
+  hash: md5
+  path: ../../../../training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/holdout_ranking_metrics.png

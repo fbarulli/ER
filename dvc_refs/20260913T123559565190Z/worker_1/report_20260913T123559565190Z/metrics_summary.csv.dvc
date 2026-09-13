@@ -1,0 +1,5 @@
+outs:
+- md5: 3637f1d7fdc9d4c0a578b10b3945f3b9
+  size: 469
+  hash: md5
+  path: ../../../../training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/metrics_summary.csv

@@ -26,6 +26,7 @@ New accessors:
 
 import json
 import copy
+from decimal import Decimal
 from functools import lru_cache
 import os
 from pathlib import Path
@@ -190,6 +191,18 @@ def _load_config_cached() -> dict:
             "sweep.rerank_model must be a config/paths.yaml model registry key: "
             f"{rerank_model!r} not in {sorted(registry_models)}"
         )
+    sims_model = merged["colab"]["sims_model"]
+    if sims_model not in registry_models:
+        raise SystemExit(
+            "colab.sims_model must be a config/paths.yaml model registry key: "
+            f"{sims_model!r} not in {sorted(registry_models)}"
+        )
+    embedding_models = set(base["embedding_model_keys"])
+    if sims_model not in embedding_models:
+        raise SystemExit(
+            "colab.sims_model must be listed in embedding_model_keys: "
+            f"{sims_model!r} not in {sorted(embedding_models)}"
+        )
     merged["category_macros"] = vocabulary["category_macros"]
     return merged
 
@@ -222,6 +235,11 @@ def category_macros() -> dict[str, str]:
     read THIS, never a module-level copy.
     """
     return dict(_VOCABULARY["category_macros"])
+
+
+def embedding_model_keys() -> tuple[str, ...]:
+    """Return the config-owned registry keys valid for bi-encoder lanes."""
+    return tuple(_CFG["embedding_model_keys"])
 
 
 def vocabulary() -> dict[str, Any]:
@@ -311,15 +329,19 @@ def plot_dpi() -> int:
 
 
 def recall_column_suffix(target_recall: float) -> str:
-    """SSOT label for recall-tied metric keys: "90pct" for 0.90.
+    """Return a collision-free SSOT label for a recall target.
 
-    The label half of every key tied to
-    ``config/training.yaml rand_matching.target_recall`` was spelled as a
-    literal ("90pct") while the value was already config-driven, so a retune
-    wrote a 95%-recall number under a 90% header. Consumers import this
-    instead of re-declaring the suffix.
+    Whole percentages retain the compact historical spelling (``0.90`` is
+    ``90pct``). Fractional percentage points use ``p`` as the decimal marker,
+    so ``0.904`` becomes ``90p4pct`` instead of colliding with ``0.90``.
     """
-    return f"{target_recall:.0%}".replace("%", "pct")
+    percent = Decimal(str(target_recall)) * Decimal("100")
+    if not percent.is_finite() or percent < 0:
+        raise ValueError(f"target_recall must be a finite non-negative value, got {target_recall!r}")
+    text = format(percent, "f").rstrip("0").rstrip(".")
+    if not text:
+        text = "0"
+    return f"{text.replace('.', 'p')}pct"
 
 
 def strip_ladder_bands() -> list[tuple[float, float]]:
@@ -617,14 +639,29 @@ def _validate_materialized_model(path: Path, reference: str) -> str:
 
 
 def resolve_model(key_or_sub: str) -> str:
-    """Resolve a registry key or explicit local path without network fallback."""
+    """Resolve a registry key, configured subdirectory, or local path.
+
+    Registry values are accepted deliberately because older callers and
+    persisted run metadata store the configured subdirectory rather than its
+    key. Both forms remain strictly project-local and never trigger a Hub
+    download.
+    """
     reference = str(key_or_sub).strip()
     if not reference:
         raise ValueError("model reference must be non-empty")
 
+    registry_keys = [key for key, value in MODELS.items() if value == reference]
     if reference in MODELS:
         relative = Path(MODELS[reference])
         candidates = [root / relative for root in _MODEL_DIRS]
+    elif len(registry_keys) == 1:
+        relative = Path(reference)
+        candidates = [root / relative for root in _MODEL_DIRS]
+    elif len(registry_keys) > 1:
+        raise ValueError(
+            f"model registry value {reference!r} is ambiguous; matching keys: "
+            f"{sorted(registry_keys)}"
+        )
     else:
         direct = Path(reference).expanduser()
         if direct.is_absolute():

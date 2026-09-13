@@ -35,12 +35,19 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Model directories resolve through the shared local-only registry. The old
 # local _m() copy and Hub fallback were removed; missing DVC bundles fail
 # before any encoder is constructed.
-from core.common import SEED, F, ensure_parent, load_config, resolve_model
+from core.common import (
+    F,
+    SEED,
+    embedding_model_keys,
+    ensure_parent,
+    load_config,
+    resolve_model,
+)
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 
 _cfg = load_config()
 
-MODELS = {k: resolve_model(sub) for k, sub in _cfg["models"].items()}
+MODEL_KEYS = embedding_model_keys()
 SIM_COLUMNS = {k: v for k, v in _cfg["sim_columns"].items()}
 
 # --models lane selector: score ONLY the named models (comma-separated).
@@ -61,7 +68,7 @@ def main() -> None:
     import argparse
 
 
-    models = dict(MODELS)
+    models = {key: resolve_model(key) for key in MODEL_KEYS}
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--models",
@@ -72,12 +79,12 @@ def main() -> None:
     args = ap.parse_args()
     if args.models is not None:
         sel = [m for m in args.models.split(",") if m]
-        missing = [m for m in sel if m not in MODELS]
+        missing = [m for m in sel if m not in MODEL_KEYS]
         if missing:
             raise SystemExit(
-                f"unknown --models entries: {missing} (have {list(MODELS)})"
+                f"unknown --models entries: {missing} (have {list(MODEL_KEYS)})"
             )
-        models = {k: v for k, v in MODELS.items() if k in sel}
+        models = {key: resolve_model(key) for key in sel}
         print(f"[models] scoring lanes only: {list(models)}", flush=True)
 
     df_canon_path = F["canonical_records"]

@@ -24,6 +24,7 @@ import argparse
 import hashlib
 import json
 import os
+from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
@@ -121,6 +122,8 @@ ASSIGNMENT_SORT_COLUMNS = (
     "candidate_gtin",
 )
 ASSIGNMENT_SORT_ASCENDING = (True, False, False, False, True)
+SOURCE_ROW_INDEX_COLUMN = "source_row_index"
+INVALID_ID_SENTINELS = frozenset({"", "nan", "none", "null"})
 
 
 def _unmatched_prefix() -> str:
@@ -149,6 +152,24 @@ def fit_threshold_key(row: dict[str, float | int]) -> tuple[float, ...]:
 
 def _fit_recall_column(target_recall: float) -> str:
     return f"fit_threshold_at_{target_recall:.0%}_recall"
+
+
+def _threshold_grid(
+    threshold_min: float,
+    threshold_max: float,
+    threshold_step: float,
+) -> np.ndarray:
+    """Build the configured threshold grid without imposing display precision."""
+    minimum = Decimal(str(threshold_min))
+    maximum = Decimal(str(threshold_max))
+    step = Decimal(str(threshold_step))
+    if step <= 0 or minimum > maximum:
+        raise ValueError("threshold grid requires min <= max and step > 0")
+    count = int((maximum - minimum) // step)
+    return np.asarray(
+        [float(minimum + step * index) for index in range(count + 1)],
+        dtype=float,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +347,31 @@ def _field_present(row: pd.Series, primary: str, alias: str | None = None) -> in
 
 def _value_present(value: object) -> int:
     return int(bool(metadata_text(value).strip()))
+
+
+def _ensure_source_row_identity(frame: pd.DataFrame) -> pd.DataFrame:
+    """Preserve the source dataset row identity across dataframe operations."""
+    result = frame.copy()
+    if SOURCE_ROW_INDEX_COLUMN in result.columns:
+        raw_identity = result[SOURCE_ROW_INDEX_COLUMN]
+        if raw_identity.isna().any():
+            raise ValueError("source_row_index contains missing values")
+        identity = raw_identity.astype(str).str.strip()
+    else:
+        identity = pd.Series(
+            result.index.astype(str),
+            index=result.index,
+            name=SOURCE_ROW_INDEX_COLUMN,
+        )
+    invalid = identity.eq("") | identity.str.lower().isin(
+        INVALID_ID_SENTINELS
+    )
+    if invalid.any():
+        raise ValueError("source_row_index contains blank or sentinel values")
+    if identity.duplicated().any():
+        raise ValueError("source_row_index must identify one source row uniquely")
+    result[SOURCE_ROW_INDEX_COLUMN] = identity
+    return result
 
 
 def trusted_gtin(value: object) -> str:
@@ -557,7 +603,7 @@ class RandMatcher:
         ]
         return texts, infos
 
-    _INVALID_SKU_SENTINELS = frozenset({"", "nan", "none", "null"})
+    _INVALID_SKU_SENTINELS = INVALID_ID_SENTINELS
 
     @staticmethod
     def _normalise_skus(skus: pd.DataFrame) -> pd.DataFrame:
@@ -566,6 +612,7 @@ class RandMatcher:
             frame = frame.rename(columns={"product_id": "SKU_ID"})
         if "SKU_ID" not in frame:
             raise ValueError("input must contain SKU_ID or product_id")
+        frame = _ensure_source_row_identity(frame)
         frame["SKU_ID"] = frame["SKU_ID"].astype(str).str.strip()
         bad = frame.loc[
             frame["SKU_ID"].str.lower().isin(RandMatcher._INVALID_SKU_SENTINELS),
@@ -636,7 +683,7 @@ class RandMatcher:
             candidate_record,
             float(np.dot(embedding, self.item_embeddings[candidate_index])),
             sku_id=str(row["SKU_ID"]),
-            source_row_index=str(row.name),
+            source_row_index=str(row[SOURCE_ROW_INDEX_COLUMN]),
             candidate_rank=candidate_rank,
             retrieval_source=retrieval_source,
         )
@@ -1101,6 +1148,10 @@ def prediction_metrics(
             "prediction metric contract drifted: "
             f"expected={METRIC_COLUMNS}, actual={tuple(metrics)}"
         )
+    _METRIC_COLUMNS_SPEC.validate_frame(
+        pd.DataFrame([metrics]),
+        "prediction metrics",
+    )
     return metrics
 
 
@@ -1299,7 +1350,9 @@ def _load_calibration_frame(
         raise ValueError("calibration input contains duplicate SKU_ID values")
     if labels[["SKU_ID", "true_item_id", "calibration_fold"]].eq("").any().any():
         raise ValueError("calibration input contains blank identity or fold values")
-    base = load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
+    base = _ensure_source_row_identity(
+        load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
+    )
     base["SKU_ID"] = base["SKU_ID"].astype(str)
     unknown_ids = sorted(set(labels["SKU_ID"]) - set(base["SKU_ID"]))
     if unknown_ids:
@@ -1315,6 +1368,8 @@ def _load_calibration_frame(
     )
     if len(calibration) != len(labels):
         raise RuntimeError("calibration merge changed the labeled population")
+    if calibration[SOURCE_ROW_INDEX_COLUMN].duplicated().any():
+        raise RuntimeError("calibration merge duplicated source row identities")
     if calibration.empty:
         raise ValueError("calibration input does not match the deduped dataset")
     calibration["SKU_ID"] = calibration["SKU_ID"].astype(str)
@@ -1815,7 +1870,9 @@ def _evaluate_holdout(
     holdout_labels: pd.DataFrame,
     final_threshold: float,
 ) -> tuple[list[dict], pd.DataFrame]:
-    base = load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
+    base = _ensure_source_row_identity(
+        load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
+    )
     base["SKU_ID"] = base["SKU_ID"].astype(str)
     unknown_ids = sorted(
         set(holdout_labels["SKU_ID"]) - set(base["SKU_ID"])
@@ -1833,6 +1890,8 @@ def _evaluate_holdout(
     )
     if len(holdout) != len(holdout_labels):
         raise RuntimeError("holdout merge changed the labeled population")
+    if holdout[SOURCE_ROW_INDEX_COLUMN].duplicated().any():
+        raise RuntimeError("holdout merge duplicated source row identities")
     holdout["SKU_ID"] = holdout["SKU_ID"].astype(str)
     holdout["true_item_id"] = holdout["true_item_id"].astype(str)
     holdout["gtin_status"] = [
@@ -2138,14 +2197,10 @@ def main() -> None:
     if not output_dir.is_absolute():
         output_dir = TRAIN_ROOT / output_dir
     output_dir = output_dir.resolve()
-    thresholds = np.round(
-        np.arange(
-            float(cfg["threshold_min"]),
-            float(cfg["threshold_max"])
-            + float(cfg["threshold_step"]) / 2,
-            float(cfg["threshold_step"]),
-        ),
-        2,
+    thresholds = _threshold_grid(
+        float(cfg["threshold_min"]),
+        float(cfg["threshold_max"]),
+        float(cfg["threshold_step"]),
     )
 
     if not checkpoint.is_dir():

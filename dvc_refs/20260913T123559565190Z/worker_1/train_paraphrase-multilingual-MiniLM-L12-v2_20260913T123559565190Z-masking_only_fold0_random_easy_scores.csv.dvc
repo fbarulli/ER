@@ -1,0 +1,5 @@
+outs:
+- md5: ee7a39636f7e251a358fff297f0c74df
+  size: 41098
+  hash: md5
+  path: ../../../training_results/20260913T123559565190Z/worker_1/train_paraphrase-multilingual-MiniLM-L12-v2_20260913T123559565190Z-masking_only_fold0_random_easy_scores.csv

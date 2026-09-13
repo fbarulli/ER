@@ -10,7 +10,9 @@ Run:  python train.py --model models/<name> [--split holdout|cv ...]
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
+import numbers
 import os
 from pathlib import Path
 import sys
@@ -96,6 +98,7 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         "holdout_component_folds": int(_split.holdout_component_folds),
         "calibration_seed_offset": int(_split.calibration_seed_offset),
         "seed": int(SEED),
+        "target_recall": float(_train_cfg.rand_matching.target_recall),
     }
 
     calibration_rows = [
@@ -128,8 +131,19 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         """Compute each fold aggregate once for both 07-series rows."""
         if field not in aggregate_cache:
             vals = [r.get(field) for r in ok_rows if r.get(field) is not None]
+            invalid = [value for value in vals if not isinstance(value, numbers.Real)]
+            if invalid:
+                raise TypeError(
+                    f"calibration field {field!r} is declared numeric but has "
+                    f"non-numeric values: {invalid[:2]!r}"
+                )
             aggregate_cache[field] = float(np.mean(vals)) if vals else float("nan")
         return aggregate_cache[field]
+
+    nonnumeric_fields = _nonnumeric_calibration_fields()
+    diagnostic_trace = _trace_nonnumeric_calibration_fields(
+        ok_rows, nonnumeric_fields
+    )
 
     row_07c = {
         "variant": args.payload,
@@ -156,7 +170,12 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
             for field in CALIBRATION_AGGREGATE_FIELDS
         }
     )
-    _append_csv(F["field_ablation"], [row_07c], ["variant", *_provenance])
+    row_07c.update(diagnostic_trace)
+    _append_csv(
+        F["field_ablation"],
+        [row_07c],
+        ["variant", *_provenance],
+    )
 
     # ---- 07d: one row per train fraction ----
     row_07d = {
@@ -185,6 +204,7 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
             for field in CALIBRATION_AGGREGATE_FIELDS
         }
     )
+    row_07d.update(diagnostic_trace)
     _append_csv(
         F["data_scaling"], [row_07d], ["fraction", "payload", *_provenance]
     )
@@ -214,32 +234,93 @@ def _append_csv(
             f"{path} has no shared replace key from {key_fields}; refusing "
             "to append without provenance identity"
         )
-    # 05-05: a key field that exists in the incoming row but not in the file
-    # (a CSV written before those columns existed) would narrow the key
-    # SILENTLY and let two runs that differ in exactly that input overwrite
-    # each other. Say so instead of replacing quietly.
     dropped = [k for k in key_fields if k not in key]
     if dropped:
-        raise ValueError(
-            f"{path} is missing required replace-key fields {dropped}; "
-            "refusing to narrow the key and overwrite indistinguishable runs"
+        legacy_marker = "__legacy_unknown__"
+        for row_number, field in enumerate(dropped):
+            old[field] = [
+                f"{legacy_marker}:{row_number}:{record_number}"
+                for record_number in range(len(old))
+            ]
+        print(
+            f"[07-migration] {path}: retained {len(old):,} pre-existing row(s); "
+            f"marked missing replace-key field(s) {dropped} as "
+            f"{legacy_marker}:<field>:<row>",
+            flush=True,
         )
+        key = list(key_fields)
+        if any(field not in new_df.columns for field in key):
+            raise ValueError(
+                f"incoming rows for {path} are missing replace-key fields "
+                f"{[field for field in key if field not in new_df.columns]}"
+            )
     # index the old rows by key tuple -> row position. Keys compare on
     # STR — pandas reads "0.25" back as float 0.25, so a raw-tuple match
     # would miss on every numeric-looking key (07d's fraction column).
-    pos = {
-        tuple(str(r[k]) for k in key): i
-        for i, r in enumerate(old.to_dict("records"))
+    old_rows = old.to_dict("records")
+    old_keys = [tuple(str(row[k]) for k in key) for row in old_rows]
+    duplicate_old_keys = {
+        item for item, count in Counter(old_keys).items() if count > 1
     }
-    out_rows = old.to_dict("records")
+    if duplicate_old_keys:
+        raise ValueError(
+            f"{path} contains duplicate replace keys; refusing ambiguous "
+            f"replacement: {sorted(duplicate_old_keys)[:3]}"
+        )
+    pos = {key_value: i for i, key_value in enumerate(old_keys)}
+    out_rows = old_rows
     appended = []
-    for r in new_df.to_dict("records"):
-        k = tuple(str(r[k_]) for k_ in key)
-        if k in pos:
-            out_rows[pos[k]] = {**out_rows[pos[k]], **r}  # replace in place
+    new_rows_records = new_df.to_dict("records")
+    new_keys = [tuple(str(r[k]) for k in key) for r in new_rows_records]
+    duplicate_new_keys = {
+        item for item, count in Counter(new_keys).items() if count > 1
+    }
+    if duplicate_new_keys:
+        raise ValueError(
+            f"incoming rows for {path} contain duplicate replace keys; "
+            f"refusing ambiguous replacement: {sorted(duplicate_new_keys)[:3]}"
+        )
+    for r, key_value in zip(new_rows_records, new_keys, strict=True):
+        if key_value in pos:
+            out_rows[pos[key_value]] = {**out_rows[pos[key_value]], **r}
         else:
             appended.append(r)
     pd.DataFrame(out_rows + appended).to_csv(path, index=False)
+
+
+def _nonnumeric_calibration_fields() -> tuple[str, ...]:
+    """Return diagnostic contract fields that must be carried, not averaged."""
+    from training.hpo_metrics import (
+        CALIBRATION_AGGREGATE_FIELDS,
+        CalibrationMetricRow,
+    )
+
+    numeric_fields = set(CALIBRATION_AGGREGATE_FIELDS)
+    return tuple(
+        name
+        for name in CalibrationMetricRow.model_fields
+        if name.startswith(
+            ("calibration_", "collapse_", "diagnostic_", "attribute_conflict_")
+        )
+        and name not in numeric_fields
+    )
+
+
+def _trace_nonnumeric_calibration_fields(
+    rows: list[dict], fields: tuple[str, ...]
+) -> dict[str, str]:
+    """Serialize per-fold string diagnostics so 07-series rows retain them."""
+    trace: dict[str, str] = {}
+    for field in fields:
+        values = [row.get(field) for row in rows]
+        trace[field] = json.dumps(values, sort_keys=True, default=str)
+    if fields:
+        print(
+            f"[07] retained {len(fields)} nonnumeric calibration diagnostic "
+            "field(s) as per-fold JSON traces",
+            flush=True,
+        )
+    return trace
 
 
 def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics_path: Path, rows: list[dict]) -> None:

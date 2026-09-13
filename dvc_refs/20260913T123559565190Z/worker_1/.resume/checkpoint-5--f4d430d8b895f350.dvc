@@ -1,0 +1,6 @@
+outs:
+- md5: 84429c574700d6665661126737b36019.dir
+  size: 1427988537
+  nfiles: 16
+  hash: md5
+  path: ../../../../training_results/20260913T123559565190Z/worker_1/_checkpoints/paraphrase-multilingual-MiniLM-L12-v2/r20260913T123559565190Z-masking_only_f0/checkpoint-5

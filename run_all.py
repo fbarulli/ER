@@ -28,14 +28,21 @@ import sys
 import time
 from pathlib import Path
 
-from core.common import TRAIN_ROOT, _path, load_config, resolve_model, sweep_cfg
+from core.common import (
+    TRAIN_ROOT,
+    _path,
+    embedding_model_keys,
+    load_config,
+    resolve_model,
+    sweep_cfg,
+)
 from core.manifest import (
     begin_manifest,
     finish_manifest,
 )
 
 _cfg = load_config()
-MODELS = dict(_cfg["models"])
+MODEL_KEYS = embedding_model_keys()
 PY = sys.executable
 TRAIN_MODULE = [PY, "-m", "training.train"]
 
@@ -136,8 +143,8 @@ def step1_embeddings() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     from core.common import runtime as _runtime
 
-    for key, sub in MODELS.items():
-        model_id = resolve_model(sub)
+    for key in MODEL_KEYS:
+        model_id = resolve_model(key)
         npz = out_dir / f"{key}.npz"
         if npz.exists():
             print(f"[step1] {key}: {npz.name} exists — skip", flush=True)
@@ -165,7 +172,7 @@ def step2_sweep_2k() -> None:
     # is train.py's argparse default now; a hardcoded 3 here silently
     # diverged from the config on every full run. The sample size is the
     # SSOT sweep.sweep_sample (was inline 2000).
-    model = resolve_model(MODELS["multilingual_l12"])
+    model = resolve_model("multilingual_l12")
     _sh(
         [
             *TRAIN_MODULE,
@@ -183,7 +190,7 @@ def step2_sweep_2k() -> None:
 
 def step3_sweep_full() -> None:
     """The full-data training pass (holdout 50/25/25)."""
-    model = resolve_model(MODELS["multilingual_l12"])
+    model = resolve_model("multilingual_l12")
     _sh(
         [
             *TRAIN_MODULE,
@@ -211,8 +218,8 @@ def step4_ablation() -> None:
     rerank lane needs that one base's trained holdout checkpoint.
     """
     _sw = sweep_cfg()
-    for key, sub in MODELS.items():
-        model = resolve_model(sub)
+    for key in MODEL_KEYS:
+        model = resolve_model(key)
         # 07c: payload variants (skip 'full' — that IS step 3) — SSOT
         # sweep.payload_variants (was inline ("title_only",))
         for variant in _sw["payload_variants"]:
@@ -254,7 +261,7 @@ def step4_ablation() -> None:
     # exists. No best-model selection: no per-model ranking artifact
     # exists at this pipeline point (all train_*_fold_metrics.csv rows
     # are L12), so a "best" would be fabricated, not measured.
-    model = resolve_model(MODELS["multilingual_l12"])
+    model = resolve_model("multilingual_l12")
     _sh(
         [
             *TRAIN_MODULE,

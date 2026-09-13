@@ -1,0 +1,5 @@
+outs:
+- md5: cb7c98d854594d1a11b198d336f74758
+  size: 42735
+  hash: md5
+  path: ../../../../training_results/20260913T123559565190Z/worker_1/report_20260913T123559565190Z/training_vs_dev_loss_by_epoch.png
