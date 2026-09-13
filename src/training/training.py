@@ -143,6 +143,37 @@ class CalibrationEvaluatorError(RuntimeError):
     """Signal an unexpected calibration evaluator failure with fold context."""
 
 
+class FoldExecutionError(RuntimeError):
+    """Signal that a selection lane received incomplete fold evidence."""
+
+    def __init__(self, lane: str, incomplete_rows: list[dict]) -> None:
+        self.lane = lane
+        self.incomplete_rows = incomplete_rows
+        # Compatibility for the first failure-path oracle and existing callers.
+        self.failed_rows = incomplete_rows
+        details = "; ".join(
+            f"fold {row.get('fold', '<unknown>')}: "
+            f"status={row.get('status', 'missing')}; "
+            f"{str(row.get('traceback', 'no traceback')).splitlines()[-1]}"
+            for row in incomplete_rows
+        )
+        super().__init__(
+            f"{lane} cannot select from incomplete fold(s): {details}"
+        )
+
+
+def require_no_failed_folds(rows: list[dict], *, lane: str) -> None:
+    """Make incomplete calibration evidence fatal before selection aggregation."""
+    incomplete_rows = [
+        row
+        for row in rows
+        if row.get("status") != "ok"
+        or not np.isfinite(row.get("calibration_rand_index", float("nan")))
+    ]
+    if not rows or incomplete_rows:
+        raise FoldExecutionError(lane, incomplete_rows or [{"status": "missing"}])
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # MLflow — SSOT src/core/mlflow_ctx (audit 2026-09-09: this module used to carry
 # its own MlflowCtx duplicate with CONFLICTING semantics — "off unless
@@ -3576,15 +3607,14 @@ def train_one_config(
                     positive_pairs=len(calibration_pos),
                     negative_pairs=len(calibration_neg),
                 )
-                if not selection_mode:
-                    print(
-                        f"  [calibration] fold {fold_i}: REQUIRED calibration "
-                        f"unavailable; {calibration_metrics['calibration_reason']}",
-                        flush=True,
-                    )
-                    raise RequiredCalibrationError(
-                        calibration_metrics["calibration_reason"]
-                    )
+                print(
+                    f"  [calibration] fold {fold_i}: REQUIRED calibration "
+                    f"unavailable; {calibration_metrics['calibration_reason']}",
+                    flush=True,
+                )
+                raise RequiredCalibrationError(
+                    calibration_metrics["calibration_reason"]
+                )
             else:
                 # The explicit empty-population branch above is the only
                 # expected unavailable-calibration condition.  An exception
@@ -4250,7 +4280,9 @@ def train_one_config(
             if "out of memory" in str(exc).lower():
                 print(f"  [cuda-oom] fold {fold_i} | {_format_telemetry(_runtime_telemetry())}\n{tb}", flush=True)
             print(f"  fold {fold_i}: FAILED\n{tb}", flush=True)
-            if isinstance(exc, (RequiredCalibrationError, CalibrationEvaluatorError)):
+            if selection_mode or isinstance(
+                exc, (RequiredCalibrationError, CalibrationEvaluatorError)
+            ):
                 raise
             rows.append({"fold": fold_i, "status": "failed", "traceback": tb})
 
@@ -4347,9 +4379,8 @@ def run_hpo(
                 hard_negative_mask_audit=hard_negative_mask_audit,
                 wandb_ctx=wandb_ctx,
             )
-            ok_rows = [r for r in rows if r.get("status") == "ok"]
-            if not ok_rows:
-                raise optuna.TrialPruned("no fold completed")
+            require_no_failed_folds(rows, lane=f"HPO trial {trial.number}")
+            ok_rows = rows
             # Persist the actual trial evidence in Optuna. The callback below
             # mirrors these values to W&B after the trial has committed.
             _trial_loss = [r.get("final_train_loss") for r in ok_rows if np.isfinite(r.get("final_train_loss", float("nan")))]
@@ -4517,6 +4548,17 @@ def run_hpo(
             n_trials=remaining,
             n_jobs=args.n_jobs,
             callbacks=[_optuna_tracking_cb(mlf, wandb_ctx), _persist_study],
+        )
+
+    completed_trials = [
+        trial
+        for trial in study.trials
+        if trial.state.name == "COMPLETE" and trial.value is not None
+    ]
+    if not completed_trials:
+        raise FoldExecutionError(
+            "Optuna selection",
+            [{"status": "no_completed_trials"}],
         )
 
     # every trial's params + value, on disk (optuna keeps them in the study;

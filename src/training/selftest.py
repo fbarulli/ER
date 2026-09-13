@@ -159,6 +159,54 @@ def oracle_second04_manifest_contract() -> None:
         )
 
 
+def oracle_fold_failure_selection_contract() -> None:
+    from training.training import FoldExecutionError, require_no_failed_folds
+
+    rows = [
+        {"fold": 0, "status": "ok", "calibration_rand_index": 0.8},
+        {"fold": 1, "status": "failed", "traceback": "RuntimeError: boom"},
+    ]
+    try:
+        require_no_failed_folds(rows, lane="selftest")
+    except FoldExecutionError as exc:
+        check(
+            "selection rejects failed folds before aggregation",
+            exc.lane == "selftest"
+            and [row["fold"] for row in exc.failed_rows] == [1]
+            and "fold 1" in str(exc)
+            and "RuntimeError: boom" in str(exc),
+            str(exc),
+        )
+    else:
+        check("selection rejects failed folds before aggregation", False)
+
+    try:
+        require_no_failed_folds(
+            [{"fold": 0, "status": "calibration_unavailable"}],
+            lane="selftest",
+        )
+    except FoldExecutionError:
+        check("selection rejects unavailable calibration", True)
+    else:
+        check("selection rejects unavailable calibration", False)
+
+    try:
+        require_no_failed_folds(
+            [{"fold": 0, "status": "ok", "calibration_rand_index": float("nan")}],
+            lane="selftest",
+        )
+    except FoldExecutionError:
+        check("selection rejects non-finite calibration objective", True)
+    else:
+        check("selection rejects non-finite calibration objective", False)
+
+    require_no_failed_folds(
+        [{"fold": 0, "status": "ok", "calibration_rand_index": 0.8}],
+        lane="selftest",
+    )
+    check("selection accepts complete fold rows", True)
+
+
 def oracle_calibration_fold_collapse_contract() -> None:
     from pydantic import ValidationError
 
@@ -2117,6 +2165,8 @@ def main() -> None:
     oracle_second04_manifest_contract()
     print("== 1c. calibration fold collapse contract ==")
     oracle_calibration_fold_collapse_contract()
+    print("== 1e. fold failure selection contract ==")
+    oracle_fold_failure_selection_contract()
     print("== 1d. Rand calibration reconciliation ==")
     oracle_rand_calibration_reconciliation()
     print("== 2. cleaning / soft-stop ==")

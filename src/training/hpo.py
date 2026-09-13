@@ -37,7 +37,13 @@ from core.common import SSOT_LOSS as _SSOT_LOSS  # no-fallback SSOT
 # declaration the config could not steer (audit 2026-09-09, owner Q27).
 from core.common import hpo_cfg as _hpo_cfg
 from core.common import runtime as _runtime  # SSOT optimizer knobs (F06)
-from training.training import ES_PATIENCE, ES_THRESHOLD, _band_tuple, train_one_config
+from training.training import (
+    ES_PATIENCE,
+    ES_THRESHOLD,
+    _band_tuple,
+    require_no_failed_folds,
+    train_one_config,
+)
 
 _HPO = _hpo_cfg()
 GRID = _HPO["grid"]    # the full 11-config sweep
@@ -201,6 +207,7 @@ def run_grid(
             mask_audit=mask_audit,
             hard_negative_mask_audit=hard_negative_mask_audit,
         )
+        require_no_failed_folds(fold_rows, lane=f"grid config {cfg_id}")
         vals = [
             r[_sig]
             for r in fold_rows
