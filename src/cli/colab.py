@@ -108,6 +108,8 @@ _PROBE_RETRY_BACKOFF_SECONDS = _COLAB.probe_retry_backoff_seconds
 _MASK_EFFECT_AFTER_TRAIN = _COLAB.mask_effect_after_train
 _SMOKE_EPOCHS = _COLAB.smoke_epochs
 _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
+_RESULT_DOWNLOAD_TIMEOUT_SECONDS = _COLAB.result_download_timeout_seconds
+_RESULT_DOWNLOAD_HEARTBEAT_SECONDS = _COLAB.result_download_heartbeat_seconds
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
 # config path is supplied. This workspace's home is read-only, so isolate the
@@ -544,6 +546,117 @@ def _mirror_resume_pointers(run_id: str, pointers: dict[str, dict[str, str]]) ->
             (pointer_dir / name).write_bytes(base64.b64decode(encoded))
 
 
+def _format_bytes(value: int) -> str:
+    """Format transfer progress without hiding the raw byte count."""
+    units = ("B", "KiB", "MiB", "GiB")
+    amount = float(value)
+    for unit in units:
+        if amount < 1024.0 or unit == units[-1]:
+            return f"{amount:.1f}{unit} ({value} bytes)"
+        amount /= 1024.0
+    raise AssertionError("unreachable byte-format branch")
+
+
+def _local_file_size(path: Path) -> int:
+    """Return partial-download size while tolerating a missing destination."""
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+def _download_file_with_visibility(
+    *,
+    remote: str,
+    local: Path,
+    worker: int,
+    index: int,
+    total: int,
+    run_id: str,
+) -> int:
+    """Download one result while exposing progress and connection failures."""
+    relative = local.relative_to(TRAINING_RESULTS / run_id)
+    print(
+        f"[download] worker={worker} file={index}/{total} starting "
+        f"remote={remote} destination={local}",
+        flush=True,
+    )
+    _post_training_event(
+        run_id,
+        "download_file",
+        "started",
+        worker=worker,
+        file=str(relative),
+        index=index,
+        total=total,
+    )
+    stop_heartbeat = threading.Event()
+
+    def report_progress() -> None:
+        while not stop_heartbeat.wait(_RESULT_DOWNLOAD_HEARTBEAT_SECONDS):
+            received = _local_file_size(local)
+            print(
+                f"[download] worker={worker} file={index}/{total} active "
+                f"received={_format_bytes(received)}; waiting for transfer",
+                flush=True,
+            )
+
+    heartbeat = threading.Thread(
+        target=report_progress,
+        name=f"result-download-heartbeat-{worker}-{index}",
+        daemon=True,
+    )
+    heartbeat.start()
+    try:
+        colab(
+            "download",
+            "-s",
+            SESSION,
+            remote,
+            str(local),
+            timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS,
+        )
+    except BaseException as exc:
+        received = _local_file_size(local)
+        _post_training_event(
+            run_id,
+            "download_file",
+            "failed",
+            worker=worker,
+            file=str(relative),
+            index=index,
+            total=total,
+            received_bytes=received,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        print(
+            f"[download] worker={worker} file={index}/{total} FAILED "
+            f"received={_format_bytes(received)} error={type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        raise
+    finally:
+        stop_heartbeat.set()
+        heartbeat.join()
+    received = _local_file_size(local)
+    _post_training_event(
+        run_id,
+        "download_file",
+        "completed",
+        worker=worker,
+        file=str(relative),
+        index=index,
+        total=total,
+        received_bytes=received,
+    )
+    print(
+        f"[download] worker={worker} file={index}/{total} completed "
+        f"received={_format_bytes(received)}",
+        flush=True,
+    )
+    return received
+
+
 def _hpo_resume_pointer_payload() -> dict[str, str]:
     """Load locally mirrored HPO pointers for a fresh Colab VM."""
     if not _HPO_RESUME_DIR.is_dir():
@@ -898,9 +1011,9 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
     for number in range(1, workers + 1):
         remote_dir = f"{remote_base}/worker_{number}"
         local_dir = local_base / f"worker_{number}"
+        remote_names = []
         for name in _list_remote(remote_dir):
             remote = Path(name)
-            rel = remote.relative_to(remote_dir)
             # Checkpoints are part of the deliverable: the local uniformity
             # audit and final prediction notebook must run against the actual
             # fine-tuned weights. DVC verification still happens at each save,
@@ -912,9 +1025,25 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
                 ".yaml", ".yml", ".txt", ".jsonl", ".html", ".db", ".sqlite3",
             }:
                 continue
+            remote_names.append(name)
+        print(
+            f"[download] worker={number} discovered {len(remote_names)} result files "
+            f"under {remote_dir}",
+            flush=True,
+        )
+        for index, name in enumerate(remote_names, start=1):
+            remote = Path(name)
+            rel = remote.relative_to(remote_dir)
             local = local_dir / rel
             local.parent.mkdir(parents=True, exist_ok=True)
-            colab("download", "-s", SESSION, name, str(local), timeout=600)
+            _download_file_with_visibility(
+                remote=name,
+                local=local,
+                worker=number,
+                index=index,
+                total=len(remote_names),
+                run_id=run_id,
+            )
             downloaded += 1
     _post_training_event(
         run_id,

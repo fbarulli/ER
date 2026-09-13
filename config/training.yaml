@@ -65,6 +65,8 @@ colab:
   dvc_remote_url: "https://dagshub.com/fbarulli/ER.dvc"
   dagshub_repo: "fbarulli/ER"
   worker_timeout_seconds: 14400
+  result_download_timeout_seconds: 3600
+  result_download_heartbeat_seconds: 15
   # One lane-level DVC publisher is separate from trainer/HPO workers.
   dvc_workers: 1
   # DVC's internal content-transfer jobs. This controls parallel object

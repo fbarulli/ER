@@ -1015,6 +1015,8 @@ class ColabSpec(BaseModel):
     dvc_remote_url: str = Field(min_length=1)
     dagshub_repo: str = Field(min_length=1)
     worker_timeout_seconds: int = Field(ge=60)
+    result_download_timeout_seconds: int = Field(ge=60)
+    result_download_heartbeat_seconds: int = Field(ge=1, le=300)
     dvc_workers: int = Field(ge=1, le=3)
     dvc_jobs: int = Field(ge=1, le=32)
     post_training_events_file: str = Field(min_length=1)
