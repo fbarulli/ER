@@ -37,6 +37,7 @@ tracking:
 colab:
   repository: "https://github.com/fbarulli/ER.git"
   branch: "training"
+  git_remote_name: "ER"
   remote_root: "/content/EuromonitoR"
   session: "my-highram-session"
   gpu: "T4"

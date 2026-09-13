@@ -82,6 +82,7 @@ _RERANK_MODEL = str(sweep_cfg()["rerank_model"])
 _COLAB = training_cfg().colab
 REPOSITORY = _COLAB.repository
 BRANCH = _COLAB.branch
+GIT_REMOTE_NAME = _COLAB.git_remote_name
 SESSION = _COLAB.session
 GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
@@ -1538,14 +1539,30 @@ def prepare_remote_layout() -> None:
 import pathlib, shutil, subprocess
 
 root = pathlib.Path({REMOTE_ROOT!r})
+remote_name = {GIT_REMOTE_NAME!r}
 if root.exists() and not (root / ".git").is_dir():
     shutil.rmtree(root)
 if (root / ".git").is_dir():
-    subprocess.run(["git", "pull", "--ff-only", "origin", {BRANCH!r}], cwd=root, check=True)
+    remotes = subprocess.run(
+        ["git", "remote"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.split()
+    if remote_name not in remotes:
+        if remote_name != "origin" and "origin" in remotes:
+            subprocess.run(
+                ["git", "remote", "rename", "origin", remote_name],
+                cwd=root,
+                check=True,
+            )
+        else:
+            raise RuntimeError(
+                f"configured git remote {{remote_name!r}} is absent in {{root}}; "
+                f"available remotes={{remotes}}"
+            )
+    subprocess.run(["git", "pull", "--ff-only", remote_name, {BRANCH!r}], cwd=root, check=True)
 else:
     root.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([
-        "git", "clone", "--depth", "1", "--branch", {BRANCH!r},
+        "git", "clone", "--origin", remote_name, "--depth", "1", "--branch", {BRANCH!r},
         {REPOSITORY!r}, str(root),
     ], check=True)
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
