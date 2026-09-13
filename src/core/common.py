@@ -26,6 +26,7 @@ New accessors:
 
 import json
 import copy
+from functools import lru_cache
 import os
 from pathlib import Path
 from typing import Any
@@ -67,7 +68,12 @@ matplotlib.use("Agg")  # headless; set before pyplot import
 import pandas as pd
 import yaml
 
-from core.schemas import DataConfig, LayoutSpec, TrainingConfig
+from core.schemas import (
+    DataConfig,
+    LayoutSpec,
+    TrainingConfig,
+    check_canonical_records_frame,
+)
 from core.text import extract_volume_ml
 
 
@@ -410,6 +416,23 @@ def _resolve_file(binding: str | Path) -> Path:
 # ── file names (SSOT → resolved absolute Paths) ─────────────────────────────
 F = {name: _resolve_file(value) for name, value in _CFG["files"].items()}
 DATA_PATH = F["dataset"]
+
+
+@lru_cache(maxsize=1)
+def _canonical_records_frame() -> pd.DataFrame:
+    """Read and validate the shared canonical-record artifact exactly once."""
+    records = pd.read_csv(
+        F["canonical_records"],
+        dtype={"gtin": str},
+        keep_default_na=False,
+    )
+    check_canonical_records_frame(records)
+    return records
+
+
+def canonical_records_frame() -> pd.DataFrame:
+    """Return an isolated view of the validated canonical-record artifact."""
+    return _canonical_records_frame().copy(deep=True)
 
 # ── owned layout templates for generated artifacts (SSOT) ───────────────────
 # paths.yaml `layouts:` entries are validated into LayoutSpec here (import

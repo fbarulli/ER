@@ -7,7 +7,6 @@ connected components for submission, or pairwise AUC as its objective.
 
 from __future__ import annotations
 
-from functools import lru_cache
 import json
 
 import numpy as np
@@ -15,8 +14,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
 from core.attribute_conflicts import sku_attribute_info
-from core.common import F, RESULTS, row_metadata_text
-from core.schemas import check_canonical_records_frame
+from core.common import canonical_records_frame, row_metadata_text
 from core.structured_features import fuse_numpy
 from training.rand_matching import (
     GTIN_STATUSES,
@@ -153,14 +151,8 @@ def unavailable_calibration_metrics(
     }
 
 
-@lru_cache(maxsize=1)
 def _canonical_record_map() -> dict[str, dict[str, object]]:
-    records = pd.read_csv(
-        RESULTS / F["canonical_records"],
-        dtype={"gtin": str},
-        keep_default_na=False,
-    )
-    check_canonical_records_frame(records)
+    records = canonical_records_frame()
     return {
         str(row["gtin"]): row.to_dict()
         for _, row in records.iterrows()

@@ -47,6 +47,7 @@ from core.common import (
     RESULTS,
     TRAIN_ROOT,
     TRAINING_CONFIG_PATH,
+    canonical_records_frame,
     load_config,
     load_dataset_deduped,
     metadata_text,
@@ -405,11 +406,7 @@ class RandMatcher:
             item_id: index for index, item_id in enumerate(self.item_ids)
         }
 
-        records = pd.read_csv(
-            RESULTS / F["canonical_records"],
-            dtype=str,
-            keep_default_na=False,
-        )
+        records = canonical_records_frame()
         if records["gtin"].duplicated().any():
             raise RuntimeError("canonical_records.csv contains duplicate GTIN rows")
         self.record_map = {
