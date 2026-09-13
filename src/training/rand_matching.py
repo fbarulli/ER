@@ -283,6 +283,105 @@ def _value_present(value: object) -> int:
     return int(bool(metadata_text(value).strip()))
 
 
+def trusted_gtin(value: object) -> str:
+    """Return a GTIN only when it is a valid identity signal."""
+    text = metadata_text(value).strip()
+    if text.lower() in {"nan", "none", "null"}:
+        return ""
+    return text if text and is_valid_gtin_checksum(text) else ""
+
+
+def gtin_status(sku_gtin: object, candidate_gtin: object) -> str:
+    """Apply the shared four-state GTIN gate taxonomy."""
+    left = trusted_gtin(sku_gtin)
+    right = trusted_gtin(candidate_gtin)
+    if not left and not right:
+        return "both_missing"
+    if not left or not right:
+        return "one_missing"
+    return "both_equal" if left == right else "different"
+
+
+def candidate_gate_fields(
+    row: pd.Series,
+    sku_info: dict,
+    candidate_gtin: str,
+    candidate_record: dict[str, object],
+    score: float,
+    *,
+    sku_id: str,
+    source_row_index: str,
+    candidate_rank: int | None = None,
+    retrieval_source: str = "unknown",
+) -> dict[str, object]:
+    """Build the shared candidate gate record used by all matching lanes."""
+    candidate_info = canonical_attribute_info(candidate_record)
+    rules = conflict_columns(sku_info, candidate_info)
+    sku_gtin = metadata_text(row_metadata_text(row, "barcode", "gtin")).strip()
+    status = gtin_status(sku_gtin, candidate_gtin)
+    exact = int(status == "both_equal")
+    gate_reason = (
+        "gtin_conflict"
+        if status == "different"
+        else "exact_gtin"
+        if exact
+        else "attribute_conflict"
+        if rules["attribute_conflict_type"] != "none"
+        else "cosine_candidate"
+    )
+    return {
+        "SKU_ID": sku_id,
+        "sku_gtin": sku_gtin,
+        "sku_gtin_present": _field_present(row, "barcode", "gtin"),
+        "sku_gtin_valid": int(bool(trusted_gtin(sku_gtin))),
+        "candidate_gtin": candidate_gtin,
+        "candidate_rank": candidate_rank,
+        "retrieval_source": retrieval_source,
+        "score": float(score),
+        "exact_gtin": exact,
+        "gtin_status": status,
+        "gate_reason": gate_reason,
+        "sku_title": row_metadata_text(row, "title"),
+        "sku_attributes": row_metadata_text(row, "attributes", "attr"),
+        "sku_brand": row_metadata_text(row, "brand"),
+        "sku_country": row_metadata_text(row, "country"),
+        "sku_category": row_metadata_text(row, "category"),
+        "sku_category_path": row_metadata_text(row, "category_path"),
+        "sku_retailer": row_metadata_text(row, "retailer"),
+        "sku_volume": json.dumps(sorted(sku_info["volume"])),
+        "sku_pack": json.dumps(sorted(sku_info["pack"])),
+        "sku_flavor": str(sku_info["flavor"]),
+        "sku_title_present": _field_present(row, "title"),
+        "sku_attributes_present": _field_present(row, "attributes", "attr"),
+        "sku_brand_present": _field_present(row, "brand"),
+        "sku_country_present": _field_present(row, "country"),
+        "sku_category_present": _field_present(row, "category"),
+        "sku_category_path_present": _field_present(row, "category_path"),
+        "sku_retailer_present": _field_present(row, "retailer"),
+        "sku_volume_present": int(bool(sku_info["volume"])),
+        "sku_pack_present": int(bool(sku_info["pack"])),
+        "sku_flavor_present": int(bool(sku_info["flavor"])),
+        "source_row_index": source_row_index,
+        "candidate_text": metadata_text(candidate_record.get("canonical")),
+        "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
+        "candidate_volume": json.dumps(sorted(candidate_info["volume"])),
+        "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
+        "candidate_flavor": str(candidate_info["flavor"]),
+        "candidate_brand_present": _value_present(candidate_record.get("mode_brand")),
+        "candidate_volume_present": int(bool(candidate_info["volume"])),
+        "candidate_pack_present": int(bool(candidate_info["pack"])),
+        "candidate_flavor_present": int(bool(candidate_info["flavor"])),
+        "rule_ok": int(rules["attribute_conflict_type"] == "none"),
+        "attribute_conflict_type": str(rules["attribute_conflict_type"]),
+        "attribute_matches": int(
+            sum(
+                not rules[key]
+                for key in ("volume_conflict", "pack_conflict", "flavor_conflict")
+            )
+        ),
+    }
+
+
 class RandMatcher:
     """Encode canonical items and score SKU candidates against them."""
 
@@ -391,8 +490,7 @@ class RandMatcher:
     @classmethod
     def _trusted_gtin(cls, value: object) -> str:
         """Return a GTIN only when it is a valid identity signal."""
-        text = cls._gtin(value)
-        return text if text and is_valid_gtin_checksum(text) else ""
+        return trusted_gtin(value)
 
     def _text_and_info(self, frame: pd.DataFrame) -> tuple[list[str], list[dict]]:
         infos = [
@@ -490,80 +588,27 @@ class RandMatcher:
         sku_gtin = self._gtin(row_metadata_text(row, "barcode", "gtin"))
         candidate_gtin = self.item_ids[candidate_index]
         candidate_record = self.record_map[candidate_gtin]
-        candidate_info = canonical_attribute_info(candidate_record)
-        rules = conflict_columns(sku_info, candidate_info)
-        status = self.gtin_status(sku_gtin, candidate_gtin)
-        exact = int(status == "both_equal")
-        if status == "different":
-            gate_reason = "gtin_conflict"
-        elif exact:
-            gate_reason = "exact_gtin"
-        elif rules["attribute_conflict_type"] != "none":
-            gate_reason = "attribute_conflict"
-        else:
-            gate_reason = "cosine_candidate"
-        return {
-            "SKU_ID": str(row["SKU_ID"]),
-            "sku_gtin": sku_gtin,
-            "sku_gtin_present": _field_present(row, "barcode", "gtin"),
-            "sku_gtin_valid": int(bool(self._trusted_gtin(sku_gtin))),
-            "candidate_gtin": candidate_gtin,
-            "candidate_rank": candidate_rank,
-            "retrieval_source": retrieval_source,
-            "score": float(np.dot(embedding, self.item_embeddings[candidate_index])),
-            "exact_gtin": exact,
-            "gtin_status": status,
-            "gate_reason": gate_reason,
-            "sku_title": row_metadata_text(row, "title"),
-            "sku_attributes": row_metadata_text(row, "attributes", "attr"),
-            "sku_brand": row_metadata_text(row, "brand"),
-            "sku_country": row_metadata_text(row, "country"),
-            "sku_category": row_metadata_text(row, "category"),
-            "sku_category_path": row_metadata_text(row, "category_path"),
-            "sku_retailer": row_metadata_text(row, "retailer"),
-            "sku_volume": json.dumps(sorted(sku_info["volume"])),
-            "sku_pack": json.dumps(sorted(sku_info["pack"])),
-            "sku_flavor": str(sku_info["flavor"]),
-            "sku_title_present": _field_present(row, "title"),
-            "sku_attributes_present": _field_present(row, "attributes", "attr"),
-            "sku_brand_present": _field_present(row, "brand"),
-            "sku_country_present": _field_present(row, "country"),
-            "sku_category_present": _field_present(row, "category"),
-            "sku_category_path_present": _field_present(row, "category_path"),
-            "sku_retailer_present": _field_present(row, "retailer"),
-            "sku_volume_present": int(bool(sku_info["volume"])),
-            "sku_pack_present": int(bool(sku_info["pack"])),
-            "sku_flavor_present": int(bool(sku_info["flavor"])),
-            "source_row_index": str(row.name),
-            "true_item_id": row_metadata_text(row, "true_item_id"),
-            "calibration_fold": row_metadata_text(row, "calibration_fold"),
-            "candidate_text": str(self.canonical[candidate_gtin]),
-            "candidate_brand": metadata_text(candidate_record["mode_brand"]),
-            "candidate_volume": json.dumps(sorted(candidate_info["volume"])),
-            "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
-            "candidate_flavor": str(candidate_info["flavor"]),
-            "candidate_brand_present": _value_present(candidate_record["mode_brand"]),
-            "candidate_volume_present": int(bool(candidate_info["volume"])),
-            "candidate_pack_present": int(bool(candidate_info["pack"])),
-            "candidate_flavor_present": int(bool(candidate_info["flavor"])),
-            "rule_ok": int(rules["attribute_conflict_type"] == "none"),
-            "attribute_conflict_type": str(rules["attribute_conflict_type"]),
-            "attribute_matches": int(
-                sum(
-                    not rules[key]
-                    for key in ("volume_conflict", "pack_conflict", "flavor_conflict")
-                )
-            ),
-        }
+        base = candidate_gate_fields(
+            row,
+            sku_info,
+            candidate_gtin,
+            candidate_record,
+            float(np.dot(embedding, self.item_embeddings[candidate_index])),
+            sku_id=str(row["SKU_ID"]),
+            source_row_index=str(row.name),
+            candidate_rank=candidate_rank,
+            retrieval_source=retrieval_source,
+        )
+        base.update(
+            {
+                "true_item_id": row_metadata_text(row, "true_item_id"),
+                "calibration_fold": row_metadata_text(row, "calibration_fold"),
+            }
+        )
+        return base
 
     def gtin_status(self, sku_gtin: object, candidate_gtin: object) -> str:
-        left = self._trusted_gtin(sku_gtin)
-        right = self._trusted_gtin(candidate_gtin)
-        if not left and not right:
-            return "both_missing"
-        if not left or not right:
-            return "one_missing"
-        return "both_equal" if left == right else "different"
+        return gtin_status(sku_gtin, candidate_gtin)
 
     def score_candidates(
         self,

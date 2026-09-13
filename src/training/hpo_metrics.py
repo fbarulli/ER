@@ -15,14 +15,15 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
 from core.graph_diagnostics import candidate_graph_diagnostics
-from core.attribute_conflicts import canonical_attribute_info, conflict_columns, sku_attribute_info
-from core.common import F, RESULTS, metadata_text, row_metadata_text
-from core.gtin import is_valid_gtin_checksum
+from core.attribute_conflicts import sku_attribute_info
+from core.common import F, RESULTS, row_metadata_text
 from core.schemas import check_canonical_records_frame
 from core.structured_features import fuse_numpy
 from training.rand_matching import (
     GTIN_STATUSES,
+    candidate_gate_fields,
     choose_assignments,
+    gtin_status,
     gtin_metrics,
     prediction_metrics,
     _threshold_at_recall,
@@ -165,61 +166,6 @@ def _canonical_record_map() -> dict[str, dict[str, object]]:
     }
 
 
-def _trusted_gtin(value: object) -> str:
-    text = "" if value is None else str(value).strip()
-    return text if text and is_valid_gtin_checksum(text) else ""
-
-
-def _status(left: object, right: object) -> str:
-    left_gtin = _trusted_gtin(left)
-    right_gtin = _trusted_gtin(right)
-    if not left_gtin and not right_gtin:
-        return "both_missing"
-    if not left_gtin or not right_gtin:
-        return "one_missing"
-    return "both_equal" if left_gtin == right_gtin else "different"
-
-
-def _source_metadata(row: pd.Series) -> dict[str, str | int]:
-    """Retain every source field used by matching and its presence state."""
-    fields = (
-        "title",
-        "attributes",
-        "brand",
-        "country",
-        "category",
-        "category_path",
-        "retailer",
-    )
-    values = {
-        field: row_metadata_text(row, field)
-        for field in fields
-    }
-    values["record_json"] = json.dumps(
-        {str(key): metadata_text(value) for key, value in row.to_dict().items()},
-        sort_keys=True,
-    )
-    return {
-        **{f"sku_{field}": value for field, value in values.items()},
-        **{
-            f"sku_{field}_present": int(bool(value.strip()))
-            for field, value in values.items()
-            if field != "record_json"
-        },
-    }
-
-
-def _canonical_metadata(record: dict[str, object]) -> dict[str, str | int]:
-    """Retain the complete canonical record alongside parsed gate fields."""
-    return {
-        "candidate_text": metadata_text(record.get("canonical")),
-        "candidate_record_json": json.dumps(
-            {str(key): metadata_text(value) for key, value in record.items()},
-            sort_keys=True,
-        ),
-    }
-
-
 def _thresholds(cfg: dict) -> np.ndarray:
     matcher = cfg["rand_matching"]
     values = np.arange(
@@ -267,60 +213,31 @@ def _candidate_frame(
             row_metadata_text(sku_row, "title"),
             row_metadata_text(sku_row, "attributes", "attr"),
         )
-        source_metadata = _source_metadata(sku_row)
-        candidate_metadata = _canonical_metadata(candidate_record)
-        candidate_info = canonical_attribute_info(candidate_record)
-        rules = conflict_columns(sku_info, candidate_info)
-        sku_gtin = row_metadata_text(sku_row, "barcode", "gtin")
-        gtin_status = _status(sku_gtin, candidate_gtin)
         if pair_index < n_pos:
             existing = truth.get(sku_id)
             if existing is not None and existing != candidate_gtin:
                 raise ValueError(f"SKU {sku_id} has conflicting proxy truth GTINs")
             truth[sku_id] = candidate_gtin
             truth_sources[sku_id] = source
-        records.append(
-            {
-                "SKU_ID": sku_id,
-                "sku_gtin": sku_gtin,
-                "candidate_gtin": candidate_gtin,
-                "score": float(score),
-                "exact_gtin": int(gtin_status == "both_equal"),
-                "gtin_status": gtin_status,
-                "rule_ok": int(rules["attribute_conflict_type"] == "none"),
-                "attribute_conflict_type": str(rules["attribute_conflict_type"]),
-                "attribute_matches": int(
-                    sum(
-                        not rules[key]
-                        for key in (
-                            "volume_conflict",
-                            "pack_conflict",
-                            "flavor_conflict",
-                        )
-                    )
-                ),
-                **source_metadata,
-                "sku_brand": row_metadata_text(sku_row, "brand"),
-                "sku_volume": str(sorted(sku_info["volume"])),
-                "sku_pack": str(sorted(sku_info["pack"])),
-                "sku_flavor": str(sku_info["flavor"]),
-                "sku_volume_present": int(bool(sku_info["volume"])),
-                "sku_pack_present": int(bool(sku_info["pack"])),
-                "sku_flavor_present": int(bool(sku_info["flavor"])),
-                **candidate_metadata,
-                "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
-                "candidate_volume": str(sorted(candidate_info["volume"])),
-                "candidate_pack": str(sorted(candidate_info["pack"])),
-                "candidate_flavor": str(candidate_info["flavor"]),
-                "candidate_brand_present": int(
-                    bool(metadata_text(candidate_record.get("mode_brand")).strip())
-                ),
-                "candidate_volume_present": int(bool(candidate_info["volume"])),
-                "candidate_pack_present": int(bool(candidate_info["pack"])),
-                "candidate_flavor_present": int(bool(candidate_info["flavor"])),
-                "source_row_index": str(source),
-            }
+        record = candidate_gate_fields(
+            sku_row,
+            sku_info,
+            candidate_gtin,
+            candidate_record,
+            float(score),
+            sku_id=sku_id,
+            source_row_index=str(source),
+            retrieval_source="calibration_pair",
         )
+        record["sku_record_json"] = json.dumps(
+            {str(key): str(value) for key, value in sku_row.to_dict().items()},
+            sort_keys=True,
+        )
+        record["candidate_record_json"] = json.dumps(
+            {str(key): str(value) for key, value in candidate_record.items()},
+            sort_keys=True,
+        )
+        records.append(record)
     candidates = pd.DataFrame(records)
     duplicate_keys = ["SKU_ID", "candidate_gtin"]
     duplicate_mask = candidates.duplicated(duplicate_keys, keep=False)
@@ -351,7 +268,7 @@ def _candidate_frame(
         [{"SKU_ID": sku_id, "true_item_id": item_id} for sku_id, item_id in truth.items()]
     )
     statuses = [
-        _status(
+        gtin_status(
             row_metadata_text(df.iloc[truth_sources[sku_id]], "barcode", "gtin"),
             item_id,
         )
