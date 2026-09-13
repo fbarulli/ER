@@ -73,7 +73,7 @@ colab:
   # DVC's internal content-transfer jobs. This controls parallel object
   # transfers inside one DVC command; it is not another trainer process.
   dvc_jobs: 4
-  post_training_events_file: "post_training_events.jsonl"
+  result_events_file: "result_events.jsonl"
   dvc_events_file: "dvc_events.jsonl"
   dvc_push_retries: 5
   dvc_push_backoff_seconds: 15

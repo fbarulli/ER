@@ -63,7 +63,6 @@ from core.common import (
     embedding_model_keys,
     sweep_cfg,
     hpo_cfg,
-    load_local_sentence_transformer,
     load_config,
     resolve_model,
     training_cfg,
@@ -123,7 +122,7 @@ TRAINING_LOG_PATH: Path | None = None
 _live_log = None
 _training_log = None
 _training_log_lock = threading.Lock()
-_post_training_event_lock = threading.Lock()
+_result_event_lock = threading.Lock()
 _original_stdout = None
 _original_stderr = None
 _SUPPRESS_LIVE_LOG = False
@@ -174,7 +173,7 @@ def _write_training_log(text: str) -> None:
         _training_log.flush()
 
 
-def _post_training_event(
+def _result_event(
     run_id: str,
     stage: str,
     state: str,
@@ -182,19 +181,19 @@ def _post_training_event(
     worker: int | None = None,
     **details: object,
 ) -> None:
-    """Persist ordered local post-training state without measuring duration."""
+    """Persist ordered result-transfer state without measuring duration."""
     root = TRAINING_RESULTS / run_id
     root.mkdir(parents=True, exist_ok=True)
     event = {"stage": stage, "state": state, **details}
     if worker is not None:
         event["worker"] = int(worker)
-    event_path = root / training_cfg().colab.post_training_events_file
-    with _post_training_event_lock:
+    event_path = root / training_cfg().colab.result_events_file
+    with _result_event_lock:
         with event_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, sort_keys=True) + "\n")
     suffix = f" worker={worker}" if worker is not None else ""
     detail_text = " ".join(f"{key}={value}" for key, value in details.items())
-    print(f"[post-training-state] {stage} {state}{suffix}" + (f" | {detail_text}" if detail_text else ""), flush=True)
+    print(f"[result-state] {stage} {state}{suffix}" + (f" | {detail_text}" if detail_text else ""), flush=True)
 
 # The clone contains the committed raw export and number-token reference;
 # data_prep regenerates deduped data and all downstream CSVs on the VM.
@@ -582,7 +581,7 @@ def _download_file_with_visibility(
         f"remote={remote} destination={local}",
         flush=True,
     )
-    _post_training_event(
+    _result_event(
         run_id,
         "download_file",
         "started",
@@ -619,7 +618,7 @@ def _download_file_with_visibility(
         )
     except BaseException as exc:
         received = _local_file_size(local)
-        _post_training_event(
+        _result_event(
             run_id,
             "download_file",
             "failed",
@@ -640,7 +639,7 @@ def _download_file_with_visibility(
         stop_heartbeat.set()
         heartbeat.join()
     received = _local_file_size(local)
-    _post_training_event(
+    _result_event(
         run_id,
         "download_file",
         "completed",
@@ -1002,12 +1001,13 @@ print(json.dumps(payload), flush=True)
 def download_verified_training_results(remote_base: str, workers: int) -> None:
     """Materialize raw worker outputs before the VM is released.
 
-    DVC publication is deliberately local now, after reports are generated;
-    this transfer therefore cannot claim DVC verification yet.
+    This transfers the raw worker bundle only. Reports, mask-effect scoring,
+    and local result publication are separate commands and are not run by the
+    Colab launcher.
     """
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     local_base = TRAINING_RESULTS / run_id
-    _post_training_event(run_id, "download", "started", workers=workers)
+    _result_event(run_id, "download", "started", workers=workers)
     downloaded = 0
     for number in range(1, workers + 1):
         remote_dir = f"{remote_base}/worker_{number}"
@@ -1046,7 +1046,7 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
                 run_id=run_id,
             )
             downloaded += 1
-    _post_training_event(
+    _result_event(
         run_id,
         "download",
         "completed",
@@ -1055,531 +1055,6 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
         destination=str(local_base),
     )
     print(f"[download] raw training outputs -> {local_base} ({downloaded} files)", flush=True)
-
-
-def generate_local_training_reports(remote_base: str, workers: int) -> None:
-    """Generate CPU-side reports after remote training results are downloaded."""
-    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    local_base = TRAINING_RESULTS / run_id
-    from training.generate_training_report import generate_report
-    from core.common import load_dataset_deduped
-    from pipeline import build_training_data
-    from training.uniformity import run_uniformity_audit
-
-    # These inputs are identical for every downloaded worker. Build them once
-    # so report generation does not rewrite the same payload audit repeatedly.
-    uniformity_cfg = training_cfg().evaluation.uniformity
-    collapse_cfg = training_cfg().collapse_guardrail
-    _post_training_event(run_id, "report_inputs", "started")
-    data = load_dataset_deduped()
-    payload = build_training_data(data, payload_variant="full")["payload"]
-    _post_training_event(
-        run_id,
-        "report_inputs",
-        "completed",
-        rows=len(data),
-        payload_entries=len(payload),
-    )
-
-    for number in range(1, workers + 1):
-        worker = local_base / f"worker_{number}"
-        _post_training_event(run_id, "reports", "started", worker=number)
-        metrics = sorted(worker.glob("*_holdout_*_fold_metrics.csv"))
-        pair_paths = sorted(worker.glob("*_fold*_pairs.csv"))
-        if not metrics or not pair_paths:
-            raise FileNotFoundError(
-                f"cannot generate local report for worker {number}: "
-                f"metrics={len(metrics)} pairs={len(pair_paths)} under {worker}"
-            )
-        pointer_path = worker / F["results_pointer"].name
-        run_tag = run_id
-        if pointer_path.is_file():
-            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-            run_tag = str(pointer.get("run_tag") or run_tag)
-        report_dir = worker / f"report_{run_tag}"
-        checkpoints = sorted(
-            worker.glob("_checkpoints/**/checkpoint-*"),
-            key=lambda path: int(path.name.split("-")[-1])
-            if path.name.split("-")[-1].isdigit()
-            else -1,
-        )
-        if not checkpoints:
-            raise FileNotFoundError(
-                f"uniformity audit requires a downloaded fine-tuned checkpoint under {worker / '_checkpoints'}"
-            )
-        uniformity = {}
-        if uniformity_cfg.enabled:
-            scope = uniformity_cfg.checkpoint_scope
-            selected_checkpoints = checkpoints if scope == "all" else [checkpoints[-1]]
-            base_model_ref = str(training_cfg().training.base_model)
-            try:
-                base_model = Path(resolve_model(base_model_ref))
-            except FileNotFoundError as exc:
-                base_model = None
-                print(
-                    f"[report-local] worker {number}: uniformity skipped; "
-                    f"configured base model is not materialized locally: "
-                    f"{base_model_ref} ({exc})",
-                    flush=True,
-                )
-            if base_model is None:
-                for checkpoint in selected_checkpoints:
-                    uniformity[checkpoint.name] = {
-                        "status": "skipped_base_model_unavailable",
-                        "base_model": base_model_ref,
-                    }
-            for checkpoint in (selected_checkpoints if base_model is not None else []):
-                try:
-                    uniformity[checkpoint.name] = run_uniformity_audit(
-                        checkpoint,
-                        report_dir / "uniformity" / checkpoint.name,
-                        base_model=base_model,
-                        df=data,
-                        payload=payload,
-                        n_pairs=uniformity_cfg.sample_pairs,
-                        seed=uniformity_cfg.seed,
-                        operating_threshold=collapse_cfg.operating_threshold,
-                        crossing_rate_ceiling=collapse_cfg.crossing_rate_ceiling,
-                        max_token_frequency=collapse_cfg.max_token_frequency,
-                    )
-                except Exception as exc:
-                    # Uniformity is an optional diagnostic. Record a named
-                    # failure without dumping the same traceback once per
-                    # checkpoint; the report event remains inspectable.
-                    print(
-                        f"[report-local] worker {number}: uniformity audit "
-                        f"failed for {checkpoint}: {exc}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    uniformity[checkpoint.name] = {
-                        "status": "error",
-                        "error_type": "uniformity_audit_failed",
-                        "error": str(exc),
-                    }
-        generate_report(
-            metrics[-1],
-            pair_paths,
-            report_dir,
-            sorted(worker.glob("*_fold*_train_scores.csv")),
-            sorted(worker.glob("*_fold*_random_easy_scores.csv")),
-            uniformity_summary={"checkpoints": uniformity},
-        )
-        _post_training_event(
-            run_id,
-            "reports",
-            "completed",
-            worker=number,
-            report_dir=str(report_dir),
-            uniformity_checkpoints=len(uniformity),
-        )
-        print(f"[report-local] worker {number}: {report_dir}", flush=True)
-
-
-def generate_local_mask_effect(remote_base: str, workers: int) -> None:
-    """Run masked-vs-unmasked scoring on local CPU after teardown.
-
-    mask_effect_after_train only controls whether the VM spends remote GPU
-    time on it (--mask-effect vs --no-mask-effect in the worker launch;
-    blocked on the VM anyway by the remote-training gate). The downloaded
-    results are always scored here on CPU; workers without a visibility log
-    or checkpoint are skipped per worker with a message, never silently.
-    """
-    import numpy as np
-    import pandas as pd
-
-    from core.common import training_cfg as _training_cfg
-
-    mask_cfg = _training_cfg().masking
-    embed_batch = int(_training_cfg().training.batch_size_embed)
-    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    for number in range(1, workers + 1):
-        worker = TRAINING_RESULTS / run_id / f"worker_{number}"
-        pointer_path = worker / F["results_pointer"].name
-        if not pointer_path.is_file():
-            _post_training_event(run_id, "mask_effect", "skipped", worker=number, reason="missing_results_pointer")
-            continue
-        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-        run_tag = str(pointer.get("run_tag") or run_id)
-        visibility = worker / "logs" / run_tag / "mask_visibility.csv"
-        if not visibility.is_file():
-            visibility = worker / "logs" / "mask_visibility.csv"
-        if not visibility.is_file():
-            print(f"[mask-effect-local] worker {number}: visibility log absent; skipped", flush=True)
-            _post_training_event(run_id, "mask_effect", "skipped", worker=number, reason="missing_visibility_log")
-            continue
-        audit = pd.read_csv(visibility)
-        if audit.empty:
-            _post_training_event(run_id, "mask_effect", "skipped", worker=number, reason="empty_visibility_log")
-            continue
-        model_tag = str(pointer.get("model", "")).rstrip("/").rsplit("/", 1)[-1]
-        roots = sorted((worker / "_checkpoints" / model_tag).glob(f"r{run_tag}_f*"))
-        if not roots:
-            print(f"[mask-effect-local] worker {number}: checkpoint root absent; skipped", flush=True)
-            _post_training_event(run_id, "mask_effect", "skipped", worker=number, reason="missing_checkpoint_root")
-            continue
-        candidates = sorted(
-            roots[0].glob("checkpoint-*"),
-            key=lambda path: int(path.name.removeprefix("checkpoint-")),
-        )
-        source = candidates[-1] if candidates else roots[0]
-        for candidate in candidates:
-            state_path = candidate / "trainer_state.json"
-            if not state_path.is_file():
-                continue
-            best = json.loads(state_path.read_text(encoding="utf-8")).get("best_model_checkpoint")
-            if best:
-                best_path = roots[0] / Path(best).name
-                if best_path.exists():
-                    source = best_path
-                    break
-
-        if "target_text" not in audit.columns:
-            canonical = pd.read_csv(worker / F["canonical_records"].name, dtype=str)
-            by_gtin = dict(zip(canonical["gtin"].astype(str), canonical["canonical"].astype(str), strict=True))
-            audit["target_text"] = audit["barcode"].astype(str).map(by_gtin)
-        audit = audit.dropna(subset=["target_text"])
-        if audit.empty:
-            _post_training_event(run_id, "mask_effect", "skipped", worker=number, reason="no_resolved_targets")
-            continue
-        try:
-            model = load_local_sentence_transformer(str(source), device="cpu")
-            masked = audit["masked_text"].astype(str).tolist()
-            anchors = audit["anchor_text"].astype(str).tolist()
-            targets = audit["target_text"].astype(str).tolist()
-            embeddings = model.encode(
-                masked + anchors + targets,
-                batch_size=embed_batch,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-            )
-            n = len(audit)
-            masked_scores = np.einsum("ij,ij->i", embeddings[:n], embeddings[2 * n:])
-            unmasked_scores = np.einsum("ij,ij->i", embeddings[n:2 * n], embeddings[2 * n:])
-            result = pd.DataFrame({
-                "realized_extent": audit["realized_extent"],
-                "sim_to_target": masked_scores.round(4),
-                "masked_score": masked_scores.round(4),
-                "unmasked_score": unmasked_scores.round(4),
-                "masked_minus_unmasked": (masked_scores - unmasked_scores).round(4),
-                "barcode": audit["barcode"],
-                "anchor_text": anchors,
-                "masked_text": masked,
-            })
-            midpoint = (float(mask_cfg.mask_lo) + float(mask_cfg.mask_hi)) / 2.0
-            result["bucket"] = np.where(
-                result["realized_extent"] >= midpoint,
-                f"high(>={midpoint:.2f})",
-                f"low(<{midpoint:.2f})",
-            )
-            log_dir = worker / "logs" / run_tag
-            log_dir.mkdir(parents=True, exist_ok=True)
-            result.to_csv(log_dir / "mask_effect.csv", index=False)
-            result.to_csv(worker / "logs" / "mask_effect.csv", index=False)
-            metrics = {
-                "mask_n": float(len(result)),
-                "mask_masked_mean_cosine": float(result["masked_score"].mean()),
-                "mask_masked_median_cosine": float(result["masked_score"].median()),
-                "mask_unmasked_mean_cosine": float(result["unmasked_score"].mean()),
-                "mask_unmasked_median_cosine": float(result["unmasked_score"].median()),
-                "mask_mean_cosine_delta": float(result["masked_minus_unmasked"].mean()),
-                "mask_median_cosine_delta": float(result["masked_minus_unmasked"].median()),
-            }
-            (worker / "local_mask_effect_metrics.json").write_text(
-                json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
-            import matplotlib
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
-            figure, axis = plt.subplots(figsize=(7, 4.5))
-            axis.hist(result["unmasked_score"], bins=20, alpha=0.55, label="non-masked")
-            axis.hist(result["masked_score"], bins=20, alpha=0.55, label="masked")
-            axis.set(xlabel="cosine similarity to target", ylabel="count",
-                     title="Masked vs non-masked positive performance")
-            axis.grid(alpha=0.25)
-            axis.legend()
-            figure.tight_layout()
-            figure.savefig(worker / f"mask_effect_{run_tag}.png", dpi=150)
-            plt.close(figure)
-            metric_paths = sorted(worker.glob("*_holdout_*_fold_metrics.csv"))
-            if metric_paths:
-                metrics_frame = pd.read_csv(metric_paths[-1])
-                for key, value in metrics.items():
-                    metrics_frame.loc[metrics_frame["status"].eq("ok"), key] = value
-                metrics_frame.to_csv(metric_paths[-1], index=False)
-                shared = worker / F["fold_metrics"].name
-                metrics_frame.to_csv(shared, index=False)
-            _post_training_event(
-                run_id,
-                "mask_effect",
-                "completed",
-                worker=number,
-                rows=len(result),
-                checkpoint=str(source),
-            )
-            print(f"[mask-effect-local] worker {number}: CPU scoring complete ({len(result)} rows)", flush=True)
-        except Exception as exc:
-            print(
-                f"[mask-effect-local] worker {number} failed; full traceback:",
-                file=sys.stderr,
-                flush=True,
-            )
-            traceback.print_exc()
-            _post_training_event(
-                run_id,
-                "mask_effect",
-                "failed",
-                worker=number,
-                error=str(exc),
-            )
-
-
-def _local_auth_env() -> dict[str, str]:
-    """Return local-only credentials for post-training publishers."""
-    env = dict(os.environ)
-    dvc_key = _env_value("DVC_API_KEY")
-    if dvc_key:
-        env["DVC_API_KEY"] = dvc_key
-        env["DAGSHUB_USER_TOKEN"] = dvc_key
-    wandb_key = _env_value("WANDB_API_KEY")
-    if wandb_key:
-        env["WANDB_API_KEY"] = wandb_key
-    return env
-
-
-def _publish_local_training_worker(run_id: str, number: int, workers: int) -> None:
-    """Publish one isolated worker bundle; safe to submit concurrently."""
-    source = TRAINING_RESULTS / run_id / f"worker_{number}"
-    if not source.is_dir():
-        raise FileNotFoundError(f"local worker output missing: {source}")
-    _post_training_event(
-        run_id,
-        "dvc_publish",
-        "started",
-        worker=number,
-        workers=workers,
-        source=str(source),
-    )
-    print(f"[dvc-local] publishing worker {number}/{workers}: {source}", flush=True)
-    try:
-        subprocess.run(
-            [
-                sys.executable, "-u", "-m", "training.dvc_store",
-                "--source", str(source), "--run-id", run_id,
-                "--worker", str(number),
-            ],
-            cwd=TRAIN_ROOT,
-            env={**_local_auth_env(), "PYTHONPATH": str(TRAIN_ROOT / "src")},
-            check=True,
-        )
-    except BaseException as exc:
-        _post_training_event(
-            run_id,
-            "dvc_publish",
-            "failed",
-            worker=number,
-            error=str(exc),
-        )
-        raise
-    _post_training_event(run_id, "dvc_publish", "completed", worker=number)
-
-
-def publish_local_training_results(remote_base: str, workers: int) -> None:
-    """Publish isolated worker bundles concurrently through DVC."""
-    from concurrent.futures import ThreadPoolExecutor
-
-    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    publisher_workers = min(workers, _DVC_WORKERS)
-    _post_training_event(
-        run_id,
-        "dvc_publish",
-        "dispatching",
-        workers=workers,
-        publisher_workers=publisher_workers,
-        dvc_workers=_DVC_WORKERS,
-        dvc_jobs=int(training_cfg().colab.dvc_jobs),
-    )
-    with ThreadPoolExecutor(max_workers=publisher_workers, thread_name_prefix="dvc-worker") as pool:
-        futures = [
-            pool.submit(_publish_local_training_worker, run_id, number, workers)
-            for number in range(1, workers + 1)
-        ]
-        for future in futures:
-            future.result()
-    _post_training_event(run_id, "dvc_publish", "completed", workers=workers)
-    print("[dvc-local] local result publication completed", flush=True)
-
-
-def publish_local_wandb_artifacts(remote_base: str, workers: int) -> None:
-    """Attach the final local report bundle to the existing W&B run."""
-    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    _post_training_event(run_id, "wandb_publish", "started", workers=workers)
-    api_key = _env_value("WANDB_API_KEY")
-    if not api_key:
-        print(
-            "[wandb-local] WANDB_API_KEY is absent; skipping W&B artifact "
-            "publication. DVC publication and teardown may continue.",
-            flush=True,
-        )
-        _post_training_event(run_id, "wandb_publish", "skipped", reason="missing_api_key")
-        return
-    import os
-
-    try:
-        import wandb
-    except Exception:
-        print(
-            "[wandb-local] W&B import failed; DVC publication and teardown "
-            "may continue. Full traceback:",
-            file=sys.stderr,
-            flush=True,
-        )
-        traceback.print_exc()
-        _post_training_event(run_id, "wandb_publish", "skipped", reason="wandb_import_failed")
-        return
-
-    project = str(training_cfg().tracking.wandb.project)
-    for number in range(1, workers + 1):
-        worker = TRAINING_RESULTS / run_id / f"worker_{number}"
-        status_path = worker / "live_status.json"
-        try:
-            status = (
-                json.loads(status_path.read_text(encoding="utf-8"))
-                if status_path.is_file()
-                else {}
-            )
-        except Exception:
-            print(
-                f"[wandb-local] worker {number}: could not read {status_path}; "
-                "skipping this worker. Full traceback:",
-                file=sys.stderr,
-                flush=True,
-            )
-            traceback.print_exc()
-            continue
-        wandb_run_id = status.get("wandb_run_id")
-        if not wandb_run_id:
-            print(
-                f"[wandb-local] worker {number}: no W&B run id in {status_path}; "
-                "skipping this worker",
-                flush=True,
-            )
-            _post_training_event(
-                run_id,
-                "wandb_publish",
-                "skipped",
-                worker=number,
-                reason="missing_wandb_run_id",
-            )
-            continue
-        try:
-            os.environ["WANDB_API_KEY"] = api_key
-            os.environ["WANDB_DIR"] = str(worker / "wandb")
-            run = wandb.init(
-                project=project,
-                id=str(wandb_run_id),
-                resume="allow",
-                settings=wandb.Settings(x_disable_stats=True, x_disable_machine_info=True),
-            )
-            artifact = wandb.Artifact(f"run-{run_id}-downloadable", type="training-result")
-            selected = []
-            for path in sorted(worker.iterdir()):
-                if path.name in {F["canonical_records"].name, F["gate_results"].name, "wandb", "mlruns"}:
-                    continue
-                if path.is_file() and path.suffix in {
-                    ".csv", ".json", ".jsonl", ".log", ".png", ".dvc", ".yaml", ".yml", ".txt",
-                }:
-                    selected.append(path)
-                elif path.is_dir() and (
-                    path.name.startswith("report_")
-                    or path.name in {"logs", "training", "_checkpoints", ".resume"}
-                ):
-                    selected.append(path)
-            if not selected:
-                print(
-                    f"[wandb-local] worker {number}: no downloadable files; skipping",
-                    flush=True,
-                )
-                run.finish(exit_code=1)
-                _post_training_event(
-                    run_id,
-                    "wandb_publish",
-                    "skipped",
-                    worker=number,
-                    reason="no_downloadable_files",
-                )
-                continue
-            for path in selected:
-                if path.is_dir():
-                    artifact.add_dir(str(path), name=path.name)
-                else:
-                    artifact.add_file(str(path), name=path.name)
-            run.log_artifact(artifact)
-            run.finish(exit_code=0)
-            _post_training_event(
-                run_id,
-                "wandb_publish",
-                "completed",
-                worker=number,
-                files=len(selected),
-                artifact=artifact.name,
-            )
-            print(f"[wandb-local] worker {number}: final artifact uploaded", flush=True)
-        except Exception:
-            print(
-                f"[wandb-local] worker {number} publication failed; "
-                "DVC publication and teardown may continue. Full traceback:",
-                file=sys.stderr,
-                flush=True,
-            )
-            traceback.print_exc()
-            _post_training_event(
-                run_id,
-                "wandb_publish",
-                "failed",
-                worker=number,
-                error="worker publication exception",
-            )
-
-
-def finalize_local_training_run(remote_base: str, workers: int) -> None:
-    """Complete every local post-run publication before remote teardown.
-
-    A training run is not complete when the GPU workers exit.  It is complete
-    only after the raw outputs are downloaded, CPU reports are generated, the
-    result bundle is verified/published through DVC, and the same bundle is
-    attached to each W&B run.  Keep this as one explicit gate so teardown
-    cannot destroy a remote-only result after a partial post-run step.
-    """
-    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    _post_training_event(run_id, "post_training", "started", workers=workers)
-    print("[post-training] finalizing downloaded results on local CPU ...", flush=True)
-    _post_training_event(run_id, "mask_effect", "started", workers=workers)
-    generate_local_mask_effect(remote_base, workers)
-    _post_training_event(run_id, "mask_effect", "completed", workers=workers)
-    generate_local_training_reports(remote_base, workers)
-    publish_local_training_results(remote_base, workers)
-    publish_local_wandb_artifacts(remote_base, workers)
-    _post_training_event(run_id, "post_training", "completed", workers=workers)
-    print("[post-training] DVC and W&B publication verified", flush=True)
-
-
-def finalize_local_mixed_run(remote_base: str) -> None:
-    """Finalize the trained worker and publish both mixed-lane workers."""
-    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    train_workers = _MIXED_TRAIN_WORKERS
-    total_workers = train_workers + _MIXED_SIMS_WORKERS
-    _post_training_event(run_id, "post_training", "started", workers=total_workers)
-    print("[post-training] finalizing mixed-lane results on local CPU ...", flush=True)
-    _post_training_event(run_id, "mask_effect", "started", workers=train_workers)
-    generate_local_mask_effect(remote_base, train_workers)
-    _post_training_event(run_id, "mask_effect", "completed", workers=train_workers)
-    generate_local_training_reports(remote_base, train_workers)
-    publish_local_training_results(remote_base, total_workers)
-    publish_local_wandb_artifacts(remote_base, total_workers)
-    _post_training_event(run_id, "post_training", "completed", workers=total_workers)
-    print("[post-training] mixed-lane DVC and W&B publication verified", flush=True)
 
 
 def _publish_local_hpo_model_snapshot(generation: Path, model_dir: Path) -> None:
@@ -1952,8 +1427,7 @@ def run_train(
         "--loss", "contrastive",
         "--train-frac", str(frac),
         "--epochs", str(epochs),
-        # Reports and plots are CPU-side post-processing. Generate them after
-        # the training run instead of spending GPU time on them.
+        # Reports and plots are intentionally not generated by the Colab lane.
         "--no-plot"]
     if model is not None:
         registry = load_config()["models"]
@@ -2035,7 +1509,7 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
         training_output=True,
     )
     download_verified_training_results(remote_base, 1)
-    print("[train] single worker completed; local post-processing deferred", flush=True)
+    print("[train] single worker completed; results downloaded", flush=True)
     return remote_base, 1
 
 
@@ -2423,7 +1897,7 @@ print(json.dumps({{"base": str(base), "completed": completed}}), flush=True)
         training_output=True,
     )
     download_verified_training_results(remote_base, mixed_workers)
-    print("[mixed] both workers completed; post-training finalization deferred", flush=True)
+    print("[mixed] both workers completed; results downloaded", flush=True)
     return remote_base, 2
 
 
@@ -2828,34 +2302,27 @@ def main() -> None:
                 resume_run=args.resume_run, model=args.model,
                 run_label=args.run_label,
             )
-        if local_training_run is not None:
-            remote_base, workers = local_training_run
-            finalize_local_training_run(remote_base, workers)
-        if local_mixed_run is not None:
-            remote_base, _ = local_mixed_run
-            finalize_local_mixed_run(remote_base)
         if local_hpo_run is not None:
-            print("[post-training] publishing HPO snapshots on local CPU ...", flush=True)
+            print("[hpo] publishing snapshots on local CPU ...", flush=True)
             publish_local_hpo_results(local_hpo_run, args.hpo_persistence)
         publication_complete = True
     except BaseException:
         print(
-            "[launcher] traceback before teardown; publication is incomplete and "
-            "the VM will be kept alive for recovery:",
+            "[launcher] traceback before teardown; result transfer is incomplete "
+            "and the VM will be kept alive for recovery:",
             flush=True,
         )
         traceback.print_exc()
         raise
     finally:
-        # A successful run is released only after every local publication step
-        # has completed.  On a failed/cancelled run, preserve the VM so a
-        # partial transfer or publication can be recovered instead of deleting
-        # the only remaining copy of the results.
+        # A successful run is released only after result transfer has completed.
+        # On a failed/cancelled run, preserve the VM so a partial transfer can
+        # be recovered instead of deleting the only remaining copy of results.
         if not args.keep_alive and publication_complete:
             stop()
         elif not args.keep_alive:
             print(
-                "[stop] skipped: training/publication did not complete; "
+                "[stop] skipped: training/result transfer did not complete; "
                 "remote results remain available for recovery",
                 file=sys.stderr,
                 flush=True,

@@ -1020,7 +1020,7 @@ class ColabSpec(BaseModel):
     worker_monitor_seconds: int = Field(ge=1, le=300)
     dvc_workers: int = Field(ge=1, le=3)
     dvc_jobs: int = Field(ge=1, le=32)
-    post_training_events_file: str = Field(min_length=1)
+    result_events_file: str = Field(min_length=1)
     dvc_events_file: str = Field(min_length=1)
     dvc_push_retries: int = Field(ge=1, le=10)
     dvc_push_backoff_seconds: int = Field(ge=1, le=120)
