@@ -316,7 +316,11 @@ def finish_manifest(
     never touch the real results/ tree.
     """
     _check_closure(row_accounting)
-    expected = list(expected_outputs or [])
+    # The public helper accepts filesystem paths for convenience, while the
+    # manifest schema owns output names. Normalize at this boundary so
+    # Pydantic receives the declared ``list[str]`` contract and expected
+    # output matching compares the same basename representation.
+    expected = [Path(p).name for p in (expected_outputs or [])]
     entries = []
     for p in outputs:
         entry = _file_entry(Path(p))
