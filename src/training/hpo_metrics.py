@@ -24,6 +24,62 @@ from training.rand_matching import (
 from training.uniformity import select_unrelated_pairs
 
 
+# One reporting contract is shared by ordinary train, fixed-grid HPO, and
+# Optuna.  Fold CSVs keep every returned field; these are the stable numeric
+# fields promoted to aggregate reports and tracking backends.
+CALIBRATION_AGGREGATE_FIELDS = (
+    "calibration_rand_index",
+    "calibration_adjusted_rand",
+    "calibration_group_precision",
+    "calibration_group_recall",
+    "calibration_pairwise_precision",
+    "calibration_pairwise_recall",
+    "calibration_pairwise_f1",
+    "calibration_over_merge_rate",
+    "calibration_under_merge_rate",
+    "calibration_predicted_group_count",
+    "calibration_expected_group_count",
+    "calibration_plausible_group_count",
+    "calibration_unmatched_skus",
+    "calibration_threshold_fold_median",
+    "calibration_threshold_fold_min",
+    "calibration_threshold_fold_max",
+    "calibration_threshold_plateau_points",
+    "calibration_threshold_stable",
+    "diagnostic_component_count",
+    "diagnostic_max_component_size",
+    "diagnostic_score_diameter",
+    "diagnostic_bridge_edge_count",
+    "diagnostic_weakest_bridge_score",
+    "collapse_median_cosine",
+    "collapse_p90_cosine",
+    "collapse_cosine_std",
+    "collapse_embedding_norm_mean",
+    "collapse_embedding_norm_std",
+    "collapse_penalty",
+    *tuple(
+        f"calibration_{status}_{metric}"
+        for status in GTIN_STATUSES
+        for metric in ("rand_index", "precision", "recall")
+    ),
+)
+
+
+def numeric_calibration_metrics(row: dict) -> dict[str, float | int]:
+    """Return finite calibration diagnostics suitable for tracking APIs."""
+    metrics: dict[str, float | int] = {}
+    for key, value in row.items():
+        if not key.startswith(("calibration_", "collapse_", "diagnostic_")):
+            continue
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value, (int, float, np.integer, np.floating)
+        ):
+            continue
+        if np.isfinite(value):
+            metrics[key] = value
+    return metrics
+
+
 def _trusted_gtin(value: object) -> str:
     text = "" if value is None else str(value).strip()
     return text if text and is_valid_gtin_checksum(text) else ""
@@ -251,7 +307,7 @@ def _collapse_penalty(stats: dict, cfg: dict) -> float:
     )
 
 
-def evaluate_hpo_trial(
+def evaluate_calibration_trial(
     *,
     model,
     df: pd.DataFrame,
@@ -264,7 +320,7 @@ def evaluate_hpo_trial(
     batch_size: int,
     config: dict,
 ) -> dict[str, float | int | str]:
-    """Evaluate one trained model on a held-out direct-assignment proxy."""
+    """Evaluate one trained model on a held-out direct-assignment calibration split."""
     if len(pos_pairs) == 0 or len(neg_pairs) == 0:
         raise ValueError("HPO calibration proxy requires positive and negative pairs")
     candidate_pairs = np.vstack([pos_pairs, neg_pairs])

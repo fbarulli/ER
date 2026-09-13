@@ -2186,13 +2186,12 @@ def train_one_config(
     resume: bool = False,
     # selection mode (test-leak fix, 2026-09-12): HPO/grid lanes in
     # HOLDOUT split call with True — the fold trains on q0+q1, early-stops
-    # and is SELECTED on dev (q2, best_dev_ap), and the test quarter's
+    # and is SELECTED on calibration metrics from dev (q2), and the test quarter's
     # eval block (pair_auc/PR-AUC/Youden/pair dump) is SKIPPED entirely:
     # the test quarter is read exactly once, by the main train lane, so
     # hyperparameters can never be fitted on it. Skipped rows carry
     # test_eval="skipped_selection_mode" — loud, never a silent NaN.
     selection_mode: bool = False,
-    compute_hpo_proxy: bool = False,
     wandb_ctx=None,
 ) -> list[dict]:
     """Train cfg across the group-aware folds. Returns fold metric rows
@@ -3457,26 +3456,27 @@ def train_one_config(
                 sum(stats["masked_count"] for stats in dynamic_mask_stats_by_epoch.values())
             )
 
-            hpo_proxy: dict[str, object] = {}
-            if compute_hpo_proxy:
-                from training.hpo_metrics import evaluate_hpo_trial
+            # Every lane uses the same component-safe calibration/Rand
+            # computation. The holdout population below remains isolated for
+            # final reporting and is never used by HPO selection.
+            from training.hpo_metrics import evaluate_calibration_trial
 
-                hpo_proxy = evaluate_hpo_trial(
-                    model=model,
-                    df=df,
-                    payload=payload,
-                    structured_features=structured_features,
-                    pos_pairs=dev_pos,
-                    neg_pairs=hard_dev,
-                    row_bc=row_bc,
-                    structured_weight=structured_feature_weight,
-                    batch_size=runtime("batch_size_eval"),
-                    config=load_config(),
-                )
+            calibration_metrics = evaluate_calibration_trial(
+                model=model,
+                df=df,
+                payload=payload,
+                structured_features=structured_features,
+                pos_pairs=dev_pos,
+                neg_pairs=hard_dev,
+                row_bc=row_bc,
+                structured_weight=structured_feature_weight,
+                batch_size=runtime("batch_size_eval"),
+                config=load_config(),
+            )
 
             # ── SELECTION-MODE EXIT (test-leak fix, 2026-09-12) ───────────
             # Holdout HPO/grid folds STOP HERE: the config is ranked on
-            # best_dev_ap and the test quarter's eval block is never
+            # calibration Rand and the test quarter's eval block is never
             # entered — no pair_auc, no PR-AUC, no Youden, no pair dump,
             # not even an encode. The test quarter is read exactly once, by
             # the main train lane, so no per-config test metric can ever
@@ -3543,7 +3543,7 @@ def train_one_config(
                             1,
                         ),
                         "fold_s": round(time.perf_counter() - t_fold, 1),
-                        **hpo_proxy,
+                        **calibration_metrics,
                     }
                 )
                 continue
@@ -3874,7 +3874,7 @@ def train_one_config(
                 "gpu_vram_gb": round(gpu_vram_gb, 2),
                 "gpu_peak_gb": round(gpu_peak_gb, 2),
                 "fold_s": round(time.perf_counter() - t_fold, 1),
-                **hpo_proxy,
+                **calibration_metrics,
             }
             rows.append(row)
 
@@ -4195,7 +4195,6 @@ def run_hpo(
                 dynamic_mask_prob=dynamic_mask_prob,
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
-                compute_hpo_proxy=True,
                 wandb_ctx=wandb_ctx,
             )
             ok_rows = [r for r in rows if r.get("status") == "ok"]
@@ -4388,7 +4387,7 @@ def run_hpo(
         "model": args.model,
         "objective": f"discriminative-LR ({_runtime('layer_decay')}^k per-layer groups)",
         # which signal ranked the trials (test-leak fix, 2026-09-12):
-        # best_dev_ap in holdout selection mode, mean fold auc in cv
+        # calibration Rand in both holdout and CV selection modes
         "selection": (
             HPO_OBJECTIVE_HOLDOUT if selection_mode else HPO_OBJECTIVE_CV
         ),

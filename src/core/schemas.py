@@ -714,10 +714,9 @@ class HpoSpaceSpec(BaseModel):
 
 class ObjectiveSpec(BaseModel):
     """HPO selection signal per split mode (hpo.objective — test-leak fix
-    2026-09-12). The keys are pinned to the sanctioned rule per mode:
-    holdout selects on the dev quarter's best_dev_ap (never the test
-    quarter); cv selects on mean fold auc (fold test sides are validation
-    folds there). A config typo changing either key dies at load."""
+    2026-09-12). Both split modes select on the component-safe calibration
+    Rand proxy; holdout calibration is dev-side and CV calibration is
+    validation-side. A config typo changing either key dies at load."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -772,9 +771,8 @@ class HpoSpec(BaseModel):
     persistence: Literal["dvc", "local", "none"]
     # selection protocol (test-leak fix, 2026-09-12): WHICH signal a sweep
     # ranks configs on, pinned PER SPLIT MODE so a config typo can never
-    # re-couple the holdout objective to the test quarter. holdout MUST
-    # stay best_dev_ap (the only sanctioned rule); cv folds' test sides
-    # are validation folds, so mean_fold_auc is legitimate there.
+    # re-couple the holdout objective to the test quarter. Both modes stay
+    # on rand_index_proxy; calibration remains separate from final holdout.
     objective: ObjectiveSpec
     # selection-mode folds skip the test-side eval + pair dump (recorded as
     # test_eval=skipped_selection_mode). MUST stay true: computing a

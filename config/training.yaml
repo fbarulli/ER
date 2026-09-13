@@ -309,10 +309,10 @@ hpo:
     reject_median: 0.80
   # ── selection protocol (test-leak fix, 2026-09-12) ─────────────────────
   # WHICH signal a sweep ranks configs on, per split mode. Holdout sweeps
-  # train q0+q1, early-stop + select on the dev quarter q2 (best_dev_ap)
-  # and NEVER compute a per-config test metric — the test quarter is read
-  # exactly once, by the main train lane. CV fold test sides are
-  # validation folds, so mean fold auc is legitimate there.
+  # train q0+q1, early-stop + select on the dev quarter q2's component-safe
+  # calibration Rand proxy and NEVER compute a per-config test metric — the
+  # test quarter is read exactly once, by the main train lane. CV uses the
+  # same calibration Rand schema on its validation-side folds.
   objective:
     holdout: rand_index_proxy
     cv: rand_index_proxy

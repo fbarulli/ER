@@ -68,6 +68,8 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
     the trained embeddings; a plain run notes its absence.
     """
 
+    from training.hpo_metrics import CALIBRATION_AGGREGATE_FIELDS
+
     # ---- 07c: one aggregate row per payload variant ----
     def agg(field: str) -> float:
         vals = [r.get(field) for r in ok_rows if r.get(field) is not None]
@@ -91,6 +93,12 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         "n_folds": len(ok_rows),
         "model": args.model,
     }
+    row_07c.update(
+        {
+            field: round(agg(field), 4)
+            for field in CALIBRATION_AGGREGATE_FIELDS
+        }
+    )
     _append_csv(F["field_ablation"], [row_07c], "variant")
 
     # ---- 07d: one row per train fraction ----
@@ -113,6 +121,12 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
         "model": args.model,
         "payload": args.payload,
     }
+    row_07d.update(
+        {
+            field: round(agg(field), 4)
+            for field in CALIBRATION_AGGREGATE_FIELDS
+        }
+    )
     _append_csv(
         F["data_scaling"], [row_07d], ["fraction", "payload"]
     )
@@ -1178,6 +1192,18 @@ def _main_inner(_mlf, _wandb) -> None:
                 if _ok_rows
                 else None
             ),
+            "mean_calibration_rand_index": (
+                float(np.mean([r["calibration_rand_index"] for r in _ok_rows]))
+                if _ok_rows
+                and all("calibration_rand_index" in r for r in _ok_rows)
+                else None
+            ),
+            "mean_calibration_adjusted_rand": (
+                float(np.mean([r["calibration_adjusted_rand"] for r in _ok_rows]))
+                if _ok_rows
+                and all("calibration_adjusted_rand" in r for r in _ok_rows)
+                else None
+            ),
         }
         F["results_pointer"].write_text(
             json.dumps(pointer, indent=2, sort_keys=True)
@@ -1266,53 +1292,80 @@ def _main_inner(_mlf, _wandb) -> None:
             "sample": args.sample or "full",
         }
     )
+    from training.hpo_metrics import numeric_calibration_metrics
+
     for r in ok_rows:
         with _mlf.nested:
             _mlf.log_params({"fold": r.get("fold")})
-            _mlf.log_metrics(
-                {
-                    k: r[k]
-                    for k in (
-                        "auc",
-                        "auc_cross",
-                        "acc_at_thr",
-                        "youden_thr",
-                        "pr_auc",
-                        "hits_at_1",
-                        "best_dev_ap",
-                        "final_train_loss",
-                        "s_per_step",
-                        # fixed-threshold metric names are config-derived
-                        # (f"f1_at_{thr:g}") — match by prefix
-                        *[
-                            k
-                            for k in r
-                            if k.startswith(
-                                ("f1_at_", "precision_at_", "recall_at_")
-                            )
-                        ],
-                    )
-                    if r.get(k) is not None
-                }
-            )
+            fold_metrics = {
+                k: r[k]
+                for k in (
+                    "auc",
+                    "auc_cross",
+                    "acc_at_thr",
+                    "youden_thr",
+                    "pr_auc",
+                    "hits_at_1",
+                    "best_dev_ap",
+                    "final_train_loss",
+                    "s_per_step",
+                    # fixed-threshold metric names are config-derived
+                    # (f"f1_at_{thr:g}") — match by prefix
+                    *[
+                        k
+                        for k in r
+                        if k.startswith(
+                            ("f1_at_", "precision_at_", "recall_at_")
+                        )
+                    ],
+                )
+                if r.get(k) is not None
+            }
+            fold_metrics.update(numeric_calibration_metrics(r))
+            _mlf.log_metrics(fold_metrics)
+            calibration_metrics = numeric_calibration_metrics(r)
             if r.get("traceback"):
                 continue
             _wandb.log_metrics(
                 {
-                    f"fold_{r.get('fold')}_{k}": r[k]
-                    for k in (
-                        "auc", "auc_cross", "acc_at_thr", "pr_auc", "hits_at_1",
-                        "best_dev_ap", "final_train_loss", "n_random_easy_neg",
-                        "random_easy_available", "n_masked_pos",
-                        "n_masked_hard_negatives",
-                        *[key for key in r if key.startswith(("f1_at_", "precision_at_", "recall_at_"))],
-                    )
-                    if r.get(k) is not None
+                    **{
+                        f"fold_{r.get('fold')}_{k}": r[k]
+                        for k in (
+                            "auc", "auc_cross", "acc_at_thr", "pr_auc", "hits_at_1",
+                            "best_dev_ap", "final_train_loss", "n_random_easy_neg",
+                            "random_easy_available", "n_masked_pos",
+                            "n_masked_hard_negatives",
+                            *[key for key in r if key.startswith(("f1_at_", "precision_at_", "recall_at_"))],
+                        )
+                        if r.get(k) is not None
+                    },
+                    **{
+                        f"fold_{r.get('fold')}_{key}": value
+                        for key, value in calibration_metrics.items()
+                    },
                 }
             )
     if aucs:
         _mlf.log_metrics(
             {"mean_auc": float(np.mean(aucs)), "std_auc": float(np.std(aucs))}
+        )
+    calibration_rows = [
+        r
+        for r in ok_rows
+        if np.isfinite(r.get("calibration_rand_index", float("nan")))
+    ]
+    if calibration_rows:
+        _mlf.log_metrics(
+            {
+                "mean_calibration_rand_index": float(
+                    np.mean([r["calibration_rand_index"] for r in calibration_rows])
+                ),
+                "mean_calibration_adjusted_rand": float(
+                    np.mean(
+                        [r["calibration_adjusted_rand"] for r in calibration_rows]
+                    )
+                ),
+            }
         )
     if not _REMOTE_TRAINING:
         _mlf.log_artifact(out)
@@ -1327,6 +1380,20 @@ def _main_inner(_mlf, _wandb) -> None:
     _wandb.set_summary(
         {
             "mean_auc": float(np.mean(aucs)) if aucs else None,
+            "mean_calibration_rand_index": (
+                float(np.mean([r["calibration_rand_index"] for r in calibration_rows]))
+                if calibration_rows
+                else None
+            ),
+            "mean_calibration_adjusted_rand": (
+                float(
+                    np.mean(
+                        [r["calibration_adjusted_rand"] for r in calibration_rows]
+                    )
+                )
+                if calibration_rows
+                else None
+            ),
             "n_folds": len(ok_rows),
             "mask_copies": len(mask_audit),
             "fold_metrics_csv": out.name,

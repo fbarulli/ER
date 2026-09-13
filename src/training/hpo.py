@@ -68,10 +68,10 @@ def run_grid(
     """Fixed-grid sweep (second07 semantics) over the ENTRY-augmented tuple.
 
     Holdout split (test-leak fix, 2026-09-12): every config trains on
-    q0+q1, early-stops + is RANKED on the dev quarter q2 (best_dev_ap);
+    q0+q1, early-stops + is RANKED on the dev quarter q2's calibration Rand;
     the per-config test-side eval is SKIPPED (train_one_config
     selection_mode). CV split keeps component folds — fold test sides are
-    validation folds there, mean fold auc stays the reported metric.
+    validation folds there, calibration Rand stays the reported metric.
 
     Masking: applied ONCE by the entry lane (src/training/train.py resolves
     CLI > config and augments BEFORE the zero-shot encode), so the tuple
@@ -162,15 +162,10 @@ def run_grid(
                 else 0.0
             ),
         }
-        # selection signal per split mode (test-leak fix, 2026-09-12):
-        # holdout folds carry best_dev_ap and NO test metric; cv fold rows
-        # carry auc (fold test sides are validation folds there). Reading
-        # the signal through the mode switch — never r["auc"] blindly,
-        # which is what leaked test into selection before.
-        if _holdout:
-            _sig, _sd_key = "best_dev_ap", "dev_ap_sd"
-        else:
-            _sig, _sd_key = "auc", "auc_sd"
+        # Both split modes rank on the same component-safe calibration Rand
+        # proxy. Holdout calibration is dev-side; CV calibration is
+        # validation-side. Neither path uses the final holdout test score.
+        _sig, _sd_key = "calibration_rand_index", "calibration_rand_index_sd"
         fold_rows = train_one_config(
             tcfg,
             # SSOT: training.loss (owner ruling: contrastive default)
@@ -219,21 +214,20 @@ def run_grid(
         if vals:
             _mean = float(np.mean(vals))
             _sd = float(np.std(vals))
-            _label = "devAP" if _holdout else "AUC"
+            _label = "calibration Rand"
             print(
                 f"{cfg_id}: {_label} {_mean:.4f} (sd {_sd:.4f})",
                 flush=True,
             )
         else:
             _mean = _sd = float("nan")
-        # config_mean summary row (second07's summary block). Objective
-        # column: which signal the mean is over — best_dev_ap in holdout
-        # selection mode (never a test metric), auc in cv.
+        # config_mean summary row (second07's summary block). The metric is
+        # identical in holdout and CV so grid and TPE consume one schema.
         rows.append(
             {
                 "config": cfg_id,
                 "fold": "mean",
-                "objective": (_sig if _holdout else "auc"),
+                "objective": _sig,
                 _sig: round(_mean, 4),
                 _sd_key: round(_sd, 4),
                 "n_masked_pos": n_masked,
@@ -286,7 +280,7 @@ def run_tpe(
     Holdout split (test-leak fix, 2026-09-12): the component split's
     boundary (folds_override=test quarter, dev_override=q2) replaces the
     old all-barcode CV folds + per-fold rng carve — trials train q0+q1,
-    rank on best_dev_ap, never see a test-side metric.
+    rank on calibration Rand, never see a test-side metric.
 
     Masking: applied ONCE by the entry lane BEFORE the zero-shot encode
     (see run_grid) — re-running augment_positives here extended payload
