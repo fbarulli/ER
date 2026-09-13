@@ -75,7 +75,9 @@ def build_pairs(
             pos_j.append(b)
     if title_drops:
         print(
-            f"[blocking] duplicate-title representatives removed: {title_drops:,}",
+            f"[blocking] excluded {title_drops:,} repeated titles from "
+            "positive-pair sampling within valid multi-retailer GTIN groups "
+            "(pair-construction rule; source rows retained)",
             flush=True,
         )
 

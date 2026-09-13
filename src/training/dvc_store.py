@@ -11,12 +11,32 @@ DVC_EXCLUDED_DIRS = frozenset({
     "_checkpoint_upload_staging", "wandb", "mlruns",
 })
 
+
+def _write_dvc_event(source: Path, event: str, **values: object) -> None:
+    """Append structured DVC state beside the worker's result bundle."""
+    record = {"event": event, **values}
+    event_path = source / common.training_cfg().colab.dvc_events_file
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    with event_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+    print(f"[dvc-state] {event} | {json.dumps(values, sort_keys=True)}", flush=True)
+
 def _run(command: list[str], cwd: Path) -> str:
+    if command[:2] == ["dvc", "push"] and "--jobs" not in command:
+        jobs = str(common.training_cfg().colab.dvc_jobs)
+        command = [command[0], command[1], "--jobs", jobs, *command[2:]]
     shown = ["<redacted>" if command[i - 1:i] == ["password"] else part for i, part in enumerate(command)]
     print(f"[dvc] running: {' '.join(shown)}", flush=True)
     cfg = common.training_cfg().colab
     attempts = cfg.dvc_push_retries if command[:2] == ["dvc", "push"] else 1
     for attempt in range(1, attempts + 1):
+        _write_dvc_event(
+            cwd,
+            "command_started",
+            command=shown,
+            attempt=attempt,
+            attempts=attempts,
+        )
         try:
             process = subprocess.Popen(
                 command,
@@ -26,6 +46,13 @@ def _run(command: list[str], cwd: Path) -> str:
                 text=True,
             )
             print(f"[dvc] started pid={process.pid}", flush=True)
+            _write_dvc_event(
+                cwd,
+                "process_started",
+                command=shown,
+                attempt=attempt,
+                pid=int(process.pid),
+            )
             output_lines = []
             assert process.stdout is not None
             for line in process.stdout:
@@ -44,6 +71,13 @@ def _run(command: list[str], cwd: Path) -> str:
         if result.stdout:
             print(result.stdout.rstrip(), flush=True)
         print(f"[dvc] finished rc={result.returncode}", flush=True)
+        _write_dvc_event(
+            cwd,
+            "command_finished",
+            command=shown,
+            attempt=attempt,
+            returncode=int(result.returncode),
+        )
         if result.returncode == 0:
             return result.stdout or ""
         if attempt < attempts:
@@ -178,6 +212,12 @@ def publish_checkpoint(
         raise RuntimeError("DVC_API_KEY is required to persist a checkpoint")
     source = source.resolve()
     checkpoint_root = checkpoint_root.resolve()
+    _write_dvc_event(
+        source,
+        "checkpoint_publish_requested",
+        checkpoint=str(checkpoint_root),
+        resume_name=resume_name or checkpoint_root.name,
+    )
     restore_root = (restore_root or checkpoint_root).resolve()
     relative_root = checkpoint_root.relative_to(source)
     restore_root.relative_to(source)
@@ -190,7 +230,8 @@ def publish_checkpoint(
     # Separate Optuna trials share one no-SCM DVC workspace.  Serialise its
     # mutable metadata operations, not just the remote push, otherwise two
     # ``dvc add`` calls can observe or rewrite each other's state.
-    lock_path = source.parent / ".dvc-push.lock"
+    lock_path = source / ".dvc-push.lock"
+    print(f"[dvc] waiting for worker-local metadata lock: {lock_path}", flush=True)
     with lock_path.open("w", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
@@ -235,7 +276,7 @@ def publish_checkpoint(
             # leaves the resume pointer referring to a nonexistent remote
             # object. Push the exact native pointer explicitly.
             print(f"[checkpoint-dvc] pushing target {native_relative}", flush=True)
-            _run(["dvc", "push", "--jobs", "1", str(native_relative)], source)
+            _run(["dvc", "push", str(native_relative)], source)
             # A successful push process is not sufficient evidence on its
             # own. Require DVC's cloud comparison to report this exact
             # pointer in sync before making the resume metadata visible.
@@ -252,6 +293,12 @@ def publish_checkpoint(
     pointer.parent.mkdir(parents=True, exist_ok=True)
     pointer.write_text(
         yaml.safe_dump(pointer_data, sort_keys=False), encoding="utf-8"
+    )
+    _write_dvc_event(
+        source,
+        "checkpoint_publish_verified",
+        checkpoint=str(checkpoint_root),
+        pointer=str(pointer),
     )
     return pointer
 
@@ -358,6 +405,12 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     if not token:
         raise RuntimeError("DVC_API_KEY is required for DagsHub persistence")
     remote = _configure(source, token)
+    _write_dvc_event(
+        source,
+        "worker_publish_started",
+        run_id=run_id,
+        worker=int(worker),
+    )
     tracked_suffixes = {
         ".csv", ".json", ".png", ".log", ".yaml", ".yml", ".txt",
     }
@@ -374,12 +427,12 @@ def publish(source: Path, run_id: str, worker: int) -> None:
         paths.append(str(relative))
     if paths:
         _run(["dvc", "add", *paths], source)
-    lock_path = source.parent / ".dvc-push.lock"
+    lock_path = source / ".dvc-push.lock"
     with lock_path.open("w", encoding="utf-8") as lock:
-        print(f"[dvc] waiting for shared push lock: {lock_path}", flush=True)
+        print(f"[dvc] waiting for worker-local push lock: {lock_path}", flush=True)
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            _run(["dvc", "push", "--jobs", "1"], source)
+            _run(["dvc", "push"], source)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     outputs = _verify_clean_pull(source, token, remote)
@@ -392,6 +445,13 @@ def publish(source: Path, run_id: str, worker: int) -> None:
     }
     (source / "dvc_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    _write_dvc_event(
+        source,
+        "worker_publish_verified",
+        run_id=run_id,
+        worker=int(worker),
+        output_count=len(outputs),
     )
     print("[dvc] clean pull verified; DagsHub DVC remote is authoritative", flush=True)
 

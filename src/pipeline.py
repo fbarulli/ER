@@ -1542,6 +1542,10 @@ def build_training_data(
                   every gate hard-no pair with similarity >= threshold
         stats   : dict — counts (nothing dropped silently)
     """
+    print(
+        f"[payload-stage] building variant={payload_variant} rows={len(df):,}",
+        flush=True,
+    )
     cfg = load_config()
     structured_cfg = cfg["training"]["structured_features"]
     structured_enabled = bool(structured_cfg["enabled"])
@@ -1631,6 +1635,11 @@ def build_training_data(
     ]
     payload.extend(canon_texts)
     row_bc.extend(canon_gtins)
+    print(
+        f"[payload-stage] materialized sku_payload={len(sku_texts):,} "
+        f"canonical_payload={len(canon_texts):,}",
+        flush=True,
+    )
     structured_infos = sku_structured + canon_structured
     structured_features = [
         structured_vector(
@@ -1736,6 +1745,11 @@ def build_training_data(
         "n_neg_resolution_dropped": n_resolution_dropped,
         "n_neg_dropped": n_resolution_dropped,
     }
+    print(
+        f"[payload-stage] pairs resolved positives={len(pos):,} "
+        f"hard_negatives={len(neg):,} unresolved_or_dropped={n_resolution_dropped:,}",
+        flush=True,
+    )
     _resolution_log = RESULTS / "logs"
     _resolution_log.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([stats]).to_csv(
@@ -1775,9 +1789,7 @@ def build_training_data(
             }
         )
     pd.DataFrame(_rows).to_csv(_vis_dir / "payload_pairs.csv", index=False)
-    _kinds = {}
-    for _r in _rows:
-        _kinds[_r["kind"]] = _kinds.get(_r["kind"], 0) + 1
+    _kinds = {"pos": int(len(pos)), "neg_hard": int(len(neg))}
     print(
         f"[payload-visibility] {len(_rows):,} pairs dumped -> "
         f"results/logs/payload_pairs.csv | {_kinds}",

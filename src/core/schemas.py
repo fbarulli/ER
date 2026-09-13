@@ -236,6 +236,7 @@ class UniformitySpec(BaseModel):
     sample_pairs: int = Field(ge=1)
     seed: int
     threshold: float = Field(ge=-1.0, le=1.0)
+    checkpoint_scope: Literal["all", "final"]
 
 
 class EvaluationSpec(BaseModel):
@@ -859,6 +860,9 @@ class ColabSpec(BaseModel):
     dvc_remote_url: str = Field(min_length=1)
     dagshub_repo: str = Field(min_length=1)
     worker_timeout_seconds: int = Field(ge=60)
+    dvc_jobs: int = Field(ge=1, le=32)
+    post_training_events_file: str = Field(min_length=1)
+    dvc_events_file: str = Field(min_length=1)
     dvc_push_retries: int = Field(ge=1, le=10)
     dvc_push_backoff_seconds: int = Field(ge=1, le=120)
 

@@ -2011,9 +2011,12 @@ def _write_datapoint_usage(
         item["pair_ids"].add(int(row["pair_id"]))
     coverage_rows: list[dict] = []
     missing: list[str] = []
-    all_populations = (
-        set(KNOWN_DATAPOINT_POPULATIONS) | set(expected) | set(by_population)
+    dynamic_names = {"ann_finetuned", "attribute_conflict"}
+    configured_populations = (
+        (set(KNOWN_DATAPOINT_POPULATIONS) - dynamic_names)
+        | dynamic_populations
     )
+    all_populations = configured_populations | set(expected) | set(by_population)
     for population in sorted(all_populations):
         expected_rows = int(expected.get(population, 0))
         item = by_population.get(population, {"presentations": 0, "pair_ids": set()})
@@ -3102,12 +3105,28 @@ def train_one_config(
             trainer.train(resume_from_checkpoint=resume_checkpoint)
             datapoint_coverage: dict[str, int] = {}
             if loss == "contrastive" and TRACK_DATAPOINT_USAGE:
+                enabled_dynamic_populations = {
+                    population
+                    for population, enabled in (
+                        ("ann_finetuned", ann_refresh_enabled),
+                        ("attribute_conflict", attribute_conflict_refresh_enabled),
+                    )
+                    if enabled
+                }
+                print(
+                    "    [datapoint-sources] "
+                    + ", ".join(
+                        f"{name}={'enabled' if name in enabled_dynamic_populations else 'disabled_by_config'}"
+                        for name in ("ann_finetuned", "attribute_conflict")
+                    ),
+                    flush=True,
+                )
                 datapoint_coverage = _write_datapoint_usage(
                     fold_i=fold_i,
                     pair_populations=pair_populations,
                     presentation_counts=presentation_counts,
                     pair_lineage=pair_lineage,
-                    dynamic_populations={"ann_finetuned", "attribute_conflict"},
+                    dynamic_populations=enabled_dynamic_populations,
                     run_tag=run_tag,
                     sample=sample,
                 )

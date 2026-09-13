@@ -36,6 +36,10 @@ dataset_model_input.csv
 *.zip
 training.log
 training_results/
+# Colab CLI session state and local runtime logs/cache.
+colab_cli_state/
+colab_system.log
+matplotlib/
 # Unrelated local artifact tree (contains node_modules, archives, and media).
 archify/
 src/ner/results/

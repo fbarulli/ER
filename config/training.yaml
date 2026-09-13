@@ -56,6 +56,11 @@ colab:
   dvc_remote_url: "https://dagshub.com/fbarulli/ER.dvc"
   dagshub_repo: "fbarulli/ER"
   worker_timeout_seconds: 14400
+  # DVC's content transfer workers. This is separate from train_workers:
+  # each isolated worker owns its metadata, while DVC parallelizes uploads.
+  dvc_jobs: 4
+  post_training_events_file: "post_training_events.jsonl"
+  dvc_events_file: "dvc_events.jsonl"
   dvc_push_retries: 5
   dvc_push_backoff_seconds: 15
 
@@ -103,6 +108,7 @@ evaluation:
     sample_pairs: 100
     seed: 42
     threshold: 0.70
+    checkpoint_scope: "final"
 
 # ── final Rand Index matching lane ─────────────────────────────────────────
 # Runtime input files are required CLI arguments; all matcher behavior and
