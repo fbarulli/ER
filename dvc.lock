@@ -1,0 +1,26 @@
+schema: '2.0'
+stages:
+  train:
+    cmd: python colab_backend.py --what train
+    deps:
+    - path: config
+      hash: md5
+      md5: f4849b184b1a547c0f9ecd4dabe420d6.dir
+      size: 40821
+      nfiles: 3
+    - path: src
+      hash: md5
+      md5: d1776f8e48b0a7a523f0a1be64a203e2.dir
+      size: 2683397
+      nfiles: 130
+    outs:
+    - path: artifacts/models
+      hash: md5
+      md5: fc70b939d9e07c9f35a435075821f73f.dir
+      size: 91630836
+      nfiles: 13
+    - path: results
+      hash: md5
+      md5: d751713988987e9331980363e24189ce.dir
+      size: 0
+      nfiles: 0
