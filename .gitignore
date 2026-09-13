@@ -43,3 +43,4 @@ matplotlib/
 # Unrelated local artifact tree (contains node_modules, archives, and media).
 archify/
 src/ner/results/
+GLM.md
