@@ -207,6 +207,69 @@ def oracle_calibration_fold_collapse_contract() -> None:
         check("GTIN-stratified sensitivity rejects unknown status", False)
 
 
+def oracle_rand_calibration_reconciliation() -> None:
+    """Prove non-HPO threshold calibration uses the final reconciliation gate."""
+    from core.common import rand_matching_cfg
+    from training.rand_matching import (
+        _assignments_with_trace,
+        _fit_fold_threshold,
+    )
+
+    candidates = pd.DataFrame(
+        [
+            ["sku-gtin", "4006381333931", 0.40, "both_equal", 1, 1, 3],
+            ["sku-gtin", "5901234123457", 0.99, "different", 0, 1, 3],
+            ["sku-attr", "4006381333931", 0.99, "both_missing", 0, 0, 0],
+        ],
+        columns=[
+            "SKU_ID",
+            "candidate_gtin",
+            "score",
+            "gtin_status",
+            "exact_gtin",
+            "rule_ok",
+            "attribute_matches",
+        ],
+    )
+    predictions, trace = _assignments_with_trace(candidates, 0.80)
+    selected = predictions.set_index("SKU_ID")["ITEM_ID"].to_dict()
+    check(
+        "Rand calibration keeps exact GTIN despite lower cosine",
+        selected["sku-gtin"] == "4006381333931",
+        str(selected),
+    )
+    check(
+        "Rand calibration vetoes different GTIN",
+        not bool(
+            trace.loc[
+                trace["candidate_gtin"].eq("5901234123457"), "accepted"
+            ].iloc[0]
+        ),
+    )
+    check(
+        "Rand calibration vetoes known attribute conflict",
+        selected["sku-attr"].startswith(
+            str(rand_matching_cfg()["unmatched_prefix"])
+        ),
+        str(selected),
+    )
+    truth = pd.DataFrame(
+        {
+            "SKU_ID": ["sku-gtin", "sku-attr"],
+            "true_item_id": ["4006381333931", "4006381333931"],
+        }
+    )
+    threshold, rows, _ = _fit_fold_threshold(
+        candidates, truth, np.asarray([0.80, 0.95], dtype=float)
+    )
+    selected_row = next(row for row in rows if row["threshold"] == threshold)
+    check(
+        "Rand threshold fit scores gated assignments",
+        threshold == 0.80 and selected_row["unmatched_skus"] == 1,
+        str(rows),
+    )
+
+
 def oracle_cleaning() -> None:
     from pipeline import (
         MODEL_PAYLOAD_SOFT_STOP,
@@ -1709,6 +1772,8 @@ def main() -> None:
     oracle_second04_manifest_contract()
     print("== 1c. calibration fold collapse contract ==")
     oracle_calibration_fold_collapse_contract()
+    print("== 1d. Rand calibration reconciliation ==")
+    oracle_rand_calibration_reconciliation()
     print("== 2. cleaning / soft-stop ==")
     oracle_cleaning()
     print("== 3. number-token reference ==")
