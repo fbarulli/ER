@@ -245,6 +245,7 @@ def oracle_calibration_fold_collapse_contract() -> None:
     sensitivity = CalibrationSensitivityRow(
         threshold=0.7,
         gtin_status="both_missing",
+        n=4,
         reconciliation_scope="final_assignment_gtin_and_attribute_gates",
         rand_index=0.8,
         adjusted_rand=0.6,

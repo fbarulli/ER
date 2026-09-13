@@ -150,7 +150,7 @@ collapse_guardrail:
   penalty_weight: 1.0
   reject_median: 0.80
   max_token_frequency: 0.05
-  operating_threshold: 0.85
+  operating_threshold: 0.80
   crossing_rate_ceiling: 0.02
 
 # ── final Rand Index matching lane ─────────────────────────────────────────

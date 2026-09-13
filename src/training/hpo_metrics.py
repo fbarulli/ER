@@ -109,6 +109,11 @@ class CalibrationMetricRow(BaseModel):
     calibration_precision_at_threshold: float
     calibration_recall_at_threshold: float
     calibration_gtin_strata: int
+    calibration_gtin_nonempty_strata: int = Field(ge=0)
+    calibration_gtin_status_counts: dict[str, int] = Field(
+        min_length=len(GTIN_STATUSES),
+        max_length=len(GTIN_STATUSES),
+    )
     calibration_sensitivity_table: list["CalibrationSensitivityRow"]
     calibration_sensitivity_by_gtin_status: list["CalibrationSensitivityRow"]
     calibration_fold_collapse: list["CalibrationFoldMetricRow"]
@@ -165,6 +170,19 @@ class CalibrationMetricRow(BaseModel):
             raise ValueError("duplicate candidate reason must be explicit")
         return value
 
+    @field_validator("calibration_gtin_status_counts")
+    @classmethod
+    def _complete_gtin_status_counts(cls, value: dict[str, int]) -> dict[str, int]:
+        expected = set(GTIN_STATUSES)
+        if set(value) != expected:
+            raise ValueError(
+                "calibration GTIN status counts must cover exactly "
+                f"{GTIN_STATUSES}, got {sorted(value)}"
+            )
+        if any(count < 0 for count in value.values()):
+            raise ValueError("calibration GTIN status counts cannot be negative")
+        return value
+
 class CalibrationFoldMetricRow(BaseModel):
     """Strict contract for one fit/check calibration fold."""
 
@@ -203,6 +221,7 @@ class CalibrationSensitivityRow(BaseModel):
 
     threshold: float
     gtin_status: str = Field(min_length=1)
+    n: int = Field(ge=0)
     reconciliation_scope: str
     rand_index: float
     adjusted_rand: float
@@ -596,6 +615,7 @@ def _stratified_sensitivity_rows(
                 {
                     "threshold": float(threshold),
                     "gtin_status": str(metrics["gtin_status"]),
+                    "n": int(metrics["n"]),
                     "reconciliation_scope": reconciliation_scope,
                     "rand_index": float(metrics["rand_index"]),
                     "adjusted_rand": float(metrics["adjusted_rand"]),
@@ -844,6 +864,7 @@ def evaluate_calibration_trial(
                 {
                     "threshold": threshold_value,
                     "gtin_status": "ALL",
+                    "n": int(metrics["n"]),
                     "reconciliation_scope": reconciliation_scope,
                     "rand_index": float(metrics["rand_index"]),
                     "adjusted_rand": float(metrics["adjusted_rand"]),
@@ -998,6 +1019,14 @@ def evaluate_calibration_trial(
         validation_candidate_frame,
     )
     result["calibration_gtin_strata"] = len(strata_rows)
+    status_counts = {
+        status: int((validation_truth_frame["gtin_status"] == status).sum())
+        for status in GTIN_STATUSES
+    }
+    result["calibration_gtin_status_counts"] = status_counts
+    result["calibration_gtin_nonempty_strata"] = sum(
+        count > 0 for count in status_counts.values()
+    )
     for row in strata_rows:
         status = str(row["gtin_status"])
         result[f"calibration_{status}_rand_index"] = float(row["rand_index"])

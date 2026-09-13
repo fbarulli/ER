@@ -3759,7 +3759,9 @@ def train_one_config(
                         structured_weight=structured_feature_weight,
                         batch_size=runtime("batch_size_eval"),
                         config=calibration_config,
-                        include_collapse_guardrail=selection_mode,
+                        include_collapse_guardrail=bool(
+                            calibration_config["collapse_guardrail"]["enabled"]
+                        ),
                     )
                 except Exception as exc:
                     raise CalibrationEvaluatorError(
