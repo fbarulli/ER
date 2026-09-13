@@ -108,6 +108,37 @@ class CalibrationMetricRow(BaseModel):
     collapse_penalty: float | None = None
 
 
+class CalibrationFoldMetricRow(BaseModel):
+    """Strict contract for one fit/check calibration fold."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    calibration_fold: int
+    calibrated_threshold: float
+    fit_rand_index: float
+    check_rand_index: float
+    check_adjusted_rand: float
+    check_group_precision: float
+    check_group_recall: float
+    check_over_merge_rate: float
+    check_under_merge_rate: float
+
+
+class CalibrationSensitivityRow(BaseModel):
+    """Strict contract for one held-out threshold sensitivity point."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    threshold: float
+    rand_index: float
+    adjusted_rand: float
+    precision: float
+    recall: float
+    over_merge_rate: float
+    under_merge_rate: float
+    predicted_group_count: int
+
+
 # One reporting contract is shared by ordinary train, fixed-grid HPO, and
 # Optuna.  Numeric aggregate fields are derived from the Pydantic contract so
 # adding a metric cannot silently omit it from fold aggregation. Optional
@@ -462,7 +493,7 @@ def evaluate_calibration_trial(
     n_folds = int(config["hpo"]["calibration_folds"])
     fold_map = _fold_ids(truth, n_folds, int(config["hpo"]["collapse_guardrail"]["seed"]))
     thresholds = _thresholds(config)
-    fold_rows: list[dict[str, float | int]] = []
+    fold_rows: list[CalibrationFoldMetricRow] = []
     validation_candidates: list[pd.DataFrame] = []
     validation_truth: list[pd.DataFrame] = []
     for fold in range(n_folds):
@@ -479,7 +510,8 @@ def evaluate_calibration_trial(
         validation_candidates.append(check_candidates)
         validation_truth.append(check_truth)
         fold_rows.append(
-            {
+            CalibrationFoldMetricRow.model_validate(
+                {
                 "calibration_fold": fold,
                 "calibrated_threshold": threshold,
                 "fit_rand_index": float(fit_metrics["rand_index"]),
@@ -489,9 +521,10 @@ def evaluate_calibration_trial(
                 "check_group_recall": float(check_metrics["group_recall"]),
                 "check_over_merge_rate": float(check_metrics["over_merge_rate"]),
                 "check_under_merge_rate": float(check_metrics["under_merge_rate"]),
-            }
+                }
+            )
         )
-    final_threshold = float(np.median([row["calibrated_threshold"] for row in fold_rows]))
+    final_threshold = float(np.median([row.calibrated_threshold for row in fold_rows]))
     validation_candidate_frame = pd.concat(validation_candidates, ignore_index=True)
     validation_truth_frame = pd.concat(validation_truth, ignore_index=True)
     overall = _assignment_metrics(
@@ -501,19 +534,32 @@ def evaluate_calibration_trial(
         include_graph_diagnostics=True,
     )
     sensitivity = [
-        (
-            float(threshold),
+        CalibrationSensitivityRow.model_validate(
+            {
+                "threshold": float(threshold),
+                **{
+                    "rand_index": float(metrics["rand_index"]),
+                    "adjusted_rand": float(metrics["adjusted_rand"]),
+                    "precision": float(metrics["pairwise_precision"]),
+                    "recall": float(metrics["pairwise_recall"]),
+                    "over_merge_rate": float(metrics["over_merge_rate"]),
+                    "under_merge_rate": float(metrics["under_merge_rate"]),
+                    "predicted_group_count": int(metrics["predicted_group_count"]),
+                },
+            }
+        )
+        for threshold in thresholds
+        for metrics in [
             _assignment_metrics(
                 validation_candidate_frame,
                 validation_truth_frame,
                 float(threshold),
             ),
-        )
-        for threshold in thresholds
+        ]
     ]
-    best_rand = max(float(row[1]["rand_index"]) for row in sensitivity)
+    best_rand = max(row.rand_index for row in sensitivity)
     plateau_count = sum(
-        float(row[1]["rand_index"]) >= best_rand - float(config["rand_matching"]["plateau_tolerance"])
+        row.rand_index >= best_rand - float(config["rand_matching"]["plateau_tolerance"])
         for row in sensitivity
     )
     collapse = _collapse_stats(
@@ -533,8 +579,8 @@ def evaluate_calibration_trial(
         "calibration_candidate_duplicate_rows_removed": duplicate_count,
         "calibrated_threshold": final_threshold,
         "calibration_threshold_fold_median": final_threshold,
-        "calibration_threshold_fold_min": float(min(row["calibrated_threshold"] for row in fold_rows)),
-        "calibration_threshold_fold_max": float(max(row["calibrated_threshold"] for row in fold_rows)),
+        "calibration_threshold_fold_min": float(min(row.calibrated_threshold for row in fold_rows)),
+        "calibration_threshold_fold_max": float(max(row.calibrated_threshold for row in fold_rows)),
         "calibration_threshold_plateau_points": int(plateau_count),
         "calibration_threshold_stable": int(
             plateau_count >= int(config["rand_matching"]["plateau_min_points"])
@@ -572,16 +618,9 @@ def evaluate_calibration_trial(
         "calibration_sensitivity_table": json.dumps(
             [
                 {
-                    "threshold": threshold,
-                    "rand_index": float(metrics["rand_index"]),
-                    "adjusted_rand": float(metrics["adjusted_rand"]),
-                    "precision": float(metrics["pairwise_precision"]),
-                    "recall": float(metrics["pairwise_recall"]),
-                    "over_merge_rate": float(metrics["over_merge_rate"]),
-                    "under_merge_rate": float(metrics["under_merge_rate"]),
-                    "predicted_group_count": int(metrics["predicted_group_count"]),
+                    **row.model_dump(),
                 }
-                for threshold, metrics in sensitivity
+                for row in sensitivity
             ],
             sort_keys=True,
         ),
