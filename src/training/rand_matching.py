@@ -1898,6 +1898,10 @@ def _evaluate_holdout(
         "holdout",
         final_threshold,
         candidates,
+        # Holdout is the frozen final evaluation.  Preserve the complete
+        # metric contract, including component/bridge diagnostics, for every
+        # GTIN stratum and the ALL row; do not rely on gtin_metrics' default.
+        include_graph_diagnostics=True,
     )
     diagnostics = _audit_trace(
         candidates,
