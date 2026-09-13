@@ -1619,6 +1619,90 @@ GATE_RESULTS_COLUMNS: tuple[str, ...] = (
 
 LABELED_PAIRS_COLUMNS: tuple[str, ...] = ("gtin1", "gtin2", "true_label")
 
+ZERO_SHOT_TRACE_COLUMNS: tuple[str, ...] = (
+    "gtin1",
+    "gtin2",
+    "gate_decision",
+    "gate_reason",
+    "canonical1",
+    "canonical2",
+    "canonical_model_text1",
+    "canonical_model_text2",
+    "model_input_text1",
+    "model_input_text2",
+    "source_row_ids1",
+    "source_row_ids2",
+    "source_sku_ids1",
+    "source_sku_ids2",
+    "source_metadata1",
+    "source_metadata2",
+    "canonical_metadata1",
+    "canonical_metadata2",
+    "mask_status1",
+    "mask_status2",
+    "mask_applied1",
+    "mask_applied2",
+    "mask_realized_extent1",
+    "mask_realized_extent2",
+    "mask_config_fingerprint",
+    "model_keys",
+    "lineage_id",
+)
+
+
+class ZeroShotTraceRow(BaseModel):
+    """One zero-shot pair row with model-input and source lineage."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    gtin1: StrictStr = Field(min_length=1)
+    gtin2: StrictStr = Field(min_length=1)
+    gate_decision: StrictStr = Field(min_length=1)
+    gate_reason: StrictStr = Field(min_length=1)
+    canonical1: StrictStr = Field(min_length=1)
+    canonical2: StrictStr = Field(min_length=1)
+    canonical_model_text1: StrictStr = Field(min_length=1)
+    canonical_model_text2: StrictStr = Field(min_length=1)
+    model_input_text1: StrictStr = Field(min_length=1)
+    model_input_text2: StrictStr = Field(min_length=1)
+    source_row_ids1: StrictStr = Field(min_length=2)
+    source_row_ids2: StrictStr = Field(min_length=2)
+    source_sku_ids1: StrictStr = Field(min_length=2)
+    source_sku_ids2: StrictStr = Field(min_length=2)
+    source_metadata1: StrictStr = Field(min_length=2)
+    source_metadata2: StrictStr = Field(min_length=2)
+    canonical_metadata1: StrictStr = Field(min_length=2)
+    canonical_metadata2: StrictStr = Field(min_length=2)
+    mask_status1: StrictStr = Field(min_length=1)
+    mask_status2: StrictStr = Field(min_length=1)
+    mask_applied1: bool
+    mask_applied2: bool
+    mask_realized_extent1: float = Field(ge=0.0, le=1.0)
+    mask_realized_extent2: float = Field(ge=0.0, le=1.0)
+    mask_config_fingerprint: StrictStr = Field(min_length=64, max_length=64)
+    model_keys: StrictStr = Field(min_length=3)
+    lineage_id: StrictStr = Field(min_length=16, max_length=64)
+
+
+def check_zero_shot_similarity_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Validate the traceable zero-shot output without dropping rows."""
+    columns = tuple(df.columns)
+    missing = [c for c in ZERO_SHOT_TRACE_COLUMNS if c not in columns]
+    if missing:
+        raise ValueError(f"zero-shot output missing trace columns: {missing}")
+    sim_columns = [c for c in columns if c.startswith("sim_")]
+    if not sim_columns:
+        raise ValueError("zero-shot output has no similarity columns")
+    if df[list(ZERO_SHOT_TRACE_COLUMNS)].isna().any().any():
+        raise ValueError("zero-shot trace columns contain missing values")
+    for column in sim_columns:
+        values = pd.to_numeric(df[column], errors="coerce")
+        if values.isna().any():
+            raise ValueError(f"zero-shot similarity column {column!r} has non-numeric values")
+    for row in df[list(ZERO_SHOT_TRACE_COLUMNS)].to_dict("records"):
+        ZeroShotTraceRow.model_validate(row)
+    return df
+
 CROSS_COUNTRY_PAIR_COLUMNS: tuple[str, ...] = (
     "sku_id_a",
     "sku_id_b",

@@ -1194,6 +1194,59 @@ def oracle_embedding_consumer_allowlist() -> None:
         )
 
 
+def oracle_zero_shot_masking_traceability() -> None:
+    """Live-data-compatible zero-shot masking and lineage contract."""
+    from core.common import F, SEED, load_dataset
+    from core.schemas import check_zero_shot_similarity_frame
+    from pipeline import canonical_model_text, strip_schema_words
+    from training.zero_shot_sims import (
+        _build_trace_frame,
+        _mask_config_fingerprint,
+        _masked_inputs,
+        _source_trace_map,
+    )
+
+    canonical = pd.read_csv(F["canonical_records"], dtype=str, keep_default_na=False)
+    gates = pd.read_csv(F["gate_results"], dtype={"gtin1": str, "gtin2": str})
+    sample = gates.head(4).copy()
+    if sample.empty:
+        skip("zero-shot masking traceability", "live gate_results.csv has no rows")
+        return
+    raw = {
+        gtin: strip_schema_words(canonical_model_text(text))
+        for gtin, text in zip(canonical["gtin"], canonical["canonical"], strict=True)
+    }
+    gtins = sorted(set(sample["gtin1"]) | set(sample["gtin2"]))
+    masked = _masked_inputs(gtins, {gtin: raw[gtin] for gtin in gtins}, seed=SEED)
+    trace = _build_trace_frame(
+        sample,
+        canonical,
+        _source_trace_map(load_dataset()),
+        masked,
+        ("minilm_l6",),
+        _mask_config_fingerprint(SEED),
+    )
+    trace["sim_minilm_l6"] = 0.5
+    check_zero_shot_similarity_frame(trace)
+    check(
+        "zero-shot masking preserves every live gate row",
+        len(trace) == len(sample),
+    )
+    check(
+        "zero-shot trace carries source SKU metadata and model lineage",
+        trace["source_sku_ids1"].str.len().gt(2).all()
+        and trace["model_keys"].eq('["minilm_l6"]').all()
+        and trace["lineage_id"].nunique() == len(trace),
+    )
+    check(
+        "zero-shot masking records status and realized extent",
+        trace["mask_status1"].isin(
+            {"disabled", "not_selected", "masked", "selected_noop"}
+        ).all()
+        and trace["mask_realized_extent1"].between(0.0, 1.0).all(),
+    )
+
+
 def oracle_no_fallback_ssot() -> None:
     """NO-FALLBACK SSOT (audit round, owner Q27): every knob that used to
     be an inline literal in a script now lives in a config file and the
@@ -2241,6 +2294,8 @@ def main() -> None:
     oracle_model_resolution_contract()
     print("== 12a2. embedding consumer model allowlist ==")
     oracle_embedding_consumer_allowlist()
+    print("== 12a3. zero-shot masking traceability ==")
+    oracle_zero_shot_masking_traceability()
     print("== 12b. no-fallback SSOT (inline literals -> config) ==")
     oracle_no_fallback_ssot()
     print("== 12c. round-3 fix pins (audit F01-F21 remediation) ==")

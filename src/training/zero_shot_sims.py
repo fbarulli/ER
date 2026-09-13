@@ -1,7 +1,9 @@
 """Owner's zero-shot embedding-similarity script (bundle-adapted paths).
 
-Encodes canonical strings for every non-hard_no candidate pair with each of
-the 3 models and stores per-model cosine similarity in embedding_similarities.csv.
+Encodes configured canonical model inputs for every gate pair and stores
+per-model cosine similarity in embedding_similarities.csv. The configured
+masking policy is applied once per canonical GTIN, and every output row carries
+the raw/model input text plus source and canonical metadata needed to audit it.
 
 MANIFEST (SILENT_DROPS task 7): the stage snapshots its inputs
 (canonical_records.csv + gate_results.csv, plus the existing
@@ -23,6 +25,9 @@ included — the eval lane draws its negatives from hard_no rows; skipping
 them was the silent class drop that rule closed).
 """
 
+import hashlib
+import json
+import random
 from pathlib import Path
 
 import numpy as np
@@ -40,10 +45,14 @@ from core.common import (
     SEED,
     embedding_model_keys,
     ensure_parent,
+    load_dataset,
     load_config,
     resolve_model,
+    training_cfg,
 )
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
+from core.schemas import ZERO_SHOT_TRACE_COLUMNS, check_zero_shot_similarity_frame
+from training.masking import mask_text
 
 _cfg = load_config()
 
@@ -62,6 +71,175 @@ SIM_COLUMNS = {k: v for k, v in _cfg["sim_columns"].items()}
 # CPU note: deberta-v3's relative attention is ~2000x slower than MiniLM on
 # this torch-CPU build (measured 3.9 s/text vs 2 ms/text) — run deberta on
 # the GPU lane; a CPU sweep leaves its column absent (04 warns, skips it).
+
+
+def _json_text(value: object) -> str:
+    """Serialize a trace value without turning missing data into ``nan``."""
+    if value is None:
+        return ""
+    try:
+        if bool(pd.isna(value)):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def _source_trace_map(source: pd.DataFrame) -> dict[str, list[dict[str, str]]]:
+    """Index every raw source row by GTIN without collapsing its metadata."""
+    required = {"barcode", "product_id"}
+    missing = sorted(required - set(source.columns))
+    if missing:
+        raise ValueError(f"source dataset missing trace columns: {missing}")
+    indexed: dict[str, list[dict[str, str]]] = {}
+    for source_row_id, row in source.reset_index(drop=True).iterrows():
+        gtin = _json_text(row["barcode"]).strip()
+        if not gtin:
+            continue
+        indexed.setdefault(gtin, []).append(
+            {
+                "source_row_id": str(source_row_id),
+                **{str(column): _json_text(value) for column, value in row.items()},
+            }
+        )
+    return indexed
+
+
+def _masked_inputs(
+    gtins: list[str],
+    texts: dict[str, str],
+    *,
+    seed: int,
+) -> dict[str, dict[str, object]]:
+    """Apply configured masking once per canonical input.
+
+    Zero-shot has no labels, so ``masking.frac`` selects canonical inputs,
+    rather than pair rows. Every pair then uses the same traceable input for a
+    GTIN; this avoids row-order-dependent masking and keeps resume fingerprints
+    stable. Both endpoints can be masked when both are selected.
+    """
+    spec = training_cfg().masking
+    rng = random.Random(seed)
+    selected_count = int(len(gtins) * spec.frac) if spec.enabled else 0
+    selected = set(rng.sample(gtins, selected_count)) if selected_count else set()
+    output: dict[str, dict[str, object]] = {}
+    for gtin in gtins:
+        raw = texts[gtin]
+        if not spec.enabled:
+            status = "disabled"
+            model_input, extent = raw, 0.0
+        elif gtin not in selected:
+            status = "not_selected"
+            model_input, extent = raw, 0.0
+        else:
+            model_input, extent = mask_text(
+                raw,
+                mask_prob=spec.mask_prob,
+                rng=rng,
+                lo=spec.mask_lo,
+                hi=spec.mask_hi,
+            )
+            status = "masked" if extent > 0.0 and model_input != raw else "selected_noop"
+        output[gtin] = {
+            "raw": raw,
+            "model_input": model_input,
+            "status": status,
+            "applied": status == "masked",
+            "extent": float(extent),
+        }
+    if len(output) != len(gtins):
+        raise AssertionError("zero-shot masking lost canonical inputs")
+    return output
+
+
+def _mask_config_fingerprint(seed: int) -> str:
+    """Fingerprint the validated masking SSOT and deterministic seed."""
+    spec = training_cfg().masking
+    payload = {
+        "seed": seed,
+        "enabled": spec.enabled,
+        "frac": spec.frac,
+        "mask_prob": spec.mask_prob,
+        "mask_lo": spec.mask_lo,
+        "mask_hi": spec.mask_hi,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _build_trace_frame(
+    candidates: pd.DataFrame,
+    canonical_records: pd.DataFrame,
+    source_rows: dict[str, list[dict[str, str]]],
+    masked: dict[str, dict[str, object]],
+    selected_keys: tuple[str, ...],
+    mask_fp: str,
+) -> pd.DataFrame:
+    """Build one fully traceable output row for every gate pair."""
+    canonical_by_gtin = canonical_records.set_index("gtin", drop=False)
+    endpoint_gtins = set(candidates["gtin1"]) | set(candidates["gtin2"])
+    missing = sorted(endpoint_gtins - set(canonical_by_gtin.index))
+    if missing:
+        raise ValueError(f"canonical records missing gate GTINs: {missing[:5]}")
+    missing_source = sorted(endpoint_gtins - set(source_rows))
+    if missing_source:
+        raise ValueError(f"source rows missing gate GTINs: {missing_source[:5]}")
+
+    model_keys_json = json.dumps(list(selected_keys), separators=(",", ":"))
+    trace_rows: list[dict[str, object]] = []
+    for row in candidates.itertuples(index=False):
+        gtin1, gtin2 = str(row.gtin1), str(row.gtin2)
+        c1 = canonical_by_gtin.loc[gtin1].to_dict()
+        c2 = canonical_by_gtin.loc[gtin2].to_dict()
+        m1, m2 = masked[gtin1], masked[gtin2]
+        lineage_payload = {
+            "gtin1": gtin1,
+            "gtin2": gtin2,
+            "model_keys": selected_keys,
+            "mask_fp": mask_fp,
+            "model_input_text1": m1["model_input"],
+            "model_input_text2": m2["model_input"],
+        }
+        lineage_id = hashlib.sha256(
+            json.dumps(lineage_payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:16]
+        source1, source2 = source_rows[gtin1], source_rows[gtin2]
+        trace_rows.append(
+            {
+                "gtin1": gtin1,
+                "gtin2": gtin2,
+                "gate_decision": str(row.gate_decision),
+                "gate_reason": str(row.gate_reason),
+                "canonical1": str(c1["canonical"]),
+                "canonical2": str(c2["canonical"]),
+                "canonical_model_text1": str(m1["raw"]),
+                "canonical_model_text2": str(m2["raw"]),
+                "model_input_text1": str(m1["model_input"]),
+                "model_input_text2": str(m2["model_input"]),
+                "source_row_ids1": json.dumps([x["source_row_id"] for x in source1], separators=(",", ":")),
+                "source_row_ids2": json.dumps([x["source_row_id"] for x in source2], separators=(",", ":")),
+                "source_sku_ids1": json.dumps([x["product_id"] for x in source1], separators=(",", ":")),
+                "source_sku_ids2": json.dumps([x["product_id"] for x in source2], separators=(",", ":")),
+                "source_metadata1": json.dumps(source1, sort_keys=True, separators=(",", ":")),
+                "source_metadata2": json.dumps(source2, sort_keys=True, separators=(",", ":")),
+                "canonical_metadata1": json.dumps(c1, sort_keys=True, default=str, separators=(",", ":")),
+                "canonical_metadata2": json.dumps(c2, sort_keys=True, default=str, separators=(",", ":")),
+                "mask_status1": str(m1["status"]),
+                "mask_status2": str(m2["status"]),
+                "mask_applied1": bool(m1["applied"]),
+                "mask_applied2": bool(m2["applied"]),
+                "mask_realized_extent1": float(m1["extent"]),
+                "mask_realized_extent2": float(m2["extent"]),
+                "mask_config_fingerprint": mask_fp,
+                "model_keys": model_keys_json,
+                "lineage_id": lineage_id,
+            }
+        )
+    result = pd.DataFrame(trace_rows, columns=list(ZERO_SHOT_TRACE_COLUMNS))
+    if len(result) != len(candidates):
+        raise AssertionError("zero-shot trace rows do not close against gate pairs")
+    return result
 
 
 def main() -> None:
@@ -84,6 +262,14 @@ def main() -> None:
                 f"unknown --models entries: {missing} (have {list(MODEL_KEYS)})"
             )
     models = {key: resolve_model(key) for key in selected_keys}
+    model_provenance = {
+        key: {
+            "model_key": key,
+            "bundle_path": str(path),
+            "source": "config.paths.models_registry",
+        }
+        for key, path in models.items()
+    }
     if args.models is not None:
         print(f"[models] scoring lanes only: {list(models)}", flush=True)
 
@@ -96,12 +282,12 @@ def main() -> None:
     # before the file is replaced). Seed = the SSOT seed; encode calls are
     # deterministic, the component split downstream (not this stage) is
     # what consumes RNG.
-    manifest_inputs = [df_canon_path, df_gate_path]
+    manifest_inputs = [df_canon_path, df_gate_path, F["dataset"]]
     if out.exists():
         manifest_inputs.append(out)
     manifest = begin_manifest("zero_shot_sims", inputs=manifest_inputs, seed=SEED)
 
-    df_canon = pd.read_csv(df_canon_path)
+    df_canon = pd.read_csv(df_canon_path, dtype=str, keep_default_na=False)
     df_gate = pd.read_csv(df_gate_path, dtype={"gtin1": str, "gtin2": str})
     assert "gtin" in df_canon.columns and "canonical" in df_canon.columns
     # MODEL-side canonical (number-free + schema-free) — the SAME text the
@@ -121,10 +307,20 @@ def main() -> None:
     print(f"Total gate pairs to score: {len(candidates)}")
 
     unique_gtins = sorted(set(candidates["gtin1"]).union(set(candidates["gtin2"])))
-    texts = [gtin_to_canon[g] for g in unique_gtins]
+    raw_texts = {g: gtin_to_canon[g] for g in unique_gtins}
+    masked = _masked_inputs(unique_gtins, raw_texts, seed=SEED)
+    model_texts = [str(masked[g]["model_input"]) for g in unique_gtins]
+    mask_fp = _mask_config_fingerprint(SEED)
+    source_rows = _source_trace_map(load_dataset())
+    results = _build_trace_frame(
+        candidates,
+        df_canon,
+        source_rows,
+        masked,
+        tuple(selected_keys),
+        mask_fp,
+    )
     print(f"Unique GTINs to encode: {len(unique_gtins)}")
-
-    results = candidates[["gtin1", "gtin2", "gate_decision", "gate_reason"]].copy()
 
     # resume: models already scored in a previous (crashed) run are skipped —
     # but ONLY when the stored pair SET matches the current gate rows exactly.
@@ -139,7 +335,12 @@ def main() -> None:
     # the sims to the exact canonical content they were computed from.
     import hashlib as _hashlib
 
-    _canon_fp = _hashlib.sha256("\n".join(texts).encode("utf-8")).hexdigest()[:16]
+    _canon_fp = _hashlib.sha256(
+        json.dumps(
+            {"model_inputs": model_texts, "mask_config": mask_fp},
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
     have: list[str] = []
     # fresh-resumed columns (already on disk with a valid fingerprint stamp) must
     # ride along on EVERY incremental write — the old write rebuilt the CSV from
@@ -155,6 +356,13 @@ def main() -> None:
             print(
                 "[resume] gate pair sequence changed since the last scoring — "
                 "re-scoring ALL models (stale sims discarded)",
+                flush=True,
+            )
+            done = None
+        elif any(column not in done.columns for column in ZERO_SHOT_TRACE_COLUMNS):
+            print(
+                "[resume] existing similarity output lacks the traceability "
+                "contract — rebuilding all selected model lanes",
                 flush=True,
             )
             done = None
@@ -206,7 +414,7 @@ def main() -> None:
         model = SentenceTransformer(model_path, device=DEVICE)
         model.max_seq_length = int(load_config()["training"]["max_seq_length"])  # SSOT
         embeddings = model.encode(
-            texts,
+            model_texts,
             batch_size=int(load_config()["training"]["batch_size_embed"]),  # SSOT
             show_progress_bar=True,
             normalize_embeddings=True,
@@ -231,7 +439,7 @@ def main() -> None:
         # final path never holds a truncated CSV mid-write, so a crashed run
         # leaves the PREVIOUS complete CSV + a re-scored lane, never a
         # half-written file a resume would trust.
-        keep = ["gtin1", "gtin2", "gate_decision", "gate_reason"] + [
+        keep = list(ZERO_SHOT_TRACE_COLUMNS) + [
             c for c in results.columns if c.startswith("sim_")
         ]
         atomic_write_csv(results[keep], ensure_parent(out), index=False)
@@ -256,6 +464,7 @@ def main() -> None:
     # coverage census, not a drop) so a silently-missing model column is
     # visible in the manifest without breaking the closure invariant.
     final = pd.read_csv(out, dtype={"gtin1": str, "gtin2": str})
+    check_zero_shot_similarity_frame(final)
     sim_cols = [c for c in final.columns if c.startswith("sim_")]
     row_accounting = {
         "input_rows": len(candidates),
@@ -269,6 +478,12 @@ def main() -> None:
         ),
         "unique_gtins_encoded": len(unique_gtins),
         "canonical_text_fp": _canon_fp,
+        "mask_config_fingerprint": mask_fp,
+        "masking_status_counts": {
+            side: final[f"mask_status{side}"].value_counts().to_dict()
+            for side in ("1", "2")
+        },
+        "model_provenance": model_provenance,
         "lanes_scored_this_run": sorted(models),
     }
     outputs = [out] + manifest_stamps
