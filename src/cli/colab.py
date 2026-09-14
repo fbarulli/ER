@@ -1405,6 +1405,8 @@ import pathlib, shutil, subprocess
 
 root = pathlib.Path({REMOTE_ROOT!r})
 remote_name = {GIT_REMOTE_NAME!r}
+if {minimal_runtime!r} and root.exists():
+    shutil.rmtree(root)
 if root.exists() and not (root / ".git").is_dir():
     shutil.rmtree(root)
 if (root / ".git").is_dir():
