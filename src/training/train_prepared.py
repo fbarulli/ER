@@ -26,6 +26,8 @@ from core.common import (
     runtime,
     set_determinism,
 )
+from core.mlflow_ctx import MlflowCtx
+from core.wandb_ctx import WandbCtx
 from training.folds import holdout_split
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 from training.prepared_bundle import load_prepared_bundle
@@ -56,6 +58,20 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    run_name = str(args.run_tag)
+    # This is the remote training entrypoint, not a local-only convenience
+    # path. A normal Colab run must create both tracking contexts; proceeding
+    # without W&B would make a missing injected credential look successful.
+    with MlflowCtx(run_name), WandbCtx(run_name) as wandb_ctx:
+        if not wandb_ctx.enabled:
+            raise RuntimeError(
+                "prepared remote training requires WANDB_API_KEY; refusing "
+                "a local-only tracking fallback"
+            )
+        _main(args, wandb_ctx)
+
+
+def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
     set_determinism(SEED)
     cfg = load_config()
     manifest, bundle = load_prepared_bundle(args.bundle)
@@ -180,7 +196,7 @@ def main() -> None:
         run_tag=args.run_tag,
         sample=False,
         resume=False,
-        wandb_ctx=None,
+        wandb_ctx=wandb_ctx,
     )
     out = RESULTS / f"train_{Path(str(model_id)).name}_holdout_{manifest.payload_variant}_fold_metrics.csv"
     rows_out = []

@@ -869,6 +869,17 @@ class ProgressCallback(TrainerCallback):
     early-stopper is actually watching.
     """
 
+    # The structured dev evaluator below is the sole source of these values.
+    # Keep its names explicit: searching metric suffixes made a renamed or
+    # incomplete evaluator look like a successful evaluation.
+    _DEV_METRICS = {
+        "accuracy": "eval_dev_cosine_accuracy",
+        "average_precision": "eval_dev_cosine_ap",
+        "f1": "eval_dev_cosine_f1",
+        "precision": "eval_dev_cosine_precision",
+        "recall": "eval_dev_cosine_recall",
+    }
+
     def __init__(
         self,
         wandb_ctx=None,
@@ -1049,11 +1060,18 @@ class ProgressCallback(TrainerCallback):
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if not metrics or not state.is_world_process_zero:
             return
-        ap = metrics.get("eval_dev_cosine_ap")
-        auc_key = next((k for k in metrics if k.endswith("_auc")), None)
-        acc_key = next((k for k in metrics if k.endswith("_cosine_accuracy")), None)
-        if acc_key is not None:
-            self.latest_dev_accuracy = float(metrics[acc_key])
+        missing = [key for key in self._DEV_METRICS.values() if key not in metrics]
+        if missing:
+            raise RuntimeError(
+                "structured dev evaluator violated its metric contract; missing "
+                + ", ".join(missing)
+            )
+        accuracy = float(metrics[self._DEV_METRICS["accuracy"]])
+        ap = float(metrics[self._DEV_METRICS["average_precision"]])
+        f1 = float(metrics[self._DEV_METRICS["f1"]])
+        precision = float(metrics[self._DEV_METRICS["precision"]])
+        recall = float(metrics[self._DEV_METRICS["recall"]])
+        self.latest_dev_accuracy = accuracy
         collapse_metrics = self._collapse_metrics(int(state.global_step))
         self.latest_collapse_metrics = dict(collapse_metrics)
         if collapse_metrics:
@@ -1066,14 +1084,11 @@ class ProgressCallback(TrainerCallback):
                 }
             )
         telemetry = _runtime_telemetry()
-        parts = [f"dev_ap {float(ap):.4f}"] if ap is not None else []
-        if auc_key is not None:
-            parts.append(f"dev_auc {float(metrics[auc_key]):.4f}")
-        if acc_key is not None:
-            parts.append(f"dev_acc {float(metrics[acc_key]):.4f}")
-        f1_key = next((k for k in metrics if k.endswith("_f1")), None)
-        if f1_key is not None:
-            parts.append(f"dev_f1 {float(metrics[f1_key]):.4f}")
+        parts = [
+            f"dev_ap {ap:.4f}",
+            f"dev_acc {accuracy:.4f}",
+            f"dev_f1 {f1:.4f}",
+        ]
         if collapse_metrics:
             parts.append(
                 "collapse "
@@ -1097,25 +1112,15 @@ class ProgressCallback(TrainerCallback):
                 flush=True,
             )
         if self.wandb_ctx is not None:
-            f1_key = next((k for k in metrics if k.endswith("_f1")), None)
-            precision_key = next((k for k in metrics if k.endswith("_precision")), None)
-            recall_key = next((k for k in metrics if k.endswith("_recall")), None)
             self.wandb_ctx.log_metrics(
                 {
                     "live/dev_loss": float(metrics["eval_loss"])
                     if metrics.get("eval_loss") is not None else None,
-                    "live/dev_accuracy": float(metrics[acc_key])
-                    if acc_key is not None else None,
-                    "live/dev_average_precision": float(ap)
-                    if ap is not None else None,
-                    "live/dev_auc": float(metrics[auc_key])
-                    if auc_key is not None else None,
-                    "live/dev_f1": float(metrics[f1_key])
-                    if f1_key is not None else None,
-                    "live/dev_precision": float(metrics[precision_key])
-                    if precision_key is not None else None,
-                    "live/dev_recall": float(metrics[recall_key])
-                    if recall_key is not None else None,
+                    "live/dev_accuracy": accuracy,
+                    "live/dev_average_precision": ap,
+                    "live/dev_f1": f1,
+                    "live/dev_precision": precision,
+                    "live/dev_recall": recall,
                     "live/epoch": float(state.epoch or 0.0),
                     **self._collapse_wandb_metrics(collapse_metrics),
                     **_wandb_memory_metrics(telemetry),
@@ -1126,14 +1131,11 @@ class ProgressCallback(TrainerCallback):
             "evaluation",
             train_loss=self.latest_train_loss,
             dev_loss=float(metrics["eval_loss"]) if metrics.get("eval_loss") is not None else None,
-            dev_average_precision=float(ap) if ap is not None else None,
-            dev_auc=float(metrics[auc_key]) if auc_key is not None else None,
+            dev_average_precision=ap,
             dev_accuracy=self.latest_dev_accuracy,
-            dev_f1=(float(metrics[f1_key]) if f1_key is not None else None),
-            dev_precision=(
-                float(metrics[precision_key]) if precision_key is not None else None
-            ),
-            dev_recall=(float(metrics[recall_key]) if recall_key is not None else None),
+            dev_f1=f1,
+            dev_precision=precision,
+            dev_recall=recall,
             **collapse_metrics,
             **telemetry,
         )
