@@ -61,6 +61,9 @@ colab:
   remote_root: "/content/EuromonitoR"
   session: "my-highram-session"
   gpu: "T4"
+  # Training workers consume immutable bundles prepared locally.  Keep all
+  # payload, pair, masking, country, and calibration construction off Colab.
+  remote_data_prep: false
   hpo_mode: "sequential"
   hpo_workers: 2
   train_workers: 6

@@ -1698,7 +1698,7 @@ def run_train(
     collapse_guardrail_profile: str | None = None,
 ) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
-    print("[run] train.py on the VM (GPU) ...")
+    print("[run] train.py on the configured VM runtime ...")
     # AUDIT 2026-09-09: --mask-frac 0.15 REMOVED — it hardcoded a value that
     # silently contradicted the SSOT (masking.frac: 1.00 in
     # config/training.yaml). train.py's own default resolves from the config
@@ -2646,6 +2646,11 @@ def main() -> None:
         help=f"Colab accelerator request (default {GPU}; e.g. A100 when available)",
     )
     ap.add_argument(
+        "--allow-gpu",
+        action="store_true",
+        help="required acknowledgement before a non-CPU runtime can be provisioned",
+    )
+    ap.add_argument(
         "--hpo-mode",
         choices=["sequential", "parallel_same_vm"],
         default=_HPO_MODE,
@@ -2667,6 +2672,8 @@ def main() -> None:
     args = ap.parse_args()
 
     GPU = args.gpu
+    if GPU.upper() != "CPU" and not args.allow_gpu:
+        raise ValueError("GPU launch requires --allow-gpu")
 
     dvc_jobs = int(training_cfg().colab.dvc_jobs)
     if args.what == "train":
@@ -2709,7 +2716,7 @@ def main() -> None:
 
     try:
         ensure_session()
-        prepared_train_runtime = args.what == "train"
+        prepared_train_runtime = args.what in {"train", "smoke"}
         prepare_remote_layout(minimal_runtime=prepared_train_runtime)
         install_deps(minimal_runtime=prepared_train_runtime)
         if args.what in {"train", "smoke", "mixed"}:

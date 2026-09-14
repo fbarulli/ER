@@ -85,14 +85,20 @@ def main() -> None:
     train_neg_sources = np.asarray(bundle["train_neg_sources"], dtype=object)
     mask_audit = list(bundle["mask_audit"])
     hard_negative_mask_audit = list(bundle["hard_negative_mask_audit"])
-    labeled_pairs_path = RESULTS / F["labeled_pairs"]
-    labeled_pairs_path.parent.mkdir(parents=True, exist_ok=True)
-    labeled_pairs_path.write_bytes(bundle["labeled_pairs_csv"])
-    print(
-        f"[prepared-bundle] materialized calibration input={labeled_pairs_path} "
-        f"bytes={len(bundle['labeled_pairs_csv']):,}",
-        flush=True,
-    )
+    frozen_inputs = {
+        "labeled_pairs": "labeled_pairs_csv",
+        "canonical_records": "canonical_records_csv",
+        "gate_results": "gate_results_csv",
+    }
+    for file_key, bundle_key in frozen_inputs.items():
+        destination = RESULTS / F[file_key]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(bundle[bundle_key])
+        print(
+            f"[prepared-bundle] materialized {file_key}={destination} "
+            f"bytes={len(bundle[bundle_key]):,}",
+            flush=True,
+        )
 
     if args.split != "holdout":
         raise ValueError("prepared GPU training currently supports the SSOT holdout split only")

@@ -1128,6 +1128,8 @@ def _main_inner(_mlf, _wandb) -> None:
             mask_audit=mask_audit,
             hard_negative_mask_audit=hard_negative_mask_audit,
             labeled_pairs_csv=(RESULTS / F["labeled_pairs"]).read_bytes(),
+            canonical_records_csv=(RESULTS / F["canonical_records"]).read_bytes(),
+            gate_results_csv=(RESULTS / F["gate_results"]).read_bytes(),
             payload_variant=args.payload,
             masking_profile=str(mask_cfg["profile"]),
         )

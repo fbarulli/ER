@@ -1104,6 +1104,7 @@ class ColabSpec(BaseModel):
     remote_root: str = Field(min_length=1)
     session: str = Field(min_length=1)
     gpu: str = Field(min_length=1)
+    remote_data_prep: Literal[False] = False
     hpo_mode: Literal["sequential", "parallel_same_vm"]
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)

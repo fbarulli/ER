@@ -24,7 +24,7 @@ class PreparedBundleManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = "1"
+    schema_version: str = "2"
     payload_variant: str = Field(min_length=1)
     masking_profile: str = Field(min_length=1)
     n_df: int = Field(ge=1)
@@ -33,6 +33,8 @@ class PreparedBundleManifest(BaseModel):
     n_neg: int = Field(ge=0)
     n_train_neg: int = Field(ge=0)
     n_labeled_pairs_bytes: int = Field(ge=1)
+    n_canonical_records_bytes: int = Field(ge=1)
+    n_gate_results_bytes: int = Field(ge=1)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
@@ -62,6 +64,8 @@ def write_prepared_bundle(
     mask_audit: list[dict[str, Any]],
     hard_negative_mask_audit: list[dict[str, Any]],
     labeled_pairs_csv: bytes,
+    canonical_records_csv: bytes,
+    gate_results_csv: bytes,
     payload_variant: str,
     masking_profile: str,
 ) -> PreparedBundleManifest:
@@ -84,6 +88,8 @@ def write_prepared_bundle(
         "mask_audit": mask_audit,
         "hard_negative_mask_audit": hard_negative_mask_audit,
         "labeled_pairs_csv": labeled_pairs_csv,
+        "canonical_records_csv": canonical_records_csv,
+        "gate_results_csv": gate_results_csv,
         "payload_variant": payload_variant,
         "masking_profile": masking_profile,
     }
@@ -98,6 +104,8 @@ def write_prepared_bundle(
         n_neg=len(neg),
         n_train_neg=len(train_neg),
         n_labeled_pairs_bytes=len(labeled_pairs_csv),
+        n_canonical_records_bytes=len(canonical_records_csv),
+        n_gate_results_bytes=len(gate_results_csv),
         sha256=_digest(path),
     )
     path.with_suffix(path.suffix + ".json").write_text(
@@ -131,7 +139,8 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
         "df", "payload", "structured_features", "row_bc", "country", "pos",
         "hp_pairs", "emb0", "neg", "train_neg", "neg_sources",
         "train_neg_sources", "mask_audit", "hard_negative_mask_audit",
-        "labeled_pairs_csv", "payload_variant", "masking_profile",
+        "labeled_pairs_csv", "canonical_records_csv", "gate_results_csv",
+        "payload_variant", "masking_profile",
     }
     missing = sorted(required - set(data))
     if missing:
@@ -147,6 +156,12 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
         or len(data["labeled_pairs_csv"]) != manifest.n_labeled_pairs_bytes
     ):
         raise ValueError("prepared bundle labeled-pairs bytes disagree with manifest")
+    for field, expected in (
+        ("canonical_records_csv", manifest.n_canonical_records_bytes),
+        ("gate_results_csv", manifest.n_gate_results_bytes),
+    ):
+        if not isinstance(data[field], bytes) or len(data[field]) != expected:
+            raise ValueError(f"prepared bundle {field} bytes disagree with manifest")
     if data["payload_variant"] != manifest.payload_variant:
         raise ValueError("prepared bundle payload variant disagrees with manifest")
     if data["masking_profile"] != manifest.masking_profile:
