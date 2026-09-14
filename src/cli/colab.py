@@ -1053,6 +1053,13 @@ for worker in range(1, {workers + 1}):
     if not worker_root.is_dir():
         raise FileNotFoundError(f"missing remote worker directory: {{worker_root}}")
     for path in sorted(worker_root.rglob("*")):
+        if path.is_symlink():
+            excluded.append({
+                "worker": worker,
+                "path": path.relative_to(worker_root).as_posix(),
+                "reason": "symlink_not_transferred",
+            })
+            continue
         if not path.is_file():
             continue
         relative = path.relative_to(worker_root)
