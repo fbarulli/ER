@@ -1428,10 +1428,13 @@ class DvcCheckpointCallback(TrainerCallback):
                 f"missing {', '.join(missing)}"
             )
         snapshot = self._snapshot(checkpoint)
+        from training.dvc_store import stage_checkpoint
+
+        stage_checkpoint(RESULTS, snapshot)
         import hashlib
         key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
         self._pending.append((snapshot, f"{checkpoint.name}--{key}", checkpoint))
-        print(f"    [checkpoint-dvc] staged step {state.global_step}", flush=True)
+        print(f"    [checkpoint-dvc] added locally at step {state.global_step}; upload deferred", flush=True)
         return control
 
     def on_train_end(self, args, state, control, **kwargs):
@@ -1441,7 +1444,7 @@ class DvcCheckpointCallback(TrainerCallback):
 
         pending = self._pending
         try:
-            for pointer in publish_checkpoints(RESULTS, pending):
+            for pointer in publish_checkpoints(RESULTS, pending, already_staged=True):
                 print(f"    [checkpoint-dvc] verified -> {pointer.relative_to(RESULTS)}", flush=True)
         finally:
             for snapshot, _, _ in pending:

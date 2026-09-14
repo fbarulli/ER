@@ -306,6 +306,8 @@ def publish_checkpoint(
 def publish_checkpoints(
     source: Path,
     checkpoints: list[tuple[Path, str, Path]],
+    *,
+    already_staged: bool = False,
 ) -> list[Path]:
     """Publish multiple immutable checkpoint snapshots with one DVC push.
 
@@ -339,16 +341,17 @@ def publish_checkpoints(
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             _configure(source, token)
-            staged_resume = None
-            if resume_dir.is_dir():
-                staged_resume = Path(tempfile.mkdtemp(prefix=".resume-staging-", dir=source.parent))
-                shutil.move(str(resume_dir), str(staged_resume / resume_dir.name))
-            try:
-                _run(["dvc", "add", *[str(snapshot.relative_to(source)) for snapshot, _, _ in resolved]], source)
-            finally:
-                if staged_resume is not None:
-                    shutil.move(str(staged_resume / resume_dir.name), str(resume_dir))
-                    shutil.rmtree(staged_resume, ignore_errors=True)
+            if not already_staged:
+                staged_resume = None
+                if resume_dir.is_dir():
+                    staged_resume = Path(tempfile.mkdtemp(prefix=".resume-staging-", dir=source.parent))
+                    shutil.move(str(resume_dir), str(staged_resume / resume_dir.name))
+                try:
+                    _run(["dvc", "add", *[str(snapshot.relative_to(source)) for snapshot, _, _ in resolved]], source)
+                finally:
+                    if staged_resume is not None:
+                        shutil.move(str(staged_resume / resume_dir.name), str(resume_dir))
+                        shutil.rmtree(staged_resume, ignore_errors=True)
             native_pointers = [
                 snapshot.with_name(f"{snapshot.name}.dvc")
                 for snapshot, _, _ in resolved
@@ -374,6 +377,29 @@ def publish_checkpoints(
         pointer.write_text(yaml.safe_dump(pointer_data, sort_keys=False), encoding="utf-8")
         _write_dvc_event(source, "checkpoint_publish_verified", checkpoint=str(snapshot), pointer=str(pointer))
     return pointers
+
+
+def stage_checkpoint(source: Path, checkpoint: Path) -> None:
+    """Run ``dvc add`` for one immutable checkpoint without network I/O.
+
+    This is deliberately called at each Trainer save, so its contents enter
+    the local DVC cache while the checkpoint is available.  The caller later
+    invokes :func:`publish_checkpoints` once to upload every staged target.
+    """
+    token = os.environ.get("DVC_API_KEY")
+    if not token:
+        raise RuntimeError("DVC_API_KEY is required to stage a checkpoint")
+    source = source.resolve()
+    checkpoint = checkpoint.resolve()
+    relative = checkpoint.relative_to(source)
+    lock_path = source / ".dvc-push.lock"
+    with lock_path.open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            _configure(source, token)
+            _run(["dvc", "add", str(relative)], source)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _pointer_outputs(source: Path, pointer: Path) -> list[Path]:
