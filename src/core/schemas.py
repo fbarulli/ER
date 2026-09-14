@@ -407,6 +407,8 @@ class RobustValidationSpec(BaseModel):
     repeats: int = Field(ge=2)
     seed: int
     min_slice_size: int = Field(ge=1)
+    min_test_negatives: int = Field(ge=5)
+    max_split_attempts: int = Field(ge=1)
     dimensions: list[Literal["brand", "category", "attribute"]] = Field(
         min_length=3, max_length=3
     )

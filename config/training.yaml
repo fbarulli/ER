@@ -177,6 +177,8 @@ evaluation:
     repeats: 3             # independent seeded assignments, 15 scored folds total
     seed: 42
     min_slice_size: 25     # suppress unstable brand/category slices
+    min_test_negatives: 5  # reject/reseed a fold with fewer test negatives
+    max_split_attempts: 100 # bounded reseed/re-shuffle attempts for strict CV
     dimensions: [brand, category, attribute]
     operating_thresholds:
       balanced_review: 0.787

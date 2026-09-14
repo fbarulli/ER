@@ -343,6 +343,8 @@ def _run_robust_validation(
         repeats=int(cfg["repeats"]),
         seed=int(cfg["seed"]),
         min_slice_size=int(cfg["min_slice_size"]),
+        min_test_negatives=int(cfg["min_test_negatives"]),
+        max_split_attempts=int(cfg["max_split_attempts"]),
         dimensions=tuple(str(value) for value in cfg["dimensions"]),
         operating_thresholds={
             str(key): float(value)

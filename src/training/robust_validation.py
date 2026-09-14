@@ -28,7 +28,6 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-
 DEFAULT_DIMENSIONS = ("brand", "category", "attribute")
 METRIC_COLUMNS = (
     "repeat",
@@ -153,7 +152,16 @@ def _fold_assignment(
     n_folds: int,
     seed: int,
 ) -> tuple[dict[str, int], dict[int, set[str]]]:
-    """Assign identifier components to folds, using positive edges only."""
+    """Assign identifier components with target/brand/category stratification.
+
+    ``StratifiedGroupKFold`` accepts one target per row, whereas a pair here
+    has two slice values (one at each endpoint).  We therefore use its
+    essential contract directly: components are indivisible groups and a
+    seeded greedy allocator balances a multi-label vector containing target,
+    endpoint-brand, and endpoint-category counts.  The caller validates the
+    resulting *pair* folds and retries another seed when a candidate violates
+    the hard class-support contract.
+    """
     union_find = _UnionFind()
     row_keys: list[tuple[str, ...]] = []
     for _, row in pairs.iterrows():
@@ -170,16 +178,128 @@ def _fold_assignment(
     for key in union_find.parent:
         components.setdefault(union_find.find(key), set()).add(key)
     ordered = sorted(components.values(), key=lambda group: sorted(group))
+
+    # Only rows fully inside a component can ever be test rows for that
+    # component.  Crossing negatives deliberately remain unassigned.
+    component_index = {
+        key: index for index, group in enumerate(ordered) for key in group
+    }
+    feature_names: set[str] = set()
+    component_features: list[dict[str, int]] = [{} for _ in ordered]
+    for _, row in pairs.iterrows():
+        keys = tuple(dict.fromkeys(_endpoint_keys(row, "a") + _endpoint_keys(row, "b")))
+        roots = {component_index[key] for key in keys if key in component_index}
+        if len(roots) != 1:
+            continue
+        features = [f"label:{int(row['label'])}"]
+        for dimension in ("brand", "category"):
+            for value in _slice_values(row, dimension):
+                features.append(f"{dimension}:{value}")
+        bucket = component_features[next(iter(roots))]
+        for feature in set(features):
+            bucket[feature] = bucket.get(feature, 0) + 1
+            feature_names.add(feature)
+
+    # Largest / least-common components first, with a seeded tie break.  For
+    # each candidate fold minimize squared distance from the per-fold target
+    # across label, brand, and category marginals.
     rng = np.random.default_rng(seed)
-    order = rng.permutation(len(ordered))
+    tie_rank = rng.permutation(len(ordered))
+    totals = {
+        feature: sum(part.get(feature, 0) for part in component_features)
+        for feature in feature_names
+    }
+    target = {feature: total / n_folds for feature, total in totals.items()}
+    order = sorted(
+        range(len(ordered)),
+        key=lambda index: (
+            -sum(component_features[index].values()),
+            -max(component_features[index].values(), default=0),
+            int(tie_rank[index]),
+        ),
+    )
     key_to_fold: dict[str, int] = {}
     fold_groups: dict[int, set[str]] = {fold: set() for fold in range(n_folds)}
-    for position, component_index in enumerate(order):
-        fold = position % n_folds
-        for key in ordered[int(component_index)]:
+    fold_features: list[dict[str, int]] = [{} for _ in range(n_folds)]
+    for component_id in order:
+        features = component_features[component_id]
+        scores: list[float] = []
+        for fold in range(n_folds):
+            score = 0.0
+            for feature in feature_names:
+                # Relative error avoids high-frequency labels drowning out a
+                # less-common but reportable brand/category slice.
+                expected = max(target[feature], 1.0)
+                current = fold_features[fold].get(feature, 0)
+                observed = current + features.get(feature, 0)
+                # Compare the incremental global imbalance.  Looking only at
+                # the projected fold would repeatedly favour a partially
+                # filled fold over an empty one when components are smaller
+                # than the per-fold target.
+                score += ((observed - target[feature]) / expected) ** 2 - (
+                    (current - target[feature]) / expected
+                ) ** 2
+            scores.append(score)
+        best = min(scores)
+        choices = [fold for fold, value in enumerate(scores) if np.isclose(value, best)]
+        fold = int(choices[int(rng.integers(len(choices)))])
+        for key in ordered[component_id]:
             key_to_fold[key] = fold
-        fold_groups[fold].update(ordered[int(component_index)])
+        fold_groups[fold].update(ordered[component_id])
+        for feature, count in features.items():
+            fold_features[fold][feature] = fold_features[fold].get(feature, 0) + count
     return key_to_fold, fold_groups
+
+
+def _strict_fold_assignment(
+    pairs: pd.DataFrame,
+    n_folds: int,
+    seed: int,
+    *,
+    min_test_negatives: int,
+    max_attempts: int,
+) -> tuple[dict[str, int], dict[int, set[str]], int]:
+    """Find a group-safe, stratified split with usable negative test support."""
+    if min_test_negatives < 5:
+        raise ValueError("strict validation requires min_test_negatives >= 5")
+    if max_attempts < 1:
+        raise ValueError("strict validation requires max_attempts >= 1")
+    labels = pairs["label"].to_numpy(dtype=int)
+    total_negative = int(np.sum(labels == 0))
+    if total_negative < n_folds * min_test_negatives:
+        raise ValueError(
+            "strict validation cannot supply the required negative test support: "
+            f"negatives={total_negative}, n_folds={n_folds}, "
+            f"min_test_negatives={min_test_negatives}"
+        )
+    for attempt in range(max_attempts):
+        attempt_seed = _stable_seed(seed, attempt)
+        key_to_fold, groups = _fold_assignment(pairs, n_folds, attempt_seed)
+        assignment: list[int | None] = []
+        for _, row in pairs.iterrows():
+            folds = {
+                key_to_fold[key]
+                for key in (_endpoint_keys(row, "a") + _endpoint_keys(row, "b"))
+                if key in key_to_fold
+            }
+            assignment.append(next(iter(folds)) if len(folds) == 1 else None)
+        assigned = np.asarray(assignment, dtype=object)
+        valid = True
+        for fold in range(n_folds):
+            test_labels = pairs.loc[assigned == fold, "label"].to_numpy(dtype=int)
+            if int(np.sum(test_labels == 0)) < min_test_negatives or not np.any(
+                test_labels == 1
+            ):
+                valid = False
+                break
+        if valid:
+            return key_to_fold, groups, attempt_seed
+    raise RuntimeError(
+        "strict stratified group split could not produce every test fold with "
+        f"at least {min_test_negatives} negatives and one positive after "
+        f"{max_attempts} seeded attempts; preserve component leakage safety "
+        "and provide more independent negative/positive components"
+    )
 
 
 def _youden_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
@@ -187,17 +307,24 @@ def _youden_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
     ordered_labels = labels[order]
     positives = max(int(labels.sum()), 1)
     negatives = max(int((labels == 0).sum()), 1)
-    j = np.cumsum(ordered_labels) / positives - np.cumsum(1 - ordered_labels) / negatives
+    j = (
+        np.cumsum(ordered_labels) / positives
+        - np.cumsum(1 - ordered_labels) / negatives
+    )
     return float(scores[order[int(np.argmax(j))]])
 
 
 def _metrics(part: pd.DataFrame, threshold: float | None) -> dict[str, object]:
     if part.empty:
-        return {key: None for key in METRIC_COLUMNS if key not in {"status", "n_train", "n_test"}}
+        return {
+            key: None
+            for key in METRIC_COLUMNS
+            if key not in {"status", "n_train", "n_test"}
+        }
     labels = part["label"].to_numpy(dtype=int)
     scores = part["score"].to_numpy(dtype=float)
     result: dict[str, object] = {
-        "n": int(len(part)),
+        "n": len(part),
         "n_positive": int(labels.sum()),
         "n_negative": int((labels == 0).sum()),
         "threshold": threshold,
@@ -254,11 +381,23 @@ def _safe_filename(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", value).strip("_") or "missing"
 
 
-def _aggregate(frame: pd.DataFrame, keys: tuple[str, ...] = ()) -> dict[str, dict[str, object]]:
+def _aggregate(
+    frame: pd.DataFrame, keys: tuple[str, ...] = ()
+) -> dict[str, dict[str, object]]:
     if frame.empty:
         return {}
     numeric = [
-        column for column in ("roc_auc", "pr_auc", "accuracy", "precision", "recall", "f1", "error_rate", "errors")
+        column
+        for column in (
+            "roc_auc",
+            "pr_auc",
+            "accuracy",
+            "precision",
+            "recall",
+            "f1",
+            "error_rate",
+            "errors",
+        )
         if column in frame.columns
     ]
     output: dict[str, dict[str, object]] = {}
@@ -267,7 +406,7 @@ def _aggregate(frame: pd.DataFrame, keys: tuple[str, ...] = ()) -> dict[str, dic
         if not isinstance(group_key, tuple):
             group_key = (group_key,)
         name = "::".join(str(value) for value in group_key)
-        values: dict[str, object] = {"n": int(len(part))}
+        values: dict[str, object] = {"n": len(part)}
         for column in numeric:
             series = pd.to_numeric(part[column], errors="coerce").dropna()
             if len(series):
@@ -287,12 +426,16 @@ def run_robust_validation(
     min_slice_size: int = 25,
     dimensions: tuple[str, ...] = DEFAULT_DIMENSIONS,
     operating_thresholds: dict[str, float] | None = None,
+    min_test_negatives: int = 5,
+    max_split_attempts: int = 100,
 ) -> dict[str, object]:
     """Run repeated component-aware validation over a scored pair frame."""
     required = {"label", "score", "sku_id_a", "sku_id_b"}
     missing = required - set(pairs.columns)
     if missing:
-        raise ValueError(f"robust validation pair dump missing columns: {sorted(missing)}")
+        raise ValueError(
+            f"robust validation pair dump missing columns: {sorted(missing)}"
+        )
     if n_folds < 3 or repeats < 2:
         raise ValueError("robust validation requires at least 3 folds and 2 repeats")
     frame = pairs.copy()
@@ -306,7 +449,13 @@ def run_robust_validation(
     operating_rows: list[dict[str, object]] = []
     for repeat in range(repeats):
         repeat_seed = _stable_seed(seed, repeat)
-        key_to_fold, _ = _fold_assignment(frame, n_folds, repeat_seed)
+        key_to_fold, _, accepted_seed = _strict_fold_assignment(
+            frame,
+            n_folds,
+            repeat_seed,
+            min_test_negatives=min_test_negatives,
+            max_attempts=max_split_attempts,
+        )
         assignments: list[int | None] = []
         for _, row in frame.iterrows():
             keys = _endpoint_keys(row, "a") + _endpoint_keys(row, "b")
@@ -315,12 +464,18 @@ def run_robust_validation(
         assignment = np.asarray(assignments, dtype=object)
         for fold in range(n_folds):
             test_mask = assignment == fold
-            train_mask = np.asarray([value is not None and value != fold for value in assignment], dtype=bool)
+            train_mask = np.asarray(
+                [value is not None and value != fold for value in assignment],
+                dtype=bool,
+            )
             straddling = int(np.sum([value is None for value in assignment]))
             train = frame.loc[train_mask]
             test = frame.loc[test_mask]
             threshold = (
-                _youden_threshold(train["score"].to_numpy(dtype=float), train["label"].to_numpy(dtype=int))
+                _youden_threshold(
+                    train["score"].to_numpy(dtype=float),
+                    train["label"].to_numpy(dtype=int),
+                )
                 if len(train) and len(np.unique(train["label"])) == 2
                 else None
             )
@@ -328,11 +483,11 @@ def run_robust_validation(
             fold_rows.append(
                 {
                     "repeat": repeat,
-                    "seed": repeat_seed,
+                    "seed": accepted_seed,
                     "fold": fold,
                     "status": result.get("status", "empty"),
-                    "n_train": int(len(train)),
-                    "n_test": int(len(test)),
+                    "n_train": len(train),
+                    "n_test": len(test),
                     "n_positive": result.get("n_positive"),
                     "n_negative": result.get("n_negative"),
                     "n_straddling": straddling,
@@ -347,16 +502,18 @@ def run_robust_validation(
                     "errors": result.get("errors"),
                 }
             )
-            for operating_point, operating_threshold in (operating_thresholds or {}).items():
+            for operating_point, operating_threshold in (
+                operating_thresholds or {}
+            ).items():
                 operating = _metrics(test, float(operating_threshold))
                 operating_rows.append(
                     {
                         "repeat": repeat,
-                        "seed": repeat_seed,
+                        "seed": accepted_seed,
                         "fold": fold,
                         "operating_point": str(operating_point),
                         "status": operating.get("status", "empty"),
-                        "n_test": int(len(test)),
+                        "n_test": len(test),
                         "n_positive": operating.get("n_positive"),
                         "n_negative": operating.get("n_negative"),
                         "threshold": float(operating_threshold),
@@ -373,7 +530,9 @@ def run_robust_validation(
                 continue
             for dimension in dimensions:
                 if dimension not in DEFAULT_DIMENSIONS:
-                    raise ValueError(f"unsupported robust-validation slice: {dimension}")
+                    raise ValueError(
+                        f"unsupported robust-validation slice: {dimension}"
+                    )
                 memberships: dict[str, list[int]] = {}
                 for index, row in test.iterrows():
                     for value in _slice_values(row, dimension):
@@ -386,12 +545,12 @@ def run_robust_validation(
                     slice_rows.append(
                         {
                             "repeat": repeat,
-                            "seed": repeat_seed,
+                            "seed": accepted_seed,
                             "fold": fold,
                             "dimension": dimension,
                             "slice": slice_name,
                             "status": result.get("status", "empty"),
-                            "n": int(len(part)),
+                            "n": len(part),
                             "n_positive": result.get("n_positive"),
                             "n_negative": result.get("n_negative"),
                             "threshold": result.get("threshold"),
@@ -423,7 +582,11 @@ def run_robust_validation(
     # worst sufficiently-supported slices by dimension.
     ok_folds = fold_frame[fold_frame["status"].eq("ok")]
     if not ok_folds.empty:
-        metrics = [column for column in ("roc_auc", "pr_auc", "accuracy", "precision", "recall", "f1") if column in ok_folds]
+        metrics = [
+            column
+            for column in ("roc_auc", "pr_auc", "accuracy", "precision", "recall", "f1")
+            if column in ok_folds
+        ]
         fig, ax = plt.subplots(figsize=(9, 5))
         ax.boxplot(
             [ok_folds[column].astype(float) for column in metrics],
@@ -432,7 +595,9 @@ def run_robust_validation(
         )
         ax.set_ylim(0, 1.05)
         ax.set_ylabel("score")
-        ax.set_title(f"Repeated {n_folds}-fold SKU/GTIN-aware validation ({repeats} repeats)")
+        ax.set_title(
+            f"Repeated {n_folds}-fold SKU/GTIN-aware validation ({repeats} repeats)"
+        )
         ax.grid(axis="y", alpha=0.25)
         fig.tight_layout()
         fig.savefig(out / "robust_validation_fold_metrics.png", dpi=150)
@@ -440,9 +605,18 @@ def run_robust_validation(
 
     ok_operating = operating_frame[operating_frame["status"].eq("ok")]
     if not ok_operating.empty:
-        metrics = [column for column in ("accuracy", "precision", "recall", "f1") if column in ok_operating]
+        metrics = [
+            column
+            for column in ("accuracy", "precision", "recall", "f1")
+            if column in ok_operating
+        ]
         means = ok_operating.groupby("operating_point", sort=False)[metrics].mean()
-        ax = means.plot(kind="bar", figsize=(8, 5), ylim=(0, 1.05), color=["#4c72b0", "#55a868", "#c44e52", "#8172b2"])
+        ax = means.plot(
+            kind="bar",
+            figsize=(8, 5),
+            ylim=(0, 1.05),
+            color=["#4c72b0", "#55a868", "#c44e52", "#8172b2"],
+        )
         ax.set_xlabel("operating point")
         ax.set_ylabel("mean test score")
         ax.set_title("Repeated validation at configured operating thresholds")
@@ -454,13 +628,29 @@ def run_robust_validation(
         plt.close(fig)
 
     if not slice_frame.empty:
-        aggregate_slices = (
-            slice_frame.groupby(["dimension", "slice"], as_index=False)
-            .agg(n=("n", "sum"), error_rate_mean=("error_rate", "mean"), error_rate_std=("error_rate", "std"))
+        aggregate_slices = slice_frame.groupby(
+            ["dimension", "slice"], as_index=False
+        ).agg(
+            n=("n", "sum"),
+            error_rate_mean=("error_rate", "mean"),
+            error_rate_std=("error_rate", "std"),
         )
-        top = aggregate_slices.sort_values(["dimension", "error_rate_mean", "n"], ascending=[True, False, False]).groupby("dimension", sort=False).head(15)
-        fig, axes = plt.subplots(1, len(top["dimension"].unique()) or 1, figsize=(6.5 * max(len(top["dimension"].unique()), 1), 5), squeeze=False)
-        for axis, (dimension, part) in zip(axes[0], top.groupby("dimension", sort=True), strict=False):
+        top = (
+            aggregate_slices.sort_values(
+                ["dimension", "error_rate_mean", "n"], ascending=[True, False, False]
+            )
+            .groupby("dimension", sort=False)
+            .head(15)
+        )
+        fig, axes = plt.subplots(
+            1,
+            len(top["dimension"].unique()) or 1,
+            figsize=(6.5 * max(len(top["dimension"].unique()), 1), 5),
+            squeeze=False,
+        )
+        for axis, (dimension, part) in zip(
+            axes[0], top.groupby("dimension", sort=True), strict=False
+        ):
             part = part.sort_values("error_rate_mean")
             axis.barh(part["slice"], part["error_rate_mean"], color="#c44e52")
             axis.set_xlim(0, 1)
@@ -471,7 +661,9 @@ def run_robust_validation(
         fig.savefig(out / "robust_validation_slice_errors.png", dpi=150)
         plt.close(fig)
     else:
-        aggregate_slices = pd.DataFrame(columns=["dimension", "slice", "n", "error_rate_mean", "error_rate_std"])
+        aggregate_slices = pd.DataFrame(
+            columns=["dimension", "slice", "n", "error_rate_mean", "error_rate_std"]
+        )
 
     fold_aggregate = _aggregate(ok_folds)
     fold_aggregate = fold_aggregate.get("all", {})
@@ -483,12 +675,14 @@ def run_robust_validation(
             "repeats": repeats,
             "seed": seed,
             "min_slice_size": min_slice_size,
+            "min_test_negatives": min_test_negatives,
+            "max_split_attempts": max_split_attempts,
             "dimensions": list(dimensions),
             "operating_thresholds": {
                 str(key): float(value)
                 for key, value in (operating_thresholds or {}).items()
             },
-            "grouping": "positive-pair SKU/GTIN connected components; crossing negatives excluded and counted",
+            "grouping": "positive-pair SKU/GTIN connected components; target + endpoint brand/category stratified; crossing negatives excluded and counted",
         },
         "fold_metrics": fold_frame.to_dict("records"),
         "slices": slice_frame.to_dict("records"),
