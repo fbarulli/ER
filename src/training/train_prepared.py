@@ -203,7 +203,7 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         attribute_conflict_refresh_enabled=False,
         train_frac=args.train_frac if args.train_frac < 1.0 else None,
         run_tag=args.run_tag,
-        sample=False,
+        sample=bool(args.sample),
         resume=False,
         wandb_ctx=wandb_ctx,
     )
@@ -230,6 +230,10 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         flush=True,
     )
     print(json.dumps({"bundle": manifest.model_dump(), "metrics": str(out)}, indent=2))
+    if len(ok) != len(rows_out):
+        raise SystemExit(
+            f"prepared training failed: successful_folds={len(ok)}/{len(rows_out)}"
+        )
 
 
 if __name__ == "__main__":

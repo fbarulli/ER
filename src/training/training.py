@@ -3075,15 +3075,29 @@ def train_one_config(
                     if len(neg_pairs[pairs_in_set(neg_pairs, row_bc, test_bc)])
                     else hard_test
                 )
-            dev_pos, calibration_pos, hard_dev, calibration_neg = (
-                _partition_calibration_pairs(
-                    dev_pos,
-                    hard_dev,
-                    row_bc,
-                    calibration_fraction,
-                    seed + fold_i + calibration_seed_offset,
+            if sample:
+                # A small chain-check sample need not contain all component
+                # populations required for threshold calibration.  Preserve
+                # its complete DEV pool for early stopping and record an
+                # explicitly unavailable calibration result after training;
+                # full runs retain the strict component-safe reservation.
+                calibration_pos = np.empty((0, 2), dtype=int)
+                calibration_neg = np.empty((0, 2), dtype=int)
+                print(
+                    f"  [calibration] fold {fold_i}: sample mode — "
+                    "strict calibration reservation skipped",
+                    flush=True,
                 )
-            )
+            else:
+                dev_pos, calibration_pos, hard_dev, calibration_neg = (
+                    _partition_calibration_pairs(
+                        dev_pos,
+                        hard_dev,
+                        row_bc,
+                        calibration_fraction,
+                        seed + fold_i + calibration_seed_offset,
+                    )
+                )
             if len(test_pos) == 0 or len(hard_test) == 0:
                 rows.append(
                     {
