@@ -197,6 +197,7 @@ rand_matching:
     # no source SKU and therefore cannot be evaluated by the matcher.
     sample_size: 12986
     calibration_size: 8657
+    calibration_folds: 3
     seed: 42
   outputs:
     submission: "SKU_ITEM_submission.csv"

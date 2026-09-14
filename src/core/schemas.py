@@ -464,6 +464,7 @@ class RandTruthSplitsSpec(BaseModel):
     holdout_output: str = Field(min_length=1)
     sample_size: int = Field(ge=6)
     calibration_size: int = Field(ge=3)
+    calibration_folds: int = Field(ge=3)
     seed: int
 
     @model_validator(mode="after")
@@ -476,6 +477,11 @@ class RandTruthSplitsSpec(BaseModel):
         if self.sample_size - self.calibration_size < 3:
             raise ValueError(
                 "rand_matching.truth_splits must reserve at least three holdout rows"
+            )
+        if self.calibration_size < self.calibration_folds:
+            raise ValueError(
+                "rand_matching.truth_splits.calibration_size must provide "
+                "at least one truth per calibration fold"
             )
         return self
 

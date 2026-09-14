@@ -3,7 +3,8 @@
 The source of truth is the frozen canonical map.  This command chooses one
 representative source SKU for each selected canonical identity, balances the
 selection across canonical brand, volume, package, material, and type strata,
-and writes disjoint ``SKU_ID,true_item_id`` calibration and holdout files.
+and writes disjoint calibration and holdout files.  Calibration rows include a
+canonical-disjoint ``calibration_fold`` required by ``er-rand-match``.
 """
 
 from __future__ import annotations
@@ -114,7 +115,12 @@ def _balanced_truths(candidates: pd.DataFrame, sample_size: int, seed: int) -> p
     return frame.loc[selected].copy()
 
 
-def _split_truths(selected: pd.DataFrame, calibration_size: int, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _split_truths(
+    selected: pd.DataFrame,
+    calibration_size: int,
+    calibration_folds: int,
+    seed: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     # Assign within every composite stratum in a 2:1 rotating pattern.  This
     # preserves broad stratum coverage in each reusable file while retaining
     # strict canonical disjointness.
@@ -152,6 +158,21 @@ def _split_truths(selected: pd.DataFrame, calibration_size: int, seed: int) -> t
     holdout = [index for index in selected.index if index in holdout_set]
     calibration_frame = selected.loc[calibration, ["SKU_ID", "gtin"]].rename(columns={"gtin": "true_item_id"})
     holdout_frame = selected.loc[holdout, ["SKU_ID", "gtin"]].rename(columns={"gtin": "true_item_id"})
+    calibration_frame = calibration_frame.copy()
+    ordered_calibration = sorted(
+        calibration_frame.index,
+        key=lambda index: _stable_rank(
+            seed,
+            "fold",
+            str(selected.at[index, "_stratum"]),
+            str(selected.at[index, "gtin"]),
+        ),
+    )
+    fold_by_index = {
+        index: str(position % calibration_folds)
+        for position, index in enumerate(ordered_calibration)
+    }
+    calibration_frame["calibration_fold"] = calibration_frame.index.map(fold_by_index)
     for name, frame in (("calibration", calibration_frame), ("holdout", holdout_frame)):
         if frame["SKU_ID"].duplicated().any() or frame["true_item_id"].duplicated().any():
             raise RuntimeError(f"{name} truth split has duplicate identities")
@@ -162,9 +183,19 @@ def _split_truths(selected: pd.DataFrame, calibration_size: int, seed: int) -> t
     return calibration_frame.sort_values("SKU_ID", kind="stable"), holdout_frame.sort_values("SKU_ID", kind="stable")
 
 
-def generate_truth_splits(output_dir: Path, sample_size: int, calibration_size: int, seed: int, calibration_name: str, holdout_name: str) -> tuple[Path, Path]:
+def generate_truth_splits(
+    output_dir: Path,
+    sample_size: int,
+    calibration_size: int,
+    calibration_folds: int,
+    seed: int,
+    calibration_name: str,
+    holdout_name: str,
+) -> tuple[Path, Path]:
     selected = _balanced_truths(_truth_candidates(), sample_size, seed)
-    calibration, holdout = _split_truths(selected, calibration_size, seed)
+    calibration, holdout = _split_truths(
+        selected, calibration_size, calibration_folds, seed
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     calibration_path = output_dir / calibration_name
     holdout_path = output_dir / holdout_name
@@ -172,7 +203,8 @@ def generate_truth_splits(output_dir: Path, sample_size: int, calibration_size: 
     atomic_write_csv(holdout, holdout_path, index=False)
     print(
         f"[rand-truth] selected={len(selected):,} calibration={len(calibration):,} "
-        f"holdout={len(holdout):,} strata={selected['_stratum'].nunique():,}",
+        f"holdout={len(holdout):,} folds={calibration_folds} "
+        f"strata={selected['_stratum'].nunique():,}",
         flush=True,
     )
     print(f"[rand-truth] calibration={calibration_path}", flush=True)
@@ -199,6 +231,7 @@ def main() -> None:
             if args.calibration_size is not None
             else cfg["calibration_size"]
         ),
+        int(cfg["calibration_folds"]),
         int(args.seed if args.seed is not None else cfg["seed"]),
         str(cfg["calibration_output"]),
         str(cfg["holdout_output"]),
