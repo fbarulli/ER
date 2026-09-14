@@ -192,8 +192,11 @@ rand_matching:
     output_dir: "results/rand_truth"
     calibration_output: "calibration_truth.csv"
     holdout_output: "holdout_truth.csv"
-    sample_size: 4000
-    calibration_size: 2667
+    # All canonical truths that have a representative deduplicated SKU.
+    # There are currently 12,986; the remaining 264 canonical records have
+    # no source SKU and therefore cannot be evaluated by the matcher.
+    sample_size: 12986
+    calibration_size: 8657
     seed: 42
   outputs:
     submission: "SKU_ITEM_submission.csv"

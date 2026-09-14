@@ -79,6 +79,15 @@ def _balanced_truths(candidates: pd.DataFrame, sample_size: int, seed: int) -> p
     for column in _STRATA_COLUMNS:
         frame[column] = frame[column].map(_normalise)
     frame["_stratum"] = frame[list(_STRATA_COLUMNS)].agg("\x1e".join, axis=1)
+    if sample_size == len(frame):
+        # A full-population verification needs no sampling loop: preserve every
+        # eligible canonical identity in a deterministic order.
+        return frame.loc[
+            sorted(
+                frame.index.tolist(),
+                key=lambda index: _stable_rank(seed, "all", str(frame.at[index, "gtin"])),
+            )
+        ].copy()
     queues: dict[str, deque[int]] = {}
     for stratum, group in frame.groupby("_stratum", sort=False):
         ordered = sorted(
@@ -119,15 +128,28 @@ def _split_truths(selected: pd.DataFrame, calibration_size: int, seed: int) -> t
 
     # Composite singleton strata initially go to holdout.  Deterministically
     # fill the requested sizes without ever moving an identity into both sets.
-    all_indices = sorted(selected.index.tolist(), key=lambda index: _stable_rank(seed, "rebalance", str(selected.at[index, "gtin"])))
-    while len(calibration) < calibration_size:
-        index = next(index for index in all_indices if index in holdout)
-        holdout.remove(index)
-        calibration.append(index)
-    while len(calibration) > calibration_size:
-        index = next(index for index in all_indices if index in calibration)
-        calibration.remove(index)
-        holdout.append(index)
+    all_indices = sorted(
+        selected.index.tolist(),
+        key=lambda index: _stable_rank(seed, "rebalance", str(selected.at[index, "gtin"])),
+    )
+    calibration_set = set(calibration)
+    holdout_set = set(holdout)
+    if len(calibration_set) < calibration_size:
+        for index in all_indices:
+            if len(calibration_set) == calibration_size:
+                break
+            if index in holdout_set:
+                holdout_set.remove(index)
+                calibration_set.add(index)
+    elif len(calibration_set) > calibration_size:
+        for index in all_indices:
+            if len(calibration_set) == calibration_size:
+                break
+            if index in calibration_set:
+                calibration_set.remove(index)
+                holdout_set.add(index)
+    calibration = [index for index in selected.index if index in calibration_set]
+    holdout = [index for index in selected.index if index in holdout_set]
     calibration_frame = selected.loc[calibration, ["SKU_ID", "gtin"]].rename(columns={"gtin": "true_item_id"})
     holdout_frame = selected.loc[holdout, ["SKU_ID", "gtin"]].rename(columns={"gtin": "true_item_id"})
     for name, frame in (("calibration", calibration_frame), ("holdout", holdout_frame)):
