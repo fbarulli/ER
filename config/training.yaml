@@ -306,10 +306,10 @@ training:
     volume_scale_ml: 10000.0
     pack_scale: 100.0
     max_set_size: 8
-  # loss: contrastive = OnlineContrastiveLoss over labeled (pos=1/neg=0)
-  # hard pairs — per-batch hard-pair selection is native to the loss.
-  # mnrl = MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
-  loss: "contrastive"
+  # Switchable through er-colab --loss. contrastive = OnlineContrastiveLoss
+  # over labeled (pos=1/neg=0) hard pairs; mnrl =
+  # MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
+  loss: "mnrl"
   contrastive_margin: 0.3     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
   hard_positives: true        # generate volume-verified cross-country pairs
                               # and join them to the training positives
