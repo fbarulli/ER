@@ -1418,20 +1418,12 @@ def ensure_session() -> None:
 
 
 def prepare_remote_layout(*, minimal_runtime: bool = False) -> None:
-    """Clone/update the configured branch and create the selected runtime."""
-    sparse_paths = [
-        "config",
-        "src",
-        "artifacts/models/all-MiniLM-L6-v2",
-        "pyproject.toml",
-    ]
+    """Restore the configured branch using the established Colab checkout flow."""
     script = f"""
 import pathlib, shutil, subprocess
 
 root = pathlib.Path({REMOTE_ROOT!r})
 remote_name = {GIT_REMOTE_NAME!r}
-if {minimal_runtime!r} and root.exists():
-    shutil.rmtree(root)
 if root.exists() and not (root / ".git").is_dir():
     shutil.rmtree(root)
 if (root / ".git").is_dir():
@@ -1450,65 +1442,30 @@ if (root / ".git").is_dir():
                 f"configured git remote {{remote_name!r}} is absent in {{root}}; "
                 f"available remotes={{remotes}}"
             )
+    # A prior sparse/detached runtime must be returned to the stable branch
+    # checkout used by the original Colab launcher before control cells import
+    # project modules from REMOTE_ROOT/src.
+    subprocess.run(["git", "sparse-checkout", "disable"], cwd=root, check=False)
     subprocess.run(["git", "fetch", remote_name, {BRANCH!r}], cwd=root, check=True)
+    subprocess.run(
+        ["git", "checkout", "-B", {BRANCH!r}, remote_name + "/" + {BRANCH!r}],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(["git", "pull", "--ff-only", remote_name, {BRANCH!r}], cwd=root, check=True)
 else:
     root.parent.mkdir(parents=True, exist_ok=True)
-    clone = [
+    subprocess.run([
         "git", "clone", "--origin", remote_name, "--depth", "1",
         "--branch", {BRANCH!r},
-    ]
-    if {minimal_runtime!r}:
-        clone.extend(["--filter=blob:none", "--no-checkout", "--sparse"])
-    clone.extend([{REPOSITORY!r}, str(root)])
-    subprocess.run(clone, check=True)
-if {minimal_runtime!r}:
-    subprocess.run(
-        ["git", "sparse-checkout", "set", "--no-cone", *{sparse_paths!r}],
-        cwd=root,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "checkout", "--detach", remote_name + "/" + {BRANCH!r}],
-        cwd=root,
-        check=True,
-    )
-    # `git sparse-checkout set` can leave the index populated while a later
-    # detached checkout re-applies a stale sparse index.  Reapply explicitly
-    # and fail before dependency installation if the runtime is incomplete.
-    subprocess.run(["git", "sparse-checkout", "reapply"], cwd=root, check=True)
-    required = [
-        root / "src" / "core" / "common.py",
-        root / "src" / "training" / "train_prepared.py",
-        root / "src" / "cli" / "colab.py",
-        root / "artifacts" / "models" / "all-MiniLM-L6-v2",
-    ]
-    missing = [str(path) for path in required if not path.exists()]
-    if missing:
-        status = subprocess.run(
-            ["git", "status", "--short", "--branch"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        sparse = subprocess.run(
-            ["git", "sparse-checkout", "list"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        raise RuntimeError(
-            "minimal runtime checkout is incomplete; "
-            "missing=" + repr(missing) + "; status=" + repr(status)
-            + "; sparse_paths=" + repr(sparse)
-        )
+        {REPOSITORY!r}, str(root),
+    ], check=True)
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
 print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
-      "minimal_runtime=" + str({minimal_runtime!r}), "at", root)
+      "prepared_runtime=" + str({minimal_runtime!r}), "at", root)
 """
-    run_colab_exec_stream(SESSION, script, timeout=600, log_name="checkout", retry_safe=False)
+    run_colab_exec_stream(SESSION, script, timeout=600, log_name="checkout", retry_safe=True)
 
 
 def install_deps(*, minimal_runtime: bool = False) -> None:
