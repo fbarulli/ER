@@ -26,10 +26,12 @@ from core.common import (
     SEED,
     F,
     artifact,
+    collapse_guardrail_cfg,
     ensure_parent,
     load_config,
     load_dataset_deduped,
     load_local_sentence_transformer,
+    masking_cfg,
     plot_dpi,
     recall_column_suffix,
     runtime,
@@ -482,6 +484,7 @@ def _main_inner(_mlf, _wandb) -> None:
     attribute_conflict_enabled = bool(attr_cfg["enabled"])
     mining_enabled = ann_mining_enabled or attribute_conflict_enabled
     mask_cfg = cfg["masking"]
+    collapse_cfg = cfg["collapse_guardrail"]
     split_cfg = cfg["split"]
 
     # Trainer models resolve through the project-owned registry. Resolution is
@@ -644,7 +647,22 @@ def _main_inner(_mlf, _wandb) -> None:
         "(off), enabled:true -> masking.frac. Explicit "
         "CLI value always wins.",
     )
+    ap.add_argument(
+        "--masking-profile",
+        default=str(mask_cfg["profile"]),
+        help="config/training.yaml masking_profiles entry",
+    )
+    ap.add_argument(
+        "--collapse-guardrail-profile",
+        default=str(collapse_cfg["profile"]),
+        help="config/training.yaml collapse_guardrail_profiles entry",
+    )
     args = ap.parse_args()
+
+    mask_cfg = masking_cfg(args.masking_profile)
+    cfg["collapse_guardrail"] = collapse_guardrail_cfg(
+        args.collapse_guardrail_profile
+    )
 
     # Resolve both the bi-encoder and optional cross-encoder through the same
     # local-only registry contract. This prevents SentenceTransformers from
@@ -732,6 +750,7 @@ def _main_inner(_mlf, _wandb) -> None:
             "contrastive_margin": float(_SSOT_CONTRASTIVE_MARGIN),
             "architecture": runtime("architecture"),
             "mask_frac": args.mask_frac,
+            "masking_profile": str(mask_cfg["profile"]),
             "masking_enabled": bool(args.mask_frac > 0),
             "mask_hard_negatives": mask_hard_negatives,
             "mask_hard_negative_frac": mask_hard_negative_frac,
@@ -743,6 +762,10 @@ def _main_inner(_mlf, _wandb) -> None:
             "hard_negative_mask_hi": hard_negative_mask_hi,
             "mask_track_visibility": bool(mask_cfg["track_visibility"]),
             "mask_track_per_epoch": bool(mask_cfg["track_per_epoch"]),
+            "collapse_guardrail_profile": str(cfg["collapse_guardrail"]["profile"]),
+            "collapse_operating_threshold": float(
+                cfg["collapse_guardrail"]["operating_threshold"]
+            ),
             "structured_features_enabled": bool(
                 tr["structured_features"]["enabled"]
             ),

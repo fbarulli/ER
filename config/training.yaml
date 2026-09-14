@@ -15,6 +15,7 @@ sim_columns:
 # ── masking augmentation ────────────────────────────────────────────────────
 masking:
   enabled: true
+  profile: baseline
   frac: 1.00          # fraction of positive anchors masked when enabled
   mask_hard_negatives: true  # enable dynamic masking on label-0 training pairs
   hard_negative_frac: 0.25   # only 25% of label-0 presentations are masked; 75% stay raw
@@ -26,6 +27,13 @@ masking:
   hard_negative_mask_hi: 0.60
   track_visibility: true      # persist per-copy realized mask percentages
   track_per_epoch: true       # persist dynamic hard-negative mask percentages
+
+masking_profiles:
+  baseline: {}
+  matched_positive_negative:
+    mask_lo: 0.40
+    mask_hi: 0.60
+    hard_negative_frac: 0.50
 
 # Optional remote mirror. Credentials stay in WANDB_API_KEY, never here.
 # Without that environment variable, runs remain local and MLflow is intact.
@@ -142,6 +150,7 @@ evaluation:
 # Shared unrelated-pair collapse monitoring and HPO penalty contract.
 collapse_guardrail:
   enabled: true
+  profile: threshold_80
   unrelated_pairs: 100
   seed: 42
   median_penalty_start: 0.50
@@ -152,6 +161,12 @@ collapse_guardrail:
   max_token_frequency: 0.05
   operating_threshold: 0.80
   crossing_rate_ceiling: 0.02
+
+collapse_guardrail_profiles:
+  threshold_80:
+    operating_threshold: 0.80
+  threshold_65:
+    operating_threshold: 0.65
 
 # ── final Rand Index matching lane ─────────────────────────────────────────
 # Runtime input files are required CLI arguments; all matcher behavior and

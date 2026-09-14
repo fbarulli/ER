@@ -521,6 +521,7 @@ class MaskingSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+    profile: str = Field(min_length=1)
     frac: float = Field(ge=0.0, le=1.0)
     mask_hard_negatives: bool
     hard_negative_frac: float = Field(ge=0.0, le=1.0)
@@ -547,6 +548,25 @@ class MaskingSpec(BaseModel):
                 f"{self.hard_negative_mask_hi}"
             )
         return self
+
+
+class MaskingProfileSpec(BaseModel):
+    """Config-owned overrides for a named masking experiment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool | None = None
+    frac: float | None = Field(default=None, ge=0.0, le=1.0)
+    mask_hard_negatives: bool | None = None
+    hard_negative_frac: float | None = Field(default=None, ge=0.0, le=1.0)
+    mask_prob: float | None = Field(default=None, ge=0.0, le=1.0)
+    mask_lo: float | None = Field(default=None, ge=0.0, lt=1.0)
+    mask_hi: float | None = Field(default=None, gt=0.0, le=1.0)
+    hard_negative_mask_prob: float | None = Field(default=None, ge=0.0, le=1.0)
+    hard_negative_mask_lo: float | None = Field(default=None, ge=0.0, lt=1.0)
+    hard_negative_mask_hi: float | None = Field(default=None, gt=0.0, le=1.0)
+    track_visibility: bool | None = None
+    track_per_epoch: bool | None = None
 
 
 class UniformityRegularizationSpec(BaseModel):
@@ -925,6 +945,7 @@ class CollapseGuardrailSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+    profile: str = Field(min_length=1)
     unrelated_pairs: int = Field(ge=1)
     seed: int
     median_penalty_start: float = Field(ge=-1.0, le=1.0)
@@ -949,6 +970,14 @@ class CollapseGuardrailSpec(BaseModel):
                 "median_penalty_start"
             )
         return self
+
+
+class CollapseGuardrailProfileSpec(BaseModel):
+    """Config-owned operating-point override for a guardrail trial."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operating_threshold: float = Field(ge=-1.0, le=1.0)
 
 
 class HpoSpec(BaseModel):
@@ -1092,9 +1121,13 @@ class TrainingConfig(BaseModel):
 
     sim_columns: dict[str, str] = Field(min_length=1)
     masking: MaskingSpec
+    masking_profiles: dict[str, MaskingProfileSpec] = Field(min_length=1)
     split: SplitSpec
     evaluation: EvaluationSpec
     collapse_guardrail: CollapseGuardrailSpec
+    collapse_guardrail_profiles: dict[str, CollapseGuardrailProfileSpec] = Field(
+        min_length=1
+    )
     gate: GateSpec
     training: TrainingSpec
     pairs: PairsSpec
@@ -1122,6 +1155,40 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "hpo.tpe_space.epochs may be fixed only to "
                 f"training.epochs={self.training.epochs}, got [{lo}, {hi}]"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _masking_profile_is_registered(self) -> TrainingConfig:
+        if self.masking.profile not in self.masking_profiles:
+            raise ValueError(
+                "masking.profile must name a configured masking_profiles entry: "
+                f"{self.masking.profile!r} not in {sorted(self.masking_profiles)}"
+            )
+        for name, profile in self.masking_profiles.items():
+            values = profile.model_dump(exclude_none=True)
+            lo = values.get("mask_lo", self.masking.mask_lo)
+            hi = values.get("mask_hi", self.masking.mask_hi)
+            neg_lo = values.get(
+                "hard_negative_mask_lo", self.masking.hard_negative_mask_lo
+            )
+            neg_hi = values.get(
+                "hard_negative_mask_hi", self.masking.hard_negative_mask_hi
+            )
+            if lo >= hi or neg_lo >= neg_hi:
+                raise ValueError(
+                    f"masking_profiles.{name} has an invalid mask extent band"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _collapse_profile_is_registered(self) -> TrainingConfig:
+        if self.collapse_guardrail.profile not in self.collapse_guardrail_profiles:
+            raise ValueError(
+                "collapse_guardrail.profile must name a configured "
+                "collapse_guardrail_profiles entry: "
+                f"{self.collapse_guardrail.profile!r} not in "
+                f"{sorted(self.collapse_guardrail_profiles)}"
             )
         return self
 

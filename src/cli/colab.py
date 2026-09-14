@@ -102,6 +102,8 @@ _MIXED_TRAIN_WORKERS = _COLAB.mixed_train_workers
 _MIXED_SIMS_WORKERS = _COLAB.mixed_sims_workers
 _MIXED_MINING_PROFILE = _COLAB.mixed_mining_profile
 _MASKING_ENABLED = training_cfg().masking.enabled
+_MASKING_PROFILE = str(training_cfg().masking.profile)
+_COLLAPSE_GUARDRAIL_PROFILE = str(training_cfg().collapse_guardrail.profile)
 _DVC_WORKERS = _COLAB.dvc_workers
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
@@ -1565,7 +1567,8 @@ for path in required:
 def run_train(
     frac: float, epochs: int, sample: int | None, workers: int = 1,
     *, resume_run: str | None = None, model: str | None = None,
-    run_label: str | None = None,
+    run_label: str | None = None, masking_profile: str | None = None,
+    collapse_guardrail_profile: str | None = None,
 ) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the VM (GPU) ...")
@@ -1592,6 +1595,11 @@ def run_train(
         args.extend(["--model", model])
     if sample is not None:
         args.extend(["--sample", str(sample)])
+    args.extend(["--masking-profile", masking_profile or _MASKING_PROFILE])
+    args.extend([
+        "--collapse-guardrail-profile",
+        collapse_guardrail_profile or _COLLAPSE_GUARDRAIL_PROFILE,
+    ])
     if not _MASK_EFFECT_AFTER_TRAIN:
         args.append("--no-mask-effect")
     if resume_run:
@@ -2322,6 +2330,16 @@ def main() -> None:
         help="experiment label for W&B (for example mining_enabled or masking_only)",
     )
     ap.add_argument(
+        "--masking-profile",
+        default=_MASKING_PROFILE,
+        help="config/training.yaml masking_profiles entry",
+    )
+    ap.add_argument(
+        "--collapse-guardrail-profile",
+        default=_COLLAPSE_GUARDRAIL_PROFILE,
+        help="config/training.yaml collapse_guardrail_profiles entry",
+    )
+    ap.add_argument(
         "--resume-run",
         default=None,
         help="resume this existing concurrent_train_<id> run on the VM",
@@ -2437,6 +2455,8 @@ def main() -> None:
             local_training_run = run_train(
                 args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE,
                 workers=_SMOKE_WORKERS, run_label=args.run_label,
+                masking_profile=args.masking_profile,
+                collapse_guardrail_profile=args.collapse_guardrail_profile,
             )
         elif args.what == "hpo":
             if args.hpo_jobs < 1:
@@ -2452,6 +2472,8 @@ def main() -> None:
                 args.train_frac, args.epochs, sample=args.sample, workers=args.workers,
                 resume_run=args.resume_run, model=args.model,
                 run_label=args.run_label,
+                masking_profile=args.masking_profile,
+                collapse_guardrail_profile=args.collapse_guardrail_profile,
             )
         if local_hpo_run is not None:
             print("[hpo] publishing snapshots on local CPU ...", flush=True)

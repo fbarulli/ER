@@ -258,6 +258,41 @@ def training_cfg() -> TrainingConfig:
     return _TRAIN_CFG
 
 
+def masking_cfg(profile: str | None = None) -> dict[str, Any]:
+    """Return the validated base masking config with one named profile applied."""
+    base = dict(_CFG["masking"])
+    selected = str(profile or base["profile"])
+    profiles = _CFG["masking_profiles"]
+    if selected not in profiles:
+        raise KeyError(
+            f"unknown masking profile {selected!r}; "
+            f"expected one of {sorted(profiles)}"
+        )
+    overrides = {
+        key: value
+        for key, value in dict(profiles[selected]).items()
+        if value is not None
+    }
+    base.update(overrides)
+    base["profile"] = selected
+    return base
+
+
+def collapse_guardrail_cfg(profile: str | None = None) -> dict[str, Any]:
+    """Return the validated collapse guardrail with one named profile applied."""
+    base = dict(_CFG["collapse_guardrail"])
+    selected = str(profile or base["profile"])
+    profiles = _CFG["collapse_guardrail_profiles"]
+    if selected not in profiles:
+        raise KeyError(
+            f"unknown collapse guardrail profile {selected!r}; "
+            f"expected one of {sorted(profiles)}"
+        )
+    base.update(dict(profiles[selected]))
+    base["profile"] = selected
+    return base
+
+
 def ner_config() -> dict[str, Any]:
     """Return the NER training settings from the centralized training SSOT.
 
