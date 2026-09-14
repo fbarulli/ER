@@ -657,6 +657,12 @@ def _main_inner(_mlf, _wandb) -> None:
         default=str(collapse_cfg["profile"]),
         help="config/training.yaml collapse_guardrail_profiles entry",
     )
+    ap.add_argument(
+        "--prepare-bundle",
+        type=Path,
+        default=None,
+        help="write the fully prepared local training bundle and exit",
+    )
     args = ap.parse_args()
 
     mask_cfg = masking_cfg(args.masking_profile)
@@ -1101,6 +1107,36 @@ def _main_inner(_mlf, _wandb) -> None:
         )
 
     data = (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0)
+
+    if args.prepare_bundle is not None:
+        from training.prepared_bundle import write_prepared_bundle
+
+        manifest = write_prepared_bundle(
+            args.prepare_bundle,
+            df=df,
+            payload=payload,
+            structured_features=structured_features,
+            row_bc=row_bc,
+            country=country,
+            pos=pos,
+            hp_pairs=hp_pairs,
+            emb0=emb0,
+            neg=neg,
+            train_neg=train_neg,
+            neg_sources=neg_sources,
+            train_neg_sources=train_neg_sources,
+            mask_audit=mask_audit,
+            hard_negative_mask_audit=hard_negative_mask_audit,
+            payload_variant=args.payload,
+            masking_profile=str(mask_cfg["profile"]),
+        )
+        print(
+            f"[prepared-bundle] wrote {args.prepare_bundle} "
+            f"({manifest.n_df:,} source rows, {manifest.n_payload:,} payload rows, "
+            f"{manifest.n_pos:,} positives, {manifest.n_neg:,} negatives)",
+            flush=True,
+        )
+        return
 
     # ── HPO lanes: second07 fixed grid / second08 optuna TPE ───────────────
     if args.grid or args.hpo:

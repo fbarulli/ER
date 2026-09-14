@@ -776,6 +776,7 @@ def run_parallel_train_and_tail(
     run_labels: list[str] | None = None,
     masking_profiles: list[str] | None = None,
     collapse_guardrail_profiles: list[str] | None = None,
+    prepared_bundles: list[Path] | None = None,
 ) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -785,6 +786,16 @@ def run_parallel_train_and_tail(
         else f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     )
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    remote_bundles = (
+        _upload_prepared_bundles(run_id=run_id, bundles=prepared_bundles)
+        if prepared_bundles is not None
+        else None
+    )
+    remote_input_names = (
+        'F["labeled_pairs"]'
+        if prepared_bundles is not None
+        else 'F["canonical_records"], F["gate_results"], F["labeled_pairs"]'
+    )
     resume_pointers = _resume_pointer_payload(run_id, workers) if resume_run else {}
     launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import base64, json, os, pathlib, shutil, shlex, subprocess, sys, time, traceback
@@ -817,11 +828,7 @@ for number in range(1, {workers} + 1):
         for name, encoded in resume_pointers[str(number)].items():
             (pointer_dir / name).write_bytes(base64.b64decode(encoded))
         print(f"[resume-preflight] worker {{number}}: pointer files written", flush=True)
-        for name in (
-            F["canonical_records"],
-            F["gate_results"],
-            F["labeled_pairs"],
-        ):
+        for name in ({remote_input_names},):
             relative = name.relative_to(root / "results")
             source = root / "results" / relative
             destination = out / relative
@@ -900,9 +907,12 @@ for number in range(1, {workers} + 1):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
     worker_args = [sys.executable, *{args!r}]
-    if masking_profiles is not None:
+    if {remote_bundles is not None!r}:
+        worker_args[worker_args.index("training.train")] = "training.train_prepared"
+        worker_args.extend(["--bundle", {remote_bundles!r}[number - 1]])
+    if masking_profiles is not None and {remote_bundles is None!r}:
         worker_args.extend(["--masking-profile", masking_profiles[number - 1]])
-    if collapse_guardrail_profiles is not None:
+    if collapse_guardrail_profiles is not None and {remote_bundles is None!r}:
         worker_args.extend([
             "--collapse-guardrail-profile",
             collapse_guardrail_profiles[number - 1],
@@ -1382,8 +1392,15 @@ def ensure_session() -> None:
     _verify_session_handshake()
 
 
-def prepare_remote_layout() -> None:
-    """Clone/update the configured training branch and create runtime dirs."""
+def prepare_remote_layout(*, minimal_runtime: bool = False) -> None:
+    """Clone/update the configured branch and create the selected runtime."""
+    sparse_paths = [
+        "config",
+        "src",
+        "artifacts/models/all-MiniLM-L6-v2",
+        "results/training/labeled_pairs.csv",
+        "pyproject.toml",
+    ]
     script = f"""
 import pathlib, shutil, subprocess
 
@@ -1410,28 +1427,50 @@ if (root / ".git").is_dir():
     subprocess.run(["git", "pull", "--ff-only", remote_name, {BRANCH!r}], cwd=root, check=True)
 else:
     root.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([
-        "git", "clone", "--origin", remote_name, "--depth", "1", "--branch", {BRANCH!r},
-        {REPOSITORY!r}, str(root),
-    ], check=True)
+    clone = [
+        "git", "clone", "--origin", remote_name, "--depth", "1",
+        "--branch", {BRANCH!r},
+    ]
+    if {minimal_runtime!r}:
+        clone.extend(["--filter=blob:none", "--no-checkout", "--sparse"])
+    clone.extend([{REPOSITORY!r}, str(root)])
+    subprocess.run(clone, check=True)
+if {minimal_runtime!r}:
+    subprocess.run(
+        ["git", "sparse-checkout", "set", "--no-cone", *{sparse_paths!r}],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(["git", "checkout", "--detach", {BRANCH!r}], cwd=root, check=True)
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
-print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r}, "at", root)
+print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
+      "minimal_runtime=" + str({minimal_runtime!r}), "at", root)
 """
     run_colab_exec_stream(SESSION, script, timeout=600, log_name="checkout", retry_safe=True)
 
 
-def install_deps() -> None:
-    print("[deps] installing dependencies on the VM ...")
+def install_deps(*, minimal_runtime: bool = False) -> None:
+    print(
+        "[deps] installing "
+        + ("GPU training runtime only" if minimal_runtime else "full lane dependencies")
+        + " on the VM ..."
+    )
     # Run pip outside the notebook kernel. A kernel disconnect can interrupt
     # the control channel, but the detached process keeps writing a durable
     # log/status pair that the launcher can retrieve before teardown.
-    run_detached_stage(
-        "00_deps",
-        "[sys.executable, '-m', 'pip', 'install', "
+    packages = (
+        "'sentence-transformers', 'datasets', 'accelerate', "
+        "'scikit-learn', 'pandas', 'numpy'"
+        if minimal_runtime
+        else
         "'sentence-transformers', 'datasets', 'accelerate', 'evaluate', "
         "'scikit-learn', 'pandas', 'numpy', 'mlflow', 'optuna', "
-        "'psycopg[binary]', 'wandb', 'dvc', 'dagshub']",
+        "'psycopg[binary]', 'wandb', 'dvc', 'dagshub'"
+    )
+    run_detached_stage(
+        "00_deps",
+        "[sys.executable, '-m', 'pip', 'install', " + packages + "]",
         timeout=900,
     )
 
@@ -1613,6 +1652,31 @@ print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)
 
 
+def verify_remote_prepared_inputs() -> None:
+    """Check only the small calibration input used by prepared GPU workers."""
+    print("[data] validating local-prepared GPU runtime inputs ...")
+    script = _BOOTSTRAP + f"""
+from core.common import F, resolve_model
+from pathlib import Path
+model = Path(resolve_model({str(training_cfg().training.base_model)!r}))
+labeled = F["labeled_pairs"]
+if not model.is_dir():
+    raise FileNotFoundError(f"prepared runtime model bundle missing: {{model}}")
+if not labeled.is_file():
+    raise FileNotFoundError(f"prepared runtime labeled-pairs input missing: {{labeled}}")
+print(f"[data] model={{model}}")
+print(f"[data] labeled_pairs={{labeled}}: {{labeled.stat().st_size:,}} bytes")
+print("[data] remote preparation disabled; worker consumes uploaded bundle")
+"""
+    run_colab_exec_stream(
+        SESSION,
+        script,
+        timeout=120,
+        log_name="01_prepared_input_check",
+        retry_safe=True,
+    )
+
+
 def run_train(
     frac: float, epochs: int, sample: int | None, workers: int = 1,
     *, resume_run: str | None = None, model: str | None = None,
@@ -1654,22 +1718,35 @@ def run_train(
         args.append("--no-mask-effect")
     if resume_run:
         args.append("--resume")
+    profiles = _expand_worker_profiles(
+        masking_profile or _MASKING_PROFILE,
+        workers,
+        "masking",
+    )
+    prepared_bundles = _prepare_local_training_bundles(
+        profiles=profiles,
+        model=model,
+        sample=sample,
+    )
     if workers == 1 and resume_run is None:
-        return run_single_train_and_stream(args, run_label=run_label)
+        return run_single_train_and_stream(
+            args,
+            run_label=run_label,
+            prepared_bundle=prepared_bundles[0],
+        )
     return run_parallel_train_and_tail(
         args, workers, resume_run=resume_run,
         run_labels=(
             _expand_worker_profiles(run_label, workers, "run label")
             if run_label else None
         ),
-        masking_profiles=_expand_worker_profiles(
-            masking_profile or _MASKING_PROFILE, workers, "masking"
-        ),
+        masking_profiles=profiles,
         collapse_guardrail_profiles=_expand_worker_profiles(
             collapse_guardrail_profile or _COLLAPSE_GUARDRAIL_PROFILE,
             workers,
             "collapse guardrail",
         ),
+        prepared_bundles=prepared_bundles,
     )
 
 
@@ -1685,12 +1762,133 @@ def _expand_worker_profiles(raw: str, workers: int, label: str) -> list[str]:
     return values
 
 
+def _prepare_local_training_bundles(
+    *,
+    profiles: list[str],
+    model: str | None,
+    sample: int | None,
+    payload: str = "full",
+) -> list[Path]:
+    """Build and validate one complete input bundle per worker locally."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    root = RESULTS / "prepared_training" / stamp
+    root.mkdir(parents=True, exist_ok=False)
+    model_key = model or str(training_cfg().training.base_model)
+    bundles: list[Path] = []
+    for number, profile in enumerate(profiles, start=1):
+        bundle = root / f"worker_{number}_{profile}.pkl.gz"
+        command = [
+            sys.executable,
+            "-u",
+            "-m",
+            "training.train",
+            "--model",
+            model_key,
+            "--payload",
+            payload,
+            "--masking-profile",
+            profile,
+            "--collapse-guardrail-profile",
+            _COLLAPSE_GUARDRAIL_PROFILE,
+            "--prepare-bundle",
+            str(bundle),
+            "--no-mask-effect",
+            "--no-plot",
+        ]
+        if sample is not None:
+            command.extend(["--sample", str(sample)])
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(TRAIN_ROOT / "src"),
+            "WANDB_MODE": "offline",
+            "EUROMONITOR_RUN_ID": f"local-prepare-{stamp}-worker_{number}",
+        }
+        print(
+            f"[local-prepare] worker={number} profile={profile} "
+            f"bundle={bundle}",
+            flush=True,
+        )
+        subprocess.run(command, cwd=TRAIN_ROOT, env=env, check=True)
+        from training.prepared_bundle import load_prepared_bundle
+
+        manifest, _ = load_prepared_bundle(bundle)
+        print(
+            f"[local-prepare] validated worker={number} "
+            f"rows={manifest.n_df:,} payload={manifest.n_payload:,} "
+            f"pos={manifest.n_pos:,} neg={manifest.n_neg:,} "
+            f"sha256={manifest.sha256}",
+            flush=True,
+        )
+        bundles.append(bundle)
+    return bundles
+
+
+def _upload_prepared_bundles(
+    *,
+    run_id: str,
+    bundles: list[Path],
+) -> list[str]:
+    """Upload only the locally prepared bundles and their manifests."""
+    remote_dir = f"{REMOTE_ROOT}/prepared_training/{run_id}"
+    mkdir_script = _BOOTSTRAP + f"""
+import pathlib
+pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
+"""
+    run_colab_exec_stream(
+        SESSION,
+        mkdir_script,
+        timeout=120,
+        log_name="prepared_bundle_mkdir",
+        retry_safe=False,
+    )
+    remote_paths: list[str] = []
+    for number, bundle in enumerate(bundles, start=1):
+        for source in (bundle, bundle.with_suffix(bundle.suffix + ".json")):
+            remote = f"{remote_dir}/worker_{number}/{source.name}"
+            run_colab_exec_stream(
+                SESSION,
+                _BOOTSTRAP
+                + f"""
+import pathlib
+pathlib.Path({str(Path(remote).parent)!r}).mkdir(parents=True, exist_ok=True)
+""",
+                timeout=120,
+                log_name=f"prepared_bundle_dir_{number}",
+                retry_safe=False,
+            )
+            print(f"[upload] prepared bundle file={source} -> {remote}", flush=True)
+            colab(
+                "upload",
+                "-s",
+                SESSION,
+                str(source),
+                remote,
+                timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS,
+            )
+        remote_paths.append(f"{remote_dir}/worker_{number}/{bundle.name}")
+    return remote_paths
+
+
 def run_single_train_and_stream(
-    args: list[str], *, run_label: str | None = None
+    args: list[str], *, run_label: str | None = None,
+    prepared_bundle: Path | None = None,
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
+    if prepared_bundle is not None:
+        remote_bundle = _upload_prepared_bundles(
+            run_id=Path(remote_base).name.removeprefix("concurrent_train_"),
+            bundles=[prepared_bundle],
+        )[0]
+        args = list(args)
+        args[args.index("training.train")] = "training.train_prepared"
+        args.extend(["--bundle", remote_bundle])
+    remote_input_names = (
+        'F["labeled_pairs"]'
+        if prepared_bundle is not None
+        else 'F["canonical_records"], F["gate_results"], F["labeled_pairs"]'
+    )
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import os, pathlib, shutil, subprocess, sys
 from core.common import F
@@ -1699,7 +1897,7 @@ base = pathlib.Path({remote_base!r})
 out = base / "worker_1"
 base.mkdir(parents=True, exist_ok=False)
 out.mkdir()
-for name in (F["canonical_records"], F["gate_results"], F["labeled_pairs"]):
+for name in ({remote_input_names},):
     relative = name.relative_to(root / "results")
     source = root / "results" / relative
     if not source.is_file():
@@ -2497,8 +2695,9 @@ def main() -> None:
 
     try:
         ensure_session()
-        prepare_remote_layout()
-        install_deps()
+        prepared_train_runtime = args.what == "train"
+        prepare_remote_layout(minimal_runtime=prepared_train_runtime)
+        install_deps(minimal_runtime=prepared_train_runtime)
         if args.what in {"train", "smoke", "mixed"}:
             required_models = [
                 args.model or str(training_cfg().training.base_model)
@@ -2513,8 +2712,12 @@ def main() -> None:
         if required_models:
             verify_remote_models(required_models)
         log_gpu_profile()
+        if args.refresh_data and prepared_train_runtime:
+            raise ValueError("--refresh-data is incompatible with local-prepared GPU training")
         if args.refresh_data:
             run_data_prep()
+        elif prepared_train_runtime:
+            verify_remote_prepared_inputs()
         else:
             verify_training_inputs()
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
