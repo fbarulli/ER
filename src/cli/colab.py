@@ -1668,27 +1668,6 @@ print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)
 
 
-def verify_remote_prepared_inputs() -> None:
-    """Check only the small calibration input used by prepared GPU workers."""
-    print("[data] validating local-prepared GPU runtime inputs ...")
-    script = _BOOTSTRAP + f"""
-from core.common import resolve_model
-from pathlib import Path
-model = Path(resolve_model({str(training_cfg().training.base_model)!r}))
-if not model.is_dir():
-    raise FileNotFoundError(f"prepared runtime model bundle missing: {{model}}")
-print(f"[data] model={{model}}")
-print("[data] remote preparation disabled; worker consumes uploaded bundle")
-"""
-    run_colab_exec_stream(
-        SESSION,
-        script,
-        timeout=120,
-        log_name="01_prepared_input_check",
-        retry_safe=True,
-    )
-
-
 def run_train(
     frac: float, epochs: int, sample: int | None, workers: int = 1,
     *, resume_run: str | None = None, model: str | None = None,
@@ -2734,9 +2713,7 @@ def main() -> None:
             raise ValueError("--refresh-data is incompatible with local-prepared GPU training")
         if args.refresh_data:
             run_data_prep()
-        elif prepared_train_runtime:
-            verify_remote_prepared_inputs()
-        else:
+        elif not prepared_train_runtime:
             verify_training_inputs()
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
         # (run_train was unconditional) — hours of unintended GPU quota
