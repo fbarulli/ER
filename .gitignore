@@ -68,3 +68,4 @@ submission/threshold_*.csv
 submission/threshold_*.png
 tmp_worker*_checkpoint/
 GLM.md
+wandb/
