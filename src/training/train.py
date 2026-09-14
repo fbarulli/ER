@@ -990,12 +990,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # uses the frozen gate population and masking, then the refresh callback
     # mines from the live fine-tuned model after checkpoint saves.
     emb0 = np.empty((0, 0), dtype=np.float32)
-    if mining_enabled:
-        print(
-            "[ANN] deferred until a fine-tuned checkpoint; zero-shot embeddings disabled",
-            flush=True,
-        )
-    else:
+    if not mining_enabled:
         print("[mining] disabled by config; skipping ANN and supplemental mining", flush=True)
 
     # Supplemental mining targets the same-brand/category attribute-conflict
@@ -1017,11 +1012,6 @@ def _main_inner(_mlf, _wandb) -> None:
             cosine_hi=_attr_hi,
         )
     elif attribute_conflict_enabled:
-        print(
-            "[attribute-conflicts] deferred until a fine-tuned checkpoint; "
-            "no zero-shot mining embeddings",
-            flush=True,
-        )
         _attr_neg = np.empty((0, 2), dtype=int)
     else:
         _attr_neg = np.empty((0, 2), dtype=int)
