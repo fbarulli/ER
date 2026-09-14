@@ -1477,11 +1477,11 @@ def install_deps(*, minimal_runtime: bool = False) -> None:
     # Run pip outside the notebook kernel. A kernel disconnect can interrupt
     # the control channel, but the detached process keeps writing a durable
     # log/status pair that the launcher can retrieve before teardown.
+    # A prepared bundle removes *data preparation*, not runtime dependencies.
+    # In particular, train.py shells out to ``dvc`` when remote checkpoint
+    # durability is enabled.  Keep the smoke install equal to the full lane so
+    # its dependency contract cannot drift and fail after training has begun.
     packages = (
-        "'sentence-transformers', 'datasets', 'accelerate', "
-        "'scikit-learn', 'pandas', 'numpy', 'mlflow', 'wandb'"
-        if minimal_runtime
-        else
         "'sentence-transformers', 'datasets', 'accelerate', 'evaluate', "
         "'scikit-learn', 'pandas', 'numpy', 'mlflow', 'optuna', "
         "'psycopg[binary]', 'wandb', 'dvc', 'dagshub'"
@@ -1490,6 +1490,37 @@ def install_deps(*, minimal_runtime: bool = False) -> None:
         "00_deps",
         "[sys.executable, '-m', 'pip', 'install', " + packages + "]",
         timeout=900,
+    )
+    verify_remote_runtime_dependencies()
+
+
+def verify_remote_runtime_dependencies() -> None:
+    """Fail before a worker starts if its declared runtime is incomplete."""
+    print("[deps] verifying Python imports and required command-line tools ...")
+    modules = (
+        "accelerate", "datasets", "dagshub", "dvc", "evaluate", "matplotlib",
+        "mlflow", "numpy", "optuna", "pandas", "psycopg", "pydantic",
+        "scipy", "sentence_transformers", "sentencepiece", "sklearn", "torch",
+        "transformers", "wandb", "yaml",
+    )
+    script = _BOOTSTRAP + f"""
+import importlib, subprocess
+modules = {modules!r}
+failed = {{}}
+for name in modules:
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        failed[name] = f"{{type(exc).__name__}}: {{exc}}"
+if failed:
+    raise RuntimeError(f"runtime import preflight failed: {{failed}}")
+tool = subprocess.run(["dvc", "version"], capture_output=True, text=True)
+if tool.returncode:
+    raise RuntimeError(f"DVC executable preflight failed: {{tool.stderr.strip()}}")
+print(f"[deps] imports={{len(modules)}} dvc={{tool.stdout.splitlines()[0]}} status=validated", flush=True)
+"""
+    run_colab_exec_stream(
+        SESSION, script, timeout=300, log_name="dependency_preflight", retry_safe=True,
     )
 
 
@@ -2712,7 +2743,6 @@ def main() -> None:
     local_training_run: tuple[str, int] | None = None
     local_mixed_run: tuple[str, int] | None = None
     local_hpo_run: str | None = None
-    publication_complete = False
 
     try:
         ensure_session()
@@ -2775,28 +2805,19 @@ def main() -> None:
         if local_hpo_run is not None:
             print("[hpo] publishing snapshots on local CPU ...", flush=True)
             publish_local_hpo_results(local_hpo_run, args.hpo_persistence)
-        publication_complete = True
     except BaseException:
         print(
-            "[launcher] traceback before teardown; result transfer is incomplete "
-            "and the VM will be kept alive for recovery:",
+            "[launcher] traceback before teardown; result transfer is incomplete:",
             flush=True,
         )
         traceback.print_exc()
         raise
     finally:
-        # A successful run is released only after result transfer has completed.
-        # On a failed/cancelled run, preserve the VM so a partial transfer can
-        # be recovered instead of deleting the only remaining copy of results.
-        if not args.keep_alive and publication_complete:
+        # Release the runtime after every outcome.  Retaining a failed VM can
+        # consume quota indefinitely; callers that intentionally need live
+        # recovery must make that choice explicitly with --keep-alive.
+        if not args.keep_alive:
             stop()
-        elif not args.keep_alive:
-            print(
-                "[stop] skipped: training/result transfer did not complete; "
-                "remote results remain available for recovery",
-                file=sys.stderr,
-                flush=True,
-            )
         else:
             print("\n[info] --keep-alive specified. VM is still running.")
         close_live_log()

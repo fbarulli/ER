@@ -411,7 +411,7 @@ hpo:
 sweep:
   payload_variants: ["title_only"]   # 07c variants beyond 'full'
   train_fracs: [0.25, 0.50, 0.75]    # 07d data-scaling curve
-  smoke_sample: 1000                  # chain-check sample size (--sample)
+  smoke_sample: 100                   # chain-check sample size (--sample)
   sweep_sample: 2000                  # step-2 smoke sweep size
   rerank_model: "rerank_minilm_l6"  # local registry key; DVC-shipped bundle
 
