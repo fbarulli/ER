@@ -27,9 +27,6 @@ results/dvc_refs/
 # training_results/ and the durable DVC state is owned by dvc.lock.
 /dvc_refs/
 
-# Local review/mention exports are generated, not source artifacts.
-DEV_MENTIONS.md
-dev_mentions.csv
 # Reproducible training input: keep the raw export in Git.
 !dataset.csv
 # NER-side derived input; regenerated from the configured source.
@@ -57,4 +54,17 @@ matplotlib/
 # Unrelated local artifact tree (contains node_modules, archives, and media).
 archify/
 src/ner/results/
+
+# Generated training splits, submission outputs, and local checkpoints.
+artifacts/data/dataset_deduped_sample_*.csv
+artifacts/data/dataset_deduped_train_minus_*.csv
+submission/SKU_ITEM_submission*.csv
+submission/calibration_diagnostics.csv
+submission/holdout_diagnostics.csv
+submission/holdout_metrics.csv
+submission/plateau_diagnostic.json
+submission/submission_provenance.json
+submission/threshold_*.csv
+submission/threshold_*.png
+tmp_worker*_checkpoint/
 GLM.md

@@ -89,8 +89,9 @@ def _emit_07_series(ok_rows: list[dict], args) -> None:
     """07b/07c/07d CSV emission — the report_plots inputs (owner ruling).
 
     07c (field ablation) and 07d (data scaling) are APPEND-MODE: each
-    src/training/train invocation adds its variant's row, so run_all's sweep
-    accumulates instead of overwriting (the plots read whatever rows exist).
+    src/training/train invocation adds its variant's row, so a 07-series
+    sweep accumulates instead of overwriting (the plots read whatever rows
+    exist).
     07b (four-population scores) is written by the rerank lane, which has
     the trained embeddings; a plain run notes its absence.
     """
@@ -1282,8 +1283,8 @@ def _main_inner(_mlf, _wandb) -> None:
         ),
     }
     t0 = time.perf_counter()
-    # run_tag carries EVERY varying axis (owner ruling): the run_all
-    # ablation series ran 12 variants into the SAME train_fold_metrics.csv
+    # run_tag carries EVERY varying axis (owner ruling): the 07-series
+    # ablation sweep ran 12 variants into the SAME train_fold_metrics.csv
     # and r{tag}_f{fold} checkpoint dirs — each run silently overwrote the
     # last. Model, payload variant, and train fraction are now part of the
     # tag so artifacts collide-proof across the whole series.
@@ -1520,7 +1521,7 @@ def _main_inner(_mlf, _wandb) -> None:
             )
 
     # persist metrics — SUFFIXED per run (see run_tag note): the fixed
-    # F["fold_metrics"] name meant the run_all step-4 series left only
+    # F["fold_metrics"] name meant the 07-series ablation left only
     # the LAST variant's fold metrics on disk. Per-run copy keeps every
     # variant; the shared name stays for the "latest run" consumer
     # (report_plots greps train_*_fold_metrics.csv).
@@ -1603,7 +1604,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # ported. The 07 lanes ARE this script's flag-mirrors (--payload = 07c,
     # --train-frac = 07d), so the CSVs regenerate from these runs:
     #   07c_field_ablation.csv — one row per payload variant (APPEND mode:
-    #     run_all sweeps full + title_only into ONE csv)
+    #     a 07-series sweep writes full + title_only into ONE csv)
     #   07d_data_scaling.csv  — one row per train fraction (append, same)
     #   07b_four_pop_scores.csv — four-population cosines (needs re-scoring;
     #     emitted by the rerank lane, see _emit_four_pop)

@@ -37,7 +37,7 @@ paths:
   models_dir: "artifacts/models"        # Git-shipped production model bundle
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
   mlruns_dir: "artifacts/mlruns"        # mlflow backend + artifact store (local)
-  logs_dir: "logs"                      # run_all per-step logs
+  logs_dir: "logs"                      # per-step orchestrator logs
 
 # ── artifact bindings (SSOT — nothing else in the tree spells these) ────────
 files:

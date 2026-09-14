@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import nullcontext
+import fcntl
 import hashlib
 import json
 import os
@@ -127,6 +128,7 @@ _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 _COLAB_CLI_STATE_DIR = TRAIN_ROOT / "colab_cli_state"
 _COLAB_CLI_CONFIG = _COLAB_CLI_STATE_DIR / "sessions.json"
 _COLAB_CLI_ENTRYPOINT = Path(__file__).with_name("colab_cli_entry.py")
+_COLAB_LAUNCH_LOCK = _COLAB_CLI_STATE_DIR / "launcher.lock"
 LIVE_LOG_PATH: Path | None = None
 TRAINING_LOG_PATH: Path | None = None
 _live_log = None
@@ -281,6 +283,46 @@ def check_colab_cli() -> None:
             "Run: uv tool install google-colab-cli\n"
             "Then: colab sessions  (to complete OAuth sign-in)"
         )
+
+
+def acquire_colab_launch_lock():
+    """Prevent independent launchers from sharing and tearing down one VM.
+
+    Every lane intentionally uses the configured session name.  Without an
+    inter-process lock, a previously interrupted local launcher can keep
+    running and execute its ``finally: stop()`` while a later launch is using
+    that same session.  The resulting kernel 404 is indistinguishable from a
+    Colab-side failure, so refuse the second launch before it touches Colab.
+    """
+    _COLAB_CLI_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    handle = _COLAB_LAUNCH_LOCK.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise RuntimeError(
+            f"a Colab launcher already owns session '{SESSION}'; "
+            f"refusing a concurrent lane (lock: {_COLAB_LAUNCH_LOCK})"
+        ) from exc
+    handle.seek(0)
+    handle.truncate()
+    handle.write(json.dumps({
+        "pid": os.getpid(),
+        "session": SESSION,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }) + "\n")
+    handle.flush()
+    return handle
+
+
+def release_colab_launch_lock(handle) -> None:
+    """Release the process-scoped Colab session ownership lock."""
+    if handle is None:
+        return
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
 
 
 def _colab_command(*args: str) -> list[str]:
@@ -998,7 +1040,7 @@ for number in range(1, {workers} + 1):
     ]
     completion_command = " ".join(shlex.quote(part) for part in completion_args)
     completion_clause = (
-        f"if [ \"$rc\" -eq 0 ]; then echo '[worker-process] training complete; running validation inference and final DVC publication'; {{completion_command}}; rc=$?; fi; "
+        "if [ \"$rc\" -eq 0 ]; then echo '[worker-process] training complete; running validation inference and final DVC publication'; {completion_command}; rc=$?; fi; "
         if {validation_inference!r} else ""
     )
     log_path, status_path = out / "training.log", out / "training.status"
@@ -2872,7 +2914,13 @@ def main() -> None:
         return
 
     start_live_log()
-    check_colab_cli()
+    launch_lock = None
+    try:
+        check_colab_cli()
+        launch_lock = acquire_colab_launch_lock()
+    except BaseException:
+        close_live_log()
+        raise
     local_training_run: tuple[str, int] | None = None
     local_mixed_run: tuple[str, int] | None = None
     local_hpo_run: str | None = None
@@ -2954,6 +3002,7 @@ def main() -> None:
         else:
             print("\n[info] --keep-alive specified. VM is still running.")
         close_live_log()
+        release_colab_launch_lock(launch_lock)
 
     print("\n[done] artifacts persisted to the configured DVC remote")
 

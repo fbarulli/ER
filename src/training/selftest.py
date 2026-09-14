@@ -1492,7 +1492,9 @@ def oracle_no_fallback_ssot() -> None:
         > _threshold_selection_key(fewer_unmatched),
     )
 
-    # ── sweep: run_all's ablation axes
+    # ── sweep: the 07-series ablation axes (config-only since run_all.py was
+    #    deleted; src/cli/colab.py derives its smoke-sample/train-frac/rerank
+    #    defaults from this block, so the keys stay live)
     s = sweep_cfg()
     check(
         "sweep payload/frac axes non-empty, fracs in (0,1)",
@@ -1597,7 +1599,9 @@ def oracle_no_fallback_ssot() -> None:
             r'"weight_decay":\s*0\.01',
             r"batch_size=128",
         ],
-        "run_all.py": [r'"title_only",\s*\)', r'"0\.25",\s*"0\.50",\s*"0\.75"'],
+        # The former "run_all.py" entry (its inline title_only / frac-list
+        # literals) was removed together with the deleted run_all.py: those
+        # axes now exist only as config-owned keys under sweep:.
         # AUDIT round 2 F03 (round 3): the two dpi=150 literals that
         # regressed in evaluate_models must not come back
         "src/training/evaluate_models.py": [r"dpi\s*=\s*150"],
@@ -1614,7 +1618,7 @@ def oracle_no_fallback_ssot() -> None:
     #    only guard the EXACT literals past audits removed. This scan is
     #    SHAPE-based — it catches NEW config-drift, not just old
     #    regressions: any inline numeric-literal band/threshold shape in
-    #    the tracked src/training/*.py + src/core/*.py + pipeline.py + run_all.py +
+    #    the tracked src/training/*.py + src/core/*.py + pipeline.py +
     #    colab_backend.py executable lines (docstrings/comments stripped).
     #
     #    Patterns (bands/thresholds ONLY — deliberately narrow):
@@ -1641,7 +1645,6 @@ def oracle_no_fallback_ssot() -> None:
             *(root / "src/training").glob("*.py"),
             *(root / "src/core").glob("*.py"),
             root / "src/pipeline.py",
-            root / "run_all.py",
             root / "colab_backend.py",
         ]
         if p.name not in ("selftest.py", "__init__.py")
@@ -1699,19 +1702,36 @@ def oracle_no_fallback_ssot() -> None:
         f"f1_at_{thr:g}".endswith(f"{thr:g}"),
     )
 
-    # ── run_all consumes sweep_cfg (subprocess --help smoke, no full run)
+    # ── a repo-root entrypoint consumes sweep_cfg (subprocess import smoke, no
+    #    full run). run_all.py was the original target and has been deleted;
+    #    the surviving root entrypoint colab_backend -> cli.colab reads
+    #    sweep_cfg at import time, so a config break still surfaces here
+    #    instead of on a GPU run.
     try:
         res = subprocess.run(
-            [_sys.executable, "-c", "import run_all"],  # importable = SSOT loads
+            [
+                _sys.executable,
+                "-c",
+                # importable = the SSOT loads; the asserts pin that the three
+                # sweep-derived colab defaults are live, not silently zero.
+                "import sys; sys.path.insert(0, 'src'); "
+                "import colab_backend, cli.colab as c; "
+                "assert c._SMOKE_SAMPLE >= 1 "
+                "and 0.0 < c._TRAIN_FRAC_DEFAULT < 1.0 and c._RERANK_MODEL",
+            ],
             cwd=str(root),
             capture_output=True,
             text=True,
             timeout=120,
             check=False,
         )
-        check("run_all imports (sweep_cfg live)", res.returncode == 0, res.stderr[-200:])
+        check(
+            "colab_backend imports (sweep_cfg live)",
+            res.returncode == 0,
+            res.stderr[-200:],
+        )
     except subprocess.TimeoutExpired:
-        check("run_all imports (sweep_cfg live)", False, "timeout")
+        check("colab_backend imports (sweep_cfg live)", False, "timeout")
 
 
 def oracle_round3_pins() -> None:

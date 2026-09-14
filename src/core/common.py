@@ -419,7 +419,8 @@ def rerank_cfg() -> dict:
 
 
 def sweep_cfg() -> dict:
-    """The sweep: block (run_all ablation axes) as plain data."""
+    """The sweep: block (07-series ablation axes; src/cli/colab.py derives its
+    smoke-sample / train-frac / rerank defaults from it) as plain data."""
     return dict(_CFG["sweep"])
 
 

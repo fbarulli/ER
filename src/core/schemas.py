@@ -813,7 +813,7 @@ class AuditSpec(BaseModel):
     export against; source_drift_threshold_pct — relative row-count
     drift allowed on that census before the gate fails (0.0 = exact
     match required); manifest_stages — the registry of stages that MUST
-    produce a manifest (run_all steps may append their own). All four
+    produce a manifest (an orchestrator lane may append its own). All four
     are optional-with-default; the defaults are mirrored explicitly in
     the yaml so the SSOT stays self-documenting."""
 
@@ -846,7 +846,7 @@ class AuditSpec(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     # manifest_stages: stages that MUST produce a manifest, in pipeline
-    #   order. run_all steps may append their own later; this list is
+    #   order. An orchestrator lane may append its own later; this list is
     #   the required-minimum registry the verify pass walks.
     manifest_stages: list[str] = Field(
         default=["dedupe", "data_prep", "labeled_pairs", "evaluate_models", "zero_shot_sims"],
@@ -1164,10 +1164,10 @@ class RerankSpec(BaseModel):
 
 
 class SweepSpec(BaseModel):
-    """Ablation-sweep axes (config/training.yaml sweep:) — run_all step 4's
+    """Ablation-sweep axes (config/training.yaml sweep:) — the 07-series
     payload variants, train-frac curve, smoke/sweep sample sizes, and the
-    07e rerank cross-encoder id. Formerly inline literals in run_all.py /
-    colab_backend.py."""
+    07e rerank cross-encoder id. src/cli/colab.py derives its smoke-sample /
+    train-frac / rerank defaults from this block."""
 
     model_config = ConfigDict(extra="forbid")
 

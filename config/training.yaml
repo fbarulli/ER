@@ -390,8 +390,8 @@ audit:
   source_drift_threshold_pct: 0.0     # allowed row-count drift; 0.0 = exact
   source_export_expected_sha256: "539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c" # approved source bytes
   manifest_stages:                    # stages that MUST produce a manifest,
-    - "dedupe"                        # in pipeline order (run_all steps may
-    - "data_prep"                     # append their own later)
+    - "dedupe"                        # in pipeline order (an orchestrator lane
+    - "data_prep"                     # may append its own later)
     - "labeled_pairs"
     - "evaluate_models"
     - "zero_shot_sims"
@@ -459,11 +459,12 @@ hpo:
   # computing a per-config test metric re-opens the leak this closed.
   selection_skip_test_eval: true
 
-# ── ablation sweep (run_all step 4 / colab smoke) ──────────────────────────
-# The 07-series axes run_all sweeps: payload variants (07c, 'full' is
-# step 3 itself so it is skipped), train-frac curve (07d), the smoke
-# sample size, and the 07e rerank cross-encoder. All were inline
-# literals in run_all.py / colab_backend.py.
+# ── ablation sweep (07-series axes / colab smoke) ──────────────────────────
+# The 07-series axes: payload variants (07c, 'full' is the main holdout lane
+# itself so it is skipped), train-frac curve (07d), the smoke sample size,
+# and the 07e rerank cross-encoder. src/cli/colab.py derives its
+# smoke-sample, train-frac and rerank defaults from this block. All were
+# inline literals in the deleted run_all.py orchestrator / colab_backend.py.
 sweep:
   payload_variants: ["title_only"]   # 07c variants beyond 'full'
   train_fracs: [0.25, 0.50, 0.75]    # 07d data-scaling curve
