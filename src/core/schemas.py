@@ -486,6 +486,28 @@ class RandTruthSplitsSpec(BaseModel):
         return self
 
 
+class RandStratumSweepSpec(BaseModel):
+    """Deterministic non-degenerate GTIN-ablation evaluation fixture."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    output_dir: str = Field(min_length=1)
+    output: str = Field(min_length=1)
+    identities_per_status: int = Field(ge=3)
+    skus_per_identity: int = Field(ge=2)
+    calibration_folds: int = Field(ge=3)
+    seed: int
+
+    @model_validator(mode="after")
+    def _has_fold_support(self) -> RandStratumSweepSpec:
+        if self.identities_per_status < self.calibration_folds:
+            raise ValueError(
+                "rand_matching.stratum_sweep.identities_per_status must provide "
+                "at least one identity per calibration fold"
+            )
+        return self
+
+
 class RandMatchingSpec(BaseModel):
     """Final direct SKU-to-canonical Rand Index matching contract."""
 
@@ -493,6 +515,7 @@ class RandMatchingSpec(BaseModel):
 
     output_dir: str = Field(min_length=1)
     truth_splits: RandTruthSplitsSpec
+    stratum_sweep: RandStratumSweepSpec
     outputs: RandMatchingOutputsSpec
     top_k: int = Field(ge=1)
     batch_size: int = Field(ge=1)

@@ -199,6 +199,15 @@ rand_matching:
     calibration_size: 8657
     calibration_folds: 3
     seed: 42
+  stratum_sweep:
+    # A non-degenerate GTIN-ablation fixture: two source SKUs per canonical
+    # truth, with complete, mismatched, and missing source GTIN scenarios.
+    output_dir: "results/rand_truth"
+    output: "gtin_stratum_sweep.csv"
+    identities_per_status: 600
+    skus_per_identity: 2
+    calibration_folds: 3
+    seed: 42
   outputs:
     submission: "SKU_ITEM_submission.csv"
     diagnostics: "SKU_ITEM_submission_diagnostics.csv"
