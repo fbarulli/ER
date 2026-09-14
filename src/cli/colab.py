@@ -43,6 +43,7 @@ from contextlib import nullcontext
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -420,12 +421,13 @@ def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
 
 def _parse_remote_json(output: str) -> dict:
     """Read the last JSON object from a Colab probe without trusting banners."""
-    for line in reversed(output.splitlines()):
+    clean_output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    for line in reversed(clean_output.splitlines()):
         try:
             return json.loads(line)
         except json.JSONDecodeError:
             continue
-    raise RuntimeError(f"remote log probe returned no JSON: {output[-1000:]}")
+    raise RuntimeError(f"remote log probe returned no JSON: {clean_output[-1000:]}")
 
 
 def run_detached_stage(stage: str, command_expr: str, timeout: int) -> None:
@@ -894,18 +896,19 @@ for number in range(1, {workers} + 1):
             raise
     else:
         out.mkdir()
-        for name in (
-            F["canonical_records"],
-            F["gate_results"],
-            F["labeled_pairs"],
-        ):
-            relative = name.relative_to(root / "results")
-            source = root / "results" / relative
-            if not source.is_file():
-                raise FileNotFoundError(f"worker input missing: {{source}}")
-            destination = out / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+        if {remote_bundles is None!r}:
+            for name in (
+                F["canonical_records"],
+                F["gate_results"],
+                F["labeled_pairs"],
+            ):
+                relative = name.relative_to(root / "results")
+                source = root / "results" / relative
+                if not source.is_file():
+                    raise FileNotFoundError(f"worker input missing: {{source}}")
+                destination = out / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
     worker_args = [sys.executable, *{args!r}]
     if {remote_bundles is not None!r}:
         worker_args[worker_args.index("training.train")] = "training.train_prepared"
