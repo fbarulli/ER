@@ -26,6 +26,8 @@ Leakage prevention: any information that could leak travels along those edges, a
 
 from __future__ import annotations
 
+from itertools import combinations
+
 import numpy as np
 
 from core.schemas import CalibrationPartition, FoldSets
@@ -140,6 +142,8 @@ def partition_component_pairs(
     row_bc: np.ndarray,
     fraction: float,
     seed: int,
+    *,
+    ensure_different_gtin: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Partition pair pools by positive-pair components without leakage.
 
@@ -153,6 +157,10 @@ def partition_component_pairs(
     product pair to opposite sides of the calibration boundary — the fit half
     keeps ``(rep(g1), canon(g2))`` for early stopping while the calibration
     half keeps ``(rep(g2), canon(g1))``.
+
+    If ``ensure_different_gtin`` is true, one reserved positive component-fold
+    is selected from the different-GTIN stratum when that stratum exists. The
+    pair remains whole because reservation is still by complete component.
     """
     if len(positive_pairs) == 0:
         raise ValueError("cannot reserve calibration data without DEV positives")
@@ -180,28 +188,98 @@ def partition_component_pairs(
     n_folds = max(2, int(np.ceil(1.0 / fraction)))
     component_groups = component_folds(local_pairs, local_barcodes, n_folds, seed)
     n_reserved = min(max(1, int(round(n_folds * fraction))), n_folds - 1)
-    selected_barcodes = set().union(*component_groups[:n_reserved])
+    selected_group_indices = list(range(n_reserved))
+    if ensure_different_gtin:
+        def positive_statuses(groups: tuple[int, ...]) -> set[str]:
+            selected = set().union(*(component_groups[index] for index in groups))
+            return {
+                (
+                    "both_equal"
+                    if str(row_bc[int(left)]).strip()
+                    == str(row_bc[int(right)]).strip()
+                    else "different"
+                )
+                for left, right in positive_pairs
+                if str(row_bc[int(left)]).strip() in selected
+                and str(row_bc[int(right)]).strip() in selected
+            }
 
-    def reserved_mask(pairs: np.ndarray) -> np.ndarray:
+        def internal_negative_count(groups: tuple[int, ...]) -> int:
+            selected = set().union(*(component_groups[index] for index in groups))
+            return sum(
+                str(row_bc[int(left)]).strip() in selected
+                and str(row_bc[int(right)]).strip() in selected
+                for left, right in negative_pairs
+            )
+
+        feasible = [
+            group_indices
+            for group_indices in combinations(range(n_folds), n_reserved)
+            if {"both_equal", "different"} <= positive_statuses(group_indices)
+            and internal_negative_count(group_indices) > 0
+        ]
+        if not feasible:
+            all_statuses = positive_statuses(tuple(range(n_folds)))
+            per_group = [
+                {
+                    "group": group_index,
+                    "both_equal": int("both_equal" in positive_statuses((group_index,))),
+                    "different": int("different" in positive_statuses((group_index,))),
+                    "internal_negatives": internal_negative_count((group_index,)),
+                }
+                for group_index in range(n_folds)
+            ]
+            raise RuntimeError(
+                "no component-safe calibration reservation can retain both_equal, "
+                "different, and a negative population: "
+                f"n_folds={n_folds}, n_reserved={n_reserved}, "
+                f"available_statuses={sorted(all_statuses)}, groups={per_group}"
+            )
+        # component_folds is seeded and ``combinations`` is lexicographic, so
+        # first feasible is an explicit deterministic reservation rule.
+        selected_group_indices = list(feasible[0])
+    selected_barcodes = set().union(
+        *(component_groups[index] for index in selected_group_indices)
+    )
+
+    def mask_inside(pairs: np.ndarray, selected: set[str]) -> np.ndarray:
         return np.asarray(
             [
-                str(row_bc[int(pair[0])]).strip() in selected_barcodes
-                and str(row_bc[int(pair[1])]).strip() in selected_barcodes
+                str(row_bc[int(pair[0])]).strip() in selected
+                and str(row_bc[int(pair[1])]).strip() in selected
                 for pair in pairs
             ],
             dtype=bool,
         )
 
-    positive_mask = reserved_mask(positive_pairs)
-    negative_mask = reserved_mask(negative_pairs)
+    all_positive_barcodes = {
+        str(row_bc[int(row)]).strip() for row in positive_pairs.ravel()
+    }
+    fit_barcodes = all_positive_barcodes - selected_barcodes
+    positive_mask = mask_inside(positive_pairs, selected_barcodes)
+    negative_reserved_mask = mask_inside(negative_pairs, selected_barcodes)
+    negative_fit_mask = mask_inside(negative_pairs, fit_barcodes)
+    crossing_negative_count = int(
+        len(negative_pairs)
+        - negative_reserved_mask.sum()
+        - negative_fit_mask.sum()
+    )
+    if crossing_negative_count:
+        print(
+            "[calibration-partition] excluded "
+            f"{crossing_negative_count:,} cross-boundary negatives to keep "
+            "fit/reserved positive identities disjoint",
+            flush=True,
+        )
     partition = CalibrationPartition(
         positive_fit=positive_pairs[~positive_mask],
         positive_reserved=positive_pairs[positive_mask],
-        negative_fit=negative_pairs[~negative_mask],
-        negative_reserved=negative_pairs[negative_mask],
+        negative_fit=negative_pairs[negative_fit_mask],
+        negative_reserved=negative_pairs[negative_reserved_mask],
         row_bc=row_bc,
         n_positive_pairs=len(positive_pairs),
         n_negative_pairs=len(negative_pairs),
+        n_negative_pairs_excluded=crossing_negative_count,
     )
     # checks that can actually fail: the two "population" guards that used to
     # sit here compared pairs[~m] + pairs[m] against len(pairs) for one and the
@@ -215,6 +293,29 @@ def partition_component_pairs(
         raise RuntimeError(
             "calibration reservation kept no negative pair: no negative pair "
             "has both endpoints inside a reserved component"
+        )
+    if ensure_different_gtin:
+        reserved_status_counts = {
+            "both_equal": sum(
+                str(row_bc[int(left)]).strip() == str(row_bc[int(right)]).strip()
+                for left, right in partition.positive_reserved
+            ),
+            "different": sum(
+                str(row_bc[int(left)]).strip() != str(row_bc[int(right)]).strip()
+                for left, right in partition.positive_reserved
+            ),
+        }
+        if any(count == 0 for count in reserved_status_counts.values()):
+            raise RuntimeError(
+                "required GTIN calibration stratum absent from reserved "
+                f"component-fold: counts={reserved_status_counts}"
+            )
+        print(
+            "[calibration-partition] reserved positive strata="
+            f"{reserved_status_counts}; fit_pos={len(partition.positive_fit):,}; "
+            f"reserved_neg={len(partition.negative_reserved):,}; "
+            f"fit_neg={len(partition.negative_fit):,}",
+            flush=True,
         )
     return partition.pools()
 # (trailing HARDNEG_SIM_THRESHOLD removed — dead constant, no readers; the

@@ -73,6 +73,7 @@ from core.common import (
     runtime,
     trace_artifact,
 )
+from core.schemas import check_labeled_pairs_frame
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_MARGIN
 from core.common import runtime as _runtime
 
@@ -2349,7 +2350,132 @@ def _partition_calibration_pairs(
         row_bc,
         calibration_fraction,
         seed,
+        ensure_different_gtin=True,
     )
+
+
+def _load_labeled_different_positive_pairs(
+    *,
+    eval_pos: np.ndarray,
+    row_bc: np.ndarray,
+    n_source_rows: int,
+) -> np.ndarray:
+    """Load one valid different-GTIN positive per source GTIN.
+
+    ``eval_pos`` already contains the implicit exact-GTIN positives. The
+    labeled-pairs artifact supplies the separately investigated
+    different-GTIN positives. Calibration's proxy contract permits one truth
+    candidate per SKU, so keep one deterministic labeled target per source
+    GTIN; callers replace that source row's exact-GTIN pair when the pair is
+    admitted to a fold-local DEV pool.
+
+    Deterministic selection rule: source rows use the lowest source-row index
+    for each source GTIN; target GTINs use lexicographic order in the sorted
+    labeled artifact. This is reproducible across reruns and does not pretend
+    the gate similarity is independent evidence (the artifact has no separate
+    quality signal beyond its gate-derived positive label).
+    """
+    selection_rule = load_config()["rand_matching"][
+        "calibration_different_gtin_selection"
+    ]
+    if selection_rule != "lowest_source_row_lexicographic_target":
+        raise ValueError(
+            "unsupported calibration different-GTIN selection rule: "
+            f"{selection_rule!r}"
+        )
+    labeled_path = RESULTS / F["labeled_pairs"]
+    if not labeled_path.is_file():
+        raise FileNotFoundError(
+            "labeled-pairs calibration input is missing: " f"{labeled_path}"
+        )
+    labeled = check_labeled_pairs_frame(
+        pd.read_csv(
+            labeled_path,
+            dtype={"gtin1": str, "gtin2": str},
+            keep_default_na=False,
+        )
+    )
+    labels = pd.to_numeric(labeled["true_label"], errors="raise").astype(int)
+    positives = labeled.loc[
+        (labels == 1)
+        & labeled["gtin1"].astype(str).str.strip().ne(
+            labeled["gtin2"].astype(str).str.strip()
+        )
+    ].copy()
+    positives["gtin1"] = positives["gtin1"].astype(str).str.strip()
+    positives["gtin2"] = positives["gtin2"].astype(str).str.strip()
+    positives = positives.sort_values(["gtin1", "gtin2"], kind="stable")
+
+    source_by_gtin: dict[str, int] = {}
+    eligible_source_rows = {
+        int(source) for source in eval_pos[:, 0]
+    } if len(eval_pos) else set()
+    for source in sorted(eligible_source_rows):
+        gtin = str(row_bc[source]).strip()
+        if gtin and source < n_source_rows and gtin not in source_by_gtin:
+            source_by_gtin[gtin] = source
+
+    canonical_by_gtin: dict[str, int] = {}
+    for index in range(n_source_rows, len(row_bc)):
+        gtin = str(row_bc[index]).strip()
+        if gtin and gtin not in canonical_by_gtin:
+            canonical_by_gtin[gtin] = index
+
+    available_source_gtins = {
+        str(row.gtin1)
+        for row in positives.itertuples(index=False)
+        if str(row.gtin1) in source_by_gtin
+        and str(row.gtin2) in canonical_by_gtin
+    }
+
+    selected: list[tuple[int, int]] = []
+    selected_sources: set[int] = set()
+    for row in positives.itertuples(index=False):
+        source = source_by_gtin.get(str(row.gtin1))
+        target = canonical_by_gtin.get(str(row.gtin2))
+        if source is None or target is None or source in selected_sources:
+            continue
+        selected.append((source, target))
+        selected_sources.add(source)
+
+    pairs = np.asarray(selected, dtype=int).reshape(-1, 2)
+    print(
+        f"[calibration-positives] labeled_pairs different-GTIN rows="
+        f"{len(positives):,}; source-GTINs with usable candidates="
+        f"{len(available_source_gtins):,}; selected one/source-GTIN="
+        f"{len(pairs):,}; selection={selection_rule}",
+        flush=True,
+    )
+    return pairs
+
+
+def _merge_different_calibration_positives(
+    dev_pos: np.ndarray,
+    labeled_pairs: np.ndarray,
+    row_bc: np.ndarray,
+    dev_bc: set[str],
+) -> np.ndarray:
+    """Add fold-local different-GTIN positives without duplicate truths."""
+    if len(labeled_pairs) == 0:
+        return dev_pos
+    eligible = labeled_pairs[pairs_in_set(labeled_pairs, row_bc, dev_bc)]
+    if len(eligible) == 0:
+        return dev_pos
+
+    # A source SKU already has an exact-GTIN positive in ``dev_pos``. Replace
+    # that exact candidate for the selected source rows so _candidate_frame's
+    # one-truth-per-SKU contract remains valid.
+    replace_sources = {int(pair[0]) for pair in eligible}
+    keep = np.asarray(
+        [int(pair[0]) not in replace_sources for pair in dev_pos], dtype=bool
+    )
+    merged = np.vstack([dev_pos[keep], eligible]) if len(dev_pos[keep]) else eligible
+    print(
+        f"[calibration-positives] DEV merge: different-GTIN={len(eligible):,} "
+        f"exact-GTIN replacements={int((~keep).sum()):,} total={len(merged):,}",
+        flush=True,
+    )
+    return merged
 
 
 def train_one_config(
@@ -2499,6 +2625,11 @@ def train_one_config(
             "positive copies from dev/holdout evaluation; training retains them",
             flush=True,
         )
+    labeled_different_pos = _load_labeled_different_positive_pairs(
+        eval_pos=eval_pos,
+        row_bc=row_bc,
+        n_source_rows=len(df),
+    )
     all_barcode_set = set(row_bc.tolist())
 
     # country must cover every payload entry (canonicals + masked copies
@@ -2645,6 +2776,12 @@ def train_one_config(
             test_pos = eval_pos[pairs_in_set(eval_pos, row_bc, test_bc)]
             train_pos = pos[pairs_in_set(pos, row_bc, tr_bc)]
             dev_pos = eval_pos[pairs_in_set(eval_pos, row_bc, dev_bc)]
+            dev_pos = _merge_different_calibration_positives(
+                dev_pos,
+                labeled_different_pos,
+                row_bc,
+                dev_bc,
+            )
             hard_train = hard_train_all[pairs_in_set(hard_train_all, row_bc, tr_bc)]
             hard_dev = hard_eval[pairs_in_set(hard_eval, row_bc, dev_bc)]
             hard_test = hard_eval[pairs_in_set(hard_eval, row_bc, test_bc)]

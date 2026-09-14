@@ -13,7 +13,7 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from core.attribute_conflicts import sku_attribute_info
 from core.common import canonical_records_frame, row_metadata_text
@@ -230,6 +230,7 @@ class CalibrationSensitivityRow(BaseModel):
     over_merge_rate: float
     under_merge_rate: float
     predicted_group_count: int
+    predicted_match_count: int = Field(ge=0)
 
     @field_validator("gtin_status")
     @classmethod
@@ -240,6 +241,47 @@ class CalibrationSensitivityRow(BaseModel):
                 f"expected ALL or {GTIN_STATUSES}"
             )
         return value
+
+
+class CalibrationFoldPlan(BaseModel):
+    """Validated component-safe, GTIN-stratified inner calibration split."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sku_to_fold: dict[str, int]
+    identity_to_fold: dict[str, int]
+    status_counts_by_fold: dict[int, dict[str, int]]
+    n_folds: int = Field(ge=2)
+    component_count: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _complete_stratified_folds(self) -> CalibrationFoldPlan:
+        expected = set(range(self.n_folds))
+        if set(self.status_counts_by_fold) != expected:
+            raise ValueError("calibration fold plan does not cover every fold")
+        if set(self.sku_to_fold.values()) - expected:
+            raise ValueError("calibration fold plan contains an out-of-range fold")
+        if set(self.identity_to_fold.values()) - expected:
+            raise ValueError(
+                "calibration fold plan contains an out-of-range identity fold"
+            )
+        missing = {
+            fold: {
+                status: int(self.status_counts_by_fold[fold].get(status, 0))
+                for status in ("both_equal", "different")
+            }
+            for fold in expected
+            if any(
+                int(self.status_counts_by_fold[fold].get(status, 0)) == 0
+                for status in ("both_equal", "different")
+            )
+        }
+        if missing:
+            raise ValueError(
+                "calibration check folds must all contain both_equal and "
+                f"different truth rows; deficient_folds={missing}"
+            )
+        return self
 
 
 CalibrationMetricRow.model_rebuild()
@@ -535,6 +577,9 @@ def _candidate_frame(
     truth_frame = pd.DataFrame(
         [{"SKU_ID": sku_id, "true_item_id": item_id} for sku_id, item_id in truth.items()]
     )
+    truth_frame["source_gtin"] = [
+        str(row_bc[truth_sources[sku_id]]).strip() for sku_id in truth
+    ]
     statuses = [
         gtin_status(
             row_metadata_text(df.iloc[truth_sources[sku_id]], "barcode", "gtin"),
@@ -624,6 +669,9 @@ def _stratified_sensitivity_rows(
                     "over_merge_rate": float(metrics["over_merge_rate"]),
                     "under_merge_rate": float(metrics["under_merge_rate"]),
                     "predicted_group_count": int(metrics["predicted_group_count"]),
+                    "predicted_match_count": int(
+                        metrics["n"] - metrics["unmatched_skus"]
+                    ),
                 }
             )
         )
@@ -643,10 +691,136 @@ def _fit_threshold(
     return threshold, _assignment_metrics(candidates, truth, threshold)
 
 
-def _fold_ids(truth: pd.DataFrame, n_folds: int, seed: int) -> dict[str, int]:
-    items = np.asarray(sorted(truth["true_item_id"].astype(str).unique()))
-    order = np.random.default_rng(seed).permutation(len(items))
-    return {str(items[position]): int(index % n_folds) for index, position in enumerate(order)}
+def _fold_ids(truth: pd.DataFrame, n_folds: int, seed: int) -> CalibrationFoldPlan:
+    """Assign positive identity components to stratified calibration folds.
+
+    Components union each source GTIN with its truth canonical. This preserves
+    the exact-GTIN split behavior while keeping a cross-GTIN truth edge whole.
+    Every fold receives a component carrying each required GTIN stratum when
+    feasible; otherwise construction fails with component and row counts.
+    """
+    required = {"SKU_ID", "source_gtin", "true_item_id", "gtin_status"}
+    missing = required - set(truth.columns)
+    if missing:
+        raise ValueError(f"calibration truth missing fold fields: {sorted(missing)}")
+
+    parent: dict[str, str] = {}
+
+    def find(identity: str) -> str:
+        parent.setdefault(identity, identity)
+        root = identity
+        while parent[root] != root:
+            root = parent[root]
+        while parent[identity] != root:
+            parent[identity], identity = root, parent[identity]
+        return root
+
+    def union(left: str, right: str) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    for row in truth.itertuples(index=False):
+        source = str(row.source_gtin).strip()
+        target = str(row.true_item_id).strip()
+        if not source or not target:
+            raise ValueError("calibration truth contains a blank source/truth identity")
+        union(source, target)
+
+    component_rows: dict[str, list[int]] = {}
+    for row_index, row in truth.reset_index(drop=True).iterrows():
+        component_rows.setdefault(find(str(row["source_gtin"]).strip()), []).append(
+            int(row_index)
+        )
+    components = sorted(
+        component_rows.values(),
+        key=lambda rows: sorted(str(truth.iloc[index]["SKU_ID"]) for index in rows),
+    )
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(len(components))
+    components = [components[int(index)] for index in order]
+
+    def statuses(rows: list[int]) -> set[str]:
+        return set(truth.iloc[rows]["gtin_status"].astype(str))
+
+    mixed = [rows for rows in components if {"both_equal", "different"} <= statuses(rows)]
+    both_only = [
+        rows for rows in components
+        if "both_equal" in statuses(rows) and "different" not in statuses(rows)
+    ]
+    different_only = [
+        rows for rows in components
+        if "different" in statuses(rows) and "both_equal" not in statuses(rows)
+    ]
+    mixed_used = min(len(mixed), n_folds)
+    uncovered = n_folds - mixed_used
+    if len(both_only) < uncovered or len(different_only) < uncovered:
+        status_rows = truth["gtin_status"].value_counts().to_dict()
+        raise ValueError(
+            "cannot build component-safe calibration folds with both_equal and "
+            "different in every check fold: "
+            f"n_folds={n_folds}, components={len(components)}, mixed={len(mixed)}, "
+            f"both_only={len(both_only)}, different_only={len(different_only)}, "
+            f"status_rows={status_rows}"
+        )
+
+    fold_components: list[list[list[int]]] = [[] for _ in range(n_folds)]
+    assigned: set[int] = set()
+    for fold, rows in enumerate(mixed[:mixed_used]):
+        fold_components[fold].append(rows)
+        assigned.add(id(rows))
+    for offset, fold in enumerate(range(mixed_used, n_folds)):
+        for rows in (both_only[offset], different_only[offset]):
+            fold_components[fold].append(rows)
+            assigned.add(id(rows))
+    for rows in components:
+        if id(rows) in assigned:
+            continue
+        target_fold = min(
+            range(n_folds),
+            key=lambda fold: (
+                sum(len(group) for group in fold_components[fold]),
+                len(fold_components[fold]),
+                fold,
+            ),
+        )
+        fold_components[target_fold].append(rows)
+
+    sku_to_fold: dict[str, int] = {}
+    status_counts_by_fold: dict[int, dict[str, int]] = {}
+    identity_fold: dict[str, int] = {}
+    for fold, groups in enumerate(fold_components):
+        row_indices = [index for group in groups for index in group]
+        fold_truth = truth.iloc[row_indices]
+        status_counts_by_fold[fold] = {
+            status: int((fold_truth["gtin_status"].astype(str) == status).sum())
+            for status in GTIN_STATUSES
+        }
+        for row in fold_truth.itertuples(index=False):
+            sku = str(row.SKU_ID)
+            if sku in sku_to_fold:
+                raise ValueError(f"SKU {sku!r} occurs in multiple calibration components")
+            sku_to_fold[sku] = fold
+            for identity in (str(row.source_gtin).strip(), str(row.true_item_id).strip()):
+                previous = identity_fold.setdefault(identity, fold)
+                if previous != fold:
+                    raise ValueError(
+                        f"calibration identity {identity!r} crosses folds "
+                        f"{previous} and {fold}"
+                    )
+    plan = CalibrationFoldPlan(
+        sku_to_fold=sku_to_fold,
+        identity_to_fold=identity_fold,
+        status_counts_by_fold=status_counts_by_fold,
+        n_folds=n_folds,
+        component_count=len(components),
+    )
+    print(
+        "[calibration-folds] component-safe strata="
+        f"{plan.status_counts_by_fold}; components={plan.component_count}",
+        flush=True,
+    )
+    return plan
 
 
 def _fold_collapse_stats(
@@ -764,7 +938,60 @@ def evaluate_calibration_trial(
             "HPO calibration has insufficient fold support for a meaningful median: "
             f"configured={n_folds}, required={minimum_support}"
         )
-    fold_map = _fold_ids(truth, n_folds, int(config["collapse_guardrail"]["seed"]))
+    fold_plan = _fold_ids(truth, n_folds, int(config["collapse_guardrail"]["seed"]))
+    source_folds = candidates["SKU_ID"].astype(str).map(fold_plan.sku_to_fold)
+    if source_folds.isna().any():
+        missing_skus = sorted(
+            candidates.loc[source_folds.isna(), "SKU_ID"].astype(str).unique()
+        )
+        raise ValueError(
+            "calibration candidates have no component fold assignment: "
+            f"{missing_skus[:5]}"
+        )
+    target_folds = candidates["candidate_gtin"].astype(str).map(
+        fold_plan.identity_to_fold
+    )
+    # A negative-only canonical is not part of the positive identity graph.
+    # Give it one deterministic owner (the lowest source fold where it occurs)
+    # and discard uses from other folds so it cannot bridge fit/check.
+    unowned = target_folds.isna()
+    if unowned.any():
+        unowned_owners = (
+            pd.DataFrame(
+                {
+                    "candidate_gtin": candidates.loc[unowned, "candidate_gtin"].astype(str),
+                    "source_fold": source_folds.loc[unowned].astype(int),
+                }
+            )
+            .groupby("candidate_gtin", sort=True)["source_fold"]
+            .min()
+        )
+        target_folds.loc[unowned] = candidates.loc[
+            unowned, "candidate_gtin"
+        ].astype(str).map(unowned_owners)
+    same_fold_candidate = source_folds.astype(int).eq(target_folds.astype(int))
+    crossing_candidates = int((~same_fold_candidate).sum())
+    if crossing_candidates:
+        candidates = candidates.loc[same_fold_candidate].copy()
+        print(
+            "[calibration-folds] excluded "
+            f"{crossing_candidates:,} candidate rows whose canonical belongs "
+            "to another fit/check component fold",
+            flush=True,
+        )
+    retained_source_folds = candidates["SKU_ID"].astype(str).map(
+        fold_plan.sku_to_fold
+    ).astype(int)
+    retained_target_folds = candidates["candidate_gtin"].astype(str).map(
+        fold_plan.identity_to_fold
+    )
+    retained_unowned = retained_target_folds.isna()
+    if retained_unowned.any():
+        retained_target_folds.loc[retained_unowned] = candidates.loc[
+            retained_unowned, "candidate_gtin"
+        ].astype(str).map(unowned_owners)
+    if not retained_source_folds.eq(retained_target_folds.astype(int)).all():
+        raise RuntimeError("calibration candidate canonical crosses component folds")
     thresholds = _thresholds(config)
     fold_rows: list[CalibrationFoldMetricRow] = []
     validation_candidates: list[pd.DataFrame] = []
@@ -773,14 +1000,36 @@ def evaluate_calibration_trial(
         config["rand_matching"]["threshold_reconciliation_scope"]
     )
     for fold in range(n_folds):
-        check_items = {item for item, value in fold_map.items() if value == fold}
-        fit_items = set(fold_map) - check_items
-        fit_truth = truth[truth["true_item_id"].isin(fit_items)]
-        check_truth = truth[truth["true_item_id"].isin(check_items)]
+        check_skus = {
+            sku for sku, value in fold_plan.sku_to_fold.items() if value == fold
+        }
+        fit_skus = set(fold_plan.sku_to_fold) - check_skus
+        fit_truth = truth[truth["SKU_ID"].isin(fit_skus)]
+        check_truth = truth[truth["SKU_ID"].isin(check_skus)]
         fit_candidates = candidates[candidates["SKU_ID"].isin(fit_truth["SKU_ID"])]
         check_candidates = candidates[candidates["SKU_ID"].isin(check_truth["SKU_ID"])]
         if fit_truth.empty or check_truth.empty:
             raise ValueError(f"HPO calibration fold {fold} has an empty fit/check side")
+        fit_truth_map = fit_truth.set_index("SKU_ID")["true_item_id"]
+        check_truth_map = check_truth.set_index("SKU_ID")["true_item_id"]
+        fit_negative_count = int(
+            fit_candidates["candidate_gtin"].astype(str).ne(
+                fit_candidates["SKU_ID"].map(fit_truth_map).astype(str)
+            ).sum()
+        )
+        check_negative_count = int(
+            check_candidates["candidate_gtin"].astype(str).ne(
+                check_candidates["SKU_ID"].map(check_truth_map).astype(str)
+            ).sum()
+        )
+        if fit_negative_count == 0 or check_negative_count == 0:
+            raise ValueError(
+                "component-safe calibration fold lost its negative population: "
+                f"fold={fold}, fit_negatives={fit_negative_count}, "
+                f"check_negatives={check_negative_count}, "
+                f"fit_candidates={len(fit_candidates)}, "
+                f"check_candidates={len(check_candidates)}"
+            )
         threshold, fit_metrics = _fit_threshold(fit_candidates, fit_truth, thresholds)
         check_metrics = _assignment_metrics(check_candidates, check_truth, threshold)
         fold_collapse = _fold_collapse_stats(
@@ -873,6 +1122,9 @@ def evaluate_calibration_trial(
                     "over_merge_rate": float(metrics["over_merge_rate"]),
                     "under_merge_rate": float(metrics["under_merge_rate"]),
                     "predicted_group_count": int(metrics["predicted_group_count"]),
+                    "predicted_match_count": int(
+                        metrics["n"] - metrics["unmatched_skus"]
+                    ),
                 }
             )
         )

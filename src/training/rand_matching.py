@@ -451,7 +451,7 @@ def candidate_gate_fields(
         )
     )
     gate_reason = (
-        "gtin_conflict"
+        "different_gtin_thresholded"
         if status == "different"
         else "exact_gtin"
         if exact
@@ -793,7 +793,10 @@ def _annotate_candidates(
     frame = candidates.copy()
     if "brand_conflict" not in frame.columns:
         raise ValueError("candidate trace is missing required brand_conflict")
-    frame["gtin_compatible"] = frame["gtin_status"].ne("different")
+    # A different valid GTIN is an explicit threshold stratum, not a hard
+    # veto. It still has to pass score, brand, and attribute gates. Exact GTIN
+    # remains locked; missing-GTIN strata remain thresholded as before.
+    frame["gtin_compatible"] = True
     if threshold_by_gtin_status is None:
         effective_threshold = pd.Series(
             float(threshold), index=frame.index, dtype=float
@@ -827,7 +830,7 @@ def _annotate_candidates(
             frame["gtin_status"].eq("different"),
             frame["exact_gtin"].astype(bool),
         ],
-        ["veto", "lock"],
+        ["threshold", "lock"],
         default="allow_unknown",
     )
     frame["attribute_gate"] = np.select(

@@ -254,6 +254,7 @@ def oracle_calibration_fold_collapse_contract() -> None:
         over_merge_rate=0.1,
         under_merge_rate=0.2,
         predicted_group_count=4,
+        predicted_match_count=3,
     )
     check(
         "GTIN-stratified sensitivity row accepts configured status",
@@ -348,8 +349,8 @@ def oracle_rand_calibration_reconciliation() -> None:
         str(selected),
     )
     check(
-        "Rand calibration vetoes different GTIN",
-        not bool(
+        "Rand calibration thresholds different GTIN",
+        bool(
             trace.loc[
                 trace["candidate_gtin"].eq("5901234123457"), "accepted"
             ].iloc[0]
@@ -365,12 +366,7 @@ def oracle_rand_calibration_reconciliation() -> None:
     predictions, trace = _assignments_with_trace(
         candidates,
         0.80,
-        threshold_by_gtin_status={
-            "both_equal": 0.80,
-            "different": 0.80,
-            "one_missing": 0.60,
-            "both_missing": 0.80,
-        },
+        threshold_by_gtin_status=rand_matching_cfg()["threshold_by_gtin_status"],
     )
     selected = predictions.set_index("SKU_ID")["ITEM_ID"].to_dict()
     check(
@@ -386,6 +382,15 @@ def oracle_rand_calibration_reconciliation() -> None:
             trace["SKU_ID"].eq("sku-brand"), "rejection_reason"
         ].iloc[0]
         == "brand_conflict",
+    )
+    configured_thresholds = rand_matching_cfg()["threshold_by_gtin_status"]
+    check(
+        "Rand matching annotates every candidate with its configured GTIN-stratum threshold",
+        all(
+            float(row.effective_threshold)
+            == float(configured_thresholds[str(row.gtin_status)])
+            for row in trace.itertuples(index=False)
+        ),
     )
     truth = pd.DataFrame(
         {
@@ -557,6 +562,70 @@ def oracle_folds() -> None:
         f0 | f1 == {"A", "B", "C", "D", "E"} and not (f0 & f1),
         f"f0={f0} f1={f1}",
     )
+
+
+def oracle_calibration_stratified_components() -> None:
+    from training.folds import partition_component_pairs
+    from training.hpo_metrics import _fold_ids
+
+    truth_rows = []
+    for index in range(3):
+        truth_rows.extend(
+            [
+                {
+                    "SKU_ID": f"exact-{index}",
+                    "source_gtin": f"B{index}",
+                    "true_item_id": f"B{index}",
+                    "gtin_status": "both_equal",
+                },
+                {
+                    "SKU_ID": f"cross-{index}",
+                    "source_gtin": f"A{index}",
+                    "true_item_id": f"B{index}",
+                    "gtin_status": "different",
+                },
+            ]
+        )
+    truth = pd.DataFrame(truth_rows)
+    plan = _fold_ids(truth, 3, 17)
+    check(
+        "inner calibration folds retain both required GTIN strata",
+        all(
+            counts["both_equal"] > 0 and counts["different"] > 0
+            for counts in plan.status_counts_by_fold.values()
+        ),
+        str(plan.status_counts_by_fold),
+    )
+    identity_folds: dict[str, int] = {}
+    no_identity_leak = True
+    for row in truth.itertuples(index=False):
+        fold = plan.sku_to_fold[str(row.SKU_ID)]
+        for identity in (str(row.source_gtin), str(row.true_item_id)):
+            previous = identity_folds.setdefault(identity, fold)
+            no_identity_leak &= previous == fold
+    check("inner calibration source/truth identities do not cross folds", no_identity_leak)
+
+    row_bc = np.array(["A", "B", "C", "D", "A", "B", "C", "D"])
+    positives = np.array([[0, 5], [1, 5], [2, 6], [3, 7]])
+    negatives = np.array([[0, 5], [0, 6], [2, 7]])
+    positive_fit, positive_reserved, negative_fit, negative_reserved = (
+        partition_component_pairs(
+            positives,
+            negatives,
+            row_bc,
+            0.5,
+            0,
+            ensure_different_gtin=True,
+        )
+    )
+    reserved_ids = set(row_bc[positive_reserved.ravel()])
+    fit_ids = set(row_bc[positive_fit.ravel()])
+    check(
+        "cross-boundary negatives are excluded from calibration partition",
+        not (reserved_ids & set(row_bc[negative_fit.ravel()]))
+        and not (fit_ids & set(row_bc[negative_reserved.ravel()])),
+    )
+    check("reserved calibration keeps an internal negative", len(negative_reserved) > 0)
 
 
 def oracle_holdout_integrity() -> None:
@@ -2329,6 +2398,8 @@ def main() -> None:
     oracle_mining()
     print("== 6. component folds ==")
     oracle_folds()
+    print("== 6c. stratified calibration components ==")
+    oracle_calibration_stratified_components()
     from core.common import training_cfg as _training_cfg
 
     _sp = _training_cfg().split

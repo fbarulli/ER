@@ -187,7 +187,9 @@ rand_matching:
     provenance: "submission_provenance.json"
   top_k: 20
   batch_size: 128
-  threshold_min: 0.80
+  # The sensitivity surface must reach the lower one_missing/different
+  # operating range; exact-GTIN remains locked independently of this grid.
+  threshold_min: 0.60
   threshold_max: 0.98
   threshold_step: 0.01
   threshold_by_gtin_status:
@@ -203,7 +205,12 @@ rand_matching:
     - "lowest_threshold"
   threshold_reconciliation_scope: "final_assignment_gtin_and_attribute_gates"
   threshold_min_fold_support: 3
-  calibration_proxy_source: "dev_component_safe_split"
+  calibration_proxy_source: "dev_component_safe_split+labeled_pairs_gate_positive_different"
+  # Deterministic source rule for the labeled_pairs cross-GTIN calibration
+  # stratum: lowest eligible source-row index, then lexicographically smallest
+  # target GTIN. The Pydantic Literal makes this policy fail loudly if changed
+  # without an implementation update.
+  calibration_different_gtin_selection: "lowest_source_row_lexicographic_target"
   plateau_tolerance: 0.005
   plateau_min_points: 3
   # SSOT for the unmatched-SKU ITEM_ID prefix (RM8). rand_matching.py's four

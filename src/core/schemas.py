@@ -477,6 +477,9 @@ class RandMatchingSpec(BaseModel):
     ]
     threshold_min_fold_support: int = Field(ge=2)
     calibration_proxy_source: str = Field(min_length=1)
+    calibration_different_gtin_selection: Literal[
+        "lowest_source_row_lexicographic_target"
+    ]
     plateau_tolerance: float = Field(gt=0.0)
     plateau_min_points: int = Field(ge=2)
     # SSOT for the unmatched-SKU ITEM_ID prefix. rand_matching.py currently
@@ -491,6 +494,23 @@ class RandMatchingSpec(BaseModel):
         if self.threshold_min > self.threshold_max:
             raise ValueError(
                 "rand_matching.threshold_min must not exceed threshold_max"
+            )
+        expected_statuses = set(GTIN_STATUSES)
+        configured_statuses = set(self.threshold_by_gtin_status)
+        if configured_statuses != expected_statuses:
+            raise ValueError(
+                "rand_matching.threshold_by_gtin_status must cover exactly "
+                f"{GTIN_STATUSES}, got {sorted(configured_statuses)}"
+            )
+        invalid_thresholds = {
+            status: threshold
+            for status, threshold in self.threshold_by_gtin_status.items()
+            if not -1.0 <= float(threshold) <= 1.0
+        }
+        if invalid_thresholds:
+            raise ValueError(
+                "rand_matching.threshold_by_gtin_status values must be in "
+                f"[-1, 1], got {invalid_thresholds}"
             )
         expected = set(THRESHOLD_TIE_BREAK_CRITERIA)
         configured = set(self.threshold_tie_break)
@@ -1662,6 +1682,7 @@ class CalibrationPartition(BaseModel):
     row_bc: np.ndarray = Field(exclude=True, repr=False)
     n_positive_pairs: int = Field(ge=0)
     n_negative_pairs: int = Field(ge=0)
+    n_negative_pairs_excluded: int = Field(ge=0, default=0)
 
     def pools(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """The positional contract, in declaration order."""
@@ -1696,7 +1717,12 @@ class CalibrationPartition(BaseModel):
                 )
         if len(self.positive_fit) + len(self.positive_reserved) != self.n_positive_pairs:
             raise ValueError("positive calibration partition changed its population")
-        if len(self.negative_fit) + len(self.negative_reserved) != self.n_negative_pairs:
+        if (
+            len(self.negative_fit)
+            + len(self.negative_reserved)
+            + self.n_negative_pairs_excluded
+            != self.n_negative_pairs
+        ):
             raise ValueError("negative calibration partition changed its population")
         shared = self.identities(self.positive_fit) & self.identities(
             self.positive_reserved
@@ -1705,6 +1731,22 @@ class CalibrationPartition(BaseModel):
             raise ValueError(
                 f"{len(shared)} positive identities cross the calibration "
                 f"boundary (e.g. {sorted(shared)[:3]})"
+            )
+        reserved_positive_identities = self.identities(self.positive_reserved)
+        fit_positive_identities = self.identities(self.positive_fit)
+        fit_negative_leak = self.identities(self.negative_fit) & reserved_positive_identities
+        if fit_negative_leak:
+            raise ValueError(
+                f"{len(fit_negative_leak)} reserved positive identities occur in "
+                f"fit negatives (e.g. {sorted(fit_negative_leak)[:3]})"
+            )
+        reserved_negative_leak = (
+            self.identities(self.negative_reserved) & fit_positive_identities
+        )
+        if reserved_negative_leak:
+            raise ValueError(
+                f"{len(reserved_negative_leak)} fit positive identities occur in "
+                f"reserved negatives (e.g. {sorted(reserved_negative_leak)[:3]})"
             )
         crossed = self.identity_pairs(self.negative_fit) & self.identity_pairs(
             self.negative_reserved
