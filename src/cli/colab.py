@@ -882,12 +882,18 @@ print(json.dumps(payload), flush=True)
 def run_parallel_train_and_tail(
     args: list[str], workers: int, *, resume_run: str | None = None,
     run_labels: list[str] | None = None,
+    worker_losses: list[str] | None = None,
     masking_profiles: list[str] | None = None,
     collapse_guardrail_profiles: list[str] | None = None,
     prepared_bundles: list[Path] | None = None,
     validation_inference: bool = True,
 ) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
+    if worker_losses is not None and len(worker_losses) != workers:
+        raise ValueError(
+            f"worker loss list must contain exactly {workers} values; "
+            f"got {len(worker_losses)}"
+        )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     remote_base = (
         f"{REMOTE_ROOT}/results/concurrent_train_{resume_run}"
@@ -919,6 +925,7 @@ run_id = base.name.removeprefix("concurrent_train_")
 base.mkdir(parents=True, exist_ok={bool(resume_run)!r})
 resume_pointers = {resume_pointers!r}
 run_labels = {run_labels!r}
+worker_losses = {worker_losses!r}
 masking_profiles = {masking_profiles!r}
 collapse_guardrail_profiles = {collapse_guardrail_profiles!r}
 started = []
@@ -1021,6 +1028,9 @@ for number in range(1, {workers} + 1):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
     worker_args = [sys.executable, *{args!r}]
+    if worker_losses is not None:
+        loss_index = worker_args.index("--loss") + 1
+        worker_args[loss_index] = worker_losses[number - 1]
     if {remote_bundles is not None!r}:
         worker_args[worker_args.index("training.train")] = "training.train_prepared"
         worker_args.extend(["--bundle", {remote_bundles!r}[number - 1]])
@@ -1801,6 +1811,7 @@ def run_train(
     run_label: str | None = None, masking_profile: str | None = None,
     collapse_guardrail_profile: str | None = None,
     loss: str = _TRAIN_LOSS,
+    worker_losses: list[str] | None = None,
     train_only: bool = False,
 ) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
@@ -1849,6 +1860,8 @@ def run_train(
         sample=sample,
     )
     if workers == 1 and resume_run is None:
+        if worker_losses is not None:
+            raise ValueError("worker_losses requires at least two concurrent workers")
         return run_single_train_and_stream(
             args,
             run_label=run_label,
@@ -1861,6 +1874,7 @@ def run_train(
             _expand_worker_profiles(run_label, workers, "run label")
             if run_label else None
         ),
+        worker_losses=worker_losses,
         masking_profiles=profiles,
         collapse_guardrail_profiles=_expand_worker_profiles(
             collapse_guardrail_profile or _COLLAPSE_GUARDRAIL_PROFILE,
@@ -2778,7 +2792,7 @@ def main() -> None:
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", required=True,
-                    choices=["train", "hpo", "sims", "mixed", "smoke", "stop"],
+                    choices=["train", "dual-train", "hpo", "sims", "mixed", "smoke", "stop"],
                     help="what to run on the VM")
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
@@ -2898,6 +2912,12 @@ def main() -> None:
             f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
             flush=True,
         )
+    elif args.what == "dual-train":
+        print(
+            f"[workers] lane=dual-train matcher_loss={args.loss} ann_loss=mnrl "
+            f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
+            flush=True,
+        )
     elif args.what == "smoke":
         print(
             f"[workers] lane=smoke trainers={_SMOKE_WORKERS} "
@@ -2937,10 +2957,10 @@ def main() -> None:
 
     try:
         ensure_session()
-        prepared_train_runtime = args.what in {"train", "smoke"}
+        prepared_train_runtime = args.what in {"train", "dual-train", "smoke"}
         prepare_remote_layout(minimal_runtime=prepared_train_runtime)
         install_deps(minimal_runtime=prepared_train_runtime)
-        if args.what in {"train", "smoke", "mixed"}:
+        if args.what in {"train", "dual-train", "smoke", "mixed"}:
             required_models = [
                 args.model or str(training_cfg().training.base_model)
             ]
@@ -2976,6 +2996,21 @@ def main() -> None:
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
                 loss=args.loss,
+                train_only=args.train_only,
+            )
+        elif args.what == "dual-train":
+            if args.resume_run:
+                raise ValueError("--resume-run is not supported for dual-train")
+            # Both workers start from the same shipped base model and prepared
+            # data, but write fully isolated checkpoints/results. The ANN
+            # encoder is always trained with MNRL; the matcher uses --loss.
+            local_training_run = run_train(
+                args.train_frac, args.epochs, sample=args.sample, workers=2,
+                model=args.model, run_label="matcher,ann_embedding",
+                masking_profile=args.masking_profile,
+                collapse_guardrail_profile=args.collapse_guardrail_profile,
+                loss=args.loss,
+                worker_losses=[args.loss, "mnrl"],
                 train_only=args.train_only,
             )
         elif args.what == "hpo":
