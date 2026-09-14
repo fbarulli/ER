@@ -3663,7 +3663,6 @@ def train_one_config(
                                 "masking/dynamic_negative_masked_pct": float(row["masked_pct"]),
                                 "masking/dynamic_negative_mean_realized_extent": float(row["mean_realized_extent"]),
                             },
-                            step=int(row["epoch"]),
                         )
             usage_rows: list[dict] = []
             if hasattr(loss_fn, "pair_usage_rows"):
@@ -5019,11 +5018,11 @@ def _optuna_tracking_cb(mlf: MlflowCtx, wandb_ctx):
             if wandb_ctx is not None:
                 wandb_ctx.log_metrics(
                     {
+                        "hpo/trial": float(trial.number),
                         "hpo_objective": trial.value,
                         **{f"hpo_{k}": v for k, v in trial.params.items()},
                         **{f"hpo_{k}": v for k, v in trial.user_attrs.items()},
                     },
-                    step=trial.number,
                 )
     return cb
 
