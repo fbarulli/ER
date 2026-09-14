@@ -1378,13 +1378,38 @@ def _verify_session_handshake() -> None:
     print(f"[session] control-channel handshake passed: {heartbeat.strip()}")
 
 
+def _forget_cached_session() -> None:
+    """Drop only this launcher's stale local session record before reprovisioning."""
+    if not _COLAB_CLI_CONFIG.is_file():
+        return
+    try:
+        state = json.loads(_COLAB_CLI_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(state, dict) or SESSION not in state:
+        return
+    state.pop(SESSION, None)
+    temporary = _COLAB_CLI_CONFIG.with_name(_COLAB_CLI_CONFIG.name + ".tmp")
+    temporary.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, _COLAB_CLI_CONFIG)
+    print(f"[session] removed stale cached record for '{SESSION}'", flush=True)
+
+
 def ensure_session() -> None:
     """Provision and verify the session before any training stage starts."""
     r = colab("sessions", check=False)
-    if SESSION in (r.stdout or ""):
+    if r.returncode == 0 and SESSION in (r.stdout or ""):
         print(f"[session] '{SESSION}' already active; verifying control channel ...")
-        _verify_session_handshake()
-        return
+        try:
+            _verify_session_handshake()
+            return
+        except BaseException as exc:
+            print(f"[session] cached session is stale; reprovisioning ({exc})", flush=True)
+            _forget_cached_session()
+    else:
+        # The CLI may retain a named session locally after the VM has been
+        # torn down.  Never let that record prevent a fresh allocation.
+        _forget_cached_session()
     accelerator = [] if GPU.upper() == "CPU" else ["--gpu", GPU]
     print(f"[session] provisioning {SESSION} ({'cpu' if not accelerator else f'gpu={GPU}'}) ...")
     colab("new", "-s", SESSION, *accelerator, timeout=300)
