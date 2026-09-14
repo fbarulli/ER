@@ -1475,7 +1475,8 @@ if {minimal_runtime!r}:
         ).stdout.strip()
         raise RuntimeError(
             "minimal runtime checkout is incomplete; "
-            f"missing={missing}; status={status!r}; sparse_paths={sparse!r}"
+            "missing=" + repr(missing) + "; status=" + repr(status)
+            + "; sparse_paths=" + repr(sparse)
         )
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
