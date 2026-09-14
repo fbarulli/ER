@@ -192,8 +192,8 @@ rand_matching:
     output_dir: "results/rand_truth"
     calibration_output: "calibration_truth.csv"
     holdout_output: "holdout_truth.csv"
-    sample_size: 3000
-    calibration_size: 2000
+    sample_size: 4000
+    calibration_size: 2667
     seed: 42
   outputs:
     submission: "SKU_ITEM_submission.csv"
