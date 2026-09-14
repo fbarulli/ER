@@ -3349,28 +3349,41 @@ def train_one_config(
                     sample=sample,
                 )
             elif loss == "mnrl":
-                # 3rd column when caller passes neg_pairs: ST's MNRL treats
-                # extra columns as explicit in-batch negatives per anchor —
-                # the gate hard-negatives ("similar text, different size/
-                # pack/flavor") enter training here. Rows are paired with a
-                # shuffled neg pool (dedup guard: skip negs that ARE the
-                # positive text).
-                neg_texts: list[str] | None = None
-                if _train_neg_source is not None and len(_train_neg_source):
-                    if len(tr_negs):
-                        rng_n = np.random.default_rng(seed + fold_i + 1)
-                        pool = [payload[a] for a, b in tr_negs] + [
-                            payload[b] for a, b in tr_negs
-                        ]
-                        neg_texts = [
-                            pool[k % len(pool)]
-                            for k in rng_n.permutation(len(train_all))[: len(train_all)]
-                        ]
+                # MNRL's third column is an explicit negative for *that same
+                # anchor*, not an arbitrary text sampled from a global pool.
+                # Preserve the gate/attribute-conflict evidence by joining
+                # every source-side hard negative to its source's positive
+                # canonical pair. The loss also continues to use the other
+                # positives in a batch as in-batch negatives.
+                positive_by_anchor: dict[int, int] = {}
+                for anchor, positive in train_all:
+                    positive_by_anchor.setdefault(int(anchor), int(positive))
+                triples: list[tuple[int, int, int]] = []
+                seen_triples: set[tuple[int, int, int]] = set()
+                for anchor, negative in tr_negs:
+                    anchor_i, negative_i = int(anchor), int(negative)
+                    positive_i = positive_by_anchor.get(anchor_i)
+                    if positive_i is None or positive_i == negative_i:
+                        continue
+                    triple = (anchor_i, positive_i, negative_i)
+                    if triple not in seen_triples:
+                        seen_triples.add(triple)
+                        triples.append(triple)
+                if not triples:
+                    rows.append(
+                        {
+                            "fold": fold_i,
+                            "status": "skipped",
+                            "reason": "MNRL needs anchor-positive-negative triples; "
+                            "none survived the train component boundary",
+                        }
+                    )
+                    continue
                 train_ds = Dataset.from_dict(
                     {
-                        "anchor": [payload[a] for a, b in train_all],
-                        "positive": [payload[b] for a, b in train_all],
-                        **({"negative": neg_texts} if neg_texts else {}),
+                        "anchor": [payload[a] for a, _, _ in triples],
+                        "positive": [payload[b] for _, b, _ in triples],
+                        "negative": [payload[c] for _, _, c in triples],
                     }
                 )
             else:

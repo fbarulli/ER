@@ -26,6 +26,7 @@ import json
 import os
 import unicodedata
 from decimal import Decimal
+from itertools import combinations, product
 from pathlib import Path
 
 import numpy as np
@@ -124,6 +125,28 @@ ASSIGNMENT_SORT_COLUMNS = (
 ASSIGNMENT_SORT_ASCENDING = (True, False, False, False, True)
 SOURCE_ROW_INDEX_COLUMN = "source_row_index"
 INVALID_ID_SENTINELS = frozenset({"", "nan", "none", "null"})
+
+# One row per *unordered* holdout SKU pair for which the truth and the
+# predicted assignment disagree about whether the SKUs are the same item.
+# These are deliberately pair-level, rather than candidate-level, records:
+# Rand errors are errors in this equivalence relation.
+PAIR_DISAGREEMENT_COLUMNS = (
+    "sku_id_a",
+    "sku_id_b",
+    "disagreement_type",
+    "true_group_id",
+    "predicted_group_id",
+    "pair_score",
+    "edge_exists",
+    "candidate_generated",
+    "candidate_generation_status",
+    "candidate_generation_source",
+    "error_classification",
+    "attribute_gate_result",
+    "component_size_true",
+    "component_size_pred",
+    "number_of_pairwise_errors_caused",
+)
 
 
 def _unmatched_prefix() -> str:
@@ -1127,6 +1150,183 @@ def _pairwise_counts(true_labels: pd.Series, predicted_labels: pd.Series) -> dic
     }
 
 
+def _pair_group_value(left: str, right: str) -> str:
+    """Encode a pair's group labels without losing either endpoint value."""
+    return json.dumps([left, right], ensure_ascii=False, separators=(",", ":"))
+
+
+def pair_disagreements(
+    pred: pd.DataFrame,
+    truth: pd.DataFrame,
+    trace: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return every unordered pair on which truth and assignment disagree.
+
+    ``edge_exists`` is one only for a predicted-same relation.  This matcher
+    assigns each SKU directly to a canonical record (it does not build a SKU
+    graph), so it is the meaningful equivalent of a predicted graph edge.
+    ``pair_score`` is the weaker selected canonical-assignment score of the
+    two endpoints. For false splits, ``candidate_generated`` says whether
+    both endpoints' *true* canonical record was retrieved at all. A false
+    merge has no true same-item counterpart, so this field is null and its
+    status is ``not_applicable_truth_different``. These evidence fields
+    intentionally describe the decision that created the predicted grouping,
+    not a separately computed SKU-to-SKU similarity that this lane never
+    used.
+    """
+    truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
+    pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
+    for frame in (truth_frame, pred_frame):
+        frame["SKU_ID"] = frame["SKU_ID"].astype(str)
+    if (
+        truth_frame["SKU_ID"].duplicated().any()
+        or pred_frame["SKU_ID"].duplicated().any()
+    ):
+        raise ValueError("pair disagreement inputs must contain one row per SKU_ID")
+    merged = truth_frame.merge(
+        pred_frame, on="SKU_ID", how="inner", validate="one_to_one"
+    )
+    if len(merged) != len(truth_frame) or len(merged) != len(pred_frame):
+        raise ValueError("pair disagreement population mismatch")
+    merged["true_item_id"] = merged["true_item_id"].astype(str)
+    merged["ITEM_ID"] = merged["ITEM_ID"].astype(str)
+
+    # At most one selected trace record exists per assigned SKU. An unmatched
+    # SKU has no selected candidate and therefore deliberately gets missing
+    # score/gate evidence rather than invented evidence.
+    selected = trace.loc[trace["selected"].astype(bool)].copy()
+    if selected.duplicated("SKU_ID").any():
+        raise RuntimeError("candidate trace has multiple selected rows for a SKU")
+    evidence = selected[["SKU_ID", "score", "attribute_gate"]].copy()
+    evidence["SKU_ID"] = evidence["SKU_ID"].astype(str)
+    evidence = evidence.rename(
+        columns={"score": "selected_score", "attribute_gate": "selected_attribute_gate"}
+    )
+    merged = merged.merge(evidence, on="SKU_ID", how="left", validate="one_to_one")
+    trace_candidates = trace[["SKU_ID", "candidate_gtin"]].copy()
+    trace_candidates["SKU_ID"] = trace_candidates["SKU_ID"].astype(str)
+    trace_candidates["candidate_gtin"] = trace_candidates["candidate_gtin"].astype(
+        str
+    )
+    if "retrieval_source" in trace:
+        trace_candidates["retrieval_source"] = trace["retrieval_source"].astype(str)
+    else:  # Allows small isolated callers to omit nonessential provenance.
+        trace_candidates["retrieval_source"] = "unknown"
+    true_candidate_rows = trace_candidates.merge(
+        truth_frame,
+        on="SKU_ID",
+        how="inner",
+        validate="many_to_one",
+    )
+    true_candidate_rows = true_candidate_rows.loc[
+        true_candidate_rows["candidate_gtin"].eq(true_candidate_rows["true_item_id"])
+    ]
+    true_candidate_sources = (
+        true_candidate_rows.groupby("SKU_ID", sort=False)["retrieval_source"]
+        .agg(lambda values: "+".join(sorted(set(values))))
+        .to_dict()
+    )
+    by_sku = merged.set_index("SKU_ID").to_dict("index")
+
+    def error_count(frame: pd.DataFrame, other_column: str) -> int:
+        return int(
+            _combination_count(len(frame))
+            - sum(_combination_count(int(n)) for n in frame.groupby(other_column).size())
+        )
+
+    def pair_row(
+        sku_a: str,
+        sku_b: str,
+        disagreement_type: str,
+        caused: int,
+    ) -> dict[str, object]:
+        left, right = by_sku[sku_a], by_sku[sku_b]
+        scores = [left["selected_score"], right["selected_score"]]
+        finite_scores = [float(score) for score in scores if pd.notna(score)]
+        true_same = left["true_item_id"] == right["true_item_id"]
+        generated = (
+            bool(true_candidate_sources.get(sku_a))
+            and bool(true_candidate_sources.get(sku_b))
+            if true_same
+            else None
+        )
+        generation_status = (
+            "generated"
+            if generated is True
+            else "unretrieved_candidate_generation_failure"
+            if generated is False
+            else "not_applicable_truth_different"
+        )
+        return {
+            "sku_id_a": sku_a,
+            "sku_id_b": sku_b,
+            "disagreement_type": disagreement_type,
+            # A false merge has two true labels; a false split has two predicted
+            # labels. JSON keeps the requested singular columns lossless.
+            "true_group_id": _pair_group_value(
+                left["true_item_id"], right["true_item_id"]
+            ),
+            "predicted_group_id": _pair_group_value(
+                left["ITEM_ID"], right["ITEM_ID"]
+            ),
+            "pair_score": min(finite_scores) if len(finite_scores) == 2 else np.nan,
+            "edge_exists": int(left["ITEM_ID"] == right["ITEM_ID"]),
+            "candidate_generated": generated,
+            "candidate_generation_status": generation_status,
+            "candidate_generation_source": (
+                f"{true_candidate_sources.get(sku_a, 'not_generated')}|"
+                f"{true_candidate_sources.get(sku_b, 'not_generated')}"
+                if true_same
+                else "not_applicable_truth_different"
+            ),
+            "error_classification": (
+                "false_split_unretrieved_candidate_generation"
+                if disagreement_type == "false_split" and generated is False
+                else disagreement_type
+            ),
+            "attribute_gate_result": (
+                f"{left['selected_attribute_gate']}|{right['selected_attribute_gate']}"
+                if pd.notna(left["selected_attribute_gate"])
+                and pd.notna(right["selected_attribute_gate"])
+                else "not_selected_candidate"
+            ),
+            "component_size_true": int(
+                (merged["true_item_id"] == left["true_item_id"]).sum()
+            ),
+            "component_size_pred": int((merged["ITEM_ID"] == left["ITEM_ID"]).sum()),
+            "number_of_pairwise_errors_caused": caused,
+        }
+
+    rows: list[dict[str, object]] = []
+    # False merge: same predicted assignment, different true canonical item.
+    for _, predicted_group in merged.groupby("ITEM_ID", sort=False):
+        caused = error_count(predicted_group, "true_item_id")
+        if not caused:
+            continue
+        true_groups = [
+            sorted(group["SKU_ID"].tolist())
+            for _, group in predicted_group.groupby("true_item_id", sort=False)
+        ]
+        for left_group, right_group in combinations(true_groups, 2):
+            for sku_a, sku_b in product(left_group, right_group):
+                rows.append(pair_row(sku_a, sku_b, "false_merge", caused))
+
+    # False split: same true canonical item, different predicted assignment.
+    for _, true_group in merged.groupby("true_item_id", sort=False):
+        caused = error_count(true_group, "ITEM_ID")
+        if not caused:
+            continue
+        predicted_groups = [
+            sorted(group["SKU_ID"].tolist())
+            for _, group in true_group.groupby("ITEM_ID", sort=False)
+        ]
+        for left_group, right_group in combinations(predicted_groups, 2):
+            for sku_a, sku_b in product(left_group, right_group):
+                rows.append(pair_row(sku_a, sku_b, "false_split", caused))
+
+    return pd.DataFrame(rows, columns=PAIR_DISAGREEMENT_COLUMNS)
+
+
 def _safe_ratio(numerator: int, denominator: int) -> float:
     return float(numerator / denominator) if denominator else 0.0
 
@@ -1951,7 +2151,7 @@ def _evaluate_holdout(
     matcher: RandMatcher,
     holdout_labels: pd.DataFrame,
     final_threshold: float,
-) -> tuple[list[dict], pd.DataFrame]:
+) -> tuple[list[dict], pd.DataFrame, pd.DataFrame]:
     base = _ensure_source_row_identity(
         load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
     )
@@ -2007,7 +2207,8 @@ def _evaluate_holdout(
         fold="holdout",
         threshold=final_threshold,
     )
-    return metrics, diagnostics
+    disagreements = pair_disagreements(predictions, truth, trace)
+    return metrics, diagnostics, disagreements
 
 
 def _sha256_path(path: Path) -> tuple[str, int]:
@@ -2182,7 +2383,11 @@ def write_outputs(
         target_recall,
         calibration_diagnostics,
     )
-    holdout_metrics, holdout_diagnostics = _evaluate_holdout(
+    (
+        holdout_metrics,
+        holdout_diagnostics,
+        holdout_pair_disagreements,
+    ) = _evaluate_holdout(
         matcher,
         holdout_labels,
         final_threshold,
@@ -2201,6 +2406,10 @@ def write_outputs(
     )
     holdout_diagnostics.to_csv(
         output_dir / output_names["holdout_diagnostics"],
+        index=False,
+    )
+    holdout_pair_disagreements.to_csv(
+        output_dir / output_names["holdout_pair_disagreements"],
         index=False,
     )
     submission = _write_final_submission(

@@ -247,6 +247,7 @@ rand_matching:
     holdout_metrics: "holdout_metrics.csv"
     calibration_diagnostics: "calibration_diagnostics.csv"
     holdout_diagnostics: "holdout_diagnostics.csv"
+    holdout_pair_disagreements: "holdout_pair_disagreements.csv"
     provenance: "submission_provenance.json"
   top_k: 20
   batch_size: 128
