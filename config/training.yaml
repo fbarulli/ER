@@ -429,7 +429,7 @@ mining:
     k: 40                     # top ANN candidates per row
     chunk_size: 2048          # rows per cosine-matrix chunk (OOM control)
     exclude_conflicting: true # drop known conflicting-barcode label errors
-    refresh_enabled: true     # refresh from the current fine-tuned model only
+    refresh_enabled: false    # ANN stays off unless an explicit experiment enables it
     refresh_every_epochs: 1   # checkpoint refresh cadence in completed epochs
     candidate_multiplier: 4    # broad candidates retained for score calibration
     score_quantiles: "0.10-0.90" # fine-tuned candidate quantiles inside band
