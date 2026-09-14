@@ -119,6 +119,7 @@ _RESULT_ARCHIVE_NAME = _COLAB.result_archive_name
 _RESULT_MANIFEST_NAME = _COLAB.result_manifest_name
 _RESULT_DOWNLOAD_EXCLUDED_DIRS = frozenset(_COLAB.result_download_excluded_dirs)
 _WORKER_MONITOR_SECONDS = _COLAB.worker_monitor_seconds
+_VALIDATION_INFERENCE = _COLAB.validation_inference
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
 # config path is supplied. This workspace's home is read-only, so isolate the
@@ -135,6 +136,68 @@ _result_event_lock = threading.Lock()
 _original_stdout = None
 _original_stderr = None
 _SUPPRESS_LIVE_LOG = False
+
+
+def training_lifecycle_preflight(
+    *, workers: int, model: str | None, masking_profile: str,
+    train_only: bool = False,
+) -> dict[str, object]:
+    """Validate the local train/holdout contract without contacting Colab."""
+    import pandas as pd
+
+    training_path = _validation_input_path(_COLAB.training_dataset_csv)
+    sample_path = _validation_input_path(_VALIDATION_INFERENCE.input_csv)
+    source_path = _validation_input_path(_VALIDATION_INFERENCE.source_csv)
+    frames = {
+        "source": pd.read_csv(source_path, usecols=["product_id"], dtype=str),
+        "training": pd.read_csv(training_path, usecols=["product_id"], dtype=str),
+        "inference": pd.read_csv(sample_path, usecols=["product_id"], dtype=str),
+    }
+    ids = {key: set(frame["product_id"]) for key, frame in frames.items()}
+    overlap = ids["training"] & ids["inference"]
+    if overlap:
+        raise RuntimeError(f"training/inference overlap contains {len(overlap)} product IDs")
+    if ids["training"] | ids["inference"] != ids["source"]:
+        raise RuntimeError("training remainder plus inference sample does not reconstruct source")
+    if len(frames["training"]) != 58_529 or len(frames["inference"]) != 3_000:
+        raise RuntimeError(
+            "unexpected split sizes: "
+            f"training={len(frames['training'])} inference={len(frames['inference'])}"
+        )
+    profiles = _expand_worker_profiles(masking_profile, workers, "masking")
+    model_key = model or str(training_cfg().training.base_model)
+    return {
+        "contacts_colab": False,
+        "workers": workers,
+        "model": model_key,
+        "masking_profiles": profiles,
+        "training_dataset": str(training_path),
+        "training_rows": len(frames["training"]),
+        "inference_dataset": str(sample_path),
+        "inference_rows": len(frames["inference"]),
+        "source_dataset": str(source_path),
+        "product_id_overlap": 0,
+        "reconstructs_source": True,
+        "train_only": train_only,
+        "validation_inference_enabled": not train_only,
+        "prepared_train_argv": [
+            sys.executable, "-u", "-m", "training.train", "--model", model_key,
+            "--dataset", str(training_path), "--prepare-bundle", "<worker-bundle>",
+        ],
+        "remote_completion_argv": (
+            None if train_only else [
+                "<remote-python>", "-m", "training.complete_colab_worker",
+                "--validation-input", "<uploaded-dataset_deduped_sample_3000.csv>",
+                "--training-input", "<uploaded-dataset_deduped_train_minus_3000.csv>",
+            ]
+        ),
+        "successful_worker_order": (
+            ["train", "write_success_status", "download", "teardown"]
+            if train_only else
+            ["train", "resolve_best_checkpoint", "heldout_sku_inference",
+             "dvc_publish", "write_success_status", "download", "teardown"]
+        ),
+    }
 
 
 class _Tee:
@@ -779,6 +842,7 @@ def run_parallel_train_and_tail(
     masking_profiles: list[str] | None = None,
     collapse_guardrail_profiles: list[str] | None = None,
     prepared_bundles: list[Path] | None = None,
+    validation_inference: bool = True,
 ) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -792,6 +856,10 @@ def run_parallel_train_and_tail(
         _upload_prepared_bundles(run_id=run_id, bundles=prepared_bundles)
         if prepared_bundles is not None
         else None
+    )
+    remote_validation_inputs = (
+        _upload_validation_inputs(run_id)
+        if validation_inference else {"sample": "", "source": "", "training": ""}
     )
     remote_input_loop = (
         "for name in ():"
@@ -921,6 +989,18 @@ for number in range(1, {workers} + 1):
             collapse_guardrail_profiles[number - 1],
         ])
     command = " ".join(shlex.quote(part) for part in worker_args)
+    completion_args = [
+        sys.executable, "-m", "training.complete_colab_worker",
+        "--source", str(out), "--run-id", run_id, "--worker", str(number),
+        "--validation-input", {remote_validation_inputs['sample']!r},
+        "--validation-source", {remote_validation_inputs['source']!r},
+        "--training-input", {remote_validation_inputs['training']!r},
+    ]
+    completion_command = " ".join(shlex.quote(part) for part in completion_args)
+    completion_clause = (
+        f"if [ \"$rc\" -eq 0 ]; then echo '[worker-process] training complete; running validation inference and final DVC publication'; {{completion_command}}; rc=$?; fi; "
+        if {validation_inference!r} else ""
+    )
     log_path, status_path = out / "training.log", out / "training.status"
     live_status_path = out / "live_status.json"
     wandb_dir = out / "wandb"
@@ -946,6 +1026,7 @@ for number in range(1, {workers} + 1):
         f"echo '[worker-process] starting pid=$$'; {{ps_command}}; "
         f"echo '[worker-process] resource snapshot before training'; {{diagnostics}}; "
         f"timeout --signal=TERM --kill-after=60 {_WORKER_TIMEOUT_SECONDS} {{command}}; rc=$?; "
+        f"{{completion_clause}}"
         f"echo '[worker-process] exited rc='$rc; {{ps_command}}; "
         f"echo '[worker-process] resource snapshot after training'; {{diagnostics}}; "
         f"printf '%s\\n' \\"$rc\\" > {{shlex.quote(str(status_path))}}; exit $rc"
@@ -1676,6 +1757,7 @@ def run_train(
     *, resume_run: str | None = None, model: str | None = None,
     run_label: str | None = None, masking_profile: str | None = None,
     collapse_guardrail_profile: str | None = None,
+    train_only: bool = False,
 ) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the configured VM runtime ...")
@@ -1727,6 +1809,7 @@ def run_train(
             args,
             run_label=run_label,
             prepared_bundle=prepared_bundles[0],
+            validation_inference=not train_only,
         )
     return run_parallel_train_and_tail(
         args, workers, resume_run=resume_run,
@@ -1741,6 +1824,7 @@ def run_train(
             "collapse guardrail",
         ),
         prepared_bundles=prepared_bundles,
+        validation_inference=not train_only,
     )
 
 
@@ -1768,6 +1852,7 @@ def _prepare_local_training_bundles(
     root = RESULTS / "prepared_training" / stamp
     root.mkdir(parents=True, exist_ok=False)
     model_key = model or str(training_cfg().training.base_model)
+    training_dataset = _validation_input_path(_COLAB.training_dataset_csv)
     bundles: list[Path] = []
     for number, profile in enumerate(profiles, start=1):
         bundle = root / f"worker_{number}_{profile}.pkl.gz"
@@ -1778,6 +1863,8 @@ def _prepare_local_training_bundles(
             "training.train",
             "--model",
             model_key,
+            "--dataset",
+            str(training_dataset),
             "--payload",
             payload,
             "--masking-profile",
@@ -1863,13 +1950,67 @@ pathlib.Path({str(Path(remote).parent)!r}).mkdir(parents=True, exist_ok=True)
     return remote_paths
 
 
+def _validation_input_path(configured_value: str) -> Path:
+    """Resolve one configured validation artifact inside the repository."""
+    configured = Path(configured_value)
+    source = configured if configured.is_absolute() else TRAIN_ROOT / configured
+    source = source.resolve()
+    if not source.is_relative_to(TRAIN_ROOT.resolve()):
+        raise ValueError(
+            "colab.validation_inference.input_csv must stay inside the repository"
+        )
+    if _VALIDATION_INFERENCE.enabled and not source.is_file():
+        raise FileNotFoundError(f"configured validation inference CSV is missing: {source}")
+    return source
+
+
+def _upload_validation_inputs(run_id: str) -> dict[str, str]:
+    """Upload the immutable source, training complement, and SKU holdout."""
+    sources = {
+        "source": _validation_input_path(_VALIDATION_INFERENCE.source_csv),
+        "training": _validation_input_path(_COLAB.training_dataset_csv),
+        "sample": _validation_input_path(_VALIDATION_INFERENCE.input_csv),
+    }
+    remotes = {
+        key: f"{REMOTE_ROOT}/prepared_training/{run_id}/validation/{key}_{source.name}"
+        for key, source in sources.items()
+    }
+    if not _VALIDATION_INFERENCE.enabled:
+        return remotes
+    remote_dir = str(Path(next(iter(remotes.values()))).parent)
+    run_colab_exec_stream(
+        SESSION,
+        _BOOTSTRAP
+        + f"""
+import pathlib
+pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
+""",
+        timeout=120,
+        log_name="validation_input_dir",
+        retry_safe=False,
+    )
+    for key, source in sources.items():
+        remote = remotes[key]
+        print(f"[upload] validation {key}={source} -> {remote}", flush=True)
+        colab(
+            "upload", "-s", SESSION, str(source), remote,
+            timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS,
+        )
+    return remotes
+
+
 def run_single_train_and_stream(
     args: list[str], *, run_label: str | None = None,
-    prepared_bundle: Path | None = None,
+    prepared_bundle: Path | None = None, validation_inference: bool = True,
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    remote_validation_inputs = (
+        _upload_validation_inputs(run_id)
+        if validation_inference else {"sample": "", "source": "", "training": ""}
+    )
     if prepared_bundle is not None:
         remote_bundle = _upload_prepared_bundles(
             run_id=Path(remote_base).name.removeprefix("concurrent_train_"),
@@ -1921,6 +2062,30 @@ with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
     rc = process.wait()
 if rc:
     raise RuntimeError(f"worker 1 failed (rc={{rc}}); log={{log_path}}")
+run_completion = {validation_inference!r}
+completion = [
+    sys.executable, "-m", "training.complete_colab_worker",
+    "--source", str(out), "--run-id", {run_id!r}, "--worker", "1",
+        "--validation-input", {remote_validation_inputs['sample']!r},
+        "--validation-source", {remote_validation_inputs['source']!r},
+        "--training-input", {remote_validation_inputs['training']!r},
+]
+if run_completion:
+    print("[train] training complete; running validation inference and final DVC publication", flush=True)
+    with log_path.open("a", encoding="utf-8", buffering=1) as log_file:
+        process = subprocess.Popen(
+            completion, cwd=root, env=env, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            log_file.write(line)
+        completion_rc = process.wait()
+    if completion_rc:
+        raise RuntimeError(
+            f"worker 1 completion failed (rc={{completion_rc}}); log={{log_path}}"
+        )
 print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
 """
     print("[run] starting one trainer with direct live stdout streaming ...", flush=True)
@@ -2649,11 +2814,30 @@ def main() -> None:
     )
     ap.add_argument("--keep-alive", action="store_true",
                     help="do not tear down the VM on completion/failure")
+    ap.add_argument(
+        "--preflight-only", action="store_true",
+        help="validate and print the train/inference lifecycle without contacting Colab",
+    )
+    ap.add_argument(
+        "--train-only", action="store_true",
+        help="train and collect artifacts without post-training validation inference",
+    )
     args = ap.parse_args()
 
     GPU = args.gpu
     if GPU.upper() != "CPU" and not args.allow_gpu:
         raise ValueError("GPU launch requires --allow-gpu")
+
+    if args.preflight_only:
+        if args.what not in {"train", "smoke"}:
+            raise ValueError("--preflight-only supports train/smoke lanes")
+        print(json.dumps(training_lifecycle_preflight(
+            workers=args.workers if args.what == "train" else _SMOKE_WORKERS,
+            model=args.model,
+            masking_profile=args.masking_profile,
+            train_only=args.train_only,
+        ), indent=2, sort_keys=True))
+        return
 
     dvc_jobs = int(training_cfg().colab.dvc_jobs)
     if args.what == "train":
@@ -2731,6 +2915,7 @@ def main() -> None:
                 workers=_SMOKE_WORKERS, run_label=args.run_label,
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
+                train_only=args.train_only,
             )
         elif args.what == "hpo":
             if args.hpo_jobs < 1:
@@ -2748,6 +2933,7 @@ def main() -> None:
                 run_label=args.run_label,
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
+                train_only=args.train_only,
             )
         if local_hpo_run is not None:
             print("[hpo] publishing snapshots on local CPU ...", flush=True)

@@ -1,0 +1,182 @@
+"""Complete a successful Colab worker: validate, then publish through DVC."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+import pandas as pd
+
+from core.common import trace_artifact, training_cfg
+from training.validation_inference import resolve_best_checkpoint, threshold_assignment_metrics
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _csv_identity(path: Path) -> dict[str, object]:
+    frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+    return {
+        "path": str(path.resolve()),
+        "rows": int(len(frame)),
+        "columns": list(frame.columns),
+        "bytes": path.stat().st_size,
+        "sha256": _sha256(path),
+    }
+
+
+def _write_input_provenance(
+    *, source_csv: Path, training_csv: Path, sample_csv: Path, output_dir: Path,
+) -> Path:
+    source_ids = set(pd.read_csv(
+        source_csv, usecols=["product_id"], dtype=str, keep_default_na=False
+    )["product_id"])
+    training_ids = pd.read_csv(
+        training_csv, usecols=["product_id"], dtype=str, keep_default_na=False
+    )["product_id"]
+    sample_ids = pd.read_csv(
+        sample_csv, usecols=["product_id"], dtype=str, keep_default_na=False
+    )["product_id"]
+    overlap = sorted(set(training_ids) & set(sample_ids))
+    reconstructed = set(training_ids) | set(sample_ids)
+    if overlap:
+        raise ValueError(
+            f"training complement overlaps validation sample on {len(overlap)} product IDs"
+        )
+    if reconstructed != source_ids:
+        raise ValueError(
+            "training complement plus validation sample does not reconstruct the deduped source: "
+            f"missing={len(source_ids - reconstructed)} extra={len(reconstructed - source_ids)}"
+        )
+    payload = {
+        "schema": "validation-input-provenance-v1",
+        "deduped_source": _csv_identity(source_csv),
+        "training_complement": _csv_identity(training_csv),
+        "sku_sample": _csv_identity(sample_csv),
+        "training_validation_product_id_overlap": 0,
+        "complement_reconstructs_source": True,
+        "sku_sample_unique_product_ids": int(sample_ids.nunique()),
+        "sku_sample_ids_present_in_source": int(len(sample_ids)),
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "input_provenance.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    trace_artifact("validation_inference", path, producer="training.complete_colab_worker")
+    return path
+
+
+def _write_sku_reports(predictions_path: Path, output_dir: Path) -> None:
+    import matplotlib.pyplot as plt
+
+    cfg = training_cfg().colab.validation_inference
+    predictions = pd.read_csv(predictions_path, dtype={"SKU_ID": str, "GTIN": str})
+    scores = pd.to_numeric(predictions["SCORE"], errors="raise")
+    metrics_path = output_dir / "sku_threshold_summary.csv"
+    threshold_assignment_metrics(scores.to_numpy(), list(cfg.thresholds)).to_csv(
+        metrics_path, index=False
+    )
+    summary_path = output_dir / "sku_score_summary.json"
+    summary_path.write_text(json.dumps({
+        "rows": int(len(scores)),
+        "score_min": float(scores.min()),
+        "score_median": float(scores.median()),
+        "score_mean": float(scores.mean()),
+        "score_max": float(scores.max()),
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(scores, bins=40)
+    ax.axvline(cfg.error_threshold, color="red", linestyle="--", label=f"{cfg.error_threshold:g}")
+    ax.set(xlabel="nearest-item cosine score", ylabel="SKU count", title="Held-out SKU score distribution")
+    ax.legend()
+    fig.tight_layout()
+    plot_path = output_dir / "sku_score_distribution.png"
+    fig.savefig(plot_path, dpi=160)
+    plt.close(fig)
+    for path in (metrics_path, summary_path, plot_path):
+        trace_artifact("validation_inference", path, producer="training.complete_colab_worker")
+
+
+def complete_worker(
+    *, source: Path, run_id: str, worker: int, validation_input: Path,
+    validation_source: Path | None = None,
+    training_input: Path | None = None,
+    publish_dvc: bool = True, device: str | None = None,
+) -> None:
+    cfg = training_cfg().colab.validation_inference
+    if cfg.enabled:
+        validation_source = validation_source or Path(cfg.source_csv)
+        training_input = training_input or Path(training_cfg().colab.training_dataset_csv)
+        output_dir = source / cfg.output_dir
+        checkpoint, _ = resolve_best_checkpoint(source)
+        predictions_path = output_dir / "sku_predictions.csv"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        command = [
+            sys.executable, "-m", "predict_items",
+            "--model", str(checkpoint),
+            "--input", str(validation_input),
+            "--output", str(predictions_path),
+            "--threshold", str(cfg.error_threshold),
+            "--device", device or cfg.device,
+            "--include-scores",
+            "--batch-size", str(cfg.batch_size),
+        ]
+        print(f"[validation-inference] SKU retrieval: {' '.join(command)}", flush=True)
+        subprocess.run(command, cwd=Path(__file__).resolve().parents[2], env=os.environ.copy(), check=True)
+        trace_artifact(
+            "validation_inference", predictions_path,
+            producer="training.complete_colab_worker",
+        )
+        _write_sku_reports(predictions_path, output_dir)
+        _write_input_provenance(
+            source_csv=validation_source,
+            training_csv=training_input,
+            sample_csv=validation_input,
+            output_dir=output_dir,
+        )
+    else:
+        print("[validation-inference] disabled by configuration", flush=True)
+    if publish_dvc:
+        from training.dvc_store import publish
+
+        publish(source, run_id, worker)
+
+
+def main() -> None:
+    cfg = training_cfg().colab.validation_inference
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--worker", type=int, required=True)
+    parser.add_argument("--validation-input", type=Path, default=Path(cfg.input_csv))
+    parser.add_argument("--validation-source", type=Path, default=Path(cfg.source_csv))
+    parser.add_argument(
+        "--training-input", type=Path,
+        default=Path(training_cfg().colab.training_dataset_csv),
+    )
+    parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
+    parser.add_argument("--skip-dvc", action="store_true")
+    args = parser.parse_args()
+    complete_worker(
+        source=args.source,
+        run_id=args.run_id,
+        worker=args.worker,
+        validation_input=args.validation_input,
+        validation_source=args.validation_source,
+        training_input=args.training_input,
+        publish_dvc=not args.skip_dvc,
+        device=args.device,
+    )
+
+
+if __name__ == "__main__":
+    main()

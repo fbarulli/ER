@@ -32,6 +32,15 @@ def main() -> None:
     parser.add_argument("--model", required=True, help="Fine-tuned SentenceTransformer directory")
     parser.add_argument("--output", required=True, help="Output CSV path")
     parser.add_argument("--input", default=None, help="Optional SKU input CSV")
+    parser.add_argument(
+        "--device", choices=["cpu", "cuda"], default="cpu",
+        help="Inference device (Colab completion uses cuda)",
+    )
+    parser.add_argument(
+        "--include-scores", action="store_true",
+        help="Include GTIN, nearest item, and cosine score diagnostics",
+    )
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--sample", type=int, default=None, help="Deterministic sample size from the full SKU data")
     parser.add_argument(
         "--threshold",
@@ -42,7 +51,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.input:
-        skus = pd.read_csv(args.input)
+        skus = pd.read_csv(args.input, dtype=str, keep_default_na=False)
     else:
         skus = load_dataset_deduped()
     if args.sample is not None:
@@ -109,17 +118,17 @@ def main() -> None:
         )
         for item_id, info in zip(item_ids, item_infos, strict=True)
     ]
-    model = load_local_sentence_transformer(str(Path(args.model)), device="cpu")
+    model = load_local_sentence_transformer(str(Path(args.model)), device=args.device)
     sku_embeddings = model.encode(
         sku_texts,
-        batch_size=128,
+        batch_size=args.batch_size,
         convert_to_tensor=True,
         normalize_embeddings=True,
         show_progress_bar=True,
     )
     item_embeddings = model.encode(
         item_texts,
-        batch_size=128,
+        batch_size=args.batch_size,
         convert_to_tensor=True,
         normalize_embeddings=True,
         show_progress_bar=True,
@@ -156,14 +165,24 @@ def main() -> None:
 
     unmatched_prefix = rand_matching_cfg()["unmatched_prefix"]
     predictions = []
-    for sku_id, hits in zip(skus["SKU_ID"].astype(str), nearest, strict=True):
+    gtins = skus.get("barcode", pd.Series([""] * len(skus))).astype(str)
+    for sku_id, gtin, hits in zip(skus["SKU_ID"].astype(str), gtins, nearest, strict=True):
         hit = hits[0]
-        item_id = item_ids[hit["corpus_id"]]
-        if float(hit["score"]) < args.threshold:
+        nearest_item_id = str(item_ids[hit["corpus_id"]])
+        score = float(hit["score"])
+        item_id = nearest_item_id
+        if score < args.threshold:
             item_id = f"{unmatched_prefix}{sku_id}"
-        predictions.append((sku_id, str(item_id)))
+        if args.include_scores:
+            predictions.append((sku_id, str(gtin), str(item_id), nearest_item_id, score))
+        else:
+            predictions.append((sku_id, str(item_id)))
 
-    output = pd.DataFrame(predictions, columns=["SKU_ID", "ITEM_ID"])
+    columns = (
+        ["SKU_ID", "GTIN", "ITEM_ID", "NEAREST_ITEM_ID", "SCORE"]
+        if args.include_scores else ["SKU_ID", "ITEM_ID"]
+    )
+    output = pd.DataFrame(predictions, columns=columns)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.to_csv(output_path, index=False)

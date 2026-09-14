@@ -145,6 +145,15 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         "lr": args.lr,
         "warmup_ratio": runtime("warmup_ratio"),
         "weight_decay": runtime("weight_decay"),
+        "projection_dropout": runtime("projection_dropout"),
+        "label_smoothing": runtime("label_smoothing"),
+        "random_easy_enabled": bool(runtime("random_easy_negatives")["enabled"]),
+        "random_easy_ratio_to_hard": float(
+            runtime("random_easy_negatives")["ratio_to_hard"]
+        ),
+        "random_easy_candidate_pool_size": int(
+            runtime("random_easy_negatives")["candidate_pool_size"]
+        ),
         "lr_scheduler": runtime("lr_scheduler"),
         "max_grad_norm": runtime("max_grad_norm"),
         "patience": ES_PATIENCE,

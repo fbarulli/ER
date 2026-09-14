@@ -12,6 +12,8 @@ er-colab = "cli.colab:main"
 er-train = "training.train:main"
 er-rand-match = "training.rand_matching:main"
 er-generate-rand-truth = "training.generate_rand_truth:main"
+er-sample-balanced-pairs = "training.sample_balanced_pairs:main"
+er-sample-deduped-dataset = "training.sample_deduped_dataset:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

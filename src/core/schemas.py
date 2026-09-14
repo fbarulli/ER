@@ -84,10 +84,13 @@ class DataFilesSpec(BaseModel):
 
     dataset: str
     dataset_deduped: str
+    dataset_deduped_sample_3000: str
+    dataset_deduped_train_minus_3000: str
     sku_to_rep: str
     canonical_records: str
     gate_results: str
     labeled_pairs: str
+    balanced_pairs_sample_3000: str
     embedding_similarities: str
     model_evaluation_summary: str
     fold_metrics: str
@@ -394,6 +397,41 @@ class UniformitySpec(BaseModel):
     checkpoint_scope: Literal["all", "final"]
 
 
+class RobustValidationSpec(BaseModel):
+    """Repeated leakage-aware validation and error-slice reporting."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    n_folds: int = Field(ge=3)
+    repeats: int = Field(ge=2)
+    seed: int
+    min_slice_size: int = Field(ge=1)
+    dimensions: list[Literal["brand", "category", "attribute"]] = Field(
+        min_length=3, max_length=3
+    )
+    operating_thresholds: dict[str, float] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def _dimensions_are_complete(self) -> RobustValidationSpec:
+        if set(self.dimensions) != {"brand", "category", "attribute"}:
+            raise ValueError(
+                "evaluation.robust_validation.dimensions must contain exactly "
+                "brand, category, and attribute"
+            )
+        required = {"balanced_review", "high_precision"}
+        if set(self.operating_thresholds) != required:
+            raise ValueError(
+                "evaluation.robust_validation.operating_thresholds must contain "
+                "exactly balanced_review and high_precision"
+            )
+        if any(not 0.0 < float(value) < 1.0 for value in self.operating_thresholds.values()):
+            raise ValueError(
+                "evaluation.robust_validation.operating_thresholds must be in (0, 1)"
+            )
+        return self
+
+
 class EvaluationSpec(BaseModel):
     """Zero-shot evaluation protocol (config/training.yaml evaluation:) —
     the component dev/test split behind evaluate_models.
@@ -410,6 +448,7 @@ class EvaluationSpec(BaseModel):
     dev_fold: int = Field(ge=0)
     test_fold: int = Field(ge=0)
     retrieval_ks: list[int] = Field(min_length=1)
+    robust_validation: RobustValidationSpec
     uniformity: UniformitySpec
 
     @model_validator(mode="after")
@@ -686,9 +725,19 @@ class TrainingSpec(BaseModel):
         start_epoch_fraction: float = Field(ge=0.0, le=1.0)
         multiplier: float = Field(gt=0.0, le=1.0)
 
+    class RandomEasyNegativesSpec(BaseModel):
+        """Split-safe easy-negative mixing for contrastive training."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        enabled: bool
+        ratio_to_hard: float = Field(ge=0.0)
+        candidate_pool_size: int = Field(ge=1)
+
     base_model: str = Field(min_length=1)
     uniformity_regularization: UniformityRegularizationSpec
     late_epoch_lr_decay: LateEpochLrDecaySpec
+    random_easy_negatives: RandomEasyNegativesSpec
     structured_features: StructuredFeaturesSpec
 
     # The default SentenceTransformer path is a tied-weight two-tower
@@ -703,6 +752,8 @@ class TrainingSpec(BaseModel):
     lr: float = Field(gt=0.0)
     warmup_ratio: float = Field(ge=0.0, le=1.0)
     weight_decay: float = Field(ge=0.0)
+    projection_dropout: float = Field(ge=0.0, lt=1.0)
+    label_smoothing: float = Field(ge=0.0, lt=0.5)
     lr_scheduler: str
     max_grad_norm: float = Field(gt=0.0)
     es_patience: int = Field(ge=1)
@@ -733,6 +784,7 @@ class PairsSpec(BaseModel):
     max_pos_per_group: int = Field(ge=1)
     n_neg: int = Field(ge=0)
     neg_oversample: int = Field(ge=1)
+    balance_train_classes: bool
 
 
 class TrainingPlotsSpec(BaseModel):
@@ -1149,6 +1201,30 @@ class TrackingSpec(BaseModel):
     wandb: WandbTrackingSpec
 
 
+class ValidationInferenceSpec(BaseModel):
+    """Post-training inference performed before a Colab worker is published."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    source_csv: str = Field(min_length=1)
+    input_csv: str = Field(min_length=1)
+    output_dir: str = Field(min_length=1)
+    batch_size: int = Field(ge=1)
+    device: Literal["cpu", "cuda"]
+    error_threshold: float = Field(ge=0.0, le=1.0)
+    thresholds: list[float] = Field(min_length=1)
+
+    @field_validator("thresholds")
+    @classmethod
+    def _valid_thresholds(cls, values: list[float]) -> list[float]:
+        if any(value < 0.0 or value > 1.0 for value in values):
+            raise ValueError("validation inference thresholds must be in [0, 1]")
+        if values != sorted(set(values)):
+            raise ValueError("validation inference thresholds must be unique and sorted")
+        return values
+
+
 class ColabSpec(BaseModel):
     """Remote checkout/runtime settings for the Colab training lane."""
 
@@ -1161,6 +1237,7 @@ class ColabSpec(BaseModel):
     session: str = Field(min_length=1)
     gpu: str = Field(min_length=1)
     remote_data_prep: Literal[False] = False
+    training_dataset_csv: str = Field(min_length=1)
     hpo_mode: Literal["sequential", "parallel_same_vm"]
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)
@@ -1192,6 +1269,7 @@ class ColabSpec(BaseModel):
     dvc_events_file: str = Field(min_length=1)
     dvc_push_retries: int = Field(ge=1, le=10)
     dvc_push_backoff_seconds: int = Field(ge=1, le=120)
+    validation_inference: ValidationInferenceSpec
 
 
 class TrainingConfig(BaseModel):
@@ -1690,6 +1768,11 @@ class TrainConfig(BaseModel):
     lr: float = Field(gt=0.0)
     warmup_ratio: float = Field(ge=0.0, le=1.0)
     weight_decay: float = Field(ge=0.0)
+    projection_dropout: float = Field(ge=0.0, lt=1.0)
+    label_smoothing: float = Field(ge=0.0, lt=0.5)
+    random_easy_enabled: bool
+    random_easy_ratio_to_hard: float = Field(ge=0.0)
+    random_easy_candidate_pool_size: int = Field(ge=1)
     lr_scheduler: str
     max_grad_norm: float = Field(gt=0.0)
     patience: int = Field(ge=1)

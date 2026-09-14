@@ -39,13 +39,25 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from core.common import plot_dpi, rand_matching_cfg, recall_column_suffix
+from core.common import load_config, plot_dpi, rand_matching_cfg, recall_column_suffix
 
 # 05-03/06-3: the recall-tied fold-metric column follows the config SSOT
 # (rand_matching.target_recall) with the producer's own helper — a hardcoded
 # recall suffix would silently miss the column of a retuned lane.
 _RECALL_KEY = recall_column_suffix(float(rand_matching_cfg()["target_recall"]))
 _RECALL_THRESHOLD_COL = f"threshold_at_{_RECALL_KEY}_recall"
+REPORT_THRESHOLDS = (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90)
+
+
+def _text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if bool(pd.isna(value)):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
 
 
 def _json_list(value) -> list[float]:
@@ -80,6 +92,38 @@ def _confusion(y: np.ndarray, scores: np.ndarray, threshold: float) -> dict:
         "recall": float(tp / (tp + fn)) if tp + fn else 0.0,
         "f1": float(2 * tp / (2 * tp + fp + fn)) if 2 * tp + fp + fn else 0.0,
     }
+
+
+def _threshold_sweep(pairs: pd.DataFrame) -> pd.DataFrame:
+    """Compute fixed-threshold confusion metrics for every scored fold."""
+    columns = [
+        "fold", "threshold", "tp", "fp", "fn", "tn",
+        "precision", "recall", "fpr",
+    ]
+    if pairs.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, int | float]] = []
+    for fold, part in pairs.groupby("fold", sort=True):
+        y = part["label"].to_numpy(dtype=int)
+        scores = part["score"].to_numpy(dtype=float)
+        for threshold in REPORT_THRESHOLDS:
+            metrics = _confusion(y, scores, threshold)
+            positives = int((y == 1).sum())
+            negatives = int((y == 0).sum())
+            rows.append(
+                {
+                    "fold": int(fold),
+                    "threshold": float(threshold),
+                    "tp": metrics["tp"],
+                    "fp": metrics["fp"],
+                    "fn": metrics["fn"],
+                    "tn": metrics["tn"],
+                    "precision": metrics["precision"],
+                    "recall": metrics["recall"],
+                    "fpr": float(metrics["fp"] / negatives) if negatives else 0.0,
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
 
 
 def _score_overlap(negative: np.ndarray, positive: np.ndarray) -> float:
@@ -168,6 +212,143 @@ def _add_attribute_conflicts(
 
     labels = pd.DataFrame([conflict(row) for _, row in pairs.iterrows()])
     return pd.concat([pairs.reset_index(drop=True), labels], axis=1)
+
+
+def _add_pair_metadata(
+    pairs: pd.DataFrame,
+    data_path: str | Path,
+    canonical_path: str | Path,
+) -> pd.DataFrame:
+    """Attach endpoint GTIN/brand/category fields for robust slicing."""
+    data = pd.read_csv(data_path, dtype=str, keep_default_na=False).fillna("")
+    canon = pd.read_csv(canonical_path, dtype=str, keep_default_na=False).fillna("")
+    sku_lookup = data.set_index("product_id").to_dict("index")
+    canon_lookup = canon.set_index("gtin").to_dict("index")
+    canonical_gtins = sorted(str(gtin) for gtin in canon["gtin"])
+
+    def endpoint_ref(row: pd.Series, side: str) -> str:
+        id_col = f"sku_id_{side}"
+        if id_col in row.index and _text(row[id_col]):
+            return _text(row[id_col])
+        for col in (f"payload_idx_{side}", side):
+            if col not in row.index:
+                continue
+            value = row[col]
+            try:
+                index = int(float(value))
+            except (TypeError, ValueError):
+                return _text(value)
+            if index < len(data):
+                return str(data.iloc[index]["product_id"])
+            canon_index = index - len(data)
+            if 0 <= canon_index < len(canonical_gtins):
+                return f"canon#{canonical_gtins[canon_index]}"
+            barcode_col = f"barcode_{side}"
+            if barcode_col in row.index and _text(row[barcode_col]):
+                return f"canon#{_text(row[barcode_col])}"
+        raise ValueError(
+            f"pair dump lacks a resolvable endpoint for side {side!r}; "
+            f"columns={list(row.index)}"
+        )
+
+    def metadata(ref: str) -> dict[str, str]:
+        if ref.startswith("masked#"):
+            # Older pair dumps exposed appended masked-copy payload entries as
+            # ``masked#<payload-index>`` but did not persist their source SKU
+            # or masking audit. Preserve the report and identify the endpoint
+            # honestly; do not guess a title/GTIN from the payload index.
+            return {
+                "gtin": "",
+                "brand": "",
+                "category": "",
+                "title": f"[{ref}: source metadata unavailable]",
+                "attributes": "",
+                "retailer": "",
+                "country": "",
+                "canonical": "",
+            }
+        if ref.startswith("canon#"):
+            gtin = ref.removeprefix("canon#")
+            record = canon_lookup.get(gtin)
+            if record is None:
+                raise KeyError(f"unknown canonical endpoint {gtin!r}")
+            return {
+                "gtin": gtin,
+                "brand": _text(record.get("mode_brand", record.get("brand", ""))),
+                "category": _text(record.get("mode_type", record.get("category", ""))),
+                "title": _text(record.get("canonical", "")),
+                "attributes": json.dumps(
+                    {
+                        key: _text(record.get(key, ""))
+                        for key in (
+                            "mode_flavor", "volume_set", "pack_set",
+                            "package_type_set", "package_material_set",
+                        )
+                        if _text(record.get(key, ""))
+                    },
+                    sort_keys=True,
+                ),
+                "retailer": "",
+                "country": "",
+                "canonical": _text(record.get("canonical", "")),
+            }
+        record = sku_lookup.get(ref)
+        if record is None:
+            raise KeyError(f"unknown SKU endpoint {ref!r}")
+        return {
+            "gtin": _text(record.get("barcode", "")),
+            "brand": _text(record.get("brand", "")),
+            "category": _text(record.get("category", record.get("category_path", ""))),
+            "title": _text(record.get("title", "")),
+            "attributes": _text(record.get("attributes", "")),
+            "retailer": _text(record.get("retailer", "")),
+            "country": _text(record.get("country", "")),
+            "canonical": "",
+        }
+
+    additions: list[dict[str, str]] = []
+    for _, row in pairs.iterrows():
+        additions.append(
+            {
+                **{f"{key}_a": value for key, value in metadata(endpoint_ref(row, "a")).items()},
+                **{f"{key}_b": value for key, value in metadata(endpoint_ref(row, "b")).items()},
+            }
+        )
+    enriched = pd.DataFrame(additions, index=pairs.index)
+    result = pairs.copy()
+    for column in enriched.columns:
+        if column not in result.columns:
+            result[column] = enriched[column]
+        else:
+            current = result[column].map(str).replace({"nan": "", "None": ""})
+            result[column] = current.where(current.str.strip().ne(""), enriched[column])
+    return result
+
+
+def _run_robust_validation(
+    pairs: pd.DataFrame,
+    out: Path,
+) -> dict[str, object] | None:
+    if pairs.empty:
+        return None
+    cfg = load_config()["evaluation"]["robust_validation"]
+    if not bool(cfg["enabled"]):
+        return None
+    from training.robust_validation import run_robust_validation
+
+    return run_robust_validation(
+        pairs,
+        out,
+        n_folds=int(cfg["n_folds"]),
+        repeats=int(cfg["repeats"]),
+        seed=int(cfg["seed"]),
+        min_slice_size=int(cfg["min_slice_size"]),
+        dimensions=tuple(str(value) for value in cfg["dimensions"]),
+        operating_thresholds={
+            str(key): float(value)
+            for key, value in cfg["operating_thresholds"].items()
+        },
+    )
 
 
 def _save(fig: plt.Figure, path: Path) -> None:
@@ -308,6 +489,8 @@ def generate_report(
         and canonical_path is not None
     ):
         pairs = _add_attribute_conflicts(pairs, data_path, canonical_path)
+    if not pairs.empty and data_path is not None and canonical_path is not None:
+        pairs = _add_pair_metadata(pairs, data_path, canonical_path)
     train_score_frames = []
     for path in train_score_paths or []:
         frame = pd.read_csv(path)
@@ -328,6 +511,38 @@ def generate_report(
         if random_score_frames
         else pd.DataFrame()
     )
+    robust_validation = _run_robust_validation(pairs, out)
+
+    # Fixed operating-point sweep requested for model review.  This uses the
+    # scored holdout rows only; thresholds are never selected from this table.
+    threshold_sweep = _threshold_sweep(pairs)
+    threshold_sweep.to_csv(out / "threshold_sweep.csv", index=False)
+    if not threshold_sweep.empty:
+        fig, ax = plt.subplots(figsize=(8.5, 4.8))
+        for metric, color in (
+            ("precision", "#4c72b0"),
+            ("recall", "#55a868"),
+            ("fpr", "#c44e52"),
+        ):
+            grouped = threshold_sweep.groupby("threshold", sort=True)[metric]
+            ax.plot(
+                grouped.mean().index,
+                grouped.mean().values,
+                marker="o",
+                label=metric,
+                color=color,
+            )
+        ax.set(
+            xlabel="decision threshold",
+            ylabel="rate",
+            title="Holdout precision / recall / false-positive rate sweep",
+            ylim=(0, 1.05),
+        )
+        ax.set_xticks(list(REPORT_THRESHOLDS))
+        ax.grid(alpha=0.25)
+        ax.legend()
+        fig.tight_layout()
+        _save(fig, out / "threshold_sweep.png")
 
     f1_col = _metric_column(list(ok.columns), "f1_at_")
     precision_col = _metric_column(list(ok.columns), "precision_at_")
@@ -655,6 +870,58 @@ def generate_report(
             fig.tight_layout()
             _save(fig, out / "attribute_error_breakdown.png")
 
+            # Concrete examples make the aggregate slice actionable. Keep a
+            # deterministic, bounded sample of the most confident mistakes
+            # in each fold/attribute/error direction; this avoids hiding the
+            # examples behind a random sample or an oversized report.
+            attr["error_kind"] = np.select(
+                [
+                    attr["error"] & attr["label"].eq(0),
+                    attr["error"] & attr["label"].eq(1),
+                ],
+                ["false_positive", "false_negative"],
+                default="correct",
+            )
+            attr["error_margin"] = (attr["score"] - attr["threshold"]).abs()
+            examples = attr[attr["error"]].copy()
+            if not examples.empty:
+                sort_columns = [
+                    column
+                    for column in (
+                        "fold", "attribute_bucket", "error_kind", "error_margin",
+                        "score", "sku_id_a", "sku_id_b",
+                    )
+                    if column in examples.columns
+                ]
+                examples = examples.sort_values(
+                    sort_columns,
+                    ascending=[
+                        column not in {"error_margin", "score"}
+                        for column in sort_columns
+                    ],
+                    kind="mergesort",
+                )
+                examples = (
+                    examples.groupby(
+                        ["fold", "attribute_bucket", "error_kind"],
+                        sort=True,
+                        group_keys=False,
+                    )
+                    .head(50)
+                    .reset_index(drop=True)
+                )
+            example_columns = [
+                "fold", "attribute_bucket", "attribute_conflict_type",
+                "error_kind", "label", "score", "threshold", "error_margin",
+                "sku_id_a", "sku_id_b", "gtin_a", "gtin_b",
+                "brand_a", "brand_b", "category_a", "category_b",
+                "retailer_a", "retailer_b", "country_a", "country_b",
+                "title_a", "title_b", "attributes_a", "attributes_b",
+            ]
+            examples[[column for column in example_columns if column in examples]].to_csv(
+                out / "attribute_error_examples.csv", index=False
+            )
+
     random_easy_plot = out / "random_easy_score_distributions.png"
     random_easy_csv = out / "random_easy_metrics.csv"
     if not random_scores.empty:
@@ -796,9 +1063,19 @@ def generate_report(
         },
         "score_overlap": _numeric_csv(out / "score_distribution_overlap.csv", ("split",)),
         "confusion": _numeric_csv(out / "confusion_matrices.csv", ("fold", "operating_point")),
+        "threshold_sweep": _numeric_csv(out / "threshold_sweep.csv", ("fold", "threshold")),
         "ranking": _numeric_csv(out / "ranking_hits_at_k.csv", ("fold", "k")),
         "random_easy": _numeric_csv(out / "random_easy_metrics.csv", ("population", "label")),
         "attribute_errors": _numeric_csv(out / "attribute_error_breakdown.csv", ("attribute_bucket", "label")),
+        "attribute_error_examples": {
+            "rows": int(
+                len(pd.read_csv(out / "attribute_error_examples.csv"))
+            )
+            if (out / "attribute_error_examples.csv").is_file()
+            else 0,
+            "artifact": "attribute_error_examples.csv",
+        },
+        "robust_validation": robust_validation or {},
         "uniformity": _numeric_tree(uniformity_summary or {}),
         "rand_matching": {
             "folds": rand_metric_folds,

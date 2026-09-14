@@ -160,6 +160,17 @@ def run_grid(
             # aligned, so the grid could train under different
             # regularization than the lane it tunes.
             "weight_decay": _runtime("weight_decay"),
+            "projection_dropout": _runtime("projection_dropout"),
+            "label_smoothing": _runtime("label_smoothing"),
+            "random_easy_enabled": bool(
+                _runtime("random_easy_negatives")["enabled"]
+            ),
+            "random_easy_ratio_to_hard": float(
+                _runtime("random_easy_negatives")["ratio_to_hard"]
+            ),
+            "random_easy_candidate_pool_size": int(
+                _runtime("random_easy_negatives")["candidate_pool_size"]
+            ),
             "lr_scheduler": _runtime("lr_scheduler"),
             "max_grad_norm": _runtime("max_grad_norm"),
             "patience": ES_PATIENCE,

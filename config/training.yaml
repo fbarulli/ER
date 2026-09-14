@@ -70,6 +70,7 @@ colab:
   # Training workers consume immutable bundles prepared locally.  Keep all
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
+  training_dataset_csv: "artifacts/data/dataset_deduped_train_minus_3000.csv"
   hpo_mode: "sequential"
   hpo_workers: 2
   train_workers: 6
@@ -110,6 +111,15 @@ colab:
   dvc_events_file: "dvc_events.jsonl"
   dvc_push_retries: 5
   dvc_push_backoff_seconds: 15
+  validation_inference:
+    enabled: true
+    source_csv: "artifacts/data/dataset_deduped.csv"
+    input_csv: "artifacts/data/dataset_deduped_sample_3000.csv"
+    output_dir: "validation_inference"
+    batch_size: 128
+    device: "cuda"
+    error_threshold: 0.787
+    thresholds: [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
 
 # ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
 # The gate's decision table, formerly signature defaults in
@@ -159,6 +169,16 @@ evaluation:
   dev_fold: 0             # fold index used as DEV  (threshold-fit half)
   test_fold: 1            # fold index used as TEST (reported half)
   retrieval_ks: [1, 5, 10]  # persisted Precision@K / Recall@K cutoffs
+  robust_validation:
+    enabled: true
+    n_folds: 5             # repeated held-out folds over SKU/GTIN components
+    repeats: 3             # independent seeded assignments, 15 scored folds total
+    seed: 42
+    min_slice_size: 25     # suppress unstable brand/category slices
+    dimensions: [brand, category, attribute]
+    operating_thresholds:
+      balanced_review: 0.787
+      high_precision: 0.85
   uniformity:
     enabled: true
     sample_pairs: 100
@@ -288,13 +308,19 @@ training:
   # hard pairs — per-batch hard-pair selection is native to the loss.
   # mnrl = MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
   loss: "contrastive"
-  contrastive_margin: 0.2     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
+  contrastive_margin: 0.3     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
   hard_positives: true        # generate volume-verified cross-country pairs
                               # and join them to the training positives
   epochs: 10
   lr: 0.00002
   warmup_ratio: 0.05
-  weight_decay: 0.01
+  weight_decay: 0.01          # conservative AdamW regularization
+  projection_dropout: 0.10    # applied after SentenceTransformer pooling
+  label_smoothing: 0.05       # binary smoothing for contrastive loss only
+  random_easy_negatives:
+    enabled: true
+    ratio_to_hard: 1.0        # retain every hard negative, then add 1 easy per hard
+    candidate_pool_size: 10000
   lr_scheduler: "linear"
   max_grad_norm: 1.0
   es_patience: 3
@@ -313,7 +339,7 @@ training:
   batch_size_cpu: 32          # finetune batch when on CPU
   # Conservative shared batch sizes for the 14.6-GB T4 across all three
   # swept backbones (MiniLM, multilingual L12, and DeBERTa-v3-base).
-  batch_size_cuda: 32         # finetune batch when on GPU
+  batch_size_cuda: 64         # finetune batch when on GPU
   batch_size_embed: 64        # encode batch (zero-shot, plots, eval encoders)
   batch_size_eval: 64         # post-train eval encodes
   max_seq_length: 128         # every encoder call
@@ -333,6 +359,7 @@ pairs:
   max_pos_per_group: 4           # eval-pair positives per multi-retailer group
   n_neg: 10000                   # eval negatives per build_pairs call
   neg_oversample: 60             # bulk-draw multiplier for valid negatives
+  balance_train_classes: true    # next training run: train negatives match all positives
 
 # ── plotting (was EDA/eda.yaml plots: — every fig.savefig reads this) ────────
 plots:

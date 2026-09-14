@@ -115,7 +115,7 @@ KNOWN_DATAPOINT_POPULATIONS = (
     "random_easy",
     "ann_finetuned",
 )
-EVAL_ONLY_DATAPOINT_POPULATIONS = {"random_easy"}
+EVAL_ONLY_DATAPOINT_POPULATIONS: set[str] = set()
 
 # DEFAULT_CFG REMOVED (audit 2026-09-09): zero readers since the entry
 # (train.py) constructs its own cfg dict; a stale epochs=2 default here
@@ -239,6 +239,32 @@ def _align_model_token_ids(model: SentenceTransformer) -> None:
     }
     if unresolved:
         raise RuntimeError(f"tokenizer/model token-ID alignment failed: {unresolved}")
+
+
+def _configure_projection_dropout(model, probability: float) -> bool:
+    """Append serializable dropout after pooling, idempotently.
+
+    Existing regularized checkpoints already contain the SentenceTransformers
+    dropout module. In that case update its probability instead of appending a
+    second layer. Returns whether a new module was added.
+    """
+    probability = float(probability)
+    if not 0.0 <= probability < 1.0:
+        raise ValueError("projection dropout must be in [0, 1)")
+
+    from sentence_transformers.sentence_transformer.modules import Dropout
+
+    existing = [module for module in model.children() if isinstance(module, Dropout)]
+    if len(existing) > 1:
+        raise RuntimeError("model contains multiple SentenceTransformer dropout modules")
+    if existing:
+        existing[0].dropout = probability
+        existing[0].dropout_layer.p = probability
+        return False
+    if probability == 0.0:
+        return False
+    model.add_module("projection_dropout", Dropout(dropout=probability))
+    return True
 
 
 def _make_checkpoint_tokenizer_portable(checkpoint: Path) -> None:
@@ -413,6 +439,79 @@ def _split_safe_random_negative_pairs(
     return np.empty((0, 2), dtype=int)
 
 
+def _mix_random_easy_training_negatives(
+    hard_pairs: np.ndarray,
+    hard_sources: np.ndarray,
+    *,
+    df: pd.DataFrame,
+    row_bc: np.ndarray,
+    train_barcodes: set[str],
+    seed: int,
+    enabled: bool,
+    ratio_to_hard: float,
+    candidate_pool_size: int,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Retain hard negatives and deterministically add split-local easy ones.
+
+    When the unique easy pool is smaller than the ratio target, deterministic
+    sampling with replacement replenishes it. The returned integer is the
+    unique candidate count before replenishment, useful for telemetry.
+    """
+    hard_pairs = np.asarray(hard_pairs, dtype=int).reshape(-1, 2)
+    hard_sources = np.asarray(hard_sources, dtype=object)
+    if len(hard_sources) != len(hard_pairs):
+        raise ValueError("hard negative/source lengths differ")
+    ratio_to_hard = float(ratio_to_hard)
+    if ratio_to_hard < 0:
+        raise ValueError("random/easy to hard ratio must be non-negative")
+    if int(candidate_pool_size) < 1:
+        raise ValueError("random/easy candidate pool size must be positive")
+    target = int(np.ceil(len(hard_pairs) * ratio_to_hard))
+    if not enabled or target == 0:
+        return hard_pairs, hard_sources, 0
+
+    candidates = _split_safe_random_negative_pairs(
+        df,
+        row_bc,
+        train_barcodes,
+        seed=seed,
+        n_neg=min(target, int(candidate_pool_size)),
+    )
+    if not len(candidates):
+        return hard_pairs, hard_sources, 0
+    if not pairs_in_set(candidates, row_bc, train_barcodes).all():
+        raise RuntimeError("random/easy training negatives crossed the train split")
+
+    normalized_hard = {tuple(pair) for pair in np.sort(hard_pairs, axis=1)}
+    unique_candidates = np.asarray(
+        [
+            pair
+            for pair in np.unique(np.sort(candidates, axis=1), axis=0)
+            if tuple(pair) not in normalized_hard
+        ],
+        dtype=int,
+    ).reshape(-1, 2)
+    if not len(unique_candidates):
+        print(
+            "[random-easy] WARNING: candidate pool only duplicated hard negatives",
+            flush=True,
+        )
+        return hard_pairs, hard_sources, 0
+    rng = np.random.default_rng(seed + 1)
+    chosen = unique_candidates[
+        rng.choice(
+            len(unique_candidates),
+            size=target,
+            replace=len(unique_candidates) < target,
+        )
+    ]
+    mixed_pairs = np.vstack([hard_pairs, chosen])
+    mixed_sources = np.concatenate(
+        [hard_sources, np.full(target, "random_easy", dtype=object)]
+    )
+    return mixed_pairs, mixed_sources, len(unique_candidates)
+
+
 def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float):
     """Precision/recall/threshold at a target recall (07-series schema).
 
@@ -465,6 +564,7 @@ def _make_loss(
     uniformity_weight: float,
     uniformity_temperature: float,
     uniformity_min_batch_size: int,
+    label_smoothing: float,
 ):
     """Loss factory (SSOT knobs: training.loss / training.contrastive_margin).
 
@@ -495,8 +595,35 @@ def _make_loss(
             uniformity_weight=uniformity_weight,
             uniformity_temperature=uniformity_temperature,
             uniformity_min_batch_size=uniformity_min_batch_size,
+            label_smoothing=label_smoothing,
         )
     return losses.TripletLoss(model)
+
+
+def _smoothed_contrastive_losses(
+    positive_pairs,
+    negative_pairs,
+    *,
+    margin: float,
+    label_smoothing: float,
+):
+    """Return positive/negative OnlineContrastiveLoss terms with smoothing."""
+    import torch.nn.functional as F
+
+    smoothing = float(label_smoothing)
+    if not 0.0 <= smoothing < 0.5:
+        raise ValueError("contrastive label smoothing must be in [0, 0.5)")
+    positive_hinge = F.relu(float(margin) - positive_pairs)
+    negative_hinge = F.relu(float(margin) - negative_pairs)
+    positive_loss = (
+        (1.0 - smoothing) * positive_pairs.pow(2)
+        + smoothing * positive_hinge.pow(2)
+    ).sum()
+    negative_loss = (
+        (1.0 - smoothing) * negative_hinge.pow(2)
+        + smoothing * negative_pairs.pow(2)
+    ).sum()
+    return positive_loss, negative_loss, negative_hinge
 
 
 def _tracking_contrastive_loss(
@@ -507,6 +634,7 @@ def _tracking_contrastive_loss(
     uniformity_weight: float,
     uniformity_temperature: float,
     uniformity_min_batch_size: int,
+    label_smoothing: float,
 ):
     """Return OnlineContrastiveLoss with selection/backprop telemetry.
 
@@ -619,9 +747,18 @@ def _tracking_contrastive_loss(
             positive_pairs = poss[
                 positive_selection
             ]
-            positive_loss = positive_pairs.pow(2).sum()
-            negative_hinge = F.relu(self.margin - negative_pairs)
-            negative_loss = negative_hinge.pow(2).sum()
+            # Binary label smoothing mixes a small amount of the opposite
+            # class objective into each selected pair. At smoothing=0 this
+            # is exactly the installed OnlineContrastiveLoss arithmetic.
+            smoothing = float(label_smoothing)
+            positive_loss, negative_loss, negative_hinge = (
+                _smoothed_contrastive_losses(
+                    positive_pairs,
+                    negative_pairs,
+                    margin=self.margin,
+                    label_smoothing=smoothing,
+                )
+            )
             uniformity_loss = self._uniformity_penalty(embeddings)
             anti_collapse_loss = uniformity_weight * uniformity_loss
             loss_value = (
@@ -639,9 +776,14 @@ def _tracking_contrastive_loss(
                     selected_negative_ids = negative_ids[
                         negative_selection.detach().cpu()
                     ]
-                    active_negative_ids = selected_negative_ids[
+                    margin_active_negative_ids = selected_negative_ids[
                         (negative_hinge > 0).detach().cpu()
                     ]
+                    backprop_negative_ids = (
+                        selected_negative_ids
+                        if smoothing > 0
+                        else margin_active_negative_ids
+                    )
                     for value in negative_ids.tolist():
                         key = int(value)
                         self._negative_present_counts[key] = (
@@ -658,7 +800,7 @@ def _tracking_contrastive_loss(
                         self._per_epoch_counts.setdefault(self._current_epoch, {}).setdefault(
                             key, {"present_count": 0, "hard_selected_count": 0, "backprop_count": 0}
                         )["hard_selected_count"] += 1
-                    for value in active_negative_ids.tolist():
+                    for value in backprop_negative_ids.tolist():
                         key = int(value)
                         self._negative_backprop_counts[key] = (
                             self._negative_backprop_counts.get(key, 0) + 1
@@ -670,8 +812,24 @@ def _tracking_contrastive_loss(
                         int(value) for value in selected_negative_ids.tolist()
                     )
                     self._seen_margin_active_negative_ids.update(
-                        int(value) for value in active_negative_ids.tolist()
+                        int(value) for value in margin_active_negative_ids.tolist()
                     )
+                    source_sets = {
+                        "present": negative_ids,
+                        "selected": selected_negative_ids,
+                        "backprop": backprop_negative_ids,
+                    }
+                    for event, ids in source_sets.items():
+                        for pair_id in ids.tolist():
+                            source = str(
+                                self._pair_lineage[int(pair_id)].get(
+                                    "population", "unknown"
+                                )
+                            )
+                            metric = f"negative_source_{source}_{event}_count"
+                            self._tracking_totals[metric] = (
+                                self._tracking_totals.get(metric, 0.0) + 1.0
+                            )
                 values = {
                     "hard_positive_count": float(len(positive_pairs)),
                     "hard_negative_count": float(len(negative_pairs)),
@@ -714,6 +872,13 @@ def _tracking_contrastive_loss(
                 "anti_collapse_loss": totals.get("anti_collapse_loss", 0.0),
                 "tracking_batches": float(batches),
             }
+            result.update(
+                {
+                    key: value
+                    for key, value in totals.items()
+                    if key.startswith("negative_source_")
+                }
+            )
             result["margin_active_negative_fraction"] = (
                 result["margin_active_negative_count"]
                 / result["hard_negative_count"]
@@ -732,6 +897,7 @@ def _tracking_contrastive_loss(
             total = self._total_negative_pairs
             return {
                 "contrastive_margin": float(self.margin),
+                "label_smoothing": float(label_smoothing),
                 "negative_cosine_target": float(1.0 - self.margin),
                 "n_train_neg_total": float(total),
                 "n_train_neg_hard_selected_unique": float(selected),
@@ -2866,6 +3032,27 @@ def train_one_config(
                 if len(_train_neg_mask)
                 else np.empty(0, dtype=object)
             )
+            n_train_hard_neg = len(tr_negs)
+            random_easy_unique_candidates = 0
+            if loss == "contrastive":
+                tr_negs, tr_neg_sources, random_easy_unique_candidates = (
+                    _mix_random_easy_training_negatives(
+                        tr_negs,
+                        tr_neg_sources,
+                        df=df,
+                        row_bc=row_bc,
+                        train_barcodes=tr_bc,
+                        seed=seed + fold_i + 20_003,
+                        enabled=bool(cfg["random_easy_enabled"]),
+                        ratio_to_hard=float(cfg["random_easy_ratio_to_hard"]),
+                        candidate_pool_size=int(
+                            cfg["random_easy_candidate_pool_size"]
+                        ),
+                    )
+                )
+            n_train_random_easy_neg = int(
+                np.sum(tr_neg_sources == "random_easy")
+            )
             train_neg_source_counts = {
                 str(source): int(np.sum(tr_neg_sources == source))
                 for source in np.unique(tr_neg_sources)
@@ -2999,6 +3186,24 @@ def train_one_config(
                 model_id, device="cuda" if on_cuda else "cpu"
             )
             _align_model_token_ids(model)
+            dropout_added = _configure_projection_dropout(
+                model, float(cfg["projection_dropout"])
+            )
+            print(
+                f"    [regularization] weight_decay={cfg['weight_decay']:.4g} | "
+                f"projection_dropout={cfg['projection_dropout']:.4g} "
+                f"({'added' if dropout_added else 'configured'}) | "
+                f"label_smoothing={cfg['label_smoothing']:.4g}",
+                flush=True,
+            )
+            if loss == "contrastive":
+                print(
+                    f"    [random-easy-train] hard={n_train_hard_neg:,} | "
+                    f"random_easy={n_train_random_easy_neg:,} "
+                    f"({random_easy_unique_candidates:,} unique candidates) | "
+                    f"ratio={n_train_random_easy_neg / n_train_hard_neg if n_train_hard_neg else 0.0:.3f}",
+                    flush=True,
+                )
             model.max_seq_length = runtime("max_seq_length")  # SSOT, no literal
 
             # ── build the training dataset FIRST (steps derive from it) ──
@@ -3453,6 +3658,7 @@ def train_one_config(
                 uniformity_weight=float(cfg["uniformity_weight"]),
                 uniformity_temperature=float(_UNIFORMITY_CFG["temperature"]),
                 uniformity_min_batch_size=int(_UNIFORMITY_CFG["min_batch_size"]),
+                label_smoothing=float(cfg["label_smoothing"]),
             )
             pair_lineage = _build_pair_lineage(
                 train_all,
@@ -3697,7 +3903,7 @@ def train_one_config(
                 )
             for usage in usage_rows:
                 source = str(usage.get("population", "unknown"))
-                if source not in {"gate", "attribute_conflict"}:
+                if source not in {"gate", "attribute_conflict", "random_easy"}:
                     continue
                 source_coverage[f"n_train_neg_source_{source}_present"] = (
                     source_coverage.get(
@@ -3714,7 +3920,7 @@ def train_one_config(
                         f"n_train_neg_source_{source}_backprop", 0
                     ) + int(bool(usage.get("backprop_count", 0)))
                 )
-            for source in ("gate", "attribute_conflict"):
+            for source in ("gate", "attribute_conflict", "random_easy"):
                 for suffix in ("", "_present", "_selected", "_backprop"):
                     source_coverage.setdefault(
                         f"n_train_neg_source_{source}{suffix}", 0
@@ -3731,6 +3937,8 @@ def train_one_config(
                 f"({source_coverage['pct_train_neg_source_gate']:.2%}) | "
                 f"attribute_conflict={source_coverage['n_train_neg_source_attribute_conflict']:,} "
                 f"({source_coverage['pct_train_neg_source_attribute_conflict']:.2%}) "
+                f"random_easy={source_coverage['n_train_neg_source_random_easy']:,} "
+                f"({source_coverage['pct_train_neg_source_random_easy']:.2%}) "
                 f"of {len(tr_negs):,} train-fold negatives",
                 flush=True,
             )
@@ -4344,15 +4552,19 @@ def train_one_config(
                 # train barcodes (the label=0 half of the dataset); mnrl:
                 # in-batch only (counted separately below); triplet: mined
                 "n_train_neg": (
-                    len(
-                        _train_neg_source[
-                            pairs_in_set(_train_neg_source, row_bc, tr_bc)
-                        ]
-                    )
+                    len(tr_negs)
                     if loss == "contrastive"
-                    and _train_neg_source is not None
-                    and len(_train_neg_source)
                     else (0 if loss == "mnrl" else len(hard_train))
+                ),
+                "n_train_hard_neg": n_train_hard_neg,
+                "n_train_random_easy_neg": n_train_random_easy_neg,
+                "n_train_random_easy_unique_candidates": (
+                    random_easy_unique_candidates
+                ),
+                "train_random_easy_to_hard_ratio": (
+                    n_train_random_easy_neg / n_train_hard_neg
+                    if n_train_hard_neg
+                    else 0.0
                 ),
                 "n_hp_in_train": (
                     len(hp_pairs[pairs_in_set(hp_pairs, row_bc, tr_bc)])
@@ -4387,6 +4599,13 @@ def train_one_config(
                 # fallback after a _discriminative_groups failure
                 "lr_groups": lr_groups,
                 "warmup_steps": warmup_steps,
+                "weight_decay": float(cfg["weight_decay"]),
+                "projection_dropout": float(cfg["projection_dropout"]),
+                "label_smoothing": (
+                    float(cfg["label_smoothing"])
+                    if loss == "contrastive"
+                    else 0.0
+                ),
                 "uniformity_weight": float(cfg["uniformity_weight"]),
                 "late_epoch_decay_enabled": bool(
                     cfg["late_epoch_decay_enabled"]
@@ -4697,6 +4916,17 @@ def run_hpo(
             ),
             "weight_decay": trial.suggest_float(
                 "weight_decay", *HPO_SPACE["weight_decay"]
+            ),
+            "projection_dropout": _runtime("projection_dropout"),
+            "label_smoothing": _runtime("label_smoothing"),
+            "random_easy_enabled": bool(
+                _runtime("random_easy_negatives")["enabled"]
+            ),
+            "random_easy_ratio_to_hard": float(
+                _runtime("random_easy_negatives")["ratio_to_hard"]
+            ),
+            "random_easy_candidate_pool_size": int(
+                _runtime("random_easy_negatives")["candidate_pool_size"]
             ),
             "lr_scheduler": _runtime("lr_scheduler"),  # SSOT
             "max_grad_norm": _runtime("max_grad_norm"),  # SSOT

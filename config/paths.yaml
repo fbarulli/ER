@@ -45,10 +45,13 @@ files:
   # explicit rather than silently falling back when artifacts/data is absent.
   dataset: "repo:dataset.csv"
   dataset_deduped: "data:dataset_deduped.csv"
+  dataset_deduped_sample_3000: "data:dataset_deduped_sample_3000.csv"
+  dataset_deduped_train_minus_3000: "data:dataset_deduped_train_minus_3000.csv"
   sku_to_rep: "data:sku_to_rep.csv"
   canonical_records: "results:canonical_records.csv"   # SHARED frozen input
   gate_results: "results:gate_results.csv"             # SHARED frozen input
   labeled_pairs: "results_training:labeled_pairs.csv"
+  balanced_pairs_sample_3000: "results_training:balanced_pairs_sample_3000.csv"
   embedding_similarities: "results_training:embedding_similarities.csv"
   model_evaluation_summary: "results_training:model_evaluation_summary.csv"
   fold_metrics: "results:train_fold_metrics.csv"       # worker-scoped pointer
@@ -104,6 +107,11 @@ layouts:
     owner: training.report_plots
     template: "report_{kind}.csv"
     fields: {kind: str}
+  validation_inference:
+    root: results
+    owner: training.validation_inference
+    template: "validation_inference/{name}"
+    fields: {name: str}
   hpo_trials:
     root: results_hpo
     owner: training.training

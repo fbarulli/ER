@@ -558,6 +558,12 @@ def _main_inner(_mlf, _wandb) -> None:
         help="debug: cap dataset rows (full chain, tiny data)",
     )
     ap.add_argument(
+        "--dataset",
+        type=Path,
+        default=None,
+        help="validated deduped source CSV override (used by prepared Colab bundles)",
+    )
+    ap.add_argument(
         "--mask-effect",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -713,7 +719,20 @@ def _main_inner(_mlf, _wandb) -> None:
     lo, hi = (float(x) for x in args.band.split("-"))
     band = (lo, hi)
 
-    df = load_dataset_deduped()
+    if args.dataset is None:
+        df = load_dataset_deduped()
+    else:
+        dataset_path = args.dataset.expanduser().resolve()
+        if not dataset_path.is_file():
+            raise FileNotFoundError(f"training dataset override is missing: {dataset_path}")
+        df = pd.read_csv(dataset_path, dtype=str)
+        required_columns = set(pd.read_csv(F["dataset_deduped"], nrows=0).columns)
+        missing_columns = sorted(required_columns - set(df.columns))
+        if missing_columns:
+            raise ValueError(
+                f"training dataset override lacks deduped columns: {missing_columns}"
+            )
+        print(f"[dataset] override={dataset_path} rows={len(df):,}", flush=True)
     if args.sample:
         df = df.head(args.sample).reset_index(drop=True)
         print(f"SAMPLE MODE: first {args.sample} rows", flush=True)
@@ -1052,6 +1071,28 @@ def _main_inner(_mlf, _wandb) -> None:
             f"eval={len(neg_sources)}/{len(neg)} "
             f"train={len(train_neg_sources)}/{len(train_neg)}"
         )
+    balance_train_classes = bool(load_config()["pairs"]["balance_train_classes"])
+    if balance_train_classes:
+        target = len(pos)
+        if target and not len(train_neg):
+            raise RuntimeError(
+                "class balancing requested but no training negatives are available"
+            )
+        if target:
+            rng = np.random.default_rng(SEED + 91_003)
+            selected = rng.choice(
+                len(train_neg),
+                size=target,
+                replace=len(train_neg) < target,
+            )
+            train_neg = train_neg[selected]
+            train_neg_sources = train_neg_sources[selected]
+        print(
+            f"[class-balance] training positives={len(pos):,} "
+            f"negatives={len(train_neg):,} ratio="
+            f"{len(train_neg) / max(len(pos), 1):.3f}",
+            flush=True,
+        )
     _wandb.log_config(
         {
             "n_gate_negative_pairs": int(np.sum(neg_sources == "gate")),
@@ -1065,6 +1106,9 @@ def _main_inner(_mlf, _wandb) -> None:
             "n_attribute_conflict_negatives": int(len(_attr_neg)),
             "n_hard_negative_training_pairs": int(len(train_neg)),
             "n_hard_negative_eval_pairs": int(len(neg)),
+            "balance_train_classes": balance_train_classes,
+            "n_training_positive_pairs": int(len(pos)),
+            "n_training_negative_pairs": int(len(train_neg)),
         }
     )
     print(
@@ -1209,6 +1253,15 @@ def _main_inner(_mlf, _wandb) -> None:
         "lr": args.lr,
         "warmup_ratio": args.warmup_ratio,
         "weight_decay": args.weight_decay,
+        "projection_dropout": runtime("projection_dropout"),
+        "label_smoothing": runtime("label_smoothing"),
+        "random_easy_enabled": bool(runtime("random_easy_negatives")["enabled"]),
+        "random_easy_ratio_to_hard": float(
+            runtime("random_easy_negatives")["ratio_to_hard"]
+        ),
+        "random_easy_candidate_pool_size": int(
+            runtime("random_easy_negatives")["candidate_pool_size"]
+        ),
         "lr_scheduler": runtime("lr_scheduler"),
         "max_grad_norm": runtime("max_grad_norm"),
         "patience": ES_PATIENCE,
@@ -1579,13 +1632,56 @@ def _main_inner(_mlf, _wandb) -> None:
                 from training.generate_training_report import generate_report
 
                 report_dir = RESULTS / f"report_{run_tag}"
-                generate_report(
+                report_payload = generate_report(
                     out,
                     pair_paths,
                     report_dir,
                     sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*_train_scores.csv")),
                     sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*_random_easy_scores.csv")),
+                    data_path=F["dataset_deduped"],
+                    canonical_path=F["canonical_records"],
                 )
+                robust = report_payload.get("robust_validation", {})
+                robust_metrics: dict[str, float] = {}
+                for metric, values in robust.get("aggregate", {}).items():
+                    if not isinstance(values, dict):
+                        continue
+                    for statistic in ("mean", "std"):
+                        value = values.get(statistic)
+                        if isinstance(value, (int, float)) and np.isfinite(value):
+                            robust_metrics[f"validation/robust/{metric}_{statistic}"] = float(value)
+                for operating_point, values in robust.get("operating_aggregate", {}).items():
+                    if not isinstance(values, dict):
+                        continue
+                    safe_point = str(operating_point).replace("/", "_")
+                    for metric, value in values.items():
+                        if metric.endswith("_mean") or metric.endswith("_std"):
+                            if isinstance(value, (int, float)) and np.isfinite(value):
+                                robust_metrics[
+                                    f"validation/robust_operating/{safe_point}/{metric}"
+                                ] = float(value)
+                slice_aggregate = robust.get("slice_aggregate", {})
+                if isinstance(slice_aggregate, dict):
+                    for slice_key, values in slice_aggregate.items():
+                        if not isinstance(values, dict):
+                            continue
+                        safe_key = "_".join(
+                            part for part in str(slice_key).replace("/", "_").split("::") if part
+                        )
+                        for metric in ("error_rate_mean", "f1_mean", "roc_auc_mean"):
+                            value = values.get(metric)
+                            if isinstance(value, (int, float)) and np.isfinite(value):
+                                robust_metrics[f"validation/robust_slice/{safe_key}/{metric}"] = float(value)
+                if robust_metrics:
+                    _mlf.log_metrics(robust_metrics)
+                    _wandb.log_metrics(robust_metrics)
+                    _wandb.log_config(
+                        {"robust_validation": robust.get("config", {})}
+                    )
+                    for filename in robust.get("files", []):
+                        path = report_dir / str(filename)
+                        if path.is_file():
+                            _mlf.log_artifact(path, "robust_validation")
                 print(f"[report] complete report -> {report_dir}", flush=True)
             except Exception:
                 report_dir.mkdir(parents=True, exist_ok=True)
