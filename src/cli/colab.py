@@ -1068,11 +1068,11 @@ for worker in range(1, {workers + 1}):
         raise FileNotFoundError(f"missing remote worker directory: {{worker_root}}")
     for path in sorted(worker_root.rglob("*")):
         if path.is_symlink():
-            excluded.append({
+            excluded.append({{
                 "worker": worker,
                 "path": path.relative_to(worker_root).as_posix(),
                 "reason": "symlink_not_transferred",
-            })
+            }})
             continue
         if not path.is_file():
             continue
@@ -1659,7 +1659,7 @@ def run_train(
     return run_parallel_train_and_tail(
         args, workers, resume_run=resume_run,
         run_labels=(
-            [item.strip() for item in run_label.split(",") if item.strip()]
+            _expand_worker_profiles(run_label, workers, "run label")
             if run_label else None
         ),
         masking_profiles=_expand_worker_profiles(
