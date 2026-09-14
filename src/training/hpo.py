@@ -169,6 +169,15 @@ def run_grid(
                 if bool(_runtime("uniformity_regularization") ["enabled"])
                 else 0.0
             ),
+            "late_epoch_decay_enabled": bool(
+                _runtime("late_epoch_lr_decay")["enabled"]
+            ),
+            "late_epoch_decay_start_fraction": float(
+                _runtime("late_epoch_lr_decay")["start_epoch_fraction"]
+            ),
+            "late_epoch_decay_multiplier": float(
+                _runtime("late_epoch_lr_decay")["multiplier"]
+            ),
         }
         # Both split modes rank on the same component-safe calibration Rand
         # proxy. Holdout calibration is dev-side; CV calibration is

@@ -621,8 +621,18 @@ class TrainingSpec(BaseModel):
         pack_scale: float = Field(gt=0.0)
         max_set_size: int = Field(ge=1)
 
+    class LateEpochLrDecaySpec(BaseModel):
+        """Config-owned LR reduction for the later training epochs."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        enabled: bool
+        start_epoch_fraction: float = Field(ge=0.0, le=1.0)
+        multiplier: float = Field(gt=0.0, le=1.0)
+
     base_model: str = Field(min_length=1)
     uniformity_regularization: UniformityRegularizationSpec
+    late_epoch_lr_decay: LateEpochLrDecaySpec
     structured_features: StructuredFeaturesSpec
 
     # The default SentenceTransformer path is a tied-weight two-tower
@@ -1628,6 +1638,9 @@ class TrainConfig(BaseModel):
     patience: int = Field(ge=1)
     es_threshold: float = Field(ge=0.0)
     uniformity_weight: float = Field(ge=0.0)
+    late_epoch_decay_enabled: bool
+    late_epoch_decay_start_fraction: float = Field(ge=0.0, le=1.0)
+    late_epoch_decay_multiplier: float = Field(gt=0.0, le=1.0)
 
 
 class FoldSets(BaseModel):

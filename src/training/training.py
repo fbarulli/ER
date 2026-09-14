@@ -887,6 +887,7 @@ class ProgressCallback(TrainerCallback):
         self._trace_rows: list[dict[str, object]] = []
         self.latest_train_loss: float | None = None
         self.latest_dev_accuracy: float | None = None
+        self.latest_collapse_metrics: dict[str, float | int | str] = {}
         collapse_values = (
             collapse_model,
             collapse_df,
@@ -1054,6 +1055,7 @@ class ProgressCallback(TrainerCallback):
         if acc_key is not None:
             self.latest_dev_accuracy = float(metrics[acc_key])
         collapse_metrics = self._collapse_metrics(int(state.global_step))
+        self.latest_collapse_metrics = dict(collapse_metrics)
         if collapse_metrics:
             self._trace_rows.append(
                 {
@@ -1135,6 +1137,68 @@ class ProgressCallback(TrainerCallback):
             **collapse_metrics,
             **telemetry,
         )
+
+
+class LateEpochLrDecayCallback(TrainerCallback):
+    """Apply the SSOT late-epoch LR reduction exactly once.
+
+    The HF scheduler still owns its normal warmup/linear schedule. At the
+    configured later-epoch boundary we scale both optimizer and scheduler
+    base LRs, so the reduction survives subsequent scheduler steps and is
+    preserved in resumable optimizer state.
+    """
+
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        start_epoch_fraction: float,
+        multiplier: float,
+    ):
+        self.enabled = bool(enabled)
+        self.start_epoch_fraction = float(start_epoch_fraction)
+        self.multiplier = float(multiplier)
+        self.applied = False
+        self.applied_epoch: float | None = None
+        self.learning_rates_before: list[float] = []
+        self.learning_rates_after: list[float] = []
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        if not self.enabled or self.applied:
+            return control
+        current_epoch = float(state.epoch or 0.0)
+        boundary = float(args.num_train_epochs) * self.start_epoch_fraction
+        if current_epoch + 1e-9 < boundary:
+            return control
+
+        optimizer = kwargs.get("optimizer")
+        scheduler = kwargs.get("lr_scheduler")
+        if optimizer is None:
+            raise RuntimeError(
+                "late-epoch LR decay reached its boundary without an optimizer"
+            )
+        self.learning_rates_before = [
+            float(group["lr"]) for group in optimizer.param_groups
+        ]
+        for group in optimizer.param_groups:
+            group["lr"] = float(group["lr"]) * self.multiplier
+            if "initial_lr" in group:
+                group["initial_lr"] = float(group["initial_lr"]) * self.multiplier
+        if scheduler is not None and hasattr(scheduler, "base_lrs"):
+            scheduler.base_lrs = [
+                float(lr) * self.multiplier for lr in scheduler.base_lrs
+            ]
+        self.learning_rates_after = [
+            float(group["lr"]) for group in optimizer.param_groups
+        ]
+        self.applied = True
+        self.applied_epoch = current_epoch
+        print(
+            f"    [optim] late-epoch LR decay applied at epoch {current_epoch:.3f} "
+            f"(boundary={boundary:.3f}, multiplier={self.multiplier:.3f})",
+            flush=True,
+        )
+        return control
 
 
 class DvcCheckpointCallback(TrainerCallback):
@@ -3420,6 +3484,13 @@ def train_one_config(
                     collapse_config=calibration_config,
                     collapse_batch_size=runtime("batch_size_eval"),
                 ),
+                LateEpochLrDecayCallback(
+                    enabled=bool(cfg["late_epoch_decay_enabled"]),
+                    start_epoch_fraction=float(
+                        cfg["late_epoch_decay_start_fraction"]
+                    ),
+                    multiplier=float(cfg["late_epoch_decay_multiplier"]),
+                ),
                 DvcCheckpointCallback(),
                 EarlyStoppingCallback(
                     early_stopping_patience=cfg["patience"],
@@ -3493,6 +3564,16 @@ def train_one_config(
                 else:
                     print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
             trainer.train(resume_from_checkpoint=resume_checkpoint)
+            progress_callback = next(
+                callback
+                for callback in callbacks
+                if isinstance(callback, ProgressCallback)
+            )
+            late_lr_callback = next(
+                callback
+                for callback in callbacks
+                if isinstance(callback, LateEpochLrDecayCallback)
+            )
             datapoint_coverage: dict[str, int] = {}
             if loss == "contrastive" and TRACK_DATAPOINT_USAGE:
                 enabled_dynamic_populations = {
@@ -4305,6 +4386,26 @@ def train_one_config(
                 # fallback after a _discriminative_groups failure
                 "lr_groups": lr_groups,
                 "warmup_steps": warmup_steps,
+                "uniformity_weight": float(cfg["uniformity_weight"]),
+                "late_epoch_decay_enabled": bool(
+                    cfg["late_epoch_decay_enabled"]
+                ),
+                "late_epoch_decay_start_fraction": float(
+                    cfg["late_epoch_decay_start_fraction"]
+                ),
+                "late_epoch_decay_multiplier": float(
+                    cfg["late_epoch_decay_multiplier"]
+                ),
+                "late_epoch_decay_applied": int(late_lr_callback.applied),
+                "late_epoch_decay_applied_epoch": (
+                    float(late_lr_callback.applied_epoch)
+                    if late_lr_callback.applied_epoch is not None
+                    else float("nan")
+                ),
+                **{
+                    f"train_{key}": value
+                    for key, value in progress_callback.latest_collapse_metrics.items()
+                },
                 # latency
                 "s_per_step": round(s_per_step, 3),
                 "texts_per_s_encode": round(texts_per_s, 1),
@@ -4605,6 +4706,15 @@ def run_hpo(
             ),
             "uniformity_weight": trial.suggest_float(
                 "uniformity_weight", *HPO_SPACE["uniformity_weight"]
+            ),
+            "late_epoch_decay_enabled": bool(
+                _runtime("late_epoch_lr_decay")["enabled"]
+            ),
+            "late_epoch_decay_start_fraction": float(
+                _runtime("late_epoch_lr_decay")["start_epoch_fraction"]
+            ),
+            "late_epoch_decay_multiplier": float(
+                _runtime("late_epoch_lr_decay")["multiplier"]
             ),
         }
         with mlf.nested:

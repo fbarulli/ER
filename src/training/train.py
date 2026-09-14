@@ -754,6 +754,7 @@ def _main_inner(_mlf, _wandb) -> None:
             "masking_enabled": bool(args.mask_frac > 0),
             "mask_hard_negatives": mask_hard_negatives,
             "mask_hard_negative_frac": mask_hard_negative_frac,
+            "mask_frac_negatives": mask_hard_negative_frac,
             "mask_prob": mask_prob,
             "mask_lo": float(mask_cfg["mask_lo"]),
             "mask_hi": float(mask_cfg["mask_hi"]),
@@ -762,6 +763,22 @@ def _main_inner(_mlf, _wandb) -> None:
             "hard_negative_mask_hi": hard_negative_mask_hi,
             "mask_track_visibility": bool(mask_cfg["track_visibility"]),
             "mask_track_per_epoch": bool(mask_cfg["track_per_epoch"]),
+            "uniformity_regularization_enabled": bool(
+                _UNIFORMITY_CFG["enabled"]
+            ),
+            "uniformity_regularization_weight": float(
+                _UNIFORMITY_CFG["weight"]
+            ),
+            "uniformity_temperature": float(_UNIFORMITY_CFG["temperature"]),
+            "late_epoch_lr_decay_enabled": bool(
+                runtime("late_epoch_lr_decay")["enabled"]
+            ),
+            "late_epoch_lr_decay_start_epoch_fraction": float(
+                runtime("late_epoch_lr_decay")["start_epoch_fraction"]
+            ),
+            "late_epoch_lr_decay_multiplier": float(
+                runtime("late_epoch_lr_decay")["multiplier"]
+            ),
             "collapse_guardrail_profile": str(cfg["collapse_guardrail"]["profile"]),
             "collapse_operating_threshold": float(
                 cfg["collapse_guardrail"]["operating_threshold"]
@@ -1161,6 +1178,15 @@ def _main_inner(_mlf, _wandb) -> None:
             float(_UNIFORMITY_CFG["weight"])
             if bool(_UNIFORMITY_CFG["enabled"])
             else 0.0
+        ),
+        "late_epoch_decay_enabled": bool(
+            runtime("late_epoch_lr_decay")["enabled"]
+        ),
+        "late_epoch_decay_start_fraction": float(
+            runtime("late_epoch_lr_decay")["start_epoch_fraction"]
+        ),
+        "late_epoch_decay_multiplier": float(
+            runtime("late_epoch_lr_decay")["multiplier"]
         ),
     }
     t0 = time.perf_counter()

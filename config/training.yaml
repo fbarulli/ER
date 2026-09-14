@@ -18,13 +18,13 @@ masking:
   profile: baseline
   frac: 1.00          # fraction of positive anchors masked when enabled
   mask_hard_negatives: true  # enable dynamic masking on label-0 training pairs
-  hard_negative_frac: 0.25   # only 25% of label-0 presentations are masked; 75% stay raw
+  hard_negative_frac: 0.30   # mask_frac_negatives: only 30% of label-0 presentations
   mask_prob: null     # null: positive extent drawn from mask_lo..mask_hi
   mask_lo: 0.20       # variable extent band, U(0.20, 0.30) per masked copy
   mask_hi: 0.30
   hard_negative_mask_prob: null  # null: negative extent drawn from its band
-  hard_negative_mask_lo: 0.40
-  hard_negative_mask_hi: 0.60
+  hard_negative_mask_lo: 0.10  # extent per masked presentation, not mask frequency
+  hard_negative_mask_hi: 0.20
   track_visibility: true      # persist per-copy realized mask percentages
   track_per_epoch: true       # persist dynamic hard-negative mask percentages
 
@@ -33,7 +33,11 @@ masking_profiles:
   matched_positive_negative:
     mask_lo: 0.40
     mask_hi: 0.60
-    hard_negative_frac: 0.50
+    # Keep the experiment's positive masking band, but make negative
+    # masking less frequent and much less destructive per presentation.
+    hard_negative_frac: 0.30
+    hard_negative_mask_lo: 0.10
+    hard_negative_mask_hi: 0.20
 
 # Optional remote mirror. Credentials stay in WANDB_API_KEY, never here.
 # Without that environment variable, runs remain local and MLflow is intact.
@@ -228,9 +232,13 @@ training:
   architecture: "two_tower"  # default: shared-weight SKU/canonical retrieval towers
   uniformity_regularization:
     enabled: true
-    weight: 0.02
+    weight: 0.05
     temperature: 2.0
     min_batch_size: 4
+  late_epoch_lr_decay:
+    enabled: true
+    start_epoch_fraction: 0.50
+    multiplier: 0.50
   structured_features:
     enabled: true
     append_to_text: true  # intentional text channel for normalized volume/pack
