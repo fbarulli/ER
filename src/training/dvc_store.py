@@ -303,6 +303,79 @@ def publish_checkpoint(
     return pointer
 
 
+def publish_checkpoints(
+    source: Path,
+    checkpoints: list[tuple[Path, str, Path]],
+) -> list[Path]:
+    """Publish multiple immutable checkpoint snapshots with one DVC push.
+
+    Each tuple is ``(snapshot, resume_name, restore_root)``.  Snapshots are
+    added together, their native pointers are pushed together, and durable
+    resume pointers are made visible only after the complete batch is cloud
+    clean.  This keeps checkpoint durability while avoiding one network push
+    per Trainer save event.
+    """
+    if not checkpoints:
+        return []
+    token = os.environ.get("DVC_API_KEY")
+    if not token:
+        raise RuntimeError("DVC_API_KEY is required to persist checkpoints")
+    source = source.resolve()
+    resolved = [
+        (snapshot.resolve(), name, restore.resolve())
+        for snapshot, name, restore in checkpoints
+    ]
+    for snapshot, name, restore in resolved:
+        snapshot.relative_to(source)
+        restore.relative_to(source)
+        _write_dvc_event(
+            source, "checkpoint_publish_requested", checkpoint=str(snapshot),
+            resume_name=name,
+        )
+    lock_path = source / ".dvc-push.lock"
+    pointers = [common.artifact("resume_pointer", {"name": name}) for _, name, _ in resolved]
+    resume_dir = pointers[0].parent
+    with lock_path.open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            _configure(source, token)
+            staged_resume = None
+            if resume_dir.is_dir():
+                staged_resume = Path(tempfile.mkdtemp(prefix=".resume-staging-", dir=source.parent))
+                shutil.move(str(resume_dir), str(staged_resume / resume_dir.name))
+            try:
+                _run(["dvc", "add", *[str(snapshot.relative_to(source)) for snapshot, _, _ in resolved]], source)
+            finally:
+                if staged_resume is not None:
+                    shutil.move(str(staged_resume / resume_dir.name), str(resume_dir))
+                    shutil.rmtree(staged_resume, ignore_errors=True)
+            native_pointers = [
+                snapshot.with_name(f"{snapshot.name}.dvc")
+                for snapshot, _, _ in resolved
+            ]
+            missing = [str(path) for path in native_pointers if not path.is_file()]
+            if missing:
+                raise RuntimeError(f"DVC did not create checkpoint pointers: {missing}")
+            native_relatives = [str(path.relative_to(source)) for path in native_pointers]
+            print(f"[checkpoint-dvc] pushing {len(native_relatives)} checkpoint targets together", flush=True)
+            _run(["dvc", "push", *native_relatives], source)
+            cloud_status = _run(["dvc", "status", "--cloud", *native_relatives], source)
+            if not _dvc_status_is_clean(cloud_status):
+                raise RuntimeError(f"DVC cloud status is not clean for checkpoint batch: {cloud_status.strip()}")
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    import yaml
+
+    for (snapshot, _, restore), pointer, native_pointer in zip(resolved, pointers, native_pointers, strict=True):
+        pointer_data = yaml.safe_load(native_pointer.read_text(encoding="utf-8")) or {}
+        for entry in pointer_data.get("outs", []):
+            entry["path"] = os.path.relpath(restore, pointer.parent)
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text(yaml.safe_dump(pointer_data, sort_keys=False), encoding="utf-8")
+        _write_dvc_event(source, "checkpoint_publish_verified", checkpoint=str(snapshot), pointer=str(pointer))
+    return pointers
+
+
 def _pointer_outputs(source: Path, pointer: Path) -> list[Path]:
     """Return the output paths declared by a DVC pointer.
 

@@ -1370,18 +1370,10 @@ class LateEpochLrDecayCallback(TrainerCallback):
 
 
 class DvcCheckpointCallback(TrainerCallback):
-    """Queue immutable Trainer checkpoints for verified DVC persistence."""
+    """Stage immutable checkpoints and publish them together at train end."""
 
     def __init__(self):
-        from concurrent.futures import ThreadPoolExecutor
-
-        # One checkpoint publisher thread is attached to each trainer so its
-        # worker-local DVC metadata stays serialized while training continues.
-        # This is not the lane-level final DVC publisher configured in colab.
-        self._publisher = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="checkpoint-dvc"
-        )
-        self._futures = []
+        self._pending: list[tuple[Path, str, Path]] = []
 
     @staticmethod
     def _snapshot(checkpoint: Path) -> Path:
@@ -1408,41 +1400,6 @@ class DvcCheckpointCallback(TrainerCallback):
             shutil.copytree(checkpoint, snapshot)
         return snapshot
 
-    @staticmethod
-    def _publish(snapshot: Path, checkpoint: Path) -> Path:
-        import hashlib
-        import shutil
-        from training.dvc_store import publish_checkpoint
-
-        try:
-            key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
-            return publish_checkpoint(
-                RESULTS,
-                snapshot,
-                # Likewise, resume pointers must not collide between two
-                # trial output roots that happen to save at the same step.
-                resume_name=f"{checkpoint.name}--{key}",
-                restore_root=checkpoint,
-            )
-        finally:
-            native_pointer = snapshot.with_name(f"{snapshot.name}.dvc")
-            shutil.rmtree(snapshot, ignore_errors=True)
-            native_pointer.unlink(missing_ok=True)
-            try:
-                snapshot.parent.rmdir()
-            except OSError:
-                pass
-
-    def _raise_publish_errors(self) -> None:
-        remaining = []
-        for future in self._futures:
-            if future.done():
-                pointer = future.result()
-                print(f"    [checkpoint-dvc] verified -> {pointer.relative_to(RESULTS)}", flush=True)
-            else:
-                remaining.append(future)
-        self._futures = remaining
-
     def on_save(self, args, state, control, **kwargs):
         import os
 
@@ -1454,7 +1411,6 @@ class DvcCheckpointCallback(TrainerCallback):
         if not os.environ.get("DVC_API_KEY"):
             print("    [checkpoint-dvc] skipped: DVC_API_KEY absent", flush=True)
             return control
-        self._raise_publish_errors()
         checkpoint_root = Path(args.output_dir)
         checkpoint = checkpoint_root / f"checkpoint-{state.global_step}"
         _make_checkpoint_tokenizer_portable(checkpoint)
@@ -1472,17 +1428,31 @@ class DvcCheckpointCallback(TrainerCallback):
                 f"missing {', '.join(missing)}"
             )
         snapshot = self._snapshot(checkpoint)
-        self._futures.append(self._publisher.submit(self._publish, snapshot, checkpoint))
-        print(f"    [checkpoint-dvc] queued step {state.global_step}", flush=True)
+        import hashlib
+        key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
+        self._pending.append((snapshot, f"{checkpoint.name}--{key}", checkpoint))
+        print(f"    [checkpoint-dvc] staged step {state.global_step}", flush=True)
         return control
 
     def on_train_end(self, args, state, control, **kwargs):
-        """Never report a successful worker exit with uploads still pending."""
-        for future in self._futures:
-            pointer = future.result()
-            print(f"    [checkpoint-dvc] verified -> {pointer.relative_to(RESULTS)}", flush=True)
-        self._futures = []
-        self._publisher.shutdown(wait=True)
+        """Push the complete checkpoint batch before reporting success."""
+        import shutil
+        from training.dvc_store import publish_checkpoints
+
+        pending = self._pending
+        try:
+            for pointer in publish_checkpoints(RESULTS, pending):
+                print(f"    [checkpoint-dvc] verified -> {pointer.relative_to(RESULTS)}", flush=True)
+        finally:
+            for snapshot, _, _ in pending:
+                native_pointer = snapshot.with_name(f"{snapshot.name}.dvc")
+                shutil.rmtree(snapshot, ignore_errors=True)
+                native_pointer.unlink(missing_ok=True)
+                try:
+                    snapshot.parent.rmdir()
+                except OSError:
+                    pass
+            self._pending = []
         return control
 
 
