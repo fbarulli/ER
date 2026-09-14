@@ -38,6 +38,11 @@ masking_profiles:
     hard_negative_frac: 0.30
     hard_negative_mask_lo: 0.10
     hard_negative_mask_hi: 0.20
+  lower_negative_masking:
+    # Comparison arm: lower frequency and lower per-presentation extent.
+    hard_negative_frac: 0.15
+    hard_negative_mask_lo: 0.05
+    hard_negative_mask_hi: 0.10
 
 # Optional remote mirror. Credentials stay in WANDB_API_KEY, never here.
 # Without that environment variable, runs remain local and MLflow is intact.
