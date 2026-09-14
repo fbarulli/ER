@@ -817,12 +817,19 @@ for number in range(1, {workers} + 1):
         for name, encoded in resume_pointers[str(number)].items():
             (pointer_dir / name).write_bytes(base64.b64decode(encoded))
         print(f"[resume-preflight] worker {{number}}: pointer files written", flush=True)
-        for name in (F["canonical_records"], F["gate_results"]):
-            source = root / "results" / name.name
-            if not (out / name.name).is_file():
+        for name in (
+            F["canonical_records"],
+            F["gate_results"],
+            F["labeled_pairs"],
+        ):
+            relative = name.relative_to(root / "results")
+            source = root / "results" / relative
+            destination = out / relative
+            if not destination.is_file():
                 if not source.is_file():
                     raise FileNotFoundError(f"resume worker input missing: {{source}}")
-                shutil.copy2(source, out / name.name)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
         try:
             from training.dvc_store import restore_pointer
             pointers = sorted(pointer_dir.glob("*.dvc"))
@@ -880,11 +887,18 @@ for number in range(1, {workers} + 1):
             raise
     else:
         out.mkdir()
-        for name in (F["canonical_records"], F["gate_results"]):
-            source = root / "results" / name.name
+        for name in (
+            F["canonical_records"],
+            F["gate_results"],
+            F["labeled_pairs"],
+        ):
+            relative = name.relative_to(root / "results")
+            source = root / "results" / relative
             if not source.is_file():
                 raise FileNotFoundError(f"worker input missing: {{source}}")
-            shutil.copy2(source, out / name.name)
+            destination = out / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
     worker_args = [sys.executable, *{args!r}]
     if masking_profiles is not None:
         worker_args.extend(["--masking-profile", masking_profiles[number - 1]])
@@ -1669,11 +1683,14 @@ base = pathlib.Path({remote_base!r})
 out = base / "worker_1"
 base.mkdir(parents=True, exist_ok=False)
 out.mkdir()
-for name in (F["canonical_records"], F["gate_results"]):
-    source = root / "results" / name.name
+for name in (F["canonical_records"], F["gate_results"], F["labeled_pairs"]):
+    relative = name.relative_to(root / "results")
+    source = root / "results" / relative
     if not source.is_file():
         raise FileNotFoundError(f"worker input missing: {{source}}")
-    shutil.copy2(source, out / name.name)
+    destination = out / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
 wandb_dir = out / "wandb"
 wandb_dir.mkdir(parents=True, exist_ok=True)
 env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
