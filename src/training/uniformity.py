@@ -20,6 +20,25 @@ from core.common import load_local_sentence_transformer, plot_dpi
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
 
+def source_payload_for_dataframe(
+    df: pd.DataFrame, payload: list[str]
+) -> list[str]:
+    """Return payload entries aligned one-to-one with source dataframe rows.
+
+    Training payloads may append canonical and masked-copy entries after the
+    source SKU rows. Uniformity selection operates on source dataframe rows,
+    so it must receive only the aligned prefix rather than the full augmented
+    payload. The prefix contract is explicit and fails if the source rows are
+    not representable.
+    """
+    if len(payload) < len(df):
+        raise ValueError(
+            "uniformity payload is shorter than source dataframe: "
+            f"rows={len(df)} payload={len(payload)}"
+        )
+    return list(payload[: len(df)])
+
+
 def _tokens(text: object) -> set[str]:
     return set(_TOKEN_RE.findall(str(text).lower()))
 
@@ -179,6 +198,7 @@ def collapse_diagnostics(
     threshold-crossing rate at the real operating point is what maps directly
     to downstream matching risk (over-merging).
     """
+    payload = source_payload_for_dataframe(df, payload)
     guardrail = config["collapse_guardrail"]
     if not requested or not bool(guardrail["enabled"]):
         return {
@@ -311,6 +331,7 @@ def run_uniformity_audit(
         raise FileNotFoundError(
             f"uniformity base model is not materialized locally: {base_model}"
         )
+    payload = source_payload_for_dataframe(df, payload)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     pairs = select_unrelated_pairs(

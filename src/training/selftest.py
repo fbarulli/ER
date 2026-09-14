@@ -2026,6 +2026,43 @@ def oracle_schemas() -> None:
         check("check_verdict_map rejects bad verdict", True)
 
 
+def oracle_uniformity_payload_alignment() -> None:
+    from training.uniformity import (
+        select_unrelated_pairs,
+        source_payload_for_dataframe,
+    )
+
+    frame = pd.DataFrame(
+        {
+            "brand": ["brand-a", "brand-b"],
+            "category": ["category-a", "category-b"],
+        }
+    )
+    extended = ["brand-a product", "brand-b product", "canonical", "masked copy"]
+    aligned = source_payload_for_dataframe(frame, extended)
+    check(
+        "uniformity trims augmented payload to source rows",
+        aligned == extended[: len(frame)],
+    )
+    pairs = select_unrelated_pairs(
+        frame,
+        aligned,
+        n_pairs=1,
+        seed=1,
+        max_token_frequency=0.5,
+    )
+    check(
+        "uniformity selects from aligned source payload",
+        len(pairs) == 1 and set(pairs[0]) == {0, 1},
+    )
+    try:
+        source_payload_for_dataframe(frame, ["only one"])
+    except ValueError:
+        check("uniformity rejects a short source payload", True)
+    else:
+        check("uniformity rejects a short source payload", False)
+
+
 def oracle_zero_pack_guard() -> None:
     """The pack_qty >= 1 contract (found live by the schema on first run):
     'pack 0.5 l' / '0% ... pack' title forms must NOT produce pack_qty=0 —
@@ -2332,6 +2369,8 @@ def main() -> None:
     oracle_round3_pins()
     print("== 13. pydantic boundary schemas ==")
     oracle_schemas()
+    print("== 13a. uniformity payload alignment ==")
+    oracle_uniformity_payload_alignment()
     print("== 14. zero-pack guard ==")
     oracle_zero_pack_guard()
     print("== 9. pinned real-data counts ==")

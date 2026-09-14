@@ -32,7 +32,7 @@ from training.rand_matching import (
     _threshold_at_recall,
     _youden_threshold,
 )
-from training.uniformity import collapse_diagnostics
+from training.uniformity import collapse_diagnostics, source_payload_for_dataframe
 
 
 class CalibrationUnavailableReasonCode(str, Enum):
