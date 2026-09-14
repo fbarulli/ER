@@ -4,6 +4,13 @@ This is the standalone version of ``notebooks/final_submission.ipynb``.
 It calibrates a cosine threshold on canonical-disjoint folds, reports GTIN
 sensitivity, and writes the final ``SKU_ID,ITEM_ID`` submission.
 
+Architecture note: this is a SKU-to-canonical retrieval and *direct
+assignment* lane. It embeds SKU and canonical records, retrieves canonical
+top-K candidates, applies gates, and selects one canonical ID per SKU. Its
+candidate bipartite graph is diagnostic-only; it does not create SKU-to-SKU
+edges or use connected components as the prediction mechanism. Rand/ARI are
+therefore evaluated over equivalence induced by the selected canonical IDs.
+
 Required inputs may be supplied as CLI arguments or environment variables:
 
     FINETUNED_CHECKPOINT
@@ -141,6 +148,7 @@ PAIR_DISAGREEMENT_COLUMNS = (
     "candidate_generated",
     "candidate_generation_status",
     "candidate_generation_source",
+    "failure_stage",
     "error_classification",
     "attribute_gate_result",
     "component_size_true",
@@ -1166,13 +1174,12 @@ def pair_disagreements(
     assigns each SKU directly to a canonical record (it does not build a SKU
     graph), so it is the meaningful equivalent of a predicted graph edge.
     ``pair_score`` is the weaker selected canonical-assignment score of the
-    two endpoints. For false splits, ``candidate_generated`` says whether
-    both endpoints' *true* canonical record was retrieved at all. A false
-    merge has no true same-item counterpart, so this field is null and its
-    status is ``not_applicable_truth_different``. These evidence fields
-    intentionally describe the decision that created the predicted grouping,
-    not a separately computed SKU-to-SKU similarity that this lane never
-    used.
+    two endpoints. ``candidate_generated`` says whether both endpoints' true
+    canonical records were retrieved. ``failure_stage`` prioritizes ANN
+    retrieval, then score threshold, then gate rejection, before assigning a
+    remaining error to ranking/assignment. These evidence fields intentionally
+    describe the decision that created the predicted grouping, not a
+    separately computed SKU-to-SKU similarity that this lane never used.
     """
     truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
     pred_frame = pred[["SKU_ID", "ITEM_ID"]].copy()
@@ -1208,10 +1215,15 @@ def pair_disagreements(
     trace_candidates["candidate_gtin"] = trace_candidates["candidate_gtin"].astype(
         str
     )
-    if "retrieval_source" in trace:
-        trace_candidates["retrieval_source"] = trace["retrieval_source"].astype(str)
-    else:  # Allows small isolated callers to omit nonessential provenance.
-        trace_candidates["retrieval_source"] = "unknown"
+    for column, default in (
+        ("retrieval_source", "unknown"),
+        ("score_pass", False),
+        ("accepted", False),
+    ):
+        trace_candidates[column] = (
+            trace[column] if column in trace else default
+        )
+    trace_candidates["retrieval_source"] = trace_candidates["retrieval_source"].astype(str)
     true_candidate_rows = trace_candidates.merge(
         truth_frame,
         on="SKU_ID",
@@ -1221,11 +1233,14 @@ def pair_disagreements(
     true_candidate_rows = true_candidate_rows.loc[
         true_candidate_rows["candidate_gtin"].eq(true_candidate_rows["true_item_id"])
     ]
-    true_candidate_sources = (
-        true_candidate_rows.groupby("SKU_ID", sort=False)["retrieval_source"]
-        .agg(lambda values: "+".join(sorted(set(values))))
-        .to_dict()
-    )
+    true_candidate_evidence = {
+        str(sku): {
+            "source": "+".join(sorted(set(rows["retrieval_source"].astype(str)))),
+            "score_pass": bool(rows["score_pass"].astype(bool).any()),
+            "accepted": bool(rows["accepted"].astype(bool).any()),
+        }
+        for sku, rows in true_candidate_rows.groupby("SKU_ID", sort=False)
+    }
     by_sku = merged.set_index("SKU_ID").to_dict("index")
 
     def error_count(frame: pd.DataFrame, other_column: str) -> int:
@@ -1243,20 +1258,26 @@ def pair_disagreements(
         left, right = by_sku[sku_a], by_sku[sku_b]
         scores = [left["selected_score"], right["selected_score"]]
         finite_scores = [float(score) for score in scores if pd.notna(score)]
-        true_same = left["true_item_id"] == right["true_item_id"]
-        generated = (
-            bool(true_candidate_sources.get(sku_a))
-            and bool(true_candidate_sources.get(sku_b))
-            if true_same
-            else None
-        )
-        generation_status = (
-            "generated"
-            if generated is True
-            else "unretrieved_candidate_generation_failure"
-            if generated is False
-            else "not_applicable_truth_different"
-        )
+        endpoint_evidence = [
+            true_candidate_evidence.get(sku_a),
+            true_candidate_evidence.get(sku_b),
+        ]
+        generated = all(item is not None for item in endpoint_evidence)
+        sources = [
+            item["source"] if item is not None else "not_generated"
+            for item in endpoint_evidence
+        ]
+        if not generated:
+            failure_stage = "retrieval_candidate_universe_failure"
+        elif not all("semantic_top_k" in source for source in sources):
+            failure_stage = "retrieval_ann_failure"
+        elif not all(item["score_pass"] for item in endpoint_evidence if item):
+            failure_stage = "scoring_low_score"
+        elif not all(item["accepted"] for item in endpoint_evidence if item):
+            failure_stage = "attribute_gate_rejection"
+        else:
+            failure_stage = "ranking_or_assignment"
+        generation_status = "generated" if generated else "unretrieved_candidate_generation_failure"
         return {
             "sku_id_a": sku_a,
             "sku_id_b": sku_b,
@@ -1273,17 +1294,9 @@ def pair_disagreements(
             "edge_exists": int(left["ITEM_ID"] == right["ITEM_ID"]),
             "candidate_generated": generated,
             "candidate_generation_status": generation_status,
-            "candidate_generation_source": (
-                f"{true_candidate_sources.get(sku_a, 'not_generated')}|"
-                f"{true_candidate_sources.get(sku_b, 'not_generated')}"
-                if true_same
-                else "not_applicable_truth_different"
-            ),
-            "error_classification": (
-                "false_split_unretrieved_candidate_generation"
-                if disagreement_type == "false_split" and generated is False
-                else disagreement_type
-            ),
+            "candidate_generation_source": f"{sources[0]}|{sources[1]}",
+            "failure_stage": failure_stage,
+            "error_classification": f"{disagreement_type}_{failure_stage}",
             "attribute_gate_result": (
                 f"{left['selected_attribute_gate']}|{right['selected_attribute_gate']}"
                 if pd.notna(left["selected_attribute_gate"])
@@ -1583,13 +1596,13 @@ def _candidate_labels(
 def _retrieval_diagnostics(
     candidates: pd.DataFrame,
     truth: pd.DataFrame,
-) -> dict[str, int]:
-    """Measure how many truth SKUs have at least one retrieved candidate.
+) -> dict[str, int | float]:
+    """Measure candidate-population health and true-candidate retrieval.
 
-    ``without_candidate_gtin_trusted`` counts the unretrieved SKUs that carry a
-    GTIN signal (``gtin_status`` other than ``both_missing``), i.e. SKUs that an
-    exact-GTIN rescue in ``_candidate_indexes`` could in principle have
-    retrieved — so their absence is a hard retrieval failure.
+    ``with_candidate`` only proves that the retrieval pipeline emitted some
+    candidate for an SKU. The true-candidate and ANN-only fields are the
+    decision-useful retrieval measures: a truth absent from their candidate
+    universe is an unretrieved case, never a threshold/model error.
     """
     truth_ids = set(truth["SKU_ID"].astype(str))
     candidate_ids = (
@@ -1607,11 +1620,47 @@ def _retrieval_diagnostics(
                 "SKU_ID",
             ].nunique()
         )
+    true_by_sku = truth.drop_duplicates("SKU_ID").set_index("SKU_ID")["true_item_id"]
+    candidate_truth = candidates[["SKU_ID", "candidate_gtin"]].copy()
+    candidate_truth["SKU_ID"] = candidate_truth["SKU_ID"].astype(str)
+    candidate_truth["candidate_gtin"] = candidate_truth["candidate_gtin"].astype(str)
+    true_candidate = candidate_truth.loc[
+        candidate_truth["candidate_gtin"].eq(
+            candidate_truth["SKU_ID"].map(true_by_sku).astype(str)
+        )
+    ]
+    true_candidate_skus = set(true_candidate["SKU_ID"])
+    ann_true_candidate_skus: set[str] = set()
+    if "retrieval_source" in candidates:
+        ann_sources = candidates.loc[
+            candidates["retrieval_source"].astype(str).str.contains(
+                "semantic_top_k", regex=False
+            ),
+            ["SKU_ID", "candidate_gtin"],
+        ].copy()
+        ann_sources["SKU_ID"] = ann_sources["SKU_ID"].astype(str)
+        ann_sources["candidate_gtin"] = ann_sources["candidate_gtin"].astype(str)
+        ann_true_candidate_skus = set(
+            ann_sources.loc[
+                ann_sources["candidate_gtin"].eq(
+                    ann_sources["SKU_ID"].map(true_by_sku).astype(str)
+                ),
+                "SKU_ID",
+            ]
+        )
     return {
         "truth_population": len(truth_ids),
         "with_candidate": len(with_any),
         "without_candidate": len(without),
         "without_candidate_gtin_trusted": gtin_trusted,
+        "with_true_candidate": len(true_candidate_skus),
+        "without_true_candidate": len(truth_ids - true_candidate_skus),
+        "true_candidate_recall": _safe_ratio(len(true_candidate_skus), len(truth_ids)),
+        "ann_with_true_candidate": len(ann_true_candidate_skus),
+        "ann_without_true_candidate": len(truth_ids - ann_true_candidate_skus),
+        "ann_true_candidate_recall": _safe_ratio(
+            len(ann_true_candidate_skus), len(truth_ids)
+        ),
     }
 
 
@@ -1981,11 +2030,25 @@ def calibrate_threshold(
                 "fit_recall_reason": precision_info["reason"],
                 "fit_recall_achieved": float(precision_info["achieved_recall"]),
                 "fit_unmatched_fraction": fit_unmatched_fraction,
+                # The ANN implementation currently exhaustively searches the
+                # encoded canonical matrix; top_k is therefore its sole
+                # recall-control parameter and must travel with its metrics.
+                "ann_top_k": int(matcher.top_k),
                 "truth_population": retrieval["truth_population"],
                 "with_candidate": retrieval["with_candidate"],
                 "without_candidate": retrieval["without_candidate"],
                 "without_candidate_gtin_trusted": retrieval[
                     "without_candidate_gtin_trusted"
+                ],
+                "with_true_candidate": retrieval["with_true_candidate"],
+                "without_true_candidate": retrieval["without_true_candidate"],
+                "true_candidate_recall": retrieval["true_candidate_recall"],
+                "ann_with_true_candidate": retrieval["ann_with_true_candidate"],
+                "ann_without_true_candidate": retrieval[
+                    "ann_without_true_candidate"
+                ],
+                "ann_true_candidate_recall": retrieval[
+                    "ann_true_candidate_recall"
                 ],
                 "reconciliation_scope": _reconciliation_scope(),
             }
