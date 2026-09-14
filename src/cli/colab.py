@@ -1447,12 +1447,42 @@ if {minimal_runtime!r}:
         cwd=root,
         check=True,
     )
+    # `git sparse-checkout set` can leave the index populated while a later
+    # detached checkout re-applies a stale sparse index.  Reapply explicitly
+    # and fail before dependency installation if the runtime is incomplete.
+    subprocess.run(["git", "sparse-checkout", "reapply"], cwd=root, check=True)
+    required = [
+        root / "src" / "core" / "common.py",
+        root / "src" / "training" / "train_prepared.py",
+        root / "src" / "cli" / "colab.py",
+        root / "artifacts" / "models" / "all-MiniLM-L6-v2",
+    ]
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        status = subprocess.run(
+            ["git", "status", "--short", "--branch"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        sparse = subprocess.run(
+            ["git", "sparse-checkout", "list"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        raise RuntimeError(
+            "minimal runtime checkout is incomplete; "
+            f"missing={missing}; status={status!r}; sparse_paths={sparse!r}"
+        )
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
 print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
       "minimal_runtime=" + str({minimal_runtime!r}), "at", root)
 """
-    run_colab_exec_stream(SESSION, script, timeout=600, log_name="checkout", retry_safe=True)
+    run_colab_exec_stream(SESSION, script, timeout=600, log_name="checkout", retry_safe=False)
 
 
 def install_deps(*, minimal_runtime: bool = False) -> None:
