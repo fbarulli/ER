@@ -250,6 +250,8 @@ rand_matching:
     calibration_diagnostics: "calibration_diagnostics.csv"
     holdout_diagnostics: "holdout_diagnostics.csv"
     holdout_pair_disagreements: "holdout_pair_disagreements.csv"
+    holdout_ann_missed_true_matches: "holdout_ann_missed_true_matches.csv"
+    holdout_retrieval_ablation_metrics: "holdout_retrieval_ablation_metrics.csv"
     provenance: "submission_provenance.json"
   # ANN/semantic candidate depth. Calibration records this value alongside
   # ANN-only true-candidate recall; do not tune it independently of the

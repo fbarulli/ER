@@ -2210,11 +2210,129 @@ def _check_calibration_holdout_disjoint(
         raise ValueError("calibration and holdout inputs share canonical identities")
 
 
+_ANN_MISS_COLUMNS = (
+    "SKU_ID",
+    "true_item_id",
+    "sku_gtin",
+    "sku_title",
+    "sku_attributes",
+    "sku_brand",
+    "sku_category",
+    "sku_volume",
+    "sku_pack",
+    "sku_flavor",
+    "true_candidate_retrieval_source",
+    "true_candidate_score",
+    "true_candidate_score_pass",
+    "true_candidate_accepted",
+    "true_candidate_attribute_gate",
+    "ann_top_candidate_gtin",
+    "ann_top_candidate_score",
+    "ann_top_candidate_rank",
+    "union_selected_item_id",
+    "union_selected_score",
+)
+
+
+def _ann_missed_true_matches(
+    trace: pd.DataFrame,
+    truth: pd.DataFrame,
+    predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    """Export true candidates absent from ANN, with decision evidence.
+
+    Exact-GTIN rescue may make a row recoverable in the union lane, but it is
+    still an ANN retrieval miss. This artifact keeps those cases separate from
+    score and gate failures.
+    """
+    true = truth[["SKU_ID", "true_item_id"]].copy()
+    true["SKU_ID"] = true["SKU_ID"].astype(str)
+    rows = trace.drop(
+        columns=["true_item_id", "true_candidate_retrieved", "true_candidate_accepted"],
+        errors="ignore",
+    ).merge(
+        true, on="SKU_ID", how="inner", validate="many_to_one"
+    )
+    is_true = rows["candidate_gtin"].astype(str).eq(rows["true_item_id"].astype(str))
+    is_ann = rows["retrieval_source"].astype(str).str.contains(
+        "semantic_top_k", regex=False
+    )
+    true_rows = rows.loc[is_true].copy()
+    ann_true_ids = set(true_rows.loc[is_ann.loc[true_rows.index], "SKU_ID"].astype(str))
+    missed_ids = set(true["SKU_ID"]) - ann_true_ids
+    missed_true = true_rows.loc[true_rows["SKU_ID"].astype(str).isin(missed_ids)].copy()
+    ann_rows = rows.loc[rows["retrieval_source"].astype(str).str.contains(
+        "semantic_top_k", regex=False
+    )].copy()
+    ann_best = (
+        ann_rows.sort_values(["SKU_ID", "candidate_rank", "score"], ascending=[True, True, False])
+        .drop_duplicates("SKU_ID")
+        [["SKU_ID", "candidate_gtin", "score", "candidate_rank"]]
+        .rename(columns={
+            "candidate_gtin": "ann_top_candidate_gtin",
+            "score": "ann_top_candidate_score",
+            "candidate_rank": "ann_top_candidate_rank",
+        })
+    )
+    selected = trace.loc[
+        trace["selected"].astype(bool), ["SKU_ID", "candidate_gtin", "score"]
+    ].rename(
+        columns={
+            "candidate_gtin": "union_selected_item_id",
+            "score": "union_selected_score",
+        }
+    )
+    result = missed_true.merge(ann_best, on="SKU_ID", how="left", validate="one_to_one").merge(
+        selected, on="SKU_ID", how="left", validate="one_to_one"
+    )
+    result = result.rename(columns={
+        "retrieval_source": "true_candidate_retrieval_source",
+        "score": "true_candidate_score",
+        "score_pass": "true_candidate_score_pass",
+        "accepted": "true_candidate_accepted",
+        "attribute_gate": "true_candidate_attribute_gate",
+    })
+    return result.reindex(columns=_ANN_MISS_COLUMNS).sort_values("SKU_ID").reset_index(drop=True)
+
+
+def _retrieval_ablation_metrics(
+    candidates: pd.DataFrame,
+    truth: pd.DataFrame,
+    threshold: float,
+) -> pd.DataFrame:
+    """Compare union retrieval to ANN-only retrieval at one fixed threshold."""
+    modes = {
+        "union_ann_plus_rescue": candidates,
+        "ann_only": candidates.loc[
+            candidates["retrieval_source"].astype(str).str.contains(
+                "semantic_top_k", regex=False
+            )
+        ].copy(),
+    }
+    rows: list[dict[str, object]] = []
+    for mode, population in modes.items():
+        predictions, _ = _assignments_with_trace(
+            population,
+            threshold,
+            threshold_by_gtin_status=_final_threshold_by_gtin_status(),
+        )
+        metrics = gtin_metrics(
+            predictions,
+            truth,
+            mode,
+            threshold,
+            population,
+            include_graph_diagnostics=True,
+        )
+        rows.extend({"retrieval_mode": mode, "ann_top_k": int(rand_matching_cfg()["top_k"]), **row} for row in metrics)
+    return pd.DataFrame(rows)
+
+
 def _evaluate_holdout(
     matcher: RandMatcher,
     holdout_labels: pd.DataFrame,
     final_threshold: float,
-) -> tuple[list[dict], pd.DataFrame, pd.DataFrame]:
+) -> tuple[list[dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     base = _ensure_source_row_identity(
         load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
     )
@@ -2271,7 +2389,9 @@ def _evaluate_holdout(
         threshold=final_threshold,
     )
     disagreements = pair_disagreements(predictions, truth, trace)
-    return metrics, diagnostics, disagreements
+    ann_misses = _ann_missed_true_matches(trace, truth, predictions)
+    ablation = _retrieval_ablation_metrics(candidates, truth, final_threshold)
+    return metrics, diagnostics, disagreements, ann_misses, ablation
 
 
 def _sha256_path(path: Path) -> tuple[str, int]:
@@ -2450,6 +2570,8 @@ def write_outputs(
         holdout_metrics,
         holdout_diagnostics,
         holdout_pair_disagreements,
+        holdout_ann_missed_true_matches,
+        holdout_retrieval_ablation_metrics,
     ) = _evaluate_holdout(
         matcher,
         holdout_labels,
@@ -2473,6 +2595,14 @@ def write_outputs(
     )
     holdout_pair_disagreements.to_csv(
         output_dir / output_names["holdout_pair_disagreements"],
+        index=False,
+    )
+    holdout_ann_missed_true_matches.to_csv(
+        output_dir / output_names["holdout_ann_missed_true_matches"],
+        index=False,
+    )
+    holdout_retrieval_ablation_metrics.to_csv(
+        output_dir / output_names["holdout_retrieval_ablation_metrics"],
         index=False,
     )
     submission = _write_final_submission(

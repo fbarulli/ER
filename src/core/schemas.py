@@ -493,6 +493,8 @@ class RandMatchingOutputsSpec(BaseModel):
     calibration_diagnostics: str = Field(min_length=1)
     holdout_diagnostics: str = Field(min_length=1)
     holdout_pair_disagreements: str = Field(min_length=1)
+    holdout_ann_missed_true_matches: str = Field(min_length=1)
+    holdout_retrieval_ablation_metrics: str = Field(min_length=1)
     provenance: str = Field(min_length=1)
 
 
