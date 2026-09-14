@@ -4177,9 +4177,15 @@ def train_one_config(
                     f"unavailable; {calibration_metrics['calibration_reason']}",
                     flush=True,
                 )
-                raise RequiredCalibrationError(
-                    calibration_metrics["calibration_reason"]
-                )
+                # Chain-check samples intentionally do not reserve a Rand
+                # calibration population: their job is to prove training,
+                # checkpointing, and inference wiring on a bounded input.
+                # Full runs must still fail loudly rather than publish an
+                # uncalibrated threshold.
+                if not sample:
+                    raise RequiredCalibrationError(
+                        calibration_metrics["calibration_reason"]
+                    )
             else:
                 # The explicit empty-population branch above is the only
                 # expected unavailable-calibration condition.  An exception
