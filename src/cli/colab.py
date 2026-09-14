@@ -1407,7 +1407,7 @@ root = pathlib.Path({REMOTE_ROOT!r})
 remote_name = {GIT_REMOTE_NAME!r}
 if root.exists() and not (root / ".git").is_dir():
     shutil.rmtree(root)
-if (root / ".git").is_dir():
+    if (root / ".git").is_dir():
     remotes = subprocess.run(
         ["git", "remote"], cwd=root, check=True, capture_output=True, text=True
     ).stdout.split()
@@ -1423,7 +1423,7 @@ if (root / ".git").is_dir():
                 f"configured git remote {{remote_name!r}} is absent in {{root}}; "
                 f"available remotes={{remotes}}"
             )
-    subprocess.run(["git", "pull", "--ff-only", remote_name, {BRANCH!r}], cwd=root, check=True)
+    subprocess.run(["git", "fetch", remote_name, {BRANCH!r}], cwd=root, check=True)
 else:
     root.parent.mkdir(parents=True, exist_ok=True)
     clone = [
@@ -1440,7 +1440,17 @@ if {minimal_runtime!r}:
         cwd=root,
         check=True,
     )
-    subprocess.run(["git", "checkout", "--detach", {BRANCH!r}], cwd=root, check=True)
+    subprocess.run(
+        ["git", "checkout", "--detach", remote_name + "/" + {BRANCH!r}],
+        cwd=root,
+        check=True,
+    )
+elif {minimal_runtime!r}:
+    subprocess.run(
+        ["git", "checkout", "--detach", remote_name + "/" + {BRANCH!r}],
+        cwd=root,
+        check=True,
+    )
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
 print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
