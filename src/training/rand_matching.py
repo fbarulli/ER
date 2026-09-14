@@ -553,7 +553,9 @@ class RandMatcher:
                 + (" ..." if len(missing_records) > 10 else "")
             )
 
-        self.model = load_local_sentence_transformer(str(checkpoint), device="cpu")
+        self.model = load_local_sentence_transformer(
+            str(checkpoint), device="cuda" if torch.cuda.is_available() else "cpu"
+        )
         self.structured_enabled = bool(self.structured_config["enabled"])
         self.structured_text = (
             self.structured_enabled
