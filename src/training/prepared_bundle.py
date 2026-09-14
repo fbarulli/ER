@@ -32,6 +32,7 @@ class PreparedBundleManifest(BaseModel):
     n_pos: int = Field(ge=1)
     n_neg: int = Field(ge=0)
     n_train_neg: int = Field(ge=0)
+    n_labeled_pairs_bytes: int = Field(ge=1)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
@@ -60,6 +61,7 @@ def write_prepared_bundle(
     train_neg_sources: np.ndarray,
     mask_audit: list[dict[str, Any]],
     hard_negative_mask_audit: list[dict[str, Any]],
+    labeled_pairs_csv: bytes,
     payload_variant: str,
     masking_profile: str,
 ) -> PreparedBundleManifest:
@@ -81,6 +83,7 @@ def write_prepared_bundle(
         "train_neg_sources": train_neg_sources,
         "mask_audit": mask_audit,
         "hard_negative_mask_audit": hard_negative_mask_audit,
+        "labeled_pairs_csv": labeled_pairs_csv,
         "payload_variant": payload_variant,
         "masking_profile": masking_profile,
     }
@@ -94,6 +97,7 @@ def write_prepared_bundle(
         n_pos=len(pos),
         n_neg=len(neg),
         n_train_neg=len(train_neg),
+        n_labeled_pairs_bytes=len(labeled_pairs_csv),
         sha256=_digest(path),
     )
     path.with_suffix(path.suffix + ".json").write_text(
@@ -127,7 +131,7 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
         "df", "payload", "structured_features", "row_bc", "country", "pos",
         "hp_pairs", "emb0", "neg", "train_neg", "neg_sources",
         "train_neg_sources", "mask_audit", "hard_negative_mask_audit",
-        "payload_variant", "masking_profile",
+        "labeled_pairs_csv", "payload_variant", "masking_profile",
     }
     missing = sorted(required - set(data))
     if missing:
@@ -138,6 +142,11 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
         raise ValueError("prepared bundle manifest/pair counts disagree")
     if len(data["train_neg"]) != manifest.n_train_neg:
         raise ValueError("prepared bundle manifest/training-negative counts disagree")
+    if (
+        not isinstance(data["labeled_pairs_csv"], bytes)
+        or len(data["labeled_pairs_csv"]) != manifest.n_labeled_pairs_bytes
+    ):
+        raise ValueError("prepared bundle labeled-pairs bytes disagree with manifest")
     if data["payload_variant"] != manifest.payload_variant:
         raise ValueError("prepared bundle payload variant disagrees with manifest")
     if data["masking_profile"] != manifest.masking_profile:

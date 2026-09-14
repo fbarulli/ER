@@ -1127,6 +1127,7 @@ def _main_inner(_mlf, _wandb) -> None:
             train_neg_sources=train_neg_sources,
             mask_audit=mask_audit,
             hard_negative_mask_audit=hard_negative_mask_audit,
+            labeled_pairs_csv=(RESULTS / F["labeled_pairs"]).read_bytes(),
             payload_variant=args.payload,
             masking_profile=str(mask_cfg["profile"]),
         )

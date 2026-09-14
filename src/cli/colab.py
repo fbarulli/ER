@@ -791,10 +791,10 @@ def run_parallel_train_and_tail(
         if prepared_bundles is not None
         else None
     )
-    remote_input_names = (
-        'F["labeled_pairs"]'
+    remote_input_loop = (
+        "for name in ():"
         if prepared_bundles is not None
-        else 'F["canonical_records"], F["gate_results"], F["labeled_pairs"]'
+        else 'for name in (F["canonical_records"], F["gate_results"], F["labeled_pairs"]):'
     )
     resume_pointers = _resume_pointer_payload(run_id, workers) if resume_run else {}
     launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
@@ -828,7 +828,7 @@ for number in range(1, {workers} + 1):
         for name, encoded in resume_pointers[str(number)].items():
             (pointer_dir / name).write_bytes(base64.b64decode(encoded))
         print(f"[resume-preflight] worker {{number}}: pointer files written", flush=True)
-        for name in ({remote_input_names},):
+        {remote_input_loop}
             relative = name.relative_to(root / "results")
             source = root / "results" / relative
             destination = out / relative
@@ -1398,7 +1398,6 @@ def prepare_remote_layout(*, minimal_runtime: bool = False) -> None:
         "config",
         "src",
         "artifacts/models/all-MiniLM-L6-v2",
-        "results/training/labeled_pairs.csv",
         "pyproject.toml",
     ]
     script = f"""
@@ -1656,16 +1655,12 @@ def verify_remote_prepared_inputs() -> None:
     """Check only the small calibration input used by prepared GPU workers."""
     print("[data] validating local-prepared GPU runtime inputs ...")
     script = _BOOTSTRAP + f"""
-from core.common import F, resolve_model
+from core.common import resolve_model
 from pathlib import Path
 model = Path(resolve_model({str(training_cfg().training.base_model)!r}))
-labeled = F["labeled_pairs"]
 if not model.is_dir():
     raise FileNotFoundError(f"prepared runtime model bundle missing: {{model}}")
-if not labeled.is_file():
-    raise FileNotFoundError(f"prepared runtime labeled-pairs input missing: {{labeled}}")
 print(f"[data] model={{model}}")
-print(f"[data] labeled_pairs={{labeled}}: {{labeled.stat().st_size:,}} bytes")
 print("[data] remote preparation disabled; worker consumes uploaded bundle")
 """
     run_colab_exec_stream(
@@ -1884,10 +1879,10 @@ def run_single_train_and_stream(
         args = list(args)
         args[args.index("training.train")] = "training.train_prepared"
         args.extend(["--bundle", remote_bundle])
-    remote_input_names = (
-        'F["labeled_pairs"]'
+    remote_input_loop = (
+        "for name in ():"
         if prepared_bundle is not None
-        else 'F["canonical_records"], F["gate_results"], F["labeled_pairs"]'
+        else 'for name in (F["canonical_records"], F["gate_results"], F["labeled_pairs"]):'
     )
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import os, pathlib, shutil, subprocess, sys
@@ -1897,7 +1892,7 @@ base = pathlib.Path({remote_base!r})
 out = base / "worker_1"
 base.mkdir(parents=True, exist_ok=False)
 out.mkdir()
-for name in ({remote_input_names},):
+{remote_input_loop}
     relative = name.relative_to(root / "results")
     source = root / "results" / relative
     if not source.is_file():
