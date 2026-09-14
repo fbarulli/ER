@@ -454,12 +454,39 @@ class RandMatchingOutputsSpec(BaseModel):
     provenance: str = Field(min_length=1)
 
 
+class RandTruthSplitsSpec(BaseModel):
+    """Deterministic, disjoint truth inputs for the final matcher."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    output_dir: str = Field(min_length=1)
+    calibration_output: str = Field(min_length=1)
+    holdout_output: str = Field(min_length=1)
+    sample_size: int = Field(ge=6)
+    calibration_size: int = Field(ge=3)
+    seed: int
+
+    @model_validator(mode="after")
+    def _sizes_are_valid(self) -> RandTruthSplitsSpec:
+        if self.calibration_size >= self.sample_size:
+            raise ValueError(
+                "rand_matching.truth_splits.calibration_size must be smaller "
+                "than sample_size"
+            )
+        if self.sample_size - self.calibration_size < 3:
+            raise ValueError(
+                "rand_matching.truth_splits must reserve at least three holdout rows"
+            )
+        return self
+
+
 class RandMatchingSpec(BaseModel):
     """Final direct SKU-to-canonical Rand Index matching contract."""
 
     model_config = ConfigDict(extra="forbid")
 
     output_dir: str = Field(min_length=1)
+    truth_splits: RandTruthSplitsSpec
     outputs: RandMatchingOutputsSpec
     top_k: int = Field(ge=1)
     batch_size: int = Field(ge=1)

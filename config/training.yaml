@@ -185,6 +185,16 @@ collapse_guardrail_profiles:
 # output locations live here so the final submission has one SSOT.
 rand_matching:
   output_dir: "submission"
+  truth_splits:
+    # One representative SKU for each selected canonical identity.  The two
+    # files are disjoint in both SKU_ID and true_item_id, so they can be
+    # supplied directly to er-rand-match.
+    output_dir: "results/rand_truth"
+    calibration_output: "calibration_truth.csv"
+    holdout_output: "holdout_truth.csv"
+    sample_size: 3000
+    calibration_size: 2000
+    seed: 42
   outputs:
     submission: "SKU_ITEM_submission.csv"
     diagnostics: "SKU_ITEM_submission_diagnostics.csv"

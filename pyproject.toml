@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 er-colab = "cli.colab:main"
 er-train = "training.train:main"
 er-rand-match = "training.rand_matching:main"
+er-generate-rand-truth = "training.generate_rand_truth:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
