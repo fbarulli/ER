@@ -1578,9 +1578,10 @@ print(
 
 
 def verify_training_inputs() -> None:
-    """Use the frozen CSV inputs committed on the training branch."""
+    """Use frozen CSV inputs and materialize derived calibration input."""
     print("[data] validating frozen training CSVs from the cloned branch ...")
     script = _BOOTSTRAP + f"""
+import subprocess, sys
 from core.common import F
 required = [
     F["dataset_deduped"],
@@ -1593,6 +1594,21 @@ if missing:
     raise FileNotFoundError("frozen training CSVs missing: " + ", ".join(missing))
 for path in required:
     print(f"[data] {{path}}: {{path.stat().st_size:,}} bytes", flush=True)
+calibration_path = F["labeled_pairs"]
+if not calibration_path.is_file():
+    print(
+        f"[data] derived calibration input missing; generating {{calibration_path}}",
+        flush=True,
+    )
+    rc = subprocess.run(
+        [sys.executable, "src/training/labeled_pairs.py"],
+        cwd={REMOTE_ROOT!r},
+    ).returncode
+    if rc != 0:
+        raise RuntimeError(f"labeled-pairs generation failed (rc={{rc}})")
+if not calibration_path.is_file():
+    raise FileNotFoundError(f"derived calibration input missing after generation: {{calibration_path}}")
+print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes", flush=True)
 """
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)
 
