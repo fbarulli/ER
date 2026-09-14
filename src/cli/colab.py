@@ -774,6 +774,8 @@ print(json.dumps(payload), flush=True)
 def run_parallel_train_and_tail(
     args: list[str], workers: int, *, resume_run: str | None = None,
     run_labels: list[str] | None = None,
+    masking_profiles: list[str] | None = None,
+    collapse_guardrail_profiles: list[str] | None = None,
 ) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -791,9 +793,10 @@ root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
 run_id = base.name.removeprefix("concurrent_train_")
 base.mkdir(parents=True, exist_ok={bool(resume_run)!r})
-command = " ".join(shlex.quote(part) for part in [sys.executable, *{args!r}])
 resume_pointers = {resume_pointers!r}
 run_labels = {run_labels!r}
+masking_profiles = {masking_profiles!r}
+collapse_guardrail_profiles = {collapse_guardrail_profiles!r}
 started = []
 for number in range(1, {workers} + 1):
     worker_profile = (
@@ -801,7 +804,7 @@ for number in range(1, {workers} + 1):
         if run_labels and number <= len(run_labels)
         else ""
     )
-    training_name = f"{{run_id}}-{{worker_profile}}" if worker_profile else "{{run_id}}"
+    training_name = f"{{run_id}}-worker_{{number}}" + (f"-{{worker_profile}}" if worker_profile else "")
     worker_profile = (
         worker_profile if worker_profile in ("mining_enabled", "masking_only") else ""
     )
@@ -882,6 +885,15 @@ for number in range(1, {workers} + 1):
             if not source.is_file():
                 raise FileNotFoundError(f"worker input missing: {{source}}")
             shutil.copy2(source, out / name.name)
+    worker_args = [sys.executable, *{args!r}]
+    if masking_profiles is not None:
+        worker_args.extend(["--masking-profile", masking_profiles[number - 1]])
+    if collapse_guardrail_profiles is not None:
+        worker_args.extend([
+            "--collapse-guardrail-profile",
+            collapse_guardrail_profiles[number - 1],
+        ])
+    command = " ".join(shlex.quote(part) for part in worker_args)
     log_path, status_path = out / "training.log", out / "training.status"
     live_status_path = out / "live_status.json"
     wandb_dir = out / "wandb"
@@ -1595,11 +1607,12 @@ def run_train(
         args.extend(["--model", model])
     if sample is not None:
         args.extend(["--sample", str(sample)])
-    args.extend(["--masking-profile", masking_profile or _MASKING_PROFILE])
-    args.extend([
-        "--collapse-guardrail-profile",
-        collapse_guardrail_profile or _COLLAPSE_GUARDRAIL_PROFILE,
-    ])
+    if workers == 1:
+        args.extend(["--masking-profile", masking_profile or _MASKING_PROFILE])
+        args.extend([
+            "--collapse-guardrail-profile",
+            collapse_guardrail_profile or _COLLAPSE_GUARDRAIL_PROFILE,
+        ])
     if not _MASK_EFFECT_AFTER_TRAIN:
         args.append("--no-mask-effect")
     if resume_run:
@@ -1612,7 +1625,27 @@ def run_train(
             [item.strip() for item in run_label.split(",") if item.strip()]
             if run_label else None
         ),
+        masking_profiles=_expand_worker_profiles(
+            masking_profile or _MASKING_PROFILE, workers, "masking"
+        ),
+        collapse_guardrail_profiles=_expand_worker_profiles(
+            collapse_guardrail_profile or _COLLAPSE_GUARDRAIL_PROFILE,
+            workers,
+            "collapse guardrail",
+        ),
     )
+
+
+def _expand_worker_profiles(raw: str, workers: int, label: str) -> list[str]:
+    """Resolve one profile or one explicit profile per concurrent worker."""
+    values = [item.strip() for item in raw.split(",") if item.strip()]
+    if len(values) == 1:
+        return values * workers
+    if len(values) != workers:
+        raise ValueError(
+            f"{label} profile count must be 1 or exactly {workers}; got {len(values)}"
+        )
+    return values
 
 
 def run_single_train_and_stream(
