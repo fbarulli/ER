@@ -1471,7 +1471,7 @@ print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
 def install_deps(*, minimal_runtime: bool = False) -> None:
     print(
         "[deps] installing "
-        + ("GPU training runtime only" if minimal_runtime else "full lane dependencies")
+        + ("prepared training runtime" if minimal_runtime else "full lane dependencies")
         + " on the VM ..."
     )
     # Run pip outside the notebook kernel. A kernel disconnect can interrupt
@@ -1479,7 +1479,7 @@ def install_deps(*, minimal_runtime: bool = False) -> None:
     # log/status pair that the launcher can retrieve before teardown.
     packages = (
         "'sentence-transformers', 'datasets', 'accelerate', "
-        "'scikit-learn', 'pandas', 'numpy'"
+        "'scikit-learn', 'pandas', 'numpy', 'mlflow', 'wandb'"
         if minimal_runtime
         else
         "'sentence-transformers', 'datasets', 'accelerate', 'evaluate', "
