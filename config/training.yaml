@@ -404,7 +404,9 @@ mining:
   # Each miner has an independent switch and parameter set. Masking is
   # configured separately above.
   ann:
-    enabled: true
+    # Safe default: ANN mining requires an explicit mining_enabled profile.
+    # masking_only and ordinary training runs must not turn it on implicitly.
+    enabled: false
     target: 20000             # maximum generic hard/eval pairs per lane
     band: "0.45-0.80"        # cosine band for ANN candidates
     band_mode: "adaptive_quantile" # fixed | adaptive_quantile | intersection
