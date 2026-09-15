@@ -68,6 +68,7 @@ OTHER_GTIN = "4006381333932"
 def trace_row(**over: object) -> dict[str, object]:
     """One row that satisfies every clause of the contract."""
     row: dict[str, object] = {
+        "run_id": "run-0123456789ab",
         "stage": "data_prep.gtin_guard",
         "step": "identity_claims_evaluated",
         "scope": "run",
@@ -269,19 +270,29 @@ def test_rows_emitted_by_the_real_producer_validate():
     entity_row = tracing.record(
         "gate.pairs", "scored", scope="entity", key=VALID_GTIN
     )
+    # A bare record() row is NOT yet run-scoped: run_id is resolved at WRITE
+    # time (the two-stage flow fingerprints the artifacts stage 1 writes, so
+    # stage 1 cannot know its run id at construction). The row contract is
+    # therefore enforced on the FRAME at the write boundary, and row-level
+    # agreement is asserted by checking the row carries every column.
     for row in (run_row, group_row, entity_row):
-        TraceRow.model_validate(row)
+        assert set(row) == set(TRACE_FRAME_COLUMNS)
+        assert row["producer"] == "core.tracing"
 
-    stage = tracing.TraceRun("stage")
+    stage = tracing.TraceRun("stage", run_id="run-test000000")
     stage.add("step", "substep", in_count=5, out_count=5)
-    stage.add_entities("entities", list(range(4)), limit=1)  # emits _truncated
+    # add_entities censuses every reason bucket and samples within a cap; the
+    # cap is per reason, and a bucket wider than it is announced, not dropped.
+    stage.add_entities("entities", list(range(4)), per_reason=1)
     rows = stage.rows().to_dict("records")
-    assert rows[-1]["step"].endswith("_truncated")
+    assert any("truncated" in str(row["step"]) or "omitted" in str(row["detail"]) for row in rows)
     assert check_trace_frame(stage.rows()) is not None
+    # every written row belongs to the run
+    assert {row["run_id"] for row in rows} == {"run-test000000"}
 
 
 def test_trace_run_frame_passes_the_checker():
-    stage = tracing.TraceRun("data_prep")
+    stage = tracing.TraceRun("data_prep", run_id="run-test000000")
     stage.add("gtin_guard", "identity_claims_evaluated", in_count=9, out_count=8)
     stage.add("gtin_guard", "checksum", scope="group", in_count=8, out_count=6)
     frame = stage.rows()

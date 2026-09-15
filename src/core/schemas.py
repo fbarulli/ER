@@ -2362,12 +2362,12 @@ class TraceRow(BaseModel):
 
     @field_validator("run_id", "stage", "step")
     @classmethod
-    def _non_blank_identity(cls, v: str) -> str:
+    def _non_blank_identity(cls, v: str, info) -> str:
         """Whitespace-only is empty. ``run_id`` in particular must be present:
         a row belonging to no run cannot be reasoned about, and the trace's
         whole duplicate-row policy is built on that axis."""
         if not str(v).strip():
-            raise ValueError("trace run_id/stage/step must not be blank")
+            raise ValueError(f"trace {info.field_name} must be non-empty")
         return v
 
     @field_validator("in_count", "out_count", "dropped_count", mode="before")
