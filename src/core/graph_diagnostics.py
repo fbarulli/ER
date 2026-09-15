@@ -99,14 +99,15 @@ def candidate_graph_diagnostics(
     candidate-space diagnostic, not a replacement for direct assignment.
     """
     _CANDIDATE_GRAPH_FRAME_SPEC.validate_frame(candidates)
+    # ``different`` is a thresholded GTIN stratum, not a hard veto (see
+    # rand_matching._annotate_candidates). Keep those accepted edges in the
+    # diagnostic graph so false-positive components cannot be hidden merely
+    # because their valid GTINs differ.
     accepted = candidates[
-        candidates["gtin_status"].ne("different")
-        & (
-            candidates["exact_gtin"].astype(bool)
-            | (
-                candidates["rule_ok"].astype(bool)
-                & candidates["score"].ge(float(threshold))
-            )
+        candidates["exact_gtin"].astype(bool)
+        | (
+            candidates["rule_ok"].astype(bool)
+            & candidates["score"].ge(float(threshold))
         )
     ]
     if accepted.empty:
