@@ -105,11 +105,26 @@ colab:
       - "optuna"
       - "psycopg[binary]"
       - "wandb"
+    # Wheels shipped in the repository instead of being compiled on the VM.
+    # `hnswlib` publishes no wheel on PyPI, so every fresh VM used to spend
+    # ~37 s building the sdist (measured with uv on a CPU VM: "Prepared 19
+    # packages in 37.19s").  This wheel was built once on a CPU Colab VM, for
+    # the image's own interpreter (cp313 / linux_x86_64), and is installed as
+    # a local requirement.  If the tag stops matching the VM interpreter the
+    # launcher logs it and falls back to the index.
+    prebuilt_wheels:
+      - "artifacts/wheels/hnswlib-0.8.0-cp313-cp313-linux_x86_64.whl"
   # Prefer `uv pip install` on the VM, falling back to `pip` when uv is absent
   # or refuses.  This mirrors what the installed Colab CLI does for its own
   # `colab install` subcommand (uv first, pip on failure), and the detached
   # stage logs which installer actually ran.  Set false to force pip.
   prefer_uv_install: true
+  # Reuse a prepared bundle whose inputs are byte-identical to one already
+  # built: same dataset bytes, same requested model/profile/payload, and the
+  # same digest over every config file and bundle-producing source file.  The
+  # local build took 531 s measured on 2026-09-15 once the payload stage was
+  # cold, and every launch rebuilt it.  Set false to force a fresh build.
+  cache_prepared_bundles: true
   hpo_mode: "sequential"
   hpo_workers: 2
   train_workers: 6

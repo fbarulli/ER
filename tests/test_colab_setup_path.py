@@ -44,6 +44,345 @@ def _installer_packages(command: str) -> list[str]:
     return ast.literal_eval(program.split("packages = ", 1)[1].split("\n", 1)[0])
 
 
+class PrebuiltWheelTests(unittest.TestCase):
+    """A shipped wheel must replace its distribution, but only when it fits."""
+
+    def _wheel_name(self) -> str:
+        import sysconfig
+
+        version = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        platform = sysconfig.get_platform().replace("-", "_")
+        return f"hnswlib-0.8.0-{version}-{version}-{platform}.whl"
+
+    def _run_with_stub_uv(self, *, wheel: str | None):
+        """Generate the installer against a temp repo root and run it."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            wheels = root / "artifacts" / "wheels"
+            wheels.mkdir(parents=True)
+            paths: list[str] = []
+            if wheel is not None:
+                (wheels / wheel).write_bytes(b"wheel")
+                paths = [f"artifacts/wheels/{wheel}"]
+            record = root / "uv-argv"
+            stub = root / "uv"
+            stub.write_text(
+                "#!/bin/sh\n"
+                f'printf "%s\\n" "$@" > {str(record)!r}\n'
+                "exit 0\n"
+            )
+            stub.chmod(0o755)
+            with mock.patch.object(colab, "REMOTE_ROOT", str(root)):
+                program = _installer_program(
+                    colab._runtime_install_command(
+                        ["hnswlib", "mlflow"], prefer_uv=True, wheel_paths=paths
+                    )
+                )
+            completed = subprocess.run(
+                [sys.executable, "-c", program],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PATH": str(root)},
+            )
+            return completed, record.read_text().splitlines()
+
+    def test_matching_wheel_replaces_the_distribution(self):
+        completed, argv = self._run_with_stub_uv(wheel=self._wheel_name())
+        self.assertIn("replaces hnswlib", completed.stdout)
+        self.assertTrue(
+            any(arg.endswith(".whl") for arg in argv),
+            f"the wheel was not passed to the installer: {argv}",
+        )
+        self.assertNotIn("hnswlib", argv, "the sdist requirement must be dropped")
+        self.assertIn("mlflow", argv)
+
+    def test_foreign_wheel_is_rejected_and_the_index_is_used(self):
+        completed, argv = self._run_with_stub_uv(
+            wheel="hnswlib-0.8.0-cp39-cp39-win_amd64.whl"
+        )
+        self.assertIn("does not match", completed.stdout)
+        self.assertFalse(any(arg.endswith(".whl") for arg in argv))
+        self.assertIn("hnswlib", argv)
+
+    def test_missing_wheel_is_reported_and_the_index_is_used(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "artifacts" / "wheels").mkdir(parents=True)
+            record = root / "uv-argv"
+            stub = root / "uv"
+            stub.write_text(
+                "#!/bin/sh\n" f'printf "%s\\n" "$@" > {str(record)!r}\n' "exit 0\n"
+            )
+            stub.chmod(0o755)
+            with mock.patch.object(colab, "REMOTE_ROOT", str(root)):
+                program = _installer_program(
+                    colab._runtime_install_command(
+                        ["hnswlib", "mlflow"], prefer_uv=True,
+                        wheel_paths=["artifacts/wheels/absent.whl"],
+                    )
+                )
+            completed = subprocess.run(
+                [sys.executable, "-c", program], capture_output=True, text=True,
+                env={**os.environ, "PATH": str(root)},
+            )
+            argv = record.read_text().splitlines()
+        self.assertIn("prebuilt wheel missing", completed.stdout)
+        self.assertIn("hnswlib", argv)
+
+
+class BundleCacheTests(unittest.TestCase):
+    """A byte-identical bundle request must not be rebuilt."""
+
+    def _fixture(self, temporary: str):
+        root = Path(temporary)
+        dataset = root / "dataset.csv"
+        dataset.write_text("product_id\n1\n")
+        manifest = mock.Mock(
+            n_df=58_529, n_payload=94_124, n_pos=44_690, n_neg=20_860,
+            sha256="a" * 64,
+        )
+
+        def fake_build(command, **_kwargs):
+            target = Path(command[command.index("--prepare-bundle") + 1])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"bundle-bytes")
+            target.with_suffix(target.suffix + ".json").write_text("{}\n")
+
+        return root, dataset, manifest, fake_build
+
+    def test_second_identical_request_is_served_from_the_cache(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, dataset, manifest, fake_build = self._fixture(temporary)
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ):
+                first = colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            self.assertEqual(len(first), 1)
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ):
+                second = colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            self.assertEqual(len(second), 1)
+            self.assertEqual(
+                build.call_count, 0, "a cache hit must not rebuild the bundle"
+            )
+
+    def test_changed_source_invalidates_the_cache(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, dataset, manifest, fake_build = self._fixture(temporary)
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ), \
+                 mock.patch.object(colab, "_tree_digest", return_value="before"):
+                first = colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ), \
+                 mock.patch.object(colab, "_tree_digest", return_value="after"):
+                second = colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            self.assertEqual(
+                build.call_count, 1, "a source change must force a rebuild"
+            )
+            self.assertEqual(second[0].name, first[0].name)
+            self.assertNotEqual(second[0].parent.name, first[0].parent.name)
+
+    def test_changed_dataset_invalidates_the_cache(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, dataset, manifest, fake_build = self._fixture(temporary)
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ):
+                first = colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            dataset.write_text("product_id\n2\n")
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ):
+                second = colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            self.assertEqual(build.call_count, 1, "new dataset bytes must rebuild")
+            self.assertNotEqual(second[0].parent.name, first[0].parent.name)
+
+    def test_disabled_cache_always_rebuilds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, dataset, manifest, fake_build = self._fixture(temporary)
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_CACHE_PREPARED_BUNDLES", False), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ):
+                colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_CACHE_PREPARED_BUNDLES", False), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ):
+                colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            self.assertEqual(build.call_count, 1, "the disabled cache must not serve")
+
+    def test_an_unusable_cache_entry_is_reported_and_rebuilt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, dataset, manifest, fake_build = self._fixture(temporary)
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ):
+                colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            captured = _Capture()
+            with mock.patch.object(colab, "RESULTS", root / "results"), \
+                 mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
+                 mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     side_effect=lambda path, *a, **k: (
+                         (_ for _ in ()).throw(
+                             ValueError("model input contract moved")
+                         )
+                         if "_cache" in str(path) else (manifest, None)
+                     ),
+                 ), \
+                 mock.patch("sys.stdout", captured):
+                colab._build_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+            self.assertEqual(build.call_count, 1)
+            self.assertIn("not reusable", captured.text())
+
+
+class ValidationUploadPrewarmTests(unittest.TestCase):
+    """Validation uploads must travel while the VM installs its runtime."""
+
+    def tearDown(self) -> None:
+        colab.drain_validation_upload_prewarm()
+
+    def test_worker_uploads_once_without_joining_itself(self):
+        """Regression guard for the self-join that broke the bundle prewarm.
+
+        The worker runs the real transfer step, so if that step consulted the
+        prewarm lookup the thread would join itself and the main thread would
+        re-upload serially — the overlap would silently never happen.
+        """
+        threads: list[str] = []
+        original = colab._perform_validation_upload
+
+        def spy(run_id):
+            threads.append(threading.current_thread().name)
+            return original(run_id)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            dataset = Path(temporary) / "dataset.csv"
+            dataset.write_text("product_id\n1\n")
+            with mock.patch.object(colab, "_perform_validation_upload", spy), \
+                 mock.patch.object(
+                     colab, "_validation_input_path", return_value=dataset
+                 ), \
+                 mock.patch.object(colab, "_remote_checkout_copy", return_value=None), \
+                 mock.patch.object(colab, "run_colab_exec_stream"), \
+                 mock.patch.object(colab, "_upload_with_retries"):
+                colab.start_validation_upload_prewarm()
+                self.assertEqual(
+                    colab._lane_run_stamp(), colab._VALIDATION_UPLOAD_PREWARM.stamp
+                )
+                paths = colab._upload_validation_inputs(colab._lane_run_stamp())
+
+        self.assertEqual(sorted(paths), ["sample", "source", "training"])
+        self.assertEqual(len(threads), 1, "the transfer must run exactly once")
+        self.assertNotEqual(
+            threads[0], threading.current_thread().name,
+            "the transfer ran on the caller's thread: the prewarm thread never "
+            "reached it (it joined itself)",
+        )
+
+    def test_failure_falls_back_to_a_serial_upload(self):
+        attempts: list[str] = []
+
+        def flaky(run_id):
+            attempts.append(run_id)
+            if len(attempts) == 1:
+                raise RuntimeError("control channel busy")
+            return {"source": "s", "training": "t", "sample": "s"}
+
+        with mock.patch.object(colab, "_perform_validation_upload", flaky):
+            colab.start_validation_upload_prewarm()
+            paths = colab._upload_validation_inputs(colab._lane_run_stamp())
+
+        self.assertEqual(paths["source"], "s")
+        self.assertEqual(len(attempts), 2, "the serial retry must have run")
+
+    def test_mismatched_run_id_uploads_serially(self):
+        with mock.patch.object(
+            colab, "_perform_validation_upload",
+            return_value={"source": "s", "training": "t", "sample": "s"},
+        ) as worker:
+            colab.start_validation_upload_prewarm()
+            colab._upload_validation_inputs("some-other-run")
+        self.assertEqual(worker.call_count, 2)
+
+    def test_drain_waits_for_an_abandoned_upload(self):
+        release = threading.Event()
+        finished = threading.Event()
+
+        def slow(run_id):
+            release.wait(timeout=10)
+            finished.set()
+            return {"source": "s", "training": "t", "sample": "s"}
+
+        with mock.patch.object(colab, "_perform_validation_upload", slow):
+            colab.start_validation_upload_prewarm()
+            release.set()
+            colab.drain_validation_upload_prewarm()
+            self.assertTrue(finished.is_set())
+
+
 class LauncherOrderTests(unittest.TestCase):
     """main() must start the build before it starts paying for the VM."""
 
@@ -58,6 +397,7 @@ class LauncherOrderTests(unittest.TestCase):
             return side_effect
 
         prewarm = mock.Mock(side_effect=record("prewarm"))
+        upload_prewarm = mock.Mock(side_effect=record("upload_prewarm"))
         with mock.patch.object(sys, "argv", ["colab.py", "--what", "train"]), \
              mock.patch.object(colab, "start_live_log"), \
              mock.patch.object(colab, "close_live_log"), \
@@ -72,15 +412,46 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "run_train", record("run_train", ("run", 1))), \
              mock.patch.object(colab, "stop", record("stop")), \
              mock.patch.object(colab, "drain_local_bundle_prewarm"), \
-             mock.patch.object(colab, "start_local_bundle_prewarm", prewarm):
+             mock.patch.object(colab, "drain_validation_upload_prewarm"), \
+             mock.patch.object(colab, "start_local_bundle_prewarm", prewarm), \
+             mock.patch.object(
+                 colab, "start_validation_upload_prewarm", upload_prewarm
+             ):
             colab.main()
 
-        self.assertEqual(order[0], "prewarm", order)
+        self.assertEqual(order[:2], ["prewarm", "upload_prewarm"], order)
+        # Both overlaps must begin before the launcher starts paying for the VM.
         self.assertLess(order.index("prewarm"), order.index("install_deps"), order)
+        self.assertLess(order.index("upload_prewarm"), order.index("session"), order)
         prewarm.assert_called_once()
+        upload_prewarm.assert_called_once()
         self.assertEqual(
             sorted(prewarm.call_args.kwargs), ["model", "profiles", "sample"]
         )
+
+    def test_a_resumed_run_does_not_prewarm_its_uploads(self):
+        """A resumed lane keeps its existing run identity and uploads serially."""
+        with mock.patch.object(
+            sys, "argv", ["colab.py", "--what", "train", "--resume-run", "abc"]
+        ), \
+             mock.patch.object(colab, "start_live_log"), \
+             mock.patch.object(colab, "close_live_log"), \
+             mock.patch.object(colab, "check_colab_cli"), \
+             mock.patch.object(colab, "acquire_colab_launch_lock", return_value=None), \
+             mock.patch.object(colab, "release_colab_launch_lock"), \
+             mock.patch.object(colab, "ensure_session"), \
+             mock.patch.object(colab, "prepare_remote_layout"), \
+             mock.patch.object(colab, "install_deps"), \
+             mock.patch.object(colab, "verify_remote_models"), \
+             mock.patch.object(colab, "log_gpu_profile"), \
+             mock.patch.object(colab, "run_train", return_value=("run", 1)), \
+             mock.patch.object(colab, "stop"), \
+             mock.patch.object(colab, "drain_local_bundle_prewarm"), \
+             mock.patch.object(colab, "drain_validation_upload_prewarm"), \
+             mock.patch.object(colab, "start_local_bundle_prewarm"), \
+             mock.patch.object(colab, "start_validation_upload_prewarm") as upload:
+            colab.main()
+        upload.assert_not_called()
 
 
 class _Capture:
@@ -134,7 +505,7 @@ class RuntimeInstallCommandTests(unittest.TestCase):
             return completed, invoked.is_file()
 
     def test_prefers_uv_and_does_not_touch_pip_when_uv_succeeds(self):
-        program = _installer_program(colab._runtime_install_command([], prefer_uv=True))
+        program = _installer_program(colab._runtime_install_command([], prefer_uv=True, wheel_paths=[]))
         completed, invoked = self._run_program(program, stub="uv-ok", stub_rc=0)
         self.assertTrue(invoked)
         self.assertIn("[deps] installer=uv", completed.stdout)
@@ -142,7 +513,7 @@ class RuntimeInstallCommandTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0)
 
     def test_falls_back_to_pip_and_says_so_when_uv_fails(self):
-        program = _installer_program(colab._runtime_install_command([], prefer_uv=True))
+        program = _installer_program(colab._runtime_install_command([], prefer_uv=True, wheel_paths=[]))
         completed, invoked = self._run_program(program, stub="uv-broken", stub_rc=3)
         self.assertTrue(invoked)
         self.assertIn("[deps] installer=uv", completed.stdout)
@@ -150,14 +521,14 @@ class RuntimeInstallCommandTests(unittest.TestCase):
         self.assertIn("[deps] installer=pip", completed.stdout)
 
     def test_falls_back_to_pip_when_uv_is_absent(self):
-        program = _installer_program(colab._runtime_install_command([], prefer_uv=True))
+        program = _installer_program(colab._runtime_install_command([], prefer_uv=True, wheel_paths=[]))
         completed, invoked = self._run_program(program, stub=None)
         self.assertFalse(invoked)
         self.assertIn("uv is absent on the VM; falling back to pip", completed.stdout)
         self.assertIn("[deps] installer=pip", completed.stdout)
 
     def test_configuration_can_force_pip_without_invoking_uv(self):
-        program = _installer_program(colab._runtime_install_command([], prefer_uv=False))
+        program = _installer_program(colab._runtime_install_command([], prefer_uv=False, wheel_paths=[]))
         completed, invoked = self._run_program(program, stub="uv-should-not-run")
         self.assertFalse(invoked)
         self.assertIn("uv disabled by configuration; using pip", completed.stdout)
@@ -166,7 +537,7 @@ class RuntimeInstallCommandTests(unittest.TestCase):
     def test_uv_installs_into_the_interpreter_the_trainer_will_use(self):
         """The fast path must not be able to land packages somewhere else."""
         program = _installer_program(
-            colab._runtime_install_command(["hnswlib"], prefer_uv=True)
+            colab._runtime_install_command(["hnswlib"], prefer_uv=True, wheel_paths=[])
         )
         self.assertIn('"--python", sys.executable', program)
         self.assertIn("['hnswlib']", program)

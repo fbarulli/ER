@@ -1595,8 +1595,13 @@ class RuntimePackagesSpec(BaseModel):
 
     prepared: list[str] = Field(min_length=1)
     full: list[str] = Field(min_length=1)
+    # Repository-relative wheels the launcher ships rather than letting the VM
+    # build them from an sdist.  A wheel is used only when its ABI/platform tag
+    # matches the VM's interpreter; otherwise the launcher falls back to the
+    # index and records why.
+    prebuilt_wheels: list[str]
 
-    @field_validator("prepared", "full")
+    @field_validator("prepared", "full", "prebuilt_wheels")
     @classmethod
     def _clean_entries(cls, values: list[str]) -> list[str]:
         if any(not value.strip() for value in values):
@@ -1621,6 +1626,7 @@ class ColabSpec(BaseModel):
     training_dataset_csv: str = Field(min_length=1)
     runtime_packages: RuntimePackagesSpec
     prefer_uv_install: bool
+    cache_prepared_bundles: bool
     hpo_mode: Literal["sequential", "parallel_same_vm"]
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)

@@ -111,6 +111,10 @@ _MIXED_MINING_PROFILE = _COLAB.mixed_mining_profile
 # trimming or re-pinning the remote stack must not require editing this file.
 _RUNTIME_PACKAGES = _COLAB.runtime_packages
 _PREFER_UV_INSTALL = bool(_COLAB.prefer_uv_install)
+# Reusing a prepared bundle whose inputs are byte-identical saves the whole
+# local build (531 s measured cold).  Config-owned so it can be turned off
+# when a lane needs to prove a bundle was built rather than reused.
+_CACHE_PREPARED_BUNDLES = bool(_COLAB.cache_prepared_bundles)
 _MASKING_ENABLED = training_cfg().masking.enabled
 _MASKING_PROFILE = str(training_cfg().masking.profile)
 _COLLAPSE_GUARDRAIL_PROFILE = str(training_cfg().collapse_guardrail.profile)
@@ -940,7 +944,7 @@ def run_parallel_train_and_tail(
             f"worker loss list must contain exactly {workers} values; "
             f"got {len(worker_losses)}"
         )
-    stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
+    stamp = _lane_run_stamp()
     remote_base = (
         f"{REMOTE_ROOT}/results/concurrent_train_{resume_run}"
         if resume_run
@@ -1668,7 +1672,9 @@ print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
     run_colab_exec_stream(SESSION, script, timeout=600, log_name="checkout", retry_safe=True)
 
 
-def _runtime_install_command(packages: list[str], *, prefer_uv: bool) -> str:
+def _runtime_install_command(
+    packages: list[str], *, prefer_uv: bool, wheel_paths: list[str],
+) -> str:
     """Build the remote command that installs one lane's runtime packages.
 
     ``uv`` resolves and downloads the same wheels several times faster than
@@ -1677,16 +1683,49 @@ def _runtime_install_command(packages: list[str], *, prefer_uv: bool) -> str:
     the interpreter that will import these packages, so the fast path cannot
     land them in a different environment than the pip fallback does.
 
-    Which installer ran — and any downgrade to pip — is printed, so the
-    durable stage log never hides the slow path (no silent fallbacks).
+    A configured prebuilt wheel replaces its distribution and is used only when
+    its ABI/platform tag matches the interpreter actually running — a compiled
+    extension from another Python or architecture is worthless, and a silent
+    mismatch would install nothing while looking successful.
+
+    Which installer ran, which prebuilt wheel was used or rejected, and any
+    downgrade to pip are all printed, so the durable stage log never hides the
+    slow path (no silent fallbacks).
     """
     program = f"""\
-import shutil, subprocess, sys
+import pathlib, shutil, subprocess, sys, sysconfig
 
 packages = {packages!r}
+root = pathlib.Path({REMOTE_ROOT!r})
+tag = "cp{{}}{{}}".format(*sys.version_info[:2])
+platform = sysconfig.get_platform().replace("-", "_")
+requirements = []
+provided = set()
+for relative in {wheel_paths!r}:
+    wheel = root / relative
+    filename = wheel.name
+    distribution = filename.split("-")[0].replace("_", "-").lower()
+    if not wheel.is_file():
+        print(f"[deps] prebuilt wheel missing: {{wheel}}", flush=True)
+        continue
+    if tag not in filename or platform not in filename:
+        print(
+            f"[deps] prebuilt wheel {{filename}} does not match {{tag}}/{{platform}}; "
+            "building from the index instead",
+            flush=True,
+        )
+        continue
+    requirements.append(str(wheel))
+    provided.add(distribution)
+    print(f"[deps] prebuilt wheel={{wheel}} replaces {{distribution}}", flush=True)
+packages = [
+    package for package in packages
+    if package.split("==")[0].split("[")[0].replace("_", "-").lower() not in provided
+]
+install = requirements + packages
 uv = shutil.which("uv") if {prefer_uv!r} else None
 if uv:
-    command = [uv, "pip", "install", "--python", sys.executable, *packages]
+    command = [uv, "pip", "install", "--python", sys.executable, *install]
     print("[deps] installer=uv", " ".join(command), flush=True)
     if subprocess.call(command) == 0:
         raise SystemExit(0)
@@ -1695,7 +1734,7 @@ elif {prefer_uv!r}:
     print("[deps] uv is absent on the VM; falling back to pip", flush=True)
 else:
     print("[deps] uv disabled by configuration; using pip", flush=True)
-command = [sys.executable, "-m", "pip", "install", *packages]
+command = [sys.executable, "-m", "pip", "install", *install]
 print("[deps] installer=pip", " ".join(command), flush=True)
 raise SystemExit(subprocess.call(command))
 """
@@ -1717,7 +1756,11 @@ def install_deps(*, minimal_runtime: bool = False) -> None:
     # durable log/status pair that the launcher can retrieve before teardown.
     run_detached_stage(
         "00_deps",
-        _runtime_install_command(packages, prefer_uv=_PREFER_UV_INSTALL),
+        _runtime_install_command(
+            packages,
+            prefer_uv=_PREFER_UV_INSTALL,
+            wheel_paths=list(_RUNTIME_PACKAGES.prebuilt_wheels),
+        ),
         timeout=900,
     )
 
@@ -2113,6 +2156,103 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
     }
 
 
+_BUNDLE_CACHE_DIRNAME = "_cache"
+# Every file whose content can change what a prepared bundle contains.  A miss
+# on any of them must invalidate the cache: a stale bundle would train on data
+# the operator did not ask for, which is the silent-staleness defect class this
+# repository treats as a bug rather than an inconvenience.
+_BUNDLE_SOURCE_DIRS = ("src/core", "src/training")
+_BUNDLE_SOURCE_FILES = ("src/pipeline.py",)
+
+
+def _tree_digest() -> str:
+    """Digest every config file and bundle-producing source file."""
+    digest = hashlib.sha256()
+    paths = sorted(
+        [path for name in _BUNDLE_SOURCE_DIRS for path in (TRAIN_ROOT / name).glob("*.py")]
+        + [TRAIN_ROOT / name for name in _BUNDLE_SOURCE_FILES]
+        + sorted((TRAIN_ROOT / "config").glob("*"))
+    )
+    for path in paths:
+        if not path.is_file():
+            continue
+        digest.update(path.relative_to(TRAIN_ROOT).as_posix().encode("utf-8"))
+        digest.update(sha256_file(path).encode("ascii"))
+    return digest.hexdigest()
+
+
+def _bundle_cache_dir(
+    *,
+    profiles: list[str],
+    model_key: str,
+    sample: int | None,
+    payload: str,
+    training_dataset: Path,
+) -> Path | None:
+    """Content address for one bundle request, or None when caching is off."""
+    if not _CACHE_PREPARED_BUNDLES:
+        return None
+    request = json.dumps(
+        {
+            "profiles": list(profiles),
+            "model": model_key,
+            "sample": sample,
+            "payload": payload,
+            "collapsed_guardrail": _COLLAPSE_GUARDRAIL_PROFILE,
+            "dataset_sha256": sha256_file(training_dataset),
+            "sources_sha256": _tree_digest(),
+        },
+        sort_keys=True,
+    )
+    key = hashlib.sha256(request.encode("utf-8")).hexdigest()[:32]
+    return RESULTS / "prepared_training" / _BUNDLE_CACHE_DIRNAME / key
+
+
+def _bundle_manifest(bundle: Path):
+    from training.prepared_bundle import load_prepared_bundle
+
+    return load_prepared_bundle(bundle)[0]
+
+
+def _cached_bundles(cache_dir: Path, *, profiles: list[str]) -> list[Path] | None:
+    """The cached bundles for this request, when every worker's pair is intact.
+
+    `load_prepared_bundle` is the validation: it re-checks the manifest against
+    the current encoder-text contract and refuses a mismatch, so a cached
+    bundle cannot outlive the model-input spec even if the digest missed it.
+    """
+    expected = [
+        cache_dir / f"worker_{number}_{profile}.pkl.gz"
+        for number, profile in enumerate(profiles, start=1)
+    ]
+    for bundle in expected:
+        if not bundle.is_file() or not bundle.with_suffix(bundle.suffix + ".json").is_file():
+            return None
+        try:
+            _bundle_manifest(bundle)
+        except Exception as exc:
+            print(
+                f"[local-prepare] cached bundle {bundle} is not reusable "
+                f"({exc!r}); rebuilding",
+                flush=True,
+            )
+            return None
+    return expected
+
+
+def _populate_bundle_cache(cache_dir: Path, bundles: list[Path]) -> None:
+    """Publish freshly built bundles under their content address."""
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        for bundle in bundles:
+            for source in (bundle, bundle.with_suffix(bundle.suffix + ".json")):
+                shutil.copy2(source, cache_dir / source.name)
+    except OSError as exc:
+        print(f"[local-prepare] could not populate {cache_dir} ({exc!r})", flush=True)
+        return
+    print(f"[local-prepare] cached {len(bundles)} bundle(s) at {cache_dir}", flush=True)
+
+
 def _build_local_training_bundles(
     *,
     profiles: list[str],
@@ -2125,12 +2265,35 @@ def _build_local_training_bundles(
     The single bundle builder.  It deliberately does NOT consult the prewarm:
     it is what the prewarm thread itself runs, so looking the prewarm up here
     would make that thread join itself.
+
+    The build is deterministic in its inputs and expensive (531 s measured on
+    this host once the payload stage is cold), and every launch rebuilt it from
+    scratch.  A content-keyed cache under `results/prepared_training/_cache`
+    now serves a bundle whose inputs — dataset bytes, every bundle-producing
+    source file, every config file, and the requested model/profile/payload —
+    are byte-identical to one already built.
     """
+    model_key = model or str(training_cfg().training.base_model)
+    training_dataset = _validation_input_path(_COLAB.training_dataset_csv)
+    cache_dir = _bundle_cache_dir(
+        profiles=profiles, model_key=model_key, sample=sample, payload=payload,
+        training_dataset=training_dataset,
+    )
+    cached = _cached_bundles(cache_dir, profiles=profiles) if cache_dir else None
+    if cached is not None:
+        for number, bundle in enumerate(cached, start=1):
+            manifest = _bundle_manifest(bundle)
+            print(
+                f"[local-prepare] cache hit worker={number} "
+                f"rows={manifest.n_df:,} payload={manifest.n_payload:,} "
+                f"pos={manifest.n_pos:,} neg={manifest.n_neg:,} "
+                f"sha256={manifest.sha256} bundle={bundle}",
+                flush=True,
+            )
+        return cached
     stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     root = RESULTS / "prepared_training" / stamp
     root.mkdir(parents=True, exist_ok=False)
-    model_key = model or str(training_cfg().training.base_model)
-    training_dataset = _validation_input_path(_COLAB.training_dataset_csv)
     bundles: list[Path] = []
     for number, profile in enumerate(profiles, start=1):
         bundle = root / f"worker_{number}_{profile}.pkl.gz"
@@ -2179,6 +2342,8 @@ def _build_local_training_bundles(
             flush=True,
         )
         bundles.append(bundle)
+    if cache_dir is not None:
+        _populate_bundle_cache(cache_dir, bundles)
     return bundles
 
 
@@ -2297,8 +2462,116 @@ else:
     return None
 
 
+_RUN_STAMP_FORMAT = "%m%dT%H%M%S%fZ"
+
+
+class _ValidationUploadPrewarm:
+    """One lane's validation uploads, travelling during the VM dependency install.
+
+    The validation CSVs are read from this repository and pushed to the VM;
+    nothing the VM does produces them, so the transfer can overlap the install
+    instead of following it.  Measured before the overlap: 36.79 s of uploads
+    strictly after a 42.96 s dependency install.
+    """
+
+    def __init__(self, stamp: str) -> None:
+        self.stamp = stamp
+        self.remote_paths: dict[str, str] | None = None
+        self.error: BaseException | None = None
+        self.thread = threading.Thread(target=self._upload, daemon=True)
+
+    def _upload(self) -> None:
+        try:
+            self.remote_paths = _perform_validation_upload(self.stamp)
+        except BaseException as exc:  # handed back to the owning run, or fallen back from
+            self.error = exc
+            print(
+                f"[upload] concurrent validation upload failed: {exc!r}", flush=True
+            )
+
+    def join(self) -> dict[str, str]:
+        self.thread.join()
+        if self.error is not None:
+            raise self.error
+        if self.remote_paths is None:
+            raise RuntimeError("the concurrent validation upload returned no paths")
+        return self.remote_paths
+
+
+_VALIDATION_UPLOAD_PREWARM: _ValidationUploadPrewarm | None = None
+
+
+def start_validation_upload_prewarm() -> str:
+    """Begin this lane's validation uploads; returns the run id they belong to."""
+    global _VALIDATION_UPLOAD_PREWARM
+    stamp = datetime.now(timezone.utc).strftime(_RUN_STAMP_FORMAT)
+    prewarm = _ValidationUploadPrewarm(stamp)
+    _VALIDATION_UPLOAD_PREWARM = prewarm
+    prewarm.thread.start()
+    print(
+        f"[upload] sending validation inputs for run {stamp} concurrently with "
+        "the VM dependency install",
+        flush=True,
+    )
+    return stamp
+
+
+def drain_validation_upload_prewarm() -> None:
+    """Never leave an upload thread writing while the live log closes."""
+    global _VALIDATION_UPLOAD_PREWARM
+    prewarm, _VALIDATION_UPLOAD_PREWARM = _VALIDATION_UPLOAD_PREWARM, None
+    if prewarm is not None and prewarm.thread.is_alive():
+        print("[upload] waiting for the concurrent upload to finish ...", flush=True)
+        prewarm.thread.join()
+
+
+def _lane_run_stamp() -> str:
+    """Adopt the prewarmed run identity so the uploads belong to this run."""
+    if _VALIDATION_UPLOAD_PREWARM is not None:
+        return _VALIDATION_UPLOAD_PREWARM.stamp
+    return datetime.now(timezone.utc).strftime(_RUN_STAMP_FORMAT)
+
+
 def _upload_validation_inputs(run_id: str) -> dict[str, str]:
-    """Upload the immutable source, training complement, and SKU holdout."""
+    """Validation inputs for one run: the in-flight transfer when it matches.
+
+    The only entry point that consumes an upload prewarm, so the transfer it
+    hands over runs once and the overlap in `start_validation_upload_prewarm`
+    is real.
+    """
+    global _VALIDATION_UPLOAD_PREWARM
+    if _VALIDATION_UPLOAD_PREWARM is not None:
+        prewarm, _VALIDATION_UPLOAD_PREWARM = _VALIDATION_UPLOAD_PREWARM, None
+        if prewarm.stamp == run_id:
+            print(
+                "[upload] joining the validation upload started before the VM "
+                "setup",
+                flush=True,
+            )
+            try:
+                return prewarm.join()
+            except Exception as exc:
+                print(
+                    f"[upload] concurrent validation upload failed ({exc!r}); "
+                    "uploading serially instead",
+                    flush=True,
+                )
+        else:
+            print(
+                f"[upload] concurrent upload belongs to run {prewarm.stamp}, not "
+                f"{run_id}; uploading serially",
+                flush=True,
+            )
+    return _perform_validation_upload(run_id)
+
+
+def _perform_validation_upload(run_id: str) -> dict[str, str]:
+    """Transfer the immutable source, training complement, and SKU holdout.
+
+    The worker itself.  It deliberately does NOT consult the prewarm: it is
+    what the prewarm thread runs, so looking the prewarm up here would make
+    that thread join itself.
+    """
     sources = {
         "source": _validation_input_path(_VALIDATION_INFERENCE.source_csv),
         "training": _validation_input_path(_COLAB.training_dataset_csv),
@@ -2359,7 +2632,7 @@ def run_single_train_and_stream(
     prepared_bundle: Path | None = None, validation_inference: bool = True,
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
-    stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
+    stamp = _lane_run_stamp()
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     _record_remote_run(remote_base, workers=1, lane="train")
@@ -3285,6 +3558,11 @@ def main() -> None:
         bundle_request = _lane_bundle_request(args)
         if bundle_request is not None:
             start_local_bundle_prewarm(**bundle_request)
+        # The validation CSVs are read here and pushed to the VM, so they do
+        # not have to wait for the dependency install to finish.  A resumed
+        # run keeps its existing identity and uploads serially.
+        if bundle_request is not None and not args.resume_run:
+            start_validation_upload_prewarm()
         ensure_session()
         prepare_remote_layout(minimal_runtime=prepared_train_runtime)
         install_deps(minimal_runtime=prepared_train_runtime)
@@ -3382,6 +3660,7 @@ def main() -> None:
         # A lane that failed before its run_train call would otherwise leave
         # the concurrent bundle build writing into a closing log file.
         drain_local_bundle_prewarm()
+        drain_validation_upload_prewarm()
         close_live_log()
         release_colab_launch_lock(launch_lock)
 
