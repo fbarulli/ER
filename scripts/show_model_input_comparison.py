@@ -9,7 +9,6 @@ pipeline additions separately so a reviewer can see what changed.
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import pandas as pd
@@ -76,7 +75,6 @@ def main() -> None:
 
     source = data.assign(__id=data["product_id"].astype(str)).set_index("__id").to_dict("index")
     raw_source = raw_data.assign(__id=raw_data["sku_id"].astype(str)).set_index("__id").to_dict("index")
-    targets = {}
     gtin_col = "barcode" if "barcode" in data else "gtin"
     raw_gtin_col = "gtin" if "gtin" in raw_data else gtin_col
     raw_targets = {}
@@ -84,10 +82,6 @@ def main() -> None:
         gtin = text(gtin)
         if gtin:
             raw_targets[gtin] = group.iloc[0].to_dict()
-    for gtin, group in data.groupby(gtin_col, sort=False):
-        gtin = text(gtin)
-        if gtin:
-            targets[gtin] = group.iloc[0].to_dict()
     canonical_map = canon.set_index(canon["gtin"].astype(str)).to_dict("index")
     composition = model_input_composition()
 
@@ -98,7 +92,6 @@ def main() -> None:
         target_id = text(item["NEAREST_ITEM_ID"])
         source_row = source.get(sku_id, {})
         canonical_row = canonical_map.get(target_id, {})
-        target_row = targets.get(target_id, {})
 
         source_features = {
             "product_id": sku_id,

@@ -510,6 +510,62 @@ To https://github.com/fbarulli/ER.git
 
 ---
 
+## 7b. Project-wide rules — verification passes (all executed)
+
+The instruction was to check the whole change against the project's rules. The premise given was that
+this repo has **no** written conventions file. **It does.** `AGENTS.local.md` exists (5 230 bytes,
+untracked by its own design — its header says the `.local.` form "lives on disk without being
+committed. Do not commit it"). It is invisible to `git ls-files` and to a search for `AGENTS.md`,
+which is presumably why it looked absent. I verified against **that** file, and I did **not** commit
+it. (It is locally excluded via `.git/info/exclude`, which is not a tracked file.) The implementing
+agent flagged the same discrepancy in its own report §25.
+
+| # | Rule | Result | Evidence |
+|---|---|---|---|
+| 1 | **SSOT** — no second implementation left behind | **PASS, one documented residual** | `sf_text`, `self.structured_text` and `structured_append_to_text` (the per-lane gate recomputations) are **gone: 0 hits**. `_structured_text_enabled()` is the single gate and is reused by `scripts/analyze_model_input.py`. Residual: `scripts/show_model_input_comparison.py:107-126` still hand-builds the *legacy intermediate steps* for its before/after columns — labelled "explanatory only", and its two "exact model input" columns do come from the builder, so it cannot misreport the shipped payload; reported, not silently duplicated. |
+| 1b | **SSOT** — the named SSOTs were reused, not re-implemented | **PASS** | see the reuse audit in §7c |
+| 1c | one path derivation | **PASS with one justified duplicate** | `src/cli/colab_cli_entry.py:17` has its own `_find_project_root`, duplicating `core.common._find_project_root`. Its docstring states why: that wrapper is launched with the Colab CLI's interpreter, "which has neither the repo on `sys.path` nor its deps, so `core.common/TRAIN_ROOT` cannot be imported here". Justified and documented, not a defect. |
+| 2 | **Transparency** — every number has its command | **PASS after one reproduction failure of my own** | I re-derived the golden fixture from `2a15852` (855/855), the 585-band margins, pack presence agreement, the separation counts, and agent A's `27.4% → 100%`. Its `18.8% → 82.6%` did **not** reproduce on my first two readings — it is **full 10-dimensional structured-vector equality over all 855 fixture rows** (`legacy 18.8% → cleaned 82.6%`), which I then reproduced exactly. My failure, not a fault in the number; the report simply does not state the definition, which is a one-line gap worth closing. |
+| 2b | no silent drop / default / fallback in the changed paths | **PASS** | the three control-flow sites that looked suspicious are all sound: `token_budget_report` skips only in-budget texts and **counts** every out-of-budget one and every dropped `[FIELD_*]` group; `attribute_separation` skips only values with zero support in **both** classes and reports `n_values_withheld_for_support`; `zero_shot_sims:86` catches a `pd.isna` type error and still returns the value. |
+| 3 | **No dead code / no bloat** | **PASS after 2 fixes** | `ruff check --select F,E9` over `src/ scripts/ tests/` diffed against the same run on an extraction of `2a15852`: **2 findings introduced by this work, 0 removed by it** (22 pre-existing repo-wide, unchanged). Both new ones — an unused `json` import and an unused `row` binding, both mine — are fixed. I also removed a genuinely dead accumulation in the same script (`targets`, 7 lines) whose only reader was an unused variable. The flag-file scan is clean. |
+| 4 | **Pydantic at boundaries** | **PASS** | every new boundary structure is a pydantic model in `core.schemas` and is genuinely used: `TrainingSpec.ModelInputSpec`, `TrainingSpec.ModelInputComposition`, `AttributeSeparationSpec`, `TokenBudgetReport` (+ the two column tuples). `PreparedBundleManifest` gained a typed `model_input` field. No loose dict or tuple crosses a boundary. |
+| 5 | **Config over constants** | **PASS** | every new tunable is in `config/*.yaml` read through `core.common.load_config`: `training.model_input.{profile,include_evidence}`, `training.structured_features.implicit_pack_qty`, `evaluation.attribute_separation.{enabled,min_pairs_per_class,min_value_support,flag_below}`, plus the two `paths.yaml` bindings. Scanned the new modules for numeric literals: the hits are indices, guards (`max_seq_length < 1`), docstring statistics and a CLI display width — no domain constant. |
+| 6 | **Tests** — green, no coverage deleted | **PASS** | `pytest tests/ -q` → **383 passed, 2 skipped** (run with other agents' in-flight edits present, so it is a floor, not a ceiling). Per-file test-function counts versus `2a15852`: **no file has fewer**; totals 200 → 290. The one test I rewrote asserts a strictly stronger pair of invariants than the one it replaced, and a second was added. |
+| 7 | **Repo safety** | **PASS** | `git diff HEAD -- results/` empty; `git diff HEAD -- dataset.csv` empty; no training, no GPU, no Colab (the only `cuda` string in the changed surface is a pre-existing CLI choice defaulting to `cpu`); other agents' uncommitted files were never staged. |
+| 8 | **Reuse audit** | **PRESENT** — §7c | required by rule 9 of `AGENTS.local.md` |
+
+Things I could **not** check, stated plainly: the suite result is a floor because other agents were
+mid-edit; the ANN A/B was not re-run after their later commits; and rule 10's "every artifact that
+becomes stale" can only be answered for the artifacts that exist on disk today.
+
+## 7c. Reused vs newly created
+
+**Reused** (existing SSOT, extended in place — nothing parallel was written):
+
+| Existing thing | Where | Used for |
+|---|---|---|
+| `core.common.load_config` / `row_metadata_text` / `F` / `runtime` / `resolve_model` | `core.common` | every config read, every field fallback, every artifact path, model loading |
+| `TrainingConfig` / `TrainingSpec` validation at load | `core.schemas` | fail-loud config, no call-site defaults |
+| `core.tracing.TraceRun` + the `training_trace` layout | `core.tracing` + `config/paths.yaml` | the composition row and the token-budget row — **no second tracing mechanism** |
+| `append_text` / `vector` / `fuse_numpy` | `core.structured_features` | the structured channel; `symmetric_info` was added **inside that same module**, not beside it |
+| `normalize_text` / `MINIMAL_STOPWORDS` / `strip_schema_words` | `pipeline` | the one normaliser, the stopword vocabulary, the schema-word strip |
+| `UNIT_CANONICALIZATION_VERSION` | `core.unit_canonicalization` | fingerprint input |
+| `PersistentHnswIndex` | `training.hnsw_index` | the index reuse gate that now rejects a stale composition |
+| `_attribute_separation_section` in the existing writer | `training.generate_training_report` | the separation metrics ride the real end-of-run report path |
+| `load_ann_config` | `core.ann_config` | ANN settings |
+
+**Newly created**, each with the grep that justified it:
+
+| New | Why nothing existing would do |
+|---|---|
+| `src/core/model_input.py` | the composition existed as **five** copy-pasted builders; the `pipeline` primitives are the *steps*, never a composition point. Consolidation, not addition — net lines went down outside the new module. |
+| `core.structured_features.symmetric_info` | no implicit-default rule existed anywhere; placed in the structured-features SSOT because that is where the one-sided sentinel lived. |
+| `TrainingSpec.ModelInputSpec`, `TrainingSpec.ModelInputComposition` | config contract + artifact provenance record; `core.schemas` is the declared boundary SSOT. Replaced a loose dict. |
+| `training.attribute_separation` (+ `AttributeSeparationSpec`) | the previous brand-separation figure (+0.0249) was produced once, by hand; a grep found no repeatable per-attribute/per-value metric. |
+| `token_budget_report` + `TokenBudgetReport` | no truncation/token-budget helper existed; the truncation was previously invisible. |
+| `preprocessing_fingerprint_inputs()` | a named accessor over a dict that was already inline — it makes the fingerprint's inputs auditable and testable. It is **not** a second fingerprint. |
+| `implicit_pack_qty()` made public | it was `_implicit_pack_qty`, and the contract test needs to state the expected value; making it public avoided duplicating the config read in the test. |
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):

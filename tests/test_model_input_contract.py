@@ -373,7 +373,6 @@ def test_cleaned_profile_makes_an_unobserved_pack_symmetric_on_both_sides() -> N
     from core.structured_features import vector
 
     record = _group("review_band_585")[0]
-    row = pd.Series(record["sku"])
     info = canonical_info(record["canonical_record"])
     assert info["pack"] == set()
 
