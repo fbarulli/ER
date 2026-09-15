@@ -635,6 +635,68 @@ own name — and stays tracked, unchanged. The earlier machine-local `.git/info/
 removed now that the rule lives in the tracked `.gitignore`, so the behaviour is reproducible on any
 clone instead of only on this machine.
 
+## 7e. Single destination — `analysis/brand-and-input` is already on `training`
+
+Owner rule: all work stays on the `training` branch of `/home/opc/ONE/EuromonitoR`; nothing may rest
+anywhere else. The analysis agent works in an isolated worktree on a scratch branch
+(`/home/opc/ONE/ER-analysis-brand-input`, `analysis/brand-and-input`).
+
+**Result: nothing is stranded — the branch is already fully merged into `training`, and `training`
+is already pushed.** Executed, not assumed:
+
+```
+$ git branch --list analysis/brand-and-input
++ analysis/brand-and-input
+$ git log --oneline training..analysis/brand-and-input
+                                        # -> EMPTY: no commits on the branch that training lacks
+$ git merge-base --is-ancestor analysis/brand-and-input training && echo ancestor
+ancestor
+$ git rev-list analysis/brand-and-input --not training
+                                        # -> EMPTY: no object on the branch is unique to it
+$ git cherry training analysis/brand-and-input
+                                        # -> no unique commits (checked by patch content too)
+$ git merge --no-ff analysis/brand-and-input
+Already up to date.                     # rc=0, no commit created
+```
+
+It landed through the merge commit **`98333b5 merge: brand and model-input analysis onto training`**.
+Its deliverables are present and tracked in `training`:
+
+| Artifact | State in `training` |
+|---|---|
+| `scripts/analyze_brand_matching.py` | tracked |
+| `scripts/analyze_model_input.py` | tracked |
+| `scripts/show_model_input_comparison.py` | tracked |
+| `BRAND_ANALYSIS_REPORT.md` | tracked |
+| `INPUT_ANALYSIS_REPORT.md` | tracked |
+
+The analysis worktree itself carries **no uncommitted work** (`git status --porcelain` shows only an
+untracked `training_results` scratch directory, i.e. data, not output). The branch was **not deleted**:
+git refuses to delete a branch that a worktree has checked out, and the agent may still be running.
+Nothing depends on it remaining, which is the property that mattered.
+
+### The same sweep across every other branch (reported, not acted on)
+
+Rule 4 taken literally — "do not leave any branch as the resting place for anything" — I checked
+every local and remote branch. Everything that follows **predates this task** and is **not** part of
+the analysis workstream, so I did not merge it; merging six unrelated WIP branches plus `main` on my
+own initiative would be exactly the kind of blind resolution the instruction warned against.
+
+| Branch | Commits not in `training` | By patch content (`git cherry`) |
+|---|---|---|
+| `analysis/brand-and-input` | **0** | no unique commits — **fully merged** |
+| `fix/346-pydantic`, `fix/346-routing`, `fix/346-verify`, `verify/346-capture` | 1 each | **already in `training`** — the tips are WIP checkpoint commits whose changes landed via other commits |
+| `fix/346-minershape` | 1 | **not in `training`** — prior-session minershape audit |
+| `fix/review-41cd50e` | 1 | **not in `training`** — prior-session review checkpoint |
+| `main` | 4 | README / notebook / visualization commits on the default branch |
+| `ER/main` | 5 | as `main` plus a README link |
+
+`fix/346-minershape` and `fix/review-41cd50e` are the only two carrying genuinely unlanded work, and
+the handoff document already records them as the previous session's WIP (its ownership map lists
+minershape as owning `core/hard_negatives.py` + `sample_balanced_pairs.py` + `rand_matching.py`).
+**Owner decision, not mine:** merge them, or delete them as superseded. `main`/`ER/main` divergence is
+a separate question about the default branch.
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):
