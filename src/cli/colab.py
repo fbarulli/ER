@@ -985,6 +985,7 @@ def run_parallel_train_and_tail(
     prepared_bundles: list[Path] | None = None,
     final_inference: bool = True,
     inference_sample: int | None = None,
+    inference_device: str | None = None,
 ) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
     if worker_losses is not None and len(worker_losses) != workers:
@@ -1150,6 +1151,8 @@ for number in range(1, {workers} + 1):
     ]
     if {inference_sample!r} is not None:
         completion_args.extend(["--sample", str({inference_sample!r})])
+    if {inference_device!r} is not None:
+        completion_args.extend(["--device", {inference_device!r}])
     if not { _DVC_ENABLED!r}:
         completion_args.append("--skip-dvc")
     completion_command = " ".join(shlex.quote(part) for part in completion_args)
@@ -2064,6 +2067,7 @@ def run_train(
     *, resume_run: str | None = None, model: str | None = None,
     dataset_csv: str | None = None,
     inference_sample: int | None = None,
+    inference_device: str | None = None,
     run_label: str | None = None, masking_profile: str | None = None,
     collapse_guardrail_profile: str | None = None,
     loss: str = _TRAIN_LOSS,
@@ -2123,6 +2127,7 @@ def run_train(
             prepared_bundle=prepared_bundles[0],
             final_inference=not train_only,
             inference_sample=inference_sample,
+            inference_device=inference_device,
         )
     return run_parallel_train_and_tail(
         args, workers, resume_run=resume_run,
@@ -2140,6 +2145,7 @@ def run_train(
         prepared_bundles=prepared_bundles,
         final_inference=not train_only,
         inference_sample=inference_sample,
+        inference_device=inference_device,
     )
 
 
@@ -2767,6 +2773,7 @@ def run_single_train_and_stream(
     args: list[str], *, run_label: str | None = None,
     prepared_bundle: Path | None = None, final_inference: bool = True,
     inference_sample: int | None = None,
+    inference_device: str | None = None,
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
     stamp = _lane_run_stamp()
@@ -2838,6 +2845,8 @@ completion = [
 ]
 if {inference_sample!r} is not None:
     completion.extend(["--sample", str({inference_sample!r})])
+if {inference_device!r} is not None:
+    completion.extend(["--device", {inference_device!r}])
 if not { _DVC_ENABLED!r}:
     completion.append("--skip-dvc")
 if run_completion:
@@ -3750,6 +3759,7 @@ def main() -> None:
                 args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE,
                 workers=_SMOKE_WORKERS, dataset_csv=_COLAB.smoke_dataset_csv,
                 inference_sample=_COLAB.smoke_inference_sample,
+                inference_device="cpu" if GPU.upper() == "CPU" else None,
                 run_label=args.run_label,
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
