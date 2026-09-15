@@ -46,6 +46,32 @@ def normalized_attribute_text(*values: object) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text)).strip()
 
 
+def compact_attribute_text(*values: object) -> str:
+    """Normalize a field to a comparison key with NO word boundaries.
+
+    The two normalisers already in the tree each solve half of this problem.
+    ``normalized_attribute_text`` above folds accents but keeps the space, so
+    ``PureThé`` becomes ``purethe`` while ``PURE THE`` becomes ``pure the``.
+    The brand veto's own normaliser drops the space but uses NFKC, which does
+    not decompose, so ``é`` survives ``isalnum()`` and ``PureThé`` stays
+    ``purethé``.  Neither matches both spellings; this does.
+
+    Measured on the 388 non-exact brand rows, the fused-vs-spaced class is the
+    one normalization misses the token filter cannot reach: ``PureThé`` vs
+    ``PURE THE``, ``Bio Food`` vs ``biofood``, ``Bolt 24`` vs ``Bolt24``,
+    ``Folkington's`` vs ``Folkingtons`` and ``A SHOC`` vs ``Ashoc`` are the
+    same brand written with and without a boundary.
+
+    Use this where a fused or spaced spelling must compare equal.  Use
+    ``normalized_attribute_text`` where word boundaries carry meaning, such as
+    the phrase matching in ``extract_critical_claims``.
+    """
+    text = " ".join(str(value or "") for value in values)
+    text = unicodedata.normalize("NFKD", text.casefold())
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return "".join(char for char in text if char.isalnum())
+
+
 def extract_flavor_tokens(*values: object) -> frozenset[str]:
     text = normalized_attribute_text(*values)
     return frozenset(
