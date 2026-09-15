@@ -11,9 +11,11 @@ Branch `training`. Substantive commits:
 | `e22c00b` | stream checkpoint publication to DVC while training runs; adaptive detached-stage polling |
 
 All pushed to `ER/training`. Tests: **334 passed / 2 skipped** before any change,
-**414 passed / 2 skipped** at `e6ccea3`, and **438 passed / 2 skipped** at
-`e22c00b` (46 of the tests are this change's own — 37 on the setup path and 9 on
-streaming publication; no existing test modified).
+**414 passed / 2 skipped** at `e6ccea3`, and **424 passed / 2 skipped** at
+`e27c656` (46 of the tests are this change's own — 37 on the setup path and 9 on
+streaming publication; no existing test modified). The suite total moves with
+the branch, which other agents are also committing to; 46/46 of these tests were
+collected and passing at the tip.
 
 The branch moved under this work: another agent landed
 `refactor(config): single training_data root; untrack all CSVs` and
