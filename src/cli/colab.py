@@ -154,10 +154,14 @@ _INCREMENTAL_SYNC_SECONDS = 30
 # The trainer writes this file last inside a checkpoint directory, so its
 # presence is what distinguishes a finished checkpoint from one mid-write.
 _CHECKPOINT_MANIFEST_NAME = "checkpoint_manifest.json"
-# ``worker_N/checkpoint-<step>/<file>`` is exactly two levels below the worker
-# root, so the incremental listing walks no deeper and stays bounded however
-# large the run's checkpoint, log, and wandb trees grow.
-_CHECKPOINT_LISTING_DEPTH = 2
+# Checkpoints live at
+# ``worker_N/_checkpoints/<model>/<run>_f0/checkpoint-<step>/<file>``, so a
+# checkpoint file is five levels below the worker root.  The walk is bounded at
+# that depth to stay inside the exec budget however large the run's log and
+# wandb trees grow -- an unbounded walk is what timed out on the T4 lane.
+_CHECKPOINT_LISTING_DEPTH = 5
+# The directory holding every checkpoint of a run, directly under a worker.
+_CHECKPOINT_ROOT_NAME = "_checkpoints"
 # Bookkeeping written beside a locally retained checkpoint, recording which
 # remote checkpoint it is and the score that won it the slot.
 _LATEST_BEST_MARKER = "latest_best.json"
@@ -1621,9 +1625,15 @@ class _IncrementalResultSync:
             prefix, max_depth=_CHECKPOINT_LISTING_DEPTH
         ):
             parts = Path(name).relative_to(prefix).parts
-            if len(parts) < 2 or not parts[0].startswith("checkpoint-"):
-                continue
-            checkpoints.setdefault(parts[0], []).append(name)
+            # A checkpoint is any path *below* a directory named checkpoint-*,
+            # wherever the trainer nested it: the model and run-folder levels
+            # above it are not fixed, so match on the directory, not its depth.
+            for index, part in enumerate(parts[:-1]):
+                if part.startswith("checkpoint-"):
+                    checkpoints.setdefault(
+                        Path(*parts[: index + 1]).as_posix(), []
+                    ).append(name)
+                    break
         if not checkpoints:
             return
         if worker in self._held:
