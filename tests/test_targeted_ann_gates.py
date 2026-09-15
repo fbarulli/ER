@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from core.attribute_conflicts import critical_attribute_evaluation
 from core.common import rand_matching_cfg
 from training.rand_matching import (
     _annotate_candidates,
@@ -25,12 +26,39 @@ SETTINGS = {
 }
 
 
-def _info(*, pack=(), volume=(), package_type=(), flavor="") -> dict[str, object]:
+def _info(
+    *,
+    pack=(),
+    volume=(),
+    package_type=(),
+    flavor=(),
+    carbonation=(),
+    sweetener=(),
+    pulp=(),
+) -> dict[str, object]:
+    """Build the record shape the gate actually consumes.
+
+    Two readers meet on this mapping: ``critical_attribute_evaluation`` reads
+    the SET keys (``flavor_set``), while the candidate diagnostics read the
+    scalar ``flavor`` display key. The helper used to declare only a scalar
+    ``flavor`` string, so the gate silently reported the flavor dimension as
+    missing in every case. It now mirrors the real contract for both readers.
+    Optional categorical dimensions default to empty (unknown), so a case only
+    asserts on the evidence it declares.
+    """
+    flavor_values = set(flavor)
     return {
         "pack": set(pack),
         "volume": set(volume),
         "package_type": set(package_type),
-        "flavor": flavor,
+        "flavor": " ".join(sorted(flavor_values)),
+        "flavor_set": flavor_values,
+        "carbonation": set(carbonation),
+        "carbonation_set": set(carbonation),
+        "sweetener": set(sweetener),
+        "sweetener_set": set(sweetener),
+        "pulp": set(pulp),
+        "pulp_set": set(pulp),
     }
 
 
@@ -81,9 +109,20 @@ def test_known_conflicts_are_hard_vetoes(left, right, left_brand, right_brand, r
 
 
 def test_volume_tolerance_is_canonical_and_configurable():
+    # Every critical dimension is declared on both sides so the ONLY thing this
+    # case exercises is the configurable volume tolerance (780 vs 750 is 3.8%,
+    # inside the 5% relative tolerance).
+    common = dict(
+        pack={6},
+        package_type={"bottle"},
+        flavor={"cola"},
+        carbonation={"carbonated"},
+        sweetener={"no_sugar"},
+        pulp={"no_pulp"},
+    )
     gate = targeted_veto_gate(
-        _info(pack={6}, volume={750}),
-        _info(pack={6}, volume={780}),
+        _info(volume={750}, **common),
+        _info(volume={780}, **common),
         sku_brand="Acme",
         candidate_brand="acme",
         exact_gtin=False,
@@ -96,9 +135,27 @@ def test_volume_tolerance_is_canonical_and_configurable():
 
 
 def test_missing_pack_or_volume_is_human_review_not_auto_merge():
+    # The candidate declares every dimension EXCEPT pack, so pack_b is the only
+    # missing evidence and the missingness that routes to review is precisely
+    # the one this test names.
     gate = targeted_veto_gate(
-        _info(pack={12}, volume={750}),
-        _info(pack=(), volume={750}),
+        _info(
+            pack={12},
+            volume={750},
+            package_type={"bottle"},
+            flavor={"cola"},
+            carbonation={"carbonated"},
+            sweetener={"no_sugar"},
+            pulp={"no_pulp"},
+        ),
+        _info(
+            volume={750},
+            package_type={"bottle"},
+            flavor={"cola"},
+            carbonation={"carbonated"},
+            sweetener={"no_sugar"},
+            pulp={"no_pulp"},
+        ),
         sku_brand="Acme",
         candidate_brand="Acme",
         exact_gtin=False,
@@ -107,6 +164,67 @@ def test_missing_pack_or_volume_is_human_review_not_auto_merge():
     assert gate["targeted_gate_decision"] == "defer"
     assert gate["targeted_gate_route"] == "human_review"
     assert gate["targeted_missing_attributes"] == "pack_b"
+    assert gate["targeted_missing_attribute_count"] == 1
+    # Unknown evidence is NOT a conflict, and must not be reported as one.
+    assert gate["targeted_critical_conflicts"] == ""
+    # The audit boolean mirrors the same evaluation: partial evidence cannot
+    # pass a full-evidence predicate.
+    assert gate["targeted_pack_gate_pass"] == 0
+
+
+def test_all_dimensions_known_and_agreeing_is_the_only_auto_merge_path():
+    """The strict audit predicate passes only with complete, agreeing evidence."""
+    full = dict(
+        pack={6},
+        volume={750},
+        package_type={"bottle"},
+        flavor={"cola"},
+        carbonation={"carbonated"},
+        sweetener={"no_sugar"},
+        pulp={"no_pulp"},
+    )
+    gate = targeted_veto_gate(
+        _info(**full),
+        _info(**full),
+        sku_brand="Acme",
+        candidate_brand="Acme",
+        exact_gtin=False,
+        config=SETTINGS,
+    )
+    assert gate["targeted_missing_attributes"] == ""
+    assert gate["targeted_critical_conflicts"] == ""
+    assert gate["targeted_pack_gate_pass"] == 1
+    assert gate["targeted_gate_route"] == "auto_merge"
+
+
+def test_extended_critical_dimensions_conflict_like_pack_and_volume():
+    """carbonation/sweetener/pulp conflicts veto exactly like pack/volume."""
+    base = dict(
+        pack={6},
+        volume={750},
+        package_type={"bottle"},
+        flavor={"cola"},
+        carbonation={"carbonated"},
+        sweetener={"no_sugar"},
+        pulp={"no_pulp"},
+    )
+    for dimension, value, expected in (
+        ("carbonation", {"still"}, "carbonation_mismatch"),
+        ("sweetener", {"sugar"}, "sweetener_mismatch"),
+        ("pulp", {"with_pulp"}, "pulp_mismatch"),
+        ("flavor", {"orange"}, "flavor_mismatch"),
+    ):
+        gate = targeted_veto_gate(
+            _info(**base),
+            _info(**{**base, dimension: value}),
+            sku_brand="Acme",
+            candidate_brand="Acme",
+            exact_gtin=False,
+            config=SETTINGS,
+        )
+        assert gate["targeted_gate_route"] == "reject", dimension
+        assert expected in gate["targeted_gate_reason"], dimension
+        assert expected.split("_")[0] in gate["targeted_critical_conflicts"], dimension
 
 
 def test_exact_gtin_lock_bypasses_conflicts_and_missingness():
@@ -268,3 +386,166 @@ def test_060_override_is_bumped_without_lowering_other_strata():
     assert thresholds["different"] == pytest.approx(0.80)
     assert thresholds["one_missing"] == pytest.approx(0.61)
     assert thresholds["both_missing"] == pytest.approx(0.80)
+
+
+def test_every_hard_no_gate_reason_maps_to_a_known_family():
+    """Every reason the gate can emit on a HARD_NO must be classifiable.
+
+    Only hard_no rows enter the balanced pool, so these are the reasons that
+    must resolve. A new gate_reason string without a matching prefix makes
+    sample_balanced_pairs raise "Unmatched hard-negative gate_reason values"
+    and the whole balanced-pool lane hard-fails on fresh artifacts — which is
+    exactly what the "Pack blocker:" reason did.
+    """
+    from training.sample_balanced_pairs import _reason_type
+
+    hard_no_reasons = {
+        # The composite blocker introduced with the shared critical-attribute
+        # gate: highest-volume hard_no reason in the committed artifact
+        # (87,804 of 135,769 rows) and the one that hard-failed the lane.
+        "Pack blocker: pack size, package type, or volume mismatch",
+        # Legacy single-dimension reasons, still emitted by the tail checks.
+        "No volume overlap",
+        "No pack overlap",
+        "Package type mismatch",
+        "Package material mismatch",
+        "Flavor mismatch: lemon vs orange",
+        # Categorical conflicts arrive as "Critical attribute mismatch: <dims>".
+        "Critical attribute mismatch: flavor",
+        "Critical attribute mismatch: carbonation,sweetener",
+    }
+    for reason in sorted(hard_no_reasons):
+        assert _reason_type(reason) is not None, reason
+
+    # Non-hard_no outcomes never reach the pool classifier, so they are
+    # deliberately NOT required to resolve.
+    for reason in ("Known critical attributes compatible", "Low raw volume confidence"):
+        assert _reason_type(reason) is None, reason
+
+
+def test_targeted_miner_never_emits_a_same_canonical_negative():
+    """A same-canonical pair is a TRUE MATCH, never a label-0 row.
+
+    build_training_data drops exactly those pairs for the baseline negatives
+    and counts them as n_neg_same_canonical_dropped; the targeted miner must
+    apply the same identity rule instead of re-adding them.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from core.attribute_conflicts import canonical_attribute_info
+    from core.hard_negatives import mine_targeted_attribute_negatives
+
+    df = pd.DataFrame(
+        {"title": ["Acme Cola 12 pack 355ml", "Acme Cola 12 pack 355ml"]}
+    )
+    canon_text = "acme cola still sugar"
+    canonical_records = pd.DataFrame(
+        [
+            {
+                "gtin": "A",
+                "canonical": canon_text,
+                "mode_brand": "acme",
+                "mode_flavor": "",
+                "volume_set": "[355]",
+                "pack_set": "[12]",
+                "package_type_set": "[]",
+            },
+            {
+                "gtin": "B",
+                "canonical": canon_text,
+                "mode_brand": "acme",
+                "mode_flavor": "",
+                "volume_set": "[1000]",
+                "pack_set": "[12]",
+                "package_type_set": "[]",
+            },
+        ]
+    )
+    gates = pd.DataFrame(
+        [{"gtin1": "A", "gtin2": "B", "similarity": 0.90, "gate_decision": "hard_no"}]
+    )
+    gtin_to_row = {"A": 0, "B": 1}
+    gtin_to_canon_idx = {"A": 100, "B": 101}
+    canonical_map = {"A": canon_text, "B": canon_text}
+
+    # Sanity: the conflict evaluator DOES see a volume conflict here, so only
+    # the same-canonical guard can prevent the pair from being mined.
+    assert "volume" in critical_attribute_evaluation(
+        canonical_attribute_info(canonical_records.iloc[0].to_dict()),
+        canonical_attribute_info(canonical_records.iloc[1].to_dict()),
+    )["conflicts"]
+
+    guarded, _ = mine_targeted_attribute_negatives(
+        df,
+        gates,
+        canonical_records,
+        gtin_to_row,
+        gtin_to_canon_idx,
+        n_target=10,
+        min_similarity=0.5,
+        canonical_map=canonical_map,
+    )
+    assert len(guarded) == 0
+
+    unguarded, _ = mine_targeted_attribute_negatives(
+        df,
+        gates,
+        canonical_records,
+        gtin_to_row,
+        gtin_to_canon_idx,
+        n_target=10,
+        min_similarity=0.5,
+    )
+    assert len(unguarded) == 2  # both directions — the label inversion
+
+
+def test_targeted_miner_respects_the_gate_volume_tolerance():
+    """A within-tolerance volume gap is agreement, not a mineable conflict."""
+    import pandas as pd
+
+    from core.hard_negatives import mine_targeted_attribute_negatives
+
+    df = pd.DataFrame({"title": ["Acme Juice 1L", "Acme Juice 1L"]})
+    base = {
+        "canonical": "acme juice still",
+        "mode_brand": "acme",
+        "mode_flavor": "",
+        "pack_set": "[6]",
+        "package_type_set": "[]",
+    }
+    canonical_records = pd.DataFrame(
+        [
+            {**base, "gtin": "A", "volume_set": "[480]"},
+            {**base, "gtin": "B", "volume_set": "[500]"},
+        ]
+    )
+    gates = pd.DataFrame(
+        [{"gtin1": "A", "gtin2": "B", "similarity": 0.90, "gate_decision": "proceed"}]
+    )
+    gtin_to_row = {"A": 0, "B": 1}
+    gtin_to_canon_idx = {"A": 100, "B": 101}
+
+    strict, _ = mine_targeted_attribute_negatives(
+        df,
+        gates,
+        canonical_records,
+        gtin_to_row,
+        gtin_to_canon_idx,
+        n_target=10,
+        min_similarity=0.5,
+        volume_relative_tolerance=0.0,
+    )
+    assert len(strict) == 2  # 480 vs 500 is a conflict at exact-match tolerance
+
+    tolerant, _ = mine_targeted_attribute_negatives(
+        df,
+        gates,
+        canonical_records,
+        gtin_to_row,
+        gtin_to_canon_idx,
+        n_target=10,
+        min_similarity=0.5,
+        volume_relative_tolerance=0.05,  # the gate's own tolerance
+    )
+    assert len(tolerant) == 0

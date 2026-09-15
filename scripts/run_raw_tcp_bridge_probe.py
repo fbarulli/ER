@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
+# Paths come from the shared contract (core.common -> config/paths.yaml), never
+# from a __file__/__parents__ offset: a magic parent count breaks silently when
+# the script moves. The repo's src/ is put on the path from the same contract.
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+from core.common import TRAIN_ROOT  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[1]
 SESSION = "euromonitor-hpo-cpu-test"
 REMOTE_SCRIPT = "/tmp/colab_tailscale_userspace.sh"
 
 
 def _env() -> dict[str, str]:
     values = {}
-    for line in (ROOT / ".env").read_text(encoding="utf-8").splitlines():
+    for line in (TRAIN_ROOT / ".env").read_text(encoding="utf-8").splitlines():
         key, sep, value = line.partition("=")
         if sep:
             values[key] = value.strip().strip('"').strip("'")
@@ -35,7 +41,7 @@ def main() -> int:
     secrets = {values["TAILSCALE_AUTH_KEY"]}
     subprocess.run(
         ["colab", "upload", "-s", SESSION,
-         str(ROOT / "scripts/colab_tailscale_userspace.sh"), REMOTE_SCRIPT],
+         str(TRAIN_ROOT / "scripts/colab_tailscale_userspace.sh"), REMOTE_SCRIPT],
         check=True,
     )
     bridge_cell = (

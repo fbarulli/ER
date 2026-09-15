@@ -106,15 +106,28 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
         carbonation.add("carbonated")
 
     pulp: set[str] = set()
+    # Only unambiguous phrasings are accepted here. A "pulp <value>" enum
+    # branch used to exist and was REMOVED (audit 2026-09-15) because the
+    # normalizer folds punctuation away, making an enum spelling
+    # ("pulp_no", "pulp:0") textually identical to prose. Two real
+    # inversions proved this: "with Added Pulp, No Sugar Added" was
+    # extracted as no_pulp (the exact opposite of its meaning) and the
+    # volume fragment "pulp 0.33l" was read as "pulp 0". A census of 61,529
+    # live titles shows the token after "pulp" is dominated by sizes
+    # (16/1l/100/750) and by "free" (65), with no enum spellings present, so
+    # the branch bought no recall and only risked label inversion. Absence of
+    # a recognized phrase now stays unknown instead of inventing a claim.
     no_pulp = bool(
         re.search(
-            r"\b(?:no pulp|without pulp|pulp free|free of pulp|pulp 0)\b",
+            r"\b(?:no pulp|without pulp|pulp free|free of pulp)\b",
             text,
         )
-        or re.search(r"\bpulp\s+(?:no|none)\b", text)
     )
     with_pulp = bool(
-        re.search(r"\b(?:with (?:extra )?pulp|contains pulp|pulp yes)\b", text)
+        re.search(
+            r"\b(?:with (?:extra )?pulp|contains pulp|pulp yes)\b",
+            text,
+        )
     )
     if no_pulp:
         pulp.add("no_pulp")
@@ -135,6 +148,38 @@ def sweetener_conflict(left: set[str], right: set[str]) -> bool:
     return bool(
         ("sugar" in left and right & negative)
         or ("sugar" in right and left & negative)
+    )
+
+
+def volumes_compatible(
+    left_values: object,
+    right_values: object,
+    *,
+    volume_relative_tolerance: float = 0.0,
+    volume_absolute_tolerance_ml: float = 0.0,
+) -> bool:
+    """Return whether any left/right volume pair is within the shared tolerance.
+
+    SSOT (audit 2026-09-15): this predicate was re-implemented in several
+    lanes with different answers — the training gate used a relative
+    tolerance, the conflict miner used exact set intersection, and the
+    calibration veto used a separate helper. Two lanes disagreeing about
+    whether the same volumes are compatible is exactly how a pair the gate
+    labels ``proceed`` gets emitted as a hard negative. Absent evidence on
+    either side is not a conflict.
+    """
+    left = set(left_values or set())
+    right = set(right_values or set())
+    if not left or not right:
+        return True
+    return any(
+        abs(float(a) - float(b))
+        <= max(
+            float(volume_absolute_tolerance_ml),
+            float(volume_relative_tolerance) * max(abs(float(a)), abs(float(b))),
+        )
+        for a in left
+        for b in right
     )
 
 
@@ -159,4 +204,5 @@ __all__ = [
     "extract_flavor_tokens",
     "normalized_attribute_text",
     "sweetener_conflict",
+    "volumes_compatible",
 ]

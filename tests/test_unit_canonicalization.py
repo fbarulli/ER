@@ -45,7 +45,12 @@ def test_pipeline_canonicalizes_title_and_attribute_units() -> None:
 
 def test_structured_tokens_are_canonical_before_encoder_input() -> None:
     info = info_from_sets([236.588], ["12"])
-    assert append_text("water", info) == "water volume_ml_237 pack_qty_12"
+    # The structured channel now emits a stable per-field marker before each
+    # value group, so field boundaries survive the encoder's tokenizer.
+    assert (
+        append_text("water", info)
+        == "water [FIELD_VOLUME] volume_ml_237 [FIELD_PACK_SIZE] pack_qty_12"
+    )
 
 
 def test_canonicalized_equivalent_volume_does_not_create_conflict() -> None:
@@ -75,7 +80,41 @@ def test_bottle_and_can_are_first_class_disjoint_attributes() -> None:
 
 def test_package_type_reaches_the_shared_model_text_representation() -> None:
     info = info_from_sets([355], [6], ["bottle"])
-    assert append_text("Acme soda", info).endswith("package_type_bottle")
+    text = append_text("Acme soda", info)
+    assert "[FIELD_PACKAGE_TYPE]" in text
+    assert text.endswith("package_type_bottle")
+
+
+def test_structured_field_markers_are_grouped_and_deterministic() -> None:
+    """Markers appear once per populated field, in a stable field order."""
+    info = info_from_sets(
+        [355, 330],
+        [6],
+        ["bottle"],
+        flavor={"cola", "lemon"},
+        carbonation={"carbonated"},
+        sweetener={"no_sugar"},
+        pulp={"no_pulp"},
+    )
+    marker_order = [
+        token
+        for token in append_text("Acme soda", info).split()
+        if token.startswith("[FIELD_")
+    ]
+    assert marker_order == [
+        "[FIELD_VOLUME]",
+        "[FIELD_PACK_SIZE]",
+        "[FIELD_PACKAGE_TYPE]",
+        "[FIELD_FLAVOR]",
+        "[FIELD_CARBONATION]",
+        "[FIELD_SWEETENER_DIET]",
+        "[FIELD_PULP]",
+    ]
+    # A field with no evidence contributes no marker, and repeated calls (which
+    # iterate sets) must produce byte-identical text.
+    empty_pulp = info_from_sets([355], [6], ["bottle"], flavor={"cola"})
+    assert "[FIELD_PULP]" not in append_text("Acme soda", empty_pulp)
+    assert len({append_text("Acme soda", info) for _ in range(25)}) == 1
 
 
 @pytest.mark.parametrize(

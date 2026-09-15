@@ -64,22 +64,33 @@ def ranking_at_k_by_query(
         raise ValueError("ranking inputs must be non-empty and aligned")
     if not np.isin(labels, (0, 1)).all():
         raise ValueError("ranking metric labels must be binary")
+    # Same argument contract as ranking_at_k: an empty or non-positive K is a
+    # caller bug. Rejecting it here matters because the alternative is a
+    # confident-looking miss — hits_by_k is only populated per requested K, so
+    # an empty ks used to return hits_at_1 == 0.0 for a population whose top
+    # candidate IS relevant.
+    if not ks:
+        raise ValueError("ranking metrics require at least one K")
+    if any(k < 1 for k in ks):
+        raise ValueError(f"K must be >= 1, got {min(ks)}")
 
     result: dict[str, float] = {}
     hits_by_k: dict[int, list[int]] = {k: [] for k in ks}
     precision_by_k: dict[int, list[float]] = {k: [] for k in ks}
+    top1_hits: list[int] = []
     for query in pd_unique(query_ids):
         mask = query_ids == query
         group = labels[mask][np.argsort(-scores[mask], kind="stable")]
         if not group.any():
             continue
+        top1_hits.append(int(group[0] == 1))
         for k in ks:
             top = group[:k]
             hits_by_k[k].append(int(top.sum() > 0))
             precision_by_k[k].append(float(top.mean()) if len(top) else 0.0)
-    result["hits_at_1"] = (
-        float(np.mean(hits_by_k[1])) if 1 in hits_by_k and hits_by_k[1] else 0.0
-    )
+    # Hits@1 is defined on every query holding a relevant candidate, so it no
+    # longer depends on 1 happening to be one of the requested K values.
+    result["hits_at_1"] = float(np.mean(top1_hits)) if top1_hits else 0.0
     for k in ks:
         hits = hits_by_k[k]
         result[f"precision_at_{k}"] = float(np.mean(precision_by_k[k])) if hits else 0.0

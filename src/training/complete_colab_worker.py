@@ -12,7 +12,7 @@ import sys
 
 import pandas as pd
 
-from core.common import trace_artifact, training_cfg
+from core.common import TRAIN_ROOT, trace_artifact, training_cfg
 from training.validation_inference import resolve_best_checkpoint, threshold_assignment_metrics
 
 
@@ -139,7 +139,11 @@ def complete_worker(
             "--batch-size", str(cfg.batch_size),
         ]
         print(f"[validation-inference] SKU retrieval: {' '.join(command)}", flush=True)
-        subprocess.run(command, cwd=Path(__file__).resolve().parents[2], env=os.environ.copy(), check=True)
+        # The subprocess cwd is the resolved project root from the shared path
+        # contract, never a __file__/__parents__ offset (owner directive
+        # 2026-09-15): a magic parent count silently breaks the moment this
+        # module moves or is installed as a package.
+        subprocess.run(command, cwd=TRAIN_ROOT, env=os.environ.copy(), check=True)
         trace_artifact(
             "validation_inference", predictions_path,
             producer="training.complete_colab_worker",

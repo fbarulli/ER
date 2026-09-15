@@ -53,7 +53,6 @@ from core.attribute_conflicts import (
     critical_attribute_evaluation,
     flavor_overlap_metrics,
     normalized_flavor_tokens,
-    pack_gate,
     sku_attribute_info,
 )
 from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
@@ -226,8 +225,9 @@ def targeted_veto_gate(
     """Classify a candidate using the shared critical-attribute contract.
 
     Any explicit conflict hard-blocks a non-exact match. Missing evidence is
-    unknown and routes to review. ``pack_gate`` is retained as the public
-    boolean audit field but now evaluates every critical dimension.
+    unknown and routes to review. ``targeted_pack_gate_pass`` is retained as
+    the public boolean audit field and mirrors the full critical-attribute
+    outcome computed below (all dimensions explicit and agreeing).
     """
     settings = config or rand_matching_cfg()["targeted_veto_gates"]
     left_pack = set(sku_info.get("pack") or set())
@@ -247,12 +247,13 @@ def targeted_veto_gate(
         volume_relative_tolerance=relative_tolerance,
         volume_absolute_tolerance_ml=absolute_tolerance_ml,
     )
-    pack_gate_pass = pack_gate(
-        sku_info,
-        candidate_info,
-        volume_relative_tolerance=relative_tolerance,
-        volume_absolute_tolerance_ml=absolute_tolerance_ml,
-    )
+    # SSOT (audit 2026-09-15): this audit column used to call a second
+    # ``pack_gate`` that lived in core.attribute_conflicts and answered the
+    # opposite way from the training-label gate for the same input. It is now
+    # derived from the SAME evaluation object that already drives the veto and
+    # defer routing below, so the reported boolean can no longer disagree with
+    # the decision it claims to audit.
+    pack_gate_pass = not critical["conflicts"] and not critical["unknown"]
 
     pack_conflict = bool(left_pack and right_pack and not (left_pack & right_pack))
     volume_conflict = bool(

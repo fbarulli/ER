@@ -65,6 +65,9 @@ def mine_targeted_attribute_negatives(
     existing: np.ndarray | None = None,
     n_target: int,
     min_similarity: float,
+    volume_relative_tolerance: float = 0.0,
+    volume_absolute_tolerance_ml: float = 0.0,
+    canonical_map: dict[str, str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mine same-brand/name critical-attribute negatives from gate evidence.
 
@@ -72,6 +75,25 @@ def mine_targeted_attribute_negatives(
     Jaccard score. The threshold is strict (``score > min_similarity``).
     Both directions are emitted as source-SKU -> other-canonical pairs and
     all critical conflicts come from the same evaluator used at inference.
+
+    SAME-CANONICAL GUARD (audit 2026-09-15): two GTINs can resolve to the
+    SAME canonical item. ``build_training_data`` drops exactly those pairs
+    with the documented rule "Those rows are true matches and must never be
+    emitted as label-0 pairs", and reports the count as
+    ``n_neg_same_canonical_dropped``. The gate's ``similarity`` score does not
+    know about that identity, so without this guard the miner re-added 154 of
+    the 350 committed targeted negatives — 44% — as label-0 pairs whose two
+    GTINs share byte-identical canonical text, giving one anchor/target pair
+    both label 1 and label 0. Passing ``canonical_map`` (gtin -> canonical
+    string) applies the same identity rule here.
+
+    SSOT (audit 2026-09-15): the conflict verdict MUST use the same volume
+    tolerance as the training-label gate. Defaulting to exact equality here
+    made the two lanes disagree on the same pair — a pair whose volumes sit
+    inside the gate's ``vol_tolerance`` was labelled ``proceed`` by the gate
+    (a positive) while this miner emitted it as a hard negative. Live check
+    found exactly such a pair (`8002267004212` / `8002267025644`: identical
+    canonical text, volumes 480 vs 500 = 4.0% <= 0.05, gate ``proceed``).
     """
     if n_target <= 0:
         return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
@@ -105,6 +127,12 @@ def mine_targeted_attribute_negatives(
             continue
         if left_gtin not in gtin_to_canon_idx or right_gtin not in gtin_to_canon_idx:
             continue
+        # Same canonical item => true match, never a label-0 pair.
+        if canonical_map is not None:
+            left_canon = canonical_map.get(left_gtin)
+            right_canon = canonical_map.get(right_gtin)
+            if left_canon is not None and left_canon == right_canon:
+                continue
         left_record, right_record = records[left_gtin], records[right_gtin]
         left_row, right_row = gtin_to_row[left_gtin], gtin_to_row[right_gtin]
         left_brand = str(left_record.get("mode_brand", "")).strip().casefold()
@@ -118,6 +146,8 @@ def mine_targeted_attribute_negatives(
         evaluation = critical_attribute_evaluation(
             canonical_attribute_info(left_record),
             canonical_attribute_info(right_record),
+            volume_relative_tolerance=float(volume_relative_tolerance),
+            volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
         )
         if not evaluation["conflicts"]:
             continue
@@ -153,6 +183,8 @@ def mine_attribute_conflict_negatives(
     n_target: int = 0,
     cosine_lo: float = 0.45,
     cosine_hi: float = 0.95,
+    volume_relative_tolerance: float = 0.0,
+    volume_absolute_tolerance_ml: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mine additional same-brand/category pairs that disagree on attributes.
 
@@ -161,6 +193,9 @@ def mine_attribute_conflict_negatives(
     the canonical brand/type, requires a volume, pack, or flavor conflict, and
     keeps only high-cosine pairs. It therefore expands coverage of the exact
     attribute-conflict population without relabeling the original 6,051 rows.
+
+    ``volume_*_tolerance`` must be the training gate's own tolerance; see the
+    SSOT note on :func:`mine_targeted_attribute_negatives`.
     """
     if n_target <= 0 or len(df) == 0:
         return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
@@ -237,7 +272,12 @@ def mine_attribute_conflict_negatives(
                 or product_names.get(source_gtin) != product_names.get(target_gtin)
             ):
                 continue
-            if not attribute_conflict_types(source, target):
+            if not attribute_conflict_types(
+                source,
+                target,
+                volume_relative_tolerance=float(volume_relative_tolerance),
+                volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
+            ):
                 continue
             target_row = canon_idx[target_gtin]
             score = float(np.dot(emb[source_row], emb[target_row]))

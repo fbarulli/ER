@@ -1071,6 +1071,13 @@ def _main_inner(_mlf, _wandb) -> None:
             n_target=int(attr_cfg["target"]),
             cosine_lo=_attr_lo,
             cosine_hi=_attr_hi,
+            # The conflict verdict must use the training gate's own volume
+            # tolerance, or this miner can emit a pair the gate already
+            # labelled compatible as a hard negative (see the SSOT note in
+            # core.hard_negatives).
+            volume_relative_tolerance=float(
+                load_config()["gate"]["vol_tolerance"]
+            ),
         )
     elif attribute_conflict_enabled:
         _attr_neg = np.empty((0, 2), dtype=int)

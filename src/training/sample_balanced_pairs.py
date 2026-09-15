@@ -50,6 +50,14 @@ DEFAULT_SWEEP_OUTPUT = Path("results/training/balanced_pairs_sample_threshold_sw
 SWEEP_THRESHOLDS = (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90)
 
 REASON_PREFIX_TO_TYPE = (
+    # "Pack blocker…" is the training gate's highest-volume hard_no reason
+    # (87,804 of 135,769 committed rows). It was introduced with the shared
+    # critical-attribute gate without being registered here, so this script
+    # raised "Unmatched hard-negative gate_reason values" for 7,967 rows and
+    # the whole balanced-pool lane hard-failed on the current artifacts.
+    # It is a composite reason covering pack/package-type/volume, so it maps
+    # to the composite family rather than to any single dimension.
+    ("Pack blocker:", "pack_blocker"),
     ("No volume overlap", "volume"),
     ("No pack overlap", "pack"),
     ("Flavor mismatch:", "flavor"),

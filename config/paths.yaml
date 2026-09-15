@@ -137,6 +137,15 @@ layouts:
     owner: training.train
     template: "logs/{run_tag}/{name}"
     fields: {run_tag: str, name: str}
+  # The ONE consolidated pipeline trace (owner: core.tracing). Every stage of
+  # data_prep and training appends its steps here instead of scattering them
+  # across results/logs/*.csv. fields is deliberately EMPTY: the destination is
+  # fixed, because a splittable trace is exactly what this layout prevents.
+  training_trace:
+    root: results
+    owner: core.tracing
+    template: "logs/training_trace.csv"
+    fields: {}
   resume_pointer:
     root: results
     owner: training.dvc_store

@@ -21,6 +21,7 @@ Public surface (old DATA_PIPE imports keep working):
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter
@@ -46,7 +47,20 @@ from core.schemas import (
     check_verdict_map,
 )
 from ner.ner_product_attributes import extract_title_attributes
-from core.critical_attributes import extract_critical_claims
+from core.critical_attributes import (
+    categorical_conflict,
+    extract_critical_claims,
+    volumes_compatible,
+)
+from core.tracing import count_rows, trace_path
+
+# Per-entity rows are capped so one stage can never explode the consolidated
+# trace. The cap is announced in the file itself (a `_truncated` marker row),
+# and aggregate counts are always exact — only the per-entity lists are
+# bounded. 200 keeps the trace inspectable by hand while still showing every
+# reason and both sides of a representative slice.
+GATE_ENTITY_ROW_CAP = 200
+PAIR_ENTITY_ROW_CAP = 200
 
 # ============================================================================
 # EXTRACTION
@@ -355,13 +369,28 @@ def pack_gate(
     *,
     volume_relative_tolerance: float = 0.0,
     volume_absolute_tolerance_ml: float = 0.0,
+    trust_threshold: float | None = None,
 ) -> bool:
     """Return whether known package identity attributes are compatible.
 
     ``score`` is accepted for a stable gate-call interface but is deliberately
     not used: a high semantic score cannot override a known pack, package-type,
-    or volume conflict.  Empty values remain unknown and are handled by the
-    existing confidence/fallback logic.
+    or volume conflict.
+
+    EVIDENCE TRUST (audit 2026-09-15). A parsed attribute is only comparable
+    when the parser reported enough confidence to be believed. Passing
+    ``trust_threshold`` makes the volume/pack comparison evidence-aware: a
+    side below the bar is treated exactly like a missing side, so it stays
+    *unknown* and reaches the confidence/fallback lane instead of being
+    fabricated into a hard rejection. Callers that leave it ``None`` keep the
+    pure structural semantics used by the I/O lanes.
+
+    PACK SEMANTICS: a canonical keeps EVERY pack count observed across its
+    titles, so a multi-title canonical legitimately holds ``{12, 24}``. A
+    shared count is therefore positive evidence of compatibility and only a
+    genuinely disjoint pair conflicts — the rule the canonical writer
+    documents ("gate logic intersects them"). Requiring set equality here
+    would reject a `{12, 24}` canonical against a `{12}` one that shares 12.
     """
     del score
 
@@ -383,31 +412,56 @@ def pack_gate(
             return set(value)
         return {value}
 
-    for left_names, right_names in (
-        (("pack_size", "pack_set", "pack_qty"), ("pack_size", "pack_set", "pack_qty")),
-        (("package_type", "package_type_set"), ("package_type", "package_type_set")),
-    ):
-        left = _set(_value(sku_a, *left_names))
-        right = _set(_value(sku_b, *right_names))
-        if left and right and left != right:
+    def _trusted(obj: object, *names: str) -> bool:
+        """Whether the named confidence field clears the caller's bar.
+
+        An absent field means the lane never carried a confidence observation;
+        the caller's own confidence lane owns that case, so it is not second
+        guessed here.
+        """
+        raw = _value(obj, *names)
+        if raw is None or raw == "":
+            return True
+        if trust_threshold is None:
+            return True
+        try:
+            return float(raw) >= float(trust_threshold)
+        except (TypeError, ValueError):
             return False
 
-    left_volume = _set(_value(sku_a, "volume", "volume_set", "volume_ml"))
-    right_volume = _set(_value(sku_b, "volume", "volume_set", "volume_ml"))
-    if left_volume and right_volume and not any(
-        abs(float(a) - float(b))
-        <= max(
-            float(volume_absolute_tolerance_ml),
-            float(volume_relative_tolerance) * max(abs(float(a)), abs(float(b))),
-        )
-        for a in left_volume
-        for b in right_volume
+    # PACK COUNT: shared evidence agrees; disjoint counts conflict.
+    left_pack = _set(_value(sku_a, "pack_size", "pack_set", "pack_qty"))
+    right_pack = _set(_value(sku_b, "pack_size", "pack_set", "pack_qty"))
+    if (
+        left_pack
+        and right_pack
+        and not (left_pack & right_pack)
+        and _trusted(sku_a, "pack_confidence")
+        and _trusted(sku_b, "pack_confidence")
     ):
         return False
 
-    def _tokens(obj: object) -> set[str]:
-        raw = _value(obj, "canonical") or ""
-        return {part.casefold() for token in str(raw).split() for part in token.split("_")}
+    # PACKAGE TYPE: disjoint categorical evidence conflicts.
+    left_type = _set(_value(sku_a, "package_type", "package_type_set"))
+    right_type = _set(_value(sku_b, "package_type", "package_type_set"))
+    if left_type and right_type and not (left_type & right_type):
+        return False
+
+    left_volume = _set(_value(sku_a, "volume", "volume_set", "volume_ml"))
+    right_volume = _set(_value(sku_b, "volume", "volume_set", "volume_ml"))
+    if (
+        left_volume
+        and right_volume
+        and _trusted(sku_a, "volume_confidence")
+        and _trusted(sku_b, "volume_confidence")
+        and not volumes_compatible(
+            left_volume,
+            right_volume,
+            volume_relative_tolerance=volume_relative_tolerance,
+            volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+        )
+    ):
+        return False
 
     def _claim_set(obj: object, dimension: str) -> set[str]:
         explicit = _value(obj, f"{dimension}_set")
@@ -419,16 +473,10 @@ def pack_gate(
     for dimension in ("carbonation", "sweetener", "pulp"):
         left = _claim_set(sku_a, dimension)
         right = _claim_set(sku_b, dimension)
-        if left and right:
-            if dimension == "sweetener":
-                conflict = (
-                    ("sugar" in left and bool(right & {"no_sugar", "diet"}))
-                    or ("sugar" in right and bool(left & {"no_sugar", "diet"}))
-                )
-            else:
-                conflict = not bool(left & right)
-            if conflict:
-                return False
+        if left and right and categorical_conflict(
+            dimension, {dimension: left}, {dimension: right}
+        ):
+            return False
     return True
 
 
@@ -466,6 +514,7 @@ def three_way_gate(
         attrs1,
         attrs2,
         volume_relative_tolerance=float(vol_tolerance),
+        trust_threshold=float(raw_conf_threshold),
     ):
         return GateResult(
             decision="hard_no",
@@ -1488,6 +1537,24 @@ def run_within_brand_pipeline(
             f"grouped by product",
             flush=True,
         )
+    # CONSOLIDATED TRACE (§gtin-guard): the guard is where identity dies, so
+    # both populations are recorded with the reason that removed them.
+    from core.tracing import TraceRun
+
+    trace = TraceRun("data_prep")
+    trace.add(
+        "gtin_guard",
+        "identity_claims_evaluated",
+        in_count=n_before,
+        out_count=len(df_full),
+        reason="rows keep identity only with a present, GS1-valid barcode",
+        detail={
+            "gtin_missing_or_nan": int((~gtin_valid).sum()),
+            "gs1_checksum_failed": n_checksum_dropped,
+            "rows_retained": int(len(df_full)),
+        },
+        source="raw export",
+    )
 
     # Group by GTIN
     grouped = (
@@ -1550,7 +1617,10 @@ def run_within_brand_pipeline(
     # GATE VISIBILITY (owner directive 2026-09-07): every gate call logs
     # exactly what it SAW (both sides' volume/pack/flavor + confidences)
     # next to what it DECIDED — auditable inputs→outputs, rewritten every
-    # run. Full census, not a sample: the whole point is no invisibility.
+    # run. Since 2026-09-15 these rows land in the ONE consolidated trace
+    # (core.tracing) instead of a per-stage results/logs CSV, so a decision
+    # and its readback are never in two places. Full census, not a sample:
+    # the whole point is no invisibility.
     gate_vis = []
     # VECTORIZATION RULING (audit close, 2026-09-10): this per-pair Python
     # loop is deliberately kept scalar. "Optimize and vectorize wherever
@@ -1652,20 +1722,93 @@ def run_within_brand_pipeline(
 
     atomic_write_csv(df_canon, RESULTS / F["canonical_records"], index=False)
     atomic_write_csv(results_df, RESULTS / F["gate_results"], index=False)
-    # gate visibility: rewritten EVERY run (single source, full census)
-    vis_dir = RESULTS / "logs"
-    vis_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_csv(
-        pd.DataFrame(gate_vis).sort_values(
-            ["gtin1", "gtin2"], kind="stable"
-        ),
-        vis_dir / "gate_visibility.csv",
-        index=False,
+    # ── CONSOLIDATED TRACE: gate stage ─────────────────────────────────────
+    # One CSV carries the whole story: run-scope funnels (candidate census →
+    # decision census) followed by the per-pair readback, capped with an
+    # explicit truncation marker so a partial entity list can never look
+    # complete. Replaces the former results/logs/gate_visibility.csv.
+    gate_frame = (
+        pd.DataFrame(gate_vis).sort_values(["gtin1", "gtin2"], kind="stable")
+        if gate_vis
+        else pd.DataFrame()
     )
-    vis_counts = pd.DataFrame(gate_vis)["decision"].value_counts().to_dict()
+    vis_counts = (
+        gate_frame["decision"].value_counts().to_dict() if len(gate_frame) else {}
+    )
+    vis_reasons = (
+        gate_frame["reason"].value_counts().to_dict() if len(gate_frame) else {}
+    )
+    trace.add(
+        "gate",
+        "candidates_gated",
+        in_count=len(candidate_pairs),
+        out_count=len(results_df),
+        reason="every same-brand pair receives exactly one decision; none is dropped",
+        detail={"decisions": {str(k): int(v) for k, v in vis_counts.items()}},
+        source="canonical_records.csv (in-memory frame)",
+    )
+    for decision in ("hard_no", "fallback", "proceed"):
+        subset = gate_frame[gate_frame["decision"] == decision] if len(gate_frame) else gate_frame
+        trace.add(
+            "gate",
+            f"decision_{decision}",
+            scope="group",
+            in_count=len(candidate_pairs),
+            out_count=int(len(subset)),
+            reason=f"gate_decision == {decision}",
+            detail={"reasons": count_rows(subset["reason"]) if len(subset) else []},
+            source="gate_results.csv",
+        )
+    if len(gate_frame):
+        trace.add(
+            "gate",
+            "decision_reasons",
+            scope="group",
+            in_count=int(len(gate_frame)),
+            out_count=int(len(vis_reasons)),
+            reason="reason census over every decision, not just hard_no",
+            detail={"reasons": count_rows(gate_frame["reason"], limit=20)},
+            source="gate_results.csv",
+        )
+        # Full per-pair readback: exactly what the gate SAW on both sides
+        # (volume/pack/package sets + their confidences and consistency) next
+        # to what it DECIDED and the similarity downstream mining bands on.
+        # The inputs are JSON so one cell stays machine-readable.
+        trace.add_entities(
+            "pair_decision",
+            list(gate_frame.itertuples(index=False)),
+            key_of=lambda r: f"{r.gtin1}|{r.gtin2}",
+            reason_of=lambda r: r.decision,
+            detail_of=lambda r: json.dumps(
+                {
+                    "reason": str(r.reason),
+                    "similarity": round(float(r.jaccard_short_tokens), 6),
+                    "volume_a": list(r.vol_set1),
+                    "volume_b": list(r.vol_set2),
+                    "volume_confidence_a": float(r.vol_conf1),
+                    "volume_confidence_b": float(r.vol_conf2),
+                    "volume_consistency_a": float(r.vol_consist1),
+                    "volume_consistency_b": float(r.vol_consist2),
+                    "pack_a": list(r.pack_set1),
+                    "pack_b": list(r.pack_set2),
+                    "pack_confidence_a": float(r.pack_conf1),
+                    "pack_confidence_b": float(r.pack_conf2),
+                    "package_type_a": list(r.package_types1),
+                    "package_type_b": list(r.package_types2),
+                    "package_material_a": list(r.package_materials1),
+                    "package_material_b": list(r.package_materials2),
+                    "flavor_a": str(r.flavor1),
+                    "flavor_b": str(r.flavor2),
+                },
+                sort_keys=True,
+            ),
+            source="gate_results.csv",
+            limit=GATE_ENTITY_ROW_CAP,
+        )
+    trace.write()
     print(
-        f"[gate-visibility] {len(gate_vis):,} gate calls logged -> "
-        f"results/logs/gate_visibility.csv | decisions: {vis_counts}",
+        f"[trace] data_prep steps written -> {trace_path()} | "
+        f"gate decisions: {vis_counts}",
         flush=True,
     )
 
@@ -1885,6 +2028,12 @@ def build_training_data(
             existing=neg,
             n_target=int(targeted_cfg["target"]),
             min_similarity=float(targeted_cfg["min_similarity"]),
+            # Same volume tolerance the training-label gate uses, so a pair the
+            # gate calls compatible can never be mined here as a conflict.
+            volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
+            # Same canonical-identity rule the baseline negative lane already
+            # applies: a same-canonical pair is a true match, not a label-0 row.
+            canonical_map=canon_map,
         )
         if bool(targeted_cfg["same_product_name"])
         else (np.empty((0, 2), dtype=int), np.empty((0,), dtype=float))
@@ -1933,19 +2082,10 @@ def build_training_data(
         f"> {float(targeted_cfg['min_similarity']):.2f}",
         flush=True,
     )
-    _resolution_log = RESULTS / "logs"
-    _resolution_log.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([stats]).to_csv(
-        _resolution_log / "negative_resolution_manifest.csv",
-        index=False,
-        mode="w",
-    )
     # ── EXACT MODEL PAYLOAD DUMP (owner directive 2026-09-07) ──────────
-    # Every pair the model trains on, with the LITERAL texts it ingests —
-    # no sampling, no summarization: the full payload is auditable. Written
-    # to results/logs/payload_pairs.csv, rewritten on every call.
-    _vis_dir = RESULTS / "logs"
-    _vis_dir.mkdir(parents=True, exist_ok=True)
+    # Every pair the model trains on, with the LITERAL texts it ingests.
+    # The rows are recorded in the ONE consolidated trace (core.tracing) below,
+    # replacing the former per-stage payload_pairs.csv.
     _rows = []
     for i, j in pos:
         _rows.append(
@@ -1983,17 +2123,11 @@ def build_training_data(
                 "text_b": payload[j],
             }
         )
-    pd.DataFrame(_rows).to_csv(_vis_dir / "payload_pairs.csv", index=False)
     _kinds = {
         "pos": int(len(pos)),
         "neg_hard": int(len(neg)),
         "neg_targeted_attribute": int(len(targeted_attribute_neg)),
     }
-    print(
-        f"[payload-visibility] {len(_rows):,} pairs dumped -> "
-        f"results/logs/payload_pairs.csv | {_kinds}",
-        flush=True,
-    )
     # BOUNDARY CONTRACT (lib.schemas.TrainingData): payload/row_bc locked,
     # every pos/neg index in range, gtin_to_row targets valid — the bundle
     # crosses into src/training/train + src/training/training; a shape break must die
@@ -2011,3 +2145,144 @@ def build_training_data(
         stats=stats,
     )
     return _bundle.model_dump()
+
+    # ── CONSOLIDATED TRACE: pairs + mining funnel ──────────────────────────
+    # The former per-stage files (negative_resolution_manifest.csv,
+    # payload_pairs.csv) folded into the ONE trace (core.tracing). Stage 2
+    # appends to stage 1's rows, so the file reads as one continuous flow.
+    from core.tracing import TraceRun
+
+    pair_trace = TraceRun("pairs")
+    pair_trace.add(
+        "positives",
+        "sku_to_canonical",
+        scope="group",
+        in_count=int(len(cand_pos)),
+        out_count=int(len(pos)),
+        reason="a row with a resolvable canonical and non-empty model text is a positive",
+        detail={
+            "rows": int(len(df)),
+            "sku_with_canonical": int(len(cand_pos)),
+            "dropped_empty_sku_text": int(len(empty_sku)),
+            "dropped_empty_canon_text": int(len(empty_canon_idx)),
+            "canonicals": int(len(canon_gtins)),
+        },
+        source="canonical_records.csv",
+    )
+    pair_trace.add(
+        "negatives",
+        "gate_hard_no_band",
+        scope="group",
+        in_count=int(len(gates)),
+        out_count=int(len(neg_gates)),
+        reason=(
+            "hard_no with similarity >= the mining threshold; same-canonical "
+            "pairs are true matches and are excluded here"
+        ),
+        detail={
+            "hard_no_and_in_band": int(hard_no_band.sum()),
+            "dropped_same_canonical": int((hard_no_band & same_canonical).sum()),
+            "similarity_threshold": float(thr_neg),
+            "both_directions": int(len(neg_gates) * 2),
+        },
+        source="gate_results.csv",
+    )
+    pair_trace.add(
+        "negatives",
+        "index_resolution",
+        scope="group",
+        in_count=int(len(neg_gates) * 2),
+        out_count=int(len(neg)),
+        reason="both endpoints must resolve to a payload row index",
+        detail={
+            "forward_resolved": int(len(fwd)),
+            "reverse_resolved": int(len(rev)),
+            "forward_source_unresolved": n_forward_source_unresolved,
+            "forward_target_unresolved": n_forward_target_unresolved,
+            "reverse_source_unresolved": n_reverse_source_unresolved,
+            "reverse_target_unresolved": n_reverse_target_unresolved,
+        },
+        source="negative_resolution_manifest.csv (folded into this trace)",
+    )
+    # Candidate funnel: the gate pairs that clear the configured similarity
+    # floor for THIS miner. Read from the same artifact the miner reads, so
+    # the number is the real input population rather than a restatement of
+    # the output. Bounded by the target cap, hence the note in `detail`.
+    targeted_candidates = int(
+        pd.to_numeric(gates["similarity"], errors="coerce")
+        .gt(float(targeted_cfg["min_similarity"]))
+        .sum()
+    )
+    pair_trace.add(
+        "mining",
+        "targeted_attribute_funnel",
+        in_count=targeted_candidates,
+        out_count=int(len(targeted_attribute_neg)),
+        reason=(
+            "same-brand + same normalized product name + a shared-evaluator "
+            "critical conflict, at gate similarity strictly above the floor"
+        ),
+        detail={
+            "gate_similarity_floor": float(targeted_cfg["min_similarity"]),
+            "same_product_name_required": bool(targeted_cfg["same_product_name"]),
+            "volume_tolerance": float(training_cfg().gate.vol_tolerance),
+            "same_canonical_guard": "enabled",
+            "target": int(targeted_cfg["target"]),
+            "both_directions_emitted": True,
+        },
+        source="gate_results.csv",
+    )
+    pair_trace.add(
+        "payload",
+        "materialized",
+        in_count=int(len(df)),
+        out_count=int(len(payload)),
+        reason="every source row plus one canonical per GTIN",
+        detail={
+            "sku_payload": int(len(df)),
+            "canonical_payload": int(len(canon_gtins)),
+            "structured_feature_dim": int(len(structured_features[0])),
+            "structured_encode": bool(structured_cfg.get("enabled", True)),
+        },
+        source="canonical_records.csv",
+    )
+    pair_trace.add(
+        "payload",
+        "pair_census",
+        scope="group",
+        in_count=int(len(pos) + len(neg) + len(targeted_attribute_neg)),
+        out_count=int(len(_rows)),
+        reason="final label populations handed to training",
+        detail={
+            "pos": int(len(pos)),
+            "neg_hard": int(len(neg)),
+            "neg_targeted_attribute": int(len(targeted_attribute_neg)),
+            "text_columns": ["text_a", "text_b"],
+        },
+        source="model payload",
+    )
+    # Bounded per-pair readback with the LITERAL model texts, so the trace is
+    # a sample of the training input rather than only a count of it. The full
+    # 38k-row dump this replaces is a sample anyway; the cap is announced.
+    pair_trace.add_entities(
+        "pair_payload",
+        _rows,
+        key_of=lambda r: f"{r['kind']}|{r['barcode_a']}|{r['barcode_b']}",
+        reason_of=lambda r: r["kind"],
+        detail_of=lambda r: json.dumps(
+            {
+                "payload_idx_a": r["payload_idx_a"],
+                "payload_idx_b": r["payload_idx_b"],
+                "text_a": r["text_a"],
+                "text_b": r["text_b"],
+            },
+            sort_keys=True,
+        ),
+        source="model payload",
+        limit=PAIR_ENTITY_ROW_CAP,
+    )
+    pair_trace.write()
+    print(
+        f"[trace] pairs steps written -> {trace_path()} | {_kinds}",
+        flush=True,
+    )

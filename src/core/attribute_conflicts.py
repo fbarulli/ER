@@ -19,6 +19,7 @@ from core.critical_attributes import (
     FLAVOR_LEXICON,
     categorical_conflict,
     extract_critical_claims,
+    volumes_compatible,
 )
 
 
@@ -244,20 +245,25 @@ def critical_attribute_evaluation(
     return {"conflicts": conflicts, "unknown": unknown, "agreements": agreements}
 
 
-def pack_gate(
+def strict_attribute_gate(
     left: Mapping[str, object],
     right: Mapping[str, object],
     *,
     volume_relative_tolerance: float = 0.0,
     volume_absolute_tolerance_ml: float = 0.0,
 ) -> bool:
-    """Compatibility gate retained under its public historical name.
+    """Return ``True`` only when every critical dimension is explicit AND agrees.
 
-    It now evaluates the complete shared critical-attribute contract, not
-    only packaging. It returns ``True`` only when every dimension has explicit
-    compatible evidence. Explicit conflict and unknown evidence both return
-    ``False``; callers use :func:`critical_attribute_evaluation` to route the
-    former to reject and the latter to review.
+    SSOT (audit 2026-09-15): this used to be a second public function named
+    ``pack_gate`` with a different signature from ``pipeline.pack_gate`` and
+    the OPPOSITE answer on identical input — the pipeline gate treats missing
+    evidence as unknown/compatible while this one requires full evidence. Two
+    functions under one name made "does the pack gate pass?" depend on which
+    module asked. The training-label gate keeps the name ``pack_gate``; this
+    stricter full-evidence predicate is for callers that must NOT auto-merge
+    on partial evidence, and returns ``False`` for unknown as well as for
+    conflict. Callers that need to tell those two cases apart use
+    :func:`critical_attribute_evaluation` directly.
     """
     result = critical_attribute_evaluation(
         left,
@@ -269,12 +275,26 @@ def pack_gate(
 
 
 def attribute_conflict_types(
-    left: Mapping[str, object], right: Mapping[str, object]
+    left: Mapping[str, object],
+    right: Mapping[str, object],
+    *,
+    volume_relative_tolerance: float = 0.0,
+    volume_absolute_tolerance_ml: float = 0.0,
 ) -> list[str]:
-    """Classify conflicts using the canonical miner's disjoint-set rules."""
+    """Classify conflicts using the canonical miner's disjoint-set rules.
+
+    Volume now uses the SHARED tolerance predicate instead of exact set
+    intersection, so a pair whose volumes sit inside the gate's
+    ``vol_tolerance`` is no longer reported as a conflict by the miner that
+    feeds training labels. The default 0.0 keeps exact-match callers (the
+    unit canonicalization tests pin that contract) unchanged.
+    """
     conflicts: list[str] = []
-    if left["volume"] and right["volume"] and not (
-        set(left["volume"]) & set(right["volume"])
+    if not volumes_compatible(
+        left.get("volume"),
+        right.get("volume"),
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
     ):
         conflicts.append("volume")
     if left["pack"] and right["pack"] and not (
@@ -289,7 +309,12 @@ def attribute_conflict_types(
         and not (left_package_types & right_package_types)
     ):
         conflicts.append("package_type")
-    evaluation = critical_attribute_evaluation(left, right)
+    evaluation = critical_attribute_evaluation(
+        left,
+        right,
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+    )
     for dimension in ("flavor", "carbonation", "sweetener", "pulp"):
         if dimension in evaluation["conflicts"]:
             conflicts.append(dimension)
@@ -320,6 +345,6 @@ __all__ = [
     "critical_attribute_evaluation",
     "flavor_overlap_metrics",
     "normalized_flavor_tokens",
-    "pack_gate",
+    "strict_attribute_gate",
     "sku_attribute_info",
 ]
