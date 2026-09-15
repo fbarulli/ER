@@ -35,6 +35,46 @@ def _csv_identity(path: Path) -> dict[str, object]:
     }
 
 
+def _resolve_final_inference_device(cfg, override: str | None) -> str:
+    """Resolve the final-inference device, refusing a SILENT CPU fallback.
+
+    ``cuda`` in the config is a REQUIREMENT, not a preference: a run that
+    quietly lands on the CPU takes hours instead of minutes and leaves nothing
+    in the artifacts to tell the two apart. Every precondition is therefore
+    checked BEFORE the encoder starts, so a misconfiguration is one named
+    failure here rather than a CUDA OOM part-way through 61,529 rows:
+
+    * the configured batch must not exceed the configured ceiling (also
+      enforced at config load — this is the defence-in-depth copy);
+    * ``cuda`` needs a visible GPU;
+    * the card must meet ``min_vram_gb``.
+    """
+    if cfg.batch_size > cfg.max_batch_size:
+        raise ValueError(
+            f"colab.final_inference.batch_size {cfg.batch_size} exceeds "
+            f"max_batch_size {cfg.max_batch_size}"
+        )
+    requested = str(override or cfg.device)
+    if requested != "cuda":
+        return requested
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "colab.final_inference.device is 'cuda' but no GPU is visible. "
+            "Final inference must not silently fall back to CPU; run on a GPU "
+            "runner or set device: 'cpu' deliberately."
+        )
+    total_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    if total_gb < float(cfg.min_vram_gb):
+        raise RuntimeError(
+            f"colab.final_inference needs >= {cfg.min_vram_gb:g} GB VRAM but the "
+            f"visible device has {total_gb:.1f} GB; lower batch_size/min_vram_gb "
+            "deliberately rather than OOMing mid-run"
+        )
+    return "cuda"
+
+
 def _write_input_provenance(
     *, source_csv: Path, training_csv: Path, sample_csv: Path, output_dir: Path,
 ) -> Path:
@@ -79,14 +119,14 @@ def _write_input_provenance(
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "input_provenance.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    trace_artifact("validation_inference", path, producer="training.complete_colab_worker")
+    trace_artifact("final_inference", path, producer="training.complete_colab_worker")
     return path
 
 
 def _write_sku_reports(predictions_path: Path, output_dir: Path) -> None:
     import matplotlib.pyplot as plt
 
-    cfg = training_cfg().colab.validation_inference
+    cfg = training_cfg().colab.final_inference
     predictions = pd.read_csv(predictions_path, dtype={"SKU_ID": str, "GTIN": str})
     scores = pd.to_numeric(predictions["SCORE"], errors="raise")
     metrics_path = output_dir / "sku_threshold_summary.csv"
@@ -111,7 +151,7 @@ def _write_sku_reports(predictions_path: Path, output_dir: Path) -> None:
     fig.savefig(plot_path, dpi=160)
     plt.close(fig)
     for path in (metrics_path, summary_path, plot_path):
-        trace_artifact("validation_inference", path, producer="training.complete_colab_worker")
+        trace_artifact("final_inference", path, producer="training.complete_colab_worker")
 
 
 def complete_worker(
@@ -120,7 +160,7 @@ def complete_worker(
     training_input: Path | None = None,
     publish_dvc: bool = True, device: str | None = None,
 ) -> None:
-    cfg = training_cfg().colab.validation_inference
+    cfg = training_cfg().colab.final_inference
     if cfg.enabled:
         validation_source = validation_source or Path(cfg.source_csv)
         training_input = training_input or Path(training_cfg().colab.training_dataset_csv)
@@ -128,24 +168,25 @@ def complete_worker(
         checkpoint, _ = resolve_best_checkpoint(source)
         predictions_path = output_dir / "sku_predictions.csv"
         output_dir.mkdir(parents=True, exist_ok=True)
+        resolved_device = _resolve_final_inference_device(cfg, device)
         command = [
             sys.executable, "-m", "predict_items",
             "--model", str(checkpoint),
             "--input", str(validation_input),
             "--output", str(predictions_path),
             "--threshold", str(cfg.error_threshold),
-            "--device", device or cfg.device,
+            "--device", resolved_device,
             "--include-scores",
             "--batch-size", str(cfg.batch_size),
         ]
-        print(f"[validation-inference] SKU retrieval: {' '.join(command)}", flush=True)
+        print(f"[final-inference] SKU retrieval: {' '.join(command)}", flush=True)
         # The subprocess cwd is the resolved project root from the shared path
         # contract, never a __file__/__parents__ offset (owner directive
         # 2026-09-15): a magic parent count silently breaks the moment this
         # module moves or is installed as a package.
         subprocess.run(command, cwd=TRAIN_ROOT, env=os.environ.copy(), check=True)
         trace_artifact(
-            "validation_inference", predictions_path,
+            "final_inference", predictions_path,
             producer="training.complete_colab_worker",
         )
         _write_sku_reports(predictions_path, output_dir)
@@ -156,7 +197,7 @@ def complete_worker(
             output_dir=output_dir,
         )
     else:
-        print("[validation-inference] disabled by configuration", flush=True)
+        print("[final-inference] disabled by configuration", flush=True)
     if publish_dvc:
         from training.dvc_store import publish
 
@@ -164,7 +205,7 @@ def complete_worker(
 
 
 def main() -> None:
-    cfg = training_cfg().colab.validation_inference
+    cfg = training_cfg().colab.final_inference
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--run-id", required=True)

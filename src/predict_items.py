@@ -115,6 +115,14 @@ def main() -> None:
         build_canonical_text(canonical_record_map.get(item_id, {}), info)
         for item_id, info in zip(item_ids, item_infos, strict=True)
     ]
+    if args.device == "cuda" and not torch.cuda.is_available():
+        # A clear failure beats a torch stack trace, and beats quietly encoding
+        # 61,529 rows on the CPU while the caller believes it used the GPU.
+        raise SystemExit(
+            "--device cuda was requested but no GPU is visible; refusing to "
+            "fall back to CPU silently. Pass --device cpu to run on CPU on "
+            "purpose."
+        )
     model = load_local_sentence_transformer(str(Path(args.model)), device=args.device)
     sku_embeddings = model.encode(
         sku_texts,

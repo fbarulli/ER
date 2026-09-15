@@ -109,10 +109,10 @@ layouts:
     owner: training.report_plots
     template: "report_{kind}.csv"
     fields: {kind: str}
-  validation_inference:
+  final_inference:
     root: results
     owner: training.validation_inference
-    template: "validation_inference/{name}"
+    template: "final_inference/{name}"
     fields: {name: str}
   hpo_trials:
     root: results_hpo

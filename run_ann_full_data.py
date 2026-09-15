@@ -46,9 +46,9 @@ def check_settings() -> None:
         "model key": cfg.training.base_model == "minilm_l6",
         "training input config": cfg.colab.training_dataset_csv
         == "artifacts/data/dataset_deduped_train_minus_3000.csv",
-        "inference input config": cfg.colab.validation_inference.input_csv
+        "inference input config": cfg.colab.final_inference.input_csv
         == "artifacts/data/dataset_deduped.csv",
-        "inference source config": cfg.colab.validation_inference.source_csv
+        "inference source config": cfg.colab.final_inference.source_csv
         == "artifacts/data/dataset_deduped.csv",
         "DVC disabled": cfg.colab.dvc_enabled is False,
         "HPO DVC persistence disabled": cfg.hpo.persistence == "none",

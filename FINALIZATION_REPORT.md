@@ -1057,6 +1057,92 @@ identical with and without an explicit spec — a stronger statement of its actu
 path resolves through `load_config`). No coverage was removed; the shipped-default pin was extended
 to the three new flags.
 
+## 7j. `validation_inference` → `final_inference` (config key), and final inference on GPU
+
+Both owner changes landed after the payload/redundancy work was committed (`2b14035`), which was
+the stated gate. **No collision materialised**: `src/cli/colab.py` and
+`tests/test_colab_setup_path.py` were reported as held by the Colab agent, but at the time I got
+here every target file was clean and committed, so I proceeded.
+
+### A) The rename
+
+The name was wrong: this lane scores the **whole** deduped catalog (61,529 rows) and uses the 3,000
+held-out rows only for the threshold view.
+
+| Site | Change |
+|---|---|
+| `config/training.yaml` | key `validation_inference:` → `final_inference:`; `output_dir` → `"final_inference"` |
+| `config/paths.yaml` | layout `validation_inference:` → `final_inference:`, `template` → `"final_inference/{name}"` |
+| `src/core/schemas.py` | `ValidationInferenceSpec` → `FinalInferenceSpec`; field `validation_inference` → `final_inference` |
+| `src/cli/colab.py` | `_VALIDATION_INFERENCE` → `_FINAL_INFERENCE`, the `validation_inference: bool` parameters, the `..._enabled` preflight key, the guard message, the shell-completion clause |
+| `src/training/complete_colab_worker.py` | 3 config accesses + the `trace_artifact` layout keys |
+| `run_ann_full_data.py` | 2 config accesses |
+| `tests/test_colab_setup_path.py` | the mock's `output_dir` + 4 `mock.patch.object(colab, "_FINAL_INFERENCE", …)` |
+
+**The `trace_artifact` key had to move with the layout**: `trace_artifact(key, …)` records
+`"layout": key`, so leaving it as `validation_inference` would have pointed the artifacts trace at a
+layout that no longer exists. Verified: `artifact("final_inference", {"name": …})` resolves and
+`"validation_inference" not in LAYOUTS`.
+
+**Every surviving occurrence, named explicitly** (the acceptance test was "zero *config* hits, with
+identifiers excepted and named"):
+
+```
+config/paths.yaml:114   owner: training.validation_inference      <- names the MODULE; must not rename
+config/training.yaml:171  a comment saying why the block is NOT called that
+src/core/schemas.py:1612  the same explanatory sentence in the docstring
+src/training/complete_colab_worker.py:16   from training.validation_inference import ...
+tests/test_validation_inference.py:12,15,86  module import, module-scoped class name,
+                                             and the negative assertion that pins its absence
+```
+
+No `config/` hit remains that is a **key**. I agree with leaving the module
+`src/training/validation_inference.py` alone: it holds genuinely validation-scoped helpers
+(`resolve_best_checkpoint`, `threshold_assignment_metrics`), and renaming it would churn imports and
+the DVC/artifact ownership declared in `paths.yaml` for no behavioural gain. Its test file keeps its
+name for the same reason.
+
+### B) Final inference on GPU, batched for 12 GB
+
+```
+device: "cuda"        # REQUIRED, not a preference
+batch_size: 512       # 12 GB VRAM, inference only
+max_batch_size: 1024  # enforced ceiling
+min_vram_gb: 10.0     # refuse a smaller card
+```
+
+**Why 512.** The existing config assumes a 14.6-GB T4 for *finetune* batches and uses 64 there
+(`training.batch_size_cuda`), because a finetune step must hold activations for the backward pass
+plus Adam moments. Inference carries **no gradients and no optimiser state** and runs forward-only,
+so the same class of card holds far more: MiniLM-L6 is ~22 M parameters (~90 MB fp32) and the
+per-sample activation at `max_seq_length: 128` is small, so 512 — 8× the finetune batch — is a
+conservative operating point on 12 GB, with 1024 as the hard ceiling.
+
+**Three guards, so a mistake fails loudly instead of OOMing part-way through 61,529 rows:**
+1. **At config load** — `FinalInferenceSpec._batch_fits_the_declared_ceiling` rejects
+   `batch_size > max_batch_size`. A typo cannot reach a run.
+2. **Before the encoder starts** — `complete_colab_worker._resolve_final_inference_device(cfg, override)`
+   re-checks the ceiling, then requires a visible GPU, then requires the card to meet `min_vram_gb`.
+3. **At the point of use** — `predict_items.py` refuses `--device cuda` when no GPU is visible rather
+   than dying inside torch or quietly encoding on the CPU.
+
+**The device cannot silently fall back.** `device: "cuda"` is treated as a requirement: with no GPU
+the worker raises `RuntimeError: colab.final_inference.device is 'cuda' but no GPU is visible. Final
+inference must not silently fall back to CPU; run on a GPU runner or set device: 'cpu'
+deliberately.` The `device=` parameter on `complete_worker` remains the documented escape hatch, and
+it excuses **only** the GPU requirement — the batch ceiling is still checked.
+
+### Tests
+**427 passed, 2 skipped** (was 420). New `FinalInferenceContractTests` (7 tests) pins: the old key is
+absent and the new one resolves; the batch is larger than the finetune batch and within the ceiling;
+an over-ceiling batch fails at config load; CUDA is used when a GPU is present (12 GB faked); a
+sub-floor card is refused before encoding; no GPU produces the loud error naming the CPU override;
+and the CPU override still enforces the ceiling. One legitimately-affected test was updated —
+`test_completion_orders_inference_reports_provenance_before_dvc` exercises the completion ordering on
+a CPU box, so it now asks for CPU through the documented override, which is precisely what the
+override exists for. No coverage was deleted. Repo-wide lint: **0 new findings vs `2a15852`**, 17 vs
+the baseline's 20.
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):

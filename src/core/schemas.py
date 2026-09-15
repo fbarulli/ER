@@ -1604,8 +1604,13 @@ class TrackingSpec(BaseModel):
     wandb: WandbTrackingSpec
 
 
-class ValidationInferenceSpec(BaseModel):
-    """Post-training inference performed before a Colab worker is published."""
+class FinalInferenceSpec(BaseModel):
+    """Final inference over the whole catalog, run before a Colab worker is published.
+
+    Not a validation sample: the lane scores the full deduped catalog and uses the
+    held-out rows only for the threshold view, which is why it is not named
+    "validation_inference".
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1613,16 +1618,36 @@ class ValidationInferenceSpec(BaseModel):
     source_csv: str = Field(min_length=1)
     input_csv: str = Field(min_length=1)
     output_dir: str = Field(min_length=1)
+    # Inference holds no gradients and no optimiser moments, so it can run a far
+    # larger batch than finetuning on the same card: the finetune batch here is
+    # 64 for a 14.6-GB T4 (config/training.yaml batch_size_cuda) because it must
+    # keep activations for backward plus Adam state; forward-only needs the
+    # working set alone. max_batch_size is the hard ceiling the schema enforces,
+    # so a typo is a config-load failure and not a CUDA OOM mid-run.
     batch_size: int = Field(ge=1)
+    max_batch_size: int = Field(ge=1)
     device: Literal["cpu", "cuda"]
+    # Refuse to start final inference on a card below this, instead of OOMing
+    # part-way through the catalog.
+    min_vram_gb: float = Field(gt=0.0)
     error_threshold: float = Field(ge=0.0, le=1.0)
     thresholds: list[float] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _batch_fits_the_declared_ceiling(self) -> FinalInferenceSpec:
+        if self.batch_size > self.max_batch_size:
+            raise ValueError(
+                f"colab.final_inference.batch_size {self.batch_size} exceeds "
+                f"max_batch_size {self.max_batch_size}; raise the ceiling "
+                "deliberately or lower the batch"
+            )
+        return self
 
     @field_validator("thresholds")
     @classmethod
     def _valid_thresholds(cls, values: list[float]) -> list[float]:
         if any(value < 0.0 or value > 1.0 for value in values):
-            raise ValueError("validation inference thresholds must be in [0, 1]")
+            raise ValueError("final inference thresholds must be in [0, 1]")
         if values != sorted(set(values)):
             raise ValueError(
                 "validation inference thresholds must be unique and sorted"
@@ -1707,7 +1732,7 @@ class ColabSpec(BaseModel):
     dvc_events_file: str = Field(min_length=1)
     dvc_push_retries: int = Field(ge=1, le=10)
     dvc_push_backoff_seconds: int = Field(ge=1, le=120)
-    validation_inference: ValidationInferenceSpec
+    final_inference: FinalInferenceSpec
 
 
 class TrainingConfig(BaseModel):

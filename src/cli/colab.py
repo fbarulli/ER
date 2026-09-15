@@ -135,7 +135,7 @@ _RESULT_ARCHIVE_NAME = _COLAB.result_archive_name
 _RESULT_MANIFEST_NAME = _COLAB.result_manifest_name
 _RESULT_DOWNLOAD_EXCLUDED_DIRS = frozenset(_COLAB.result_download_excluded_dirs)
 _WORKER_MONITOR_SECONDS = _COLAB.worker_monitor_seconds
-_VALIDATION_INFERENCE = _COLAB.validation_inference
+_FINAL_INFERENCE = _COLAB.final_inference
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
 # config path is supplied. This workspace's home is read-only, so isolate the
@@ -162,8 +162,8 @@ def training_lifecycle_preflight(
     import pandas as pd
 
     training_path = _validation_input_path(_COLAB.training_dataset_csv)
-    sample_path = _validation_input_path(_VALIDATION_INFERENCE.input_csv)
-    source_path = _validation_input_path(_VALIDATION_INFERENCE.source_csv)
+    sample_path = _validation_input_path(_FINAL_INFERENCE.input_csv)
+    source_path = _validation_input_path(_FINAL_INFERENCE.source_csv)
     frames = {
         "source": pd.read_csv(source_path, usecols=["product_id"], dtype=str),
         "training": pd.read_csv(training_path, usecols=["product_id"], dtype=str),
@@ -195,7 +195,7 @@ def training_lifecycle_preflight(
         "product_id_overlap": 0,
         "reconstructs_source": True,
         "train_only": train_only,
-        "validation_inference_enabled": not train_only,
+        "final_inference_enabled": not train_only,
         "prepared_train_argv": [
             sys.executable, "-u", "-m", "training.train", "--model", model_key,
             "--dataset", str(training_path), "--prepare-bundle", "<worker-bundle>",
@@ -936,7 +936,7 @@ def run_parallel_train_and_tail(
     masking_profiles: list[str] | None = None,
     collapse_guardrail_profiles: list[str] | None = None,
     prepared_bundles: list[Path] | None = None,
-    validation_inference: bool = True,
+    final_inference: bool = True,
 ) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
     if worker_losses is not None and len(worker_losses) != workers:
@@ -959,7 +959,7 @@ def run_parallel_train_and_tail(
     )
     remote_validation_inputs = (
         _upload_validation_inputs(run_id)
-        if validation_inference else {"sample": "", "source": "", "training": ""}
+        if final_inference else {"sample": "", "source": "", "training": ""}
     )
     remote_input_loop = (
         "for name in ():"
@@ -1105,7 +1105,7 @@ for number in range(1, {workers} + 1):
     completion_command = " ".join(shlex.quote(part) for part in completion_args)
     completion_clause = (
         f'if [ "$rc" -eq 0 ]; then echo "[worker-process] training complete; running validation inference and final DVC publication"; {{completion_command}}; rc=$?; fi; '
-        if {validation_inference!r} else ""
+        if {final_inference!r} else ""
     )
     log_path, status_path = out / "training.log", out / "training.status"
     live_status_path = out / "live_status.json"
@@ -2002,7 +2002,7 @@ def run_train(
             args,
             run_label=run_label,
             prepared_bundle=prepared_bundles[0],
-            validation_inference=not train_only,
+            final_inference=not train_only,
         )
     return run_parallel_train_and_tail(
         args, workers, resume_run=resume_run,
@@ -2018,7 +2018,7 @@ def run_train(
             "collapse guardrail",
         ),
         prepared_bundles=prepared_bundles,
-        validation_inference=not train_only,
+        final_inference=not train_only,
     )
 
 
@@ -2414,10 +2414,10 @@ def _validation_input_path(configured_value: str) -> Path:
     source = source.resolve()
     if not source.is_relative_to(TRAIN_ROOT.resolve()):
         raise ValueError(
-            "colab.validation_inference.input_csv must stay inside the repository"
+            "colab.final_inference.input_csv must stay inside the repository"
         )
-    if _VALIDATION_INFERENCE.enabled and not source.is_file():
-        raise FileNotFoundError(f"configured validation inference CSV is missing: {source}")
+    if _FINAL_INFERENCE.enabled and not source.is_file():
+        raise FileNotFoundError(f"configured final-inference CSV is missing: {source}")
     return source
 
 
@@ -2573,14 +2573,14 @@ def _perform_validation_upload(run_id: str) -> dict[str, str]:
     that thread join itself.
     """
     sources = {
-        "source": _validation_input_path(_VALIDATION_INFERENCE.source_csv),
+        "source": _validation_input_path(_FINAL_INFERENCE.source_csv),
         "training": _validation_input_path(_COLAB.training_dataset_csv),
-        "sample": _validation_input_path(_VALIDATION_INFERENCE.input_csv),
+        "sample": _validation_input_path(_FINAL_INFERENCE.input_csv),
     }
     remote_dir = f"{REMOTE_ROOT}/prepared_training/{run_id}/validation"
     remotes: dict[str, str] = {}
     remote_by_source: dict[str, str] = {}
-    if not _VALIDATION_INFERENCE.enabled:
+    if not _FINAL_INFERENCE.enabled:
         for key, source in sources.items():
             remotes[key] = remote_by_source.setdefault(
                 str(source.resolve()), f"{remote_dir}/{key}_{source.name}"
@@ -2629,7 +2629,7 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
 
 def run_single_train_and_stream(
     args: list[str], *, run_label: str | None = None,
-    prepared_bundle: Path | None = None, validation_inference: bool = True,
+    prepared_bundle: Path | None = None, final_inference: bool = True,
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
     stamp = _lane_run_stamp()
@@ -2638,7 +2638,7 @@ def run_single_train_and_stream(
     _record_remote_run(remote_base, workers=1, lane="train")
     remote_validation_inputs = (
         _upload_validation_inputs(run_id)
-        if validation_inference else {"sample": "", "source": "", "training": ""}
+        if final_inference else {"sample": "", "source": "", "training": ""}
     )
     if prepared_bundle is not None:
         remote_bundle = _upload_prepared_bundles(
@@ -2691,7 +2691,7 @@ with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
     rc = process.wait()
 if rc:
     raise RuntimeError(f"worker 1 failed (rc={{rc}}); log={{log_path}}")
-run_completion = {validation_inference!r}
+run_completion = {final_inference!r}
 completion = [
     sys.executable, "-m", "training.complete_colab_worker",
     "--source", str(out), "--run-id", {run_id!r}, "--worker", "1",

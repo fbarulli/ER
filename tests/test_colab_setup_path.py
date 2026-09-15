@@ -797,7 +797,7 @@ class UploadReuseTests(unittest.TestCase):
             enabled=True,
             source_csv="s",
             input_csv="i",
-            output_dir="validation_inference",
+            output_dir="final_inference",
         )
 
         def resolve(value: str) -> Path:
@@ -811,7 +811,7 @@ class UploadReuseTests(unittest.TestCase):
             root, _paths, validation, resolve = self._fixture(temporary)
             validation.enabled = False
             with mock.patch.object(colab, "TRAIN_ROOT", root), \
-                 mock.patch.object(colab, "_VALIDATION_INFERENCE", validation), \
+                 mock.patch.object(colab, "_FINAL_INFERENCE", validation), \
                  mock.patch.object(colab, "_validation_input_path", side_effect=resolve), \
                  mock.patch.object(colab, "run_colab_exec_stream") as stream, \
                  mock.patch.object(colab, "run_colab_exec_capture") as capture, \
@@ -838,7 +838,7 @@ class UploadReuseTests(unittest.TestCase):
                 return source_digest + "\n" if paths["source"].name in script else "\n"
 
             with mock.patch.object(colab, "TRAIN_ROOT", root), \
-                 mock.patch.object(colab, "_VALIDATION_INFERENCE", validation), \
+                 mock.patch.object(colab, "_FINAL_INFERENCE", validation), \
                  mock.patch.object(colab, "_validation_input_path", side_effect=resolve), \
                  mock.patch.object(colab, "run_colab_exec_stream"), \
                  mock.patch.object(colab, "run_colab_exec_capture", side_effect=capture), \
@@ -857,7 +857,7 @@ class UploadReuseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root, paths, validation, resolve = self._fixture(temporary)
             with mock.patch.object(colab, "TRAIN_ROOT", root), \
-                 mock.patch.object(colab, "_VALIDATION_INFERENCE", validation), \
+                 mock.patch.object(colab, "_FINAL_INFERENCE", validation), \
                  mock.patch.object(colab, "_validation_input_path", side_effect=resolve), \
                  mock.patch.object(colab, "run_colab_exec_stream"), \
                  mock.patch.object(
@@ -875,7 +875,7 @@ class UploadReuseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root, paths, validation, resolve = self._fixture(temporary)
             with mock.patch.object(colab, "TRAIN_ROOT", root), \
-                 mock.patch.object(colab, "_VALIDATION_INFERENCE", validation), \
+                 mock.patch.object(colab, "_FINAL_INFERENCE", validation), \
                  mock.patch.object(colab, "_validation_input_path", side_effect=resolve), \
                  mock.patch.object(colab, "run_colab_exec_stream"), \
                  mock.patch.object(
