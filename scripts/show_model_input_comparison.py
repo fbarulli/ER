@@ -19,7 +19,12 @@ from core.structured_features import (
     canonical_info as canonical_structured_info,
     sku_info as sku_structured_info,
 )
-from pipeline import canonical_model_text, clean_sku_text, strip_schema_words
+from pipeline import (
+    canonical_evidence_text,
+    canonical_model_text,
+    clean_sku_text,
+    strip_schema_words,
+)
 
 
 def text(value: object) -> str:
@@ -36,7 +41,8 @@ def main() -> None:
     args = parser.parse_args()
 
     review = pd.read_csv(args.review, dtype=str, keep_default_na=False)
-    data = pd.read_csv(args.dataset, dtype=str, keep_default_na=False).rename(
+    raw_data = pd.read_csv(args.dataset, dtype=str, keep_default_na=False)
+    data = raw_data.rename(
         columns={
             "sku_id": "product_id",
             "sku_name_eng": "title",
@@ -51,8 +57,15 @@ def main() -> None:
             data[col] = ""
 
     source = data.assign(__id=data["product_id"].astype(str)).set_index("__id").to_dict("index")
+    raw_source = raw_data.assign(__id=raw_data["sku_id"].astype(str)).set_index("__id").to_dict("index")
     targets = {}
     gtin_col = "barcode" if "barcode" in data else "gtin"
+    raw_gtin_col = "gtin" if "gtin" in raw_data else gtin_col
+    raw_targets = {}
+    for gtin, group in raw_data.groupby(raw_gtin_col, sort=False):
+        gtin = text(gtin)
+        if gtin:
+            raw_targets[gtin] = group.iloc[0].to_dict()
     for gtin, group in data.groupby(gtin_col, sort=False):
         gtin = text(gtin)
         if gtin:
@@ -71,27 +84,25 @@ def main() -> None:
         canonical_row = canonical_map.get(target_id, {})
         target_row = targets.get(target_id, {})
 
-        raw_source = {
+        source_features = {
             "product_id": sku_id,
-            "title": text(source_row.get("title")),
-            "brand": text(source_row.get("brand")),
-            "description": text(source_row.get("description")),
-            "category": text(source_row.get("category")),
-            "breadcrumbs": text(source_row.get("category_path")),
-            "attributes": text(source_row.get("attributes")),
+            **{key: value for key, value in raw_source.get(sku_id, {}).items() if not key.startswith("__")},
         }
         base_source = clean_sku_text(
-            raw_source["title"], raw_source["attributes"], raw_source["brand"],
-            raw_source["description"], raw_source["category"], raw_source["breadcrumbs"],
+            text(source_row.get("title")), text(source_row.get("attributes")), text(source_row.get("brand")),
+            text(source_row.get("description")), text(source_row.get("category")), text(source_row.get("category_path")),
         )
         cleaned_source = strip_schema_words(base_source)
-        source_info = sku_structured_info(raw_source["title"], raw_source["attributes"])
+        source_info = sku_structured_info(text(source_row.get("title")), text(source_row.get("attributes")))
         source_model = append_structured_text(cleaned_source, source_info, enabled=structured_text)
 
-        canonical_base = " ".join(
-            text(canonical_row.get(col))
-            for col in ("canonical", "mode_brand", "mode_type", "description_evidence", "breadcrumb_evidence")
-        )
+        canonical_base = " ".join((
+            text(canonical_row.get("canonical")),
+            text(canonical_row.get("mode_brand")),
+            text(canonical_row.get("mode_type")),
+            canonical_evidence_text(canonical_row.get("description_evidence", "")),
+            canonical_evidence_text(canonical_row.get("breadcrumb_evidence", "")),
+        ))
         canonical_clean = strip_schema_words(canonical_model_text(canonical_base))
         target_info = canonical_structured_info(canonical_row)
         target_model = append_structured_text(canonical_clean, target_info, enabled=structured_text)
@@ -100,19 +111,13 @@ def main() -> None:
             "SKU_ID": sku_id,
             "NEAREST_ITEM_ID": target_id,
             "SCORE": text(item.get("SCORE")),
-            "source_original_features": raw_source,
+            "source_original_features": source_features,
             "source_base_cleaned": base_source,
             "source_after_schema_strip": cleaned_source,
             "source_structured_info": source_info,
             "source_exact_model_text": source_model,
             "target_original_features": {
-                "gtin": target_id,
-                "title": text(target_row.get("title")),
-                "brand": text(target_row.get("brand")),
-                "description": text(target_row.get("description")),
-                "category": text(target_row.get("category")),
-                "breadcrumbs": text(target_row.get("category_path")),
-                "attributes": text(target_row.get("attributes")),
+                **{key: value for key, value in raw_targets.get(target_id, {}).items() if not key.startswith("__")},
             },
             "target_canonical_record": {
                 k: text(canonical_row.get(k))
@@ -129,7 +134,7 @@ def main() -> None:
                 "=" * 100,
                 f"ROW {len(rows)} | SKU_ID={sku_id} | candidate GTIN={target_id} | score={text(item.get('SCORE'))}",
                 "SOURCE — ORIGINAL FEATURES",
-                *(f"  {k}: {v}" for k, v in raw_source.items()),
+                *(f"  {k}: {v}" for k, v in source_features.items()),
                 "SOURCE — PIPELINE CHANGES",
                 f"  base cleaned:       {base_source}",
                 f"  schema words removed: {cleaned_source}",
