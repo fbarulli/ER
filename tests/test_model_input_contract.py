@@ -491,6 +491,39 @@ def test_ann_fingerprint_inputs_include_the_composition() -> None:
     assert digest(other) != digest(inputs)
 
 
+def test_ann_fingerprint_inputs_cover_the_normalisation_vocabulary() -> None:
+    """A vocabulary edit changes the encoder text, so it must move the fingerprint.
+
+    ``MINIMAL_STOPWORDS`` and the schema-word strip both come from
+    ``config/vocabulary.json`` and are applied inside the composition, so
+    editing that file changes the text while leaving every other fingerprint
+    input identical. Without the vocabulary in the reuse contract a persisted
+    ANN index built before the edit would be silently reused.
+    """
+    from core.common import VOCABULARY_CONFIG_PATH
+    from core.manifest import sha256_file
+    from training.rand_matching import preprocessing_fingerprint_inputs
+
+    inputs = preprocessing_fingerprint_inputs({"enabled": True})
+    assert inputs["vocabulary"] == sha256_file(VOCABULARY_CONFIG_PATH)
+    assert len(inputs["vocabulary"]) == 64
+
+    # The vocabulary really is an input to the composed text: a stopword that
+    # appears in the corpus changes what the builder emits.
+    import pipeline
+
+    record = _group("review_band_585")[0]
+    info = canonical_info(record["canonical_record"])
+    before = build_canonical_text(record["canonical_record"], info, spec=CLEANED)
+    original = list(pipeline.MINIMAL_STOPWORDS)
+    try:
+        pipeline.MINIMAL_STOPWORDS = original + ["carbonated"]
+        after = build_canonical_text(record["canonical_record"], info, spec=CLEANED)
+    finally:
+        pipeline.MINIMAL_STOPWORDS = original
+    assert after != before, "the fixture row must carry a token the vocabulary controls"
+
+
 def test_run_trace_records_the_active_composition() -> None:
     """The payload stage must stamp the composition onto the run trace.
 

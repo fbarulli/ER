@@ -41,10 +41,7 @@ import numpy as np
 import pandas as pd
 import torch
 from pydantic import BaseModel, ConfigDict, Field
-from sklearn.metrics import (
-    adjusted_rand_score,
-    rand_score,
-)
+from sklearn.metrics import adjusted_rand_score
 
 from core.ann_config import load_ann_config
 from core.attribute_conflicts import (
@@ -62,6 +59,7 @@ from core.common import (
     RESULTS,
     TRAIN_ROOT,
     TRAINING_CONFIG_PATH,
+    VOCABULARY_CONFIG_PATH,
     canonical_records_frame,
     load_local_sentence_transformer,
     load_config,
@@ -104,14 +102,22 @@ def preprocessing_fingerprint_inputs(structured_config: dict) -> dict[str, objec
     """Everything that changes the encoder TEXT a persisted index was built on.
 
     A persisted ANN index is reusable only while these inputs are unchanged.
-    ``model_input`` belongs here because switching the composition changes the
-    item embeddings without touching the catalog or the checkpoint, so without
-    it a profile switch would silently reuse an index built on the other text.
+
+    * ``model_input`` — switching the composition changes the item embeddings
+      without touching the catalog or the checkpoint, so without it a profile
+      switch would silently reuse an index built on the other text.
+    * ``vocabulary`` — ``MINIMAL_STOPWORDS`` and the schema-word strip both come
+      from ``config/vocabulary.json`` and are applied INSIDE the composition
+      (``core.model_input._normalized_tokens``), so editing that file changes
+      the encoder text while leaving every other input identical. Measured: an
+      added stopword moved the composed-text digest and left this fingerprint
+      byte-identical, which is the same silent-reuse seam in a second input.
     """
     return {
         "structured_features": structured_config,
         "model_input": model_input_composition().model_dump(),
         "unit_canonicalization": UNIT_CANONICALIZATION_VERSION,
+        "vocabulary": sha256_file(VOCABULARY_CONFIG_PATH),
     }
 
 
@@ -1217,7 +1223,6 @@ class RandMatcher:
         candidate_rank: int | None,
         retrieval_source: str,
     ) -> dict[str, object]:
-        sku_gtin = self._gtin(row_metadata_text(row, "barcode", "gtin"))
         candidate_gtin = self.item_ids[candidate_index]
         candidate_record = self.record_map[candidate_gtin]
         base = candidate_gate_fields(

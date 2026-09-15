@@ -77,3 +77,11 @@ wandb/
 node_modules/
 pnpm-lock.yaml
 package.json
+
+# Project working agreements. These are deliberate LOCAL documents — the rules
+# every agent and contributor is asked to follow — not shipped artifacts, and
+# they are not part of the product's public contract. Ignored so the working
+# tree stays clean while the files remain present on disk for the harness and
+# for anyone reading the checkout. Do not commit them; do not delete them.
+AGENTS.local.md
+CONVENTIONS.md
