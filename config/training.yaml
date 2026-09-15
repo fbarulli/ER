@@ -354,18 +354,21 @@ training:
   # payload audit build the encoder text through core.model_input, which
   # reads this block.  Switch profiles here — never by reverting code.
   #
-  #   profile: legacy   the committed composition, byte for byte (default)
-  #   profile: cleaned  symmetric [BRAND] [TITLE] [ATTRIBUTES] composition:
+  #   profile: cleaned  [Brand] [Title] [Attributes] composition (default):
   #                     underscore compounds split so they can match source
-  #                     text, discriminative numbers kept, and the
-  #                     description/breadcrumb evidence channel excluded
+  #                     text, discriminative numbers kept, percentage
+  #                     evidence preserved, and the description/breadcrumb
+  #                     evidence channel excluded
+  #   profile: legacy   the original committed composition, byte for byte —
+  #                     the fallback selection, kept verified by
+  #                     tests/test_model_input_contract.py
   #
   # include_evidence appends the description/breadcrumb evidence channel.
   # 'cleaned' excludes that channel by definition, so cleaned+true is
   # rejected at config load rather than silently ignored.
   model_input:
-    profile: "legacy"
-    include_evidence: true
+    profile: "cleaned"
+    include_evidence: false
   # Switchable through er-colab --loss. contrastive = OnlineContrastiveLoss
   # over labeled (pos=1/neg=0) hard pairs; mnrl =
   # MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.

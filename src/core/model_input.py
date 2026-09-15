@@ -11,15 +11,17 @@ from the canonical record, so one product produced two unrelated strings.
 Profile selection lives in ``config/training.yaml`` (``training.model_input``)
 and is validated by ``core.schemas.TrainingSpec.ModelInputSpec``:
 
-``legacy``
-    The committed composition, reproduced byte for byte, so an untouched
-    config keeps exactly today's behaviour and a rollback is a config edit
-    rather than a code revert.
 ``cleaned``
-    ``[Brand] [Title] [Attributes]`` composition — those three field groups,
-    in that order, and nothing else.  Underscore compounds are split so they
-    can lexically match source text, discriminative numbers survive into the
-    model input, and the description/breadcrumb evidence channel is excluded.
+    The shipped default.  ``[Brand] [Title] [Attributes]`` composition — those
+    three field groups, in that order, and nothing else.  Underscore compounds
+    are split so they can lexically match source text, discriminative numbers
+    survive into the model input, and the description/breadcrumb evidence
+    channel is excluded.
+``legacy``
+    The pre-change composition, reproduced byte for byte.  Kept selectable
+    from config so going back is a config edit rather than a code revert;
+    ``tests/test_model_input_contract.py`` pins it against fixtures captured
+    from the unmodified code.
 """
 
 from __future__ import annotations

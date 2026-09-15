@@ -6,7 +6,8 @@ quality or score deltas** — no training was run, no GPU was used, and every nu
 **string level** on real committed artifacts.
 
 Repo `/home/opc/ONE/EuromonitoR`, branch `training`. Baseline suite: **290 passed, 2 skipped**.
-After: **307 passed, 2 skipped**.
+After: **309 passed, 2 skipped**. The `cleaned` composition is the **shipped default**; `legacy` remains
+selectable from config and is still byte-identical to the pre-change output (§9).
 
 ---
 
@@ -107,24 +108,30 @@ While consolidating I removed the now-dead per-lane gate recomputation
 (`sf_text`, `self.structured_text`, `structured_append_to_text`) — the builder owns that gate, so the
 three sites can no longer disagree about whether the structured channel is on.
 
-### Config-gated, default = today's behaviour
+### Config-gated, cleaned is the default, legacy is the fallback
 
 `config/training.yaml`:
 
 ```yaml
   model_input:
-    profile: "legacy"        # legacy | cleaned
-    include_evidence: true
+    profile: "cleaned"       # cleaned | legacy
+    include_evidence: false
 ```
 
-* `legacy` + `include_evidence: true` → **byte-identical to the committed code**. This is the shipped default.
-* `legacy` + `include_evidence: false` → today's composition with the evidence channel ablated.
-* `cleaned` → the new symmetric composition.
+* `cleaned` + `include_evidence: false` → **the new composition, and the shipped default.** No config
+  edit is needed to get it.
+* `legacy` + `include_evidence: true` → **byte-identical to the committed code** (the pre-change
+  behaviour). This is the fallback selection; see §9 for how to restore it.
+* `legacy` + `include_evidence: false` → the original composition with the evidence channel ablated.
 * `cleaned` + `include_evidence: true` → **rejected at config load** (contradiction).
 
 One profile plus one granular flag, with the contradictory combination refused rather than ignored.
 The schema is `src/core/schemas.py` → `TrainingSpec.ModelInputSpec` (pydantic, `extra="forbid"`,
 `@model_validator`), reached through the existing `core.common.load_config()` — no new config mechanism.
+
+Verified after the flip: on all 855 fixture rows the no-argument default equals the `cleaned` profile
+and **never** equals the captured legacy string, while the explicit `legacy` selection still reproduces
+the golden bytes with 0 mismatches.
 
 ### The `cleaned` composition
 
@@ -254,13 +261,22 @@ text-builder gap, and is out of scope here.
 
 ## 6. Tests
 
-**290 passed, 2 skipped → 307 passed, 2 skipped.** No pre-existing test needed changing:
+**290 passed, 2 skipped → 309 passed, 2 skipped.** No pre-existing test needed changing:
 `tests/test_unit_canonicalization.py:91-98` pins the exact `append_text` output
 (`"water [FIELD_VOLUME] volume_ml_237 [FIELD_PACK_SIZE] pack_qty_12"`) and still passes unchanged,
 because `append_text` and the structured channel were left exactly as they were.
 
-New: **`tests/test_model_input_contract.py`** (17 tests) — legacy byte-equivalence over all 855 fixture
-rows on both sides; default-is-legacy; the contradiction is rejected; evidence ablation; compound
+**No test depends on the default implicitly.** Every test that asserts a legacy string passes the
+legacy spec explicitly, and every test that asserts cleaned behaviour passes the cleaned spec
+explicitly. The evidence is the default flip itself: switching the shipped default from `legacy` to
+`cleaned` broke **zero** tests, and the legacy byte-equivalence test still fails loudly if the fallback
+path drifts. The default is nevertheless pinned by its own test
+(`test_shipped_config_defaults_to_the_cleaned_profile`, plus a test that the no-argument selection
+equals it), so the default is covered by the suite rather than being accidental.
+
+New: **`tests/test_model_input_contract.py`** (19 tests) — legacy byte-equivalence over all 855 fixture
+rows on both sides; the shipped default is pinned to cleaned; the no-argument path resolves to it;
+legacy stays selectable as the fallback; the contradiction is rejected; evidence ablation; compound
 splitting; number and percentage preservation; evidence excluded on both lanes; one normalizer across
 lanes; no literal markers; margin improvement; true-pairs-far-above-cross-pairs; different brands stay
 distinct; `title_only` variant semantics; both lanes call the shared builder.
@@ -288,7 +304,11 @@ MODEL_INPUT_FIX_REPORT.md     | new
 
 **EXECUTED** (all CPU, no training, no GPU):
 
-* `pytest tests/ -q` before (290 passed / 2 skipped) and after (307 / 2) the change.
+* `pytest tests/ -q` before (290 passed / 2 skipped) and after (309 / 2) the change, including a run
+  after the default was flipped from `legacy` to `cleaned` — which broke no test.
+* A no-argument-default check over all 855 fixture rows: the default equals the `cleaned` profile on
+  855/855 rows, never equals the captured legacy string, and the explicit `legacy` selection still
+  reproduces the golden bytes with 0 mismatches.
 * `/tmp/repro_5claims.py` — rebuilt source/target strings for all 585 pairs through the real committed
   functions and measured Jaccard, brand-match/score separation, compound origins, boilerplate mass.
 * `/tmp/repro_claims34.py` — per-channel discriminative separation and boilerplate mass.
@@ -346,9 +366,9 @@ from a fresh rebuild for this reason.
 
 ---
 
-## 9. Rollback procedure (no code revert required)
+## 9. Which input is active, and how to go back (no code revert required)
 
-**Enable the new input** — `config/training.yaml`, under `training:`:
+**The new input is already the default** — `config/training.yaml`, under `training:`, ships as:
 
 ```yaml
   model_input:
@@ -356,7 +376,10 @@ from a fresh rebuild for this reason.
     include_evidence: false
 ```
 
-**Restore today's exact behaviour** — the shipped default, unchanged:
+No config edit is required to get the new composition. Both lanes (training candidate retrieval and
+scoring prediction) and the payload stage read this block through `core.model_input`.
+
+**Restore the original committed behaviour** — change those two values to:
 
 ```yaml
   model_input:
@@ -364,7 +387,11 @@ from a fresh rebuild for this reason.
     include_evidence: true
 ```
 
-**Ablation only** (today's composition without the description/breadcrumb channel):
+That single edit restores the pre-change output **byte for byte**, verified against
+`tests/fixtures/model_input_golden.json` (855 rows captured from the unmodified code before any edit).
+No code revert, no branch switch, no rebuild.
+
+**Ablation only** (the original composition without the description/breadcrumb channel):
 
 ```yaml
   model_input:
@@ -374,5 +401,5 @@ from a fresh rebuild for this reason.
 
 Do not set `cleaned` with `include_evidence: true`; config load rejects it with a named error.
 `tests/test_model_input_contract.py::test_legacy_profile_reproduces_golden_bytes` fails loudly if the
-`legacy` profile ever stops reproducing the captured strings, so a rollback that silently changed
+`legacy` profile ever stops reproducing the captured strings, so a fallback that silently changed
 output cannot ship.

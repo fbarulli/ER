@@ -74,17 +74,33 @@ def _cross_jaccard(sources: list[str], targets: list[str], per_row: int = 12) ->
 # ── the switch itself ──────────────────────────────────────────────────────
 
 
-def test_shipped_config_defaults_to_the_legacy_profile() -> None:
-    """An untouched config must keep today's behaviour (rollback by config)."""
+def test_shipped_config_defaults_to_the_cleaned_profile() -> None:
+    """Pin the shipped default so it can never change silently.
+
+    Every other test in this module selects its profile explicitly, so
+    without this one a default change would be invisible to the suite.
+    """
     spec = model_input_spec()
-    assert spec.profile == "legacy"
-    assert spec.include_evidence is True
+    assert spec.profile == "cleaned"
+    assert spec.include_evidence is False
+
+
+def test_default_selection_is_reachable_without_any_config_argument() -> None:
+    """Omitting ``spec`` must use the config, not an implicit constant."""
+    assert model_input_spec() == CLEANED
 
 
 def test_cleaned_profile_refuses_to_also_request_the_evidence_channel() -> None:
     """One profile plus one granular flag must not admit a contradiction."""
     with pytest.raises(ValidationError, match="excludes the"):
         TrainingSpec.ModelInputSpec(profile="cleaned", include_evidence=True)
+
+
+def test_legacy_profile_remains_selectable_as_the_fallback() -> None:
+    """Legacy must stay expressible from config alone (no code revert)."""
+    fallback = TrainingSpec.ModelInputSpec(profile="legacy", include_evidence=True)
+    assert fallback.profile == "legacy"
+    assert fallback != model_input_spec()
 
 
 def test_model_input_block_is_declared_in_the_config_contract() -> None:
