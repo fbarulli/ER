@@ -696,7 +696,7 @@ def _parse_remote_json(output: str) -> dict:
     raise RuntimeError(f"remote log probe returned no JSON: {clean_output[-1000:]}")
 
 
-def run_detached_stage(stage: str, command_expr: str, timeout: int) -> None:
+def run_detached_stage(stage: str, command_expr: list[str], timeout: int) -> None:
     """Run a VM stage outside the notebook kernel and stream its durable log."""
     # Two launches can occur within the same UTC second (especially after a
     # failed preflight). Microseconds keep the remote result root unique and
@@ -1065,6 +1065,8 @@ def run_parallel_train_and_tail(
     final_inference: bool = True,
     inference_sample: int | None = None,
     inference_device: str | None = None,
+    remote_checkout_inputs: bool = False,
+    remote_validation_csv: str | None = None,
 ) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
     if worker_losses is not None and len(worker_losses) != workers:
@@ -1085,17 +1087,25 @@ def run_parallel_train_and_tail(
         if prepared_bundles is not None
         else None
     )
-    remote_validation_inputs = (
-        _upload_validation_inputs(run_id)
-        if final_inference else {"sample": "", "source": "", "training": ""}
-    )
+    if not final_inference:
+        remote_validation_inputs = {"sample": "", "source": "", "training": ""}
+    elif remote_validation_csv is not None:
+        remote_validation_inputs = {
+            "sample": remote_validation_csv,
+            "source": remote_validation_csv,
+            "training": remote_validation_csv,
+        }
+    else:
+        remote_validation_inputs = _upload_validation_inputs(run_id)
     remote_input_loop = (
         "for name in ():"
-        if prepared_bundles is not None
+        if prepared_bundles is not None or remote_checkout_inputs
         else 'for name in (F["canonical_records"], F["gate_results"], F["labeled_pairs"]):'
     )
     resume_pointers = _resume_pointer_payload(run_id, workers) if resume_run else {}
-    launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
+    launch = _BOOTSTRAP + _remote_auth_env_script(
+        include_wandb=not remote_checkout_inputs
+    ) + f"""
 import base64, json, os, pathlib, shutil, shlex, subprocess, sys, time, traceback
 from core.common import F
 root = pathlib.Path({REMOTE_ROOT!r})
@@ -1193,7 +1203,7 @@ for number in range(1, {workers} + 1):
             raise
     else:
         out.mkdir()
-        if {remote_bundles is None!r}:
+        if {remote_bundles is None and not remote_checkout_inputs!r}:
             for name in (
                 F["canonical_records"],
                 F["gate_results"],
@@ -2489,8 +2499,6 @@ def run_train(
     if sample is not None:
         args.extend(["--sample", str(sample)])
     if remote_dataset_csv is not None:
-        if workers != 1:
-            raise ValueError("remote dataset training supports one worker only")
         remote_dataset = Path(remote_dataset_csv)
         if remote_dataset.is_absolute() or ".." in remote_dataset.parts:
             raise ValueError("remote dataset path must stay inside the checkout")
@@ -2552,6 +2560,8 @@ def run_train(
         final_inference=not train_only,
         inference_sample=inference_sample,
         inference_device=inference_device,
+        remote_checkout_inputs=remote_dataset_csv is not None,
+        remote_validation_csv=remote_validation_csv,
     )
 
 
@@ -3349,7 +3359,10 @@ if run_completion:
         )
 print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
 """
-    print("[run] starting one trainer with direct live stdout streaming ...", flush=True)
+    print(
+        "[run] starting one trainer as a detached remote stage; polling its durable log ...",
+        flush=True,
+    )
     # Stream finished artifacts back while the trainer runs, so the end-of-run
     # download is a short delta instead of the whole result set.  The stream is
     # stopped before the authoritative download so the two never race on the
@@ -3357,13 +3370,14 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
     syncer = _IncrementalResultSync(remote_base, run_id, workers=1)
     syncer.start()
     try:
-        run_colab_exec_stream(
-            SESSION,
-            script,
+        # A long-lived ``colab exec`` stream can stall before the kernel begins
+        # evaluating the worker cell. Run the exact same script outside the
+        # notebook kernel instead; its log, PID, and exit status are then
+        # independently visible through the short polling probes.
+        run_detached_stage(
+            "train",
+            ["/usr/bin/python3", "-c", script],
             timeout=_WORKER_TIMEOUT_SECONDS,
-            log_name="train",
-            exclude_from_live_log=True,
-            training_output=True,
         )
     finally:
         syncer.stop()

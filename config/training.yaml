@@ -133,7 +133,8 @@ colab:
   hpo_mode: "sequential"
   hpo_workers: 2
   train_workers: 6
-  smoke_workers: 1
+  # One baseline worker plus one worker for the configured smoke model.
+  smoke_workers: 2
   mixed_train_workers: 1
   mixed_sims_workers: 1
   mixed_mining_profile: "masking_only"
