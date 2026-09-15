@@ -140,6 +140,7 @@ class DataFilesSpec(BaseModel):
     embedding_similarities: str
     model_evaluation_summary: str
     attribute_separation_summary: str
+    brand_analysis_pairs: str
     attribute_separation_values: str
     fold_metrics: str
     hpo_grid_csv: str
@@ -485,6 +486,76 @@ class RobustValidationSpec(BaseModel):
         return self
 
 
+# ── brand-string analysis (results/training/brand_analysis_pairs.csv) ──────
+# Are brands failing to match, and why not? TF-IDF cosine + fuzzy ratio per
+# brand-vs-brand comparison, with the support behind every verdict.
+BRAND_PAIR_COLUMNS: tuple[str, ...] = (
+    "brand_left",
+    "brand_right",
+    "classification",
+    "similarity_ratio",
+    "token_sort_ratio",
+    "token_set_ratio",
+    "edit_distance",
+    "tfidf_cosine",
+    "n_positive",
+    "n_negative",
+    "reportable",
+)
+
+
+class BrandAnalysisSpec(BaseModel):
+    """Thresholds and TF-IDF settings for the brand analysis.
+
+    Every knob is config.  The two ratio thresholds leave an INTENTIONAL band
+    in which the evidence does not decide the class, and that band is reported
+    under its own name rather than forced into a verdict.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    tfidf_analyzer: Literal["char_wb", "char", "word"]
+    tfidf_ngram_min: int = Field(ge=1)
+    tfidf_ngram_max: int = Field(ge=1)
+    surface_variant_min_ratio: float = Field(ge=0.0, le=1.0)
+    different_brand_max_ratio: float = Field(ge=0.0, le=1.0)
+    indeterminate_class: str = Field(min_length=1)
+    min_pair_support: int = Field(ge=1)
+    corporate_suffixes: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _ngram_range_ordered(self) -> BrandAnalysisSpec:
+        if self.tfidf_ngram_min > self.tfidf_ngram_max:
+            raise ValueError("tfidf_ngram_min must not exceed tfidf_ngram_max")
+        if self.different_brand_max_ratio >= self.surface_variant_min_ratio:
+            raise ValueError(
+                "different_brand_max_ratio must be below surface_variant_min_ratio, "
+                "otherwise the indeterminate band is empty or inverted"
+            )
+        return self
+
+
+class BrandPairRow(BaseModel):
+    """One brand_analysis_pairs.csv row: one brand-vs-brand comparison."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    brand_left: str
+    brand_right: str
+    classification: str = Field(min_length=1)
+    similarity_ratio: float = Field(ge=0.0, le=1.0)
+    token_sort_ratio: float = Field(ge=0.0, le=1.0)
+    token_set_ratio: float = Field(ge=0.0, le=1.0)
+    edit_distance: int = Field(ge=0)
+    tfidf_cosine: float = Field(ge=0.0, le=1.0 + 1e-6)
+    n_positive: int = Field(ge=0)
+    n_negative: int = Field(ge=0)
+    # A brand pair is only reportable as a defect when BOTH classes clear the
+    # support floor; a two-row brand is evidence, not a verdict.
+    reportable: bool
+
+
 # ── attribute separation metrics (results/training/attribute_separation_*.csv) ──
 # How well each product attribute separates TRUE pairs from FALSE ones, at the
 # attribute level and per attribute value.  Computed from labelled pairs plus
@@ -610,6 +681,7 @@ class EvaluationSpec(BaseModel):
     robust_validation: RobustValidationSpec
     uniformity: UniformitySpec
     attribute_separation: AttributeSeparationSpec
+    brand_analysis: BrandAnalysisSpec
 
     @model_validator(mode="after")
     def _folds_distinct_and_in_range(self) -> EvaluationSpec:

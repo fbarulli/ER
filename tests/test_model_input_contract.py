@@ -205,7 +205,7 @@ def test_cleaned_profile_preserves_percentage_evidence() -> None:
     """
     assert _normalized_tokens("Juice Content: 100%", drop_schema_words=True) == ["pct100"]
     assert _normalized_tokens("Juice Content: 0-2%", drop_schema_words=True) == ["pct0to2"]
-    assert "pct5.5" in _normalized_tokens("Alcohol: 5.5%", drop_schema_words=True)
+    assert "pct5d5" in _normalized_tokens("Alcohol: 5.5%", drop_schema_words=True)
 
     carried = sum(
         1

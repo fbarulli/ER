@@ -179,6 +179,21 @@ evaluation:
     min_pairs_per_class: 30   # attribute-level: min positives AND negatives
     min_value_support: 20     # per-value: min pairs in BOTH classes to flag
     flag_below: 0.10          # separation <= this (with support) = weak
+  # ── brand analysis: are brands failing to match, and why not? ───────────
+  # TF-IDF (char n-grams, the right space for short strings) + stdlib fuzzy
+  # ratios. The two ratio thresholds leave an INTENTIONAL band where the
+  # evidence does not decide, reported under indeterminate_class.
+  brand_analysis:
+    enabled: true
+    tfidf_analyzer: "char_wb"
+    tfidf_ngram_min: 2
+    tfidf_ngram_max: 3
+    surface_variant_min_ratio: 0.85
+    different_brand_max_ratio: 0.60
+    indeterminate_class: "ambiguous_similarity"
+    min_pair_support: 20      # both classes must clear this to report a defect
+    corporate_suffixes: ["gmbh", "sa", "ltd", "limited", "inc", "group",
+                         "holding", "bv", "nv", "ag", "spa", "srl", "plc", "co"]
   component_split_k: 2   # component folds over the labeled-pair barcode graph
   dev_fold: 0             # fold index used as DEV  (threshold-fit half)
   test_fold: 1            # fold index used as TEST (reported half)

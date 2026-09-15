@@ -768,3 +768,160 @@ reporting wiring (via a read-only reconnaissance subagent, no code run).
 `git checkout -- results/` was therefore never needed — `results/` stayed clean
 apart from the two new `attribute_separation_*.csv` files, which are gitignored
 and NOT committed.
+
+---
+
+## 20. Brand analysis: TF-IDF + fuzzy matching — are brands failing to match, and why not?
+
+`src/training/brand_analysis.py`. **No new dependency**: TF-IDF uses
+`sklearn` (`scikit-learn==1.9.0`, already in `requirements.txt`) and fuzzy
+matching uses stdlib `difflib` plus a small Levenshtein. `rapidfuzz` 3.14.6 is
+present in the venv but is **not declared** in `requirements.txt`, so relying on
+it would break a fresh install — not used.
+
+TF-IDF is configured `analyzer="char_wb"`, `ngram_range=(2,3)`: character
+n-grams are the right space for short strings, where whole-token overlap is too
+sparse (`Radnor` / `Rainbow` share no token but share n-grams). Settings and
+thresholds live in `evaluation.brand_analysis`; rows are pydantic
+(`BrandPairRow`).
+
+### 20.1 The classes, with real counts
+
+**585-pair review band** (the population where brands actually differ —
+`brand_match` is False on 388 of 585):
+
+| class | count | share |
+|---|---|---|
+| `exact_match` | 197 | 33.7 % |
+| `different_brand` | 378 | 64.6 % |
+| `ambiguous_similarity` (0.60 < ratio < 0.85) | 10 | 1.7 % |
+| `surface_variant` (case/accents/punctuation/suffix) | **0** | 0 % |
+| `missing_brand` (empty either side) | **0** | 0 % |
+| `brand_only_in_title` | **0** | 0 % |
+
+**Labelled-pair population (19,918 pairs):** 19,917 `exact_match`,
+1 `surface_variant`, 0 of every other class — every pair is same-brand by
+construction.
+
+**Catalog (13,250 GTINs, 1,655 distinct brands):** exactly **3** clusters where
+raw brand strings collapse to one normal form — `REAL | Reál | Réal` (8 GTINs),
+`ECO | Eco+` (14), `Viva | Viva!` (6) — **28 GTINs, 0.21 %**, and **0 labelled
+pairs** involve two spellings of one brand.
+
+### 20.2 The answer: brands are not failing to match — the wrong product is being retrieved
+
+The 10 `ambiguous_similarity` cases were inspected individually. **Every one is a
+genuinely different brand that happens to share a substring**, not a
+normalisation failure:
+
+```
+Radnor   vs Rainbow      0.615   LIFEWTR  vs ZenWTR     0.615
+Cemilefendi vs Cemil     0.625   Peace Tea vs Seven Teas 0.632
+Thick- It vs Thick & Easy 0.667  Réal     vs Realemon  0.667
+Albi     vs Marli        0.667
+```
+
+So of the 388 brand mismatches: **378 are outright different brands** (the
+retriever surfaced a different brand's product) and **10 are different brands
+sharing letters**. **Zero are string-normalisation defects.** Brand mismatch is
+a **retrieval/gating** problem, not a text-composition problem — which is
+consistent with §15's finding that brand is constant across the *training* pair
+population and therefore carries no learnable signal.
+
+### 20.3 What was fixed, and what it is worth
+
+| class | fixable here? | action |
+|---|---|---|
+| surface variants (accents) | yes | **fixed** — diacritics folded before normalisation |
+| surface variants (case/punctuation) | yes | already handled by `normalize_text` |
+| surface variants (corporate suffixes) | yes | suffix stripping added to the analysis normal form |
+| missing/empty brand | n/a — **0 instances** | nothing to fix; current behaviour is correct and a regression test pins it |
+| brand only in title | n/a — **0 instances** | nothing to fix |
+| genuinely different brands | **no** | handed over as a training-side spec (§20.4) |
+
+**Important SSOT correction.** I originally wrote a private `_fold_accents`
+helper. That was a duplicate: `core.critical_attributes.normalized_attribute_text`
+is the repo's existing accent-folding normaliser (NFKD + casefold + strip
+combining marks), already used by `core.hard_negatives.normalized_product_name`.
+The brand analysis and `core.model_input` now **both call the existing
+function**; the private copy is deleted. One consequence surfaced immediately:
+that normaliser also collapses punctuation, so the decimal percentage marker
+had to become alphanumeric (`5.5%` → `pct5d5`, not `pct5.5`) or it split into
+two tokens. Caught by an existing test.
+
+Scope preserved: every one of these changes is in the **`cleaned`** composition,
+and `legacy` still reproduces the golden fixtures — re-verified after the
+normaliser swap, **0 byte-mismatches over 855 rows × 2 sides**.
+
+### 20.4 Handover — the training-side specification (not attempted here)
+
+**True hard negatives.** 378 of 585 review-band pairs (and ~100 % of the
+labelled-pair negatives) pair *different brands* while matching on the other
+attributes. Two consequences the user's separate training run should decide:
+
+1. **Hard-negative mining must admit cross-brand pairs.** The current negatives
+   are same-brand by construction (`pair_type` = volume / pack / package_type),
+   so the encoder is trained on a population where brand is constant — it
+   learns that brand is noise, which is exactly the +0.0249 separation observed.
+   Recommended: sample a configurable fraction of hard negatives *across* brands
+   at the same volume/pack, so brand becomes a discriminating dimension.
+2. **Loss weighting / margin.** With brand made informative, the contrastive
+   margin (`training.contrastive_margin`, currently 0.1) is the lever that
+   decides how hard same-attribute/different-brand pairs are pushed apart. This
+   is a tuning decision for the training run, not a code change here.
+
+No training was run; this is a written specification only.
+
+## 21. Status of item 6 (provenance / contract stamping)
+
+**Partially covered by concurrent work; the delta is NOT done.** Another agent
+working this repository in parallel introduced `TrainingSpec.ModelInputComposition`
+(pydantic, in `src/core/schemas.py`) carrying `profile`, `include_evidence` and a
+`fingerprint` digest, and stamps it into the run trace, the checkpoint manifest,
+the prepared-bundle manifest and the ANN reuse fingerprint through the existing
+`core.tracing` / `config/paths.yaml` machinery.
+
+Of the four fields item 6 asks for, **two are present** (composition profile,
+fingerprint) and **two are NOT** (symmetry mode, code commit / git SHA, config
+hash). I did not add them: the area was under active concurrent edit, and
+shipping an unverified extension into another agent's in-flight schema is how
+two schemas for one concept appear. Stated plainly as open.
+
+**Absence is the marker for pre-change artifacts.** No historical artifact was
+rewritten. A reader identifies a pre-change artifact by the *absence* of the
+`model_input` block in its manifest/trace: artifacts produced before this work
+carry no such key, artifacts produced after it always do. Nothing was
+back-filled, so the absence is meaningful.
+
+## 22. Reused vs newly created (this round)
+
+**Reused:** `core.critical_attributes.normalized_attribute_text` (**the fix for
+my own duplication** — see §20.3); `sklearn` TF-IDF (already declared);
+`difflib` (stdlib); `core.common.F` / `ensure_parent` / `load_config`;
+`config/paths.yaml` + `DataConfig` registration; the `EvaluationSpec` nested-spec
+and row-model style in `core/schemas.py`.
+
+**Newly created (justified):** `src/training/brand_analysis.py` and
+`tests/test_brand_analysis.py`. The reuse grep for fuzzy/TF-IDF/brand helpers
+(`SequenceMatcher|difflib|levenshtein|edit_distance|fuzz|TfidfVectorizer|tfidf`)
+returned **nothing** in `src/`, so no brand-similarity machinery existed;
+`attribute_agreement_audit.py` is a different domain (legacy extractor vs NER
+sidecar). Also new: `BrandAnalysisSpec` / `BrandPairRow` / `BRAND_PAIR_COLUMNS`,
+`catalog_brand_variants`, `review_comparisons`, `brand_support`, the
+`brand_analysis_pairs` artifact path, and `_levenshtein` (no stdlib or declared
+dependency provides edit distance).
+
+## 23. EXECUTED vs READ (brand round)
+
+**EXECUTED:** brand classification over all 19,918 labelled pairs (19,917
+exact / 1 surface variant); over the 585 review band (197 / 378 / 10, with the
+10 inspected individually); catalog variant clustering over 13,250 GTINs and
+1,655 brands (3 clusters, 28 GTINs); the empty-brand and title-only counts
+(0 and 0); the legacy byte-identity re-verification after the normaliser swap
+(0 / 855×2); full suite **341 passed, 2 skipped**; ruff clean on both new files.
+
+**READ only:** the concurrent agent's `ModelInputComposition` implementation and
+its stamping sites (for §21); the `difflib` / `sklearn` APIs.
+
+**Not run:** any training; the real pipeline; `rapidfuzz` (available but
+undeclared, deliberately unused).
