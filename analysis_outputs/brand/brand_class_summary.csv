@@ -1,0 +1,10 @@
+brand_class,rows,mean_score,mean_ratio,mean_tfidf_cosine_char,resolves_under_normalisation
+absent_both,0,0.0,0.0,0.0,False
+absent_source,0,0.0,0.0,0.0,False
+absent_target,0,0.0,0.0,0.0,False
+identical_normalized,197,0.6936211997482378,100.0,1.0,False
+surface_variant_same_brand,0,0.0,0.0,0.0,True
+containment_or_truncation,4,0.6818080842494965,60.41666666666667,0.35491034920869935,True
+brand_present_only_in_title,4,0.6921907216310501,19.476190476190478,0.015236442812818104,False
+distinct_brand_true_hard_negative,378,0.668206074092754,23.63200371019878,0.011405714106152418,False
+partial_overlap_needs_review,2,0.6856217980384827,66.66666666666667,0.3874385817149699,False
