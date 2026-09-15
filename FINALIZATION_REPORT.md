@@ -1143,6 +1143,100 @@ a CPU box, so it now asks for CPU through the documented override, which is prec
 override exists for. No coverage was deleted. Repo-wide lint: **0 new findings vs `2a15852`**, 17 vs
 the baseline's 20.
 
+## 7k. Training inputs moved to a single current root — plus two things I had to fix to make it true
+
+Owner task: one root (`training_data/`) holding ONLY files we are certain are current, config pointed at
+it, old copies gone. No collision on the files I needed (`src/cli/colab.py` was clean), so I proceeded.
+
+### The root, and the resolver extension
+
+```
+config/paths.yaml
+  paths:
+    training_data_dir: "training_data"        # declared like every other root
+  files:
+    dataset_deduped:                  "training_data:dataset_deduped.csv"
+    dataset_deduped_sample_3000:      "training_data:dataset_deduped_sample_3000.csv"
+    dataset_deduped_train_minus_3000: "training_data:dataset_deduped_train_minus_3000.csv"
+    canonical_records:                "training_data:canonical_records.csv"
+    gate_results:                     "training_data:gate_results.csv"
+```
+`DataPathsSpec` gained `training_data_dir` (the config contract), and `_BINDING_ROOTS` in
+`src/core/common.py` gained `"training_data": TRAIN_ROOT / _CFG["paths"]["training_data_dir"]` — ONE rule
+beside the existing five, no hardcoded path anywhere. `dataset.csv` keeps its `repo:` binding and did
+not move.
+
+Tracked files moved with `git mv` so history follows; `git diff --cached -M` confirms the renames were
+detected (`{results => training_data}/canonical_records.csv`, and 0-change pure renames for the other
+two). The two derived splits were plain `mv` and stay untracked by the same policy as before, now with
+matching rules for their new home; `.gitignore`'s allow-list entries for the old `results/` and
+`artifacts/data/` locations were deleted as dead.
+
+Consumers updated: `common.load_dataset_deduped` reads `F["dataset_deduped"]` (unchanged code, new
+binding), `training/sample_deduped_dataset.py` now derives its defaults from `F[...]` instead of
+spelling `TRAIN_ROOT / "artifacts/data/..."` by hand, `training/sample_balanced_pairs.py` likewise
+(and gained the `F` import it needed), `run_ann_full_data.py`, `training/dedupe.py`'s docstring, and
+`tests/test_validation_inference.py`.
+
+**Verified:** zero live references to the old paths
+(`git grep "results/canonical_records|results/gate_results|artifacts/data/dataset_deduped.csv|..."` over
+`config/ src/ scripts/ tests/ run_ann_full_data.py` → empty). A real load through the config:
+```
+load_dataset_deduped() -> 61529 rows   from training_data/dataset_deduped.csv
+canonical_records      -> 13250 rows
+gate_results           -> 135769 rows
+dataset.csv (raw)      -> still at the repo root
+```
+Suite **427 passed, 2 skipped**.
+
+### FIX 1 — the "regenerated" artifacts were still the committed copies
+
+The brief said `results/canonical_records.csv` and `results/gate_results.csv` had been regenerated. They
+had **not**: both were **byte-identical to HEAD** (`gate d91363ce…`, `canon b044f2ef…`), and `gate_results`
+still carried the OLD split `hard_no 88,683 / fallback 45,494 / proceed 1,592` — a fresh mtime from a
+`git checkout -- results/`, which restores content without changing it. Moving them into a root defined as
+"only files we are certain are current" would have put stale files in the one directory that exists to
+prevent exactly that.
+
+So I regenerated them (`python -m training.data_prep`), which now writes **through the binding** and landed
+directly in `training_data/`. Result, matching the brief's expected NEW numbers exactly:
+
+```
+gate decisions: {'hard_no': 87241, 'fallback': 46791, 'proceed': 1737}   (expected 87,241/46,791/1,737 ✓)
+canonical rows: 13,250      manifest closure 71,623 == 13,250 + 45,260
+gate     d91363ce… -> 24478ab0…      canon b044f2ef… -> 566d6d83…
+```
+
+I also regenerated `dataset_deduped.csv` as instructed; it came out **byte-identical** to the 09-14 copy
+(`3050b456…`), which confirms dedupe is deterministic on the unchanged raw export rather than merely
+being assumed current.
+
+### FIX 2 — ⚠️ a concurrent agent had staged the deletion of `dataset.csv`
+
+While preparing the commit the index contained **16 staged deletions, 474,418 lines, including
+`dataset.csv`** — plus `colab_retrieved/*`, `artifacts/data/number_tokens_reference.csv` and the
+`analysis_outputs/*` CSVs. The files were all present on disk; only the index said deleted.
+
+Cause: another agent added a blanket rule to the **same** `.gitignore` I was editing —
+```
+# Every CSV is generated or local-only; the tree ships code, not data.
+*.csv
+```
+— and ran `git rm --cached` over the CSVs. That is incompatible with this task (`git mv` the frozen
+inputs so history follows; `dataset.csv` "must not move") and with the standing repo-safety rules.
+
+What I did, deliberately and without destroying anyone's work:
+* `git restore --staged .` — the index is back to HEAD; **no file was lost**, all 16 are on disk and
+  tracked again;
+* staged **only** my paths, and verified `dataset.csv`, `colab_retrieved/`,
+  `artifacts/data/number_tokens_reference.csv` and `analysis_outputs/` are **not** in the staged set;
+* the other agent's `*.csv` line is **left exactly where it is in the working tree, uncommitted** — I
+  staged a `.gitignore` without it rather than committing their in-flight change or reverting it.
+
+**Owner decision needed:** the blanket `*.csv` rule and the four frozen inputs in `training_data/` are in
+direct conflict. If "the tree ships code, not data" is the real policy, this migration must be reverted
+in favour of it; if the four frozen inputs stay tracked, the `*.csv` line should be dropped deliberately.
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):
