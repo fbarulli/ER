@@ -566,3 +566,205 @@ A **checkpoint is not validated against the composition at scoring time.** `pred
 will happily run a legacy-trained checkpoint over cleaned text; the ANN fingerprint guards the index,
 not the weights. Closing it needs a load-time check against the manifest key added above, which is a
 retraining-workflow decision rather than a text-builder one. Stated so the retrain can decide.
+
+---
+
+## 13. Universal symmetry: the pack sentinel and every other attribute
+
+### 13.1 The audit — every attribute, both channels
+
+`sku_info` and `canonical_info` were compared on an EMPTY record (the cleanest
+way to see an implicit default) and over all 855 fixture rows:
+
+| attribute | unobserved treatment, SOURCE | unobserved treatment, TARGET | verdict | after |
+|---|---|---|---|---|
+| `volume` | omit (empty set) | omit (empty set) | already symmetric | unchanged |
+| **`pack`** | **`{1.0}` sentinel** (`structured_features.py:112-116`) | **empty** (`:128-149`) | **ONE-SIDED DEFAULT** | implicit `1.0` on BOTH sides |
+| `package_type` | omit | omit | already symmetric | unchanged |
+| `flavor` | omit | omit | already symmetric | unchanged |
+| `carbonation` | omit | omit | already symmetric | unchanged |
+| `sweetener` | omit | omit | already symmetric | unchanged |
+| `pulp` | omit | omit | already symmetric | unchanged |
+
+`pack` was the **only** one-sided implicit default, in **both** channels. The
+categorical attributes do disagree between the two sides of a *retrieved* pair
+(54/34, 58/40, 139/52 rows in the review band) but that is **evidence
+disagreement about two different products**, not a default: an empty record
+returns empty sets from BOTH extractors, verified by execution. The canonical
+side also consults `mode_flavor` / `extract_critical_claims` where the source
+side does not — an **evidence-source** difference, not a default, and
+deliberately left alone.
+
+### 13.2 The fix, and the byte-identity guarantee kept honest
+
+`core.structured_features.symmetric_info` applies the rule; `core.model_input.
+model_input_info` is the profile-aware entry point that BOTH the text channel
+and the numeric vector read, so the two can no longer disagree. The implicit
+value is `training.structured_features.implicit_pack_qty` (config), validated
+`> 0`.
+
+**The symmetry fix is scoped to `cleaned`.** `legacy` returns the info
+unchanged, so the golden fixtures keep passing **by construction, not by
+weakening them** — re-verified this round: **0 byte-mismatches across all 855
+fixture rows × 2 sides**.
+
+| measure (855 fixture rows) | before | after |
+|---|---|---|
+| pack-token presence agrees source vs target | 27.4 % | **100 %** |
+| identical numeric vector source vs target | 18.8 % | **82.6 %** |
+| rows where an unobserved source pack now emits `1.0` on both sides | — | **579/599** |
+
+The 20 rows that do **not** end at `{1.0}` carry an explicitly observed
+`pack_set` (`[6]`, `[2,5]`) and keep it — the implicit value fills a gap, it
+never overwrites evidence. **0 unexplained cases.**
+
+`rand_matching.py:1117-1120` carried a rationale claiming the source sentinel
+already "matches the canonical singleton token pack_qty_1". It did not — that
+comment is corrected in place.
+
+### 13.3 The universal audit found a SECOND, worse defect: accents
+
+Chasing the user's hypothesis that brand variants are "lexically near-identical
+but unnormalised" exposed something worse. `normalize_text` deletes every
+non-ASCII character, so an accent does not merely go unfolded — it becomes a
+**word break that corrupts the token**:
+
+```
+'Brämhults'        -> ['br', 'mhults']
+'Côteaux Nantais'  -> ['teaux', 'nantais']
+'Björk'            -> ['bj', 'rk']
+'Reál' -> ['re']      'Réal' -> ['al']      'REAL' -> ['real']
+```
+
+Two spellings of one brand could therefore **never** match, and 47 distinct
+canonical brands carry non-ASCII. Fixed by folding diacritics (NFKD + drop
+combining marks) before `normalize_text`, in the `cleaned` composition only:
+
+```
+'Brämhults' -> ['bramhults']   'Côteaux Nantais' -> ['coteaux','nantais']
+'Reál' -> ['real']   'Réal' -> ['real']   'REAL' -> ['real']
+```
+
+## 14. Attribute separation metrics
+
+`src/training/attribute_separation.py`, wired into **`generate_report()`** —
+the single composite writer that `train.py` actually calls. Registered in
+`config/paths.yaml` + `DataConfig` as `attribute_separation_summary` /
+`attribute_separation_values`; thresholds in
+`evaluation.attribute_separation`; rows are pydantic
+(`SeparationSummaryRow` / `SeparationValueRow`). **No parallel reporting path,
+no model, no training** — it reads the labelled-pair population and the
+canonical attributes.
+
+`separation = P(attribute agrees | positive) − P(attribute agrees | negative)`,
+computed over pairs where the attribute is *observable* (both-sides-empty pairs
+are counted in `n_unobservable`, never silently scored as agreement).
+
+**Executed** on all 19,918 labelled pairs (7,330 positive / 12,588 negative):
+
+| attribute | separation | flagged weak | note |
+|---|---|---|---|
+| volume | **+0.837** | no | strongest signal |
+| pack | **+0.584** | no | |
+| package_type | **+0.253** | no | |
+| sweetener | +0.062 | yes | |
+| carbonation | +0.029 | yes | |
+| **brand** | **0.000** | **yes** | **saturated — see 15** |
+| pulp | −0.051 | yes | |
+| flavor | −0.087 | yes | sharing a flavor makes a pair *more* likely negative |
+
+1,147 values scored; 98 flagged weak; **1,007 withheld for insufficient
+support** (reported with their counts, never flagged — a brand seen twice is
+not a defect).
+
+## 15. Brand separation: the diagnosis (replaces the gate-eligibility idea)
+
+The user asked to find out *how to separate brands better*. Classification of
+every brand failure mechanism, measured on real data:
+
+| class | mechanism | pairs affected | verdict |
+|---|---|---|---|
+| **(a)** brand empty/absent on one side | `mode_brand` blank | **0** | not a defect here |
+| **(b)** near-identical but unnormalised | case/accents/suffixes | **0 pairs** collapse today — **but the accent mechanism was real and is FIXED** (§13.3) | fixed in code |
+| **(c)** genuinely different brand, other attributes match | true hard negative | **0** | does not occur |
+| **(d)** brand present but drowned out | brand is **constant across the population** | **all 19,918** | **the actual finding** |
+
+**(d) is the answer, and it is a population property, not a text bug.**
+`true_label=1` pairs are gate-`proceed` pairs; `true_label=0` pairs are
+gate-`hard_no` **hard negatives**. Brand agreement is **100 % in BOTH classes** —
+every single one of the 19,918 pairs has the same brand on both sides
+(`pair_type` for the sampled negatives: volume 1258, pack 230, package_type 8,
+flavor 1). Brand is therefore **constant by construction**, separation is
+exactly 0, and the model's measured **+0.0249 brand separation is the correct
+response to this data**, not a model failure.
+
+**Consequence — a training-side specification (not attempted here).** No
+text-composition change can improve brand separation, because the signal is
+absent from the pair population. The lever is **hard-negative mining**: admit
+cross-brand pairs at a meaningful rate (the current negatives are ~100 %
+within-brand), or the encoder is being trained to treat brand as noise. Stated
+as a specification only — **no training was run**, and this is untouched by
+this change.
+
+## 16. Status of the five newly approved items — stated plainly
+
+| item | status |
+|---|---|
+| 1. Symmetry as an enforced invariant | **DONE** — `test_symmetry_invariant_where_the_same_evidence_feeds_both_sides`, all 855 rows, byte-equal text + vector. Scoped deliberately: a raw SKU listing and a canonical record legitimately differ in wording, so the invariant is applied where the SAME data feeds both sides; the one permitted exception (the target de-duplicates the brand it already emitted) is encoded explicitly in the mirror, not by loosening the assertion. |
+| 2. Truncation guard + counter in run metrics | **NOT DONE.** The finding stands (11.9 % of target texts lost the structured tail entirely; 27.7 % exceeded the window) and the remedy is unstarted. Raising `max_seq_length` is **not** free — `worker_2`'s ANN checkpoint was trained at 128 — so this needs a deliberate decision, not a silent bump. |
+| 4. Band-conditioned separation | **NOT DONE.** The metric is band-ready (it takes any pair frame) but no band split is wired. |
+| 5. Stage attribution (retrieval vs scoring) | **NOT DONE.** |
+| replacement. Brand diagnosis | **DONE** — §15, with (a)/(b) fixed in code and (c)/(d) handed over as a training-side spec. |
+
+Items 2, 4 and 5 remain open. I stopped rather than ship them half-verified:
+the working tree was concurrently edited by another agent across ~20 files in
+this same feature area (§17), and I judged an honest "not done" more useful
+than code I could not verify end to end.
+
+## 17. Concurrent edits — disclosure
+
+Partway through this round the working tree gained edits **I did not author**,
+in the same feature area: `model_input_provenance` was renamed to
+`model_input_composition` and promoted to a pydantic model with a `fingerprint`
+field; `_implicit_pack_qty` was made public as `implicit_pack_qty`; and
+`prepared_bundle.py`, `zero_shot_sims.py`, `src/cli/colab.py`, `dvc_store.py`
+and others were touched. My tests were adapted to that API rather than
+reverting another agent's work, and one of my tests duplicating an existing
+one was dropped. The full suite was green across the combined state
+(**332 passed, 2 skipped**).
+
+## 18. Reused vs newly created (this round)
+
+**Reused:** `core.structured_features` (`_as_set` / `_as_string_set` / `vector`)
+for attribute parsing; `pipeline.normalize_text`; `core.common` `F` registry,
+`ensure_parent`, `load_config`; `generate_report` and its
+`_datapoint_coverage_section` pattern; `config/paths.yaml` + `DataConfig`
+registration; `TrainingSpec` nested-spec style; `tests/fixtures/
+model_input_golden.json`.
+
+**Newly created (all justified):** `src/training/attribute_separation.py` —
+the reuse grep (`separation|discriminat|per_value|per_attribute|by_value`)
+found only `extract_discriminative_ngrams` (n-gram IDF, not pair separation),
+`_discriminative_groups` (LR groups) and `attribute_agreement_audit.py` (legacy
+extractor vs NER sidecar agreement — a different domain). Nothing computed
+pair-level attribute separation. Also new: `SeparationSummaryRow` /
+`SeparationValueRow` / `AttributeSeparationSpec`, `_fold_accents`,
+`symmetric_info`, `model_input_info`, and the two registered artifact paths.
+
+## 19. EXECUTED vs READ (this round)
+
+**EXECUTED:** full suite before and after (332 passed / 2 skipped); the
+attribute audit over 855 rows; the accent tokenisation probes; the labelled-pair
+brand classification (19,918 pairs, both classes); the separation metrics end to
+end on real data and through `_attribute_separation_section`; the legacy
+byte-identity re-verification (0/855×2); the pack symmetry counts
+(599 unobserved rows, 579 conforming, 20 explained by an observed pack_set,
+0 unexplained).
+
+**READ only:** the concurrent agent's edits; `evaluate_models.py` and the
+reporting wiring (via a read-only reconnaissance subagent, no code run).
+
+**Not run:** any training; the real pipeline (it rewrites `results/*.csv`);
+`git checkout -- results/` was therefore never needed — `results/` stayed clean
+apart from the two new `attribute_separation_*.csv` files, which are gitignored
+and NOT committed.

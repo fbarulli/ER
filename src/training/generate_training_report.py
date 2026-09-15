@@ -676,6 +676,86 @@ def _datapoint_coverage_rows(
     return rows
 
 
+def _attribute_separation_section(
+    out: Path, canonical_path: str | Path | None
+) -> dict[str, object]:
+    """Compute + persist the attribute separation metrics, or say why not.
+
+    Silently skipping would be the defect this project keeps paying for, so a
+    disabled or unreadable population is REPORTED in the section, never
+    omitted.
+    """
+    from core.common import F
+    from training.attribute_separation import (
+        ATTRIBUTE_SOURCES,
+        ATTRIBUTE_UNAVAILABLE,
+        separation_spec,
+        write_separation_reports,
+    )
+
+    spec = separation_spec()
+    section: dict[str, object] = {
+        "enabled": bool(spec.enabled),
+        "min_pairs_per_class": int(spec.min_pairs_per_class),
+        "min_value_support": int(spec.min_value_support),
+        "flag_below": float(spec.flag_below),
+        "unavailable_attributes": dict(ATTRIBUTE_UNAVAILABLE),
+    }
+    if not spec.enabled:
+        section["skipped"] = "evaluation.attribute_separation.enabled is false"
+        return section
+    labeled = Path(F["labeled_pairs"])
+    canonicals = Path(canonical_path or F["canonical_records"])
+    if not labeled.is_file() or not canonicals.is_file():
+        section["skipped"] = (
+            f"missing population: labeled_pairs={labeled.is_file()} "
+            f"canonical_records={canonicals.is_file()}"
+        )
+        return section
+
+    summary, by_value = write_separation_reports(
+        pd.read_csv(labeled, dtype={"gtin1": str, "gtin2": str}),
+        pd.read_csv(canonicals, dtype=str, keep_default_na=False),
+        spec=spec,
+    )
+    summary.to_csv(out / "attribute_separation_summary.csv", index=False)
+    by_value.to_csv(out / "attribute_separation_values.csv", index=False)
+    weak = by_value[by_value["flagged_weak"]]
+    section["summary"] = {
+        str(row["attribute"]): {
+            key: _finite_number(row[key]) if key != "negative_class_saturated" else bool(row[key])
+            for key in (
+                "n_positive", "n_negative", "n_unobservable", "p_agree_positive",
+                "p_agree_negative", "separation", "reportable", "flagged_weak",
+                "negative_class_saturated",
+            )
+        }
+        for _, row in summary.iterrows()
+    }
+    section["weakest_values"] = {
+        str(attribute): [
+            {
+                "value": str(row["value"]),
+                "n_positive": int(row["n_positive"]),
+                "n_negative": int(row["n_negative"]),
+                "separation": _finite_number(row["separation"]),
+            }
+            for _, row in weak[weak["attribute"].eq(attribute)].head(10).iterrows()
+        ]
+        for attribute in ATTRIBUTE_SOURCES
+    }
+    section["n_values_scored"] = len(by_value)
+    section["n_values_flagged_weak"] = len(weak)
+    section["n_values_withheld_for_support"] = int((~by_value["reportable"]).sum())
+    print(
+        f"[separation] {len(summary)} attributes, {len(by_value):,} values scored, "
+        f"{len(weak):,} flagged weak, "
+        f"{int((~by_value['reportable']).sum()):,} withheld for support",
+        flush=True,
+    )
+    return section
+
+
 def _print_datapoint_coverage(section: dict[str, object]) -> None:
     """Human-facing summary of the coverage section (never silent)."""
     print("\n[report] datapoint coverage", flush=True)
@@ -1477,6 +1557,12 @@ def generate_report(
         ],
     ).to_csv(out / "datapoint_coverage.csv", index=False)
 
+    # Attribute separation: how well each attribute (and each of its values)
+    # separates true pairs from false ones. Computed from the registered
+    # labelled-pair population and the canonical attributes — no model scores
+    # involved, so it is equally valid for a run that only prepared data.
+    separation_report = _attribute_separation_section(out, canonical_path)
+
     report = {
         "report_version": 3,
         "folds": int(len(ok)),
@@ -1496,6 +1582,10 @@ def generate_report(
         # the registry declares that this run never reported, and the per-fold
         # negative-source accounting identity.
         "datapoint_coverage": datapoint_coverage,
+        # Which attributes actually carry signal, and which of their VALUES
+        # do not. A 0.0 with negative_class_saturated=true means the pair
+        # population cannot discriminate on that attribute by construction.
+        "attribute_separation": separation_report,
         "score_overlap": _numeric_csv(out / "score_distribution_overlap.csv", ("split",)),
         "confusion": _numeric_csv(out / "confusion_matrices.csv", ("fold", "operating_point")),
         "threshold_sweep": _numeric_csv(out / "threshold_sweep.csv", ("fold", "threshold")),

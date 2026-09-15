@@ -79,7 +79,9 @@ defaults to an inline literal at the call site.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 import math
 from collections.abc import Callable
 from datetime import datetime
@@ -137,6 +139,8 @@ class DataFilesSpec(BaseModel):
     balanced_pairs_sample_3000: str
     embedding_similarities: str
     model_evaluation_summary: str
+    attribute_separation_summary: str
+    attribute_separation_values: str
     fold_metrics: str
     hpo_grid_csv: str
     # hpo_tpe_best REMOVED (audit round 2 F02, finished round 3): dead
@@ -481,6 +485,112 @@ class RobustValidationSpec(BaseModel):
         return self
 
 
+# ── attribute separation metrics (results/training/attribute_separation_*.csv) ──
+# How well each product attribute separates TRUE pairs from FALSE ones, at the
+# attribute level and per attribute value.  Computed from labelled pairs plus
+# canonical attributes only: it needs NO model and NO training run.
+SEPARATION_SUMMARY_COLUMNS: tuple[str, ...] = (
+    "attribute",
+    "n_positive",
+    "n_negative",
+    "n_unobservable",
+    "p_agree_positive",
+    "p_agree_negative",
+    "separation",
+    "reportable",
+    "flagged_weak",
+    "negative_class_saturated",
+)
+SEPARATION_VALUE_COLUMNS: tuple[str, ...] = (
+    "attribute",
+    "value",
+    "n_positive",
+    "n_negative",
+    "p_match_positive",
+    "p_match_negative",
+    "separation",
+    "reportable",
+    "flagged_weak",
+)
+
+
+class AttributeSeparationSpec(BaseModel):
+    """Support and flagging rules for the attribute separation metrics.
+
+    STATISTICAL HONESTY: a separation score is only meaningful with support on
+    BOTH classes.  A value observed in two pairs is reported with its counts
+    but is never flagged as a defect — ``reportable`` is False and
+    ``flagged_weak`` stays False.  Thresholds are config, not literals.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    min_pairs_per_class: int = Field(ge=1)
+    min_value_support: int = Field(ge=1)
+    flag_below: float = Field(ge=-1.0, le=1.0)
+
+
+class SeparationSummaryRow(BaseModel):
+    """One attribute_separation_summary.csv row: one product attribute."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attribute: str = Field(min_length=1)
+    n_positive: int = Field(ge=0)
+    n_negative: int = Field(ge=0)
+    n_unobservable: int = Field(ge=0)
+    p_agree_positive: float = Field(ge=0.0, le=1.0)
+    p_agree_negative: float = Field(ge=0.0, le=1.0)
+    separation: float = Field(ge=-1.0, le=1.0)
+    reportable: bool
+    flagged_weak: bool
+    # The attribute agrees on EVERY negative pair, so it cannot separate this
+    # population by construction and its 0.0 is a property of the pair
+    # sampling, not a finding about the attribute. Read every score with it.
+    negative_class_saturated: bool
+
+    @model_validator(mode="after")
+    def _flag_requires_support(self) -> SeparationSummaryRow:
+        if self.flagged_weak and not self.reportable:
+            raise ValueError(
+                f"{self.attribute}: flagged_weak=True with reportable=False — "
+                "an under-supported score must never be reported as a defect"
+            )
+        if self.negative_class_saturated and self.separation > 0:
+            raise ValueError(
+                f"{self.attribute}: negative_class_saturated with a positive "
+                "separation is impossible — the rule or the counts are wrong"
+            )
+        return self
+
+
+class SeparationValueRow(BaseModel):
+    """One attribute_separation_values.csv row: one value of one attribute."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attribute: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    n_positive: int = Field(ge=0)
+    n_negative: int = Field(ge=0)
+    p_match_positive: float = Field(ge=0.0, le=1.0)
+    p_match_negative: float = Field(ge=0.0, le=1.0)
+    separation: float = Field(ge=-1.0, le=1.0)
+    reportable: bool
+    flagged_weak: bool
+
+    @model_validator(mode="after")
+    def _flag_requires_support(self) -> SeparationValueRow:
+        if self.flagged_weak and not self.reportable:
+            raise ValueError(
+                f"{self.attribute}={self.value!r}: flagged_weak=True with "
+                "reportable=False — an under-supported value must never be "
+                "reported as a defect"
+            )
+        return self
+
+
 class EvaluationSpec(BaseModel):
     """Zero-shot evaluation protocol (config/training.yaml evaluation:) —
     the component dev/test split behind evaluate_models.
@@ -499,6 +609,7 @@ class EvaluationSpec(BaseModel):
     retrieval_ks: list[int] = Field(min_length=1)
     robust_validation: RobustValidationSpec
     uniformity: UniformitySpec
+    attribute_separation: AttributeSeparationSpec
 
     @model_validator(mode="after")
     def _folds_distinct_and_in_range(self) -> EvaluationSpec:
@@ -817,6 +928,11 @@ class TrainingSpec(BaseModel):
         volume_scale_ml: float = Field(gt=0.0)
         pack_scale: float = Field(gt=0.0)
         max_set_size: int = Field(ge=1)
+        # Universal symmetry: an attribute that was NOT observed must be
+        # represented the same way on both sides of a pair. An unobserved pack
+        # count is an implicit 1.0 (one unit) on BOTH sides, in the text
+        # channel and in the numeric vector alike.
+        implicit_pack_qty: float = Field(gt=0.0)
 
     class ModelInputSpec(BaseModel):
         """Model-input text composition (config/training.yaml training.model_input:).
@@ -842,6 +958,40 @@ class TrainingSpec(BaseModel):
                     "set include_evidence: false, or profile: legacy to keep it"
                 )
             return self
+
+    class ModelInputComposition(BaseModel):
+        """The ACTIVE encoder-text contract, as recorded on artifacts.
+
+        ``profile``/``include_evidence`` say WHICH composition was selected;
+        ``fingerprint`` is a stable digest of those two, so an artifact can
+        name its input contract and two artifacts built from different
+        compositions are distinguishable without diffing the text itself.
+        Written to the run trace, the checkpoint manifest, the prepared-bundle
+        manifest and the ANN reuse fingerprint — one record, not four shapes.
+        """
+
+        model_config = ConfigDict(extra="forbid")
+
+        profile: Literal["legacy", "cleaned"]
+        include_evidence: bool
+        fingerprint: str = Field(min_length=64, max_length=64)
+
+        @classmethod
+        def from_spec(
+            cls, spec: TrainingSpec.ModelInputSpec
+        ) -> TrainingSpec.ModelInputComposition:
+            payload = {
+                "profile": spec.profile,
+                "include_evidence": spec.include_evidence,
+            }
+            return cls(
+                **payload,
+                fingerprint=hashlib.sha256(
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+                        "utf-8"
+                    )
+                ).hexdigest(),
+            )
 
     class LateEpochLrDecaySpec(BaseModel):
         """Config-owned LR reduction for the later training epochs."""

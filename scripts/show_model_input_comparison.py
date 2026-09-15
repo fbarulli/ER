@@ -17,7 +17,7 @@ import pandas as pd
 from core.model_input import (
     build_canonical_text,
     build_sku_text,
-    model_input_provenance,
+    model_input_composition,
 )
 from core.structured_features import (
     canonical_info as canonical_structured_info,
@@ -89,7 +89,7 @@ def main() -> None:
         if gtin:
             targets[gtin] = group.iloc[0].to_dict()
     canonical_map = canon.set_index(canon["gtin"].astype(str)).to_dict("index")
-    composition = model_input_provenance()
+    composition = model_input_composition()
 
     rows: list[dict[str, object]] = []
     blocks: list[str] = []
@@ -130,7 +130,7 @@ def main() -> None:
         row = {
             "SKU_ID": sku_id,
             "NEAREST_ITEM_ID": target_id,
-            "model_input_composition": json.dumps(composition, sort_keys=True),
+            "model_input_composition": composition.model_dump_json(),
             "SCORE": text(item.get("SCORE")),
             "source_original_features": source_features,
             "source_base_cleaned": base_source,
@@ -154,7 +154,7 @@ def main() -> None:
             "\n".join([
                 "=" * 100,
                 f"ROW {len(rows)} | SKU_ID={sku_id} | candidate GTIN={target_id} | score={text(item.get('SCORE'))}",
-                f"MODEL INPUT COMPOSITION: {composition}",
+                f"MODEL INPUT COMPOSITION: {composition.model_dump_json()}",
                 "SOURCE — ORIGINAL FEATURES",
                 *(f"  {k}: {v}" for k, v in source_features.items()),
                 "SOURCE — PIPELINE CHANGES",
@@ -182,7 +182,7 @@ def main() -> None:
         "# Model input comparison",
         "",
         "Each review row is shown independently. The model-input blocks are exact strings; no fields are abbreviated.",
-        f"Model-input composition in force: `{composition}`. The exact-input blocks are produced by `core.model_input`; the intermediate steps describe the original (legacy) composition and are explanatory only.",
+        f"Model-input composition in force: `{composition.model_dump_json()}`. The exact-input blocks are produced by `core.model_input`; the intermediate steps describe the original (legacy) composition and are explanatory only.",
         "",
     ]
     for number, row in enumerate(rows, start=1):

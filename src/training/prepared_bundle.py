@@ -18,15 +18,24 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.schemas import TrainingSpec
+
 
 class PreparedBundleManifest(BaseModel):
     """Machine-checked identity and shape contract for a prepared bundle."""
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = "2"
+    schema_version: str = "3"
     payload_variant: str = Field(min_length=1)
     masking_profile: str = Field(min_length=1)
+    # The encoder-text composition the frozen payload was built with. A bundle
+    # is a frozen list of strings, so reusing one after the composition moves
+    # would train on text no lane produces any more — the manifest names the
+    # contract and load_prepared_bundle refuses a mismatch instead of silently
+    # training on the wrong payload. (schema_version 2 bundles have no such
+    # field and are rejected loudly by extra="forbid".)
+    model_input: TrainingSpec.ModelInputSpec
     n_df: int = Field(ge=1)
     n_payload: int = Field(ge=1)
     n_pos: int = Field(ge=1)
@@ -71,6 +80,8 @@ def write_prepared_bundle(
 ) -> PreparedBundleManifest:
     """Write one compressed, self-contained, locally generated input bundle."""
 
+    from core.model_input import model_input_spec
+
     path.parent.mkdir(parents=True, exist_ok=True)
     payload_data = {
         "df": df,
@@ -98,6 +109,7 @@ def write_prepared_bundle(
     manifest = PreparedBundleManifest(
         payload_variant=payload_variant,
         masking_profile=masking_profile,
+        model_input=model_input_spec(),
         n_df=len(df),
         n_payload=len(payload),
         n_pos=len(pos),
@@ -166,4 +178,14 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
         raise ValueError("prepared bundle payload variant disagrees with manifest")
     if data["masking_profile"] != manifest.masking_profile:
         raise ValueError("prepared bundle masking profile disagrees with manifest")
+    from core.model_input import model_input_spec
+
+    active = model_input_spec()
+    if manifest.model_input != active:
+        raise ValueError(
+            "prepared training bundle was built with a different encoder-text "
+            f"composition: bundle={manifest.model_input.model_dump()} "
+            f"active={active.model_dump()}. Re-prepare the bundle; the frozen "
+            "payload strings are not the text the active composition produces."
+        )
     return manifest, data

@@ -83,7 +83,8 @@ from core.schemas import GTIN_STATUSES, THRESHOLD_TIE_BREAK_CRITERIA
 from core.model_input import (
     build_canonical_text,
     build_sku_text,
-    model_input_provenance,
+    model_input_info,
+    model_input_composition,
 )
 from core.structured_features import (
     canonical_info as canonical_structured_info,
@@ -109,7 +110,7 @@ def preprocessing_fingerprint_inputs(structured_config: dict) -> dict[str, objec
     """
     return {
         "structured_features": structured_config,
-        "model_input": model_input_provenance(),
+        "model_input": model_input_composition().model_dump(),
         "unit_canonicalization": UNIT_CANONICALIZATION_VERSION,
     }
 
@@ -1022,7 +1023,7 @@ class RandMatcher:
         ).hexdigest()
 
         item_infos = [
-            canonical_structured_info(self.record_map[item_id])
+            model_input_info(canonical_structured_info(self.record_map[item_id]))
             if self.structured_enabled
             else {"volume": set(), "pack": set()}
             for item_id in self.item_ids
@@ -1114,9 +1115,16 @@ class RandMatcher:
         self, frame: pd.DataFrame
     ) -> tuple[list[str], list[dict], list[dict]]:
         # Keep gate attributes confidence-aware: an absent pack count remains
-        # unknown to the gate.  The model-side structured channel has a
-        # separate source representation whose missing pack count defaults to
-        # the canonical singleton token pack_qty_1.
+        # UNKNOWN to the gate, which is correct — the gate must not conflate
+        # "not observed" with an observed count of 1.
+        #
+        # The model-side channel is different and must be SYMMETRIC: it applies
+        # the active composition's unobserved-attribute rule via
+        # core.model_input.model_input_info, so an unobserved pack emits the
+        # configured implicit 1.0 on BOTH sides.  (The comment that stood here
+        # claimed the source sentinel already matched "the canonical singleton
+        # token pack_qty_1"; it did not — canonical_info passed an empty set
+        # through, which is the 425/585-row asymmetry this fixes.)
         gate_infos = [
             sku_attribute_info(
                 row_metadata_text(row, "title"),
@@ -1125,10 +1133,10 @@ class RandMatcher:
             for _, row in frame.iterrows()
         ]
         model_infos = [
-            sku_structured_info(
+            model_input_info(sku_structured_info(
                 row_metadata_text(row, "title"),
                 row_metadata_text(row, "attributes", "attr"),
-            )
+            ))
             if self.structured_enabled
             else {"volume": set(), "pack": set()}
             for _, row in frame.iterrows()

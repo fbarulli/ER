@@ -2006,7 +2006,8 @@ def build_training_data(
     from core.model_input import (
         build_canonical_text,
         build_sku_text,
-        model_input_provenance,
+        model_input_info,
+        model_input_composition,
     )
     from core.structured_features import (
         canonical_info as canonical_structured_info,
@@ -2021,7 +2022,7 @@ def build_training_data(
     trace.add(
         "payload",
         "model_input_composition",
-        detail=model_input_provenance(),
+        detail=model_input_composition().model_dump(),
     )
 
     thr_pos = float(cfg["pairs"]["proceed_sim_threshold"])
@@ -2042,7 +2043,7 @@ def build_training_data(
     # The old text lane deliberately removed these tokens; that made the
     # volume/pack work useful for labels but invisible to the embedding.
     sku_structured = [
-        sku_structured_info(t, a)
+        model_input_info(sku_structured_info(t, a))
         if structured_enabled
         else {"volume": set(), "pack": set(), "package_type": set()}
         for t, a in zip(title, attrs, strict=True)
@@ -2084,7 +2085,7 @@ def build_training_data(
         for _, row in canonical_records.iterrows()
     }
     canon_structured = [
-        canonical_structured_info(canonical_record_map.get(g, {}))
+        model_input_info(canonical_structured_info(canonical_record_map.get(g, {})))
         if structured_enabled
         else {"volume": set(), "pack": set(), "package_type": set()}
         for g in canon_gtins

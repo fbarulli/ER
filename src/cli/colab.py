@@ -2948,8 +2948,11 @@ def main() -> None:
         action="store_true",
         help="explicitly regenerate frozen CSV inputs before training",
     )
-    ap.add_argument("--keep-alive", action="store_true",
-                    help="do not tear down the VM on completion/failure")
+    ap.add_argument(
+        "--keep-alive",
+        action="store_true",
+        help="CPU only: do not tear down the VM on completion/failure (refused for GPU launches)",
+    )
     ap.add_argument(
         "--preflight-only", action="store_true",
         help="validate and print the train/inference lifecycle without contacting Colab",
@@ -2963,6 +2966,22 @@ def main() -> None:
     GPU = args.gpu
     if GPU.upper() != "CPU" and not args.allow_gpu:
         raise ValueError("GPU launch requires --allow-gpu")
+
+    # Keep-alive is a CPU-only capability.  A retained GPU VM bills accelerator
+    # quota for as long as it lives, so this is a hard safety invariant rather
+    # than a tunable: refuse the launch instead of quietly ignoring the flag, so
+    # a caller can never mistake an unhonoured request for a retained VM.
+    if args.keep_alive and GPU.upper() != "CPU":
+        raise ValueError(
+            "--keep-alive is CPU-only (a retained GPU VM consumes accelerator "
+            f"quota indefinitely); requested --gpu {GPU}. Use --gpu CPU or drop "
+            "--keep-alive."
+        )
+    # The Colab CLI wrapper performs the actual detached spawn, so publish the
+    # launcher's decision for it to enforce at that point (default deny).
+    os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = (
+        "1" if args.keep_alive and GPU.upper() == "CPU" else "0"
+    )
 
     if args.preflight_only:
         if args.what not in {"train", "smoke"}:

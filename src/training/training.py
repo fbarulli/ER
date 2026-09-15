@@ -412,7 +412,7 @@ def _write_checkpoint_manifest(
     training_args,
 ) -> None:
     """Describe the complete native HF resume snapshot without duplicating it."""
-    from core.model_input import model_input_provenance
+    from core.model_input import model_input_composition
 
     log_history = getattr(trainer_state, "log_history", []) or []
     losses = [entry["eval_loss"] for entry in log_history if "eval_loss" in entry]
@@ -439,7 +439,7 @@ def _write_checkpoint_manifest(
         # comparable, and only reusable at scoring time, together with the
         # composition that produced them — a checkpoint trained on one
         # composition is not interchangeable with another.
-        "model_input": model_input_provenance(),
+        "model_input": model_input_composition().model_dump(),
         # These are the exact components of the requested checkpoint dict.
         # They remain in their native HF files so model/optimizer tensors are
         # not serialized a second time into a multi-GB sidecar.

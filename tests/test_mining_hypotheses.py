@@ -659,15 +659,18 @@ def test_live_no_text_pair_carries_both_labels() -> None:
     import pipeline as pipeline_module
     from core.common import DATA_DIR, RESULTS, F, load_config
     from core.hard_negatives import mine_targeted_attribute_negatives_with_funnel
+    from core.model_input import (
+        build_canonical_text,
+        build_sku_text,
+        model_input_info,
+    )
     from core.structured_features import (
-        append_text as append_structured_text,
         canonical_info as canonical_structured_info,
         sku_info as sku_structured_info,
     )
 
     cfg = load_config()
-    structured_cfg = cfg["training"]["structured_features"]
-    structured = bool(structured_cfg["enabled"])
+    structured = bool(cfg["training"]["structured_features"]["enabled"])
     df = pd.read_csv(DATA_DIR / "dataset_deduped.csv", dtype=str, keep_default_na=False)
     gates = pd.read_csv(
         RESULTS / F["gate_results"], dtype={"gtin1": str, "gtin2": str}, keep_default_na=False
@@ -678,23 +681,26 @@ def test_live_no_text_pair_carries_both_labels() -> None:
     canon_map = pipeline_module.load_canonical_map()
     thr_neg = float(cfg["pairs"]["hardneg_sim_threshold"])
 
+    # Built through the SAME shared builder the payload stage uses, so this
+    # measurement keeps describing the texts the MODEL ingests when the
+    # composition profile changes. It used to re-implement the composition,
+    # which silently made the claim false after the default moved to `cleaned`.
     def sku_text(index: int) -> str:
-        title, attrs = df["title"].iloc[index], df["attributes"].iloc[index]
-        info = sku_structured_info(title, attrs) if structured else {}
-        return append_structured_text(
-            pipeline_module.strip_schema_words(pipeline_module.clean_sku_text(title, attrs)),
-            info,
-            enabled=structured and bool(structured_cfg["append_to_text"]),
-        )
+        row = df.iloc[index]
+        info = model_input_info(
+            sku_structured_info(row["title"], row["attributes"])
+        ) if structured else {}
+        return build_sku_text(row, info)
 
     record_map = {str(r["gtin"]): r.to_dict() for _, r in canonical_records.iterrows()}
     canon_gtins = sorted(canon_map)
     gtin_to_canon_idx = {gtin: i for i, gtin in enumerate(canon_gtins)}
     canon_text = {
-        gtin: append_structured_text(
-            pipeline_module.strip_schema_words(pipeline_module.canonical_model_text(canon_map[gtin])),
-            canonical_structured_info(record_map.get(gtin, {})) if structured else {},
-            enabled=structured and bool(structured_cfg["append_to_text"]),
+        gtin: build_canonical_text(
+            record_map.get(gtin, {}),
+            model_input_info(canonical_structured_info(record_map.get(gtin, {})))
+            if structured
+            else {},
         )
         for gtin in canon_gtins
     }

@@ -54,6 +54,8 @@ files:
   balanced_pairs_sample_3000: "results_training:balanced_pairs_sample_3000.csv"
   embedding_similarities: "results_training:embedding_similarities.csv"
   model_evaluation_summary: "results_training:model_evaluation_summary.csv"
+  attribute_separation_summary: "results_training:attribute_separation_summary.csv"
+  attribute_separation_values: "results_training:attribute_separation_values.csv"
   fold_metrics: "results:train_fold_metrics.csv"       # worker-scoped pointer
   hpo_grid_csv: "results_hpo:hpo_grid.csv"
   # hpo_tpe_best REMOVED (audit round 2 F02, finished round 3): dead key —

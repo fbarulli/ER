@@ -168,6 +168,17 @@ split:
 # the scores it rates. Every reported metric is test-side; the CSV keeps
 # youden_thr_test_descriptive as the leak diagnostic only.
 evaluation:
+  # ── attribute separation metrics (attribute_separation_*.csv) ───────────
+  # How well each attribute (and each of its VALUES) separates true pairs from
+  # false ones. Computed from labelled pairs + canonical attributes: no model,
+  # no training. SUPPORT IS ENFORCED: a score is only flagged as weak when
+  # BOTH classes clear the support floor, so a brand seen twice is reported
+  # with its counts but never called a defect.
+  attribute_separation:
+    enabled: true
+    min_pairs_per_class: 30   # attribute-level: min positives AND negatives
+    min_value_support: 20     # per-value: min pairs in BOTH classes to flag
+    flag_below: 0.10          # separation <= this (with support) = weak
   component_split_k: 2   # component folds over the labeled-pair barcode graph
   dev_fold: 0             # fold index used as DEV  (threshold-fit half)
   test_fold: 1            # fold index used as TEST (reported half)
@@ -349,6 +360,11 @@ training:
     volume_scale_ml: 10000.0
     pack_scale: 100.0
     max_set_size: 8
+    # Universal symmetry (owner ruling): an unobserved pack count is an
+    # implicit 1.0 on BOTH sides of a pair — source and target, text channel
+    # and numeric vector alike. Applied by the 'cleaned' composition only;
+    # 'legacy' keeps its historical one-sided sentinel and its golden bytes.
+    implicit_pack_qty: 1.0
   # ── model-input text composition (SSOT: core.model_input) ───────────────
   # Both lanes (training candidate retrieval + scoring prediction) and the
   # payload audit build the encoder text through core.model_input, which

@@ -208,6 +208,38 @@ def append_text(text: str, info: Mapping[str, object], *, enabled: bool = True) 
     return " ".join([str(text).strip(), *tokens]).strip()
 
 
+def symmetric_info(
+    info: Mapping[str, object], *, implicit_pack_qty: float
+) -> dict[str, set[float] | set[str]]:
+    """Apply the universal implicit-default rule to one side of a pair.
+
+    An attribute that was NOT observed must be represented identically on both
+    sides, or the two sides of the same product differ for a reason that has
+    nothing to do with the product.
+
+    Audited attribute by attribute against ``sku_info`` / ``canonical_info``:
+
+    * ``volume`` — both sides already omit when unobserved: already symmetric.
+    * ``pack`` — the ONLY one-sided implicit default: ``sku_info`` emits the
+      ``{1.0}`` "no pack count observed" sentinel while ``canonical_info``
+      passes an empty set through. This emits ``implicit_pack_qty`` whenever
+      the pack set is empty, on whichever side is being normalized.
+    * ``package_type`` / ``flavor`` / ``carbonation`` / ``sweetener`` /
+      ``pulp`` — both sides already omit when unobserved (an empty record
+      returns empty sets from both extractors), so no implicit default is
+      added. They can still disagree as *evidence* for a pair that is not the
+      same product; that is information, not a default.
+
+    Idempotent: a pack set that is already non-empty is returned unchanged.
+    """
+    if implicit_pack_qty <= 0:
+        raise ValueError("implicit_pack_qty must be positive")
+    normalized = dict(info)
+    if not _as_set(info.get("pack"), kind="pack"):
+        normalized["pack"] = {float(implicit_pack_qty)}
+    return normalized
+
+
 def vector(info: Mapping[str, object], *, volume_scale_ml: float, pack_scale: float, max_set_size: int) -> list[float]:
     """Encode volume_set/pack_set as a fixed-size, scale-normalized vector.
 

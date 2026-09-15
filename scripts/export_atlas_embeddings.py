@@ -16,13 +16,16 @@ import numpy as np
 import pandas as pd
 
 from core.common import load_config, load_local_sentence_transformer
+from core.model_input import (
+    build_sku_text,
+    model_input_info,
+    model_input_composition,
+)
 from core.structured_features import (
-    append_text as append_structured_text,
     fuse_numpy,
     sku_info as sku_structured_info,
     vector as structured_vector,
 )
-from pipeline import clean_sku_text, strip_schema_words
 
 
 def main() -> None:
@@ -51,22 +54,24 @@ def main() -> None:
 
     cfg = load_config()["training"]["structured_features"]
     enabled = bool(cfg["enabled"])
-    append_structured = enabled and bool(cfg["append_to_text"])
+    rows = frame.to_dict("records")
+    # The encoder text comes from the shared composition SSOT.  This script used
+    # to build its own copy and called the six-argument `clean_sku_text` with
+    # two, so brand/description/category/breadcrumbs silently became "" — a
+    # composition that matched neither profile.
     infos = [
-        sku_structured_info(
-            row.get("title", ""), row.get("attributes", row.get("attr", ""))
-        ) if enabled else {"volume": set(), "pack": set()}
-        for row in frame.to_dict("records")
+        model_input_info(
+            sku_structured_info(
+                row.get("title", ""), row.get("attributes", row.get("attr", ""))
+            )
+        )
+        if enabled
+        else {"volume": set(), "pack": set()}
+        for row in rows
     ]
     texts = [
-        append_structured_text(
-            strip_schema_words(clean_sku_text(
-                row.get("title", ""), row.get("attributes", row.get("attr", ""))
-            )),
-            info,
-            enabled=append_structured,
-        )
-        for row, info in zip(frame.to_dict("records"), infos, strict=True)
+        build_sku_text(pd.Series(row), info)
+        for row, info in zip(rows, infos, strict=True)
     ]
     model = load_local_sentence_transformer(args.model, device=args.device)
     embeddings = model.encode(
@@ -94,6 +99,11 @@ def main() -> None:
     np.save(embedding_path, embeddings)
     metadata = frame.copy()
     metadata.insert(0, "atlas_id", metadata[id_column].astype(str))
+    # The matrix is only interpretable together with the composition that
+    # produced it, so the artifact names its own input contract.
+    provenance = model_input_composition()
+    metadata.insert(1, "model_input_profile", provenance.profile)
+    metadata.insert(2, "model_input_include_evidence", provenance.include_evidence)
     if args.predictions:
         predictions = pd.read_csv(args.predictions, dtype=str, keep_default_na=False)
         join_key = "SKU_ID" if "SKU_ID" in predictions.columns else "product_id"

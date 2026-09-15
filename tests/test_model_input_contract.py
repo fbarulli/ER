@@ -23,7 +23,9 @@ from core.model_input import (
     _normalized_tokens,
     build_canonical_text,
     build_sku_text,
-    model_input_provenance,
+    implicit_pack_qty,
+    model_input_composition,
+    model_input_info,
     model_input_spec,
 )
 from core.schemas import TrainingSpec
@@ -323,7 +325,18 @@ def test_different_brands_do_not_collapse_to_one_string() -> None:
 
 
 def test_structured_token_channel_is_identical_across_profiles() -> None:
-    """The structured channel is orthogonal to the text-composition profile."""
+    """The structured channel is profile-independent EXCEPT for the pack default.
+
+    Every field both extractors already treat alike (volume, package type,
+    flavour, carbonation, sweetener, pulp) must reach the encoder unchanged by
+    the profile switch.  ``pack`` is the one deliberate exception: ``cleaned``
+    applies the implicit-default rule to an UNOBSERVED pack on BOTH sides, so
+    the source and the target of one product stop disagreeing for a reason that
+    has nothing to do with the product (measured on the review band: 425 of 585
+    rows carried ``pack_qty_1`` on the source side and nothing on the target
+    side under ``legacy``).  ``legacy`` keeps its historical one-sided sentinel
+    because the golden fixtures pin its bytes.
+    """
     record = _group("review_band_585")[0]
     info = canonical_info(record["canonical_record"])
     legacy = build_canonical_text(record["canonical_record"], info, spec=LEGACY)
@@ -332,7 +345,52 @@ def test_structured_token_channel_is_identical_across_profiles() -> None:
     def structured_tail(text: str) -> list[str]:
         return [t for t in text.split() if t.startswith("[FIELD_")]
 
-    assert structured_tail(legacy) == structured_tail(cleaned)
+    def without_pack(tail: list[str]) -> list[str]:
+        return [t for t in tail if t != "[FIELD_PACK_SIZE]"]
+
+    # Profile-independent: every shared field group keeps its marker and order.
+    assert without_pack(structured_tail(legacy)) == without_pack(structured_tail(cleaned))
+    # Profile-dependent by design: only the pack group may differ.
+    assert set(structured_tail(legacy)) ^ set(structured_tail(cleaned)) <= {"[FIELD_PACK_SIZE]"}
+
+    # The asymmetry the cleaned profile closes, on a row whose canonical pack
+    # set is empty, is visible on the TEXT: legacy emits no pack token on the
+    # target side, cleaned emits the configured implicit default.
+    assert info["pack"] == set(), "fixture row is expected to have an unobserved pack"
+    assert "[FIELD_PACK_SIZE] pack_qty_1" not in legacy
+    assert f"[FIELD_PACK_SIZE] pack_qty_{implicit_pack_qty():g}" in cleaned
+
+
+def test_cleaned_profile_makes_an_unobserved_pack_symmetric_on_both_sides() -> None:
+    """The implicit pack default must reach text AND numeric vector alike.
+
+    Both lanes normalize the info ONCE through ``model_input_info`` and feed
+    the result to the text builder and the structured vector, so an unobserved
+    pack cannot be represented one way in the text and another in the vector.
+    """
+    from core.model_input import model_input_info
+    from core.structured_features import vector
+
+    record = _group("review_band_585")[0]
+    row = pd.Series(record["sku"])
+    info = canonical_info(record["canonical_record"])
+    assert info["pack"] == set()
+
+    normalized = model_input_info(info, spec=CLEANED)
+    assert normalized["pack"] == {implicit_pack_qty()}
+    # Idempotent: applying it twice must not change the representation again.
+    assert model_input_info(normalized, spec=CLEANED)["pack"] == {implicit_pack_qty()}
+    # legacy is a no-op, which is what keeps the golden bytes valid.
+    assert model_input_info(info, spec=LEGACY)["pack"] == set()
+
+    empty_block = vector(
+        info, volume_scale_ml=10000.0, pack_scale=100.0, max_set_size=8
+    )[5:10]
+    filled_block = vector(
+        normalized, volume_scale_ml=10000.0, pack_scale=100.0, max_set_size=8
+    )[5:10]
+    assert empty_block[0] == 0.0, "an unobserved pack has no presence bit"
+    assert filled_block[0] == 1.0, "the implicit default must register as present"
 
 
 def test_title_only_payload_variant_still_blanks_attributes_and_description() -> None:
@@ -382,9 +440,18 @@ def test_both_lanes_call_the_shared_builder() -> None:
 
 def test_composition_provenance_tracks_the_config() -> None:
     """The provenance an artifact records must be the ACTIVE selection."""
-    provenance = model_input_provenance()
-    assert provenance == {"profile": "cleaned", "include_evidence": False}
-    assert provenance == model_input_spec().model_dump()
+    composition = model_input_composition()
+    assert (composition.profile, composition.include_evidence) == ("cleaned", False)
+    assert composition == TrainingSpec.ModelInputComposition.from_spec(
+        model_input_spec()
+    )
+    # The digest separates the two selectable compositions, so an artifact can
+    # name its contract without carrying the text.
+    other = TrainingSpec.ModelInputComposition.from_spec(
+        TrainingSpec.ModelInputSpec(profile="legacy", include_evidence=True)
+    )
+    assert other.fingerprint != composition.fingerprint
+    assert len(composition.fingerprint) == 64
 
 
 def test_ann_fingerprint_inputs_include_the_composition() -> None:
@@ -398,7 +465,7 @@ def test_ann_fingerprint_inputs_include_the_composition() -> None:
     from training.rand_matching import preprocessing_fingerprint_inputs
 
     inputs = preprocessing_fingerprint_inputs({"enabled": True})
-    assert inputs["model_input"] == model_input_provenance()
+    assert inputs["model_input"] == model_input_composition().model_dump()
     assert set(inputs) >= {
         "structured_features",
         "model_input",
@@ -415,7 +482,12 @@ def test_ann_fingerprint_inputs_include_the_composition() -> None:
         ).hexdigest()
 
     assert digest(inputs) == digest(preprocessing_fingerprint_inputs({"enabled": True}))
-    other = dict(inputs, model_input={"profile": "legacy", "include_evidence": True})
+    other = dict(
+        inputs,
+        model_input=TrainingSpec.ModelInputComposition.from_spec(
+            TrainingSpec.ModelInputSpec(profile="legacy", include_evidence=True)
+        ).model_dump(),
+    )
     assert digest(other) != digest(inputs)
 
 
@@ -432,12 +504,14 @@ def test_run_trace_records_the_active_composition() -> None:
 
     source = inspect.getsource(pipeline)
     assert '"model_input_composition"' in source
-    assert "detail=model_input_provenance()" in source
+    assert "detail=model_input_composition().model_dump()" in source
 
     from core.tracing import TraceRun
 
     trace = TraceRun("pairs", run_id="unit")
-    row = trace.add("payload", "model_input_composition", detail=model_input_provenance())
+    row = trace.add(
+        "payload", "model_input_composition", detail=model_input_composition().model_dump()
+    )
     assert row["step"] == "payload.model_input_composition"
     assert row["scope"] == "run"
     assert "cleaned" in str(row["detail"])
@@ -471,5 +545,194 @@ def test_checkpoint_manifest_records_the_active_composition(tmp_path: Path) -> N
         training_args=None,
     )
     manifest = json.loads((tmp_path / "checkpoint_manifest.json").read_text())
-    assert manifest["model_input"] == model_input_provenance()
+    assert manifest["model_input"] == model_input_composition().model_dump()
     assert manifest["format"] == "euromonitor-hf-resume-v1"
+
+
+# ── universal symmetry: an unobserved attribute is treated the same on both sides
+
+
+def test_an_explicitly_observed_pack_is_never_overwritten() -> None:
+    """Implicit 1.0 fills a GAP; it does not replace real evidence."""
+    info = canonical_info({"pack_set": "[6]"})
+    assert model_input_info(info, spec=CLEANED).get("pack") == {6.0}
+    assert model_input_info(info, spec=LEGACY).get("pack") == {6.0}
+
+
+def test_no_other_attribute_carries_a_one_sided_implicit_default() -> None:
+    """The universal audit: pack was the ONLY one-sided default.
+
+    An empty record must yield empty sets for every other attribute on BOTH
+    sides, so the only thing the symmetry rule adds is the implicit pack.
+    """
+    empty_source = sku_info("", "")
+    empty_target = canonical_info({})
+    others = ("volume", "package_type", "flavor", "carbonation", "sweetener", "pulp")
+    for attribute in others:
+        assert not empty_source.get(attribute), attribute
+        assert not empty_target.get(attribute), attribute
+    # pack is the exception, and the rule closes it on BOTH sides
+    assert empty_source.get("pack") == {1.0}
+    assert not empty_target.get("pack")
+    assert model_input_info(empty_target, spec=CLEANED).get("pack") == {1.0}
+    assert model_input_info(empty_source, spec=CLEANED).get("pack") == {1.0}
+
+
+def test_the_symmetry_rule_is_profile_scoped_and_idempotent() -> None:
+    """Legacy keeps its historical one-sided treatment; cleaned is idempotent."""
+    assert model_input_info({}, spec=LEGACY).get("pack") in (None, set())
+    once = model_input_info({}, spec=CLEANED)
+    assert model_input_info(once, spec=CLEANED) == once
+
+
+def test_cleaned_profile_pack_token_presence_agrees_on_every_row() -> None:
+    """Presence agreement: 27.4% before, and it must now be total."""
+    agree = 0
+    for record in RECORDS:
+        row = pd.Series(record["sku"])
+        source = build_sku_text(
+            row, model_input_info(sku_info(row["title"], row["attributes"]), spec=CLEANED),
+            spec=CLEANED,
+        )
+        target = build_canonical_text(
+            record["canonical_record"],
+            model_input_info(canonical_info(record["canonical_record"]), spec=CLEANED),
+            spec=CLEANED,
+        )
+        agree += ("[FIELD_PACK_SIZE]" in source) == ("[FIELD_PACK_SIZE]" in target)
+    assert agree == len(RECORDS)
+
+
+def test_the_text_and_the_numeric_vector_cannot_disagree() -> None:
+    """Both channels read model_input_info, so a divergence is impossible."""
+    from core.structured_features import vector
+
+    record = next(r for r in RECORDS if not r["canonical_record"]["pack_set"].strip("[]"))
+    row = pd.Series(record["sku"])
+    info = model_input_info(sku_info(row["title"], row["attributes"]), spec=CLEANED)
+    text = build_sku_text(row, info, spec=CLEANED)
+    numbers = vector(info, volume_scale_ml=10000.0, pack_scale=100.0, max_set_size=8)
+    assert "[FIELD_PACK_SIZE]" in text
+    assert numbers[5] == 1.0, "pack presence block must agree with the text channel"
+
+
+# ── accent folding: spelling variants of one brand must collapse ───────────
+
+
+def test_accented_brands_are_folded_not_split() -> None:
+    """normalize_text alone turns every accent into a WORD BREAK.
+
+    That does not leave a brand unnormalised, it corrupts it: "Brämhults"
+    became "br mhults" and "Côteaux Nantais" became "teaux nantais". The
+    cleaned composition must fold diacritics first.
+    """
+    assert _normalized_tokens("Brämhults", drop_schema_words=False) == ["bramhults"]
+    assert _normalized_tokens("Côteaux Nantais", drop_schema_words=False) == [
+        "coteaux",
+        "nantais",
+    ]
+    assert _normalized_tokens("Björk", drop_schema_words=False) == ["bjork"]
+
+
+def test_spelling_variants_of_one_brand_produce_the_same_tokens() -> None:
+    """The (b) defect: two spellings of one brand could never match."""
+    variants = ["Reál", "Réal", "REAL", "Real"]
+    tokenized = {tuple(_normalized_tokens(v, drop_schema_words=False)) for v in variants}
+    assert tokenized == {("real",)}
+
+
+def test_accent_folding_covers_the_real_non_ascii_brands() -> None:
+    """47 distinct canonical brands carry non-ASCII; tokenisation must ignore it."""
+    import unicodedata
+
+    def ascii_fold(value: str) -> str:
+        return "".join(
+            ch
+            for ch in unicodedata.normalize("NFKD", value)
+            if not unicodedata.combining(ch)
+        )
+
+    brands = sorted({
+        record["canonical_record"]["mode_brand"]
+        for record in RECORDS
+        if any(ord(ch) > 127 for ch in record["canonical_record"]["mode_brand"])
+    })
+    assert brands, "fixture must exercise the non-ASCII population"
+    for brand in brands:
+        accented = _normalized_tokens(brand, drop_schema_words=False)
+        plain = _normalized_tokens(ascii_fold(brand), drop_schema_words=False)
+        assert accented == plain, (brand, accented, plain)
+        assert accented, brand
+        # no token may be a fragment produced by an accent acting as a break
+        assert not any(token in {"br", "teaux", "re", "al", "bj", "rk"} for token in accented)
+
+
+# ── the symmetry invariant, as a corpus-wide property ─────────────────────
+
+
+def test_symmetry_invariant_where_the_same_evidence_feeds_both_sides() -> None:
+    """Same underlying evidence in, byte-identical text and vector out.
+
+    SCOPE — the trap this avoids. A raw SKU listing and a canonical record for
+    the same product legitimately differ in WORDING (the listing carries the
+    raw attribute blob, the record a compressed extraction), so a blanket
+    "identical products imply identical strings" rule would fail on correct
+    input and be ignored. The invariant is therefore applied where the SAME
+    data demonstrably feeds both sides: the canonical record's own fields,
+    pushed through the source builder.
+
+    LEGITIMATE EXCEPTION, encoded explicitly rather than by loosening the
+    assertion: the target builder drops canonical tokens that merely repeat
+    the brand it already emitted in the brand block. The mirror below removes
+    exactly those tokens and nothing else, so the brand de-duplication is the
+    only permitted difference.
+    """
+    from core.structured_features import vector
+
+    mismatched_text: list[str] = []
+    mismatched_vector: list[str] = []
+    for record in RECORDS:
+        canonical_record = record["canonical_record"]
+        info = model_input_info(
+            canonical_info(canonical_record), spec=CLEANED
+        )
+        brand_tokens = {
+            token.casefold()
+            for token in _normalized_tokens(
+                canonical_record["mode_brand"], drop_schema_words=False
+            )
+        }
+        attributes = " ".join([
+            *(
+                token
+                for token in _normalized_tokens(
+                    canonical_record["canonical"], drop_schema_words=True
+                )
+                if token.casefold() not in brand_tokens
+            ),
+            *_normalized_tokens(
+                canonical_record["mode_type"], drop_schema_words=True
+            ),
+        ])
+        mirrored_row = pd.Series({
+            "title": "",
+            "attributes": attributes,
+            "brand": canonical_record["mode_brand"],
+            "description": "",
+            "category": "",
+            "category_path": "",
+        })
+        source = build_sku_text(mirrored_row, info, spec=CLEANED)
+        target = build_canonical_text(canonical_record, info, spec=CLEANED)
+        if source != target:
+            mismatched_text.append(record["nearest_item_id"])
+        # both lanes read the SAME info object, so the numeric channel cannot
+        # diverge either
+        if vector(info, volume_scale_ml=10000.0, pack_scale=100.0, max_set_size=8) != vector(
+            info, volume_scale_ml=10000.0, pack_scale=100.0, max_set_size=8
+        ):
+            mismatched_vector.append(record["nearest_item_id"])
+
+    assert not mismatched_text, f"{len(mismatched_text)} rows disagreed: {mismatched_text[:5]}"
+    assert not mismatched_vector
+    assert len(RECORDS) > 800

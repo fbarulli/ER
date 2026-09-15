@@ -27,6 +27,7 @@ and is validated by ``core.schemas.TrainingSpec.ModelInputSpec``:
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping
 
 from core.common import load_config, row_metadata_text
@@ -35,9 +36,17 @@ from core.schemas import TrainingSpec
 __all__ = [
     "build_canonical_text",
     "build_sku_text",
-    "model_input_provenance",
+    "implicit_pack_qty",
+    "model_input_composition",
+    "model_input_info",
     "model_input_spec",
 ]
+
+def _fold_accents(text: object) -> str:
+    """Strip diacritics so spelling variants of one brand collapse together."""
+    decomposed = unicodedata.normalize("NFKD", str(text))
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
 
 # Percentage evidence, captured before normalize_text removes the sign.
 # "0-2%" is a range (juice content bands), "100%" a single value.
@@ -52,17 +61,21 @@ def model_input_spec() -> TrainingSpec.ModelInputSpec:
     )
 
 
-def model_input_provenance() -> dict[str, object]:
-    """The ACTIVE composition, for fingerprints, traces and manifests.
+def model_input_composition() -> TrainingSpec.ModelInputComposition:
+    """The ACTIVE composition, for fingerprints, traces, manifests, bundles.
 
     Any artifact whose contents depend on the encoder text — a persisted
-    embedding index above all — must be able to name the exact input contract
-    that produced it.  Changing the profile changes the text but NOT the
-    catalog, the checkpoint or the code path, so without this the artifact
-    looks reusable when it is not.
+    embedding index, a checkpoint, a frozen payload bundle above all — must be
+    able to name the exact input contract that produced it.  Changing the
+    profile changes the text but NOT the catalog, the checkpoint or the code
+    path, so without this the artifact looks reusable when it is not.
     """
-    spec = model_input_spec()
-    return {"profile": spec.profile, "include_evidence": spec.include_evidence}
+    return TrainingSpec.ModelInputComposition.from_spec(model_input_spec())
+
+
+def implicit_pack_qty() -> float:
+    """The configured implicit pack count for an unobserved pack (SSOT)."""
+    return float(load_config()["training"]["structured_features"]["implicit_pack_qty"])
 
 
 def _structured_text_enabled() -> bool:
@@ -98,6 +111,12 @@ def _normalized_tokens(text: object, *, drop_schema_words: bool) -> list[str]:
         lambda m: f" pct{m.group(1)}to{m.group(2)} ", str(text)
     )
     protected = _PERCENT_RE.sub(lambda m: f" pct{m.group(1)} ", protected)
+    # Fold accents BEFORE normalize_text. Without this every non-ASCII letter
+    # becomes a word break, which does not merely leave a brand unnormalised —
+    # it CORRUPTS it: "Brämhults" -> "br mhults", "Côteaux Nantais" ->
+    # "teaux nantais", and "Reál"/"Réal" -> "re"/"al", so two spellings of one
+    # brand can never match. 47 distinct canonical brands carry non-ASCII.
+    protected = _fold_accents(protected)
     split = " ".join(
         part
         for token in normalize_text(protected).split()
@@ -128,7 +147,8 @@ def _cleaned_sku_text(row, info: Mapping[str, object]) -> str:
     tokens += _normalized_tokens(
         row_metadata_text(row, "attributes", "attr"), drop_schema_words=True
     )
-    return append_text(" ".join(tokens), info, enabled=_structured_text_enabled())
+    symmetric = model_input_info(info)
+    return append_text(" ".join(tokens), symmetric, enabled=_structured_text_enabled())
 
 
 def _cleaned_canonical_text(
@@ -151,7 +171,8 @@ def _cleaned_canonical_text(
         *canonical,
         *_normalized_tokens(record.get("mode_type", ""), drop_schema_words=True),
     ]
-    return append_text(" ".join(tokens), info, enabled=_structured_text_enabled())
+    symmetric = model_input_info(info)
+    return append_text(" ".join(tokens), symmetric, enabled=_structured_text_enabled())
 
 
 def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
@@ -189,6 +210,29 @@ def _legacy_canonical_text(
         parts.append(canonical_evidence_text(record.get("breadcrumb_evidence", "")))
     base = strip_schema_words(canonical_model_text(" ".join(parts)))
     return append_text(base, info, enabled=_structured_text_enabled())
+
+
+def model_input_info(
+    info: Mapping[str, object],
+    *,
+    spec: TrainingSpec.ModelInputSpec | None = None,
+) -> dict[str, set[float] | set[str]]:
+    """The structured info as the ACTIVE composition sees it.
+
+    Callers use this once per row and feed the result to BOTH the text builder
+    and the numeric vector, so an attribute's unobserved treatment can never
+    differ between the two channels.
+
+    ``legacy`` returns the info unchanged (its historical, one-sided treatment
+    is what the golden fixtures pin). ``cleaned`` applies the universal
+    implicit-default rule, which is the shipped default.
+    """
+    resolved = _resolve(spec)
+    if resolved.profile != "cleaned":
+        return dict(info)
+    from core.structured_features import symmetric_info
+
+    return symmetric_info(info, implicit_pack_qty=implicit_pack_qty())
 
 
 def _resolve(

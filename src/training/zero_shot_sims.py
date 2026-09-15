@@ -348,14 +348,21 @@ def _run_zero_shot(args, wandb_ctx: WandbCtx) -> None:
     df_canon = pd.read_csv(df_canon_path, dtype=str, keep_default_na=False)
     df_gate = pd.read_csv(df_gate_path, dtype={"gtin1": str, "gtin2": str})
     assert "gtin" in df_canon.columns and "canonical" in df_canon.columns
-    # MODEL-side canonical (number-free + schema-free) — the SAME text the
-    # trainer encodes (consistency: eval measures the payload the model runs
-    # on; the gate's raw numeric canonical never reaches an encoder)
-    from pipeline import canonical_model_text, strip_schema_words
+    # MODEL-side canonical — the SAME text the trainer encodes, built by the
+    # shared composition SSOT so switching `training.model_input.profile` moves
+    # this lane with the lanes it exists to evaluate.  It used to build its own
+    # copy (number-free + schema-free canonical only), which made the eval
+    # measure a payload the model no longer ran on while its own text
+    # fingerprint — computed from the strings it built — stayed valid and
+    # silently resumed the stale sims.
+    from core.model_input import build_canonical_text, model_input_info
+    from core.structured_features import canonical_info
 
     gtin_to_canon = {
-        g: strip_schema_words(canonical_model_text(c))
-        for g, c in zip(df_canon["gtin"].astype(str), df_canon["canonical"].astype(str), strict=True)
+        str(record["gtin"]): build_canonical_text(
+            record, model_input_info(canonical_info(record))
+        )
+        for record in df_canon.to_dict("records")
     }
 
     # score EVERY gate pair (candidates AND hard_no): the evaluation set

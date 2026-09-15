@@ -17,7 +17,11 @@ from core.common import (
     load_dataset_deduped,
     rand_matching_cfg,
 )
-from core.model_input import build_canonical_text, build_sku_text
+from core.model_input import (
+    build_canonical_text,
+    build_sku_text,
+    model_input_info,
+)
 from core.structured_features import (
     canonical_info as canonical_structured_info,
     fuse_numpy,
@@ -82,16 +86,23 @@ def main() -> None:
         str(row["gtin"]): row.to_dict()
         for _, row in canonical_records.iterrows()
     }
+    # model_input_info applies the active composition's unobserved-attribute
+    # rule (implicit pack 1.0 on both sides for 'cleaned', untouched for
+    # 'legacy') so the TEXT and the NUMERIC VECTOR can never disagree.
     sku_infos = [
-        sku_structured_info(
-            row.get("title", ""), row.get("attributes", row.get("attr", ""))
+        model_input_info(
+            sku_structured_info(
+                row.get("title", ""), row.get("attributes", row.get("attr", ""))
+            )
         )
         if sf_enabled
         else {"volume": set(), "pack": set()}
         for _, row in skus.iterrows()
     ]
     item_infos = [
-        canonical_structured_info(canonical_record_map.get(item_id, {}))
+        model_input_info(
+            canonical_structured_info(canonical_record_map.get(item_id, {}))
+        )
         if sf_enabled
         else {"volume": set(), "pack": set()}
         for item_id in item_ids
