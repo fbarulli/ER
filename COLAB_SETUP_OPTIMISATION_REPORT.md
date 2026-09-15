@@ -3,8 +3,10 @@
 Branch `training`. Substantive commits: **`4f5be42`** (the optimisation),
 **`c3cac78`** (a real defect in it, found by measuring — §2.3), **`aaf7838`**
 (report + profiler); docs-only corrections may follow. Pushed to `ER/training`.
-Baseline test count before any change: **334 passed, 2 skipped**; after:
-**358 passed, 2 skipped** (24 new tests; no existing test modified).
+Baseline test count before any change: **334 passed, 2 skipped**; for this
+change alone: **358 passed, 2 skipped** (24 new tests); at the pushed branch tip
+(which also carries a concurrent agent's cross-brand work): **407 passed,
+2 skipped**, all observed green.
 
 Two measurement campaigns, both reported:
 
@@ -350,8 +352,10 @@ asserts, which is a policy call.
 * Files: `src/cli/colab.py`, `src/core/schemas.py`, `config/training.yaml`,
   `tests/test_colab_setup_path.py` (new), `scripts/profile_colab_setup.py`
   (new), `COLAB_SETUP_OPTIMISATION_REPORT.md` (new).
-* Tests: **334 passed / 2 skipped → 358 passed / 2 skipped.** No existing test
-  was modified.
+* Tests: **334 passed / 2 skipped → 358 passed / 2 skipped** for this change
+  alone (24 new tests, no existing test modified), and **407 passed / 2 skipped**
+  at the pushed branch tip, where a concurrent agent's cross-brand mining work
+  has also landed. Both counts observed green.
 * Lint: `ruff 0.16.3` reports 33 findings on the two changed modules against 31
   at the parent commit; the 2 new ones are `BLE001` on deliberate broad catches
   (the prewarm worker must not die silently; the checkout-copy probe must fall
