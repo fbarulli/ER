@@ -223,10 +223,18 @@ class MiningFunnel:
             ),
         ]
 
-    def bottleneck(self) -> str:
-        """The candidate-level step that dropped the most candidates."""
-        named = [(name, dropped) for name, dropped, _ in self._candidate_drops()]
-        return max(named, key=lambda item: item[1])[0] if named else ""
+    def bottleneck(self, *, exclude_similarity_floor: bool = False) -> str:
+        """The candidate-level step that dropped the most candidates.
+
+        ``exclude_similarity_floor=True`` answers the actionable question —
+        which FILTER inside the candidate window is the real constraint —
+        instead of naming the configured threshold, which is a knob rather
+        than a defect.
+        """
+        drops = self._candidate_drops()
+        if exclude_similarity_floor:
+            drops = [item for item in drops if item[0] != "gate_similarity_floor"]
+        return max(drops, key=lambda item: item[1])[0] if drops else ""
 
     def candidate_ceiling_pct(self) -> float:
         """Passing share of the candidates that cleared the similarity floor."""
@@ -259,6 +267,7 @@ class MiningFunnel:
             "dropped_pairs_already_in_baseline": int(self.dropped_pairs_already_in_baseline),
             "emitted_pairs": int(self.emitted_pairs),
             "bottleneck": self.bottleneck(),
+            "candidate_bottleneck": self.bottleneck(exclude_similarity_floor=True),
             "candidate_to_emitted_pct": round(self.candidate_ceiling_pct(), 4),
             "target_reached": bool(self.emitted_pairs >= self.n_target > 0),
             "conflict_dimension_census": dict(sorted(self.conflict_dimension_census.items())),
@@ -442,13 +451,13 @@ def mine_targeted_attribute_negatives(
         exact_name = bool(left_name) and left_name == right_name
         evaluation: dict[str, list[str]] | None = None
         if not exact_name:
+            left_residual = flavor_variant_product_name(left_name)
             relaxed = (
                 name_match == "flavor_variant"
-                and bool(left_name)
-                and bool(right_name)
-                and flavor_variant_product_name(left_name)
-                == flavor_variant_product_name(right_name)
-                and flavor_variant_product_name(left_name) != ""
+                and bool(left_residual)
+                and left_residual == flavor_variant_product_name(right_name)
+                # The gate is the label authority: only a pair the gate has
+                # ALREADY called hard_no may be re-exposed by this rule.
                 and str(getattr(row, "gate_decision", "")) == "hard_no"
             )
             if funnel is not None:
