@@ -109,14 +109,27 @@ def main() -> None:
     # The CLI's native dependencies are built for its own interpreter, so a
     # wrapper started under a different python hands over before importing.
     _reexec_under_colab_cli_python()
+    import colab_cli.auth as auth
+    import colab_cli.auto_update as auto_update
     import colab_cli.common as common
     from colab_cli.history import HistoryLogger
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    # Upstream's OAuth token location is a module constant resolved at import
+    # time.  This workspace has a read-only home directory, so make the
+    # official flow persist and refresh its token beside the session metadata.
+    # This only redirects storage; credential acquisition remains upstream.
+    auth.TOKEN_CONFIG_PATH = str(STATE_DIR / "token.json")
     common.state._history = HistoryLogger(str(HISTORY_DIR))
     # The upstream CLI currently creates ~/.config/colab-cli/colab.log even
     # with --logtostderr. The launcher owns the durable training log instead.
     common.setup_logging = lambda _log_to_stderr: None
+
+    # ``colab`` otherwise performs a daily update lookup for every `exec`,
+    # `upload`, and `download`.  The launcher makes many short-lived control
+    # calls, has just been installed from the upstream Git revision, and pins
+    # that revision for a reproducible run; omit only that nonessential check.
+    auto_update.run_background_check = lambda: None
 
     import colab_cli.commands.session as session_commands
 

@@ -16,17 +16,11 @@ now the src/training/ module chain):
            minilm_l6 and scores against the same canonical fingerprint
            contract as training.
   smoke  — the chain check (fast verification the remote environment
-           reproduces the local results contract). Runs on CPU by default,
-           and its sample size is config-owned, not a literal here:
-           sweep.smoke_sample in config/training.yaml (128). That value is
-           the minimum this lane may use, not a free tuning knob — it is the
-           smallest population that still clears the fold pair/component/
-           triple guards in src/training/folds.py, and the matching dataset
-           must be the same-length prefix (colab.smoke_dataset_csv,
-           training_data/dataset_deduped_smoke_128.csv). Smaller values are
-           not rejected up front; they fail later as an empty calibration
-           reservation. On CPU the final validation inference is also pinned
-           to CPU (inference_device) instead of the accelerator.
+           reproduces the local results contract). Runs on CPU by default and
+           reads the full deduped CSV already in the cloned Colab checkout;
+           no CSV or prepared bundle is uploaded. Its config-owned 128-row
+           cap is applied only in memory by train.py, never by deleting or
+           rewriting source rows.
 
 Every lane reuses the shared bootstrap: the VM clones the configured public
 training branch, regenerates all derived CSVs (byte-deterministic: canonicals
@@ -1391,10 +1385,40 @@ def sha256(path):
 
 included = []
 excluded = []
+
+# ``_checkpoints`` is excluded because a run writes one large checkpoint per
+# evaluation, but the checkpoint the trainer selected must still reach the
+# laptop.  trainer_state.json records best_model_checkpoint and best_metric --
+# the same choice training restores at the end -- so keep that one directory
+# per worker and drop the rest.
+def _best_checkpoint(worker_root):
+    best = None
+    pattern = "_checkpoints/**/checkpoint-*/trainer_state.json"
+    for state_path in sorted(worker_root.glob(pattern)):
+        try:
+            state = json.loads(state_path.read_text())
+        except (OSError, ValueError):
+            continue
+        recorded = state.get("best_model_checkpoint")
+        if not recorded:
+            continue
+        selected = state_path.parent.parent / pathlib.Path(str(recorded)).name
+        if not selected.is_dir():
+            continue
+        metric = state.get("best_metric")
+        rank = (
+            float(metric) if metric is not None else float("-inf"),
+            int(state.get("global_step") or 0),
+        )
+        if best is None or rank > best[0]:
+            best = (rank, selected)
+    return best[1] if best is not None else None
+
 for worker in range(1, {workers + 1}):
     worker_root = base / f"worker_{{worker}}"
     if not worker_root.is_dir():
         raise FileNotFoundError(f"missing remote worker directory: {{worker_root}}")
+    best_checkpoint = _best_checkpoint(worker_root)
     for path in sorted(worker_root.rglob("*")):
         if path.is_symlink():
             excluded.append({{
@@ -1406,6 +1430,19 @@ for worker in range(1, {workers + 1}):
         if not path.is_file():
             continue
         relative = path.relative_to(worker_root)
+        if best_checkpoint is not None:
+            try:
+                path.relative_to(best_checkpoint)
+            except ValueError:
+                pass
+            else:
+                included.append({{
+                    "worker": worker,
+                    "path": relative.as_posix(),
+                    "size": path.stat().st_size,
+                    "sha256": sha256(path),
+                }})
+                continue
         blocked = next((part for part in relative.parts if part in excluded_dirs), None)
         if blocked is not None:
             excluded.append({{
@@ -2403,6 +2440,7 @@ def run_train(
     loss: str = _TRAIN_LOSS,
     worker_losses: list[str] | None = None,
     train_only: bool = False,
+    remote_dataset_csv: str | None = None,
 ) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the configured VM runtime ...")
@@ -2429,6 +2467,13 @@ def run_train(
         args.extend(["--model", model])
     if sample is not None:
         args.extend(["--sample", str(sample)])
+    if remote_dataset_csv is not None:
+        if workers != 1:
+            raise ValueError("remote dataset training supports one worker only")
+        remote_dataset = Path(remote_dataset_csv)
+        if remote_dataset.is_absolute() or ".." in remote_dataset.parts:
+            raise ValueError("remote dataset path must stay inside the checkout")
+        args.extend(["--dataset", str(Path(REMOTE_ROOT) / remote_dataset)])
     if workers == 1:
         args.extend(["--masking-profile", masking_profile or _MASKING_PROFILE])
         args.extend([
@@ -2440,21 +2485,23 @@ def run_train(
     if resume_run:
         args.append("--resume")
     profiles = _training_bundle_profiles(masking_profile, workers)
-    bundle_request = {
-        "profiles": profiles,
-        "model": model,
-        "sample": sample,
-    }
-    if dataset_csv is not None:
-        bundle_request["dataset_csv"] = dataset_csv
-    prepared_bundles = _prepare_local_training_bundles(**bundle_request)
+    prepared_bundles: list[Path] | None = None
+    if remote_dataset_csv is None:
+        bundle_request = {
+            "profiles": profiles,
+            "model": model,
+            "sample": sample,
+        }
+        if dataset_csv is not None:
+            bundle_request["dataset_csv"] = dataset_csv
+        prepared_bundles = _prepare_local_training_bundles(**bundle_request)
     if workers == 1 and resume_run is None:
         if worker_losses is not None:
             raise ValueError("worker_losses requires at least two concurrent workers")
         return run_single_train_and_stream(
             args,
             run_label=run_label,
-            prepared_bundle=prepared_bundles[0],
+            prepared_bundle=prepared_bundles[0] if prepared_bundles else None,
             final_inference=not train_only,
             inference_sample=inference_sample,
             inference_device=inference_device,
@@ -2599,10 +2646,7 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
     function `run_train` uses.  Returns None for lanes that prepare no
     bundles (sims, mixed, hpo, stop).
     """
-    if args.what == "smoke":
-        workers, sample = _SMOKE_WORKERS, _SMOKE_SAMPLE
-        dataset_csv = _COLAB.smoke_dataset_csv
-    elif args.what == "dual-train":
+    if args.what == "dual-train":
         workers, sample = 2, args.sample
         dataset_csv = None
     elif args.what == "train":
@@ -4178,7 +4222,7 @@ def main() -> None:
     local_hpo_run: str | None = None
 
     try:
-        prepared_train_runtime = args.what in {"train", "dual-train", "smoke"}
+        prepared_train_runtime = args.what in {"train", "dual-train"}
         # The local bundle build is pure local CPU work over immutable local
         # inputs, so start it before the VM is even provisioned: it then runs
         # under the remote checkout, install, model check, and profile instead
@@ -4239,14 +4283,16 @@ def main() -> None:
         elif args.what == "smoke":
             local_training_run = run_train(
                 args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE,
-                workers=_SMOKE_WORKERS, dataset_csv=_COLAB.smoke_dataset_csv,
-                inference_sample=_COLAB.smoke_inference_sample,
-                inference_device="cpu" if GPU.upper() == "CPU" else None,
+                workers=_SMOKE_WORKERS,
                 run_label=args.run_label,
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
                 loss=args.loss,
-                train_only=args.train_only,
+                # The smoke lane's full CSV is already in the Git checkout.
+                # It does no input upload and intentionally skips the separate
+                # validation-inference stage, which needs held-out CSVs.
+                train_only=True,
+                remote_dataset_csv="training_data/dataset_deduped.csv",
             )
         elif args.what == "dual-train":
             if args.resume_run:
