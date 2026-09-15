@@ -52,15 +52,31 @@ from core.critical_attributes import (
     extract_critical_claims,
     volumes_compatible,
 )
-from core.tracing import count_rows, trace_path
+from core.tracing import (
+    ENTITY_ROW_CAP,
+    ENTITY_SAMPLE_PER_REASON,
+    count_rows,
+    trace_path,
+)
 
-# Per-entity rows are capped so one stage can never explode the consolidated
-# trace. The cap is announced in the file itself (a `_truncated` marker row),
-# and aggregate counts are always exact — only the per-entity lists are
-# bounded. 200 keeps the trace inspectable by hand while still showing every
-# reason and both sides of a representative slice.
-GATE_ENTITY_ROW_CAP = 200
-PAIR_ENTITY_ROW_CAP = 200
+# Column contracts of the two frames this module consumes. They are DIFFERENT
+# and the handoff between them is not a rename: stage 1 (run_within_brand_pipeline)
+# reads the RAW export, stage 2 (build_training_data) reads the DEDUPED dataset
+# whose columns were canonicalized by the dedupe tier. Both are declared here so
+# the trace states, per run, which contract each stage actually received.
+RAW_EXPORT_REQUIRED_COLUMNS = (
+    "gtin",
+    "sku_name_eng",
+    "attribute",
+    "brand",
+    "description_short_eng",
+    "breadcrumbs_eng",
+)
+CANONICAL_DATASET_REQUIRED_COLUMNS = ("barcode", "title", "attributes")
+# The per-entity caps live in core.tracing (one policy, one place) with their
+# justification: exact per-reason census rows + a bounded stratified sample.
+ENTITY_PER_REASON = ENTITY_SAMPLE_PER_REASON
+ENTITY_TOTAL_CAP = ENTITY_ROW_CAP
 
 # ============================================================================
 # EXTRACTION
@@ -1501,6 +1517,27 @@ def run_within_brand_pipeline(
             }
         )
 
+    # ── CONSOLIDATED TRACE: stage 1 writer ────────────────────────────────
+    # ONE writer for the whole stage, committed once at the end of the
+    # function. The first row records the COLUMN CONTRACT this frame arrived
+    # with — the raw export's names — because the stage that follows consumes a
+    # different contract (see build_training_data) and that handoff used to be
+    # invisible until a KeyError fired somewhere downstream.
+    from core.tracing import TraceRun
+
+    trace = TraceRun("data_prep")
+    trace.add_column_contract(
+        df_full,
+        contract="raw_export (core.common.load_raw_export)",
+        required=RAW_EXPORT_REQUIRED_COLUMNS,
+        note=(
+            "stage 2 (build_training_data) does NOT consume this frame: it "
+            "reloads the deduped dataset through load_dataset_deduped(), whose "
+            "columns are the canonical ones (barcode/title/attributes) — the "
+            "two stages meet at canonical_records.csv + gate_results.csv"
+        ),
+    )
+
     # NaN/empty GTINs must NOT form a group: 41,545 rows (58% of the corpus)
     # share gtin=NaN and used to collapse into ONE canonical record with an
     # arbitrary mode-brand — poisoning canonical_records.csv AND the global
@@ -1539,9 +1576,6 @@ def run_within_brand_pipeline(
         )
     # CONSOLIDATED TRACE (§gtin-guard): the guard is where identity dies, so
     # both populations are recorded with the reason that removed them.
-    from core.tracing import TraceRun
-
-    trace = TraceRun("data_prep")
     trace.add(
         "gtin_guard",
         "identity_claims_evaluated",
@@ -1601,6 +1635,34 @@ def run_within_brand_pipeline(
         record["breadcrumb_evidence"] = row["breadcrumb_evidence"]
         canonical_records.append(record)
     df_canon = pd.DataFrame(canonical_records)
+
+    # ── CONSOLIDATED TRACE: the row identity closes here ──────────────────
+    # Every GS1-valid row is either promoted to its gtin's canonical record or
+    # collapsed into it (kept and aggregated — a distinct destiny from the
+    # guard's two drop populations). With this row the trace alone closes
+    #   rows_in == canonical_records + collapsed_same_gtin
+    #              + gtin_missing_or_nan + gs1_checksum_failed
+    # which is what core.tracing.accounting() recomputes from the file.
+    trace.add(
+        "canonical",
+        "records_built",
+        in_count=len(df_full),
+        out_count=len(df_canon),
+        reason=(
+            "one canonical record per distinct GS1-valid gtin; the other rows "
+            "collapse into their own gtin's record (kept and aggregated, not "
+            "dropped)"
+        ),
+        detail={
+            "distinct_gtins": int(len(df_canon)),
+            "collapsed_same_gtin": int(len(df_full) - len(df_canon)),
+            "brands": int(grouped["brand"].nunique()) if len(grouped) else 0,
+            "brands_with_pairs": int(
+                sum(1 for gtins in brand_to_gtins.values() if len(gtins) > 1)
+            ),
+        },
+        source="raw export",
+    )
 
     # Brand blocking
     candidate_pairs = set()
@@ -1724,9 +1786,12 @@ def run_within_brand_pipeline(
     atomic_write_csv(results_df, RESULTS / F["gate_results"], index=False)
     # ── CONSOLIDATED TRACE: gate stage ─────────────────────────────────────
     # One CSV carries the whole story: run-scope funnels (candidate census →
-    # decision census) followed by the per-pair readback, capped with an
-    # explicit truncation marker so a partial entity list can never look
-    # complete. Replaces the former results/logs/gate_visibility.csv.
+    # decision census → complete reason census), one exact group row per
+    # (decision, reason) bucket, then a bounded stratified SAMPLE of pairs with
+    # the literal readback. Every pair's decision and reason is counted exactly
+    # in the census rows; the sample exists so the evidence can be eyeballed
+    # without opening gate_results.csv. Replaces the former
+    # results/logs/gate_visibility.csv.
     gate_frame = (
         pd.DataFrame(gate_vis).sort_values(["gtin1", "gtin2"], kind="stable")
         if gate_vis
@@ -1747,6 +1812,10 @@ def run_within_brand_pipeline(
         detail={"decisions": {str(k): int(v) for k, v in vis_counts.items()}},
         source="canonical_records.csv (in-memory frame)",
     )
+    # One group row per decision: its EXACT population plus the complete reason
+    # distribution inside it (count_rows with no limit — the label set is small
+    # and bounded, so "which pairs got which decision and why" is answered here
+    # rather than by opening gate_results.csv).
     for decision in ("hard_no", "fallback", "proceed"):
         subset = gate_frame[gate_frame["decision"] == decision] if len(gate_frame) else gate_frame
         trace.add(
@@ -1756,31 +1825,46 @@ def run_within_brand_pipeline(
             in_count=len(candidate_pairs),
             out_count=int(len(subset)),
             reason=f"gate_decision == {decision}",
-            detail={"reasons": count_rows(subset["reason"]) if len(subset) else []},
+            detail={
+                "reasons": count_rows(subset["reason"]) if len(subset) else [],
+                "reason_census": (
+                    count_rows(subset["reason"], limit=None) if len(subset) else []
+                ),
+            },
             source="gate_results.csv",
         )
     if len(gate_frame):
+        # Named `reason_census`, NOT `decision_reasons`: every group step
+        # starting with "gate.decision_" is a decision bucket and is summed by
+        # core.tracing.accounting(), so this cross-decision row must not share
+        # that prefix.
         trace.add(
             "gate",
-            "decision_reasons",
+            "reason_census",
             scope="group",
             in_count=int(len(gate_frame)),
             out_count=int(len(vis_reasons)),
-            reason="reason census over every decision, not just hard_no",
-            detail={"reasons": count_rows(gate_frame["reason"], limit=20)},
+            reason="complete reason census over every decision, not just hard_no",
+            detail={
+                "reasons": count_rows(gate_frame["reason"], limit=None),
+                "pairs": int(len(gate_frame)),
+            },
             source="gate_results.csv",
         )
         # Full per-pair readback: exactly what the gate SAW on both sides
         # (volume/pack/package sets + their confidences and consistency) next
         # to what it DECIDED and the similarity downstream mining bands on.
-        # The inputs are JSON so one cell stays machine-readable.
+        # The inputs are JSON so one cell stays machine-readable. Bucketed by
+        # (decision :: reason) so the census rows above and the sampled rows
+        # below join on the same label.
         trace.add_entities(
             "pair_decision",
             list(gate_frame.itertuples(index=False)),
             key_of=lambda r: f"{r.gtin1}|{r.gtin2}",
-            reason_of=lambda r: r.decision,
+            reason_of=lambda r: f"{r.decision} :: {r.reason}",
             detail_of=lambda r: json.dumps(
                 {
+                    "decision": str(r.decision),
                     "reason": str(r.reason),
                     "similarity": round(float(r.jaccard_short_tokens), 6),
                     "volume_a": list(r.vol_set1),
@@ -1803,7 +1887,8 @@ def run_within_brand_pipeline(
                 sort_keys=True,
             ),
             source="gate_results.csv",
-            limit=GATE_ENTITY_ROW_CAP,
+            per_reason=ENTITY_PER_REASON,
+            total_cap=ENTITY_TOTAL_CAP,
         )
     trace.write()
     print(
@@ -1838,6 +1923,24 @@ def build_training_data(
     print(
         f"[payload-stage] building variant={payload_variant} rows={len(df):,}",
         flush=True,
+    )
+    # ── CONSOLIDATED TRACE: stage 2 writer ────────────────────────────────
+    # Created here so the column contract of the frame THIS stage received is
+    # the first row of the stage — see run_within_brand_pipeline for the other
+    # half of the two-stage handoff.
+    from core.tracing import TraceRun
+
+    trace = TraceRun("pairs")
+    trace.add_column_contract(
+        df,
+        contract="canonical dataset (core.common.load_dataset_deduped)",
+        required=CANONICAL_DATASET_REQUIRED_COLUMNS,
+        note=(
+            "stage 1 (run_within_brand_pipeline) consumes the RAW export "
+            "contract (gtin/sku_name_eng/attribute) — the two stages are joined "
+            "by canonical_records.csv + gate_results.csv, never by passing this "
+            "frame between them"
+        ),
     )
     cfg = load_config()
     structured_cfg = cfg["training"]["structured_features"]
@@ -2000,6 +2103,10 @@ def build_training_data(
     )
     neg_mask = hard_no_band & ~same_canonical
     neg_gates = gates[neg_mask]
+    # The other two gate outcomes, kept as masks so the label-destiny census
+    # below accounts for EVERY candidate pair rather than only the negatives.
+    proceeded = gates["gate_decision"] == "proceed"
+    fell_back = gates["gate_decision"] == "fallback"
     a = neg_gates["gtin1"].map(gtin_to_row)
     b = neg_gates["gtin2"].map(gtin_to_row)
     ca = neg_gates["gtin2"].map(gtin_to_canon_idx)
@@ -2144,16 +2251,88 @@ def build_training_data(
         gtin_to_row=gtin_to_row,
         stats=stats,
     )
-    return _bundle.model_dump()
-
     # ── CONSOLIDATED TRACE: pairs + mining funnel ──────────────────────────
     # The former per-stage files (negative_resolution_manifest.csv,
     # payload_pairs.csv) folded into the ONE trace (core.tracing). Stage 2
-    # appends to stage 1's rows, so the file reads as one continuous flow.
-    from core.tracing import TraceRun
+    # commits onto stage 1's rows for the same run, so the file reads as one
+    # continuous flow. This block used to sit AFTER `return _bundle.model_dump()`
+    # and was therefore dead: stage 2 ran, printed its counts, and wrote nothing
+    # to the trace. The bundle is validated first (fail fast on a shape break),
+    # then every step is recorded, then the bundle is returned.
+    _kinds_row = _bundle.model_dump()
 
-    pair_trace = TraceRun("pairs")
-    pair_trace.add(
+    # EVERY candidate pair gets exactly one label destiny. Summing these group
+    # rows reproduces len(gates) exactly, which is the pair-side accounting
+    # identity: no gate pair is unaccounted for, and each row states in words
+    # why that population did or did not become a training label.
+    n_gates = int(len(gates))
+    label_buckets = [
+        (
+            "proceed_not_a_training_pair",
+            int(proceeded.sum()),
+            "gate says same product: a PROCEED pair yields no label here — "
+            "positives come from the row→canonical relation, not the pair",
+            {"gate_decision": "proceed"},
+        ),
+        (
+            "fallback_unresolved",
+            int(fell_back.sum()),
+            "gate could not resolve the pair: neither a verified match nor a "
+            "hard no, so neither mining lane may use it",
+            {"gate_decision": "fallback"},
+        ),
+        (
+            "negative_hard",
+            int(neg_mask.sum()),
+            "hard_no inside the mining similarity band and NOT same-canonical: "
+            "emitted as a label-0 pair in both directions",
+            {
+                "gate_decision": "hard_no",
+                "similarity_threshold": float(thr_neg),
+                "directions_per_pair": 2,
+            },
+        ),
+        (
+            "true_match_same_canonical_excluded",
+            int((hard_no_band & same_canonical).sum()),
+            "hard_no in band but both gtins share one canonical record: a true "
+            "match, so label 0 would be wrong",
+            {"gate_decision": "hard_no"},
+        ),
+        (
+            "hard_no_below_similarity_floor",
+            int(((gates["gate_decision"] == "hard_no") & ~hard_no_band).sum()),
+            "hard_no below the mining similarity floor: a valid hard no that "
+            "this lane's negative mining does not reach",
+            {"gate_decision": "hard_no", "similarity_threshold": float(thr_neg)},
+        ),
+    ]
+    for bucket, population, why, extra in label_buckets:
+        trace.add(
+            "labels",
+            f"destiny_{bucket}",
+            scope="group",
+            in_count=n_gates,
+            out_count=population,
+            reason=why,
+            detail={"population": population, **extra},
+            source="gate_results.csv",
+        )
+    trace.add(
+        "labels",
+        "every_pair_accounted",
+        in_count=n_gates,
+        out_count=int(sum(population for _, population, _, _ in label_buckets)),
+        reason="every candidate pair carries exactly one label destiny",
+        detail={
+            "gate_pairs": n_gates,
+            "destinies": {
+                bucket: population for bucket, population, _, _ in label_buckets
+            },
+        },
+        source="gate_results.csv",
+    )
+    trace.add(
         "positives",
         "sku_to_canonical",
         scope="group",
@@ -2166,14 +2345,20 @@ def build_training_data(
             "dropped_empty_sku_text": int(len(empty_sku)),
             "dropped_empty_canon_text": int(len(empty_canon_idx)),
             "canonicals": int(len(canon_gtins)),
+            "gate_proceed_rows": int(
+                (
+                    (gates["gate_decision"] == "proceed")
+                    & (gates["similarity"] >= thr_pos)
+                ).sum()
+            ),
         },
         source="canonical_records.csv",
     )
-    pair_trace.add(
+    trace.add(
         "negatives",
         "gate_hard_no_band",
         scope="group",
-        in_count=int(len(gates)),
+        in_count=n_gates,
         out_count=int(len(neg_gates)),
         reason=(
             "hard_no with similarity >= the mining threshold; same-canonical "
@@ -2187,7 +2372,7 @@ def build_training_data(
         },
         source="gate_results.csv",
     )
-    pair_trace.add(
+    trace.add(
         "negatives",
         "index_resolution",
         scope="group",
@@ -2202,7 +2387,7 @@ def build_training_data(
             "reverse_source_unresolved": n_reverse_source_unresolved,
             "reverse_target_unresolved": n_reverse_target_unresolved,
         },
-        source="negative_resolution_manifest.csv (folded into this trace)",
+        source="model payload index maps (rows + canonicals)",
     )
     # Candidate funnel: the gate pairs that clear the configured similarity
     # floor for THIS miner. Read from the same artifact the miner reads, so
@@ -2213,7 +2398,7 @@ def build_training_data(
         .gt(float(targeted_cfg["min_similarity"]))
         .sum()
     )
-    pair_trace.add(
+    trace.add(
         "mining",
         "targeted_attribute_funnel",
         in_count=targeted_candidates,
@@ -2232,7 +2417,7 @@ def build_training_data(
         },
         source="gate_results.csv",
     )
-    pair_trace.add(
+    trace.add(
         "payload",
         "materialized",
         in_count=int(len(df)),
@@ -2246,7 +2431,7 @@ def build_training_data(
         },
         source="canonical_records.csv",
     )
-    pair_trace.add(
+    trace.add(
         "payload",
         "pair_census",
         scope="group",
@@ -2262,9 +2447,10 @@ def build_training_data(
         source="model payload",
     )
     # Bounded per-pair readback with the LITERAL model texts, so the trace is
-    # a sample of the training input rather than only a count of it. The full
-    # 38k-row dump this replaces is a sample anyway; the cap is announced.
-    pair_trace.add_entities(
+    # a sample of the training input rather than only a count of it. Bucketed
+    # by label kind, so the three label populations above and the sampled rows
+    # below join on the same label.
+    trace.add_entities(
         "pair_payload",
         _rows,
         key_of=lambda r: f"{r['kind']}|{r['barcode_a']}|{r['barcode_b']}",
@@ -2273,16 +2459,20 @@ def build_training_data(
             {
                 "payload_idx_a": r["payload_idx_a"],
                 "payload_idx_b": r["payload_idx_b"],
+                "barcode_a": r["barcode_a"],
+                "barcode_b": r["barcode_b"],
                 "text_a": r["text_a"],
                 "text_b": r["text_b"],
             },
             sort_keys=True,
         ),
         source="model payload",
-        limit=PAIR_ENTITY_ROW_CAP,
+        per_reason=ENTITY_PER_REASON,
+        total_cap=ENTITY_TOTAL_CAP,
     )
-    pair_trace.write()
+    trace.write()
     print(
         f"[trace] pairs steps written -> {trace_path()} | {_kinds}",
         flush=True,
     )
+    return _kinds_row

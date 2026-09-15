@@ -2,14 +2,26 @@
 
 Loads the raw export (raw column names, dtype=str), runs the within-brand
 pipeline (extraction → canonical → gating → similarity), writes
-canonical_records.csv + gate_results.csv into the config results dir.
+canonical_records.csv + gate_results.csv into the config results dir, and
+records every step in the ONE consolidated trace (core.tracing).
+
+The two-stage flow this file is half of:
+    stage 1  data_prep.main()                 RAW export columns
+             (gtin / sku_name_eng / attribute)  -> canonical_records.csv,
+                                                   gate_results.csv, trace
+    stage 2  training.data_prep.build (train)  CANONICAL columns
+             (barcode / title / attributes)     -> training pairs, trace
+Stage 2 does NOT consume stage 1's dataframe — it reloads the deduped dataset
+(core.common.load_dataset_deduped) and only MEETS stage 1 at the two artifacts
+above. That handoff is pinned in the trace by each stage's column-contract row.
 """
 
 from __future__ import annotations
 
 
-from core.common import DATA_PATH, SEED, F, artifact, load_raw_export
+from core.common import DATA_PATH, SEED, F, load_raw_export
 from core.manifest import begin_manifest, finish_manifest
+from core.tracing import trace_path
 from pipeline import run_within_brand_pipeline
 
 
@@ -40,15 +52,21 @@ def main() -> None:
     # The gate is pair-level, not row-level: every candidate pair gets a
     # decision (no pair is dropped), so pairs carry no dropped bucket.
     row_accounting = _dp_manifest_accounting(df, pairs, canon)
+    # The stage's outputs are its two frozen artifacts plus the consolidated
+    # trace. The trace used to be listed here by its OLD per-stage name
+    # (results/logs/gate_visibility.csv), whose writer this directive deleted —
+    # finish_manifest hashes every listed output, so a stale name made the
+    # stage die with FileNotFoundError after all the work was done. The name
+    # now comes from the layout that owns it (core.tracing → training_trace).
     out_paths = [
         F["canonical_records"],
         F["gate_results"],
-        artifact("visibility", {"name": "gate_visibility.csv"}),
+        trace_path(),
     ]
     expected = [
         F["canonical_records"].name,
         F["gate_results"].name,
-        "gate_visibility.csv",
+        trace_path().name,
     ]
     mpath = finish_manifest(
         manifest, out_paths, row_accounting, expected_outputs=expected
