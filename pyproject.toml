@@ -7,6 +7,10 @@ name = "euromonitor-reconciliation"
 version = "0.1.0"
 requires-python = ">=3.12"
 
+[project.optional-dependencies]
+# Optional diagnostics only; Atlas is never required for training or inference.
+atlas = ["nomic"]
+
 [project.scripts]
 er-colab = "cli.colab:main"
 er-train = "training.train:main"
