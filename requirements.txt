@@ -40,5 +40,12 @@ psycopg[binary]==3.3.5
 # ── plots ──────────────────────────────────────────────────────────────────
 matplotlib==3.11.1
 
+# ── analysis / audit scripts ───────────────────────────────────────────────
+rapidfuzz==3.14.6      # scripts/analyze_brand_matching.py imports `fuzz` and
+                       # `distance.Levenshtein`. AUDIT 2026-09-15: it was
+                       # imported but declared nowhere, so the script ran only
+                       # on machines whose venv happened to carry it and any
+                       # image built from this file failed at import.
+
 # ── dev tooling (same pin the lane lints with) ─────────────────────────────
 ruff==0.16.3

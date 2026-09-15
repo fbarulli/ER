@@ -909,6 +909,59 @@ the both-observed number beside it. (Per-value, the strongest negatives are `gin
 
 Suite **386 passed, 2 skipped**. `results/` and `dataset.csv` untouched. `e326c46` untouched.
 
+## 7h. `rapidfuzz` declared — a latent import break closed
+
+`scripts/analyze_brand_matching.py:66-67` imports `from rapidfuzz import fuzz` and
+`from rapidfuzz.distance import Levenshtein`, and **the dependency was declared nowhere**:
+`git show HEAD:requirements.txt | grep -ci rapidfuzz` → **0**. It worked on this machine only
+because the venv happens to carry it, so any environment built from `requirements.txt` — including
+the Colab VM path the file's own header says it drives — would fail at that script's import.
+
+Approved by the owner and fixed. The header states *"The Dockerfile installs EXACTLY this file"*, so
+an undeclared import is a real image break, not a formality.
+
+Added, in the file's existing commented style, as its own section:
+
+```
+# ── analysis / audit scripts ───────────────────────────────────────────────
+rapidfuzz==3.14.6      # scripts/analyze_brand_matching.py imports `fuzz` and
+                       # `distance.Levenshtein`. AUDIT 2026-09-15: it was
+                       # imported but declared nowhere, so the script ran only
+                       # on machines whose venv happened to carry it and any
+                       # image built from this file failed at import.
+```
+
+Verified, executed:
+
+```
+rapidfuzz pinned : 3.14.6          (the version actually installed in the venv)
+rapidfuzz installed: 3.14.6        MATCH
+occurrences of 'rapidfuzz' in the file: 1 pin — no second, conflicting declaration
+any Levenshtein / fuzzywuzzy / thefuzz pin: none
+fuzz.ratio 100.0 · fuzz.token_set_ratio 100.0 · Levenshtein.distance 1
+  · Levenshtein.normalized_similarity 1.0      (the exact symbols the script uses)
+analyze_brand_matching.py imports resolve OK
+every importer of rapidfuzz in src/ scripts/ tests/: scripts/analyze_brand_matching.py (declared)
+Suite: 386 passed, 2 skipped
+```
+
+### A pre-existing environment drift this surfaced (reported, NOT "fixed")
+
+Validating the whole file against the venv, **all 16 other pins match**, but three do not — and they
+are pre-existing, describing the **image** rather than this dev venv:
+
+| pin | installed here |
+|---|---|
+| `pandas==3.0.5` | 2.3.3 |
+| `transformers==5.16.1` | **4.53.2** |
+| `psycopg[binary]==3.3.5` | not installed |
+
+`uv pip check` adds the reason: *"sentence-transformers requires transformers>=5.0.0,<6.0.0, but
+4.53.2 is installed"* (plus an aarch64/CUDA platform warning). I did **not** touch those pins — the
+file documents the pinned image and the local venv is simply not that image. It does, however,
+independently confirm the caveat already recorded in §6.3(1): **the local stack is not the declared
+stack**, which is why the ANN A/B reproduced only as a paired comparison and not in absolute terms.
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):
