@@ -17,13 +17,13 @@ into the existing pair-building path as one more registered negative source.
 
 ## 1. What was mined — the funnel, on real data
 
-Command (real artifacts: `artifacts/data/dataset_deduped.csv` 61,529 rows,
+Command (real artifacts: `data/dataset_deduped.csv` 61,529 rows,
 `results/canonical_records.csv` 13,250 canonicals, `results/gate_results.csv`
 135,769 rows; config `mining.cross_brand` as committed):
 
 ```
 PYTHONPATH=src .venv/bin/python -m training.train \
-  --dataset artifacts/data/dataset_deduped.csv --prepare-bundle /tmp/xbundle.pkl
+  --dataset data/dataset_deduped.csv --prepare-bundle /tmp/xbundle.pkl
 ```
 
 `candidate_generation` is the miner's own blocking census; each following row is
@@ -306,7 +306,7 @@ Training is yours; nothing here needs a GPU.
 ```bash
 cd /home/opc/ONE/EuromonitoR
 PYTHONPATH=src .venv/bin/python -m training.train \
-  --dataset artifacts/data/dataset_deduped.csv --prepare-bundle /tmp/xbundle.pkl
+  --dataset data/dataset_deduped.csv --prepare-bundle /tmp/xbundle.pkl
 ```
 
 PASS if all four lines appear:

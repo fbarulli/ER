@@ -19,8 +19,8 @@ The deduped dataset is the MATCHING-stage input (step 03+); the raw export
 stays the source of truth (load_dataset unchanged).
 
 Writes:
-  training_data/dataset_deduped.csv    deduped dataset (pipeline input)
-  artifacts/data/sku_to_rep.csv        raw SKU (product_id) -> rep_id
+  data/dataset_deduped.csv             deduped dataset (pipeline input)
+  data/sku_to_rep.csv                  raw SKU (product_id) -> rep_id
   results/06_dedupe_summary.csv        per-tier counts
   results/06_ambiguous_offer_groups.csv  retailer+title >1 price
   results/06_dedupe_removals.csv       one review row per removed raw SKU

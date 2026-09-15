@@ -90,16 +90,16 @@ class FinalInferenceContractTests(unittest.TestCase):
         # The settled split: inference runs on the 3,000 held-out sample only --
         # nothing infers over the full catalog -- while the full deduped catalog
         # stays as the identity anchor that training + sample must reconstruct.
-        self.assertEqual(spec.input_csv, "training_data/dataset_deduped_sample_3000.csv")
-        self.assertEqual(spec.source_csv, "training_data/dataset_deduped.csv")
+        self.assertEqual(spec.input_csv, "data/dataset_deduped_sample_3000.csv")
+        self.assertEqual(spec.source_csv, "data/dataset_deduped.csv")
         self.assertEqual(
             colab.training_dataset_csv,
-            "training_data/dataset_deduped_train_minus_3000.csv",
+            "data/dataset_deduped_train_minus_3000.csv",
         )
         # One consistent layout: every input resolves through the single root,
-        # so no stray artifacts/data/ or results/ reference can survive.
+        # so no stray legacy data directory or results/ reference can survive.
         for binding in (spec.input_csv, spec.source_csv, colab.training_dataset_csv):
-            self.assertTrue(binding.startswith("training_data/"), binding)
+            self.assertTrue(binding.startswith("data/"), binding)
         self.assertEqual(spec.output_dir, "final_inference")
 
     def test_final_inference_batch_is_sized_for_inference_not_finetuning(self):

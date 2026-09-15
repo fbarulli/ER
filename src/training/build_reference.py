@@ -1,7 +1,7 @@
 """build_reference.py — reproduce number_tokens_reference.csv (the SSOT
 number-token verdict census).
 
-The committed artifacts/data/number_tokens_reference.csv (1,742 rows) is
+The committed data/number_tokens_reference.csv (1,742 rows) is
 the ONLY input CSV besides dataset.csv that had no producer entrypoint —
 its recipe lived only as functions in pipeline.py. This script is that
 entrypoint, pinning the EXACT verified recipe:

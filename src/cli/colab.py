@@ -4323,8 +4323,8 @@ def main() -> None:
                 # It tests inference against the same file without uploading
                 # a separate held-out split.
                 train_only=False,
-                remote_dataset_csv="training_data/dataset_deduped.csv",
-                remote_validation_csv=f"{REMOTE_ROOT}/training_data/dataset_deduped.csv",
+                remote_dataset_csv="data/dataset_deduped.csv",
+                remote_validation_csv=f"{REMOTE_ROOT}/data/dataset_deduped.csv",
             )
         elif args.what == "dual-train":
             if args.resume_run:

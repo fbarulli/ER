@@ -8,9 +8,7 @@ artifacts/results/
 artifacts/models/
 artifacts/embeddings/
 artifacts/mlruns/
-artifacts/data/sku_to_rep.csv
-artifacts/data/clean_sku_gtin.csv
-artifacts/data/embeddings_cache/
+artifacts/data/
 .venv/
 .env
 .dvc-site-cache/
@@ -18,12 +16,6 @@ results/*
 !results/
 results/*
 results/dvc_refs/
-# Regenerated splits: derived from the deduped dataset at seed 42, so they are
-# reproducible and stay untracked. They live in training_data/ with the rest of
-# the current inputs; only the four frozen inputs below are committed.
-training_data/dataset_deduped_sample_*.csv
-training_data/dataset_deduped_train_minus_*.csv
-training_data/dataset_deduped_smoke_*.csv
 # DVC publication pointers are generated run metadata; payloads remain in
 # training_results/ and the durable DVC state is owned by dvc.lock.
 /dvc_refs/
@@ -56,12 +48,7 @@ matplotlib/
 archify/
 src/ner/results/
 
-# Generated training splits, submission outputs, and local checkpoints.
-# The smoke variants still live under artifacts/data and stay ignored; the
-# real splits moved to training_data/ (rules further down).
-artifacts/data/dataset_deduped_sample_*.csv
-artifacts/data/dataset_deduped_train_minus_*.csv
-artifacts/data/dataset_deduped_smoke_*.csv
+# Generated submission outputs and local checkpoints.
 submission/SKU_ITEM_submission*.csv
 submission/calibration_diagnostics.csv
 submission/holdout_diagnostics.csv
@@ -90,7 +77,9 @@ package.json
 # Do not commit it; do not delete it.
 AGENTS.local.md
 
-# CSVs are generated or local-only by default; the tree ships code, not data.
+# CSVs are generated or local-only by default. The versioned runtime inputs
+# under data/ are the deliberate exception: they are required on a fresh
+# Colab checkout for preparation, training, and inference.
 *.csv
 # ...EXCEPT the inputs a clone must have to run the pipeline at all. These five
 # are the raw export and the frozen artifacts the lanes consume directly:
@@ -101,7 +90,5 @@ AGENTS.local.md
 # the sampler regenerates them deterministically from the deduped catalog at a
 # fixed seed, so tracking them would only duplicate 45 MB of derived data.
 !dataset.csv
-!training_data/dataset_deduped.csv
-!training_data/canonical_records.csv
-!training_data/gate_results.csv
-!artifacts/data/number_tokens_reference.csv
+!data/
+!data/*.csv

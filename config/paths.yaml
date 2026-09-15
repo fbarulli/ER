@@ -18,7 +18,7 @@
 # it — the phone book owns the address, code owns only the resolution rule.
 # Roots:
 #   repo              → TRAIN_ROOT/name                     (repo root)
-#   data              → DATA_DIR/name                       (artifacts/data)
+#   data              → DATA_DIR/name                       (data)
 #   results           → RESULTS/name                        (honors
 #                       EUROMONITOR_RESULTS_DIR — on a Colab worker this is
 #                       the worker dir, NEVER the repo results root)
@@ -30,7 +30,10 @@
 # ── folder layout (relative to the repo root unless absolute) ──────────────
 paths:
   artifacts_dir: "artifacts"            # ONE root: everything lives under it
-  data_dir: "artifacts/data"            # raw + deduped dataset live here
+  # Versioned runtime data lives in this one repository-root directory.
+  # A clean clone therefore has every non-model CSV needed by data prep,
+  # training, and inference without relying on local artifact directories.
+  data_dir: "data"
   results_dir: "results"                # frozen inputs + run-tree parent +
                                         # shared/orchestration outputs at repo root
   training_results_dir: "training_results" # verified Colab smoke outputs
@@ -38,11 +41,9 @@ paths:
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
   mlruns_dir: "artifacts/mlruns"        # mlflow backend + artifact store (local)
   logs_dir: "logs"                      # per-step orchestrator logs
-  # The ONE home for the current, regenerated training-input CSVs. A separate
-  # root rather than a corner of artifacts/ or results/ so that "is this file
-  # current?" is answerable by looking at one directory: anything stale lives
-  # somewhere else or does not exist.
-  training_data_dir: "training_data"
+  # Training inputs share the versioned root-level data directory with the
+  # reference data. Results remain separate and are never inputs by default.
+  training_data_dir: "data"
 
 # ── artifact bindings (SSOT — nothing else in the tree spells these) ────────
 files:

@@ -72,11 +72,11 @@ colab:
   # Training workers consume immutable bundles prepared locally.  Keep all
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
-  training_dataset_csv: "training_data/dataset_deduped_train_minus_3000.csv"
+  training_dataset_csv: "data/dataset_deduped_train_minus_3000.csv"
   # Deterministic 128-row prefix of training_dataset_csv. It is the smallest
   # checked smoke population that survives the pair/component/triple guards.
   # Columns the pipeline never reads (url, image_url) are dropped from it.
-  smoke_dataset_csv: "training_data/dataset_deduped_smoke_128.csv"
+  smoke_dataset_csv: "data/dataset_deduped_smoke_128.csv"
   smoke_inference_sample: 5
   # Distributions the launcher asserts on the VM, per lane.  The Colab image
   # already ships torch/transformers/sentence-transformers/datasets/pandas/
@@ -186,10 +186,10 @@ colab:
     enabled: true
     # The identity anchor: the FULL deduped catalog. training + sample must
     # reconstruct exactly this, which is what the preflight asserts.
-    source_csv: "training_data/dataset_deduped.csv"
+    source_csv: "data/dataset_deduped.csv"
     # The file actually FED TO INFERENCE: the 3,000 held-out sample. Inference
     # runs on the 3,000 only -- it never scores the whole catalog.
-    input_csv: "training_data/dataset_deduped_sample_3000.csv"
+    input_csv: "data/dataset_deduped_sample_3000.csv"
     output_dir: "final_inference"
     # REQUIRED, not a preference: final inference must actually run on the GPU
     # when one is present. The worker refuses to start rather than silently
