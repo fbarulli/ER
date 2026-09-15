@@ -106,6 +106,11 @@ _SMOKE_WORKERS = _COLAB.smoke_workers
 _MIXED_TRAIN_WORKERS = _COLAB.mixed_train_workers
 _MIXED_SIMS_WORKERS = _COLAB.mixed_sims_workers
 _MIXED_MINING_PROFILE = _COLAB.mixed_mining_profile
+# The VM's asserted distributions and installer preference are config-owned
+# (config/training.yaml colab.runtime_packages / colab.prefer_uv_install):
+# trimming or re-pinning the remote stack must not require editing this file.
+_RUNTIME_PACKAGES = _COLAB.runtime_packages
+_PREFER_UV_INSTALL = bool(_COLAB.prefer_uv_install)
 _MASKING_ENABLED = training_cfg().masking.enabled
 _MASKING_PROFILE = str(training_cfg().masking.profile)
 _COLLAPSE_GUARDRAIL_PROFILE = str(training_cfg().collapse_guardrail.profile)
@@ -1663,29 +1668,60 @@ print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
     run_colab_exec_stream(SESSION, script, timeout=600, log_name="checkout", retry_safe=True)
 
 
+def _runtime_install_command(packages: list[str], *, prefer_uv: bool) -> str:
+    """Build the remote command that installs one lane's runtime packages.
+
+    ``uv`` resolves and downloads the same wheels several times faster than
+    pip, and the installed Colab CLI already prefers it for its own
+    ``colab install`` subcommand.  ``--python sys.executable`` targets exactly
+    the interpreter that will import these packages, so the fast path cannot
+    land them in a different environment than the pip fallback does.
+
+    Which installer ran — and any downgrade to pip — is printed, so the
+    durable stage log never hides the slow path (no silent fallbacks).
+    """
+    program = f"""\
+import shutil, subprocess, sys
+
+packages = {packages!r}
+uv = shutil.which("uv") if {prefer_uv!r} else None
+if uv:
+    command = [uv, "pip", "install", "--python", sys.executable, *packages]
+    print("[deps] installer=uv", " ".join(command), flush=True)
+    if subprocess.call(command) == 0:
+        raise SystemExit(0)
+    print("[deps] uv install failed; falling back to pip", flush=True)
+elif {prefer_uv!r}:
+    print("[deps] uv is absent on the VM; falling back to pip", flush=True)
+else:
+    print("[deps] uv disabled by configuration; using pip", flush=True)
+command = [sys.executable, "-m", "pip", "install", *packages]
+print("[deps] installer=pip", " ".join(command), flush=True)
+raise SystemExit(subprocess.call(command))
+"""
+    return f"[sys.executable, '-c', {program!r}]"
+
+
 def install_deps(*, minimal_runtime: bool = False) -> None:
+    packages = list(
+        _RUNTIME_PACKAGES.prepared if minimal_runtime else _RUNTIME_PACKAGES.full
+    )
     print(
         "[deps] installing "
         + ("prepared training runtime" if minimal_runtime else "full lane dependencies")
-        + " on the VM ..."
+        + f" on the VM ({len(packages)} distributions: {', '.join(packages)}) ...",
+        flush=True,
     )
-    # Run pip outside the notebook kernel. A kernel disconnect can interrupt
-    # the control channel, but the detached process keeps writing a durable
-    # log/status pair that the launcher can retrieve before teardown.
-    packages = (
-        "'sentence-transformers', 'datasets', 'accelerate', "
-        "'scikit-learn', 'pandas', 'numpy', 'hnswlib', 'mlflow', 'wandb'"
-        if minimal_runtime
-        else
-        "'sentence-transformers', 'datasets', 'accelerate', 'evaluate', "
-        "'scikit-learn', 'pandas', 'numpy', 'hnswlib', 'mlflow', 'optuna', "
-        "'psycopg[binary]', 'wandb'"
-    )
+    # Run the installer outside the notebook kernel. A kernel disconnect can
+    # interrupt the control channel, but the detached process keeps writing a
+    # durable log/status pair that the launcher can retrieve before teardown.
     run_detached_stage(
         "00_deps",
-        "[sys.executable, '-m', 'pip', 'install', " + packages + "]",
+        _runtime_install_command(packages, prefer_uv=_PREFER_UV_INSTALL),
         timeout=900,
     )
+
+
 def log_gpu_profile() -> None:
     """Record the runtime hardware before training, including CPU smoke runs."""
     script = """import torch
@@ -1910,11 +1946,7 @@ def run_train(
         args.append("--no-mask-effect")
     if resume_run:
         args.append("--resume")
-    profiles = _expand_worker_profiles(
-        masking_profile or _MASKING_PROFILE,
-        workers,
-        "masking",
-    )
+    profiles = _training_bundle_profiles(masking_profile, workers)
     prepared_bundles = _prepare_local_training_bundles(
         profiles=profiles,
         model=model,
@@ -1959,6 +1991,128 @@ def _expand_worker_profiles(raw: str, workers: int, label: str) -> list[str]:
     return values
 
 
+def _training_bundle_profiles(masking_profile: str | None, workers: int) -> list[str]:
+    """Resolve the masking profiles one lane's prepared bundles are built for.
+
+    Single definition shared by `run_train` (which builds the bundles) and
+    `main` (which may start that build early), so a prewarm can never be built
+    for a different request than the run asks for.
+    """
+    return _expand_worker_profiles(
+        masking_profile or _MASKING_PROFILE, workers, "masking"
+    )
+
+
+def _bundle_request_key(request: dict) -> tuple:
+    """Identity of one local bundle request, for prewarm reuse checks."""
+    return (
+        tuple(request["profiles"]),
+        request["model"],
+        request["sample"],
+        request.get("payload", "full"),
+    )
+
+
+class _BundlePrewarm:
+    """One local bundle build running while the VM provisions and installs.
+
+    The build is pure local CPU work over immutable local inputs; nothing on
+    the VM feeds it, so it can overlap the remote deps stage instead of
+    following it.  Measured on the 2026-09-15 T4 launch: 33.3 s of local
+    bundle construction sat strictly after a 62.7 s remote install.
+    """
+
+    def __init__(self, request: dict) -> None:
+        self.request = request
+        self.key = _bundle_request_key(request)
+        self.bundles: list[Path] | None = None
+        self.error: BaseException | None = None
+        self.thread = threading.Thread(target=self._build, daemon=True)
+
+    def _build(self) -> None:
+        try:
+            self.bundles = _prepare_local_training_bundles(**self.request)
+        except BaseException as exc:  # re-raised in the owning run_train call
+            self.error = exc
+            # Also print: a prewarm abandoned by a mismatched request would
+            # otherwise fail invisibly (no silent drops).
+            print(f"[local-prepare] concurrent build failed: {exc!r}", flush=True)
+
+    def join(self) -> list[Path]:
+        self.thread.join()
+        if self.error is not None:
+            raise self.error
+        if self.bundles is None:
+            raise RuntimeError("the concurrent bundle build returned no bundles")
+        return self.bundles
+
+
+_BUNDLE_PREWARM: _BundlePrewarm | None = None
+
+
+def start_local_bundle_prewarm(**request) -> None:
+    """Build this lane's prepared bundles while the VM installs its runtime."""
+    global _BUNDLE_PREWARM
+    prewarm = _BundlePrewarm(request)
+    _BUNDLE_PREWARM = prewarm
+    prewarm.thread.start()
+    print(
+        "[local-prepare] building "
+        f"{len(request['profiles'])} bundle(s) concurrently with the VM "
+        "dependency install",
+        flush=True,
+    )
+
+
+def drain_local_bundle_prewarm() -> None:
+    """Never leave a prewarm thread writing into a closing live log."""
+    global _BUNDLE_PREWARM
+    prewarm, _BUNDLE_PREWARM = _BUNDLE_PREWARM, None
+    if prewarm is not None and prewarm.thread.is_alive():
+        print("[local-prepare] waiting for the concurrent build to finish ...", flush=True)
+        prewarm.thread.join()
+
+
+def _take_prewarmed_bundles(**request) -> list[Path] | None:
+    """Hand over the in-flight build when it matches this exact request."""
+    global _BUNDLE_PREWARM
+    prewarm, _BUNDLE_PREWARM = _BUNDLE_PREWARM, None
+    if prewarm is None:
+        return None
+    if prewarm.key != _bundle_request_key(request):
+        print(
+            "[local-prepare] concurrent build was started for a different "
+            f"request {prewarm.key}; rebuilding for {_bundle_request_key(request)}",
+            flush=True,
+        )
+        return None
+    print("[local-prepare] joining the build started before the VM setup", flush=True)
+    return prewarm.join()
+
+
+def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
+    """The exact local bundle request a lane's `run_train` call will make.
+
+    Mirrors the per-lane worker/sample arguments in `main`; the profile
+    derivation itself comes from `_training_bundle_profiles`, the same
+    function `run_train` uses.  Returns None for lanes that prepare no
+    bundles (sims, mixed, hpo, stop).
+    """
+    if args.what == "smoke":
+        workers, sample = _SMOKE_WORKERS, _SMOKE_SAMPLE
+    elif args.what == "dual-train":
+        workers, sample = 2, args.sample
+    elif args.what == "train":
+        workers, sample = args.workers, args.sample
+    else:
+        return None
+    return {
+        "profiles": _training_bundle_profiles(args.masking_profile, workers),
+        "model": args.model,
+        "sample": sample,
+    }
+
+
 def _prepare_local_training_bundles(
     *,
     profiles: list[str],
@@ -1967,6 +2121,11 @@ def _prepare_local_training_bundles(
     payload: str = "full",
 ) -> list[Path]:
     """Build and validate one complete input bundle per worker locally."""
+    prewarmed = _take_prewarmed_bundles(
+        profiles=profiles, model=model, sample=sample, payload=payload
+    )
+    if prewarmed is not None:
+        return prewarmed
     stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     root = RESULTS / "prepared_training" / stamp
     root.mkdir(parents=True, exist_ok=False)
@@ -2030,13 +2189,21 @@ def _upload_prepared_bundles(
 ) -> list[str]:
     """Upload only the locally prepared bundles and their manifests."""
     remote_dir = f"{REMOTE_ROOT}/prepared_training/{run_id}"
-    mkdir_script = _BOOTSTRAP + f"""
-import pathlib
-pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
-"""
+    worker_dirs = [
+        f"{remote_dir}/worker_{number}" for number in range(1, len(bundles) + 1)
+    ]
+    # One exec for every worker directory. Each notebook exec carries ~1.5 s of
+    # round trip (measured 1.43-1.63 s in the 2026-09-15 T4 history), so the
+    # former per-file mkdir made setup latency grow with the worker count while
+    # creating exactly the same directories.
     run_colab_exec_stream(
         SESSION,
-        mkdir_script,
+        _BOOTSTRAP
+        + f"""
+import pathlib
+for worker_dir in {worker_dirs!r}:
+    pathlib.Path(worker_dir).mkdir(parents=True, exist_ok=True)
+""",
         timeout=120,
         log_name="prepared_bundle_mkdir",
         retry_safe=False,
@@ -2045,17 +2212,6 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
     for number, bundle in enumerate(bundles, start=1):
         for source in (bundle, bundle.with_suffix(bundle.suffix + ".json")):
             remote = f"{remote_dir}/worker_{number}/{source.name}"
-            run_colab_exec_stream(
-                SESSION,
-                _BOOTSTRAP
-                + f"""
-import pathlib
-pathlib.Path({str(Path(remote).parent)!r}).mkdir(parents=True, exist_ok=True)
-""",
-                timeout=120,
-                log_name=f"prepared_bundle_dir_{number}",
-                retry_safe=False,
-            )
             print(f"[upload] prepared bundle file={source} -> {remote}", flush=True)
             _upload_with_retries(
                 source, remote, timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS
@@ -2078,6 +2234,47 @@ def _validation_input_path(configured_value: str) -> Path:
     return source
 
 
+def _remote_checkout_copy(source: Path) -> str | None:
+    """Return the VM's own checkout copy of `source` when its bytes match.
+
+    `prepare_remote_layout` has already put the configured branch at
+    REMOTE_ROOT, so any validation input that is committed to the branch is
+    on the VM before the first upload.  Re-uploading it costs the launcher
+    seconds per run (measured: 14.7 s for the 46 MB deduped source CSV on the
+    2026-09-15 T4 launch) and transfers bytes the VM already has.
+
+    The reuse is content-verified, not assumed: the remote file is hashed and
+    must equal the local digest, so a locally modified or absent input falls
+    back to a normal upload instead of silently training on the wrong rows.
+    """
+    relative = source.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
+    remote = f"{REMOTE_ROOT}/{relative}"
+    probe = _BOOTSTRAP + f"""
+import hashlib, pathlib
+path = pathlib.Path({remote!r})
+if path.is_file():
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    print(digest.hexdigest(), flush=True)
+else:
+    print("", flush=True)
+"""
+    try:
+        reported = run_colab_exec_capture(SESSION, probe, timeout=120).strip()
+    except Exception as exc:
+        print(
+            f"[upload] could not verify the VM checkout copy of {source.name} "
+            f"({exc}); uploading instead",
+            flush=True,
+        )
+        return None
+    if reported and reported == sha256_file(source):
+        return remote
+    return None
+
+
 def _upload_validation_inputs(run_id: str) -> dict[str, str]:
     """Upload the immutable source, training complement, and SKU holdout."""
     sources = {
@@ -2088,12 +2285,11 @@ def _upload_validation_inputs(run_id: str) -> dict[str, str]:
     remote_dir = f"{REMOTE_ROOT}/prepared_training/{run_id}/validation"
     remotes: dict[str, str] = {}
     remote_by_source: dict[str, str] = {}
-    for key, source in sources.items():
-        source_key = str(source.resolve())
-        remotes[key] = remote_by_source.setdefault(
-            source_key, f"{remote_dir}/{key}_{source.name}"
-        )
     if not _VALIDATION_INFERENCE.enabled:
+        for key, source in sources.items():
+            remotes[key] = remote_by_source.setdefault(
+                str(source.resolve()), f"{remote_dir}/{key}_{source.name}"
+            )
         return remotes
     run_colab_exec_stream(
         SESSION,
@@ -2106,20 +2302,33 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
         log_name="validation_input_dir",
         retry_safe=False,
     )
-    uploaded: set[str] = set()
     for key, source in sources.items():
-        remote = remotes[key]
-        if remote in uploaded:
+        source_key = str(source.resolve())
+        if source_key in remote_by_source:
+            remotes[key] = remote_by_source[source_key]
             print(
-                f"[upload] validation {key}={source} reusing existing remote copy {remote}",
+                f"[upload] validation {key}={source} reusing "
+                f"{remote_by_source[source_key]}",
                 flush=True,
             )
             continue
+        checkout_copy = _remote_checkout_copy(source)
+        if checkout_copy is not None:
+            remote_by_source[source_key] = checkout_copy
+            remotes[key] = checkout_copy
+            print(
+                f"[upload] validation {key}={source} reused the verified VM "
+                f"checkout copy {checkout_copy} (sha256 matches; not uploaded)",
+                flush=True,
+            )
+            continue
+        remote = f"{remote_dir}/{key}_{source.name}"
         print(f"[upload] validation {key}={source} -> {remote}", flush=True)
         _upload_with_retries(
             source, remote, timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS
         )
-        uploaded.add(remote)
+        remote_by_source[source_key] = remote
+        remotes[key] = remote
     return remotes
 
 
@@ -3045,8 +3254,16 @@ def main() -> None:
     local_hpo_run: str | None = None
 
     try:
-        ensure_session()
         prepared_train_runtime = args.what in {"train", "dual-train", "smoke"}
+        # The local bundle build is pure local CPU work over immutable local
+        # inputs, so start it before the VM is even provisioned: it then runs
+        # under the remote checkout, install, model check, and profile instead
+        # of after them.  run_train joins this exact build (or rebuilds when
+        # the request differs).
+        bundle_request = _lane_bundle_request(args)
+        if bundle_request is not None:
+            start_local_bundle_prewarm(**bundle_request)
+        ensure_session()
         prepare_remote_layout(minimal_runtime=prepared_train_runtime)
         install_deps(minimal_runtime=prepared_train_runtime)
         if args.what in {"train", "dual-train", "smoke", "mixed"}:
@@ -3140,6 +3357,9 @@ def main() -> None:
             stop()
         else:
             print("\n[info] --keep-alive specified. VM is still running.")
+        # A lane that failed before its run_train call would otherwise leave
+        # the concurrent bundle build writing into a closing log file.
+        drain_local_bundle_prewarm()
         close_live_log()
         release_colab_launch_lock(launch_lock)
 

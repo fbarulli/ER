@@ -73,6 +73,43 @@ colab:
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
   training_dataset_csv: "artifacts/data/dataset_deduped_train_minus_3000.csv"
+  # Distributions the launcher asserts on the VM, per lane.  The Colab image
+  # already ships torch/transformers/sentence-transformers/datasets/pandas/
+  # numpy/scikit-learn (the launcher streams them back as "already
+  # satisfied"), so the deps stage costs what is NOT in the image.  Measured
+  # on the 2026-09-15 T4 launch: 19.99 MiB downloaded, 18 distributions
+  # installed, and only two top-level items needed work — `hnswlib` (source
+  # build; PyPI publishes no wheel) and `mlflow` (11.6 MB + its closure).
+  # Trim, pin, or drop entries here rather than editing src/cli/colab.py.
+  runtime_packages:
+    prepared:
+      - "sentence-transformers"
+      - "datasets"
+      - "accelerate"
+      - "scikit-learn"
+      - "pandas"
+      - "numpy"
+      - "hnswlib"
+      - "mlflow"
+      - "wandb"
+    full:
+      - "sentence-transformers"
+      - "datasets"
+      - "accelerate"
+      - "evaluate"
+      - "scikit-learn"
+      - "pandas"
+      - "numpy"
+      - "hnswlib"
+      - "mlflow"
+      - "optuna"
+      - "psycopg[binary]"
+      - "wandb"
+  # Prefer `uv pip install` on the VM, falling back to `pip` when uv is absent
+  # or refuses.  This mirrors what the installed Colab CLI does for its own
+  # `colab install` subcommand (uv first, pip on failure), and the detached
+  # stage logs which installer actually ran.  Set false to force pip.
+  prefer_uv_install: true
   hpo_mode: "sequential"
   hpo_workers: 2
   train_workers: 6

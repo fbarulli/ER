@@ -1540,6 +1540,30 @@ class ValidationInferenceSpec(BaseModel):
         return values
 
 
+class RuntimePackagesSpec(BaseModel):
+    """Colab VM distributions the launcher asserts, one list per lane.
+
+    The Colab image already ships most of the training stack, so these are the
+    distributions the launcher hands to the VM installer — not an environment
+    lock.  ``prepared`` is the local-bundle training lane (the VM only trains
+    and scores); ``full`` adds the HPO/zero-shot extras.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    prepared: list[str] = Field(min_length=1)
+    full: list[str] = Field(min_length=1)
+
+    @field_validator("prepared", "full")
+    @classmethod
+    def _clean_entries(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("runtime package entries must be non-empty")
+        if len(set(values)) != len(values):
+            raise ValueError("runtime package entries must be unique")
+        return values
+
+
 class ColabSpec(BaseModel):
     """Remote checkout/runtime settings for the Colab training lane."""
 
@@ -1553,6 +1577,8 @@ class ColabSpec(BaseModel):
     gpu: str = Field(min_length=1)
     remote_data_prep: Literal[False] = False
     training_dataset_csv: str = Field(min_length=1)
+    runtime_packages: RuntimePackagesSpec
+    prefer_uv_install: bool
     hpo_mode: Literal["sequential", "parallel_same_vm"]
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)
