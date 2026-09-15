@@ -2114,6 +2114,67 @@ def oracle_schemas() -> None:
     except Exception:
         check("check_verdict_map rejects bad verdict", True)
 
+    # ── consolidated trace row contract (core.tracing.TRACE_COLUMNS) ────────
+    # The trace's rows are written by core.tracing and validated by
+    # core.schemas.TraceRow. These oracles run the LIVE producer
+    # (tracing.record / TraceRun.rows) through the model, so the writer and
+    # the contract cannot drift, and prove the two clauses with teeth —
+    # scope domain and the derived dropped_count — still reject.
+    from core.schemas import (
+        FRAME_CHECKERS,
+        TRACE_FRAME_COLUMNS,
+        TraceRow,
+        check_trace_frame,
+    )
+    from core.tracing import TRACE_COLUMNS, TraceRun, record
+
+    check(
+        "trace frame contract reuses core.tracing.TRACE_COLUMNS",
+        TRACE_FRAME_COLUMNS is TRACE_COLUMNS
+        and tuple(TraceRow.model_fields) == tuple(TRACE_COLUMNS),
+    )
+    trace_run_row = record(
+        "data_prep.gtin_guard",
+        "identity_claims_evaluated",
+        in_count=100,
+        out_count=90,
+        reason="checksum",
+    )
+    check(
+        "TraceRow accepts a live run row with derived dropped_count",
+        TraceRow.model_validate(trace_run_row).dropped_count == 10,
+    )
+    check(
+        "TraceRow accepts an entity row without counts",
+        TraceRow.model_validate(
+            record("gate.pairs", "scored", scope="entity", key="4006381333931")
+        ).dropped_count
+        is None,
+    )
+    for bad_row, why in (
+        (dict(trace_run_row, dropped_count=4), "dropped_count contradicting in-out"),
+        (dict(trace_run_row, scope="batch"), "unknown scope"),
+        (dict(trace_run_row, in_count=-1, dropped_count=101), "negative in_count"),
+        (dict(trace_run_row, stage=""), "empty stage"),
+        (dict(trace_run_row, at="yesterday"), "non ISO-8601 at"),
+    ):
+        try:
+            TraceRow.model_validate(bad_row)
+            check(f"TraceRow rejects {why}", False)
+        except Exception:
+            check(f"TraceRow rejects {why}", True)
+
+    trace_stage = TraceRun("selftest")
+    trace_stage.add("step", "substep", in_count=5, out_count=5)
+    check(
+        "check_trace_frame accepts a live TraceRun frame",
+        check_trace_frame(trace_stage.rows()) is not None,
+    )
+    check(
+        "trace frame checker is discoverable in FRAME_CHECKERS",
+        FRAME_CHECKERS["trace"] is check_trace_frame,
+    )
+
 
 def oracle_uniformity_payload_alignment() -> None:
     from training.uniformity import (
