@@ -46,6 +46,8 @@ from core.schemas import (
     ZERO_SHOT_TRACE_COLUMNS,
     PairArrays,
     TraceRow,
+    TrainingData,
+    TrainingStats,
     check_canonical_records_frame,
     check_cross_country_pair_frame,
     check_eval_summary_frame,
