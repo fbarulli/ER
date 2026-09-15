@@ -776,6 +776,7 @@ class LaneBundleRequestTests(unittest.TestCase):
         request = colab._lane_bundle_request(self._args("smoke"))
         self.assertEqual(len(request["profiles"]), colab._SMOKE_WORKERS)
         self.assertEqual(request["sample"], colab._SMOKE_SAMPLE)
+        self.assertEqual(request["dataset_csv"], colab._COLAB.smoke_dataset_csv)
 
     def test_lanes_without_local_bundles_are_not_prewarmed(self):
         for what in ("sims", "mixed", "hpo", "stop"):

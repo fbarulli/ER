@@ -73,6 +73,9 @@ colab:
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
   training_dataset_csv: "training_data/dataset_deduped_train_minus_3000.csv"
+  # Deterministic 128-row prefix of training_dataset_csv. It is the smallest
+  # checked smoke population that survives the pair/component/triple guards.
+  smoke_dataset_csv: "training_data/dataset_deduped_smoke_128.csv"
   # Distributions the launcher asserts on the VM, per lane.  The Colab image
   # already ships torch/transformers/sentence-transformers/datasets/pandas/
   # numpy/scikit-learn (the launcher streams them back as "already

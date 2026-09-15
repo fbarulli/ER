@@ -2059,6 +2059,7 @@ print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes
 def run_train(
     frac: float, epochs: int, sample: int | None, workers: int = 1,
     *, resume_run: str | None = None, model: str | None = None,
+    dataset_csv: str | None = None,
     run_label: str | None = None, masking_profile: str | None = None,
     collapse_guardrail_profile: str | None = None,
     loss: str = _TRAIN_LOSS,
@@ -2101,11 +2102,14 @@ def run_train(
     if resume_run:
         args.append("--resume")
     profiles = _training_bundle_profiles(masking_profile, workers)
-    prepared_bundles = _prepare_local_training_bundles(
-        profiles=profiles,
-        model=model,
-        sample=sample,
-    )
+    bundle_request = {
+        "profiles": profiles,
+        "model": model,
+        "sample": sample,
+    }
+    if dataset_csv is not None:
+        bundle_request["dataset_csv"] = dataset_csv
+    prepared_bundles = _prepare_local_training_bundles(**bundle_request)
     if workers == 1 and resume_run is None:
         if worker_losses is not None:
             raise ValueError("worker_losses requires at least two concurrent workers")
@@ -2163,6 +2167,7 @@ def _bundle_request_key(request: dict) -> tuple:
         tuple(request["profiles"]),
         request["model"],
         request["sample"],
+        request.get("dataset_csv"),
         request.get("payload", "full"),
     )
 
@@ -2254,17 +2259,23 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
     """
     if args.what == "smoke":
         workers, sample = _SMOKE_WORKERS, _SMOKE_SAMPLE
+        dataset_csv = _COLAB.smoke_dataset_csv
     elif args.what == "dual-train":
         workers, sample = 2, args.sample
+        dataset_csv = None
     elif args.what == "train":
         workers, sample = args.workers, args.sample
+        dataset_csv = None
     else:
         return None
-    return {
+    request = {
         "profiles": _training_bundle_profiles(args.masking_profile, workers),
         "model": args.model,
         "sample": sample,
     }
+    if dataset_csv is not None:
+        request["dataset_csv"] = dataset_csv
+    return request
 
 
 _BUNDLE_CACHE_DIRNAME = "_cache"
@@ -2369,6 +2380,7 @@ def _build_local_training_bundles(
     profiles: list[str],
     model: str | None,
     sample: int | None,
+    dataset_csv: str | None = None,
     payload: str = "full",
 ) -> list[Path]:
     """Build and validate one complete input bundle per worker locally.
@@ -2385,7 +2397,9 @@ def _build_local_training_bundles(
     are byte-identical to one already built.
     """
     model_key = model or str(training_cfg().training.base_model)
-    training_dataset = _validation_input_path(_COLAB.training_dataset_csv)
+    training_dataset = _validation_input_path(
+        dataset_csv or _COLAB.training_dataset_csv
+    )
     cache_dir = _bundle_cache_dir(
         profiles=profiles, model_key=model_key, sample=sample, payload=payload,
         training_dataset=training_dataset,
@@ -2463,6 +2477,7 @@ def _prepare_local_training_bundles(
     profiles: list[str],
     model: str | None,
     sample: int | None,
+    dataset_csv: str | None = None,
     payload: str = "full",
 ) -> list[Path]:
     """Bundles for one training call: the in-flight build when it matches.
@@ -2470,14 +2485,18 @@ def _prepare_local_training_bundles(
     The only entry point that consumes a prewarm, so the build it hands over
     runs once and the overlap in `start_local_bundle_prewarm` is real.
     """
-    prewarmed = _take_prewarmed_bundles(
-        profiles=profiles, model=model, sample=sample, payload=payload
-    )
+    request = {
+        "profiles": profiles,
+        "model": model,
+        "sample": sample,
+        "payload": payload,
+    }
+    if dataset_csv is not None:
+        request["dataset_csv"] = dataset_csv
+    prewarmed = _take_prewarmed_bundles(**request)
     if prewarmed is not None:
         return prewarmed
-    return _build_local_training_bundles(
-        profiles=profiles, model=model, sample=sample, payload=payload
-    )
+    return _build_local_training_bundles(**request)
 
 
 def _upload_prepared_bundles(
@@ -3720,7 +3739,8 @@ def main() -> None:
         elif args.what == "smoke":
             local_training_run = run_train(
                 args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE,
-                workers=_SMOKE_WORKERS, run_label=args.run_label,
+                workers=_SMOKE_WORKERS, dataset_csv=_COLAB.smoke_dataset_csv,
+                run_label=args.run_label,
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
                 loss=args.loss,
