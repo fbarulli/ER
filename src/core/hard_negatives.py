@@ -127,16 +127,18 @@ class MiningFunnel:
     above_floor_hard_no: int = 0
     above_floor_proceed: int = 0
     above_floor_fallback: int = 0
-    dropped_not_in_canonical_records: int = 0
-    dropped_no_representative_row: int = 0
-    dropped_no_canonical_index: int = 0
-    dropped_same_canonical: int = 0
-    dropped_brand_mismatch: int = 0
-    dropped_name_mismatch: int = 0
-    dropped_no_attribute_conflict: int = 0
-    dropped_already_in_baseline: int = 0
+    # Candidate-row drop counters: one candidate = one (gtin1, gtin2) gate row.
+    dropped_candidates_no_canonical_record: int = 0
+    dropped_candidates_no_source_row: int = 0
+    dropped_candidates_no_canonical_index: int = 0
+    dropped_candidates_same_canonical: int = 0
+    dropped_candidates_brand: int = 0
+    dropped_candidates_name: int = 0
+    dropped_candidates_no_conflict: int = 0
     flavor_variant_candidates: int = 0
-    passed_all_filters: int = 0
+    passed_candidates: int = 0
+    # Pair-direction counters: a candidate emits up to two (anchor, target) rows.
+    dropped_pairs_already_in_baseline: int = 0
     emitted_pairs: int = 0
     conflict_dimension_census: dict[str, int] = field(default_factory=dict)
     name_blocked_conflict_dimension_census: dict[str, int] = field(default_factory=dict)
@@ -146,22 +148,38 @@ class MiningFunnel:
 
         Counts are cumulative down the funnel: each step's ``out_count`` is the
         next step's ``in_count``, so a trace read top-to-bottom is the data
-        flow and no step can silently lie about its own attrition.
+        flow and no step can silently lie about its own attrition. The first
+        block is counted in CANDIDATE ROWS (gate pairs); ``direction_expansion``
+        switches to PAIR DIRECTIONS, because one candidate emits two
+        ``(source SKU, other canonical)`` rows.
         """
         steps: list[tuple[str, int, int, str]] = []
         cursor = int(self.gate_rows)
-        for name, dropped, reason in self._drop_order():
+        for name, dropped, reason in self._candidate_drops():
             steps.append((name, cursor, cursor - int(dropped), reason))
             cursor -= int(dropped)
+        directions = 2 * cursor
+        steps.append((
+            "direction_expansion",
+            cursor,
+            directions,
+            "one candidate emits both (source SKU -> other canonical) directions",
+        ))
+        steps.append((
+            "baseline_deduplication",
+            directions,
+            directions - int(self.dropped_pairs_already_in_baseline),
+            "pair direction already present in the baseline negative population",
+        ))
         steps.append((
             "emitted",
-            cursor,
+            directions - int(self.dropped_pairs_already_in_baseline),
             int(self.emitted_pairs),
-            "pairs emitted after baseline de-duplication and the target cap",
+            "pair directions emitted after the target cap",
         ))
         return steps
 
-    def _drop_order(self) -> list[tuple[str, int, str]]:
+    def _candidate_drops(self) -> list[tuple[str, int, str]]:
         return [
             (
                 "gate_similarity_floor",
@@ -170,56 +188,51 @@ class MiningFunnel:
             ),
             (
                 "canonical_records_resolution",
-                self.dropped_not_in_canonical_records,
+                self.dropped_candidates_no_canonical_record,
                 "endpoint GTIN has no canonical record",
             ),
             (
                 "representative_row_resolution",
-                self.dropped_no_representative_row,
+                self.dropped_candidates_no_source_row,
                 "endpoint GTIN has no source row in the SKU frame",
             ),
             (
                 "canonical_index_resolution",
-                self.dropped_no_canonical_index,
+                self.dropped_candidates_no_canonical_index,
                 "endpoint GTIN has no payload canonical index",
             ),
             (
                 "same_canonical_guard",
-                self.dropped_same_canonical,
+                self.dropped_candidates_same_canonical,
                 "both GTINs resolve to the same canonical item (true match)",
             ),
             (
                 "brand_equality",
-                self.dropped_brand_mismatch,
+                self.dropped_candidates_brand,
                 "canonical brands differ or are empty",
             ),
             (
                 "product_name_equality",
-                self.dropped_name_mismatch,
+                self.dropped_candidates_name,
                 f"normalized product names differ (name_match={self.name_match})",
             ),
             (
                 "critical_attribute_conflict",
-                self.dropped_no_attribute_conflict,
+                self.dropped_candidates_no_conflict,
                 "no critical attribute conflict under the gate's own tolerance",
-            ),
-            (
-                "baseline_deduplication",
-                self.dropped_already_in_baseline,
-                "pair already present in the baseline negative population",
             ),
         ]
 
     def bottleneck(self) -> str:
-        """The single step that dropped the most candidates."""
-        named = [(name, dropped) for name, dropped, _ in self._drop_order()]
+        """The candidate-level step that dropped the most candidates."""
+        named = [(name, dropped) for name, dropped, _ in self._candidate_drops()]
         return max(named, key=lambda item: item[1])[0] if named else ""
 
     def candidate_ceiling_pct(self) -> float:
-        """Emitted share of the candidates that cleared the similarity floor."""
+        """Passing share of the candidates that cleared the similarity floor."""
         if not self.above_similarity_floor:
             return 0.0
-        return 100.0 * self.passed_all_filters / self.above_similarity_floor
+        return 100.0 * self.passed_candidates / self.above_similarity_floor
 
     def to_dict(self) -> dict[str, object]:
         """JSON-serializable readback for a trace ``detail`` column."""
@@ -238,14 +251,16 @@ class MiningFunnel:
                 "proceed": int(self.above_floor_proceed),
                 "fallback": int(self.above_floor_fallback),
             },
-            "dropped": {
-                name: int(dropped) for name, dropped, _ in self._drop_order()
+            "dropped_candidates": {
+                name: int(dropped) for name, dropped, _ in self._candidate_drops()
             },
             "flavor_variant_candidates": int(self.flavor_variant_candidates),
-            "passed_all_filters": int(self.passed_all_filters),
+            "passed_candidates": int(self.passed_candidates),
+            "dropped_pairs_already_in_baseline": int(self.dropped_pairs_already_in_baseline),
             "emitted_pairs": int(self.emitted_pairs),
             "bottleneck": self.bottleneck(),
             "candidate_to_emitted_pct": round(self.candidate_ceiling_pct(), 4),
+            "target_reached": bool(self.emitted_pairs >= self.n_target > 0),
             "conflict_dimension_census": dict(sorted(self.conflict_dimension_census.items())),
             "name_blocked_conflict_dimension_census": dict(
                 sorted(self.name_blocked_conflict_dimension_census.items())
@@ -396,15 +411,15 @@ def mine_targeted_attribute_negatives(
         left_gtin, right_gtin = str(row.gtin1), str(row.gtin2)
         if left_gtin not in records or right_gtin not in records:
             if funnel is not None:
-                funnel.dropped_not_in_canonical_records += 1
+                funnel.dropped_candidates_no_canonical_record += 1
             continue
         if left_gtin not in gtin_to_row or right_gtin not in gtin_to_row:
             if funnel is not None:
-                funnel.dropped_no_representative_row += 1
+                funnel.dropped_candidates_no_source_row += 1
             continue
         if left_gtin not in gtin_to_canon_idx or right_gtin not in gtin_to_canon_idx:
             if funnel is not None:
-                funnel.dropped_no_canonical_index += 1
+                funnel.dropped_candidates_no_canonical_index += 1
             continue
         # Same canonical item => true match, never a label-0 pair.
         if canonical_map is not None:
@@ -412,7 +427,7 @@ def mine_targeted_attribute_negatives(
             right_canon = canonical_map.get(right_gtin)
             if left_canon is not None and left_canon == right_canon:
                 if funnel is not None:
-                    funnel.dropped_same_canonical += 1
+                    funnel.dropped_candidates_same_canonical += 1
                 continue
         left_record, right_record = records[left_gtin], records[right_gtin]
         left_row, right_row = gtin_to_row[left_gtin], gtin_to_row[right_gtin]
@@ -420,7 +435,7 @@ def mine_targeted_attribute_negatives(
         right_brand = str(right_record.get("mode_brand", "")).strip().casefold()
         if not left_brand or left_brand != right_brand:
             if funnel is not None:
-                funnel.dropped_brand_mismatch += 1
+                funnel.dropped_candidates_brand += 1
             continue
         left_name = normalized_product_name(df.iloc[left_row].get("title", ""), left_brand)
         right_name = normalized_product_name(df.iloc[right_row].get("title", ""), right_brand)
@@ -446,7 +461,7 @@ def mine_targeted_attribute_negatives(
                 )
             if not relaxed:
                 if funnel is not None:
-                    funnel.dropped_name_mismatch += 1
+                    funnel.dropped_candidates_name += 1
                 continue
             if evaluation is None:
                 evaluation = _evaluate(left_record, right_record)
@@ -455,7 +470,7 @@ def mine_targeted_attribute_negatives(
                 # evaluator sees no flavour conflict: nothing identity-bearing
                 # separates them, so this is not a negative.
                 if funnel is not None:
-                    funnel.dropped_name_mismatch += 1
+                    funnel.dropped_candidates_name += 1
                 continue
             if funnel is not None:
                 funnel.flavor_variant_candidates += 1
@@ -463,11 +478,11 @@ def mine_targeted_attribute_negatives(
             evaluation = _evaluate(left_record, right_record)
         if not evaluation["conflicts"]:
             if funnel is not None:
-                funnel.dropped_no_attribute_conflict += 1
+                funnel.dropped_candidates_no_conflict += 1
             continue
         if funnel is not None:
             _census(funnel.conflict_dimension_census, evaluation["conflicts"])
-            funnel.passed_all_filters += 1
+            funnel.passed_candidates += 1
         score = float(row.candidate_similarity)
         for pair in (
             (left_row, gtin_to_canon_idx[right_gtin]),
@@ -476,7 +491,7 @@ def mine_targeted_attribute_negatives(
             pair = (int(pair[0]), int(pair[1]))
             if pair in existing_keys:
                 if funnel is not None:
-                    funnel.dropped_already_in_baseline += 1
+                    funnel.dropped_pairs_already_in_baseline += 1
                 continue
             existing_keys.add(pair)
             found.append((pair[0], pair[1], score))
