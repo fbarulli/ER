@@ -154,6 +154,10 @@ _INCREMENTAL_SYNC_SECONDS = 30
 # The trainer writes this file last inside a checkpoint directory, so its
 # presence is what distinguishes a finished checkpoint from one mid-write.
 _CHECKPOINT_MANIFEST_NAME = "checkpoint_manifest.json"
+# ``worker_N/checkpoint-<step>/<file>`` is exactly two levels below the worker
+# root, so the incremental listing walks no deeper and stays bounded however
+# large the run's checkpoint, log, and wandb trees grow.
+_CHECKPOINT_LISTING_DEPTH = 2
 # Bookkeeping written beside a locally retained checkpoint, recording which
 # remote checkpoint it is and the score that won it the slot.
 _LATEST_BEST_MARKER = "latest_best.json"
@@ -1597,32 +1601,25 @@ class _IncrementalResultSync:
                 )
 
     def _pass(self) -> None:
-        try:
-            remote_files = _list_remote(self.remote_base)
-        except BaseException as exc:  # a listing failure must not escape a pass
-            print(
-                f"[result-sync] listing failed ({type(exc).__name__}: {exc}); "
-                "final download still covers every file",
-                flush=True,
-            )
-            return
         for worker in range(1, self.workers + 1):
             try:
-                self._sync_worker(worker, remote_files)
+                self._sync_worker(worker)
             except BaseException as exc:
+                # A listing failure, a timeout, or a download error all land
+                # here: one pass must never escape into the run.
                 print(
-                    f"[result-sync] worker {worker} skipped "
+                    f"[result-sync] worker {worker} pass skipped "
                     f"({type(exc).__name__}: {exc}); final download covers it",
                     flush=True,
                 )
 
-    def _sync_worker(self, worker: int, remote_files: list[str]) -> None:
+    def _sync_worker(self, worker: int) -> None:
         """Copy this worker's best-so-far checkpoint, if it beats the local one."""
         prefix = f"{self.remote_base}/worker_{worker}/"
         checkpoints: dict[str, list[str]] = {}
-        for name in remote_files:
-            if not name.startswith(prefix):
-                continue
+        for name in _list_remote(
+            prefix, max_depth=_CHECKPOINT_LISTING_DEPTH
+        ):
             parts = Path(name).relative_to(prefix).parts
             if len(parts) < 2 or not parts[0].startswith("checkpoint-"):
                 continue
@@ -2943,15 +2940,24 @@ class _ValidationUploadPrewarm:
     nothing the VM does produces them, so the transfer can overlap the install
     instead of following it.  Measured before the overlap: 36.79 s of uploads
     strictly after a 42.96 s dependency install.
+
+    The thread waits for :func:`ensure_session` before its first transfer.
+    Started earlier, it raced session provisioning, failed on a VM that did
+    not exist yet, and left the whole payload to be re-uploaded serially at
+    the join -- which is the cost the overlap exists to remove.
     """
 
     def __init__(self, stamp: str) -> None:
         self.stamp = stamp
         self.remote_paths: dict[str, str] | None = None
         self.error: BaseException | None = None
+        self.session_ready = threading.Event()
         self.thread = threading.Thread(target=self._upload, daemon=True)
 
     def _upload(self) -> None:
+        # A GPU allocation can take minutes; the upload is worthless until the
+        # control channel answers, so wait rather than transfer into a void.
+        self.session_ready.wait()
         try:
             self.remote_paths = _perform_validation_upload(self.stamp)
         except BaseException as exc:  # handed back to the owning run, or fallen back from
@@ -2975,6 +2981,12 @@ _VALIDATION_UPLOAD_PREWARM: _ValidationUploadPrewarm | None = None
 def start_validation_upload_prewarm() -> str:
     """Begin this lane's validation uploads; returns the run id they belong to."""
     global _VALIDATION_UPLOAD_PREWARM
+    if _VALIDATION_UPLOAD_PREWARM is not None:
+        # Running a second prewarm over an unfinished one would race two
+        # threads onto the same remote paths, and the first thread would never
+        # be joined.  Release and retire it before starting its replacement.
+        _VALIDATION_UPLOAD_PREWARM.session_ready.set()
+        _VALIDATION_UPLOAD_PREWARM.thread.join()
     stamp = datetime.now(timezone.utc).strftime(_RUN_STAMP_FORMAT)
     prewarm = _ValidationUploadPrewarm(stamp)
     _VALIDATION_UPLOAD_PREWARM = prewarm
@@ -2993,7 +3005,17 @@ def drain_validation_upload_prewarm() -> None:
     prewarm, _VALIDATION_UPLOAD_PREWARM = _VALIDATION_UPLOAD_PREWARM, None
     if prewarm is not None and prewarm.thread.is_alive():
         print("[upload] waiting for the concurrent upload to finish ...", flush=True)
+        # The thread may still be blocked on the session gate; release it so a
+        # drain at exit cannot hang forever on a VM that never came up.
+        prewarm.session_ready.set()
         prewarm.thread.join()
+
+
+def release_validation_upload_prewarm() -> None:
+    """Let the prewarmed upload start, now that the session can accept it."""
+    prewarm = _VALIDATION_UPLOAD_PREWARM
+    if prewarm is not None:
+        prewarm.session_ready.set()
 
 
 def _lane_run_stamp() -> str:
@@ -3019,6 +3041,10 @@ def _upload_validation_inputs(run_id: str) -> dict[str, str]:
                 "setup",
                 flush=True,
             )
+            # By the time a lane joins, the session is up: release the gate so
+            # the overlap actually happens instead of the thread waiting on a
+            # signal that this join is itself blocking.
+            prewarm.session_ready.set()
             try:
                 return prewarm.join()
             except Exception as exc:
@@ -3614,13 +3640,28 @@ print(json.dumps({{"base": str(base), "completed": completed}}), flush=True)
     return remote_base, 2
 
 
-def _list_remote(pattern_dir: str) -> list[str]:
-    """List remote files via a stdin-exec (same channel the lanes use)."""
+def _list_remote(pattern_dir: str, *, max_depth: int | None = None) -> list[str]:
+    """List remote files via a stdin-exec (same channel the lanes use).
+
+    ``max_depth`` bounds the walk.  An unbounded ``rglob`` over a live run
+    root is what timed out a listing during the 2026-09-15 T4 run: the tree
+    holds every checkpoint, ``wandb`` file, and log the run has produced so
+    far, and the walk exceeded the 120 s exec budget.  Callers that only need
+    a shallow slice pass a depth and get a bounded walk.
+    """
     import json as _json
 
+    if max_depth is None:
+        collect = "p for p in root.rglob('*')"
+    else:
+        collect = (
+            f"p for p in root.rglob('*') "
+            f"if len(p.relative_to(root).parts) <= {int(max_depth)}"
+        )
     script = (
         "import pathlib, json\n"
-        f"files = sorted(str(p) for p in pathlib.Path('{pattern_dir}').rglob('*') if p.is_file())\n"
+        f"root = pathlib.Path({pattern_dir!r})\n"
+        f"files = sorted(str(p) for p in {collect} if p.is_file())\n"
         "print('@@FILES@@' + json.dumps(files))\n"
     )
     proc = subprocess.Popen(
@@ -4121,6 +4162,10 @@ def main() -> None:
         if bundle_request is not None and not args.resume_run:
             start_validation_upload_prewarm()
         ensure_session()
+        # The session exists now, so the prewarmed upload can run for real.  It
+        # travels alongside prepare_remote_layout/install_deps below instead of
+        # after them, which is the whole point of starting it early.
+        release_validation_upload_prewarm()
         if GPU.upper() != "CPU":
             # Backstop, not the primary release: the launcher's own teardown
             # still runs in `finally`.  A GPU VM must never be left held open
