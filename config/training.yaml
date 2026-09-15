@@ -73,9 +73,10 @@ colab:
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
   training_dataset_csv: "training_data/dataset_deduped_train_minus_3000.csv"
-  # Deterministic 1,000-row stratified sample of dataset_deduped, sized to
-  # exercise the GPU path end to end without the full-dataset runtime.
-  smoke_dataset_csv: "training_data/dataset_deduped_smoke_1000.csv"
+  # Deterministic 128-row prefix of training_dataset_csv. It is the smallest
+  # checked smoke population that survives the pair/component/triple guards.
+  # Columns the pipeline never reads (url, image_url) are dropped from it.
+  smoke_dataset_csv: "training_data/dataset_deduped_smoke_128.csv"
   smoke_inference_sample: 5
   # Distributions the launcher asserts on the VM, per lane.  The Colab image
   # already ships torch/transformers/sentence-transformers/datasets/pandas/
@@ -158,14 +159,11 @@ colab:
   result_download_heartbeat_seconds: 15
   result_archive_name: "result_bundle.tar.gz"
   result_manifest_name: "result_bundle_manifest.json"
-  # Nothing that carries data is excluded: with dvc_enabled false the manual
-  # download is the only path off the VM, so dropping a directory here loses
-  # its contents at teardown.  Only local DVC scratch state stays out, and the
-  # incremental sync already keeps just the best checkpoint under latest_best/.
   result_download_excluded_dirs:
     - ".dvc-cache"
     - ".dvc-site-cache"
     - "_checkpoint_upload_staging"
+    - "_checkpoints"
   worker_monitor_seconds: 15
   dvc_enabled: false
   # One lane-level DVC publisher is separate from trainer/HPO workers.
@@ -671,7 +669,7 @@ hpo:
 sweep:
   payload_variants: ["title_only"]   # 07c variants beyond 'full'
   train_fracs: [0.25, 0.50, 0.75]    # 07d data-scaling curve
-  smoke_sample: 1000                  # chain-check sample size (--sample)
+  smoke_sample: 128                   # chain-check sample size (--sample)
   sweep_sample: 2000                  # step-2 smoke sweep size
   rerank_model: "rerank_minilm_l6"  # local registry key; DVC-shipped bundle
 
