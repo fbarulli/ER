@@ -3468,21 +3468,23 @@ def main() -> None:
     if GPU.upper() != "CPU" and not args.allow_gpu:
         raise ValueError("GPU launch requires --allow-gpu")
 
-    # Keep-alive is a CPU-only capability.  A retained GPU VM bills accelerator
-    # quota for as long as it lives, so this is a hard safety invariant rather
-    # than a tunable: refuse the launch instead of quietly ignoring the flag, so
-    # a caller can never mistake an unhonoured request for a retained VM.
+    # The CLI's keep-alive daemon starts with the session and is what
+    # PROVISIONING needs, so the wrapper must never deny it: denying it stops
+    # `colab new` working at all, on every lane.  What is restricted is
+    # RETENTION -- whether the VM is left running when the work ends.
+    os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
     if args.keep_alive and GPU.upper() != "CPU":
-        raise ValueError(
-            "--keep-alive is CPU-only (a retained GPU VM consumes accelerator "
-            f"quota indefinitely); requested --gpu {GPU}. Use --gpu CPU or drop "
-            "--keep-alive."
+        # Retention on a GPU lane is a deliberate, owner-approved choice: on the
+        # first run with a new input contract neither the Colab transfer nor DVC
+        # is trusted, and the manual checksum-verified pull is the guarantee.
+        # Loud, not blocked -- and the run is not finished until the pull is done
+        # and `colab stop` has released the VM.
+        print(
+            f"[warn] retaining a {GPU} VM on purpose: accelerator quota is spent "
+            "for as long as it lives. Pull and verify the results, then run "
+            "`colab stop`.",
+            flush=True,
         )
-    # The Colab CLI wrapper performs the actual detached spawn, so publish the
-    # launcher's decision for it to enforce at that point (default deny).
-    os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = (
-        "1" if args.keep_alive and GPU.upper() == "CPU" else "0"
-    )
 
     if args.preflight_only:
         if args.what not in {"train", "smoke"}:
