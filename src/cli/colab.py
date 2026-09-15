@@ -2031,7 +2031,7 @@ class _BundlePrewarm:
 
     def _build(self) -> None:
         try:
-            self.bundles = _prepare_local_training_bundles(**self.request)
+            self.bundles = _build_local_training_bundles(**self.request)
         except BaseException as exc:  # re-raised in the owning run_train call
             self.error = exc
             # Also print: a prewarm abandoned by a mismatched request would
@@ -2113,19 +2113,19 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
     }
 
 
-def _prepare_local_training_bundles(
+def _build_local_training_bundles(
     *,
     profiles: list[str],
     model: str | None,
     sample: int | None,
     payload: str = "full",
 ) -> list[Path]:
-    """Build and validate one complete input bundle per worker locally."""
-    prewarmed = _take_prewarmed_bundles(
-        profiles=profiles, model=model, sample=sample, payload=payload
-    )
-    if prewarmed is not None:
-        return prewarmed
+    """Build and validate one complete input bundle per worker locally.
+
+    The single bundle builder.  It deliberately does NOT consult the prewarm:
+    it is what the prewarm thread itself runs, so looking the prewarm up here
+    would make that thread join itself.
+    """
     stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     root = RESULTS / "prepared_training" / stamp
     root.mkdir(parents=True, exist_ok=False)
@@ -2180,6 +2180,28 @@ def _prepare_local_training_bundles(
         )
         bundles.append(bundle)
     return bundles
+
+
+def _prepare_local_training_bundles(
+    *,
+    profiles: list[str],
+    model: str | None,
+    sample: int | None,
+    payload: str = "full",
+) -> list[Path]:
+    """Bundles for one training call: the in-flight build when it matches.
+
+    The only entry point that consumes a prewarm, so the build it hands over
+    runs once and the overlap in `start_local_bundle_prewarm` is real.
+    """
+    prewarmed = _take_prewarmed_bundles(
+        profiles=profiles, model=model, sample=sample, payload=payload
+    )
+    if prewarmed is not None:
+        return prewarmed
+    return _build_local_training_bundles(
+        profiles=profiles, model=model, sample=sample, payload=payload
+    )
 
 
 def _upload_prepared_bundles(

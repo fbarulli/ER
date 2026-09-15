@@ -221,7 +221,7 @@ class BundlePrewarmTests(unittest.TestCase):
             prewarm = colab._BUNDLE_PREWARM
             overlap.append(prewarm is not None and prewarm.thread.is_alive())
 
-        with mock.patch.object(colab, "_prepare_local_training_bundles", fake_build), \
+        with mock.patch.object(colab, "_build_local_training_bundles", fake_build), \
              mock.patch.object(colab, "install_deps", fake_deps):
             colab.start_local_bundle_prewarm(
                 profiles=["baseline"], model=None, sample=None
@@ -250,7 +250,7 @@ class BundlePrewarmTests(unittest.TestCase):
             release.wait(timeout=10)
             return [Path("/tmp/worker_1.pkl.gz")]
 
-        with mock.patch.object(colab, "_prepare_local_training_bundles", fake):
+        with mock.patch.object(colab, "_build_local_training_bundles", fake):
             colab.start_local_bundle_prewarm(profiles=["p"], model="m", sample=7)
             release.set()
             result = colab._take_prewarmed_bundles(profiles=["p"], model="m", sample=7)
@@ -273,6 +273,65 @@ class BundlePrewarmTests(unittest.TestCase):
         # No dataset resolution and no bundle subprocess: the build was reused.
         inputs.assert_not_called()
 
+    def test_prewarm_thread_builds_once_without_joining_itself(self):
+        """Regression guard for a real defect the mocked tests hid.
+
+        The prewarm thread runs the real builder, so if the builder consulted
+        the prewarm lookup the thread would join itself, die with
+        ``cannot join current thread``, and the main thread would then rebuild
+        serially — same output, no overlap, and no test that only counts builds
+        would notice.  This drives the REAL builder (stubbing its subprocess and
+        manifest reader) and asserts the build ran on the prewarm thread, not
+        on the caller's.
+        """
+        manifest = mock.Mock(
+            n_df=58_529, n_payload=94_124, n_pos=44_690, n_neg=22_393,
+            sha256="0" * 64,
+        )
+        built_on: list[str] = []
+        original_build = colab._build_local_training_bundles
+
+        def spy(**request):
+            built_on.append(threading.current_thread().name)
+            return original_build(**request)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            dataset = Path(temporary) / "dataset.csv"
+            dataset.write_text("product_id\n1\n")
+            with mock.patch.object(colab, "RESULTS", Path(temporary)), \
+                 mock.patch.object(
+                     colab, "_validation_input_path", return_value=dataset
+                 ), \
+                 mock.patch.object(colab.subprocess, "run") as build, \
+                 mock.patch(
+                     "training.prepared_bundle.load_prepared_bundle",
+                     return_value=(manifest, None),
+                 ), \
+                 mock.patch.object(colab, "_build_local_training_bundles", spy):
+                colab.start_local_bundle_prewarm(
+                    profiles=["baseline"], model=None, sample=None
+                )
+                bundles = colab._prepare_local_training_bundles(
+                    profiles=["baseline"], model=None, sample=None
+                )
+                self.assertIsNone(
+                    colab._BUNDLE_PREWARM, "the matching prewarm must be consumed"
+                )
+
+        self.assertEqual(build.call_count, 1, "the bundle must be built exactly once")
+        self.assertEqual(len(bundles), 1)
+        self.assertTrue(bundles[0].name.startswith("worker_1_"))
+        self.assertEqual(len(built_on), 1, "the build must run exactly once")
+        self.assertNotEqual(
+            built_on[0], threading.current_thread().name,
+            "the build ran on the caller's thread: the prewarm thread never "
+            "reached the builder (it joined itself)",
+        )
+        command = build.call_args.args[0]
+        self.assertIn("--prepare-bundle", command)
+        # No training: the bundle-writer path must be what ran.
+        self.assertIn("--no-plot", command)
+
     def test_different_request_is_reported_and_not_reused(self):
         release = threading.Event()
 
@@ -281,7 +340,7 @@ class BundlePrewarmTests(unittest.TestCase):
             return [Path("/tmp/worker_1.pkl.gz")]
 
         captured = _Capture()
-        with mock.patch.object(colab, "_prepare_local_training_bundles", fake), \
+        with mock.patch.object(colab, "_build_local_training_bundles", fake), \
              mock.patch("sys.stdout", captured):
             colab.start_local_bundle_prewarm(profiles=["p"], model=None, sample=None)
             release.set()
@@ -295,7 +354,7 @@ class BundlePrewarmTests(unittest.TestCase):
         def fake(**request):
             raise RuntimeError("bundle inputs are missing")
 
-        with mock.patch.object(colab, "_prepare_local_training_bundles", fake):
+        with mock.patch.object(colab, "_build_local_training_bundles", fake):
             colab.start_local_bundle_prewarm(profiles=["p"], model=None, sample=None)
             with self.assertRaises(RuntimeError) as caught:
                 colab._take_prewarmed_bundles(profiles=["p"], model=None, sample=None)
@@ -311,7 +370,7 @@ class BundlePrewarmTests(unittest.TestCase):
             finished.set()
             return []
 
-        with mock.patch.object(colab, "_prepare_local_training_bundles", fake):
+        with mock.patch.object(colab, "_build_local_training_bundles", fake):
             colab.start_local_bundle_prewarm(profiles=["p"], model=None, sample=None)
             release.set()
             colab.drain_local_bundle_prewarm()
