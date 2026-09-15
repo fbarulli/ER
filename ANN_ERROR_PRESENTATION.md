@@ -12,7 +12,7 @@ directory after the next inference completes.
 <tr><td>Overall ANN quality</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/holdout_operating_metrics.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/holdout_operating_metrics.png"></td></tr>
 <tr><td>Error rate by attribute</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/attribute_error_breakdown.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/attribute_error_breakdown.png"></td></tr>
 <tr><td>ANN candidate recall</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/ann_ranking_hits_corrected.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/ann_ranking_hits_corrected.png"></td></tr>
-<tr><td>Score separation/calibration</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/holdout_score_distributions.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/holdout_score_distributions.png"></td></tr>
+<tr><td>AUC threshold tuning</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/auc_threshold_tuning.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/auc_threshold_tuning.png"></td></tr>
 </table>
 
 Baseline: adjusted Rand `0.9900`, pair recall `0.9803`, pair precision `1.0000`,

@@ -546,6 +546,42 @@ def generate_report(
         fig.tight_layout()
         _save(fig, out / "threshold_sweep.png")
 
+        # AUC is threshold-independent, so show it as the discrimination
+        # baseline while plotting the threshold-dependent operating points.
+        # This avoids the misleading implication that lowering a threshold
+        # can improve ROC AUC; it only trades precision/recall/FPR.
+        auc_values = []
+        for _, part in pairs.groupby("fold", sort=True):
+            if part["label"].nunique() > 1:
+                auc_values.append(
+                    roc_auc_score(part["label"].to_numpy(), part["score"].to_numpy())
+                )
+        mean_auc = float(np.mean(auc_values)) if auc_values else float("nan")
+        tuning = threshold_sweep.groupby("threshold", sort=True).mean(numeric_only=True)
+        tuning["f1"] = (
+            2 * tuning["precision"] * tuning["recall"]
+            / (tuning["precision"] + tuning["recall"]).replace(0, np.nan)
+        ).fillna(0.0)
+        fig, ax = plt.subplots(figsize=(8.5, 4.8))
+        for metric, color in (
+            ("precision", "#4c72b0"),
+            ("recall", "#55a868"),
+            ("f1", "#8172b2"),
+            ("fpr", "#c44e52"),
+        ):
+            ax.plot(tuning.index, tuning[metric], marker="o", label=metric, color=color)
+        ax.set(
+            xlabel="decision threshold",
+            ylabel="rate",
+            title=f"ANN threshold tuning (mean ROC AUC={mean_auc:.3f})",
+            ylim=(0, 1.05),
+        )
+        ax.set_xticks(list(REPORT_THRESHOLDS))
+        ax.grid(alpha=0.25)
+        ax.legend()
+        fig.tight_layout()
+        _save(fig, out / "auc_threshold_tuning.png")
+
     f1_col = _metric_column(list(ok.columns), "f1_at_")
     precision_col = _metric_column(list(ok.columns), "precision_at_")
     recall_col = _metric_column(list(ok.columns), "recall_at_")
