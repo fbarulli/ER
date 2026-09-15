@@ -274,7 +274,13 @@ def require_no_failed_folds(rows: list[dict], *, lane: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 from core.mlflow_ctx import MlflowCtx
-from core.ranking_metrics import ranking_at_k_by_query
+from core.ranking_metrics import (
+    added_encode_rows,
+    build_evaluation_pool,
+    competitors_per_query,
+    ranking_at_k_by_query,
+    ranking_coverage,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Training (ST 6 modern Trainer path with HF early stopping)
@@ -3323,6 +3329,99 @@ def train_one_config(
         hard_train_all = np.empty((0, 2), dtype=int)
         hard_eval = np.empty((0, 2), dtype=int)
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # RETRIEVAL-POOL INPUTS (ER-346) — computed ONCE, before the fold loop.
+    # ═══════════════════════════════════════════════════════════════════════
+    # The holdout ranking metric used to be evaluated on a pool that was one
+    # candidate wide for 90.5% of queries (5,292 of 5,847 holdout queries saw
+    # ONLY their own positive; the widest pool any query saw was 6 against
+    # max(ks)=10).  A perfect oracle and an informationless constant scorer
+    # therefore produced IDENTICAL numbers, so the metric measured nothing.
+    # The pool below gives every query a genuine ranking task.  Its inputs are
+    # derived here from the SAME graph, the SAME payload space, and the SAME
+    # fixed artifacts the fold itself uses.
+    from core.ranking_metrics import component_index
+
+    # Component ids over the positive-pair graph: the unit
+    # training.folds.component_folds splits on.  Recomputed here (the split
+    # helper returns fold membership, not component identity) and asserted
+    # fold-pure below, so a competitor drawn from ANOTHER component of the
+    # SAME fold provably shares no positive-pair chain with the query.
+    _retrieval_row_component = component_index(pos, row_bc)
+
+    def _canonical_payload_rows() -> np.ndarray:
+        """Payload rows that are CANONICAL entries (the competitor universe).
+
+        Payload layout: [0, len(df)) = source SKU rows, then one canonical per
+        GTIN (contiguous), then masked-anchor copies.  The canonical/copy
+        boundary is the smallest FIRST endpoint at or past ``len(df)`` — the
+        same rule the per-fold pair dump uses — because every masked copy
+        appears as a first endpoint of a positive pair with its anchor.
+        """
+        masked_firsts = [int(i) for i in pos[:, 0] if int(i) >= len(df)]
+        canon_end = min(masked_firsts) if masked_firsts else len(payload)
+        canon_end = max(int(canon_end), len(df))
+        return np.arange(len(df), canon_end, dtype=int)
+
+    def _holdout_true_match_barcode_pairs() -> frozenset[tuple[str, str]]:
+        """Known same-product relations — never a competing candidate.
+
+        A competitor that the lane's own evidence says IS the query's product
+        would be scored as a non-relevant candidate and turn a correct
+        ranking into a recorded miss.  Three sources of that evidence exist
+        and all three are excluded: the labeled-pairs ground truth, the
+        gate's own ``proceed`` decision (the relation the canonicals are built
+        from), and an identical canonical identity string.
+        """
+        from pipeline import load_canonical_map
+
+        pairs: set[tuple[str, str]] = set()
+
+        def add(left: object, right: object) -> None:
+            a, b = str(left).strip(), str(right).strip()
+            if a and b and a != b:
+                pairs.add((a, b))
+                pairs.add((b, a))
+
+        labeled = check_labeled_pairs_frame(
+            pd.read_csv(
+                RESULTS / F["labeled_pairs"],
+                dtype={"gtin1": str, "gtin2": str},
+                keep_default_na=False,
+            )
+        )
+        labels = pd.to_numeric(labeled["true_label"], errors="raise").astype(int)
+        positives = labeled.loc[labels == 1]
+        for left, right in zip(positives["gtin1"], positives["gtin2"], strict=True):
+            add(left, right)
+        gates = pd.read_csv(
+            RESULTS / F["gate_results"],
+            dtype={"gtin1": str, "gtin2": str},
+            keep_default_na=False,
+        )
+        proceeds = gates.loc[gates["gate_decision"] == "proceed"]
+        for left, right in zip(proceeds["gtin1"], proceeds["gtin2"], strict=True):
+            add(left, right)
+        by_canonical: dict[str, list[str]] = {}
+        for gtin, canonical in load_canonical_map().items():
+            by_canonical.setdefault(str(canonical), []).append(str(gtin))
+        for group in by_canonical.values():
+            if len(group) > 1:
+                for left in group:
+                    for right in group:
+                        add(left, right)
+        return frozenset(pairs)
+
+    _retrieval_canonical_rows = _canonical_payload_rows()
+    _retrieval_true_match_pairs = _holdout_true_match_barcode_pairs()
+    print(
+        f"[retrieval-pool] canonical competitor universe={len(_retrieval_canonical_rows):,} "
+        f"payload rows | known true-match barcode pairs excluded="
+        f"{len(_retrieval_true_match_pairs) // 2:,} (labeled positives + gate "
+        f"proceed + identical canonical identity)",
+        flush=True,
+    )
+
     rows: list[dict] = []
     for fold_i, test_bc in enumerate(folds):
         try:
@@ -3392,6 +3491,38 @@ def train_one_config(
                 )
 
             test_pos = eval_pos[pairs_in_set(eval_pos, row_bc, test_bc)]
+            # ── RETRIEVAL-POOL FOLD PURITY (ER-346) ──────────────────────
+            # The competitor rule excludes the query's own COMPONENT, which is
+            # only fold-safe if the split really deals whole components: a
+            # component straddling the boundary would let a competitor carry a
+            # positive relationship across it.  Checked, not assumed — the
+            # component ids and the split are derived from the same graph.
+            _bc_in_test = np.asarray(
+                [row_bc[i] in test_bc for i in range(len(row_bc))], dtype=bool
+            )
+            _test_components = np.unique(
+                _retrieval_row_component[_bc_in_test]
+            )
+            _impure = int(
+                np.sum(
+                    np.isin(_retrieval_row_component, _test_components)
+                    & ~_bc_in_test
+                    & (_retrieval_row_component >= 0)
+                )
+            )
+            assert not _impure, (
+                f"LEAK: {_impure} payload rows belong to a component that "
+                "intersects the test fold but is not contained in it — the "
+                "retrieval competitor rule assumes the split deals WHOLE "
+                "components, so excluding own-component competitors would not "
+                "be fold-safe"
+            )
+            # Competitor universe for THIS fold: canonical payload rows whose
+            # barcode belongs to the test fold, so every query's ranking task
+            # stays inside the fold it is scored on.
+            _fold_canonical_rows = _retrieval_canonical_rows[
+                _bc_in_test[_retrieval_canonical_rows]
+            ]
             train_pos = pos[pairs_in_set(pos, row_bc, tr_bc)]
             dev_pos = eval_pos[pairs_in_set(eval_pos, row_bc, dev_bc)]
             dev_pos = _merge_different_calibration_positives(
@@ -4843,19 +4974,115 @@ def train_one_config(
             from core.common import load_config as _lc
 
             _pr_auc = float(average_precision_score(_y, _all))
-            # Retrieval is evaluated per source SKU/query.  A global ranking
-            # over the concatenated pair table makes recall@K approximately
-            # 1 / number_of_positive_rows and is not a retrieval metric.
+            # ══════════════════════════════════════════════════════════════
+            # HOLDOUT RETRIEVAL (ER-346) — two protocols, both reported
+            # ══════════════════════════════════════════════════════════════
+            # OLD PROTOCOL (retained, renamed, and PROVEN degenerate by its own
+            # coverage record below): the pool was np.vstack([test_pos,
+            # hard_test]) grouped by source product_id.  Negatives are anchored
+            # only at the single representative row per barcode, so 5,292 of
+            # 5,847 holdout queries saw EXACTLY their own positive and no query
+            # ever saw more than 6 candidates (< max(ks)=10).  With the positive
+            # first in a stable sort, a perfect oracle and a constant scorer
+            # both read Hits@1 = Precision@1 = Recall@1 = Recall@5 = Recall@10
+            # = 1.0.  Its coverage fields (share_queries_pool_le_max_k = 1.0,
+            # trustworthy = 0) are what make that visible in the CSV.
+            _ks = tuple(_lc()["evaluation"]["retrieval_ks"])
             _eval_pairs = np.vstack([test_pos, hard_test])
             _query_ids = np.asarray(
                 [str(df["product_id"].iloc[int(i)]) for i in _eval_pairs[:, 0]],
                 dtype=str,
             )
-            _ranking = ranking_at_k_by_query(
-                _y,
-                _all,
-                _query_ids,
-                tuple(_lc()["evaluation"]["retrieval_ks"]),
+            _old_protocol = {
+                f"old_protocol_{name}": value
+                for name, value in ranking_at_k_by_query(
+                    _y, _all, _query_ids, _ks
+                ).items()
+            }
+            _old_protocol.update(
+                ranking_coverage(
+                    _y,
+                    _query_ids,
+                    _ks,
+                    prefix="old_protocol_",
+                    tie_break="stable_input_order_positive_first",
+                )
+            )
+
+            # NEW PROTOCOL: every query gets its OWN positive plus
+            # ``competitors_per_query(ks)`` competing canonicals from OTHER
+            # components of the SAME test fold.  N = 10 * max(ks) - 1 = 99 for
+            # ks=[1,5,10] — the floor is N >= max(ks) (pool strictly larger than
+            # the largest K) and the chosen N puts an informationless scorer's
+            # Recall@10 at 10/100 = 0.10, one decade of usable range below 1.0.
+            # The correctness floor for the FIVE bare schema-pinned columns
+            # (hits_at_1 / precision_at_k / recall_at_k) now carries these
+            # corrected values.
+            _n_competitors = competitors_per_query(_ks)
+            _retrieval_pool = build_evaluation_pool(
+                test_pos,
+                np.asarray(
+                    [str(df["product_id"].iloc[int(i)]) for i in test_pos[:, 0]],
+                    dtype=str,
+                ),
+                competitor_rows=_fold_canonical_rows,
+                row_component=_retrieval_row_component,
+                row_bc=row_bc,
+                n_competitors=_n_competitors,
+                seed=seed + fold_i * 1009 + 340346,
+                ks=_ks,
+                # the fold's mined hard negatives are seated FIRST so the
+                # hardest distractors stay inside the ranking comparison
+                priority_pairs=hard_test,
+                excluded_barcode_pairs=_retrieval_true_match_pairs,
+            )
+            _t_pool = time.perf_counter()
+            _pool_rows = np.unique(_retrieval_pool.pairs.ravel())
+            # Pool rows are payload indices encoded through the SAME fused
+            # cache the rest of the fold uses, so the added cost is the number
+            # of UNIQUE rows (bounded by the fold's canonical count), never
+            # queries x N.
+            _pool_added_rows = added_encode_rows(_pool_rows, eval_rows)
+            _pool_emb = _encode_fused_rows(_pool_rows)
+            _pool_idx = np.searchsorted(_pool_rows, _retrieval_pool.pairs).reshape(-1, 2)
+            _pool_scores = _cos(_pool_emb, _pool_idx)
+            _pool_encode_s = time.perf_counter() - _t_pool
+            _retrieval = ranking_at_k_by_query(
+                _retrieval_pool.labels,
+                _pool_scores,
+                _retrieval_pool.query_keys,
+                _ks,
+            )
+            _retrieval.update(
+                ranking_coverage(
+                    _retrieval_pool.labels,
+                    _retrieval_pool.query_keys,
+                    _ks,
+                    prefix="retrieval_",
+                    tie_break="seeded_within_query_permutation",
+                )
+            )
+            _retrieval.update(
+                {
+                    f"retrieval_{name}": value
+                    for name, value in _retrieval_pool.coverage.items()
+                }
+            )
+            _retrieval["retrieval_pool_unique_rows"] = int(len(_pool_rows))
+            _retrieval["retrieval_pool_added_encode_rows"] = int(_pool_added_rows)
+            _retrieval["retrieval_pool_encode_s"] = round(_pool_encode_s, 1)
+            print(
+                f"  [retrieval] fold {fold_i}: {_retrieval_pool.coverage['pool_queries_evaluated']:,}"
+                f"/{_retrieval_pool.coverage['pool_queries_requested']:,} queries pooled | "
+                f"pool sizes {_retrieval_pool.coverage['pool_size_min']}-"
+                f"{_retrieval_pool.coverage['pool_size_max']} "
+                f"(target 1+{_n_competitors}) | unique rows +{_pool_added_rows:,}"
+                f" | Recall@10 {_retrieval['recall_at_10']:.4f} vs chance "
+                f"{_retrieval['retrieval_chance_recall_at_10']:.4f} | "
+                f"old protocol Recall@10 {_old_protocol['old_protocol_recall_at_10']:.4f} "
+                f"(share_pool_le_max_k="
+                f"{_old_protocol['old_protocol_share_queries_pool_le_max_k']:.4f})",
+                flush=True,
             )
 
             _fixed_thr = float(_lc()["split"]["fixed_threshold"])
@@ -4900,7 +5127,13 @@ def train_one_config(
                 "pr_auc": _pr_auc,
                 # 07-schema: AP under the same name the plots expect
                 "average_precision": _pr_auc,
-                **_ranking,
+                # The five bare, schema-pinned retrieval columns
+                # (hits_at_1/precision_at_k/recall_at_k) now carry the
+                # CORRECTED per-query pool; the degenerate historical pool is
+                # retained under old_protocol_* so the improvement is auditable
+                # in the same row, and BOTH carry their own coverage record.
+                **_retrieval,
+                **_old_protocol,
                 f"precision_at_{_recall_key}_recall": _prec90,
                 f"tp_at_{_recall_key}_recall": _tp90,
                 f"fp_at_{_recall_key}_recall": _fp90,
