@@ -94,32 +94,26 @@ def _normalized_tokens(text: object, *, drop_schema_words: bool) -> list[str]:
     percentage (``100%``, ``0-2%``, ...), and once the sign is gone the bare
     number collides with the ``MINIMAL_STOPWORDS`` volume entries (``100``,
     ``2``), so the attribute was silently discarded on the legacy path.
+
+    Diacritics are NOT folded here (owner ruling): brand-string normalisation
+    is owned by the dedicated brand-analysis work, and the measured evidence
+    for it is recorded in MODEL_INPUT_FIX_REPORT.md section 24 as input to that
+    deliberate decision rather than being applied ahead of it.
     """
-    from core.critical_attributes import normalized_attribute_text
     from pipeline import MINIMAL_STOPWORDS, normalize_text, strip_schema_words
 
-    # The decimal point must NOT survive as "." or "_": the SSOT normaliser
-    # (normalized_attribute_text) collapses punctuation to spaces and the
-    # compound splitter cuts on "_", so either would split 5.5% into two
-    # tokens. It is encoded as "d" instead — alphanumeric and unambiguous.
-    def _decimal(value: str) -> str:
-        return value.replace(".", "d")
-
+    # normalize_text preserves [a-z0-9.], so a decimal such as 5.5% survives as
+    # ONE token. Never use "_" here: the compound splitter below would cut the
+    # value in half.
     protected = _PERCENT_RANGE_RE.sub(
-        lambda m: f" pct{_decimal(m.group(1))}to{_decimal(m.group(2))} ", str(text)
+        lambda m: f" pct{m.group(1)}to{m.group(2)} ", str(text)
     )
-    protected = _PERCENT_RE.sub(
-        lambda m: f" pct{_decimal(m.group(1))} ", protected
-    )
+    protected = _PERCENT_RE.sub(lambda m: f" pct{m.group(1)} ", protected)
     # Fold accents BEFORE normalize_text. Without this every non-ASCII letter
     # becomes a word break, which does not merely leave a brand unnormalised —
     # it CORRUPTS it: "Brämhults" -> "br mhults", "Côteaux Nantais" ->
     # "teaux nantais", and "Reál"/"Réal" -> "re"/"al", so two spellings of one
     # brand can never match. 47 distinct canonical brands carry non-ASCII.
-    # Reuse the existing SSOT normaliser (core.critical_attributes): it is the
-    # repo's one accent-folding implementation (NFKD + casefold + strip
-    # combining marks), already used by hard_negatives for product names.
-    protected = normalized_attribute_text(protected)
     split = " ".join(
         part
         for token in normalize_text(protected).split()
