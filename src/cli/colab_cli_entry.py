@@ -43,6 +43,44 @@ HISTORY_DIR = STATE_DIR / "history"
 ENTRYPOINT = Path(__file__).resolve()
 
 
+def _colab_cli_python() -> Path | None:
+    """Interpreter that owns the installed Colab CLI, if it can be found.
+
+    The CLI is a uv tool, and its dependencies include compiled extensions
+    (``pydantic_core._pydantic_core``) built for that tool's interpreter.  They
+    cannot be loaded by a different python, even with its site-packages on
+    ``sys.path``, so a wrapper started under any other interpreter must hand
+    over to this one rather than try to import the package itself.
+    """
+    override = os.environ.get("COLAB_CLI_PYTHON")
+    if override:
+        candidate = Path(override).expanduser()
+        return candidate if candidate.is_file() else None
+    tools_root = Path.home() / ".local" / "share" / "uv" / "tools"
+    for tool_dir in ("google-colab-cli", "colab-cli"):
+        for candidate in sorted((tools_root / tool_dir / "bin").glob("python*")):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+    return None
+
+
+def _reexec_under_colab_cli_python() -> None:
+    """Re-run this wrapper with the interpreter that owns the Colab CLI."""
+    interpreter = _colab_cli_python()
+    if interpreter is None or Path(sys.executable).resolve() == interpreter.resolve():
+        # Already the owning interpreter: carrying on here is the point of the
+        # handover, so this is the recursion stop.
+        return
+    try:
+        completed = subprocess.run(
+            [str(interpreter), str(ENTRYPOINT), *sys.argv[1:]],
+            check=False,
+        )
+    except OSError:
+        return
+    raise SystemExit(completed.returncode)
+
+
 def _spawn_keep_alive(endpoint: str, session_name: str, auth_provider=None, config_path=None) -> int:
     """Start keep-alive through this wrapper so it shares CLI state safely.
 
@@ -68,6 +106,9 @@ def _spawn_keep_alive(endpoint: str, session_name: str, auth_provider=None, conf
 
 
 def main() -> None:
+    # The CLI's native dependencies are built for its own interpreter, so a
+    # wrapper started under a different python hands over before importing.
+    _reexec_under_colab_cli_python()
     import colab_cli.common as common
     from colab_cli.history import HistoryLogger
 

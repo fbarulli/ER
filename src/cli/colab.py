@@ -2935,6 +2935,13 @@ else:
 
 
 _RUN_STAMP_FORMAT = "%m%dT%H%M%S%fZ"
+# How long the prewarmed upload waits for the session gate before giving up and
+# letting the lane upload serially.  Generous enough for a slow GPU allocation,
+# finite so a lane that never releases the gate cannot hang teardown.
+_PREWARM_GATE_TIMEOUT_SECONDS = 900
+# How long starting a new prewarm waits for a previous one to retire.  Bounded
+# so that starting a lane never depends on an earlier lane's transfer.
+_PREWARM_RETIRE_SECONDS = 30
 
 
 class _ValidationUploadPrewarm:
@@ -2961,7 +2968,16 @@ class _ValidationUploadPrewarm:
     def _upload(self) -> None:
         # A GPU allocation can take minutes; the upload is worthless until the
         # control channel answers, so wait rather than transfer into a void.
-        self.session_ready.wait()
+        # Bounded: if the gate is never released -- a lane that failed before
+        # releasing it -- this thread must still end, because the launcher's
+        # drain joins it and an unbounded wait would hang teardown forever.
+        if not self.session_ready.wait(_PREWARM_GATE_TIMEOUT_SECONDS):
+            print(
+                f"[upload] session was not ready within "
+                f"{_PREWARM_GATE_TIMEOUT_SECONDS}s; uploading serially instead",
+                flush=True,
+            )
+            return
         try:
             self.remote_paths = _perform_validation_upload(self.stamp)
         except BaseException as exc:  # handed back to the owning run, or fallen back from
@@ -2988,9 +3004,12 @@ def start_validation_upload_prewarm() -> str:
     if _VALIDATION_UPLOAD_PREWARM is not None:
         # Running a second prewarm over an unfinished one would race two
         # threads onto the same remote paths, and the first thread would never
-        # be joined.  Release and retire it before starting its replacement.
+        # be joined.  Release and retire it before starting its replacement --
         _VALIDATION_UPLOAD_PREWARM.session_ready.set()
-        _VALIDATION_UPLOAD_PREWARM.thread.join()
+        # but never block indefinitely: starting a lane must stay instant, so
+        # a previous upload that will not finish is abandoned to its own
+        # bounded wait rather than stalling this one.
+        _VALIDATION_UPLOAD_PREWARM.thread.join(timeout=_PREWARM_RETIRE_SECONDS)
     stamp = datetime.now(timezone.utc).strftime(_RUN_STAMP_FORMAT)
     prewarm = _ValidationUploadPrewarm(stamp)
     _VALIDATION_UPLOAD_PREWARM = prewarm
@@ -3012,7 +3031,15 @@ def drain_validation_upload_prewarm() -> None:
         # The thread may still be blocked on the session gate; release it so a
         # drain at exit cannot hang forever on a VM that never came up.
         prewarm.session_ready.set()
-        prewarm.thread.join()
+        # Bounded: an upload to a dead VM can stall, and teardown must not wait
+        # on it indefinitely.  Whatever lands is verified by the download.
+        prewarm.thread.join(timeout=_PREWARM_RETIRE_SECONDS)
+        if prewarm.thread.is_alive():
+            print(
+                "[upload] concurrent upload did not finish within "
+                f"{_PREWARM_RETIRE_SECONDS}s; continuing with teardown",
+                flush=True,
+            )
 
 
 def release_validation_upload_prewarm() -> None:
