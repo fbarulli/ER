@@ -31,6 +31,20 @@ def text(value: object) -> str:
     return str(value or "").strip()
 
 
+def human_value(value: object, *, evidence: bool = False) -> str:
+    """Render audit metadata without Python dict/list/set repr syntax."""
+    if evidence:
+        return canonical_evidence_text(value) or "none"
+    if isinstance(value, dict):
+        return "; ".join(
+            f"{key}={human_value(item)}" for key, item in value.items()
+        )
+    if isinstance(value, (set, frozenset, list, tuple)):
+        rendered = [human_value(item) for item in value]
+        return ", ".join(rendered) if rendered else "none"
+    return text(value) or "none"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--review", type=Path, required=True)
@@ -138,7 +152,7 @@ def main() -> None:
                 "SOURCE — PIPELINE CHANGES",
                 f"  base cleaned:       {base_source}",
                 f"  schema words removed: {cleaned_source}",
-                f"  structured info:    {source_info}",
+                f"  structured info:    {human_value(source_info)}",
                 "SOURCE — EXACT MODEL INPUT",
                 f"  {source_model}",
                 "TARGET — ORIGINAL FEATURES (representative raw row)",
@@ -147,7 +161,7 @@ def main() -> None:
                 *(f"  {k}: {v}" for k, v in row["target_canonical_record"].items()),
                 f"  canonical base:    {canonical_base}",
                 f"  canonical cleaned: {canonical_clean}",
-                f"  structured info:   {target_info}",
+                f"  structured info:   {human_value(target_info)}",
                 "TARGET — EXACT MODEL INPUT",
                 f"  {target_model}",
             ])
@@ -177,7 +191,7 @@ def main() -> None:
             "",
             f"- **Base cleaned:** `{row['source_base_cleaned']}`",
             f"- **After schema-word removal:** `{row['source_after_schema_strip']}`",
-            f"- **Structured fields extracted:** `{row['source_structured_info']}`",
+            f"- **Structured fields extracted:** {human_value(row['source_structured_info'])}",
             "",
             "### Source: exact model input",
             "",
@@ -194,12 +208,15 @@ def main() -> None:
             "### Candidate target: canonical record and pipeline changes",
             "",
         ])
-        markdown.extend(f"- **{key}:** {value}" for key, value in row["target_canonical_record"].items())
+        markdown.extend(
+            f"- **{key}:** {human_value(value, evidence=key in {'description_evidence', 'breadcrumb_evidence'})}"
+            for key, value in row["target_canonical_record"].items()
+        )
         markdown.extend([
             "",
             f"- **Canonical base:** `{row['target_base_canonical']}`",
             f"- **After canonical cleaning:** `{row['target_after_canonical_cleaning']}`",
-            f"- **Structured fields extracted:** `{row['target_structured_info']}`",
+            f"- **Structured fields extracted:** {human_value(row['target_structured_info'])}",
             "",
             "### Candidate target: exact model input",
             "",
