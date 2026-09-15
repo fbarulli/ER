@@ -602,6 +602,7 @@ class RandMatchingSpec(BaseModel):
         enabled: bool
         pack_mismatch_veto: bool
         volume_mismatch_veto: bool
+        package_type_mismatch_veto: bool
         brand_mismatch_veto: bool
         missing_pack_or_volume_route: Literal["human_review"]
         volume_relative_tolerance: float = Field(ge=0.0, le=1.0)

@@ -137,11 +137,37 @@ def _value_set(value: object, *, kind: str) -> set[object]:
     raise ValueError(f"canonical attribute set is not a sequence: {value!r}")
 
 
+def _string_value_set(value: object, *, kind: str) -> set[str]:
+    """Parse a canonical string-set field into normalized values."""
+    if value is None:
+        return set()
+    if isinstance(value, (list, tuple, set, frozenset)):
+        parsed = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return set()
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError) as exc:
+            raise ValueError(f"invalid canonical {kind} set: {value!r}") from exc
+    if not isinstance(parsed, (list, tuple, set, frozenset)):
+        raise ValueError(f"canonical {kind} set is not a sequence: {value!r}")
+    return {
+        normalized
+        for item in parsed
+        if (normalized := str(item).strip().casefold())
+    }
+
+
 def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
     """Return the structured attributes used by the canonical record lane."""
     return {
         "volume": _value_set(record.get("volume_set"), kind="volume"),
         "pack": _value_set(record.get("pack_set"), kind="pack"),
+        "package_type": _string_value_set(
+            record.get("package_type_set"), kind="package_type"
+        ),
         "flavor": _flavor_evidence(
             record.get("mode_flavor", ""), record.get("canonical", "")
         ),
@@ -180,6 +206,11 @@ def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
     return {
         "volume": volume,
         "pack": pack,
+        "package_type": {
+            str(value).strip().casefold()
+            for value in extracted.get("package_types") or []
+            if str(value).strip()
+        },
         "flavor": _flavor_evidence(
             extracted.get("flavor") or "", title, attributes
         ),
@@ -199,6 +230,14 @@ def attribute_conflict_types(
         set(left["pack"]) & set(right["pack"])
     ):
         conflicts.append("pack")
+    left_package_types = set(left.get("package_type") or set())
+    right_package_types = set(right.get("package_type") or set())
+    if (
+        left_package_types
+        and right_package_types
+        and not (left_package_types & right_package_types)
+    ):
+        conflicts.append("package_type")
     if left["flavor"] and right["flavor"] and flavor_overlap_metrics(
         left["flavor"], right["flavor"]
     )[1] == 0.0:
@@ -214,6 +253,7 @@ def conflict_columns(
     return {
         "volume_conflict": int("volume" in conflicts),
         "pack_conflict": int("pack" in conflicts),
+        "package_type_conflict": int("package_type" in conflicts),
         "flavor_conflict": int("flavor" in conflicts),
         "attribute_conflict_type": "+".join(conflicts) if conflicts else "none",
     }

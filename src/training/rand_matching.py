@@ -222,16 +222,18 @@ def targeted_veto_gate(
 ) -> dict[str, object]:
     """Classify a non-exact candidate as auto, veto, or human review.
 
-    Known pack, volume, and brand contradictions are hard vetoes.  One-sided
-    or joint pack/volume absence is routed to review so unknown evidence can
-    never become an automatic graph edge.  Exact GTIN remains an auditable
-    lock and bypasses every targeted veto.
+    Known pack, volume, package-type, and brand contradictions are hard
+    vetoes. One-sided or joint pack/volume absence is routed to review so
+    unknown evidence can never become an automatic graph edge. Exact GTIN
+    remains an auditable lock and bypasses every targeted veto.
     """
     settings = config or rand_matching_cfg()["targeted_veto_gates"]
     left_pack = set(sku_info.get("pack") or set())
     right_pack = set(candidate_info.get("pack") or set())
     left_volume = set(sku_info.get("volume") or set())
     right_volume = set(candidate_info.get("volume") or set())
+    left_package_type = set(sku_info.get("package_type") or set())
+    right_package_type = set(candidate_info.get("package_type") or set())
     left_brand = _normalize_brand(sku_brand)
     right_brand = _normalize_brand(candidate_brand)
     relative_tolerance = float(settings["volume_relative_tolerance"])
@@ -249,6 +251,11 @@ def targeted_veto_gate(
         )
     )
     brand_conflict = bool(left_brand and right_brand and left_brand != right_brand)
+    package_type_conflict = bool(
+        left_package_type
+        and right_package_type
+        and not (left_package_type & right_package_type)
+    )
     missing = [
         name
         for name, present in (
@@ -263,12 +270,15 @@ def targeted_veto_gate(
         "targeted_pack_conflict": int(pack_conflict),
         "targeted_volume_conflict": int(volume_conflict),
         "targeted_brand_conflict": int(brand_conflict),
+        "targeted_package_type_conflict": int(package_type_conflict),
         "targeted_missing_attributes": ",".join(missing),
         "targeted_missing_attribute_count": len(missing),
         "targeted_pack_a": json.dumps(sorted(left_pack)),
         "targeted_pack_b": json.dumps(sorted(right_pack)),
         "targeted_volume_ml_a": json.dumps(sorted(left_volume)),
         "targeted_volume_ml_b": json.dumps(sorted(right_volume)),
+        "targeted_package_type_a": json.dumps(sorted(left_package_type)),
+        "targeted_package_type_b": json.dumps(sorted(right_package_type)),
         "targeted_brand_a": left_brand,
         "targeted_brand_b": right_brand,
         "targeted_volume_relative_tolerance": relative_tolerance,
@@ -294,6 +304,8 @@ def targeted_veto_gate(
         veto_reasons.append("volume_mismatch")
     if brand_conflict and bool(settings["brand_mismatch_veto"]):
         veto_reasons.append("brand_mismatch")
+    if package_type_conflict and bool(settings["package_type_mismatch_veto"]):
+        veto_reasons.append("package_type_mismatch")
     if veto_reasons:
         return common | {
             "targeted_gate_decision": "veto",
@@ -720,8 +732,14 @@ def candidate_gate_fields(
             bool(targeted_settings["pack_mismatch_veto"])
             and bool(targeted_gate["targeted_pack_conflict"])
         )
+        rules["package_type_conflict"] = int(
+            bool(targeted_settings["package_type_mismatch_veto"])
+            and bool(targeted_gate["targeted_package_type_conflict"])
+        )
     conflict_names = [
-        name for name in ("volume", "pack", "flavor") if bool(rules[f"{name}_conflict"])
+        name
+        for name in ("volume", "pack", "package_type", "flavor")
+        if bool(rules[f"{name}_conflict"])
     ]
     rules["attribute_conflict_type"] = (
         "+".join(conflict_names) if conflict_names else "none"
@@ -794,6 +812,9 @@ def candidate_gate_fields(
         "sku_retailer": row_metadata_text(row, "retailer"),
         "sku_volume": json.dumps(sorted(sku_info["volume"])),
         "sku_pack": json.dumps(sorted(sku_info["pack"])),
+        "sku_package_type": json.dumps(
+            sorted(sku_info.get("package_type") or set())
+        ),
         "sku_flavor": str(sku_info["flavor"]),
         "sku_title_present": _field_present(row, "title"),
         "sku_attributes_present": _field_present(row, "attributes", "attr"),
@@ -804,6 +825,7 @@ def candidate_gate_fields(
         "sku_retailer_present": _field_present(row, "retailer"),
         "sku_volume_present": int(bool(sku_info["volume"])),
         "sku_pack_present": int(bool(sku_info["pack"])),
+        "sku_package_type_present": int(bool(sku_info.get("package_type"))),
         "sku_flavor_present": int(bool(sku_info["flavor"])),
         "source_row_index": source_row_index,
         "candidate_text": metadata_text(candidate_record.get("canonical")),
@@ -811,17 +833,24 @@ def candidate_gate_fields(
         "brand_conflict": brand_conflict,
         "candidate_volume": json.dumps(sorted(candidate_info["volume"])),
         "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
+        "candidate_package_type": json.dumps(sorted(candidate_info["package_type"])),
         "candidate_flavor": str(candidate_info["flavor"]),
         "candidate_brand_present": _value_present(candidate_record.get("mode_brand")),
         "candidate_volume_present": int(bool(candidate_info["volume"])),
         "candidate_pack_present": int(bool(candidate_info["pack"])),
+        "candidate_package_type_present": int(bool(candidate_info["package_type"])),
         "candidate_flavor_present": int(bool(candidate_info["flavor"])),
         "rule_ok": int(rules["attribute_conflict_type"] == "none"),
         "attribute_conflict_type": str(rules["attribute_conflict_type"]),
         "attribute_matches": int(
             sum(
                 not rules[key]
-                for key in ("volume_conflict", "pack_conflict", "flavor_conflict")
+                for key in (
+                    "volume_conflict",
+                    "pack_conflict",
+                    "package_type_conflict",
+                    "flavor_conflict",
+                )
             )
         ),
         **targeted_gate,

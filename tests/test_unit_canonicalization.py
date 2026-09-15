@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from core.attribute_conflicts import attribute_conflict_types, canonical_attribute_info
+from core.attribute_conflicts import (
+    attribute_conflict_types,
+    canonical_attribute_info,
+    conflict_columns,
+    sku_attribute_info,
+)
 from core.structured_features import append_text, info_from_sets
 from core.unit_canonicalization import canonical_pack_count, canonical_volume_ml
 from pipeline import extract_all
@@ -49,6 +54,28 @@ def test_canonicalized_equivalent_volume_does_not_create_conflict() -> None:
         {"volume_set": "[237]", "pack_set": "[]", "mode_flavor": ""}
     )
     assert attribute_conflict_types(left, right) == []
+
+
+def test_bottle_and_can_are_first_class_disjoint_attributes() -> None:
+    bottle = sku_attribute_info("Acme soda 6 pack 12 oz bottles", "")
+    can = canonical_attribute_info(
+        {
+            "canonical": "Acme soda cans",
+            "mode_flavor": "",
+            "volume_set": "[355]",
+            "pack_set": "[6]",
+            "package_type_set": "['can']",
+        }
+    )
+    assert bottle["package_type"] == {"bottle"}
+    assert can["package_type"] == {"can"}
+    assert attribute_conflict_types(bottle, can) == ["package_type"]
+    assert conflict_columns(bottle, can)["package_type_conflict"] == 1
+
+
+def test_package_type_reaches_the_shared_model_text_representation() -> None:
+    info = info_from_sets([355], [6], ["bottle"])
+    assert append_text("Acme soda", info).endswith("package_type_bottle")
 
 
 @pytest.mark.parametrize(

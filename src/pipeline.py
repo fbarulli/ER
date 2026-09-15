@@ -1557,7 +1557,7 @@ def build_training_data(
 
     Returns dict with:
         payload : list[str]  — clean sku text per row + one canonical per GTIN
-        structured_features : list[list[float]] — normalized volume/pack features
+        structured_features : list[list[float]] — normalized numeric features
         row_bc  : np.ndarray — barcode per payload entry (gtin for canonicals)
         pos     : np.ndarray (N,2) — (sku_row, canon_idx) for every row whose
                   barcode has a canonical
@@ -1600,7 +1600,9 @@ def build_training_data(
     # The old text lane deliberately removed these tokens; that made the
     # volume/pack work useful for labels but invisible to the embedding.
     sku_structured = [
-        sku_structured_info(t, a) if structured_enabled else {"volume": set(), "pack": set()}
+        sku_structured_info(t, a)
+        if structured_enabled
+        else {"volume": set(), "pack": set(), "package_type": set()}
         for t, a in zip(title, attrs, strict=True)
     ]
 
@@ -1633,7 +1635,7 @@ def build_training_data(
     canon_start = len(payload)
     gtin_to_canon_idx = {g: canon_start + i for i, g in enumerate(canon_gtins)}
     # MODEL payload: schema-free canonical variant plus normalized structured
-    # volume/pack tokens. The gate's CSV keeps the original numbers and schema
+    # volume/pack/package-type tokens. The gate's CSV keeps the original values and schema
     # labels for decisions; the model receives the stable normalized tokens
     # explicitly so those attributes are no longer discarded.
     canonical_records = pd.read_csv(
@@ -1646,7 +1648,7 @@ def build_training_data(
     canon_structured = [
         canonical_structured_info(canonical_record_map.get(g, {}))
         if structured_enabled
-        else {"volume": set(), "pack": set()}
+        else {"volume": set(), "pack": set(), "package_type": set()}
         for g in canon_gtins
     ]
     canon_texts = [

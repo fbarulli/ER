@@ -7,6 +7,7 @@ from core.common import rand_matching_cfg
 from training.rand_matching import (
     _annotate_candidates,
     _assignments_with_trace,
+    candidate_gate_fields,
     targeted_veto_gate,
 )
 
@@ -15,6 +16,7 @@ SETTINGS = {
     "enabled": True,
     "pack_mismatch_veto": True,
     "volume_mismatch_veto": True,
+    "package_type_mismatch_veto": True,
     "brand_mismatch_veto": True,
     "missing_pack_or_volume_route": "human_review",
     "volume_relative_tolerance": 0.05,
@@ -23,8 +25,13 @@ SETTINGS = {
 }
 
 
-def _info(*, pack=(), volume=(), flavor="") -> dict[str, object]:
-    return {"pack": set(pack), "volume": set(volume), "flavor": flavor}
+def _info(*, pack=(), volume=(), package_type=(), flavor="") -> dict[str, object]:
+    return {
+        "pack": set(pack),
+        "volume": set(volume),
+        "package_type": set(package_type),
+        "flavor": flavor,
+    }
 
 
 @pytest.mark.parametrize(
@@ -50,6 +57,13 @@ def _info(*, pack=(), volume=(), flavor="") -> dict[str, object]:
             "Acme",
             "Other",
             "brand_mismatch",
+        ),
+        (
+            _info(pack={6}, volume={355}, package_type={"bottle"}),
+            _info(pack={6}, volume={355}, package_type={"can"}),
+            "Acme",
+            "Acme",
+            "package_type_mismatch",
         ),
     ],
 )
@@ -106,6 +120,88 @@ def test_exact_gtin_lock_bypasses_conflicts_and_missingness():
     )
     assert gate["targeted_gate_decision"] == "exact_gtin_lock"
     assert gate["targeted_gate_route"] == "auto_merge"
+
+
+def test_package_type_veto_has_explicit_audit_evidence():
+    gate = targeted_veto_gate(
+        _info(pack={6}, volume={355}, package_type={"bottle"}),
+        _info(pack={6}, volume={355}, package_type={"can"}),
+        sku_brand="Acme",
+        candidate_brand="Acme",
+        exact_gtin=False,
+        config=SETTINGS,
+    )
+    assert gate["targeted_package_type_conflict"] == 1
+    assert gate["targeted_package_type_a"] == '["bottle"]'
+    assert gate["targeted_package_type_b"] == '["can"]'
+    assert gate["targeted_gate_decision"] == "veto"
+
+
+def test_bottle_sku_to_can_candidate_is_rejected_end_to_end():
+    row = pd.Series(
+        {
+            "SKU_ID": "bottle-sku",
+            "barcode": "",
+            "title": "Acme soda 6 pack 12 oz bottles",
+            "brand": "Acme",
+        }
+    )
+    candidate = candidate_gate_fields(
+        row,
+        _info(pack={6}, volume={355}, package_type={"bottle"}),
+        "candidate-can",
+        {
+            "canonical": "Acme soda 6 pack 355 ml cans",
+            "mode_brand": "Acme",
+            "mode_flavor": "",
+            "volume_set": "[355]",
+            "pack_set": "[6]",
+            "package_type_set": "['can']",
+        },
+        0.99,
+        sku_id="bottle-sku",
+        source_row_index="0",
+    )
+    assert candidate["attribute_conflict_type"] == "package_type"
+    assert candidate["rule_ok"] == 0
+    assert candidate["targeted_gate_route"] == "reject"
+
+    trace = _annotate_candidates(pd.DataFrame([candidate]), 0.61)
+    assert not bool(trace.iloc[0]["accepted"])
+    assert trace.iloc[0]["rejection_reason"] == "targeted_attribute_veto"
+
+
+def test_exact_gtin_package_type_disagreement_uses_configured_lock():
+    gtin = "4006381333931"
+    row = pd.Series(
+        {
+            "SKU_ID": "exact-bottle",
+            "barcode": gtin,
+            "title": "Acme soda 6 pack 12 oz bottles",
+            "brand": "Acme",
+        }
+    )
+    candidate = candidate_gate_fields(
+        row,
+        _info(pack={6}, volume={355}, package_type={"bottle"}),
+        gtin,
+        {
+            "canonical": "Acme soda 6 pack 355 ml cans",
+            "mode_brand": "Acme",
+            "mode_flavor": "",
+            "volume_set": "[355]",
+            "pack_set": "[6]",
+            "package_type_set": "['can']",
+        },
+        0.10,
+        sku_id="exact-bottle",
+        source_row_index="0",
+    )
+    assert candidate["targeted_gate_decision"] == "exact_gtin_lock"
+    assert candidate["rule_ok"] == 0
+    trace = _annotate_candidates(pd.DataFrame([candidate]), 0.99)
+    assert bool(trace.iloc[0]["accepted"])
+    assert trace.iloc[0]["attribute_gate"] == "override_exact_gtin"
 
 
 def _candidate(

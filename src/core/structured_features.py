@@ -1,9 +1,9 @@
-"""Structured volume/pack features shared by the training and scoring lanes.
+"""Structured product attributes shared by the training and scoring lanes.
 
 The catalog already carries these values in the canonical records.  This
 module gives them one representation at both boundaries of the model:
 
-* stable text tokens (``volume_ml_500`` / ``pack_qty_2``), and
+* stable text tokens (``volume_ml_500`` / ``pack_qty_2`` / ``package_type_can``), and
 * a small numeric vector fused with the encoder output before similarity or
   contrastive loss is calculated.
 
@@ -52,15 +52,42 @@ def _as_set(value: object, *, kind: str) -> set[float]:
     return normalized
 
 
-def info_from_sets(volume: object, pack: object) -> dict[str, set[float]]:
+def _as_string_set(value: object, *, kind: str) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, (set, frozenset, list, tuple, np.ndarray)):
+        values = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return set()
+        try:
+            values = ast.literal_eval(text)
+        except (SyntaxError, ValueError) as exc:
+            raise ValueError(f"invalid structured {kind} set: {value!r}") from exc
+    if not isinstance(values, (set, frozenset, list, tuple, np.ndarray)):
+        raise ValueError(f"structured {kind} must be a sequence: {value!r}")
+    return {
+        normalized
+        for item in values
+        if (normalized := str(item).strip().casefold())
+    }
+
+
+def info_from_sets(
+    volume: object, pack: object, package_type: object = None
+) -> dict[str, set[float] | set[str]]:
     """Normalize a SKU/canonical record into the shared set representation."""
     return {
         "volume": _as_set(volume, kind="volume"),
         "pack": _as_set(pack, kind="pack"),
+        "package_type": _as_string_set(package_type, kind="package_type"),
     }
 
 
-def sku_info(title: object, attributes: object) -> dict[str, set[float]]:
+def sku_info(
+    title: object, attributes: object
+) -> dict[str, set[float] | set[str]]:
     """Parse one source SKU using the pipeline's existing extractor."""
     from pipeline import extract_all
 
@@ -72,11 +99,17 @@ def sku_info(title: object, attributes: object) -> dict[str, set[float]]:
         if pack_qty is not None and float(extracted.get("pack_confidence") or 0.0) > 0.0
         else set()
     )
-    return info_from_sets(volume, pack)
+    return info_from_sets(volume, pack, extracted.get("package_types"))
 
 
-def canonical_info(record: Mapping[str, object]) -> dict[str, set[float]]:
-    return info_from_sets(record.get("volume_set"), record.get("pack_set"))
+def canonical_info(
+    record: Mapping[str, object],
+) -> dict[str, set[float] | set[str]]:
+    return info_from_sets(
+        record.get("volume_set"),
+        record.get("pack_set"),
+        record.get("package_type_set"),
+    )
 
 
 def _number_token(prefix: str, value: float) -> str:
@@ -88,7 +121,14 @@ def text_tokens(info: Mapping[str, object]) -> list[str]:
     """Return deterministic, tokenizer-safe-ish normalized attribute tokens."""
     volumes = sorted(_as_set(info.get("volume"), kind="volume"))
     packs = sorted(_as_set(info.get("pack"), kind="pack"))
-    return [*_number_tokens("volume_ml_", volumes), *_number_tokens("pack_qty_", packs)]
+    package_types = sorted(
+        _as_string_set(info.get("package_type"), kind="package_type")
+    )
+    return [
+        *_number_tokens("volume_ml_", volumes),
+        *_number_tokens("pack_qty_", packs),
+        *(f"package_type_{value.replace(' ', '_')}" for value in package_types),
+    ]
 
 
 def _number_tokens(prefix: str, values: Sequence[float]) -> list[str]:
@@ -108,7 +148,9 @@ def vector(info: Mapping[str, object], *, volume_scale_ml: float, pack_scale: fl
 
     Presence, min, max, span and cardinality are retained for each set.  The
     vector is intentionally small and deterministic so it can be fused with
-    any MiniLM-sized embedding without another trainable model.
+    any MiniLM-sized embedding without another trainable model. Package type
+    uses the text-token channel because an unordered categorical vocabulary
+    has no meaningful scalar geometry.
     """
     if volume_scale_ml <= 0 or pack_scale <= 0 or max_set_size <= 0:
         raise ValueError("structured feature scales and max_set_size must be positive")

@@ -277,6 +277,7 @@ rand_matching:
     enabled: true
     pack_mismatch_veto: true
     volume_mismatch_veto: true
+    package_type_mismatch_veto: true
     brand_mismatch_veto: true
     missing_pack_or_volume_route: "human_review"
     volume_relative_tolerance: 0.05
@@ -341,7 +342,7 @@ training:
     multiplier: 0.50
   structured_features:
     enabled: true
-    append_to_text: true  # intentional text channel for normalized volume/pack
+    append_to_text: true  # intentional text channel for normalized volume/pack/package type
     feed_to_loss: true    # intentional second structured channel in the loss
     embedding_weight: 0.35
     volume_scale_ml: 10000.0

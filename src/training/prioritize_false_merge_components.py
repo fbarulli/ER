@@ -88,6 +88,7 @@ def build_prioritized_component_report(
         "score",
         "volume_conflict",
         "pack_conflict",
+        "package_type_conflict",
         "flavor_conflict",
         "attribute_conflict_type",
     }
@@ -182,11 +183,16 @@ def build_prioritized_component_report(
                     "candidate_pack": gate["targeted_pack_b"],
                     "source_volume_ml": gate["targeted_volume_ml_a"],
                     "candidate_volume_ml": gate["targeted_volume_ml_b"],
+                    "source_package_type": gate["targeted_package_type_a"],
+                    "candidate_package_type": gate["targeted_package_type_b"],
                     "source_flavor": gate["sku_flavor"],
                     "candidate_flavor": gate["candidate_flavor"],
                     "prior_attribute_conflict_type": edge.attribute_conflict_type,
                     "pack_conflict": gate["targeted_pack_conflict"],
                     "volume_conflict": gate["targeted_volume_conflict"],
+                    "package_type_conflict": gate[
+                        "targeted_package_type_conflict"
+                    ],
                     "brand_conflict": gate["targeted_brand_conflict"],
                     "flavor_conflict": int(edge.flavor_conflict),
                 }

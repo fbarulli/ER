@@ -1921,6 +1921,7 @@ def _load_canonical_metadata() -> dict[str, dict]:
         "mode_flavor",
         "volume_set",
         "pack_set",
+        "package_type_set",
         "volume_confidence",
         "pack_confidence",
     }
@@ -1955,6 +1956,7 @@ def _sku_payload_metadata(index: int, row, barcode: str, text: str) -> dict:
         "category": row_metadata_text(row, "category", "category_path"),
         "volume": sorted(info["volume"]),
         "pack": sorted(info["pack"]),
+        "package_type": sorted(info["package_type"]),
         "flavor": str(info["flavor"]),
         "volume_confidence": "",
         "pack_confidence": "",
@@ -1981,6 +1983,7 @@ def _canonical_payload_metadata(
         "category": metadata_text(record["mode_type"]),
         "volume": sorted(info["volume"]),
         "pack": sorted(info["pack"]),
+        "package_type": sorted(info["package_type"]),
         "flavor": str(info["flavor"]),
         "volume_confidence": metadata_text(record["volume_confidence"]),
         "pack_confidence": metadata_text(record["pack_confidence"]),

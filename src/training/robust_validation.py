@@ -370,7 +370,12 @@ def _slice_values(row: pd.Series, dimension: str) -> tuple[str, ...]:
     if value:
         return (value,)
     conflicts = []
-    for field in ("volume_conflict", "pack_conflict", "flavor_conflict"):
+    for field in (
+        "volume_conflict",
+        "pack_conflict",
+        "package_type_conflict",
+        "flavor_conflict",
+    ):
         raw = _key(row.get(field, ""))
         if raw in {"1", "true", "yes"}:
             conflicts.append(field.removesuffix("_conflict"))
