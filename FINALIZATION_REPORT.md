@@ -603,33 +603,37 @@ constant, no new hasher. Pinned by
 `test_ann_fingerprint_inputs_cover_the_normalisation_vocabulary`, which asserts both halves (the file
 is in the fingerprint, and the vocabulary really does change the composed text).
 
-### The conventions file: the premise was wrong again
+### The conventions document — resolved
 
-The instruction said a `CONVENTIONS.md` had been created in the main checkout. **It does not exist** —
-not in this repo, not in any sibling checkout, not anywhere under `/home/opc` or `/` to depth 6
-(`find / -maxdepth 6 -name 'CONVENTIONS.md'` returns nothing). What exists is **`AGENTS.local.md`**
-(5 230 B), whose ten sections are exactly the ones described: SSOT with the table of single sources
-of truth, reuse-before-you-write, transparency/EXECUTED-vs-READ, no dead code, pydantic at
-boundaries, config over constants, tests, repo/artifact safety, reporting discipline, blast radius.
+A `CONVENTIONS.md` was briefly believed to exist in the main checkout; `find / -maxdepth 6 -name
+'CONVENTIONS.md'` returned nothing, and I declined to invent it (writing a file the owner believes
+exists, or copying the rules into a second document, is the duplication §2 of those rules forbids).
+The owner has since **consolidated it away to stop two copies of the same rules drifting apart**, and
+the conventions live at their original home:
 
-I did **not** create `CONVENTIONS.md`. Writing it would have meant inventing a file the owner
-believes exists, and copying the rules into a second document is the duplication §2 of those very
-rules forbids.
+**`AGENTS.local.md`** — and that filename is load-bearing, not arbitrary. The harness probes
+`AGENTS.md` / `CLAUDE.md` / **`AGENTS.local.md`** / `CLAUDE.local.md` at the project root and injects
+a hint into every agent, subagents included, telling it to read and follow them. The `.local.` form
+is the conventionally untracked variant, so the rules are **auto-discovered** by agents rather than
+depending on a prompt happening to mention them.
 
-Both names are now ignored in `.gitignore` with an explanatory comment, so the intent holds whichever
-name the owner settles on:
+`.gitignore` therefore ignores **`AGENTS.local.md` only** — `CONVENTIONS.md` is deliberately NOT
+ignored, because it no longer exists and re-adding the rule would resurrect the duplicate that was
+just consolidated away:
 
 ```
-$ git check-ignore -v CONVENTIONS.md
-.gitignore:87:CONVENTIONS.md	CONVENTIONS.md
 $ git check-ignore -v AGENTS.local.md
-.gitignore:86:AGENTS.local.md	AGENTS.local.md
-$ git status --porcelain | grep -E 'CONVENTIONS|AGENTS.local'   # -> no output
+.gitignore:88:AGENTS.local.md	AGENTS.local.md          # resolves  (rc=0)
+$ git check-ignore -v CONVENTIONS.md
+                                                         # does not resolve (rc=1) - correct
+$ git status --porcelain | grep AGENTS.local             # -> no output
+$ ls -la AGENTS.local.md                                 # 5230 B, still on disk, not deleted
 ```
 
-`AGENTS.local.md` is still on disk, still untracked, still not deleted. The earlier machine-local
-`​.git/info/exclude` entry was removed now that the rule lives in the tracked `.gitignore`, so the
-behaviour is reproducible on any clone instead of only on this machine.
+`AGENT_BRIEF_MATCHER_ROUTING.md` is a **different** file — the stray agent brief preserved under its
+own name — and stays tracked, unchanged. The earlier machine-local `.git/info/exclude` entry was
+removed now that the rule lives in the tracked `.gitignore`, so the behaviour is reproducible on any
+clone instead of only on this machine.
 
 ## 8. EXECUTED vs READ
 
@@ -683,6 +687,20 @@ behaviour is reproducible on any clone instead of only on this machine.
    report" is not by itself enough — the input has to be pinned too.
 6. **`artifacts/embeddings/*.npz`** are orphaned: no writer and no reader anywhere in the tree, and
    stale under the new composition. Harmless today; worth deleting or documenting.
+6b. **The fingerprint covers data inputs but not the composition CODE.** After the §7d fix the ANN
+   reuse contract is `{structured_features, model_input, unit_canonicalization, vocabulary}` — all
+   data/config. But the text is also produced by code that is *not* config: `pipeline.SCHEMA_WORDS`
+   (`src/pipeline.py:1249`) and `_MODEL_STOP` (`:1292`) are module constants, and
+   `core.model_input._normalized_tokens` is the normaliser itself. Editing any of them changes the
+   encoder text while every fingerprint input stays identical, so a persisted index is silently
+   reused — the same seam again, one level up. The run manifest already records `git_sha`
+   (`core.manifest._environment`), so a pipeline run is attributable; the **index metadata is not**.
+   Exact patch, not applied because the invalidation granularity is an owner call (it would force a
+   rebuild on any edit to those files, including a docstring):
+   in `src/training/rand_matching.py::preprocessing_fingerprint_inputs`, add
+   `"composition_code": sha256_file(Path(pipeline.__file__))` reusing the existing
+   `core.manifest.sha256_file`, or record `git_sha` from `core.manifest._environment` into
+   `PersistentHnswIndex.build`'s metadata alongside `preprocessing_fingerprint`.
 7. Multiple agents were writing to this checkout during the session (a third was running in
    `/home/opc/ONE/ER-analysis-brand-input`). The tree was re-verified green at the moment of commit;
    if another agent continues afterwards, that verification no longer covers its output.

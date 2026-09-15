@@ -78,10 +78,11 @@ node_modules/
 pnpm-lock.yaml
 package.json
 
-# Project working agreements. These are deliberate LOCAL documents — the rules
-# every agent and contributor is asked to follow — not shipped artifacts, and
-# they are not part of the product's public contract. Ignored so the working
-# tree stays clean while the files remain present on disk for the harness and
-# for anyone reading the checkout. Do not commit them; do not delete them.
+# The project working agreement — a deliberately untracked LOCAL document,
+# not a shipped artifact. The `.local.` filename is load-bearing: the harness
+# probes AGENTS.md / CLAUDE.md / AGENTS.local.md / CLAUDE.local.md at the
+# project root and points every agent (subagents included) at them, so the
+# rules are auto-discovered rather than depending on a prompt mentioning them.
+# Ignored so the tree stays clean while the file remains present on disk.
+# Do not commit it; do not delete it.
 AGENTS.local.md
-CONVENTIONS.md
