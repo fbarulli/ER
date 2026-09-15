@@ -1237,6 +1237,32 @@ What I did, deliberately and without destroying anyone's work:
 direct conflict. If "the tree ships code, not data" is the real policy, this migration must be reverted
 in favour of it; if the four frozen inputs stay tracked, the `*.csv` line should be dropped deliberately.
 
+### What actually landed, and a commit message that overstates its own diff
+
+The migration reached the branch as **`07bf660`**, but **not under my message**: a concurrent agent
+committed while my own pathspec-limited commit was aborting, and swept my staged work into its commit —
+the same sweep that happened earlier with `e326c46`.
+
+Its message claims two things its diff **does not contain**, both verified against the commit object:
+
+| claim in `07bf660` | actual diff |
+|---|---|
+| *"Untrack every CSV … the tree should carry code, not data"* | **`dataset.csv` is still tracked** (`100644 blob c4432ab4…`). The untracking was un-staged and never landed. |
+| *".gitignore now ignores `*.csv`"* | HEAD's `.gitignore` **ends at `AGENTS.local.md`** — no blanket rule. |
+
+What `07bf660` *does* contain is exactly my 13-file migration (its stat is identical to the set I
+staged, renames included). The code is right and the prose is wrong, which is the part a future reader
+would trust — hence this note.
+
+Final verified state:
+```
+dataset.csv      still tracked, still at the repo root, unmoved
+training_data/   canonical_records.csv, dataset_deduped.csv, gate_results.csv        (tracked)
+                 dataset_deduped_sample_3000.csv, _train_minus_3000.csv             (untracked, by policy)
+working tree     M .gitignore  <- the other agent's *.csv line, left uncommitted and untouched
+                 M COLAB_SETUP_OPTIMISATION_REPORT.md  <- the other agent's
+```
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):
