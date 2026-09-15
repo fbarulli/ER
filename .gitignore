@@ -58,6 +58,7 @@ src/ner/results/
 # Generated training splits, submission outputs, and local checkpoints.
 artifacts/data/dataset_deduped_sample_*.csv
 artifacts/data/dataset_deduped_train_minus_*.csv
+artifacts/data/dataset_deduped_smoke_*.csv
 submission/SKU_ITEM_submission*.csv
 submission/calibration_diagnostics.csv
 submission/holdout_diagnostics.csv
