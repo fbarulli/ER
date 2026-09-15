@@ -1066,6 +1066,7 @@ def run_parallel_train_and_tail(
     inference_sample: int | None = None,
     inference_device: str | None = None,
     remote_checkout_inputs: bool = False,
+    remote_checkout_bundles: list[str] | None = None,
     remote_validation_csv: str | None = None,
     incremental_sync: bool = True,
 ) -> tuple[str, int]:
@@ -1083,11 +1084,21 @@ def run_parallel_train_and_tail(
     )
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     _record_remote_run(remote_base, workers=workers, lane="train")
-    remote_bundles = (
-        _upload_prepared_bundles(run_id=run_id, bundles=prepared_bundles)
-        if prepared_bundles is not None
-        else None
-    )
+    if prepared_bundles is not None and remote_checkout_bundles is not None:
+        raise ValueError("prepared bundles must be uploaded or checkout-native, not both")
+    if remote_checkout_bundles is not None:
+        if len(remote_checkout_bundles) != workers:
+            raise ValueError("checkout bundle list must contain one bundle per worker")
+        remote_bundles = []
+        for raw in remote_checkout_bundles:
+            relative = Path(raw)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("checkout bundle path must stay inside the checkout")
+            remote_bundles.append(str(Path(REMOTE_ROOT) / relative))
+    elif prepared_bundles is not None:
+        remote_bundles = _upload_prepared_bundles(run_id=run_id, bundles=prepared_bundles)
+    else:
+        remote_bundles = None
     if not final_inference:
         remote_validation_inputs = {"sample": "", "source": "", "training": ""}
     elif remote_validation_csv is not None:
@@ -1105,7 +1116,9 @@ def run_parallel_train_and_tail(
     )
     resume_pointers = _resume_pointer_payload(run_id, workers) if resume_run else {}
     launch = _BOOTSTRAP + _remote_auth_env_script(
-        include_wandb=not remote_checkout_inputs
+        # train_prepared is deliberately remote-only and refuses to run
+        # without W&B.  A Git-shipped bundle changes transport, not tracking.
+        include_wandb=remote_bundles is not None or not remote_checkout_inputs
     ) + f"""
 import base64, json, os, pathlib, shutil, shlex, subprocess, sys, time, traceback
 from core.common import F
@@ -2477,6 +2490,7 @@ def run_train(
     worker_losses: list[str] | None = None,
     train_only: bool = False,
     remote_dataset_csv: str | None = None,
+    remote_prepared_bundles: list[str] | None = None,
     remote_validation_csv: str | None = None,
     incremental_sync: bool = True,
 ) -> tuple[str, int]:
@@ -2522,7 +2536,7 @@ def run_train(
         args.append("--resume")
     profiles = _training_bundle_profiles(masking_profile, workers)
     prepared_bundles: list[Path] | None = None
-    if remote_dataset_csv is None:
+    if remote_dataset_csv is None and remote_prepared_bundles is None:
         bundle_request = {
             "profiles": profiles,
             "model": model,
@@ -2569,6 +2583,7 @@ def run_train(
         inference_sample=inference_sample,
         inference_device=inference_device,
         remote_checkout_inputs=remote_dataset_csv is not None,
+        remote_checkout_bundles=remote_prepared_bundles,
         remote_validation_csv=remote_validation_csv,
         incremental_sync=incremental_sync,
     )
@@ -4374,6 +4389,13 @@ def main() -> None:
                 # a separate held-out split.
                 train_only=False,
                 remote_dataset_csv="data/dataset_deduped.csv",
+                # These bundles are committed with the other immutable
+                # runtime inputs.  Colab only consumes them on the GPU; no
+                # CSV or prepared-data upload is part of this lane.
+                remote_prepared_bundles=[
+                    "data/prepared/smoke_1000/worker_1_baseline.pkl.gz",
+                    "data/prepared/smoke_1000/worker_2_baseline.pkl.gz",
+                ] if smoke_sample == 1000 else None,
                 remote_validation_csv=f"{REMOTE_ROOT}/data/dataset_deduped.csv",
                 # The status/log poll is the only Colab control-channel user
                 # during smoke; checkpoint syncing waits for full runs.

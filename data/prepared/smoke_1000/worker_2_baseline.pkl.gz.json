@@ -1,0 +1,21 @@
+{
+  "schema_version": "3",
+  "payload_variant": "full",
+  "masking_profile": "baseline",
+  "model_input": {
+    "profile": "cleaned",
+    "include_evidence": false,
+    "emit_field_markers": false,
+    "keep_redundant_attribute_words": true,
+    "emit_singleton_pack_token": false
+  },
+  "n_df": 1000,
+  "n_payload": 15231,
+  "n_pos": 1962,
+  "n_neg": 1894,
+  "n_train_neg": 1894,
+  "n_labeled_pairs_bytes": 241236,
+  "n_canonical_records_bytes": 10047232,
+  "n_gate_results_bytes": 28153414,
+  "sha256": "9098e62f98c84fc189531a000b5d0a87c01909998a50282f1cf2235cf07333c5"
+}
