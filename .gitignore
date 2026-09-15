@@ -90,5 +90,18 @@ package.json
 # Do not commit it; do not delete it.
 AGENTS.local.md
 
-# Every CSV is generated or local-only; the tree ships code, not data.
+# CSVs are generated or local-only by default; the tree ships code, not data.
 *.csv
+# ...EXCEPT the inputs a clone must have to run the pipeline at all. These five
+# are the raw export and the frozen artifacts the lanes consume directly:
+# dataset.csv is the irreplaceable source, dataset_deduped.csv is the frozen
+# training input train.py reads, canonical_records/gate_results are the shared
+# frozen inputs, and number_tokens_reference.csv backs build_reference.
+# The DERIVED splits (sample_3000 / train_minus_3000) stay untracked on purpose:
+# the sampler regenerates them deterministically from the deduped catalog at a
+# fixed seed, so tracking them would only duplicate 45 MB of derived data.
+!dataset.csv
+!training_data/dataset_deduped.csv
+!training_data/canonical_records.csv
+!training_data/gate_results.csv
+!artifacts/data/number_tokens_reference.csv
