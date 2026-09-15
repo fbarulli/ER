@@ -300,6 +300,135 @@ def test_deferral_scope_is_pack_and_volume():
     assert set(DEFERRAL_DIMENSIONS) < set(CRITICAL_ATTRIBUTE_DIMENSIONS)
 
 
+# The five veto-only dimensions and every record key each one is read through.
+# ``flavor`` is the asymmetric case: ``critical_attribute_evaluation`` falls back
+# to the scalar display key, while the gate's census reads ``flavor_set``.
+_VETO_ONLY_DIMENSION_KEYS = {
+    "package_type": ("package_type",),
+    "flavor": ("flavor", "flavor_set"),
+    "carbonation": ("carbonation", "carbonation_set"),
+    "sweetener": ("sweetener", "sweetener_set"),
+    "pulp": ("pulp", "pulp_set"),
+}
+
+
+def _wipe(info: dict, dimension: str) -> dict:
+    for key in _VETO_ONLY_DIMENSION_KEYS[dimension]:
+        info[key] = set()
+    return info
+
+
+_VETO_ONLY_DIMENSIONS = tuple(_VETO_ONLY_DIMENSION_KEYS)
+
+
+@pytest.mark.parametrize("absent", range(1 << len(_VETO_ONLY_DIMENSIONS)))
+def test_no_absent_veto_only_dimension_can_ever_defer_or_enter_the_deferral_reason(absent):
+    """Property pin over EVERY combination of absent veto-only dimensions.
+
+    A blanket deferral on absence is wrong for exactly these five dimensions, so
+    this asserts the property rather than one hand-picked case: wip any subset of
+    ``package_type``/``flavor``/``carbonation``/``sweetener``/``pulp`` on either
+    endpoint while pack and volume stay explicit and agreeing, and the pair must
+    still auto-merge -- with a deferral reason that can never name a dimension
+    outside ``DEFERRAL_DIMENSIONS``.
+
+    On a revert of ``DEFERRAL_DIMENSIONS`` to all seven this fails for all 31
+    non-empty subsets, which is what makes it a pin rather than a restatement of
+    ``test_absent_non_decisive_dimensions_do_not_defer_an_otherwise_clean_pair``
+    (one case, two dimensions). It also pins the AUDIT census independently: the
+    census must still report every wiped dimension on every wiped side, so the
+    two halves of the change cannot drift apart.
+    """
+    from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
+    from training.rand_matching import DEFERRAL_DIMENSIONS
+
+    full = dict(
+        pack={6},
+        volume={750},
+        package_type={"bottle"},
+        flavor={"cola"},
+        carbonation={"carbonated"},
+        sweetener={"no_sugar"},
+        pulp={"no_pulp"},
+    )
+    left, right = _info(**full), _info(**full)
+    wiped: set[str] = set()
+    for index, dimension in enumerate(_VETO_ONLY_DIMENSIONS):
+        if absent & (1 << index):
+            wiped.add(dimension)
+            _wipe(left, dimension)
+            _wipe(right, dimension)
+
+    gate = targeted_veto_gate(
+        left,
+        right,
+        sku_brand="Acme",
+        candidate_brand="Acme",
+        exact_gtin=False,
+        config=SETTINGS,
+    )
+
+    # (a) ABSENCE of a veto-only dimension is never deferral.
+    assert gate["targeted_gate_decision"] == "allow", wiped
+    assert gate["targeted_gate_route"] == "auto_merge", wiped
+    assert gate["targeted_gate_reason"] == "attributes_compatible", wiped
+    assert gate["targeted_critical_conflicts"] == "", wiped
+
+    # (b) The AUDIT census still reports every absent dimension, both sides.
+    census = [
+        token for token in str(gate["targeted_missing_attributes"]).split(",") if token
+    ]
+    assert {token.rsplit("_", 1)[0] for token in census} == wiped, wiped
+    assert sorted(census) == sorted(
+        f"{dimension}_{side}" for dimension in wiped for side in ("a", "b")
+    ), wiped
+    assert gate["targeted_missing_attribute_count"] == 2 * len(wiped), wiped
+    # (c) The deferral scope is unchanged by any of this.
+    assert set(DEFERRAL_DIMENSIONS) == {"pack", "volume"}
+    assert set(DEFERRAL_DIMENSIONS) < set(CRITICAL_ATTRIBUTE_DIMENSIONS)
+
+
+def test_audit_census_names_all_seven_dimensions_while_the_deferral_scope_names_two():
+    """The census contract and the routing contract are separate and both load-bearing.
+
+    With no evidence at all on either side, ``targeted_missing_attributes`` /
+    ``..._count`` must still describe the FULL critical-attribute contract (all
+    seven dimensions x two endpoints = 14), because the diagnostics consume that
+    census as the audit trail. The deferral REASON, by contrast, may only name
+    the decisive subset — the tokens the ``missing_pack_or_volume_route`` dial
+    actually governs. A revert of ``DEFERRAL_DIMENSIONS`` to all seven changes
+    the reason to 14 tokens and leaves the census at 14, so asserting both
+    fields together is what distinguishes a scoped deferral from a blanket one.
+    """
+    from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
+    from training.rand_matching import DEFERRAL_DIMENSIONS
+
+    gate = targeted_veto_gate(
+        _info(),
+        _info(),
+        sku_brand="Acme",
+        candidate_brand="Acme",
+        exact_gtin=False,
+        config=SETTINGS,
+    )
+    assert gate["targeted_gate_route"] == "human_review"
+    assert gate["targeted_gate_decision"] == "defer"
+
+    census = str(gate["targeted_missing_attributes"]).split(",")
+    assert len(census) == 14
+    assert len(set(census)) == 14
+    assert {token.rsplit("_", 1)[0] for token in census} == set(
+        CRITICAL_ATTRIBUTE_DIMENSIONS
+    )
+    assert gate["targeted_missing_attribute_count"] == len(census) == 14
+
+    reason_tokens = str(gate["targeted_gate_reason"]).split(":", 1)[1].split(",")
+    assert {token.rsplit("_", 1)[0] for token in reason_tokens} == set(
+        DEFERRAL_DIMENSIONS
+    )
+    assert len(reason_tokens) == 4 < len(census)
+
+
 def test_live_gate_positive_population_is_not_starved_of_auto_merge():
     """The regression, pinned on the LIVE frozen artifacts.
 

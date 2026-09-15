@@ -151,9 +151,16 @@ INVALID_ID_SENTINELS = frozenset({"", "nan", "none", "null"})
 #
 # The other five critical dimensions (package_type, flavor, carbonation,
 # sweetener, pulp) are veto-only: an explicit conflict rejects, and their
-# ABSENCE is already handled by a dedicated, bounded lever
-# (``confidence_penalty_mask``, "A field contributes only when it is absent on
-# both endpoints. This avoids treating a one-sided parser miss as a conflict").
+# ABSENCE is not deferral at all -- the training gate that DEFINES this
+# population (``pipeline.three_way_gate``) already labels such a pair
+# ``proceed`` with reason "Known critical attributes compatible", where
+# "Unknown stays unknown ... it is not fabricated into a conflict or an
+# agreement". The ``flavor`` member additionally carries a bounded score
+# penalty through ``confidence_penalty_mask`` ("A field contributes only when
+# it is absent on *both* endpoints. This avoids treating a one-sided parser
+# miss as a conflict"). That mask is a SECOND, independent lever, not this
+# gate's deferral rule, and its configured ``critical_attributes`` are
+# ``[volume, pack, flavor]`` -- so it covers only ``flavor`` of these five.
 # Requiring all seven to be explicit instead made ``auto_merge`` unreachable:
 # on the live 1,592-pair gate-positive population it left 1 pair (0.06%)
 # auto-mergeable, because ``pulp_set`` is populated on only ~2% of canonical
