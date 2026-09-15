@@ -70,3 +70,10 @@ submission/threshold_*.png
 tmp_worker*_checkpoint/
 GLM.md
 wandb/
+
+# Stray pnpm tool state in a Python repo: `package.json` holds only a
+# `packageManager` pin and nothing in this project reads it. Ignored rather
+# than tracked so the tree stays clean without committing tool junk.
+node_modules/
+pnpm-lock.yaml
+package.json

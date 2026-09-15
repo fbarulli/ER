@@ -266,3 +266,99 @@ Until both hold, the correct action is **no new gate criteria**.
 
 **Still worth doing independently:** the `both_equal` GTIN stratum bypasses the cosine threshold entirely, so a
 perfect Rand Index there tests nothing — the calibration design flaw already recorded in `PRESENT.md`.
+
+---
+
+# 10. FINAL STATE — model-input composition session (2026-09-15, later)
+
+This section supersedes §"FINAL CONSOLIDATED TIP" above for the current tip. The earlier sections are
+kept because they still describe the `346f401` review and its open items.
+
+## What shipped
+
+The **encoder-text composition** is now one config-selectable contract instead of three copy-pasted
+builders that had drifted apart (the source and target of the same product shared only ~0.51 of their
+tokens).
+
+```
+config/training.yaml
+  training:
+    structured_features:
+      implicit_pack_qty: 1.0     # unobserved pack, applied to BOTH sides by 'cleaned'
+    model_input:
+      profile: "cleaned"         # legacy | cleaned   <- SHIPPED DEFAULT
+      include_evidence: false    # 'cleaned' excludes the evidence channel by definition
+```
+
+**Rollback is one config edit, never a code revert.**
+
+| Want | Set |
+|---|---|
+| Shipped default (symmetric, compound-split, number-preserving) | `profile: "cleaned"` + `include_evidence: false` |
+| Today's pre-change behaviour, byte for byte | `profile: "legacy"` + `include_evidence: true` |
+| Pre-change composition without the description/breadcrumb channel | `profile: "legacy"` + `include_evidence: false` |
+| *(rejected at config load)* | `profile: "cleaned"` + `include_evidence: true` |
+
+`profile: legacy` + `include_evidence: true` is pinned byte-identical to the pre-change code on
+**855/855** fixture rows (`tests/fixtures/model_input_golden.json`, captured from `2a15852` before any
+edit and independently re-derived from that commit during verification). If the legacy path ever
+drifts, `tests/test_model_input_contract.py::test_legacy_profile_reproduces_golden_bytes` fails loudly.
+
+## Where the composition is recorded (traceability)
+
+`core.model_input.model_input_composition()` returns a validated
+`TrainingSpec.ModelInputComposition` (`profile`, `include_evidence`, `fingerprint`) and is written to
+**four existing** places — no new mechanism was introduced:
+
+1. the run trace, as the `payload.model_input_composition` run-scope row (`core.tracing`);
+2. `checkpoint_manifest.json`, so a checkpoint names the contract its weights were trained on;
+3. the prepared-bundle manifest (`schema_version 3`) — and `load_prepared_bundle` now **refuses** a
+   bundle built under a different composition instead of training on the wrong payload;
+4. the ANN index reuse fingerprint (`training.rand_matching.preprocessing_fingerprint_inputs`), so an
+   index cannot outlive the composition that built it.
+
+## Verified state at handoff
+
+* Suite: **341 passed, 2 skipped** (baseline at `2a15852`: 290 passed, 2 skipped). The committed tree
+  was briefly **red** (1 failed) when the pack-symmetry change landed without its test being updated;
+  that test was rewritten to assert the true invariant and a second one added. Fixed, not silenced.
+* `results/` clean; no regenerated `results/*.csv` committed; `dataset.csv` read-only throughout.
+* Independent verification, blast-radius audit and the ANN measurement: see `FINALIZATION_REPORT.md`.
+
+## What is now stale, and what needs retraining
+
+* **Every checkpoint trained on the old text is stale and non-comparable** — including
+  `training_results/0915T063500554948Z/worker_2/_checkpoints/.../checkpoint-44`. It still loads and
+  still scores, but every metric it produced describes the other composition. **Retrain on Colab.**
+  CPU measurement on that checkpoint anyway shows the switch is not a regression (see
+  `FINALIZATION_REPORT.md` §6): every attribute error bucket and retrieval recall@1/5/10 improve once
+  each composition is judged at its own operating point, and the optimal threshold moves **up**
+  (0.6909 → 0.7317), so no recall was bought by lowering the bar.
+* **Every report under `training_results/*`** — retrain, then regenerate.
+* `results/ann_index/` — **rebuild** (automatic: the fingerprint check rejects the stale index).
+* `results/prepared_training/*` (55 bundles) — **re-prepare**; the new manifest rejects them loudly.
+* `results/training/embedding_similarities.csv` — **regenerate**; the zero-shot lane was a 4th
+  hand-built composition with a self-blinding fingerprint, now routed through the SSOT.
+
+## Corrections to the record
+
+* The stray "MATCHER-ROUTING agent" brief that had overwritten this file is preserved as
+  `AGENT_BRIEF_MATCHER_ROUTING.md`. This file is the real handoff.
+* The pnpm footprint (`node_modules/`, `pnpm-lock.yaml`, `package.json`) is **ignored, not tracked**.
+  `package.json` holds only a `packageManager` pin and nothing in this Python project reads it. To
+  keep the pin instead, remove the `package.json` line from `.gitignore` and commit it.
+
+## Open items carried forward
+
+1. **Retrain the ANN arm** on the cleaned composition; the local measurement says it should improve,
+   but that is a prediction, not a result.
+2. **Nothing pins the bytes of the shipped `cleaned` default** — only its properties. A second frozen
+   fixture captured from the shipping commit would close this; it needs an owner decision on what is
+   frozen.
+3. The **shared-builder guard is module-scoped** (it counts calls in `predict_items` and
+   `rand_matching` only). It could not catch the zero-shot or atlas compositions, which were routed
+   by hand during this session. A repo-wide scan would close it.
+4. All items from §§2-5 and §9 above remain open unless explicitly closed in this session: the
+   information-free ranking metric, the dead `auto_merge` route, the stale committed
+   `canonical_records.csv` vs the run-scoped one, blob flavour pollution, carbonation both-states,
+   and the uncaptured sweetener phrasings.
