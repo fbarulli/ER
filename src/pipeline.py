@@ -2122,9 +2122,18 @@ def build_training_data(
     # and explicit-conflict requirements. They remain a separate population
     # so training can enable/disable them through the mining profile and keep
     # source provenance intact.
-    from core.hard_negatives import mine_targeted_attribute_negatives
+    # The funnel is the miner's OWN attrition accounting, so the trace records
+    # why each candidate died rather than restating a similarity threshold. The
+    # miner stays the single source of truth for every filter it applies.
+    from core.hard_negatives import (
+        MiningFunnel,
+        mine_targeted_attribute_negatives,
+    )
 
     targeted_cfg = cfg["mining"]["attribute_conflict"]
+    mining_funnel = (
+        MiningFunnel() if bool(targeted_cfg["same_product_name"]) else None
+    )
     targeted_attribute_neg, targeted_attribute_scores = (
         mine_targeted_attribute_negatives(
             df,
@@ -2141,6 +2150,7 @@ def build_training_data(
             # Same canonical-identity rule the baseline negative lane already
             # applies: a same-canonical pair is a true match, not a label-0 row.
             canonical_map=canon_map,
+            funnel=mining_funnel,
         )
         if bool(targeted_cfg["same_product_name"])
         else (np.empty((0, 2), dtype=int), np.empty((0,), dtype=float))
@@ -2389,34 +2399,38 @@ def build_training_data(
         },
         source="model payload index maps (rows + canonicals)",
     )
-    # Candidate funnel: the gate pairs that clear the configured similarity
-    # floor for THIS miner. Read from the same artifact the miner reads, so
-    # the number is the real input population rather than a restatement of
-    # the output. Bounded by the target cap, hence the note in `detail`.
-    targeted_candidates = int(
-        pd.to_numeric(gates["similarity"], errors="coerce")
-        .gt(float(targeted_cfg["min_similarity"]))
-        .sum()
-    )
-    trace.add(
-        "mining",
-        "targeted_attribute_funnel",
-        in_count=targeted_candidates,
-        out_count=int(len(targeted_attribute_neg)),
-        reason=(
-            "same-brand + same normalized product name + a shared-evaluator "
-            "critical conflict, at gate similarity strictly above the floor"
-        ),
-        detail={
-            "gate_similarity_floor": float(targeted_cfg["min_similarity"]),
-            "same_product_name_required": bool(targeted_cfg["same_product_name"]),
-            "volume_tolerance": float(training_cfg().gate.vol_tolerance),
-            "same_canonical_guard": "enabled",
-            "target": int(targeted_cfg["target"]),
-            "both_directions_emitted": True,
-        },
-        source="gate_results.csv",
-    )
+    # ONE row per real filter, taken from the miner's OWN funnel accounting.
+    # The previous single row restated "gate rows above the similarity floor"
+    # as the input and claimed the filters generically, which hid that ~39,896
+    # candidates die at the name filter and made the lane's ceiling
+    # unanswerable from the trace. The miner stays the label authority; this
+    # only records what it did.
+    if mining_funnel is not None:
+        for _step, _in, _out, _why in mining_funnel.stages():
+            trace.add(
+                "mining",
+                f"targeted_attribute_funnel.{_step}",
+                in_count=int(_in),
+                out_count=int(_out),
+                reason=_why,
+                detail={
+                    "gate_similarity_floor": float(targeted_cfg["min_similarity"]),
+                    "volume_tolerance": float(training_cfg().gate.vol_tolerance),
+                    "target": int(targeted_cfg["target"]),
+                    "funnel": mining_funnel.to_dict(),
+                },
+                source="gate_results.csv",
+            )
+    else:
+        trace.add(
+            "mining",
+            "targeted_attribute_funnel.disabled",
+            in_count=0,
+            out_count=0,
+            reason="mining.attribute_conflict.same_product_name is false",
+            detail={"target": int(targeted_cfg["target"])},
+            source="config/training.yaml",
+        )
     trace.add(
         "payload",
         "materialized",
