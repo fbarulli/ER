@@ -52,8 +52,8 @@ via ``ranking_coverage(..., tie_break=...)``.
 
 from __future__ import annotations
 
+from collections.abc import Hashable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Hashable, Iterable, Sequence
 
 import numpy as np
 
@@ -272,7 +272,7 @@ def ranking_coverage(
         [int(labels[query_ids == q].sum()) for q in queries], dtype=int
     )
     scored = relevant > 0
-    n_total = int(len(queries))
+    n_total = len(queries)
     n_scored = int(scored.sum())
     n_excluded = n_total - n_scored
     safe = np.maximum(sizes[scored], 1)
@@ -379,7 +379,7 @@ class EvaluationPool:
     coverage: dict[str, float | int]
 
     def __len__(self) -> int:
-        return int(len(self.labels))
+        return len(self.labels)
 
 
 def build_evaluation_pool(
@@ -480,8 +480,8 @@ def build_evaluation_pool(
         else np.empty((0, 2), dtype=int)
     ):
         priority.setdefault(int(left), []).append(int(right))
-    for row in priority:
-        priority[row] = sorted(set(priority[row]))
+    for row, candidates in priority.items():
+        priority[row] = sorted(set(candidates))
 
     barcode_of_row = np.asarray([str(bc).strip() for bc in row_bc], dtype=object)
 
@@ -559,7 +559,7 @@ def build_evaluation_pool(
         pair_candidates.extend(int(value) for value in block)
         pair_labels.extend(int(value) for value in labels)
         evaluated_rows.append(query_row)
-        pool_sizes.append(int(len(block)))
+        pool_sizes.append(len(block))
         for candidate in chosen:
             exposure[candidate] = exposure.get(candidate, 0) + 1
 
@@ -569,8 +569,8 @@ def build_evaluation_pool(
         "pool_target_competitors": int(n_competitors),
         "pool_floor_competitors": int(floor),
         "pool_headroom": int(POOL_HEADROOM),
-        "pool_queries_requested": int(len(queries)),
-        "pool_queries_evaluated": int(len(evaluated_rows)),
+        "pool_queries_requested": len(queries),
+        "pool_queries_evaluated": len(evaluated_rows),
         "pool_queries_excluded": int(len(queries) - len(evaluated_rows)),
         "pool_excluded_no_eligible_competitor": int(n_no_eligible),
         "pool_excluded_missing_positive": int(n_missing_positive),
@@ -578,7 +578,7 @@ def build_evaluation_pool(
         "pool_size_min": int(sizes.min()) if len(sizes) else 0,
         "pool_size_median": float(np.median(sizes)) if len(sizes) else 0.0,
         "pool_size_max": int(sizes.max()) if len(sizes) else 0,
-        "pool_unique_candidate_rows": int(len(exposure)),
+        "pool_unique_candidate_rows": len(exposure),
         "pool_draw_incidences": int(len(pair_candidates) - len(evaluated_rows)),
         "pool_candidate_exposure_min": (
             int(exposure_values.min()) if len(exposure_values) else 0
@@ -606,11 +606,9 @@ def build_evaluation_pool(
 
 def added_encode_rows(pool_rows: np.ndarray, already_encoded: np.ndarray) -> int:
     """How many payload rows a pool adds to an existing encode set."""
-    return int(
-        len(
+    return len(
             np.setdiff1d(
                 np.unique(np.asarray(pool_rows, dtype=int)),
                 np.unique(np.asarray(already_encoded, dtype=int)),
             )
         )
-    )
