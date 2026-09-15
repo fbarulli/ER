@@ -24,8 +24,8 @@ from core.common import F, SEED, TRAIN_ROOT
 
 
 DEFAULT_INPUT = Path(F["dataset_deduped"])
-DEFAULT_OUTPUT = TRAIN_ROOT / "artifacts/data/dataset_deduped_sample_3000.csv"
-DEFAULT_REMAINDER_OUTPUT = TRAIN_ROOT / "artifacts/data/dataset_deduped_train_minus_3000.csv"
+DEFAULT_OUTPUT = Path(F["dataset_deduped_sample_3000"])
+DEFAULT_REMAINDER_OUTPUT = Path(F["dataset_deduped_train_minus_3000"])
 DEFAULT_MANIFEST = TRAIN_ROOT / "results/manifests/dataset_deduped_sample_3000.json"
 
 

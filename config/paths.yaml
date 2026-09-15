@@ -38,18 +38,23 @@ paths:
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
   mlruns_dir: "artifacts/mlruns"        # mlflow backend + artifact store (local)
   logs_dir: "logs"                      # per-step orchestrator logs
+  # The ONE home for the current, regenerated training-input CSVs. A separate
+  # root rather than a corner of artifacts/ or results/ so that "is this file
+  # current?" is answerable by looking at one directory: anything stale lives
+  # somewhere else or does not exist.
+  training_data_dir: "training_data"
 
 # ── artifact bindings (SSOT — nothing else in the tree spells these) ────────
 files:
   # The inspected raw export is repository-root dataset.csv. Keep this
   # explicit rather than silently falling back when artifacts/data is absent.
   dataset: "repo:dataset.csv"
-  dataset_deduped: "data:dataset_deduped.csv"
-  dataset_deduped_sample_3000: "data:dataset_deduped_sample_3000.csv"
-  dataset_deduped_train_minus_3000: "data:dataset_deduped_train_minus_3000.csv"
+  dataset_deduped: "training_data:dataset_deduped.csv"
+  dataset_deduped_sample_3000: "training_data:dataset_deduped_sample_3000.csv"
+  dataset_deduped_train_minus_3000: "training_data:dataset_deduped_train_minus_3000.csv"
   sku_to_rep: "data:sku_to_rep.csv"
-  canonical_records: "results:canonical_records.csv"   # SHARED frozen input
-  gate_results: "results:gate_results.csv"             # SHARED frozen input
+  canonical_records: "training_data:canonical_records.csv"   # SHARED frozen input
+  gate_results: "training_data:gate_results.csv"             # SHARED frozen input
   labeled_pairs: "results_training:labeled_pairs.csv"
   balanced_pairs_sample_3000: "results_training:balanced_pairs_sample_3000.csv"
   embedding_similarities: "results_training:embedding_similarities.csv"

@@ -8,8 +8,6 @@ artifacts/results/
 artifacts/models/
 artifacts/embeddings/
 artifacts/mlruns/
-# Frozen training input consumed directly by train.py.
-!artifacts/data/dataset_deduped.csv
 artifacts/data/sku_to_rep.csv
 artifacts/data/clean_sku_gtin.csv
 artifacts/data/embeddings_cache/
@@ -19,10 +17,13 @@ artifacts/data/embeddings_cache/
 results/*
 !results/
 results/*
-# Frozen training inputs consumed directly by train.py.
-!results/canonical_records.csv
-!results/gate_results.csv
 results/dvc_refs/
+# Regenerated splits: derived from the deduped dataset at seed 42, so they are
+# reproducible and stay untracked. They live in training_data/ with the rest of
+# the current inputs; only the four frozen inputs below are committed.
+training_data/dataset_deduped_sample_*.csv
+training_data/dataset_deduped_train_minus_*.csv
+training_data/dataset_deduped_smoke_*.csv
 # DVC publication pointers are generated run metadata; payloads remain in
 # training_results/ and the durable DVC state is owned by dvc.lock.
 /dvc_refs/
@@ -56,6 +57,8 @@ archify/
 src/ner/results/
 
 # Generated training splits, submission outputs, and local checkpoints.
+# The smoke variants still live under artifacts/data and stay ignored; the
+# real splits moved to training_data/ (rules further down).
 artifacts/data/dataset_deduped_sample_*.csv
 artifacts/data/dataset_deduped_train_minus_*.csv
 artifacts/data/dataset_deduped_smoke_*.csv

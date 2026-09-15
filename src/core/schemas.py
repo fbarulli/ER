@@ -177,6 +177,7 @@ class DataPathsSpec(BaseModel):
     artifacts_dir: str
     data_dir: str
     results_dir: str
+    training_data_dir: str
     training_results_dir: str
     models_dir: str
     embeddings_dir: str

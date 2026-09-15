@@ -88,8 +88,8 @@ class FinalInferenceContractTests(unittest.TestCase):
         )
         spec = colab.final_inference
         # The name was wrong: this scores the WHOLE catalog, not a sample.
-        self.assertEqual(spec.input_csv, "artifacts/data/dataset_deduped.csv")
-        self.assertEqual(spec.source_csv, "artifacts/data/dataset_deduped.csv")
+        self.assertEqual(spec.input_csv, "training_data/dataset_deduped.csv")
+        self.assertEqual(spec.source_csv, "training_data/dataset_deduped.csv")
         self.assertEqual(spec.output_dir, "final_inference")
 
     def test_final_inference_batch_is_sized_for_inference_not_finetuning(self):

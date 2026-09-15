@@ -38,11 +38,11 @@ from typing import Any
 
 import pandas as pd
 
-from core.common import load_config
+from core.common import F, load_config
 
 
-DEFAULT_GATE_INPUT = Path("results/gate_results.csv")
-DEFAULT_SKU_INPUT = Path("artifacts/data/dataset_deduped.csv")
+DEFAULT_GATE_INPUT = Path(F["gate_results"])
+DEFAULT_SKU_INPUT = Path(F["dataset_deduped"])
 DEFAULT_BALANCED_OUTPUT = Path("results/training/balanced_pairs.csv")
 DEFAULT_SAMPLE_OUTPUT = Path("results/training/balanced_pairs_sample_3000.csv")
 DEFAULT_MANIFEST_OUTPUT = Path("results/training/balanced_pairs_sample_manifest.json")

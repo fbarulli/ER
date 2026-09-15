@@ -477,6 +477,9 @@ TRAINING_RESULTS.mkdir(parents=True, exist_ok=True)
 _BINDING_ROOTS = {
     "repo": TRAIN_ROOT,
     "data": DATA_DIR,
+    # The current, regenerated training inputs. Its OWN root on purpose: these
+    # files must never be confused with the stale copies they replaced.
+    "training_data": TRAIN_ROOT / _CFG["paths"]["training_data_dir"],
     "results": RESULTS,
     "results_training": RESULTS / "training",
     "results_hpo": RESULTS / "hpo",
