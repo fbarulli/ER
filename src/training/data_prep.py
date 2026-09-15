@@ -40,15 +40,22 @@ def main() -> None:
     # The gate is pair-level, not row-level: every candidate pair gets a
     # decision (no pair is dropped), so pairs carry no dropped bucket.
     row_accounting = _dp_manifest_accounting(df, pairs, canon)
+    # The per-stage gate_visibility.csv was REPLACED by the one consolidated
+    # trace (layout `training_trace`, owner core.tracing). The manifest is this
+    # stage's completion marker, so naming a file the pipeline no longer writes
+    # made every real run die in finish_manifest AFTER doing all the work
+    # (FileNotFoundError: results/logs/gate_visibility.csv). Declare what the
+    # stage actually produces.
+    trace_out = artifact("training_trace")
     out_paths = [
         F["canonical_records"],
         F["gate_results"],
-        artifact("visibility", {"name": "gate_visibility.csv"}),
+        trace_out,
     ]
     expected = [
         F["canonical_records"].name,
         F["gate_results"].name,
-        "gate_visibility.csv",
+        trace_out.name,
     ]
     mpath = finish_manifest(
         manifest, out_paths, row_accounting, expected_outputs=expected
