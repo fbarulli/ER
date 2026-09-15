@@ -431,11 +431,13 @@ def _provenance_blocks() -> dict[str, str]:
                 wanted["attr_mine"] = node
             elif "np.vstack([neg, targeted_attribute_neg])" in text:
                 wanted["targeted"] = node
+            elif "np.vstack([neg, cross_brand_neg])" in text:
+                wanted["cross_brand"] = node
             elif "np.vstack([neg, _attr_neg])" in text:
                 wanted["attr"] = node
     order = [
-        "alias", "sources_init", "sources_copy", "targeted", "attr_mine",
-        "attr", "guard", "balance_flag", "balance",
+        "alias", "sources_init", "sources_copy", "targeted", "cross_brand",
+        "attr_mine", "attr", "guard", "balance_flag", "balance",
     ]
     missing = [key for key in order if key not in wanted]
     assert not missing, f"train.py provenance blocks not found: {missing}"
@@ -444,7 +446,7 @@ def _provenance_blocks() -> dict[str, str]:
 
 def _run_provenance_case(
     blocks: dict[str, str], *, n_gate: int, n_targeted: int, n_attr: int,
-    balance: bool, n_pos_pairs: int,
+    balance: bool, n_pos_pairs: int, n_cross_brand: int = 0,
 ) -> dict:
     """Execute the real blocks in a sandbox namespace for one branch combo."""
     import core.hard_negatives as hard_negatives
@@ -472,6 +474,10 @@ def _run_provenance_case(
         "targeted_attribute_neg": np.asarray(
             [(i, 100 + i) for i in range(n_targeted)], dtype=int
         ).reshape(-1, 2),
+        "cross_brand_neg": np.asarray(
+            [(i, 300 + i) for i in range(n_cross_brand)], dtype=int
+        ).reshape(-1, 2),
+        "cross_brand_enabled": True,
         "neg": np.asarray(
             [(i, 500 + i) for i in range(n_gate)], dtype=int
         ).reshape(-1, 2),
@@ -485,8 +491,8 @@ def _run_provenance_case(
     }
     try:
         for key in (
-            "alias", "sources_init", "sources_copy", "targeted", "attr_mine",
-            "attr", "guard", "balance_flag", "balance",
+            "alias", "sources_init", "sources_copy", "targeted", "cross_brand",
+            "attr_mine", "attr", "guard", "balance_flag", "balance",
         ):
             exec(compile(blocks[key], f"<train.py:{key}>", "exec"), namespace)  # noqa: S102
     finally:
@@ -502,6 +508,9 @@ def _run_provenance_case(
         ("targeted_only", dict(n_gate=6, n_targeted=3, n_attr=0, balance=False, n_pos_pairs=5)),
         ("attr_only", dict(n_gate=6, n_targeted=0, n_attr=2, balance=False, n_pos_pairs=5)),
         ("targeted_and_attr", dict(n_gate=6, n_targeted=3, n_attr=2, balance=False, n_pos_pairs=5)),
+        ("cross_brand_only", dict(n_gate=6, n_targeted=0, n_attr=0, n_cross_brand=4, balance=False, n_pos_pairs=5)),
+        ("all_three_miners", dict(n_gate=6, n_targeted=3, n_attr=2, n_cross_brand=4, balance=False, n_pos_pairs=5)),
+        ("cross_brand_balanced", dict(n_gate=6, n_targeted=3, n_attr=2, n_cross_brand=4, balance=True, n_pos_pairs=25)),
         ("empty_baseline", dict(n_gate=0, n_targeted=3, n_attr=0, balance=False, n_pos_pairs=5)),
         ("empty_all", dict(n_gate=0, n_targeted=0, n_attr=0, balance=False, n_pos_pairs=5)),
         ("balanced_short", dict(n_gate=6, n_targeted=3, n_attr=2, balance=True, n_pos_pairs=25)),
@@ -514,12 +523,14 @@ def test_negative_provenance_stays_aligned_and_labelled(label: str, kwargs: dict
     neg, sources = namespace["neg"], namespace["neg_sources"]
     train_neg, train_sources = namespace["train_neg"], namespace["train_neg_sources"]
     n_gate, n_targeted, n_attr = kwargs["n_gate"], kwargs["n_targeted"], kwargs["n_attr"]
+    n_cross = kwargs.get("n_cross_brand", 0)
 
     assert len(sources) == len(neg)
     assert len(train_sources) == len(train_neg)
     assert list(sources) == (
         ["gate"] * n_gate
         + ["targeted_attribute_conflict"] * n_targeted
+        + ["cross_brand_conflict"] * n_cross
         + ["attribute_conflict"] * n_attr
     )
     # Identity, not just length: each training row keeps the label of ITS pair.
@@ -529,6 +540,40 @@ def test_negative_provenance_stays_aligned_and_labelled(label: str, kwargs: dict
     assert [label_by_pair[tuple(int(x) for x in pair)] for pair in train_neg] == list(
         train_sources
     )
+    # NO DUPLICATED TRAINING ROWS (the 11,602-row defect): class balancing
+    # samples without replacement, so every training row is a distinct pair.
+    rows = [tuple(int(x) for x in pair) for pair in train_neg]
+    assert len(rows) == len(set(rows))
+
+
+@pytest.mark.parametrize(
+    ("n_gate", "n_cross_brand", "n_pos_pairs"),
+    [
+        (20, 0, 15),   # pool larger than the positive class -> subsample
+        (4, 2, 20),    # pool smaller than the positive class -> keep whole
+    ],
+)
+def test_class_balance_never_duplicates_rows(
+    n_gate: int, n_cross_brand: int, n_pos_pairs: int
+) -> None:
+    """A short negative pool is reported, never padded with duplicate rows."""
+    namespace = _run_provenance_case(
+        _provenance_blocks(),
+        n_gate=n_gate,
+        n_targeted=0,
+        n_attr=0,
+        n_cross_brand=n_cross_brand,
+        balance=True,
+        n_pos_pairs=n_pos_pairs,
+    )
+    train_neg, train_sources = namespace["train_neg"], namespace["train_neg_sources"]
+    rows = [tuple(int(x) for x in pair) for pair in train_neg]
+    assert len(rows) == len(set(rows))
+    # the pool is kept whole when it is the smaller side, never enlarged
+    pool = n_gate + n_cross_brand
+    assert len(train_neg) == min(n_pos_pairs, pool)
+    assert len(train_sources) == len(train_neg)
+    assert namespace["n_class_balance_shortfall"] == max(0, n_pos_pairs - pool)
 
 
 # ── H6: traceability of the miner ──────────────────────────────────────────

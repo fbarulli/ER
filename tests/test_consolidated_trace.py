@@ -421,12 +421,20 @@ def test_two_stage_live_run_covers_every_row_and_every_pair(
 
     # ── the final label census equals the populations handed to training ───
     pair_census = _rows(frame)["payload.pair_census"]
-    assert int(pair_census["out_count"]) == len(bundle["pos"]) + len(bundle["neg"]) + len(
-        bundle["targeted_attribute_neg"]
+    assert int(pair_census["out_count"]) == (
+        len(bundle["pos"])
+        + len(bundle["neg"])
+        + len(bundle["targeted_attribute_neg"])
+        + len(bundle["cross_brand_neg"])
     )
     kinds = detail_json(pair_census["detail"])
     assert kinds["pos"] == len(bundle["pos"])
     assert kinds["neg_hard"] == len(bundle["neg"])
+    # every population that reaches training is named in the census, including
+    # the cross-brand lane (its count is 0 on this slice, and the KEY is the
+    # part that must never be absent)
+    assert kinds["neg_targeted_attribute"] == len(bundle["targeted_attribute_neg"])
+    assert kinds["neg_cross_brand"] == len(bundle["cross_brand_neg"])
 
     # ── the column-contract rows make the two-stage handoff visible ────────
     contracts = frame[frame["step"] == "column_contract.input_frame"]

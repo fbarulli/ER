@@ -478,11 +478,17 @@ def _main_inner(_mlf, _wandb) -> None:
                 **mining_cfg["attribute_conflict"],
                 "enabled": bool(profile_cfg["attribute_conflict_enabled"]),
             },
+            "cross_brand": {
+                **mining_cfg["cross_brand"],
+                "enabled": bool(profile_cfg["cross_brand_enabled"]),
+            },
         }
     ann_cfg = mining_cfg["ann"]
     attr_cfg = mining_cfg["attribute_conflict"]
+    cross_cfg = mining_cfg["cross_brand"]
     ann_mining_enabled = bool(ann_cfg["enabled"])
     attribute_conflict_enabled = bool(attr_cfg["enabled"])
+    cross_brand_enabled = bool(cross_cfg["enabled"])
     mining_enabled = ann_mining_enabled or attribute_conflict_enabled
     mask_cfg = cfg["masking"]
     collapse_cfg = cfg["collapse_guardrail"]
@@ -768,6 +774,10 @@ def _main_inner(_mlf, _wandb) -> None:
     )
     targeted_attribute_neg = np.asarray(
         data.get("targeted_attribute_neg", np.empty((0, 2), dtype=int)),
+        dtype=int,
+    ).reshape(-1, 2)
+    cross_brand_neg = np.asarray(
+        data.get("cross_brand_neg", np.empty((0, 2), dtype=int)),
         dtype=int,
     ).reshape(-1, 2)
     s = data["stats"]
@@ -1056,6 +1066,26 @@ def _main_inner(_mlf, _wandb) -> None:
         neg_sources = np.concatenate([neg_sources, targeted_sources])
         train_neg_sources = np.concatenate([train_neg_sources, targeted_sources])
 
+    # Static cross-brand candidates: brands differ, every other critical
+    # attribute agrees (mined in build_training_data from the canonical
+    # records). They are the ONLY negatives in the population where brand is
+    # the discriminating evidence, so they join BOTH the eval and the training
+    # negative pools exactly like the targeted lane — a label-0 pair that is
+    # never scored cannot make brand learnable, and a pair that is only scored
+    # cannot.
+    if cross_brand_enabled and len(cross_brand_neg):
+        neg = np.vstack([neg, cross_brand_neg]) if len(neg) else cross_brand_neg
+        train_neg = (
+            np.vstack([train_neg, cross_brand_neg])
+            if len(train_neg)
+            else cross_brand_neg.copy()
+        )
+        cross_sources = np.full(
+            len(cross_brand_neg), "cross_brand_conflict", dtype=object
+        )
+        neg_sources = np.concatenate([neg_sources, cross_sources])
+        train_neg_sources = np.concatenate([train_neg_sources, cross_sources])
+
     # Supplemental dynamic mining uses the same dimension contract after a
     # fine-tuned embedding population exists.
     if attribute_conflict_enabled and emb0.size:
@@ -1098,6 +1128,7 @@ def _main_inner(_mlf, _wandb) -> None:
             f"train={len(train_neg_sources)}/{len(train_neg)}"
         )
     balance_train_classes = bool(load_config()["pairs"]["balance_train_classes"])
+    n_class_balance_shortfall = 0
     if balance_train_classes:
         target = len(pos)
         if target and not len(train_neg):
@@ -1106,17 +1137,27 @@ def _main_inner(_mlf, _wandb) -> None:
             )
         if target:
             rng = np.random.default_rng(SEED + 91_003)
-            selected = rng.choice(
-                len(train_neg),
-                size=target,
-                replace=len(train_neg) < target,
-            )
+            # WITHOUT replacement (defect fix, measured at live scale): this
+            # sampler used to draw `replace=len(train_neg) < target`, padding a
+            # short negative pool by DUPLICATING rows — 7,952 of 11,686 train
+            # negatives on the pre-change population and 6,564 after the
+            # cross-brand lane joined — while every downstream counter (the
+            # per-fold coverage audit's distinct_pairs_presented, the source
+            # census) reported those rows as distinct pairs. A duplicated row
+            # is not new data: it silently re-weights one pair. The pool is now
+            # kept WHOLE when it is smaller than the positive class, and the
+            # shortfall is reported as its own number instead.
+            size = min(target, len(train_neg))
+            n_class_balance_shortfall = target - int(size)
+            selected = rng.choice(len(train_neg), size=size, replace=False)
             train_neg = train_neg[selected]
             train_neg_sources = train_neg_sources[selected]
         print(
             f"[class-balance] training positives={len(pos):,} "
             f"negatives={len(train_neg):,} ratio="
-            f"{len(train_neg) / max(len(pos), 1):.3f}",
+            f"{len(train_neg) / max(len(pos), 1):.3f} "
+            f"(without replacement; unavailable rows={n_class_balance_shortfall:,}, "
+            "duplicated rows=0)",
             flush=True,
         )
     _wandb.log_config(
@@ -1133,14 +1174,20 @@ def _main_inner(_mlf, _wandb) -> None:
             "n_targeted_attribute_negative_pairs": int(
                 np.sum(neg_sources == "targeted_attribute_conflict")
             ),
+            "n_cross_brand_negative_pairs": int(
+                np.sum(neg_sources == "cross_brand_conflict")
+            ),
         }
     )
     _wandb.log_config(
         {
             "n_attribute_conflict_negatives": int(len(_attr_neg)),
+            "n_cross_brand_negatives": int(len(cross_brand_neg)),
             "n_hard_negative_training_pairs": int(len(train_neg)),
             "n_hard_negative_eval_pairs": int(len(neg)),
             "balance_train_classes": balance_train_classes,
+            "n_class_balance_shortfall": int(n_class_balance_shortfall),
+            "n_class_balance_duplicated_rows": 0,
             "n_training_positive_pairs": int(len(pos)),
             "n_training_negative_pairs": int(len(train_neg)),
         }
@@ -1149,6 +1196,13 @@ def _main_inner(_mlf, _wandb) -> None:
         f"[attribute-conflicts] +{len(targeted_attribute_neg):,} targeted static, "
         f"+{len(_attr_neg):,} supplemental dynamic label-0 pairs "
         f"(baseline gate hard-negatives preserved; total {len(neg):,})",
+        flush=True,
+    )
+    print(
+        f"[cross-brand] +{len(cross_brand_neg):,} cross-brand static label-0 pairs "
+        f"(enabled={cross_brand_enabled}; "
+        f"{np.sum(neg_sources == 'cross_brand_conflict'):,} carry the "
+        "cross_brand_conflict source in this fold's negative pool)",
         flush=True,
     )
 

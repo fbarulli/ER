@@ -2244,6 +2244,45 @@ def build_training_data(
         else (np.empty((0, 2), dtype=int), np.empty((0,), dtype=float))
     )
 
+    # ── CROSS-BRAND HARD NEGATIVES (the brand-separation lever, §15) ──────
+    # The gate's candidate space is brand-blocked upstream ("Brand blocking"),
+    # so brand is constant across every labelled pair and the encoder can only
+    # learn that brand is noise (measured separation 0.000 vs volume +0.837).
+    # This lane mines the mirror population — brands DIFFER, every other
+    # critical attribute agrees — and stays a separate population so training
+    # can enable/disable it through the mining profile while provenance
+    # survives. The funnel is the miner's OWN accounting: it reports candidate
+    # GENERATION (blocking census) and then every filter's attrition.
+    from core.hard_negatives import (
+        CrossBrandMiningFunnel,
+        mine_cross_brand_negatives,
+    )
+
+    cross_cfg = cfg["mining"]["cross_brand"]
+    cross_brand_funnel = (
+        CrossBrandMiningFunnel() if bool(cross_cfg["enabled"]) else None
+    )
+    cross_brand_neg, cross_brand_scores = (
+        mine_cross_brand_negatives(
+            df,
+            canonical_records,
+            gtin_to_row,
+            gtin_to_canon_idx,
+            existing=neg,
+            n_target=int(cross_cfg["target"]),
+            require_agreement=tuple(str(d) for d in cross_cfg["require_agreement"]),
+            min_similarity=float(cross_cfg["min_similarity"]),
+            max_per_canonical=int(cross_cfg["max_per_canonical"]),
+            max_per_brand=int(cross_cfg["max_per_brand"]),
+            # Same volume tolerance the training-label gate uses, so a pair the
+            # gate calls compatible can never be mined here as a conflict.
+            volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
+            funnel=cross_brand_funnel,
+        )
+        if bool(cross_cfg["enabled"])
+        else (np.empty((0, 2), dtype=int), np.empty((0,), dtype=float))
+    )
+
     n_forward_source_unresolved = int(a.isna().sum())
     n_forward_target_unresolved = int(ca.isna().sum())
     n_reverse_source_unresolved = int(b.isna().sum())
@@ -2275,6 +2314,16 @@ def build_training_data(
         "n_neg_dropped": n_resolution_dropped,
         "n_targeted_attribute_candidates": int(len(targeted_attribute_scores)),
         "n_targeted_attribute_resolved": int(len(targeted_attribute_neg)),
+        # Candidates ENTERING the cross-brand funnel (the pairs its
+        # require_agreement blocking generated) and the pair rows it emitted.
+        # The two differ by the funnel's own attrition, which the trace
+        # records step by step.
+        "n_cross_brand_candidates": int(
+            cross_brand_funnel.candidates_in_blocks
+            if cross_brand_funnel is not None
+            else 0
+        ),
+        "n_cross_brand_resolved": int(len(cross_brand_neg)),
     }
     print(
         f"[payload-stage] pairs resolved positives={len(pos):,} "
@@ -2287,6 +2336,22 @@ def build_training_data(
         f"> {float(targeted_cfg['min_similarity']):.2f}",
         flush=True,
     )
+    if cross_brand_funnel is not None:
+        _cb = cross_brand_funnel
+        print(
+            f"[cross-brand-negatives] {len(cross_brand_neg):,} label-0 pair rows "
+            f"from {_cb.accepted_candidates:,} candidates "
+            f"({_cb.candidates_in_blocks:,} generated -> "
+            f"{_cb.passed_candidates:,} survived every filter; "
+            f"target {int(cross_cfg['target']):,}, "
+            f"reached={_cb.emitted_pairs >= int(cross_cfg['target']) > 0})",
+            flush=True,
+        )
+    else:
+        print(
+            "[cross-brand-negatives] disabled by mining.cross_brand.enabled",
+            flush=True,
+        )
     # ── EXACT MODEL PAYLOAD DUMP (owner directive 2026-09-07) ──────────
     # Every pair the model trains on, with the LITERAL texts it ingests.
     # The rows are recorded in the ONE consolidated trace (core.tracing) below,
@@ -2328,10 +2393,23 @@ def build_training_data(
                 "text_b": payload[j],
             }
         )
+    for i, j in cross_brand_neg:
+        _rows.append(
+            {
+                "kind": "neg_cross_brand",
+                "payload_idx_a": int(i),
+                "payload_idx_b": int(j),
+                "barcode_a": row_bc[i],
+                "barcode_b": row_bc[j],
+                "text_a": payload[i],
+                "text_b": payload[j],
+            }
+        )
     _kinds = {
         "pos": int(len(pos)),
         "neg_hard": int(len(neg)),
         "neg_targeted_attribute": int(len(targeted_attribute_neg)),
+        "neg_cross_brand": int(len(cross_brand_neg)),
     }
     # BOUNDARY CONTRACT (lib.schemas.TrainingData): payload/row_bc locked,
     # every pos/neg index in range, gtin_to_row targets valid — the bundle
@@ -2346,6 +2424,7 @@ def build_training_data(
         pos=pos,
         neg=neg,
         targeted_attribute_neg=targeted_attribute_neg,
+        cross_brand_neg=cross_brand_neg,
         gtin_to_row=gtin_to_row,
         stats=stats,
     )
@@ -2519,6 +2598,37 @@ def build_training_data(
             detail={"target": int(targeted_cfg["target"])},
             source="config/training.yaml",
         )
+    # The cross-brand lane's own funnel, in the same shape as the targeted one:
+    # its generation step (blocking census) then every filter's attrition. A
+    # lane whose population is generated rather than handed in cannot be
+    # audited from its output count alone, so the census is the trace's job.
+    if cross_brand_funnel is not None:
+        for _step, _in, _out, _why in cross_brand_funnel.stages():
+            trace.add(
+                "mining",
+                f"cross_brand_funnel.{_step}",
+                in_count=int(_in),
+                out_count=int(_out),
+                reason=_why,
+                detail={
+                    "target": int(cross_cfg["target"]),
+                    "min_similarity": float(cross_cfg["min_similarity"]),
+                    "require_agreement": list(cross_cfg["require_agreement"]),
+                    "volume_tolerance": float(training_cfg().gate.vol_tolerance),
+                    "funnel": cross_brand_funnel.to_dict(),
+                },
+                source="canonical_records.csv + gate_results.csv",
+            )
+    else:
+        trace.add(
+            "mining",
+            "cross_brand_funnel.disabled",
+            in_count=0,
+            out_count=0,
+            reason="mining.cross_brand.enabled is false",
+            detail={"target": int(cross_cfg["target"])},
+            source="config/training.yaml",
+        )
     trace.add(
         "payload",
         "materialized",
@@ -2537,13 +2647,16 @@ def build_training_data(
         "payload",
         "pair_census",
         scope="group",
-        in_count=int(len(pos) + len(neg) + len(targeted_attribute_neg)),
+        in_count=int(
+            len(pos) + len(neg) + len(targeted_attribute_neg) + len(cross_brand_neg)
+        ),
         out_count=int(len(_rows)),
         reason="final label populations handed to training",
         detail={
             "pos": int(len(pos)),
             "neg_hard": int(len(neg)),
             "neg_targeted_attribute": int(len(targeted_attribute_neg)),
+            "neg_cross_brand": int(len(cross_brand_neg)),
             "text_columns": ["text_a", "text_b"],
         },
         source="model payload",

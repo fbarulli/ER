@@ -616,16 +616,47 @@ mining:
     band: "0.50-0.95"        # dynamic cosine band; lower bound is strict (>0.50)
     min_similarity: 0.50      # static gate Jaccard must be strictly greater
     same_product_name: true   # normalized name removes pack/size/container only
+  # ── cross-brand hard negatives (the brand-separation lever, §15) ─────────
+  # THE DEFECT: the gate's candidate pairs are generated INSIDE a brand block,
+  # so brand agreement is 100% in BOTH training classes and measured pair
+  # separation for brand is exactly 0.000 (volume: +0.837). The encoder can
+  # only learn that brand is noise. This lane mines the mirror population —
+  # brands DIFFER, every other critical attribute agrees — verified non-matches
+  # by canonical identity, label-error guard and brand-spelling guard, so brand
+  # becomes the only discriminating evidence.
+  #
+  # Measured on the live artifacts (13,250 canonicals, 133,127 blocked
+  # candidates): 46,251 survive the attribute filter, 30,372 clear the
+  # similarity floor below, and the target keeps the hardest 3,000 candidates
+  # (6,000 pair rows, both directions).
+  cross_brand:
+    enabled: true
+    target: 6000              # maximum emitted (sku row, other canonical) rows;
+                              # ~28% of the 15,397-row negative population
+    min_similarity: 0.10      # gate short-token Jaccard, strictly greater. A
+                              # 0.20 floor was measured and REJECTED: it drops
+                              # the cross-brand pairs the review band cites
+                              # (Piacelli/Premier 0.143-0.250).
+    require_agreement: ["volume", "package_type"]
+                              # BLOCKING key, not the whole rule: both sides
+                              # must CARRY and agree on these values. `volume`
+                              # alone blocks 5,693,447 candidates (43x more
+                              # work for the same answer); package_type alone
+                              # is present on only 2,712 canonicals.
+    max_per_canonical: 20     # endpoint diversity: max accepted pairs per GTIN
+    max_per_brand: 100        # endpoint diversity: max accepted pairs per brand
 
 # Named concurrent-run selectors. They toggle methods only; all miner knobs
-# remain in mining.ann / mining.attribute_conflict above.
+# remain in mining.ann / mining.attribute_conflict / mining.cross_brand above.
 mining_profiles:
   mining_enabled:
     ann_enabled: true
     attribute_conflict_enabled: true
+    cross_brand_enabled: true
   masking_only:
     ann_enabled: false
     attribute_conflict_enabled: false
+    cross_brand_enabled: false
 
 # ── NER lane ───────────────────────────────────────────────────────────────
 # NER is a training consumer, so it shares this configuration contract rather

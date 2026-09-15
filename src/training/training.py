@@ -156,6 +156,15 @@ DATAPOINT_POPULATION_SPEC: dict[str, dict[str, object]] = {
         "role": "negative_source",
         "dynamic": False,
     },
+    # Static cross-brand negatives (train.py: np.full(len(cross_brand_neg),
+    # "cross_brand_conflict")). The ONLY negatives whose two sides carry
+    # DIFFERENT brands: without them brand agreement is 100% in both training
+    # classes and measured brand separation is exactly 0.000.
+    "cross_brand_conflict": {
+        "emitter": "training.train: np.full(len(cross_brand_neg), 'cross_brand_conflict')",
+        "role": "negative_source",
+        "dynamic": False,
+    },
     "attribute_conflict": {
         "emitter": "training.train: np.full(len(_attr_neg), 'attribute_conflict')",
         "role": "negative_source",
