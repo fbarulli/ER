@@ -4,6 +4,11 @@ Owner session date: 2026-09-15. Base of all work: **`2cfd772`** (branch `verify/
 worktree `/home/opc/ONE/ER-verify-346f401`), whose parent is **`346f401`** (the commit under review,
 branch `training`).
 
+**FINAL CONSOLIDATED TIP: `377676e`, tag `session-2026-09-15-final`, 247 tests passing (2 skipped).**
+Every agent branch is merged into `verify/ssot-346f401`; `results/canonical_records.csv`,
+`results/gate_results.csv` and `dataset.csv` are verified byte-identical to `346f401`, and
+`results/` plus every worktree are clean. The bundle is current at 112M.
+
 ## How to resume in a fresh session
 
 ```bash
@@ -30,7 +35,7 @@ Physical backup of every worktree **including uncommitted work**:
 | `fix/346-ranking` | `ER-346-ranking` | at `2cfd772` (agent work not yet committed) |
 | `fix/346-coverage` | `ER-346-coverage` | at `2cfd772` (agent work not yet committed) |
 | `fix/346-routing` | `ER-346-routing` | at `2cfd772` (agent work not yet committed) |
-| `verify/346-capture` | `ER-346-capture` | at `2cfd772` (read-only verifier) |
+| `verify/346-capture` | `ER-346-capture` | read-only verifier |
 | `training` | `EuromonitoR` | `346f401` — untouched original |
 
 Agents still running at handoff time: trace, pydantic, minershape, verify, ranking, coverage, routing,
