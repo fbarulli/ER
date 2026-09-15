@@ -159,6 +159,7 @@ def complete_worker(
     validation_source: Path | None = None,
     training_input: Path | None = None,
     publish_dvc: bool = True, device: str | None = None,
+    sample: int | None = None,
 ) -> None:
     cfg = training_cfg().colab.final_inference
     if cfg.enabled:
@@ -179,6 +180,8 @@ def complete_worker(
             "--include-scores",
             "--batch-size", str(cfg.batch_size),
         ]
+        if sample is not None:
+            command.extend(["--sample", str(sample)])
         print(f"[final-inference] SKU retrieval: {' '.join(command)}", flush=True)
         # The subprocess cwd is the resolved project root from the shared path
         # contract, never a __file__/__parents__ offset (owner directive
@@ -217,6 +220,7 @@ def main() -> None:
         default=Path(training_cfg().colab.training_dataset_csv),
     )
     parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
+    parser.add_argument("--sample", type=int, default=None)
     parser.add_argument("--skip-dvc", action="store_true")
     args = parser.parse_args()
     complete_worker(
@@ -228,6 +232,7 @@ def main() -> None:
         training_input=args.training_input,
         publish_dvc=not args.skip_dvc,
         device=args.device,
+        sample=args.sample,
     )
 
 

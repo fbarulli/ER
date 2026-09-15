@@ -1722,6 +1722,7 @@ class ColabSpec(BaseModel):
     remote_data_prep: Literal[False] = False
     training_dataset_csv: str = Field(min_length=1)
     smoke_dataset_csv: str = Field(min_length=1)
+    smoke_inference_sample: int = Field(ge=1)
     runtime_packages: RuntimePackagesSpec
     prefer_uv_install: bool
     cache_prepared_bundles: bool
