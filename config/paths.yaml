@@ -56,7 +56,9 @@ files:
   sku_to_rep: "data:sku_to_rep.csv"
   canonical_records: "training_data:canonical_records.csv"   # SHARED frozen input
   gate_results: "training_data:gate_results.csv"             # SHARED frozen input
-  labeled_pairs: "results_training:labeled_pairs.csv"
+  # Frozen calibration pairs are an input to both training and inference,
+  # so ship them with the rest of the versioned runtime data.
+  labeled_pairs: "data:labeled_pairs.csv"
   balanced_pairs_sample_3000: "results_training:balanced_pairs_sample_3000.csv"
   embedding_similarities: "results_training:embedding_similarities.csv"
   model_evaluation_summary: "results_training:model_evaluation_summary.csv"

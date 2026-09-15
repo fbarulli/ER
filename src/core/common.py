@@ -610,7 +610,10 @@ SEED = int(_CFG["seed"])
 # the pack_qty >= 1 zero-guard fixed 26 gate decisions).
 # NOT recomputed here: a pinned constant, updated alongside any
 # intentional census drift (paired with the selftest oracle update).
-PINNED_GATE_FALLBACK_PAIRS = 13_765
+# Regenerated from the current frozen gate census on 2026-09-15. This pin is
+# updated only with the matching gate artifact, so this remains a loud drift
+# check rather than silently changing labels.
+PINNED_GATE_FALLBACK_PAIRS = 46_791
 
 
 def set_determinism(seed: int) -> None:

@@ -2514,7 +2514,8 @@ def run_train(
             # RESULTS and is not applicable to this path.
             copy_remote_inputs=remote_dataset_csv is None,
             remote_validation_csv=remote_validation_csv,
-            prepare_remote_labeled_pairs=remote_dataset_csv is not None,
+            # Calibration pairs are now a versioned checkout input.
+            prepare_remote_labeled_pairs=False,
             include_wandb=remote_dataset_csv is None,
         )
     return run_parallel_train_and_tail(
@@ -4310,11 +4311,12 @@ def main() -> None:
                 args.train_frac, args.epochs, model=args.model, loss=args.loss,
             )
         elif args.what == "smoke":
+            smoke_sample = args.sample if args.sample is not None else _SMOKE_SAMPLE
             local_training_run = run_train(
-                args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE,
+                args.train_frac, _SMOKE_EPOCHS, sample=smoke_sample,
                 workers=_SMOKE_WORKERS,
-                inference_sample=_SMOKE_SAMPLE,
-                inference_device="cpu",
+                inference_sample=smoke_sample,
+                inference_device="cuda" if GPU.upper() != "CPU" else "cpu",
                 run_label=args.run_label,
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
