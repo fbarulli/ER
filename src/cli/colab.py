@@ -1569,6 +1569,20 @@ def _forget_cached_session() -> None:
         return
     if not isinstance(state, dict) or SESSION not in state:
         return
+    cached = state.get(SESSION)
+    keep_alive_pid = cached.get("keep_alive_pid") if isinstance(cached, dict) else None
+    if isinstance(keep_alive_pid, int) and keep_alive_pid != os.getpid():
+        proc_cmdline = Path(f"/proc/{keep_alive_pid}/cmdline")
+        try:
+            command = proc_cmdline.read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            command = ""
+        if "colab_cli_entry.py" in command and "keep-alive" in command:
+            try:
+                os.kill(keep_alive_pid, 15)
+                print(f"[session] stopped stale local keep-alive pid={keep_alive_pid}", flush=True)
+            except ProcessLookupError:
+                pass
     state.pop(SESSION, None)
     temporary = _COLAB_CLI_CONFIG.with_name(_COLAB_CLI_CONFIG.name + ".tmp")
     temporary.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
