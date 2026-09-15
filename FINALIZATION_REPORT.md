@@ -1417,6 +1417,95 @@ new tests pin the decision: `test_a_sweetener_clash_is_audited_but_does_not_veto
 selecting it back) and `test_absent_evidence_never_vetoes_in_any_dimension` (the doctrine, across all
 seven).
 
+## 7n. The two training blockers
+
+### BLOCKER A — already fixed before the report arrived; verified by execution
+
+`config/training.yaml` did **not** need changing: `input_csv` was repointed to the 3,000 sample in
+`dba2673`, the commit that landed the settled split. Verified live:
+
+```
+resolved input_csv  : training_data/dataset_deduped_sample_3000.csv      (3,000 rows on disk)
+resolved source_csv : training_data/dataset_deduped.csv                  (61,529, identity anchor)
+training_dataset_csv: training_data/dataset_deduped_train_minus_3000.csv (58,529)
+```
+
+**The preflight PASSES**, run for real through `er-colab --what smoke --preflight-only` (no monkeypatching):
+
+```
+product_id_overlap   = 0
+reconstructs_source  = True
+training_rows        = 58529        training_dataset = dataset_deduped_train_minus_3000.csv
+source_dataset       = dataset_deduped.csv
+inference input      = <uploaded-dataset_deduped_sample_3000.csv>
+```
+
+Exactly the original contract: `training ∩ inference = ∅`, `inference == 3,000`, `training | inference
+== source`. The guard was **not touched** — the retracted rewrite was never applied, so there was
+nothing to undo. `run_ann_full_data.py` untouched, per the one-writer rule.
+
+### BLOCKER B — bundle rebuilt cleanly; the cross-brand target is met, two counts are not what was cited
+
+`results/prepared_training/0915T185952251323Z/` was indeed empty. Rebuilt with the launcher's own
+invocation (`training.train --prepare-bundle …`, CPU, ~4 min):
+
+```
+[prepared-bundle] wrote results/prepared_training/0915T185952251323Z/worker_1_baseline.pkl.gz
+  (58,529 source rows, 94,124 payload rows, 44,690 positives, 20,405 negatives)
+[cross-brand-negatives] 6,000 label-0 pair rows from 3,000 candidates
+  (133,127 generated -> 29,061 survived every filter; target 6,000, reached=True)
+```
+
+Loaded back through `load_prepared_bundle` (which re-checks the sha256 and the composition):
+
+```
+schema_version=3  payload=full  masking=baseline
+n_df=58,529  n_payload=94,124  n_pos=44,690  n_neg=20,405  n_train_neg=20,405
+composition = {profile: cleaned, include_evidence: false, emit_field_markers: false,
+               keep_redundant_attribute_words: true, emit_singleton_pack_token: false}
+
+neg_sources       : {'cross_brand_conflict': 6000, 'gate': 13897, 'targeted_attribute_conflict': 508}
+train_neg_sources : {'cross_brand_conflict': 6000, 'gate': 13897, 'targeted_attribute_conflict': 508}
+```
+
+**Observed value, as asked — not the expectation:**
+
+| source | cited | **observed** | |
+|---|---|---|---|
+| `cross_brand_conflict` | 6,000 | **6,000** | **MET exactly — the target the miner owns** |
+| `gate` | 14,829 | **13,897** | −932 |
+| `targeted_attribute_conflict` | 568 | **508** | −60 |
+
+**The bundle is internally consistent with the config that produced it**, which is the part that
+matters for a launch:
+
+* `n_gate_results_bytes` = 28,153,414 = the byte size of the **current** `training_data/gate_results.csv` exactly — the bundle baked the regenerated artifact, not a stale one;
+* `13,897 + 508 + 6,000 = 20,405 = manifest.n_neg` exactly — no negative is unaccounted for;
+* `train_neg_sources` equals `neg_sources`, so the fold split did not silently drop a population.
+
+**Why the two counts differ from the cited expectation — the cited numbers are older than the gate.**
+They come from `CROSS_BRAND_NEGATIVES_REPORT.md:325`
+(`Counter({'gate': 14829, 'cross_brand_conflict': 6000, 'targeted_attribute_conflict': 568})`), and that
+same report measures `pos 23,370` where this build produces `22,345` — a different input corpus,
+measured **before** `results/gate_results.csv` was regenerated. The regeneration re-routed 1,442 rows
+out of `hard_no` (88,683 → 87,241), and both gate-derived counts move with that pool:
+
+```
+positives        23,370 -> 22,345   (-1,025)
+gate negatives   14,829 -> 13,897   (  -932)     derived from hard_no rows
+targeted            568 ->    508   (   -60)
+cross_brand       6,000 ->  6,000   (     0)     <- unaffected: the miner mines its own population
+```
+
+All three derived counts move the same direction as the row pool they come from; `cross_brand_conflict`,
+which the miner generates itself rather than deriving from the gate, is unchanged and on target. I did
+**not** rebuild against the old gate to force the cited pair of numbers: that would be manufacturing a
+match. **Owner call:** if `14,829 / 568` are the numbers the launch gate requires, they need re-deriving
+against the current gate artifact — the report they came from predates it.
+
+Note the bundle lives under `results/prepared_training/`, which is gitignored, so this rebuild is a
+local artifact and nothing about it is committed.
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):
