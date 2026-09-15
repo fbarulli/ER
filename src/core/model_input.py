@@ -156,11 +156,15 @@ def _normalized_tokens(text: object, *, drop_schema_words: bool) -> list[str]:
         lambda m: f" pct{m.group(1)}to{m.group(2)} ", str(text)
     )
     protected = _PERCENT_RE.sub(lambda m: f" pct{m.group(1)} ", protected)
-    # Fold accents BEFORE normalize_text. Without this every non-ASCII letter
-    # becomes a word break, which does not merely leave a brand unnormalised —
-    # it CORRUPTS it: "Brämhults" -> "br mhults", "Côteaux Nantais" ->
-    # "teaux nantais", and "Reál"/"Réal" -> "re"/"al", so two spellings of one
-    # brand can never match. 47 distinct canonical brands carry non-ASCII.
+    # Diacritics are deliberately NOT folded here (owner ruling — see the
+    # docstring). normalize_text turns every non-ASCII letter into a word
+    # break, so an accented brand arrives split: "Brämhults" -> "br mhults"
+    # and "Reál"/"Réal" -> "re"/"al". The measured consequence is recorded in
+    # MODEL_INPUT_FIX_REPORT.md 20.1 — 3 catalog clusters / 28 GTINs / 0
+    # labelled pairs, and 378 of the 388 review-band brand mismatches are
+    # outright different brands — so this is a retrieval problem, not a
+    # composition one, and brand-string normalisation is owned by the
+    # dedicated brand-analysis work (commit 38358bf reverted the interim fix).
     split = " ".join(
         part
         for token in normalize_text(protected).split()

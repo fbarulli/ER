@@ -792,6 +792,123 @@ corrected printed line.
 `pytest tests/ -q` → **386 passed, 2 skipped**. `results/` and `dataset.csv` untouched.
 `git status --porcelain` for all four files is empty, i.e. **committed and safe**.
 
+## 7g. Concurrency resolution — verified, with three briefing claims corrected
+
+The arrangement says agent A is paused, `e326c46` is the shared baseline and must not be
+rewritten. **Confirmed on all three counts**: `e326c46` is an ancestor of `HEAD` and untouched, and
+`HEAD` is `5b4c232`. Nothing of agent A's was reverted.
+
+### Three claims in the briefing are stale — checked against the tree, not accepted
+
+| Claim | Reality |
+|---|---|
+| "Still mine and still uncommitted: `.gitignore`, `run_ann_full_data.py`, `src/training/dvc_store.py`, `src/cli/colab_cli_entry.py`" | All four are **already committed and clean**. `.gitignore` → my `8d698e4`; the other three → `3fdc039` (and follow-ups). There was nothing left to sweep into a finalization commit, and nothing was rewritten. |
+| "Agent A explicitly did NOT deliver the truncation guard" | **It did.** `token_budget_report` is live at `src/core/model_input.py:77`, delivered by `f996718 feat(model-input): truncation guard with a counted, traceable budget`, and it is the subject of §6.3b. |
+| "suite 332 passed / 2 skipped" | Stale. Current: **386 passed, 2 skipped**. |
+
+Band-conditioned separation and stage attribution (retrieval vs scoring) are genuinely **not**
+present — noted as outstanding, not filled in (see §9).
+
+### What I confirmed of agent A's claims — 9/9 executed (`/tmp/verify_agentA_claims.py`)
+
+```
+== (a) is pack the ONLY one-sided implicit default? ==
+[PASS] pack is the only attribute with a one-sided implicit default — one-sided: ['pack']
+       volume/package_type/flavor/carbonation/sweetener/pulp all return set() on BOTH sides
+       when nothing is observed; only `pack` returns {1.0} on the source and set() on the canonical.
+== (b) symmetric_info is scoped to cleaned; legacy untouched ==
+[PASS] legacy leaves the source sentinel as-is
+[PASS] cleaned applies the implicit default to an EMPTY canonical pack
+[PASS] cleaned never overwrites an observed pack
+== (c) text channel and numeric vector cannot diverge ==
+[PASS] pack presence agrees between text and vector on all 585 pairs (x2 sides) — divergences=0
+== (d) legacy byte-identity re-run NOW ==
+[PASS] legacy reproduces the frozen bytes on 855x2 sides — mismatches=0
+```
+
+`pack-token agreement 27.4% → 100%` I had already reproduced **exactly** (§6b), and on 3 000 real
+rows presence agreement goes 4.0% → 100.0%.
+
+### (e) The accent-folding claim is TRUE AS HISTORY AND FALSE AS SHIPPED — and it left a lie in the code
+
+I tested it directly and it failed:
+
+```
+'Brá̈mhults'  normalize_text -> ['br', 'mhults']   _normalized_tokens -> ['br', 'mhults']
+'Reál'       normalize_text -> ['re', 'l']         _normalized_tokens -> ['re']
+'Réal'       normalize_text -> ['r', 'al']         _normalized_tokens -> ['al']
+```
+
+The reason is a commit the briefing does not mention: **`38358bf revert(brand): hand the brand
+analysis to its dedicated agent`** deliberately reverted the interim accent fix —
+
+> *"revert the accent-folding normalisation in core.model_input: brand-string normalisation is not
+> applied ahead of the diagnosis. The composition is back to normalize_text alone … folding it in
+> today would change only 3 catalog clusters / 28 GTINs / 0 labelled pairs, while 378 of the 388
+> review-band brand mismatches are outright different brands. Brand mismatch is a retrieval problem,
+> not a string-composition one."*
+
+So the corruption agent A measured is real and still present **by decision**, not by oversight — the
+numbers are kept in its report §20.1 as input to that ruling. That part is fine.
+
+**What is not fine:** the revert left the old explanatory comment behind, so `_normalized_tokens`
+contained a comment claiming *"Fold accents BEFORE normalize_text. Without this every non-ASCII
+letter becomes a word break … it CORRUPTS it"* sitting directly above code that folds nothing, while
+its own docstring three lines above correctly says *"Diacritics are NOT folded here (owner ruling)"*.
+A comment that contradicts its function and misdescribes the code is a defect under §3 (transparency)
+and §4 (a comment that lies about what the code does). **Fixed** — the comment now states the
+deliberate non-folding, names the ruling and the commit, and quotes the measured consequence. No
+behaviour was changed: whether to fold is the owner's call and stays reverted.
+
+### Its two headline numbers — both CONFIRMED, and both explained (`/tmp/sep_scrutiny.py`)
+
+| attribute | n_pos | n_neg | separation | reportable | flagged |
+|---|---|---|---|---|---|
+| brand | 7330 | 12588 | **0.000000** | True | True |
+| volume | 7330 | 12588 | +0.836969 | True | False |
+| pack | 1086 | 4918 | +0.583639 | True | False |
+| package_type | 1916 | 4499 | +0.253216 | True | False |
+| **flavor** | 5997 | 9729 | **−0.086930** | True | True |
+| carbonation | 6686 | 11622 | +0.029128 | True | True |
+| sweetener | 4672 | 7214 | +0.061668 | True | True |
+| pulp | 336 | 516 | −0.051426 | True | True |
+
+**brand = 0.000 is exactly zero, and the reason is structural, not a metric bug.** Brand is observed
+on both sides of **100%** of pairs in *both* classes and agrees on **100%** of them:
+`P(agree | positive) = 7330/7330 = 1.0000`, `P(agree | negative) = 12588/12588 = 1.0000`. The
+candidate population is same-brand **by construction**, so brand has zero variance and therefore
+zero discriminative power here. Consequence worth acting on: **brand can never be a useful gate
+feature on this population**, and the earlier "+0.0249 brand separation" figure was measuring noise
+in a population where the answer is fixed by the sampling.
+
+**flavor = −0.087 is confirmed, and it should NOT be read as "sharing a flavour makes a pair more
+likely to be a mismatch".** I split each class by whether agreement was even possible
+(`/tmp/flavor_mechanism.py`):
+
+```
+flavor  positive  both-observed=4661 (63.6%)  one-sided=1336  neither=1333  P(agree|both)=0.7775
+        negative  both-observed=8059 (64.0%)  one-sided=1670  neither=2859  P(agree|both)=0.8345
+        -> separation over the BOTH-OBSERVED subpopulation: -0.056955   (headline -0.086930)
+```
+
+So the headline decomposes into two parts:
+* **≈ −0.030 is a coverage artefact.** A one-sided pair can never agree, and positives are one-sided
+  *more often* (18.2%) than negatives (13.3%), which drags the positive agreement rate down for
+  reasons that have nothing to do with flavour.
+* **≈ −0.057 is real but is a property of the sampled population, not of flavour.** Negatives were
+  mined as same-category, flavour-sharing near-neighbours, so *by construction* they share flavour
+  more often than cross-country positives do. The same effect shows on `carbonation`: headline
+  +0.029 collapses to +0.004 once both sides are observed.
+
+Verdict: **CONFIRMED as arithmetic, REFUTED as an interpretation.** It is evidence about how the
+negative pool was built, not evidence that flavour is anti-predictive — and it should be quoted with
+the both-observed number beside it. (Per-value, the strongest negatives are `ginger` −0.2479,
+`peach` −0.1502, `strawberry` −0.1017 — all popular flavours, consistent with the mining explanation.)
+
+### Current state after this round
+
+Suite **386 passed, 2 skipped**. `results/` and `dataset.csv` untouched. `e326c46` untouched.
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):
@@ -844,6 +961,10 @@ corrected printed line.
    report" is not by itself enough — the input has to be pinned too.
 6. **`artifacts/embeddings/*.npz`** are orphaned: no writer and no reader anywhere in the tree, and
    stale under the new composition. Harmless today; worth deleting or documenting.
+6a. **Not delivered by agent A, outstanding:** band-conditioned separation (separation computed
+   within score bands rather than over the whole pair pool) and stage attribution (whether an error
+   originates at retrieval or at scoring). The briefing states these remain with agent A; I did not
+   implement them and did not silently substitute anything for them.
 6b. **The fingerprint covers data inputs but not the composition CODE.** After the §7d fix the ANN
    reuse contract is `{structured_features, model_input, unit_canonicalization, vocabulary}` — all
    data/config. But the text is also produced by code that is *not* config: `pipeline.SCHEMA_WORDS`
