@@ -121,7 +121,52 @@ def build(kind, predicate):
     print(json.dumps({{"kind": kind, "archive": str(archive_path), "manifest": str(manifest_path), "files": len(archived_files)}}), flush=True)
 
 build("results", lambda p: "_checkpoints" not in p.parts and ".dvc" not in p.parts and p.name not in {{"manual_download_results.tar.gz", "manual_download_results_manifest.json", "manual_download_checkpoints.tar.gz", "manual_download_checkpoints_manifest.json", "canonical_records.csv", "gate_results.csv", "labeled_pairs.csv"}} and "training" not in p.relative_to(base).parts)
-build("checkpoints", lambda p: "_checkpoints" in p.parts)
+
+# Only the best checkpoint leaves the VM.  A run writes one checkpoint per
+# evaluation and they are individually large, so archiving every one made the
+# recovery payload grow with training length and buried the one that matters.
+# The trainer records its own selection in trainer_state.json
+# (best_model_checkpoint), which is the authoritative choice: the same file
+# HuggingFace restores at the end of training.
+def best_checkpoint_dirs():
+    chosen = {{}}
+    for worker in sorted(base.glob("worker_*")):
+        if not worker.is_dir():
+            continue
+        best = None
+        for state_path in sorted(worker.glob("_checkpoints/**/checkpoint-*/trainer_state.json")):
+            try:
+                state = json.loads(state_path.read_text())
+            except (OSError, ValueError):
+                continue
+            recorded = state.get("best_model_checkpoint")
+            if not recorded:
+                continue
+            selected = state_path.parent.parent / pathlib.Path(str(recorded)).name
+            if not selected.is_dir():
+                continue
+            metric = state.get("best_metric")
+            step = state.get("global_step") or 0
+            rank = (float(metric) if metric is not None else float("-inf"), int(step))
+            if best is None or rank > best[0]:
+                best = (rank, selected)
+        if best is not None:
+            chosen[worker.name] = best[1]
+    return chosen
+
+best_dirs = best_checkpoint_dirs()
+print(json.dumps({{"kind": "checkpoints", "selected": {{k: str(v) for k, v in best_dirs.items()}}}}), flush=True)
+
+def is_best_checkpoint(p):
+    for worker_name, checkpoint_dir in best_dirs.items():
+        try:
+            p.relative_to(checkpoint_dir)
+        except ValueError:
+            continue
+        return True
+    return False
+
+build("checkpoints", is_best_checkpoint)
 ''',
         encoding="utf-8",
     )

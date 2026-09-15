@@ -1755,7 +1755,11 @@ class ColabSpec(BaseModel):
     result_manifest_name: str = Field(min_length=1)
     result_download_excluded_dirs: list[str] = Field(min_length=1)
     worker_monitor_seconds: int = Field(ge=1, le=300)
-    dvc_enabled: bool = True
+    # Off by default.  DVC uploads are best-effort and have repeatedly failed
+    # mid-run, and the verified manual download is the path that always
+    # completes, so a config layer that forgets to set this must not silently
+    # re-enable remote publishing.
+    dvc_enabled: bool = False
     dvc_workers: int = Field(ge=1, le=3)
     dvc_jobs: int = Field(ge=1, le=32)
     result_events_file: str = Field(min_length=1)
