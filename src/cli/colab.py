@@ -1616,11 +1616,11 @@ def install_deps(*, minimal_runtime: bool = False) -> None:
     # log/status pair that the launcher can retrieve before teardown.
     packages = (
         "'sentence-transformers', 'datasets', 'accelerate', "
-        "'scikit-learn', 'pandas', 'numpy', 'mlflow', 'wandb', 'dvc'"
+        "'scikit-learn', 'pandas', 'numpy', 'hnswlib', 'mlflow', 'wandb', 'dvc'"
         if minimal_runtime
         else
         "'sentence-transformers', 'datasets', 'accelerate', 'evaluate', "
-        "'scikit-learn', 'pandas', 'numpy', 'mlflow', 'optuna', "
+        "'scikit-learn', 'pandas', 'numpy', 'hnswlib', 'mlflow', 'optuna', "
         "'psycopg[binary]', 'wandb', 'dvc', 'dagshub'"
     )
     run_detached_stage(

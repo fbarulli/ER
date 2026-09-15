@@ -36,16 +36,17 @@ from decimal import Decimal
 from itertools import combinations, product
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 from pydantic import BaseModel, ConfigDict, Field
-from sentence_transformers import util
 from sklearn.metrics import (
     adjusted_rand_score,
     rand_score,
 )
 
+from core.ann_config import load_ann_config
 from core.attribute_conflicts import (
     canonical_attribute_info,
     conflict_columns,
@@ -81,13 +82,13 @@ from core.structured_features import (
     fuse_numpy,
     vector as structured_vector,
 )
-import matplotlib.pyplot as plt
 from pipeline import (
     canonical_model_text,
     clean_sku_text,
     load_canonical_map,
     strip_schema_words,
 )
+from training.hnsw_index import PersistentHnswIndex, normalize_embeddings
 
 
 ASSIGNMENT_COLUMNS = ("SKU_ID", "ITEM_ID", "score", "gtin_status")
@@ -555,6 +556,8 @@ class RandMatcher:
         *,
         batch_size: int,
         top_k: int,
+        ann_index_dir: Path | None = None,
+        rebuild_ann_index: bool = False,
     ) -> None:
         self.checkpoint = checkpoint
         self.batch_size = batch_size
@@ -624,12 +627,49 @@ class RandMatcher:
             [self._structured_vector(info) for info in item_infos],
             dtype=np.float32,
         )
-        self.item_embeddings = fuse_numpy(
-            item_embeddings,
-            item_features,
-            self.structured_weight,
+        self.item_embeddings = normalize_embeddings(
+            fuse_numpy(
+                item_embeddings,
+                item_features,
+                self.structured_weight,
+            )
         )
-        self.item_embeddings_t = torch.as_tensor(self.item_embeddings)
+        ann_settings = load_ann_config()
+        ann_cfg = ann_settings.index
+        configured_output = Path(ann_cfg.output_dir)
+        if not configured_output.is_absolute():
+            configured_output = TRAIN_ROOT / configured_output
+        self.ann_index = PersistentHnswIndex(
+            ann_index_dir or configured_output,
+            ef_construction=ann_cfg.ef_construction,
+            M=ann_cfg.M,
+            ef_search=ann_cfg.ef_search,
+            space=ann_cfg.space,
+        )
+        model_name = ann_settings.embedding.model
+        if not rebuild_ann_index:
+            try:
+                self.ann_index.load(
+                    ids=self.item_ids,
+                    dim=self.item_embeddings.shape[1],
+                    checkpoint=self.checkpoint,
+                    model_name=model_name,
+                )
+                print(f"loaded persisted HNSW index from {self.ann_index.output_dir}")
+            except (FileNotFoundError, ValueError) as exc:
+                print(f"persisted HNSW index needs rebuild: {exc}")
+                rebuild_ann_index = True
+        if rebuild_ann_index:
+            metadata = self.ann_index.build(
+                self.item_embeddings,
+                self.item_ids,
+                checkpoint=self.checkpoint,
+                model_name=model_name,
+            )
+            print(
+                f"built HNSW index count={metadata['count']:,} "
+                f"dim={metadata['dim']} at {self.ann_index.output_dir}"
+            )
 
         print(
             f"loaded {len(self.item_ids):,} canonical items from "
@@ -726,15 +766,15 @@ class RandMatcher:
         sku_gtin: str,
     ) -> dict[int, tuple[int | None, str]]:
         indexes = {
-            int(hit["corpus_id"]): (rank, "semantic_top_k")
-            for rank, hit in enumerate(hits, start=1)
+            int(candidate_index): (rank, "hnsw_semantic_top_k")
+            for rank, candidate_index in enumerate(hits, start=1)
         }
         trusted_gtin = self._trusted_gtin(sku_gtin)
         if trusted_gtin in self.item_index:
             index = self.item_index[trusted_gtin]
             if index in indexes:
                 rank, _ = indexes[index]
-                indexes[index] = (rank, "semantic_top_k+exact_gtin")
+                indexes[index] = (rank, "hnsw_semantic_top_k+exact_gtin")
             else:
                 indexes[index] = (None, "exact_gtin_rescue")
         return indexes
@@ -784,16 +824,14 @@ class RandMatcher:
         frame = self._normalise_skus(skus)
         texts, sku_infos = self._text_and_info(frame)
         embeddings = self._encode_skus(texts, sku_infos)
-        hits = util.semantic_search(
-            torch.as_tensor(embeddings),
-            self.item_embeddings_t,
-            top_k=min(top_k, len(self.item_ids)),
-        )
+        hit_labels, _ = self.ann_index.query(embeddings, top_k=top_k)
 
         rows: list[dict[str, object]] = []
         for position, (_, row) in enumerate(frame.iterrows()):
             sku_gtin = self._gtin(row_metadata_text(row, "barcode", "gtin"))
-            candidate_indexes = self._candidate_indexes(hits[position], sku_gtin)
+            candidate_indexes = self._candidate_indexes(
+                hit_labels[position].tolist(), sku_gtin
+            )
             for index in sorted(candidate_indexes):
                 candidate_rank, retrieval_source = candidate_indexes[index]
                 rows.append(
@@ -2672,6 +2710,16 @@ def parse_args() -> argparse.Namespace:
         "--holdout-input",
         help="frozen, untouched holdout CSV (or HOLDOUT_INPUT)",
     )
+    parser.add_argument(
+        "--ann-index-dir",
+        type=Path,
+        help="persisted HNSW artifact directory (default: training_ANN.yaml)",
+    )
+    parser.add_argument(
+        "--rebuild-ann-index",
+        action="store_true",
+        help="rebuild the complete catalog HNSW artifact",
+    )
     return parser.parse_args()
 
 
@@ -2713,10 +2761,13 @@ def main() -> None:
             "HOLDOUT_INPUT must point to a frozen holdout CSV: "
             f"{holdout_input}"
         )
+    ann_cfg = load_ann_config()
     matcher = RandMatcher(
         checkpoint,
-        batch_size=int(cfg["batch_size"]),
-        top_k=int(cfg["top_k"]),
+        batch_size=int(ann_cfg.embedding.encode_batch_size),
+        top_k=int(ann_cfg.index.top_k),
+        ann_index_dir=args.ann_index_dir,
+        rebuild_ann_index=args.rebuild_ann_index,
     )
     output_names = {str(key): str(value) for key, value in cfg["outputs"].items()}
     write_outputs(

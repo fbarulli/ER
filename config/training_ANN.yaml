@@ -1,0 +1,25 @@
+# Standalone ANN encoder/index lane.  This file deliberately does not alter
+# the ordinary matcher or training defaults in config/training.yaml.
+embedding:
+  model: "minilm_l6"
+  loss: "mnrl"
+  device: "cpu"
+  batch_size: 32
+  encode_batch_size: 64
+  max_sequence_length: 128
+  learning_rate: 0.00002
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+
+smoke:
+  sample: 100
+  epochs: 1
+
+index:
+  backend: "hnswlib"
+  output_dir: "results/ann_index"
+  space: "ip"
+  ef_construction: 200
+  M: 32
+  ef_search: 100
+  top_k: 50

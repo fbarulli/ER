@@ -3204,6 +3204,10 @@ def train_one_config(
                 "version": 0,
                 "count": 0,
             }
+            # MNRL/triplet do not install the dynamic contrastive dataset
+            # transform, but post-training telemetry is shared by every loss.
+            # Keep its empty state defined for those lanes.
+            dynamic_mask_stats_by_epoch: dict[int, dict[str, float]] = {}
             if loss == "contrastive":
                 # OnlineContrastiveLoss (owner ruling 2026-09-07): paired
                 # (sentence1, sentence2, label) rows. POSITIVES = train_all
@@ -3257,7 +3261,6 @@ def train_one_config(
                 )
                 dynamic_mask_counts: dict[int, int] = {}
                 dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
-                dynamic_mask_stats_by_epoch: dict[int, dict[str, float]] = {}
                 dynamic_epoch_ref = {"epoch": 0}
                 if (
                     (dynamic_mask_hard_negatives and dynamic_mask_frac > 0)

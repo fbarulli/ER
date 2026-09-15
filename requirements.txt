@@ -22,6 +22,7 @@ pydantic==2.13.5       # src/core/schemas.py boundary + config contracts
 torch==2.14.0
 transformers==5.16.1
 sentence-transformers==6.0.1
+hnswlib==0.8.0       # persistent normalized-IP catalog ANN retrieval
 datasets==5.0.1        # src/training/training.py:631 (from datasets import Dataset)
 accelerate==1.14.0     # no direct import, but SentenceTransformerTrainer ->
                        # HF Trainer.__init__ builds Accelerator() unconditionally
