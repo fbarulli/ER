@@ -2008,6 +2008,7 @@ def build_training_data(
         build_sku_text,
         model_input_info,
         model_input_composition,
+        token_budget_report,
     )
     from core.structured_features import (
         canonical_info as canonical_structured_info,
@@ -2024,7 +2025,6 @@ def build_training_data(
         "model_input_composition",
         detail=model_input_composition().model_dump(),
     )
-
     thr_pos = float(cfg["pairs"]["proceed_sim_threshold"])
     thr_neg = float(cfg["pairs"]["hardneg_sim_threshold"])
 
@@ -2095,6 +2095,31 @@ def build_training_data(
         for g, info in zip(canon_gtins, canon_structured, strict=True)
     ]
     payload.extend(canon_texts)
+
+    # The structured tail is appended LAST, so at max_seq_length it is the
+    # first thing truncated. Measure the assembled payload and record it, so a
+    # dropped field group is a named number in the run trace rather than an
+    # invisible shortening. Reuses the tracing SSOT and the config SSOT.
+    from transformers import AutoTokenizer
+
+    from core.common import resolve_model, runtime
+
+    budget = token_budget_report(
+        payload,
+        tokenizer=AutoTokenizer.from_pretrained(
+            str(resolve_model(str(runtime("base_model"))))
+        ),
+        max_seq_length=int(runtime("max_seq_length")),
+    )
+    trace.add("payload", "token_budget", detail=budget.model_dump())
+    if budget.n_field_groups_dropped:
+        print(
+            f"    [token-budget] WARNING: {budget.n_over_budget:,}/"
+            f"{budget.n_records:,} payload records exceed max_seq_length="
+            f"{budget.max_seq_length}; dropped field groups: "
+            f"{budget.dropped_groups}",
+            flush=True,
+        )
     row_bc.extend(canon_gtins)
     print(
         f"[payload-stage] materialized sku_payload={len(sku_texts):,} "

@@ -862,3 +862,81 @@ one concept appear. **Open.**
 rewritten or back-filled, so a reader identifies a pre-change artifact by the
 **absence** of the `model_input` block in its manifest/trace; artifacts
 produced after this work always carry it.
+
+---
+
+## 24. Truncation guard + counter (queue item 4)
+
+**The defect.** The structured tail is appended LAST, so at `max_seq_length`
+it is truncated first, silently: measured 11.9 % of target texts losing the
+whole tail and 27.7 % exceeding the window, with nothing recorded anywhere.
+Same class as a coverage gap — a silent drop.
+
+**The guard.** `core.model_input.token_budget_report(texts, *, tokenizer,
+max_seq_length)` returns a `core.schemas.TokenBudgetReport` naming every
+dropped `[FIELD_*]` group with a count. It never raises on a long payload —
+the caller decides whether to reorder fields or raise the budget — and it
+records rather than truncates silently.
+
+**Surfaced in the run record, not a log line.** The payload stage in
+`core.pipeline` writes a `payload.token_budget` row through the existing
+`core.tracing.TraceRun` (the trace SSOT) alongside the composition row, and
+prints a warning only when a group is actually dropped.
+
+**The remedy is left explicit and NOT applied.** Raising `max_seq_length`
+carries a model-compatibility cost — the `worker_2` ANN checkpoint was trained
+at 128 — so it is **not** raised here. Reordering so brand/title survive is the
+other option and is likewise a deliberate decision, not a silent one.
+
+**Reused (rule 1):** `core.common.runtime()` for `max_seq_length` and
+`base_model` (the config accessor SSOT — no literal, no new accessor);
+`core.common.resolve_model()` (model registry); `core.tracing.TraceRun` and its
+existing `payload` stage (the trace SSOT — no second mechanism);
+`transformers.AutoTokenizer` (already a dependency); `core.model_input` itself
+as the composition SSOT. The reuse grep
+(`truncat|token_budget|max_seq_length|input_ids|word_ids|offset_mapping`)
+found **no** existing truncation or token-budget helper, so the counting
+function is genuinely new.
+
+**Newly created:** `TokenBudgetReport` (pydantic, `core.schemas` — a structure
+crossing an artifact/trace boundary, rule 4); `token_budget_report()` and its
+`_FIELD_GROUP_RE` constant in `core.model_input` (the module that emits the
+`[FIELD_*]` markers owns their budget check).
+
+**Tests:** 5 hermetic tests using a deterministic one-token-per-character
+tokenizer, so the guard is tested by COUNTING and does not depend on a model
+artifact being present. They cover: a payload that fits; a payload that drops
+two named groups; a payload that exceeds the window while keeping the group
+inside it; a non-positive budget; and the schema identities
+(`n_field_groups_dropped == sum(dropped_groups)`, `n_over_budget <= n_records`).
+
+Suite **334 passed, 2 skipped**; `legacy` re-verified, 0 byte-mismatches.
+
+## 25. Project-wide rules — reuse audit and one factual discrepancy
+
+**A discrepancy, stated rather than silently absorbed.** The instruction said
+this repo has no written conventions file. As of this commit
+`AGENTS.local.md` **does exist** (5,230 bytes, mtime 2026-09-15 15:47); it was
+also loaded into my context earlier in this session and then withdrawn by the
+harness. `.agents/`, `.codex/`, `AGENTS.md` and `CONTRIBUTING.md` are indeed
+absent, and `pyproject.toml` has no ruff config — that part matches. I followed
+the rules as given (they are consistent with that file's content) and am
+recording the observation rather than acting on a file whose status is
+evidently in flux. It is untracked and was never staged.
+
+**Reuse audit for this round (rule 8).** REUSED: `core.common.runtime`,
+`core.common.resolve_model`, `core.common.F` / `load_config` / `ensure_parent`,
+`core.tracing`, `core.schemas` (style + `ConfigDict` + `model_validator`),
+`core.structured_features`, `core.model_input`, `core.unit_canonicalization`
+(via the structured channel), `transformers`, `sklearn` (declared dependency),
+`difflib` (stdlib), `config/paths.yaml` + `DataConfig` registration.
+NEWLY CREATED, each justified: `core.model_input` (the composition SSOT this
+work exists to create); `TokenBudgetReport`, `AttributeSeparationSpec`,
+`SeparationSummaryRow`, `SeparationValueRow` (boundary structures, rule 4);
+`token_budget_report`, `symmetric_info`, `model_input_info`; and
+`src/training/attribute_separation.py` (the reuse grep found only
+`extract_discriminative_ngrams`, `_discriminative_groups` and
+`attribute_agreement_audit.py`, none of which scores pair separation).
+REMOVED for duplication: the brand-analysis module, `_fold_accents` (duplicate
+of `core.critical_attributes.normalized_attribute_text`), and the three
+copy-pasted composition sites.

@@ -27,6 +27,7 @@ from core.model_input import (
     model_input_composition,
     model_input_info,
     model_input_spec,
+    token_budget_report,
 )
 from core.schemas import TrainingSpec
 from core.structured_features import canonical_info, sku_info
@@ -688,3 +689,69 @@ def test_symmetry_invariant_where_the_same_evidence_feeds_both_sides() -> None:
     assert not mismatched_text, f"{len(mismatched_text)} rows disagreed: {mismatched_text[:5]}"
     assert not mismatched_vector
     assert len(RECORDS) > 800
+
+
+# ── token budget: a dropped field group must be a named number ─────────────
+
+
+class _CharTokenizer:
+    """Deterministic character tokenizer: one token per character.
+
+    Hermetic on purpose — the guard is about COUNTING, so the test must not
+    depend on a model artifact being present.
+    """
+
+    def __call__(self, text, *, add_special_tokens=True, return_offsets_mapping=True):
+        assert return_offsets_mapping
+        return {"offset_mapping": [(i, i + 1) for i in range(len(text))]}
+
+
+def test_token_budget_report_is_clean_when_everything_fits() -> None:
+    report = token_budget_report(
+        ["water [FIELD_VOLUME] volume_ml_500"],
+        tokenizer=_CharTokenizer(),
+        max_seq_length=1000,
+    )
+    assert report.n_records == 1
+    assert report.n_over_budget == 0
+    assert report.n_field_groups_dropped == 0
+    assert report.dropped_groups == {}
+
+
+def test_token_budget_report_names_every_dropped_field_group() -> None:
+    """The silent-drop defect: the tail is appended last and cut first."""
+    text = "x" * 40 + " [FIELD_VOLUME] volume_ml_500 [FIELD_CARBONATION] carbonation_still"
+    report = token_budget_report([text], tokenizer=_CharTokenizer(), max_seq_length=20)
+    assert report.n_over_budget == 1
+    assert set(report.dropped_groups) == {"VOLUME", "CARBONATION"}
+    assert report.n_field_groups_dropped == 2
+    assert report.max_seq_length == 20
+
+
+def test_token_budget_report_keeps_groups_that_survive_the_window() -> None:
+    text = "water [FIELD_VOLUME] volume_ml_500" + " y" * 200
+    report = token_budget_report([text], tokenizer=_CharTokenizer(), max_seq_length=40)
+    assert report.n_over_budget == 1
+    # VOLUME sits inside the window, so it is NOT reported as dropped
+    assert report.dropped_groups == {}
+
+
+def test_token_budget_report_rejects_a_nonsense_budget() -> None:
+    with pytest.raises(ValueError, match="must be positive"):
+        token_budget_report(["x"], tokenizer=_CharTokenizer(), max_seq_length=0)
+
+
+def test_token_budget_report_counts_match_their_parts() -> None:
+    """The schema enforces the identity, so a drifting counter cannot ship."""
+    from core.schemas import TokenBudgetReport
+
+    with pytest.raises(ValidationError, match="must equal the sum"):
+        TokenBudgetReport(
+            max_seq_length=128, n_records=1, n_over_budget=1,
+            n_field_groups_dropped=5, dropped_groups={"VOLUME": 1},
+        )
+    with pytest.raises(ValidationError, match="cannot exceed"):
+        TokenBudgetReport(
+            max_seq_length=128, n_records=1, n_over_budget=9,
+            n_field_groups_dropped=0, dropped_groups={},
+        )

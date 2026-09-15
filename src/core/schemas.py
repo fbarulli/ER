@@ -485,6 +485,37 @@ class RobustValidationSpec(BaseModel):
         return self
 
 
+# ── encoder token budget (guards the silent truncation of field groups) ────
+
+
+class TokenBudgetReport(BaseModel):
+    """What the encoder window actually kept, per payload.
+
+    The structured tail is appended LAST, so at ``max_seq_length`` it is the
+    first thing truncated — measured at 11.9 % of target texts losing the whole
+    tail, silently. This record makes that countable instead of invisible:
+    a dropped field group is a named, numbered event, not a shorter string.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_seq_length: int = Field(ge=1)
+    n_records: int = Field(ge=0)
+    n_over_budget: int = Field(ge=0)
+    n_field_groups_dropped: int = Field(ge=0)
+    dropped_groups: dict[str, int]
+
+    @model_validator(mode="after")
+    def _counts_are_consistent(self) -> TokenBudgetReport:
+        if self.n_over_budget > self.n_records:
+            raise ValueError("n_over_budget cannot exceed n_records")
+        if self.n_field_groups_dropped != sum(self.dropped_groups.values()):
+            raise ValueError(
+                "n_field_groups_dropped must equal the sum of dropped_groups"
+            )
+        return self
+
+
 # ── attribute separation metrics (results/training/attribute_separation_*.csv) ──
 # How well each product attribute separates TRUE pairs from FALSE ones, at the
 # attribute level and per attribute value.  Computed from labelled pairs plus
