@@ -333,7 +333,7 @@ drifts, `tests/test_model_input_contract.py::test_legacy_profile_reproduces_gold
   CPU measurement on that checkpoint anyway shows the switch is not a regression (see
   `FINALIZATION_REPORT.md` §6): every attribute error bucket and retrieval recall@1/5/10 improve once
   each composition is judged at its own operating point, and the optimal threshold moves **up**
-  (0.6909 → 0.7317), so no recall was bought by lowering the bar.
+  (0.6909 → 0.7249), so no recall was bought by lowering the bar.
 * **Every report under `training_results/*`** — retrain, then regenerate.
 * `results/ann_index/` — **rebuild** (automatic: the fingerprint check rejects the stale index).
 * `results/prepared_training/*` (55 bundles) — **re-prepare**; the new manifest rejects them loudly.

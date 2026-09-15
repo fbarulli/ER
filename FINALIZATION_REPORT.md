@@ -288,39 +288,43 @@ shown at its **own** Youden-optimal operating point as well as at the legacy-fit
 
 | metric | legacy | cleaned | Δ |
 |---|---|---|---|
-| Youden J | 0.6874 | **0.7688** | **+0.0814** |
-| AUC | 0.9271 | **0.9520** | +0.0249 |
-| precision | 0.9576 | **0.9747** | +0.0171 |
-| recall | 0.8353 | **0.8579** | +0.0226 |
-| F1 | 0.8923 | **0.9126** | +0.0203 |
-| false merges (FP) | 204 | **123** | **−81 (−39.7 %)** |
-| missed merges (FN) | 909 | **784** | −125 (−13.8 %) |
-| operating threshold | 0.6909 | 0.7317 | **higher, not lower** |
+| Youden J | 0.6874 | **0.7690** | **+0.0816** |
+| AUC | 0.9271 | **0.9517** | +0.0246 |
+| precision | 0.9576 | **0.9715** | +0.0139 |
+| recall | 0.8353 | **0.8711** | +0.0358 |
+| F1 | 0.8923 | **0.9186** | +0.0263 |
+| false merges (FP) | 204 | **141** | **−63 (−30.9 %)** |
+| missed merges (FN) | 909 | **711** | −198 (−21.8 %) |
+| operating threshold | 0.6909 | 0.7249 | **higher, not lower** |
 
 **Attribute error rates at that operating point** — the acceptance-criteria buckets:
 
 | bucket | n | legacy | cleaned | Δ |
 |---|---|---|---|---|
-| `pack/0` | 172 | 0.3779 | **0.2500** | −0.1279 |
-| `volume/0` | 925 | 0.1005 | **0.0519** | −0.0486 |
-| `none/0` | 111 | 0.2523 | **0.2252** | −0.0270 |
-| `none/1` | 5477 | 0.1636 | **0.1413** | −0.0223 |
-| `flavor/1` | 41 | 0.3171 | **0.2439** | −0.0732 |
-| `multiple/0` | 172 | 0.1047 | **0.0407** | −0.0640 |
+| `pack/0` | 172 | 0.3779 | **0.2791** | −0.0988 |
+| `volume/0` | 925 | 0.1005 | **0.0627** | −0.0378 |
+| `none/0` | 111 | 0.2523 | **0.2432** | −0.0091 |
+| `none/1` | 5477 | 0.1636 | **0.1282** | −0.0354 |
+| `flavor/1` | 41 | 0.3171 | **0.2195** | −0.0976 |
+| `multiple/0` | 172 | 0.1047 | **0.0465** | −0.0582 |
 
 **Retrieval recall over the full catalog** (5 518 queries):
 
 | k | legacy | cleaned | Δ |
 |---|---|---|---|
-| @1 | 0.7555 | **0.7769** | +0.0214 |
-| @5 | 0.9067 | **0.9543** | +0.0476 |
-| @10 | 0.9368 | **0.9732** | +0.0365 |
+| @1 | 0.7555 | **0.7760** | +0.0205 |
+| @5 | 0.9067 | **0.9565** | +0.0498 |
+| @10 | 0.9368 | **0.9734** | +0.0366 |
 
 ### 6.3 The verdict on the composition change
 
 **It HELPS the ANN arm, and it does not require lowering the threshold** — the optimal operating
-point moves *up* (0.6909 → 0.7317), which is the opposite of buying recall by lowering the bar.
-Every acceptance bucket improves, false merges drop 39.7 %, and retrieval recall rises at every k.
+point moves *up* (0.6909 → 0.7249), which is the opposite of buying recall by lowering the bar.
+Every acceptance bucket improves, false merges drop 30.9 %, and retrieval recall rises at every k.
+
+*(Consistency check: an earlier pass on a tree frozen just before the accent-folding commit gave
+J 0.7688, FP 123, recall@1 0.7769 — the same direction and the same conclusion on every row of both
+tables. Only the committed-`e326c46` numbers above are quoted as the result.)*
 
 Two honest qualifications, because they matter:
 
@@ -337,6 +341,17 @@ Two honest qualifications, because they matter:
    legacy number is **0.7555 @1**. The acceptance criterion "keep retrieval recall at or above
    baseline" is therefore measured against a metric that cannot fail; the replacement above is the
    meaningful one.
+
+### 6.3b A related silent drop, closed after my measurement
+
+A later commit (`f996718`) added `token_budget_report()` + a `payload.token_budget` trace row: the
+`[FIELD_*]` tail is appended last, so at `max_seq_length` it was truncated first and silently
+(11.9 % of target texts lost the whole tail, 27.7 % exceeded the window, and nothing recorded it) —
+the same defect class as a coverage gap. It is **observational only**: the guard names and counts
+every dropped field group and never rewrites the text, so the strings measured in §6.2 are still the
+shipping strings, and the measurement is not invalidated. It does raise one honest caveat for the
+retrain: the remedy (raising `max_seq_length`) is deliberately left unapplied because the worker_2
+checkpoint was trained at 128.
 
 ### 6.4 The checkpoint: stale and non-comparable — RETRAINING required
 
@@ -356,12 +371,12 @@ guards the *index*, not the weights). The engineering consequence:
 
 | Criterion (`ANN_ERROR_PRESENTATION.md`) | Status | Evidence |
 |---|---|---|
-| Improve `pack/0` | **IMPROVED (local)** | 0.3779 → 0.2500 at each composition's own operating point |
-| Improve `none/0` | **IMPROVED (local)** | 0.2523 → 0.2252 |
-| Improve `volume/0` | **IMPROVED (local)** | 0.1005 → 0.0519 |
-| Preserve over-merge at 0 % | **NOT MEASURABLE LOCALLY** | over-merge is an assignment-level statistic; it needs the calibration gate + full pipeline, which is a training-lane run. The nearest local proxy, false merges (FP) at the matched operating point, **falls 204 → 123**. Claiming 0 % preserved would be a claim I did not run. |
-| Do not lower the global threshold | **SATISFIED** | the optimal threshold rises (0.6909 → 0.7317); no recall was bought by lowering it |
-| Keep retrieval recall ≥ baseline | **IMPROVED (paired, same harness)** | @1 0.7555 → 0.7769, @5 0.9067 → 0.9543, @10 0.9368 → 0.9732. The published 99.84 % @1 is degenerate (single-candidate pool); see §6.3(2). |
+| Improve `pack/0` | **IMPROVED (local)** | 0.3779 → 0.2791 at each composition's own operating point |
+| Improve `none/0` | **IMPROVED (local)** | 0.2523 → 0.2432 |
+| Improve `volume/0` | **IMPROVED (local)** | 0.1005 → 0.0627 |
+| Preserve over-merge at 0 % | **NOT MEASURABLE LOCALLY** | over-merge is an assignment-level statistic; it needs the calibration gate + full pipeline, which is a training-lane run. The nearest local proxy, false merges (FP) at the matched operating point, **falls 204 → 141**. Claiming 0 % preserved would be a claim I did not run. |
+| Do not lower the global threshold | **SATISFIED** | the optimal threshold rises (0.6909 → 0.7249); no recall was bought by lowering it |
+| Keep retrieval recall ≥ baseline | **IMPROVED (paired, same harness)** | @1 0.7555 → 0.7760, @5 0.9067 → 0.9565, @10 0.9368 → 0.9734. The published 99.84 % @1 is degenerate (single-candidate pool); see §6.3(2). |
 | Improve `flavor/1`, `multiple/0` (not in the list, reported anyway) | **IMPROVED (local)** | 0.3171 → 0.2439, 0.1047 → 0.0407 |
 
 **Achieved locally:** every string-level and scoring-level improvement above, with the existing
