@@ -450,8 +450,23 @@ def build_outputs(
     )
     _assert_pair_contract(balanced)
     if sample_size > len(balanced):
+        # DIAGNOSIS IN THE MESSAGE (audit 2026-09-15): "balanced pool has only
+        # 986" was read as the composite hard-negative reason starving the pool,
+        # but the ceiling is 2*min(positives, typed negatives) and on the live
+        # artifacts the POSITIVE side binds (493 eligible positives vs 7,967
+        # typed negatives). Name the binding side and both supplies so the next
+        # reader cannot misattribute the shortfall to the reason mapping.
+        binding = (
+            "eligible positives"
+            if len(positive) <= len(negative)
+            else "eligible typed negatives"
+        )
         raise ValueError(
-            f"Requested {sample_size:,} rows, but balanced pool has only {len(balanced):,}"
+            f"Requested {sample_size:,} rows, but balanced pool has only "
+            f"{len(balanced):,} ({len(balanced) // 2:,} per class). The ceiling is "
+            f"2*min(eligible positives, eligible typed negatives) = "
+            f"2*min({len(positive):,}, {len(negative):,}); it is bound by "
+            f"{binding}. Hard-negative reason families are not the constraint."
         )
 
     sample_per_class = sample_size // 2
