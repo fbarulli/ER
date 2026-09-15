@@ -21,12 +21,12 @@ from core.common import training_cfg
 
 ROOT = Path(__file__).resolve().parent
 TRAINING_DATA = ROOT / "training_data/dataset_deduped_train_minus_3000.csv"
-INFERENCE_DATA = ROOT / "training_data/dataset_deduped.csv"
+INFERENCE_DATA = ROOT / "training_data/dataset_deduped_sample_3000.csv"
 MODEL_DIR = ROOT / "artifacts/models/all-MiniLM-L6-v2"
 EXPECTED_MODEL_BYTES = 91_630_836
 
 EXPECTED_TRAIN_ROWS = 58_529
-EXPECTED_INFERENCE_ROWS = 61_529
+EXPECTED_INFERENCE_ROWS = 3_000
 
 
 def data_rows(path: Path) -> int:
@@ -47,7 +47,7 @@ def check_settings() -> None:
         "training input config": cfg.colab.training_dataset_csv
         == "training_data/dataset_deduped_train_minus_3000.csv",
         "inference input config": cfg.colab.final_inference.input_csv
-        == "training_data/dataset_deduped.csv",
+        == "training_data/dataset_deduped_sample_3000.csv",
         "inference source config": cfg.colab.final_inference.source_csv
         == "training_data/dataset_deduped.csv",
         "DVC disabled": cfg.colab.dvc_enabled is False,

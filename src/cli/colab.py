@@ -302,9 +302,6 @@ def _record_remote_run(remote_base: str, *, workers: int, lane: str) -> None:
     )
     print(f"[run] remote metadata recorded -> {root / 'remote_run.json'}", flush=True)
 
-# The clone contains the committed raw export and number-token reference;
-# data_prep regenerates deduped data and all downstream CSVs on the VM.
-
 
 def check_colab_cli() -> None:
     """Ensure the colab CLI is installed and authenticated."""
