@@ -72,7 +72,7 @@ colab:
   # Training workers consume immutable bundles prepared locally.  Keep all
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
-  training_dataset_csv: "artifacts/data/dataset_deduped_train_minus_1500.csv"
+  training_dataset_csv: "artifacts/data/dataset_deduped_train_minus_3000.csv"
   hpo_mode: "sequential"
   hpo_workers: 2
   train_workers: 6
@@ -116,7 +116,7 @@ colab:
   validation_inference:
     enabled: true
     source_csv: "artifacts/data/dataset_deduped.csv"
-    input_csv: "artifacts/data/dataset_deduped_sample_1500.csv"
+    input_csv: "artifacts/data/dataset_deduped_sample_3000.csv"
     output_dir: "validation_inference"
     batch_size: 128
     device: "cpu"

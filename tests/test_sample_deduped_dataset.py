@@ -4,11 +4,11 @@ import unittest
 
 import pandas as pd
 
-from training.sample_deduped_dataset import _sample_half
+from training.sample_deduped_dataset import _sample
 
 
 class SampleDedupedDatasetTests(unittest.TestCase):
-    def test_half_sample_is_deterministic_and_audits_odd_strata(self) -> None:
+    def test_stratified_sample_is_deterministic_and_unique(self) -> None:
         population = pd.DataFrame(
             [
                 {
@@ -22,21 +22,14 @@ class SampleDedupedDatasetTests(unittest.TestCase):
                 for index in range(6)
             ]
         )
-        first, allocation, audit = _sample_half(population, 3, 42)
-        second, _, _ = _sample_half(population, 3, 42)
+        first, allocation = _sample(population, 3, 42)
+        second, _ = _sample(population, 3, 42)
         self.assertEqual(first["product_id"].tolist(), second["product_id"].tolist())
         self.assertEqual(len(first), 3)
-        self.assertEqual(sum(row["retained_rows"] for row in audit), 3)
-        self.assertTrue(
-            all(
-                row["retained_rows"]
-                in {row["population_rows"] // 2, (row["population_rows"] + 1) // 2}
-                for row in audit
-            )
-        )
         self.assertEqual(sum(allocation.values()), 3)
+        self.assertEqual(first["product_id"].nunique(), 3)
 
-    def test_half_sample_rejects_non_half_size(self) -> None:
+    def test_sample_rejects_size_larger_than_population(self) -> None:
         population = pd.DataFrame(
             {
                 "product_id": ["a", "b", "c", "d"],
@@ -47,8 +40,8 @@ class SampleDedupedDatasetTests(unittest.TestCase):
                 "attributes": [""] * 4,
             }
         )
-        with self.assertRaisesRegex(ValueError, "exactly half"):
-            _sample_half(population, 3, 42)
+        with self.assertRaisesRegex(ValueError, "sample size"):
+            _sample(population, 5, 42)
 
 
 if __name__ == "__main__":

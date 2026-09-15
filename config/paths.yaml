@@ -45,8 +45,8 @@ files:
   # explicit rather than silently falling back when artifacts/data is absent.
   dataset: "repo:dataset.csv"
   dataset_deduped: "data:dataset_deduped.csv"
-  dataset_deduped_sample_1500: "data:dataset_deduped_sample_1500.csv"
-  dataset_deduped_train_minus_1500: "data:dataset_deduped_train_minus_1500.csv"
+  dataset_deduped_sample_3000: "data:dataset_deduped_sample_3000.csv"
+  dataset_deduped_train_minus_3000: "data:dataset_deduped_train_minus_3000.csv"
   sku_to_rep: "data:sku_to_rep.csv"
   canonical_records: "results:canonical_records.csv"   # SHARED frozen input
   gate_results: "results:gate_results.csv"             # SHARED frozen input

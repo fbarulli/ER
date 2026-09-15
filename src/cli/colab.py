@@ -191,8 +191,8 @@ def training_lifecycle_preflight(
         "remote_completion_argv": (
             None if train_only else [
                 "<remote-python>", "-m", "training.complete_colab_worker",
-                "--validation-input", "<uploaded-dataset_deduped_sample_1500.csv>",
-                "--training-input", "<uploaded-dataset_deduped_train_minus_1500.csv>",
+                "--validation-input", "<uploaded-dataset_deduped_sample_3000.csv>",
+                "--training-input", "<uploaded-dataset_deduped_train_minus_3000.csv>",
             ]
         ),
         "successful_worker_order": (
