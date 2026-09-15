@@ -8,12 +8,12 @@ Branch `training`. Substantive commits:
 | `c3cac78` | fix: the bundle prewarm joined its own thread and never overlapped |
 | `aaf7838` | the re-runnable phase profiler and this report |
 | `e6ccea3` | cache the bundle build; ship a prebuilt `hnswlib` wheel; overlap the validation uploads with the dependency install |
+| `e22c00b` | stream checkpoint publication to DVC while training runs; adaptive detached-stage polling |
 
 All pushed to `ER/training`. Tests: **334 passed / 2 skipped** before any change,
-**414 passed / 2 skipped** at `e6ccea3`, and **427 passed / 2 skipped** at the
-branch tip, which by then also carried a concurrent agent's data-root and
-inference-naming refactor (37 of the tests are this change's own; no existing
-test modified).
+**414 passed / 2 skipped** at `e6ccea3`, and **438 passed / 2 skipped** at
+`e22c00b` (46 of the tests are this change's own — 37 on the setup path and 9 on
+streaming publication; no existing test modified).
 
 The branch moved under this work: another agent landed
 `refactor(config): single training_data root; untrack all CSVs` and
@@ -272,6 +272,75 @@ the part the wheel removed.
 
 ---
 
+### 2.7 Detached-stage detection latency (directive A, measured)
+
+The dependency install's own work is ~2.4 s, but the *stage* was measured at
+7.10-35.70 s. The gap is the poll loop, which slept a full
+`log_poll_seconds` before its first probe. The launcher now starts at
+`colab.log_poll_initial_seconds` and backs off to `log_poll_seconds`.
+
+A/B on **one** CPU VM, identical 3-second synthetic stage, two probes each:
+
+```
+[ab_old_poll] completed successfully after 3.62s of polling (2 probe(s))   # initial delay = log_poll_seconds
+[ab_new_poll] completed successfully after 2.17s of polling (2 probe(s))   # initial delay = 0.25s
+```
+
+**Saving: 1.45 s of detection per detached stage — MEASURED.** The
+launcher has exactly one `run_detached_stage` call site (`00_deps`), so this
+is worth ~1.45 s per launch, not more.
+
+Stated honestly: the two runs' *totals* differ by 10.8 s (16.85 s vs 6.06 s),
+but that figure is **confounded** — the first stage of a session also pays
+kernel warm-up, which the poll policy has nothing to do with. I quote the
+launcher's own per-stage polling timers, not the totals.
+
+Also measured on that VM with the committed code: `installer=uv` with the
+prebuilt wheel, `Resolved 123 packages in 1.44s`, `Prepared 19 packages in
+931ms`, `Installed 19 packages in 339ms`, **`deps = 6.41 s`**.
+
+What was already done in earlier rounds and is not re-done here: the
+`hnswlib` source build (now a shipped wheel, §2.1), the upload round trips
+(now overlapped, §2.3), and the local bundle build (now cached, §2.2). The
+remaining deps wall clock is the stage launch exec and the 16.2 MiB `mlflow`
+download, neither of which the poll interval governs.
+
+### 2.8 Streaming DVC publication (directive B, measured)
+
+The trainer already signalled every checkpoint — `stage_checkpoint` runs once
+per save — and `publish_checkpoints` already batched at the end. What was
+missing was anything in between: the log literally said *"added locally at
+step N; upload deferred"*, so every upload waited for `on_train_end` and an
+interrupted run left its checkpoints in a cache that dies with the VM.
+
+`_CheckpointStreamer` hangs off that **same** signal. One background thread
+waits for `colab.dvc_publish_debounce_seconds` of quiet, then pushes
+everything staged in that window with **one** `dvc push`. The single-push
+implementation was extracted into `_push_targets` and is now shared by
+`publish_checkpoint`, `publish_checkpoints` and the streamer, so "pushed" has
+one definition (exit code plus a clean `dvc status --cloud`).
+
+Proved with a scripted `dvc` on PATH, so the tests observe exactly what the
+real binary is asked to do (`tests/test_dvc_streaming_publish.py`, 9 tests):
+
+| requirement | proof |
+|---|---|
+| **Push as soon as available** | a lone checkpoint is pushed **within the quiet window**, and the test measures the delay from availability to the push rather than assuming it; the window is honoured for both 0.3 s and 1.2 s, so it demonstrably comes from config |
+| **Never blocks training** | a simulated training loop kept **50+ iterations** running, each `signal()` costing **< 50 ms**, while a push was deliberately held in flight for seconds |
+| **Take no lock the publisher holds** | a test pins that `training.py`'s `on_save` contains **no** `.dvc-push.lock`, that staging is **submitted** to the executor rather than run inline, and that the publisher's coalescing loop holds no lock. The lock belongs to the staging executor and to the publisher — never to the training thread |
+| **Batch a burst** | three checkpoints available in one window produce **exactly one** `dvc push` carrying all three targets |
+| **Failure degrades to a warning** | with the remote failing, the signal does not raise, the target is recorded as failed and **kept for the final batch**, which then pushes it — durability is not lost |
+
+The final batch also **skips what the publisher already verified**, so a
+streamed checkpoint is not pushed a second time (tested).
+
+One real defect was found and fixed while building this: the first version
+re-armed its debounce timer on the batch it was already holding, so it never
+reached a deadline and never pushed anything. The burst test caught it — the
+streamer reported `pending: [target]` with `push_count: 0`.
+
+---
+
 ## 3. The defect this work found and fixed
 
 The first version of the bundle overlap **never worked**. `_BundlePrewarm._build`
@@ -403,6 +472,15 @@ is unchanged, the join reports the prewarm, and no run logs `different request`.
 **NOT verified:** the multi-worker lanes (`dual-train`, `smoke` with >1 worker)
 and the HPO/zero-shot lanes; their code paths are shared but only the one-worker
 `train` lane was exercised on a VM.
+
+**Collision handled, not resolved silently:** `config/training.yaml` and
+`src/core/schemas.py` are in a cross-brand agent's in-flight set, but directive B
+required the debounce window to come from config rather than a literal. The two
+new keys were therefore applied and committed in an **isolated worktree at
+HEAD** — the other agent's working tree was never edited or staged, and none of
+its hunks are in `e22c00b`. `src/training/dvc_store.py` was the one file in
+`src/training/` touched; the carve-out the owner gave for it covers it, and no
+other file in that directory was modified.
 
 **Repository hygiene:** the leftover `stash@{0}: FOREIGN WIP (colab runtime
 packages)` was verified to be a strict subset of HEAD — every hunk it carried is
