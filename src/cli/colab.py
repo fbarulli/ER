@@ -92,7 +92,9 @@ _SIMS_MODEL = str(_COLAB.sims_model)
 REPOSITORY = _COLAB.repository
 BRANCH = _COLAB.branch
 GIT_REMOTE_NAME = _COLAB.git_remote_name
-SESSION = _COLAB.session
+# Keep the config session as the default, while allowing concurrent launches
+# to select an isolated named VM without editing the shared configuration.
+SESSION = os.environ.get("EUROMONITOR_COLAB_SESSION", _COLAB.session)
 GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
