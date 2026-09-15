@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Launch the pinned ANN training run with fail-fast runtime checks.
 
-This is intentionally separate from the older launcher and downloader.
-It does not download or tear down the VM; use manual_download_results.py
-after completion while the session is kept alive.
+This is intentionally separate from the older launcher and downloader.  The
+launcher tears the GPU VM down on every outcome: a retained GPU VM consumes
+accelerator quota indefinitely, so keep-alive is CPU-only and is deliberately
+NOT requested here.  Artifacts are persisted through the DVC remote before
+teardown; use manual_download_results.py only for a CPU session that was
+deliberately kept alive.
 """
 
 from __future__ import annotations
@@ -71,7 +74,7 @@ def check_settings() -> None:
     print(f"  train={TRAINING_DATA} rows={actual_train:,}", flush=True)
     print(f"  inference={INFERENCE_DATA} rows={actual_inference:,}", flush=True)
     print(f"  model=minilm_l6 path={MODEL_DIR}", flush=True)
-    print("  gpu=T4 workers=1 train_frac=1.0 epochs=10 keep_alive=true", flush=True)
+    print("  gpu=T4 workers=1 train_frac=1.0 epochs=10 keep_alive=false", flush=True)
     print("  dvc=false", flush=True)
 
 
@@ -91,7 +94,6 @@ def main() -> int:
         "--gpu",
         "T4",
         "--allow-gpu",
-        "--keep-alive",
     ]
     print("[launch] " + " ".join(command), flush=True)
     return subprocess.run(command, cwd=ROOT).returncode

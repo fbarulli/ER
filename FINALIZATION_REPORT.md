@@ -388,8 +388,25 @@ quality, the assignment-level over/under-merge rates, and the final submission.
 
 ## 7. What I committed, and the push
 
-Committed by this session (in addition to the implementer's `bfe539d`, `c0b4d35`, `27b1cb0`,
-`e326c46`):
+### Commits on `training` for this work
+
+| commit | what |
+|---|---|
+| `bfe539d` | one config-gated builder for the encoder text in both lanes (the implementer) |
+| `c0b4d35` | make the cleaned composition the default |
+| `27b1cb0` | map the blast radius, close the coverage gap, stamp provenance |
+| `e326c46` | universal pack symmetry, accent folding, attribute separation |
+| `38358bf` | revert the brand analysis (handed to its dedicated agent) |
+| `f996718` | truncation guard with a counted, traceable budget |
+| `056fab8` | **this session** — finalize the session record; commit the remaining meaningful files |
+| `addc705` | **this session** — the final ANN measurement + the truncation-guard caveat |
+
+Corrections C1-C3 and blast-radius fixes M1-M4 were in the working tree while the implementer was
+still committing and were swept into `e326c46` by its `git add`; the content is what is described
+here and the code is in that commit, not in a later one. Everything else in this table is committed
+under its own message.
+
+Committed by this session's own commits:
 
 * `FINALIZATION_REPORT.md` — this document.
 * `.gitignore` — **decision:** the pnpm footprint (`node_modules/`, `pnpm-lock.yaml`,
@@ -408,7 +425,15 @@ Committed by this session (in addition to the implementer's `bfe539d`, `c0b4d35`
 `results/` is **clean** (`git status --porcelain -- results/` empty); no regenerated
 `results/*.csv` was committed, and `dataset.csv` was only ever opened read-only.
 
-Push: `git push ER training` — see the final report line below.
+Push result:
+
+```
+$ git push ER training
+To https://github.com/fbarulli/ER.git
+   f996718..addc705  training -> training
+```
+
+`git rev-list --count ER/training..HEAD` afterwards: **0**. No force-push, no history rewrite.
 
 ---
 

@@ -44,7 +44,18 @@ ENTRYPOINT = Path(__file__).resolve()
 
 
 def _spawn_keep_alive(endpoint: str, session_name: str, auth_provider=None, config_path=None) -> int:
-    """Start keep-alive through this wrapper so it shares CLI state safely."""
+    """Start keep-alive through this wrapper so it shares CLI state safely.
+
+    Refused unless the launcher marked this session keep-alive-eligible.  A
+    retained GPU VM consumes accelerator quota for its entire lifetime, so the
+    default here is deny: only an explicitly CPU launch may leave a VM running.
+    """
+    if os.environ.get("EUROMONITOR_KEEP_ALIVE_ALLOWED") != "1":
+        raise RuntimeError(
+            "refusing to start Colab keep-alive: this session was not marked "
+            "keep-alive-eligible by the launcher (GPU sessions must never "
+            "retain their VM)"
+        )
     command = [sys.executable, str(ENTRYPOINT)]
     if auth_provider is not None:
         command.append(f"--auth={auth_provider.value}")

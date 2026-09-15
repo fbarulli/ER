@@ -2,6 +2,8 @@
 from __future__ import annotations
 import argparse, fcntl, json, os, shutil, subprocess, tempfile, time, traceback
 from pathlib import Path
+from urllib.parse import urlsplit
+
 from core import common
 
 # The tracking/verify EXCLUSION set — files/dirs whose path parts hit these
@@ -135,13 +137,7 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
         prefix=".dvc-verify-", dir=source.parent
     ) as temp:
         verify = Path(temp)
-        os.environ["DVC_SITE_CACHE_DIR"] = str(verify / ".dvc-site-cache")
-        _run(["dvc", "init", "--no-scm"], verify)
-        _run(["dvc", "config", "cache.dir", str(verify / ".dvc-cache")], verify)
-        _run(["dvc", "remote", "add", "--default", "dagshub", remote], verify)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], verify)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "user", "fbarulli"], verify)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], verify)
+        _configure_workspace(verify, token=token, remote=remote)
         for pointer in source.rglob("*.dvc"):
             if not pointer.is_file():
                 continue
@@ -180,17 +176,41 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
         return result
 
 
+def _remote_owner(remote: str) -> str:
+    """DagsHub account owning ``remote``.
+
+    The owner is not a secret and not a second source of truth: the configured
+    ``colab.dvc_remote_url`` already names it, so derive it from there rather
+    than hardcoding an account in the code.
+    """
+    parts = urlsplit(remote).path.strip("/").split("/")
+    if len(parts) < 2 or not parts[0]:
+        raise ValueError(f"cannot derive the DagsHub owner from remote URL: {remote!r}")
+    return parts[0]
+
+
+def _configure_workspace(root: Path, *, token: str, remote: str) -> None:
+    """Create the isolated workspace once, then always re-authenticate it.
+
+    ``.env`` owns ``DVC_API_KEY``; DVC persists the password into
+    ``.dvc/config.local``.  Re-applying the credential on EVERY call is what
+    makes ``.env`` authoritative: applying it only at init would silently
+    ignore a rotated token for the entire lifetime of the workspace.
+    """
+    os.environ["DVC_SITE_CACHE_DIR"] = str(root / ".dvc-site-cache")
+    if not (root / ".dvc").is_dir():
+        _run(["dvc", "init", "--no-scm"], root)
+        _run(["dvc", "config", "cache.dir", str(root / ".dvc-cache")], root)
+        _run(["dvc", "remote", "add", "--default", "dagshub", remote], root)
+    _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], root)
+    _run(["dvc", "remote", "modify", "dagshub", "--local", "user", _remote_owner(remote)], root)
+    _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], root)
+
+
 def _configure(source: Path, token: str) -> str:
     """Configure an isolated, no-SCM DVC workspace for one worker."""
-    os.environ["DVC_SITE_CACHE_DIR"] = str(source / ".dvc-site-cache")
     remote = common.training_cfg().colab.dvc_remote_url
-    if not (source / ".dvc").is_dir():
-        _run(["dvc", "init", "--no-scm"], source)
-        _run(["dvc", "config", "cache.dir", str(source / ".dvc-cache")], source)
-        _run(["dvc", "remote", "add", "--default", "dagshub", remote], source)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], source)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "user", "fbarulli"], source)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], source)
+    _configure_workspace(source, token=token, remote=remote)
     return remote
 
 
