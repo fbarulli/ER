@@ -2519,7 +2519,10 @@ def run_train(
         args.extend(["--model", model])
     if sample is not None:
         args.extend(["--sample", str(sample)])
-    if remote_dataset_csv is not None:
+    # `training.train_prepared` receives the frozen dataframe inside its
+    # bundle.  Keep the checkout dataset available for final inference, but
+    # do not pass raw-trainer-only `--dataset` to that entrypoint.
+    if remote_dataset_csv is not None and remote_prepared_bundles is None:
         remote_dataset = Path(remote_dataset_csv)
         if remote_dataset.is_absolute() or ".." in remote_dataset.parts:
             raise ValueError("remote dataset path must stay inside the checkout")
