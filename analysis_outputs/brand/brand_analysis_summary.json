@@ -1,0 +1,157 @@
+{
+  "provenance": {
+    "commit_sha": "e9d1ca66ed913a43a74bae32b8410829ef8b7519",
+    "review_csv": "training_results/0915T075044186132Z/worker_1/report/human_review_features/human_review_enriched.csv",
+    "population_rows": 585,
+    "thresholds": [
+      {
+        "name": "title_corroboration_min_chars",
+        "value": 3.0,
+        "origin": "script default"
+      },
+      {
+        "name": "key_containment_min_chars",
+        "value": 4.0,
+        "origin": "script default"
+      },
+      {
+        "name": "gtin_claim_min_share",
+        "value": 0.5,
+        "origin": "script default"
+      },
+      {
+        "name": "gtin_rival_min_share",
+        "value": 0.5,
+        "origin": "script default"
+      },
+      {
+        "name": "generic_token_doc_fraction",
+        "value": 0.01,
+        "origin": "script default"
+      }
+    ],
+    "config_block_present": false,
+    "char_ngram_range": [
+      2,
+      5
+    ],
+    "word_ngram_range": [
+      1,
+      2
+    ]
+  },
+  "classes": [
+    {
+      "brand_class": "absent_both",
+      "rows": 0,
+      "mean_score": 0.0,
+      "mean_ratio": 0.0,
+      "mean_tfidf_cosine_char": 0.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
+      "resolves_under_normalisation": false
+    },
+    {
+      "brand_class": "absent_source",
+      "rows": 0,
+      "mean_score": 0.0,
+      "mean_ratio": 0.0,
+      "mean_tfidf_cosine_char": 0.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
+      "resolves_under_normalisation": false
+    },
+    {
+      "brand_class": "absent_target",
+      "rows": 0,
+      "mean_score": 0.0,
+      "mean_ratio": 0.0,
+      "mean_tfidf_cosine_char": 0.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
+      "resolves_under_normalisation": false
+    },
+    {
+      "brand_class": "same_brand_verified",
+      "rows": 197,
+      "mean_score": 0.6936211997482378,
+      "mean_ratio": 100.0,
+      "mean_tfidf_cosine_char": 1.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
+      "resolves_under_normalisation": false
+    },
+    {
+      "brand_class": "surface_variant_same_brand",
+      "rows": 0,
+      "mean_score": 0.0,
+      "mean_ratio": 0.0,
+      "mean_tfidf_cosine_char": 0.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
+      "resolves_under_normalisation": true
+    },
+    {
+      "brand_class": "brand_field_defect",
+      "rows": 8,
+      "mean_score": 0.6793239489197731,
+      "mean_ratio": 21.913859852884244,
+      "mean_tfidf_cosine_char": 0.005989376742127756,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": true,
+      "resolves_under_normalisation": false
+    },
+    {
+      "brand_class": "evidence_disagreement",
+      "rows": 4,
+      "mean_score": 0.7050164490938187,
+      "mean_ratio": 29.027777777777775,
+      "mean_tfidf_cosine_char": 0.03949341873126272,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
+      "resolves_under_normalisation": false
+    },
+    {
+      "brand_class": "different_brand_verified_hard_negative",
+      "rows": 246,
+      "mean_score": 0.6692075416809176,
+      "mean_ratio": 24.825263377660367,
+      "mean_tfidf_cosine_char": 0.02130160605662715,
+      "is_true_hard_negative": true,
+      "is_brand_field_defect": false,
+      "resolves_under_normalisation": false
+    },
+    {
+      "brand_class": "different_brand_unverified_hard_negative",
+      "rows": 130,
+      "mean_score": 0.665918632195546,
+      "mean_ratio": 22.979733719394357,
+      "mean_tfidf_cosine_char": 0.008621080652686703,
+      "is_true_hard_negative": true,
+      "is_brand_field_defect": false,
+      "resolves_under_normalisation": false
+    }
+  ],
+  "impact": {
+    "population_rows": 585,
+    "brand_agrees_raw_string": 197,
+    "brand_differs_raw_string": 388,
+    "brand_agrees_verified": 197,
+    "brand_differs_verified": 376,
+    "brand_field_defects": 8,
+    "evidence_disagreements": 4,
+    "true_hard_negatives": 376,
+    "contradictions_found_by_co_listings": 0,
+    "pairs_with_same_gtin": 48,
+    "same_gtin_conflicting_brands": 0,
+    "key_containment_rows": 4,
+    "resolved_by_normalisation": 0,
+    "resolved_share_of_population": 0.0,
+    "separation_raw_string": 0.02493786256612396,
+    "separation_verified": 0.02493786256612396,
+    "separation_excluding_defects": 0.02555078102768804,
+    "mean_score_brand_agrees_verified": 0.6936211997482378,
+    "mean_score_brand_differs_verified": 0.6680704187205497,
+    "mean_score_true_hard_negative": 0.6680704187205497
+  }
+}

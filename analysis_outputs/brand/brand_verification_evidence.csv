@@ -1,0 +1,1171 @@
+side,claim,gtin,gtin_group_size,gtin_group_brands,claim_share_in_group,gtin_check_independent,title_corroborates,title_check_independent,corpus_support,generic_token_fraction,is_generic_category_word,status,role,sku_id
+source,Powerking,7611612221887,3,Powerkingx3,1.0,True,False,True,134,0.0005026318361420214,False,confirmed_by_co_listings,source,153415775
+target,Powerking,7611612221887,3,Powerkingx3,1.0,False,True,False,134,0.0005026318361420214,False,derived_only_not_independently_checkable,target,153415775
+source,Marcel,3700749304540,2,Marcelx2,1.0,True,True,True,129,0.0011169596358711587,False,confirmed_by_co_listings,source,510711467
+target,Marcel,3700749304540,2,Marcelx2,1.0,False,True,False,129,0.0011169596358711587,False,derived_only_not_independently_checkable,target,510711467
+source,Piacelli,,0,,0.0,True,True,True,15,6.980997724194742e-05,False,confirmed_by_title_only,source,80905704
+target,Premier,7611612515344,3,Premierx3,1.0,False,True,False,343,0.0005165938315904109,False,derived_only_not_independently_checkable,target,80905704
+source,PureThé,3551720039391,3,PureThéx3,1.0,True,True,True,23,0.0001815059408290633,False,confirmed_by_co_listings,source,2880687
+target,Fresh Tea,3564700891827,2,Fresh Teax2,1.0,False,True,False,32,0.012300517990031136,True,generic_category_word,target,2880687
+source,Ekolo,,0,,0.0,True,True,True,140,0.0014660095220808958,False,confirmed_by_title_only,source,279017608
+target,Côteaux Nantais,3301591000774,2,Côteaux Nantaisx2,1.0,False,False,False,108,0.0,False,derived_only_not_independently_checkable,target,279017608
+source,Mont,3375830000061,4,Montx4,1.0,True,False,True,50,0.0011169596358711587,False,confirmed_by_co_listings,source,934800838
+target,Mont,3375830000016,2,Montx2,1.0,False,True,False,50,0.0011169596358711587,False,derived_only_not_independently_checkable,target,934800838
+source,Erikli,,0,,0.0,True,False,True,169,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,907813293
+target,Erikli,8690793010052,4,Eriklix4,1.0,False,True,False,169,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,907813293
+source,Quellbrunn,,0,,0.0,True,False,True,25,0.00012565795903550535,False,unverified_no_independent_evidence,source,49087055
+target,Rheinfels Quelle,4101130003544,1,Rheinfels Quellex1,1.0,False,True,False,51,0.0,False,derived_only_not_independently_checkable,target,49087055
+source,Mi Wadi,5011026701197,1,Mi Wadix1,1.0,True,True,True,35,0.00030716389986456866,False,confirmed_by_co_listings,source,74429047
+target,Mi Wadi,5011026701203,2,Mi Wadix2,1.0,False,True,False,35,0.00030716389986456866,False,derived_only_not_independently_checkable,target,74429047
+source,Cure Hydration,850025251792,3,Cure Hydrationx3,1.0,True,True,True,93,0.0011588456222163272,False,confirmed_by_co_listings,source,1041744561
+target,Cure Hydration,850025251198,1,Cure Hydrationx1,1.0,False,True,False,93,0.0011588456222163272,False,derived_only_not_independently_checkable,target,1041744561
+source,Dr. Smoothie,647854920407,1,Dr. Smoothiex1,1.0,True,True,True,47,0.006310821942672047,False,confirmed_by_co_listings,source,69888784
+target,Dr. Smoothie,647854920407,1,Dr. Smoothiex1,1.0,False,True,False,47,0.006310821942672047,False,derived_only_not_independently_checkable,target,69888784
+source,Body Attack,4250350519240,2,Body Attackx2,1.0,True,True,True,52,0.0006980997724194742,False,confirmed_by_co_listings,source,979292842
+target,Body Attack,4250350519240,2,Body Attackx2,1.0,False,True,False,52,0.0006980997724194742,False,derived_only_not_independently_checkable,target,979292842
+source,RC Cola,78000041163,8,RC Colax8,1.0,True,True,True,73,0.0010052636722840428,False,confirmed_by_co_listings,source,87945875
+target,Live,890704002253,1,Livex1,1.0,False,True,False,53,0.0019826033536713065,False,derived_only_not_independently_checkable,target,87945875
+source,Barsmith,614362707226,1,Barsmithx1,1.0,True,False,True,57,0.0006282897951775268,False,confirmed_by_co_listings,source,1029228545
+target,Barsmith,614362707226,1,Barsmithx1,1.0,False,True,False,57,0.0006282897951775268,False,derived_only_not_independently_checkable,target,1029228545
+source,DubbelFrisss,8720157400097,3,DubbelFrisssx3,1.0,True,False,True,168,0.0,False,confirmed_by_co_listings,source,769807373
+target,Damla,5449000290823,1,Damlax1,1.0,False,True,False,41,0.0,False,derived_only_not_independently_checkable,target,769807373
+source,May Tea,3124480189073,6,May Teax6,1.0,True,True,True,258,0.00297390503050696,False,confirmed_by_co_listings,source,93551199
+target,May Tea,3124480189073,6,May Teax6,1.0,False,True,False,258,0.00297390503050696,False,derived_only_not_independently_checkable,target,93551199
+source,The Gutsy Captain,,0,,0.0,True,False,True,38,0.0005165938315904109,False,unverified_no_independent_evidence,source,858728998
+target,4Bro,4260667060786,1,4Brox1,1.0,False,True,False,86,0.0007120617678678636,False,derived_only_not_independently_checkable,target,858728998
+source,Edeka,4311501346617,2,Edekax2,1.0,True,True,True,105,0.0014241235357357273,False,confirmed_by_co_listings,source,122543235
+target,Edeka,4311501346617,2,Edekax2,1.0,False,True,False,105,0.0014241235357357273,False,derived_only_not_independently_checkable,target,122543235
+source,Tradition,,0,,0.0,True,True,True,106,0.001242617594906664,False,confirmed_by_title_only,source,1034110917
+target,Get More,5060338922066,2,Get Morex2,1.0,False,True,False,94,0.0012286555994582746,False,derived_only_not_independently_checkable,target,1034110917
+source,Jocko,,0,,0.0,True,True,True,57,0.0007958337405582006,False,confirmed_by_title_only,source,948958419
+target,Jocko,708088781575,1,Jockox1,1.0,False,True,False,57,0.0007958337405582006,False,derived_only_not_independently_checkable,target,948958419
+source,Alpro,,0,,0.0,True,True,True,48,0.0005724418133839688,False,confirmed_by_title_only,source,231929899
+target,Alpro,5411188129257,9,Alprox9,1.0,False,True,False,48,0.0005724418133839688,False,derived_only_not_independently_checkable,target,231929899
+source,Siracuse,,0,,0.0,True,False,True,60,0.0003909358725549055,False,unverified_no_independent_evidence,source,416255674
+target,Siracuse,8009490001087,4,Siracusex4,1.0,False,True,False,60,0.0003909358725549055,False,derived_only_not_independently_checkable,target,416255674
+source,Shine Water,850036444121,2,Shine Waterx2,1.0,True,True,True,45,0.0006422517906259162,False,confirmed_by_co_listings,source,998144757
+target,Shine Water,850036444121,2,Shine Waterx2,1.0,False,True,False,45,0.0006422517906259162,False,derived_only_not_independently_checkable,target,998144757
+source,Flawsome!,,0,,0.0,True,True,True,17,0.00022339192717423174,False,confirmed_by_title_only,source,1003817397
+target,Flawsome!,5060524790004,2,Flawsome!x2,1.0,False,True,False,17,0.00022339192717423174,False,derived_only_not_independently_checkable,target,1003817397
+source,Oca,24474007839,4,Ocax4,1.0,True,True,True,23,0.00020942993172584225,False,confirmed_by_co_listings,source,702798748
+target,A SHOC,810014530482,9,A SHOCx4; Acceleratorx3; Adrenaline Shocx2,0.4444444444444444,False,True,False,72,0.0022059952808455383,False,derived_only_not_independently_checkable,target,702798748
+source,Repp,,0,,0.0,True,False,True,16,0.0001815059408290633,False,unverified_no_independent_evidence,source,482436758
+target,3D,850003560526,1,3Dx1,1.0,False,False,False,81,0.0010611116540776007,False,derived_only_not_independently_checkable,target,482436758
+source,Fun Light,,0,,0.0,True,True,True,103,0.0023735392262262123,False,confirmed_by_title_only,source,83266210
+target,Fun Light,7316110000889,1,Fun Lightx1,1.0,False,True,False,103,0.0023735392262262123,False,derived_only_not_independently_checkable,target,83266210
+source,Erikli,,0,,0.0,True,False,True,169,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,143150379
+target,Erikli,8690793010106,3,Eriklix3,1.0,False,True,False,169,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,143150379
+source,Naren,,0,,0.0,True,True,True,57,0.0007679097496614216,False,confirmed_by_title_only,source,145338357
+target,Arifoglu,8691530927824,4,Arifoglux4,1.0,False,True,False,20,0.00015358194993228433,False,derived_only_not_independently_checkable,target,145338357
+source,Farm Boy,,0,,0.0,True,True,True,143,0.0020105273445680857,False,confirmed_by_title_only,source,841683344
+target,Rieme,3292481350010,3,Riemex3,1.0,False,True,False,18,4.1885986345168454e-05,False,derived_only_not_independently_checkable,target,841683344
+source,Mehustamo,7340191129047,2,Mehustamox2,1.0,True,False,True,58,0.0,False,confirmed_by_co_listings,source,735740777
+target,Mehustamo,7340191129047,2,Mehustamox2,1.0,False,True,False,58,0.0,False,derived_only_not_independently_checkable,target,735740777
+source,Pure,,0,,0.0,True,True,True,18,0.02595534953855605,True,generic_category_word,source,992854293
+target,True North,815154024136,6,True Northx6,1.0,False,True,False,50,0.0018010974128422434,False,derived_only_not_independently_checkable,target,992854293
+source,George's,810158588257,2,George'sx2,1.0,True,True,True,20,0.0002513159180710107,False,confirmed_by_co_listings,source,902850750
+target,Agalima,810158583115,2,Agalimax2,1.0,False,True,False,41,0.0005584798179355794,False,derived_only_not_independently_checkable,target,902850750
+source,Oregon Chai,,0,,0.0,True,True,True,22,0.00029320190441617914,False,confirmed_by_title_only,source,810773414
+target,Oregon Chai,707082120328,1,Oregon Chaix1,1.0,False,True,False,22,0.00029320190441617914,False,derived_only_not_independently_checkable,target,810773414
+source,Bremner's,,0,,0.0,True,True,True,19,0.0002513159180710107,False,confirmed_by_title_only,source,962295719
+target,L&A,746155811152,1,L&Ax1,1.0,False,False,False,100,1.0,False,derived_only_not_independently_checkable,target,962295719
+source,José Cuervo,,0,,0.0,True,True,True,65,0.0008516817223517586,False,confirmed_by_title_only,source,73027471
+target,José Cuervo,811538011242,2,José Cuervox2,1.0,False,False,False,65,0.0008516817223517586,False,derived_only_not_independently_checkable,target,73027471
+source,Zingo,7310070006776,2,Zingox2,1.0,True,False,True,81,0.0007539477542130321,False,confirmed_by_co_listings,source,914755342
+target,Kas,8410408012901,1,Kasx1,1.0,False,True,False,127,0.0018988313809809698,False,derived_only_not_independently_checkable,target,914755342
+source,Dunkin',,0,,0.0,True,False,True,155,0.002052413330913254,False,unverified_no_independent_evidence,source,856949182
+target,Victor Allen's,811130033512,1,Victor Allen'sx1,1.0,False,True,False,57,0.0006701757815226953,False,derived_only_not_independently_checkable,target,856949182
+source,Clearly Canadian,,0,,0.0,True,True,True,220,0.0026946651215391704,False,confirmed_by_title_only,source,902979373
+target,Recess,10850019179238,2,Recessx2,1.0,False,True,False,59,0.0008237577314549795,False,derived_only_not_independently_checkable,target,902979373
+source,Puhdistamo,6430039222359,5,Puhdistamox5,1.0,True,False,True,123,2.7923990896778967e-05,False,confirmed_by_co_listings,source,283686895
+target,Puhdistamo,5151808487557,1,Puhdistamox1,1.0,False,True,False,123,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,283686895
+source,Rheinfels Quelle,,0,,0.0,True,False,True,51,0.0,False,unverified_no_independent_evidence,source,249360137
+target,Rheinfels Quelle,4101130003544,1,Rheinfels Quellex1,1.0,False,True,False,51,0.0,False,derived_only_not_independently_checkable,target,249360137
+source,Sinalco,4018715527008,1,Sinalcox1,1.0,True,True,True,111,0.001410161540287338,False,confirmed_by_co_listings,source,141909509
+target,Sinalco,4018715527008,1,Sinalcox1,1.0,False,True,False,111,0.001410161540287338,False,derived_only_not_independently_checkable,target,141909509
+source,Pureness,,0,,0.0,True,True,True,39,0.0005305558270388003,False,confirmed_by_title_only,source,981855534
+target,Pureness,7350116311976,3,Purenessx3,1.0,False,True,False,39,0.0005305558270388003,False,derived_only_not_independently_checkable,target,981855534
+source,Cocofina,,0,,0.0,True,True,True,74,0.0010192256677324324,False,confirmed_by_title_only,source,159449556
+target,Cocofina,5060118260203,44,Cocofinax44,1.0,False,True,False,74,0.0010192256677324324,False,derived_only_not_independently_checkable,target,159449556
+source,Marcel,3700749300023,3,Marcelx3,1.0,True,False,True,129,0.0011169596358711587,False,confirmed_by_co_listings,source,438276139
+target,Daylesford,721866639691,1,Daylesfordx1,1.0,False,True,False,71,0.0009913016768356533,False,derived_only_not_independently_checkable,target,438276139
+source,Levissima,,0,,0.0,True,False,True,168,0.00011169596358711587,False,unverified_no_independent_evidence,source,89697839
+target,Levissima,80015536,5,Levissimax5,1.0,False,True,False,168,0.00011169596358711587,False,derived_only_not_independently_checkable,target,89697839
+source,Fun Light,7350126085713,4,Fun Lightx4,1.0,True,False,True,103,0.0023735392262262123,False,confirmed_by_co_listings,source,718842803
+target,Fun Light,7350126085713,4,Fun Lightx4,1.0,False,True,False,103,0.0023735392262262123,False,derived_only_not_independently_checkable,target,718842803
+source,Sir Up,,0,,0.0,True,False,True,51,1.3961995448389483e-05,False,unverified_no_independent_evidence,source,93534941
+target,Hip Syrups,609311269993,1,Hip Syrupsx1,1.0,False,True,False,21,0.0009075297041453164,False,derived_only_not_independently_checkable,target,93534941
+source,Live,,0,,0.0,True,False,True,53,0.0019826033536713065,False,unverified_no_independent_evidence,source,5270811
+target,Live,815298020049,2,Livex2,1.0,False,True,False,53,0.0019826033536713065,False,derived_only_not_independently_checkable,target,5270811
+source,Pibb,,0,,0.0,True,True,True,74,0.0010192256677324324,False,confirmed_by_title_only,source,851181878
+target,Pibb,677937753189,1,Pibbx1,1.0,False,True,False,74,0.0010192256677324324,False,derived_only_not_independently_checkable,target,851181878
+source,Les Fees Bio,,0,,0.0,True,False,True,39,1.3961995448389483e-05,False,unverified_no_independent_evidence,source,175080540
+target,Cidou,3760225494035,1,Cidoux1,1.0,False,True,False,62,0.0005864038088323583,False,derived_only_not_independently_checkable,target,175080540
+source,Ethiquable,3760278861228,4,Ethiquablex4,1.0,True,False,True,124,0.0,False,confirmed_by_co_listings,source,348818468
+target,Fruity King,8714862616010,2,Fruity Kingx2,1.0,False,True,False,95,0.0016195914720131801,False,derived_only_not_independently_checkable,target,348818468
+source,Nature Blessed,18184790099,1,Nature Blessedx1,1.0,True,True,True,15,0.00019546793627745276,False,confirmed_by_co_listings,source,580667538
+target,L&A,129600516787,1,L&Ax1,1.0,False,False,False,100,1.0,False,derived_only_not_independently_checkable,target,580667538
+source,Coco Rico,706098268871,2,Coco Ricox2,1.0,True,True,True,17,0.0005026318361420214,False,confirmed_by_co_listings,source,114282359
+target,Coco Rico,706098268871,2,Coco Ricox2,1.0,False,True,False,17,0.0005026318361420214,False,derived_only_not_independently_checkable,target,114282359
+source,Exotic,,0,,0.0,True,False,True,87,0.003378802898510255,False,unverified_no_independent_evidence,source,809612299
+target,Poikain Parhaat,6430065312451,2,Poikain Parhaatx2,1.0,False,True,False,43,0.0,False,derived_only_not_independently_checkable,target,809612299
+source,Possmei,786173938622,1,Possmeix1,1.0,True,True,True,21,0.00029320190441617914,False,confirmed_by_co_listings,source,210057699
+target,Possmei,786173938622,1,Possmeix1,1.0,False,True,False,21,0.00029320190441617914,False,derived_only_not_independently_checkable,target,210057699
+source,A SHOC,,0,,0.0,True,True,True,72,0.0022059952808455383,False,confirmed_by_title_only,source,905364999
+target,Rambler,860004467946,5,Ramblerx5,1.0,False,True,False,42,0.0005864038088323583,False,derived_only_not_independently_checkable,target,905364999
+source,Bio Frutti,,0,,0.0,True,False,True,33,0.0007958337405582006,False,unverified_no_independent_evidence,source,95650189
+target,Bio Frutti,3770000858198,3,Bio Fruttix3,1.0,False,True,False,33,0.0007958337405582006,False,derived_only_not_independently_checkable,target,95650189
+source,Brämhults,,0,,0.0,True,True,True,251,0.0014799715175292853,False,confirmed_by_title_only,source,147920571
+target,Brämhults,7313619001461,3,Brämhultsx3,1.0,False,False,False,251,0.0014799715175292853,False,derived_only_not_independently_checkable,target,147920571
+source,Hildon,,0,,0.0,True,True,True,43,0.0006003658042807479,False,confirmed_by_title_only,source,4904204
+target,Hildon,5017160000028,1,Hildonx1,1.0,False,True,False,43,0.0006003658042807479,False,derived_only_not_independently_checkable,target,4904204
+source,Cal Valls,,0,,0.0,True,True,True,181,0.001954679362774528,False,confirmed_by_title_only,source,580678791
+target,Garant,7340083444616,2,Garantx2,1.0,False,True,False,191,0.0,False,derived_only_not_independently_checkable,target,580678791
+source,Bio Gourmet,,0,,0.0,True,True,True,27,0.0010471496586292113,False,confirmed_by_title_only,source,508529711
+target,Vitalhaus,4041685003449,2,Vitalhausx2,1.0,False,True,False,134,0.00012565795903550535,False,derived_only_not_independently_checkable,target,508529711
+source,Proviva,7310867008631,5,Provivax5,1.0,True,False,True,222,0.0007679097496614216,False,confirmed_by_co_listings,source,55602974
+target,Proviva,7350000550597,5,Provivax5,1.0,False,True,False,222,0.0007679097496614216,False,derived_only_not_independently_checkable,target,55602974
+source,Kullamust,,0,,0.0,True,True,True,9,5.5847981793557934e-05,False,confirmed_by_title_only,source,520330212
+target,Paquito,3250390006824,1,Paquitox1,1.0,False,True,False,11,0.0,False,derived_only_not_independently_checkable,target,520330212
+source,Kutztown,,0,,0.0,True,True,True,29,0.00040489786800329504,False,confirmed_by_title_only,source,816988150
+target,Kutztown,703694611858,1,Kutztownx1,1.0,False,True,False,29,0.00040489786800329504,False,derived_only_not_independently_checkable,target,816988150
+source,True North,,0,,0.0,True,False,True,50,0.0018010974128422434,False,unverified_no_independent_evidence,source,466189744
+target,Yerbae,853156007092,1,Yerbaex1,1.0,False,True,False,98,0.001326389567597001,False,derived_only_not_independently_checkable,target,466189744
+source,Zumosol,,0,,0.0,True,False,True,161,0.001647515462909959,False,unverified_no_independent_evidence,source,281664820
+target,Libby's,8412755108504,1,Libby'sx1,1.0,False,True,False,30,0.0003909358725549055,False,derived_only_not_independently_checkable,target,281664820
+source,RC Cola,,0,,0.0,True,True,True,73,0.0010052636722840428,False,confirmed_by_title_only,source,690232366
+target,Peapod,688267001352,2,Peapodx2,1.0,False,True,False,180,0.002359577230777823,False,derived_only_not_independently_checkable,target,690232366
+source,Kiviks Musteri,7314720716305,2,Kiviks Musterix2,1.0,True,False,True,261,0.0,False,confirmed_by_co_listings,source,672078252
+target,So Natural,5603493001001,2,So Naturalx2,1.0,False,True,False,93,0.0015777054856680117,False,derived_only_not_independently_checkable,target,672078252
+source,Kizilay,,0,,0.0,True,False,True,117,0.0004188598634516845,False,unverified_no_independent_evidence,source,214981461
+target,Eager,5060113200747,1,Eagerx1,1.0,False,True,False,52,0.0006841377769710847,False,derived_only_not_independently_checkable,target,214981461
+source,Mehukatti,6415130077169,2,Mehukattix2,1.0,True,False,True,109,0.0,False,confirmed_by_co_listings,source,131805237
+target,Mehukatti,6415130077169,2,Mehukattix2,1.0,False,True,False,109,0.0,False,derived_only_not_independently_checkable,target,131805237
+source,Manzanita Sol,,0,,0.0,True,True,True,52,0.0007120617678678636,False,confirmed_by_title_only,source,352634480
+target,Cock N Bull,810158581258,2,Cock N Bullx2,1.0,False,True,False,142,0.0019826033536713065,False,derived_only_not_independently_checkable,target,352634480
+source,SEK,,0,,0.0,True,False,True,30,0.0,False,unverified_no_independent_evidence,source,909572750
+target,Fiuggi,8015962000533,3,Fiuggix3,1.0,False,True,False,27,0.00033508789076134763,False,derived_only_not_independently_checkable,target,909572750
+source,Sisi,,0,,0.0,True,True,True,101,0.0010750736495259902,False,confirmed_by_title_only,source,749986134
+target,Sisi,8715600246315,4,Sisix4,1.0,False,True,False,101,0.0010750736495259902,False,derived_only_not_independently_checkable,target,749986134
+source,May Tea,3124480185112,6,May Teax6,1.0,True,True,True,258,0.00297390503050696,False,confirmed_by_co_listings,source,20394241
+target,May Tea,3124480185112,6,May Teax6,1.0,False,True,False,258,0.00297390503050696,False,derived_only_not_independently_checkable,target,20394241
+source,Olympos,5202178084065,2,Olymposx2,1.0,True,False,True,114,0.0,False,confirmed_by_co_listings,source,165783191
+target,Aroniasaft,7613312094464,1,Aroniasaftx1,1.0,False,True,False,14,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,165783191
+source,Caffe D'Vita,,0,,0.0,True,True,True,14,0.0022059952808455383,False,confirmed_by_title_only,source,613901951
+target,Starbucks Frappuccino Vanilla,100142347862,1,Starbucks Frappuccino Vanillax1,1.0,False,True,False,72,0.0010052636722840428,False,derived_only_not_independently_checkable,target,613901951
+source,Valio,6408430102419,3,Valiox3,1.0,True,False,True,275,0.00012565795903550535,False,confirmed_by_co_listings,source,764947215
+target,Valio,6408430102419,3,Valiox3,1.0,False,True,False,275,0.00012565795903550535,False,derived_only_not_independently_checkable,target,764947215
+source,May Tea,3124480189158,7,May Teax7,1.0,True,True,True,258,0.00297390503050696,False,confirmed_by_co_listings,source,165916902
+target,May Tea,3124480189158,7,May Teax7,1.0,False,True,False,258,0.00297390503050696,False,derived_only_not_independently_checkable,target,165916902
+source,Vio,,0,,0.0,True,True,True,114,0.0014380855311841168,False,confirmed_by_title_only,source,49437976
+target,Vio,5449000299628,1,Viox1,1.0,False,True,False,114,0.0014380855311841168,False,derived_only_not_independently_checkable,target,49437976
+source,Emmi,,0,,0.0,True,True,True,172,0.0020803373218100333,False,confirmed_by_title_only,source,858729213
+target,Emmi,7610900301638,1,Emmix1,1.0,False,True,False,172,0.0020803373218100333,False,derived_only_not_independently_checkable,target,858729213
+source,Pin,8683079425428,1,Pinx1,1.0,True,True,True,48,0.00030716389986456866,False,confirmed_by_co_listings,source,869480020
+target,Pin,8683079425428,1,Pinx1,1.0,False,True,False,48,0.00030716389986456866,False,derived_only_not_independently_checkable,target,869480020
+source,Royal Bliss,,0,,0.0,True,True,True,94,0.0014799715175292853,False,confirmed_by_title_only,source,96265195
+target,Royal Bliss,54001565,2,Royal Blissx2,1.0,False,True,False,94,0.0014799715175292853,False,derived_only_not_independently_checkable,target,96265195
+source,God Morgon,7313619001584,3,God Morgonx3,1.0,True,False,True,257,0.0,False,confirmed_by_co_listings,source,336020772
+target,God Morgon,7313619001584,3,God Morgonx3,1.0,False,True,False,257,0.0,False,derived_only_not_independently_checkable,target,336020772
+source,Aksu Vital,,0,,0.0,True,True,True,171,0.00022339192717423174,False,confirmed_by_title_only,source,245797215
+target,Aksu Vital,8690088018923,4,Aksu Vitalx4,1.0,False,True,False,171,0.00022339192717423174,False,derived_only_not_independently_checkable,target,245797215
+source,May Tea,3124480189073,6,May Teax6,1.0,True,False,True,258,0.00297390503050696,False,confirmed_by_co_listings,source,517435480
+target,May Tea,3124480189073,6,May Teax6,1.0,False,True,False,258,0.00297390503050696,False,derived_only_not_independently_checkable,target,517435480
+source,Relentless,5060466510210,2,Relentlessx2,1.0,True,False,True,118,0.0014380855311841168,False,confirmed_by_co_listings,source,19697655
+target,Cult,5710176002740,2,Cultx2,1.0,False,True,False,53,0.000781871745109811,False,derived_only_not_independently_checkable,target,19697655
+source,Clean Drink,7350089430704,4,Clean Drinkx4,1.0,True,False,True,101,0.003937282716445834,False,confirmed_by_co_listings,source,203843461
+target,Clean Drink,7350089430704,4,Clean Drinkx4,1.0,False,True,False,101,0.003937282716445834,False,derived_only_not_independently_checkable,target,203843461
+source,Proviva,7350000551396,6,Provivax6,1.0,True,False,True,222,0.0007679097496614216,False,confirmed_by_co_listings,source,280043335
+target,The Juice Company,4088600404004,1,The Juice Companyx1,1.0,False,True,False,40,0.0023037292489842646,False,derived_only_not_independently_checkable,target,280043335
+source,Eska,,0,,0.0,True,False,True,98,0.0009494156904904849,False,unverified_no_independent_evidence,source,67284602
+target,Eska,671785100010,1,Eskax1,1.0,False,True,False,98,0.0009494156904904849,False,derived_only_not_independently_checkable,target,67284602
+source,Marcel,3700749300061,1,Marcelx1,1.0,True,False,True,129,0.0011169596358711587,False,confirmed_by_co_listings,source,438179574
+target,Marcel,3700749300061,1,Marcelx1,1.0,False,True,False,129,0.0011169596358711587,False,derived_only_not_independently_checkable,target,438179574
+source,Dad's,,0,,0.0,True,True,True,57,0.0005026318361420214,False,confirmed_by_title_only,source,952300679
+target,Ibc,304628333190,1,Ibcx1,1.0,False,True,False,81,0.0010052636722840428,False,derived_only_not_independently_checkable,target,952300679
+source,Ikea,,0,,0.0,True,True,True,6,8.377197269033691e-05,False,confirmed_by_title_only,source,81938494
+target,D'Arbo,9001432018138,4,D'Arbox4,1.0,False,True,False,77,0.00022339192717423174,False,derived_only_not_independently_checkable,target,81938494
+source,Slimpie,,0,,0.0,True,False,True,106,0.00022339192717423174,False,unverified_no_independent_evidence,source,948693130
+target,The Juice Company,4088600124070,1,The Juice Companyx1,1.0,False,True,False,40,0.0023037292489842646,False,derived_only_not_independently_checkable,target,948693130
+source,Venom,,0,,0.0,True,True,True,58,0.0011309216313195483,False,confirmed_by_title_only,source,857477196
+target,Full Throttle,655466965693,1,Full Throttlex1,1.0,False,True,False,61,0.0007958337405582006,False,derived_only_not_independently_checkable,target,857477196
+source,Monoprix,,0,,0.0,True,True,True,144,0.0017452494310486854,False,confirmed_by_title_only,source,1009974015
+target,Monoprix,3350033594142,1,Monoprixx1,1.0,False,True,False,144,0.0017452494310486854,False,derived_only_not_independently_checkable,target,1009974015
+source,Ramlösa,7310074002507,6,Ramlösax6,1.0,True,False,True,338,0.0,False,confirmed_by_co_listings,source,58781960
+target,Ramlösa,73145714,4,Ramlösax4,1.0,False,False,False,338,0.0,False,derived_only_not_independently_checkable,target,58781960
+source,Kotimaista,6415712610593,2,Kotimaistax2,1.0,True,False,True,96,0.0,False,confirmed_by_co_listings,source,75367564
+target,Ramlösa,7310070005953,4,Ramlösax4,1.0,False,False,False,338,0.0,False,derived_only_not_independently_checkable,target,75367564
+source,Nutramino,,0,,0.0,True,True,True,57,0.0005445178224871899,False,confirmed_by_title_only,source,51415244
+target,Clean Drink,7350089431183,2,Clean Drinkx2,1.0,False,True,False,101,0.003937282716445834,False,derived_only_not_independently_checkable,target,51415244
+source,Bravo,7310867565905,7,Bravox7,1.0,True,False,True,137,0.0006980997724194742,False,confirmed_by_co_listings,source,176142885
+target,Garant,7311043000418,1,Garantx1,1.0,False,True,False,191,0.0,False,derived_only_not_independently_checkable,target,176142885
+source,Alvalle,8410409010142,6,Alvallex6,1.0,True,True,True,26,0.00020942993172584225,False,confirmed_by_co_listings,source,56449421
+target,Alvalle,8410409010142,6,Alvallex6,1.0,False,True,False,26,0.00020942993172584225,False,derived_only_not_independently_checkable,target,56449421
+source,Jacobs,,0,,0.0,True,False,True,42,0.000460745849796853,False,unverified_no_independent_evidence,source,931564036
+target,Paulig,6411301625313,1,Pauligx1,1.0,False,True,False,52,0.0003909358725549055,False,derived_only_not_independently_checkable,target,931564036
+source,Côteaux Nantais,3301591000491,3,Côteaux Nantaisx3,1.0,True,False,True,108,0.0,False,confirmed_by_co_listings,source,339349286
+target,Côteaux Nantais,3301591000514,2,Côteaux Nantaisx2,1.0,False,False,False,108,0.0,False,derived_only_not_independently_checkable,target,339349286
+source,Clean Drink,7350089431107,6,Clean Drinkx6,1.0,True,False,True,101,0.003937282716445834,False,confirmed_by_co_listings,source,426237408
+target,Clean Drink,7350089430070,6,Clean Drinkx6,1.0,False,True,False,101,0.003937282716445834,False,derived_only_not_independently_checkable,target,426237408
+source,OxyShred,,0,,0.0,True,True,True,28,1.3961995448389483e-05,False,confirmed_by_title_only,source,886948923
+target,OxyShred,810095630262,1,OxyShredx1,1.0,False,True,False,28,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,886948923
+source,Sisi,,0,,0.0,True,True,True,101,0.0010750736495259902,False,confirmed_by_title_only,source,54272430
+target,Sisi,8715600245318,3,Sisix3,1.0,False,True,False,101,0.0010750736495259902,False,derived_only_not_independently_checkable,target,54272430
+source,So Natural,5603493007102,2,So Naturalx2,1.0,True,True,True,93,0.0015777054856680117,False,confirmed_by_co_listings,source,170330818
+target,So Natural,5603493006549,2,So Naturalx2,1.0,False,True,False,93,0.0015777054856680117,False,derived_only_not_independently_checkable,target,170330818
+source,Sunmagic,,0,,0.0,True,True,True,26,0.0003630118816581266,False,confirmed_by_title_only,source,924976629
+target,Mr. Fitzpatrick's,5060407070681,2,Mr. Fitzpatrick'sx2,1.0,False,True,False,34,0.00037697387710651606,False,derived_only_not_independently_checkable,target,924976629
+source,Valio,6408430102419,3,Valiox3,1.0,True,False,True,275,0.00012565795903550535,False,confirmed_by_co_listings,source,763759694
+target,Valio,6408430102419,3,Valiox3,1.0,False,True,False,275,0.00012565795903550535,False,derived_only_not_independently_checkable,target,763759694
+source,Super Drink,,0,,0.0,True,True,True,116,0.005570836183907404,False,confirmed_by_title_only,source,29380428
+target,Super Drink,642709032519,1,Super Drinkx1,1.0,False,True,False,116,0.005570836183907404,False,derived_only_not_independently_checkable,target,29380428
+source,Abant,,0,,0.0,True,True,True,32,0.0003630118816581266,False,confirmed_by_title_only,source,145595847
+target,Imsdal,7044610874920,3,Imsdalx3,1.0,False,True,False,55,0.0006562137860743057,False,derived_only_not_independently_checkable,target,145595847
+source,Caresse Antillaise,3291330008812,4,Caresse Antillaisex4,1.0,True,False,True,62,0.0,False,confirmed_by_co_listings,source,527540455
+target,Wesergold,4100060024346,1,Wesergoldx1,1.0,False,True,False,27,0.00026527791351940017,False,derived_only_not_independently_checkable,target,527540455
+source,O Organics,,0,,0.0,True,True,True,109,0.0036999287938232132,False,confirmed_by_title_only,source,988826374
+target,amazon,195515047555,1,amazonx1,1.0,False,True,False,12,0.0006282897951775268,False,derived_only_not_independently_checkable,target,988826374
+source,Bezoya,8410128000400,3,Bezoyax3,1.0,True,True,True,76,0.0010192256677324324,False,confirmed_by_co_listings,source,53911412
+target,Bezoya,8410128000400,3,Bezoyax3,1.0,False,True,False,76,0.0010192256677324324,False,derived_only_not_independently_checkable,target,53911412
+source,Kas,,0,,0.0,True,True,True,127,0.0018988313809809698,False,confirmed_by_title_only,source,73284494
+target,Conad,8003170074064,2,Conadx2,1.0,False,True,False,139,0.0018848693855325804,False,derived_only_not_independently_checkable,target,73284494
+source,Loviseberg Råsaft,7350068172694,2,Loviseberg Råsaftx2,1.0,True,False,True,143,0.00012565795903550535,False,confirmed_by_co_listings,source,117500559
+target,Cidou,3760225491881,2,Cidoux2,1.0,False,True,False,62,0.0005864038088323583,False,derived_only_not_independently_checkable,target,117500559
+source,BOB,7310090167532,6,BOBx6,1.0,True,False,True,85,0.0003909358725549055,False,confirmed_by_co_listings,source,59119520
+target,Prosain,3335880007717,1,Prosainx1,1.0,False,True,False,34,0.00013961995448389484,False,derived_only_not_independently_checkable,target,59119520
+source,Valio,6408430102419,3,Valiox3,1.0,True,False,True,275,0.00012565795903550535,False,confirmed_by_co_listings,source,762727084
+target,Valio,6408430102419,3,Valiox3,1.0,False,True,False,275,0.00012565795903550535,False,derived_only_not_independently_checkable,target,762727084
+source,Uptime,25713919906,4,Uptimex4,1.0,True,True,True,88,0.0010890356449743798,False,confirmed_by_co_listings,source,427886801
+target,Bloom,842595136616,5,Bloomx5,1.0,False,True,False,57,0.0008796057132485375,False,derived_only_not_independently_checkable,target,427886801
+source,Levissima,8001050766566,5,Levissimax5,1.0,True,False,True,168,0.00011169596358711587,False,confirmed_by_co_listings,source,976554241
+target,Tasting Good,8719075630310,2,Tasting Goodx2,1.0,False,True,False,25,0.0015777054856680117,False,derived_only_not_independently_checkable,target,976554241
+source,Dry,851818001440,5,Dryx5,1.0,True,True,True,96,0.002219957276293928,False,confirmed_by_co_listings,source,47024083
+target,Aura Bora,860002260921,6,Aura Borax6,1.0,False,True,False,46,0.000432821858900074,False,derived_only_not_independently_checkable,target,47024083
+source,Mahbuba,,0,,0.0,True,False,True,133,0.0,False,unverified_no_independent_evidence,source,279695870
+target,Kiviks Musteri,7314720734132,5,Kiviks Musterix5,1.0,False,True,False,261,0.0,False,derived_only_not_independently_checkable,target,279695870
+source,Marli,6415130103905,3,Marlix3,1.0,True,True,True,294,0.00378370076651355,False,confirmed_by_co_listings,source,786964402
+target,Marli,6415130126492,1,Marlix1,1.0,False,True,False,294,0.00378370076651355,False,derived_only_not_independently_checkable,target,786964402
+source,River,,0,,0.0,True,True,True,68,0.0018010974128422434,False,confirmed_by_title_only,source,568051769
+target,S-BUDGET,2020001482702,1,S-BUDGETx1,1.0,False,True,False,6,0.0005165938315904109,False,derived_only_not_independently_checkable,target,568051769
+source,Big 8,,0,,0.0,True,True,True,104,0.004928584393281488,False,confirmed_by_title_only,source,726263376
+target,Peapod,688267001581,1,Peapodx1,1.0,False,True,False,180,0.002359577230777823,False,derived_only_not_independently_checkable,target,726263376
+source,Frooti,,0,,0.0,True,True,True,15,0.00019546793627745276,False,confirmed_by_title_only,source,403717530
+target,Frooti,8902579100087,1,Frootix1,1.0,False,True,False,15,0.00019546793627745276,False,derived_only_not_independently_checkable,target,403717530
+source,Monoprix,,0,,0.0,True,True,True,144,0.0017452494310486854,False,confirmed_by_title_only,source,385740938
+target,Sirop Sport,3014409008489,1,Sirop Sportx1,1.0,False,True,False,44,6.980997724194742e-05,False,derived_only_not_independently_checkable,target,385740938
+source,Saol Vitamin Water,,0,,0.0,True,False,True,121,0.0,False,unverified_no_independent_evidence,source,145329014
+target,MIXXD,5060337507363,2,MIXXDx2,1.0,False,True,False,13,0.0001815059408290633,False,derived_only_not_independently_checkable,target,145329014
+source,Bolt 24,,0,,0.0,True,True,True,90,0.00022339192717423174,False,confirmed_by_title_only,source,252330993
+target,Nutramino,8437019410742,1,Nutraminox1,1.0,False,True,False,57,0.0005445178224871899,False,derived_only_not_independently_checkable,target,252330993
+source,Link,,0,,0.0,True,False,True,30,0.00016754394538067381,False,unverified_no_independent_evidence,source,869075423
+target,Link,8692971071107,2,Linkx2,1.0,False,True,False,30,0.00016754394538067381,False,derived_only_not_independently_checkable,target,869075423
+source,Van de Boom,8720157465867,2,Van de Boomx2,1.0,True,False,True,31,6.980997724194742e-05,False,confirmed_by_co_listings,source,841486606
+target,Van de Boom,8720157402909,1,Van de Boomx1,1.0,False,True,False,31,6.980997724194742e-05,False,derived_only_not_independently_checkable,target,841486606
+source,Gayelord Hauser,,0,,0.0,True,False,True,48,0.0005026318361420214,False,unverified_no_independent_evidence,source,1024516132
+target,So Natural,5603493002893,2,So Naturalx2,1.0,False,True,False,93,0.0015777054856680117,False,derived_only_not_independently_checkable,target,1024516132
+source,KA,,0,,0.0,True,False,True,91,0.001214693604009885,False,unverified_no_independent_evidence,source,159578391
+target,Lilt,5449000024541,2,Liltx2,1.0,False,True,False,50,0.0006701757815226953,False,derived_only_not_independently_checkable,target,159578391
+source,Get More,5060338920789,2,Get Morex2,1.0,True,True,True,94,0.0012286555994582746,False,confirmed_by_co_listings,source,208084089
+target,Get More,5060338920789,2,Get Morex2,1.0,False,True,False,94,0.0012286555994582746,False,derived_only_not_independently_checkable,target,208084089
+source,Sunita,,0,,0.0,True,True,True,147,0.0016614774583583486,False,confirmed_by_title_only,source,159827667
+target,Hysope,3770014856425,1,Hysopex1,1.0,False,True,False,24,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,159827667
+source,Salvavidas,,0,,0.0,True,True,True,10,0.00012565795903550535,False,confirmed_by_title_only,source,579794127
+target,Salvavidas,688474668904,1,Salvavidasx1,1.0,False,True,False,10,0.00012565795903550535,False,derived_only_not_independently_checkable,target,579794127
+source,Stewart's,,0,,0.0,True,False,True,153,0.0013543135584937799,False,unverified_no_independent_evidence,source,963809178
+target,River,855323002596,1,Riverx1,1.0,False,True,False,68,0.0018010974128422434,False,derived_only_not_independently_checkable,target,963809178
+source,Sade Organik,,0,,0.0,True,False,True,73,0.0,False,unverified_no_independent_evidence,source,380747911
+target,Prosain,3335880007816,3,Prosainx3,1.0,False,True,False,34,0.00013961995448389484,False,derived_only_not_independently_checkable,target,380747911
+source,Montellier,,0,,0.0,True,True,True,83,0.000865643717800148,False,confirmed_by_title_only,source,841529554
+target,Stewart's,352154328128,1,Stewart'sx1,1.0,False,True,False,153,0.0013543135584937799,False,derived_only_not_independently_checkable,target,841529554
+source,Vitalhaus,,0,,0.0,True,False,True,134,0.00012565795903550535,False,unverified_no_independent_evidence,source,116762461
+target,Aroniasaft,4018745934524,1,Aroniasaftx1,1.0,False,True,False,14,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,116762461
+source,President's Choice,60383204310,1,President's Choicex1,1.0,True,True,True,259,0.0012565795903550535,False,confirmed_by_co_listings,source,67442317
+target,Kas,8410408050187,3,Kasx3,1.0,False,True,False,127,0.0018988313809809698,False,derived_only_not_independently_checkable,target,67442317
+source,Montellier,,0,,0.0,True,True,True,83,0.000865643717800148,False,confirmed_by_title_only,source,841576339
+target,Stewart's,352154328128,1,Stewart'sx1,1.0,False,True,False,153,0.0013543135584937799,False,derived_only_not_independently_checkable,target,841576339
+source,Princes,,0,,0.0,True,True,True,34,0.0005445178224871899,False,confirmed_by_title_only,source,836685967
+target,Mehukatti,6415131402311,3,Mehukattix3,1.0,False,True,False,109,0.0,False,derived_only_not_independently_checkable,target,836685967
+source,Accelerator,,0,,0.0,True,True,True,61,0.0014939335129776747,False,confirmed_by_title_only,source,902250305
+target,Accelerator,810014530543,4,Acceleratorx3; A SHOCx1,0.75,False,True,False,61,0.0014939335129776747,False,derived_only_not_independently_checkable,target,902250305
+source,Tas,,0,,0.0,True,False,True,73,4.1885986345168454e-05,False,unverified_no_independent_evidence,source,224564199
+target,Chaudfontaine,5000112648935,1,Chaudfontainex1,1.0,False,True,False,83,0.0007120617678678636,False,derived_only_not_independently_checkable,target,224564199
+source,Viladrau,8410100000008,3,Viladraux3,1.0,True,True,True,29,0.00040489786800329504,False,confirmed_by_co_listings,source,200875081
+target,Viladrau,8411002101800,2,Viladraux2,1.0,False,True,False,29,0.00040489786800329504,False,derived_only_not_independently_checkable,target,200875081
+source,Erikli,8690793010052,4,Eriklix4,1.0,True,False,True,169,2.7923990896778967e-05,False,confirmed_by_co_listings,source,75830002
+target,Erikli,8690793010052,4,Eriklix4,1.0,False,True,False,169,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,75830002
+source,Mr. Fitzpatrick's,,0,,0.0,True,True,True,34,0.00037697387710651606,False,confirmed_by_title_only,source,160613629
+target,Fiovana,5060505820195,1,Fiovanax1,1.0,False,True,False,13,0.0001815059408290633,False,derived_only_not_independently_checkable,target,160613629
+source,L&A,,0,,0.0,True,False,True,100,1.0,False,unverified_no_independent_evidence,source,268217480
+target,meijer,713733545853,1,meijerx1,1.0,False,True,False,48,0.0006701757815226953,False,derived_only_not_independently_checkable,target,268217480
+source,Bubbl'r,,0,,0.0,True,True,True,123,0.0015218575038744538,False,confirmed_by_title_only,source,672228163
+target,Glow,861982000255,1,Glowx1,1.0,False,True,False,13,0.0007679097496614216,False,derived_only_not_independently_checkable,target,672228163
+source,Tate & Lyle,,0,,0.0,True,True,True,64,0.0009075297041453164,False,confirmed_by_title_only,source,8427944
+target,Tate & Lyle,721866591128,1,Tate & Lylex1,1.0,False,True,False,64,0.0009075297041453164,False,derived_only_not_independently_checkable,target,8427944
+source,Mr. Fitzpatrick's,,0,,0.0,True,True,True,34,0.00037697387710651606,False,confirmed_by_title_only,source,204037167
+target,Fiovana,5060505820195,1,Fiovanax1,1.0,False,True,False,13,0.0001815059408290633,False,derived_only_not_independently_checkable,target,204037167
+source,Slimpie,,0,,0.0,True,False,True,106,0.00022339192717423174,False,unverified_no_independent_evidence,source,961826258
+target,Sicilia,715120446507,1,Siciliax1,1.0,False,True,False,42,0.0005026318361420214,False,derived_only_not_independently_checkable,target,961826258
+source,North Coast,22014320707,5,North Coastx5,1.0,True,True,True,48,0.0006841377769710847,False,confirmed_by_co_listings,source,449747663
+target,Central Market,995561352890,1,Central Marketx1,1.0,False,True,False,17,0.00020942993172584225,False,derived_only_not_independently_checkable,target,449747663
+source,Sunny Delight,8414100384441,1,Sunny Delightx1,1.0,True,True,True,109,0.0016056294765647906,False,confirmed_by_co_listings,source,299103058
+target,Sunny Delight,8414100384441,1,Sunny Delightx1,1.0,False,True,False,109,0.0016056294765647906,False,derived_only_not_independently_checkable,target,299103058
+source,Pure,,0,,0.0,True,False,True,18,0.02595534953855605,True,generic_category_word,source,615648172
+target,True North,815154024136,6,True Northx6,1.0,False,True,False,50,0.0018010974128422434,False,derived_only_not_independently_checkable,target,615648172
+source,Lowicz,,0,,0.0,True,True,True,10,0.00011169596358711587,False,confirmed_by_title_only,source,257968949
+target,Lowicz,5900397737594,3,Lowiczx3,1.0,False,True,False,10,0.00011169596358711587,False,derived_only_not_independently_checkable,target,257968949
+source,Thick & Easy,,0,,0.0,True,True,True,159,0.003685966798374824,False,confirmed_by_title_only,source,579976080
+target,Thick & Easy,696850062901,1,Thick & Easyx1,1.0,False,True,False,159,0.003685966798374824,False,derived_only_not_independently_checkable,target,579976080
+source,Farm Boy,,0,,0.0,True,True,True,143,0.0020105273445680857,False,confirmed_by_title_only,source,726316905
+target,NOS,769553414220,1,NOSx1,1.0,False,True,False,169,0.00216410929450037,False,derived_only_not_independently_checkable,target,726316905
+source,Hella,,0,,0.0,True,True,True,80,0.0010890356449743798,False,confirmed_by_title_only,source,832465898
+target,Côteaux Nantais,3301591000804,3,Côteaux Nantaisx3,1.0,False,False,False,108,0.0,False,derived_only_not_independently_checkable,target,832465898
+source,Meneau,,0,,0.0,True,False,True,181,0.00015358194993228433,False,unverified_no_independent_evidence,source,409774683
+target,Meneau,3274490970274,1,Meneaux1,1.0,False,True,False,181,0.00015358194993228433,False,derived_only_not_independently_checkable,target,409774683
+source,Olympos,5202178008009,1,Olymposx1,1.0,True,False,True,114,0.0,False,confirmed_by_co_listings,source,297816288
+target,Olympos,5202178008009,1,Olymposx1,1.0,False,True,False,114,0.0,False,derived_only_not_independently_checkable,target,297816288
+source,Raak,,0,,0.0,True,False,True,148,0.00011169596358711587,False,unverified_no_independent_evidence,source,948974941
+target,Raak,87351880,3,Raakx3,1.0,False,True,False,148,0.00011169596358711587,False,derived_only_not_independently_checkable,target,948974941
+source,Çamlica,,0,,0.0,True,True,True,92,0.0012286555994582746,False,confirmed_by_title_only,source,168113772
+target,Çamlica,8690504525127,2,Çamlicax2,1.0,False,True,False,92,0.0012286555994582746,False,derived_only_not_independently_checkable,target,168113772
+source,Tradition,,0,,0.0,True,True,True,106,0.001242617594906664,False,confirmed_by_title_only,source,786233749
+target,Tradition,775462750052,1,Traditionx1,1.0,False,True,False,106,0.001242617594906664,False,derived_only_not_independently_checkable,target,786233749
+source,X- Gamer,,0,,0.0,True,True,True,67,0.0008935677086969269,False,confirmed_by_title_only,source,375007208
+target,X- Gamer,7340158202165,2,X- Gamerx2,1.0,False,True,False,67,0.0008935677086969269,False,derived_only_not_independently_checkable,target,375007208
+source,Cove,,0,,0.0,True,True,True,50,0.0006701757815226953,False,confirmed_by_title_only,source,841342682
+target,Rowdy Mermaid,857075007171,2,Rowdy Mermaidx2,1.0,False,True,False,30,0.00023735392262262122,False,derived_only_not_independently_checkable,target,841342682
+source,Thick- It,,0,,0.0,True,True,True,99,0.0021222233081552013,False,confirmed_by_title_only,source,78046727
+target,Thick & Easy,696850061607,1,Thick & Easyx1,1.0,False,True,False,159,0.003685966798374824,False,derived_only_not_independently_checkable,target,78046727
+source,Zumosol,,0,,0.0,True,True,True,161,0.001647515462909959,False,confirmed_by_title_only,source,56443387
+target,Zumosol,8435425102237,2,Zumosolx2,1.0,False,True,False,161,0.001647515462909959,False,derived_only_not_independently_checkable,target,56443387
+source,North Coast,,0,,0.0,True,True,True,48,0.0006841377769710847,False,confirmed_by_title_only,source,684864828
+target,Plezi,850044833290,2,Plezix2,1.0,False,True,False,19,0.00019546793627745276,False,derived_only_not_independently_checkable,target,684864828
+source,FLIRT,,0,,0.0,True,True,True,22,0.00023735392262262122,False,confirmed_by_title_only,source,993516854
+target,Me Me,3770007351043,1,Me Mex1,1.0,False,False,False,14,0.000432821858900074,False,derived_only_not_independently_checkable,target,993516854
+source,Wesergold,,0,,0.0,True,False,True,27,0.00026527791351940017,False,unverified_no_independent_evidence,source,47970418
+target,Wesergold,4100060024346,1,Wesergoldx1,1.0,False,True,False,27,0.00026527791351940017,False,derived_only_not_independently_checkable,target,47970418
+source,3D,868784000322,5,3Dx5,1.0,True,False,True,81,0.0010611116540776007,False,confirmed_by_co_listings,source,415186577
+target,3D,868784000391,3,3Dx3,1.0,False,False,False,81,0.0010611116540776007,False,derived_only_not_independently_checkable,target,415186577
+source,May Tea,3124480185112,6,May Teax6,1.0,True,False,True,258,0.00297390503050696,False,confirmed_by_co_listings,source,517453161
+target,PureThé,3551720042063,1,PureThéx1,1.0,False,False,False,23,0.0001815059408290633,False,derived_only_not_independently_checkable,target,517453161
+source,Taksi,,0,,0.0,True,False,True,87,1.3961995448389483e-05,False,unverified_no_independent_evidence,source,750643907
+target,Taksi,8720157462910,2,Taksix2,1.0,False,True,False,87,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,750643907
+source,Clever,,0,,0.0,True,True,True,44,0.0005584798179355794,False,confirmed_by_title_only,source,859564233
+target,Premier,7611612513883,4,Premierx4,1.0,False,True,False,343,0.0005165938315904109,False,derived_only_not_independently_checkable,target,859564233
+source,Kayseri Pazarı,,0,,0.0,True,False,True,233,0.0,False,unverified_no_independent_evidence,source,418956805
+target,Arifoglu,8691530918112,1,Arifoglux1,1.0,False,True,False,20,0.00015358194993228433,False,derived_only_not_independently_checkable,target,418956805
+source,Vibe,,0,,0.0,True,True,True,6,8.377197269033691e-05,False,confirmed_by_title_only,source,152045764
+target,Ekotrebol,8436571270191,1,Ekotrebolx1,1.0,False,True,False,32,0.00037697387710651606,False,derived_only_not_independently_checkable,target,152045764
+source,Big 8,,0,,0.0,True,True,True,104,0.004928584393281488,False,confirmed_by_title_only,source,841531686
+target,Kas,8410408050361,2,Kasx2,1.0,False,True,False,127,0.0018988313809809698,False,derived_only_not_independently_checkable,target,841531686
+source,Bremner's,,0,,0.0,True,True,True,19,0.0002513159180710107,False,confirmed_by_title_only,source,920646457
+target,Valio,6408430670031,3,Valiox3,1.0,False,True,False,275,0.00012565795903550535,False,derived_only_not_independently_checkable,target,920646457
+source,Two Bears,,0,,0.0,True,True,True,55,0.0006562137860743057,False,confirmed_by_title_only,source,726301432
+target,Two Bears,628504309032,1,Two Bearsx1,1.0,False,True,False,55,0.0006562137860743057,False,derived_only_not_independently_checkable,target,726301432
+source,Good & Gather,85239038284,2,Good & Gatherx2,1.0,True,True,True,24,0.00033508789076134763,False,confirmed_by_co_listings,source,214790880
+target,De La Calle,810050500258,2,De La Callex2,1.0,False,True,False,17,0.00023735392262262122,False,derived_only_not_independently_checkable,target,214790880
+source,Fruchtsirup,,0,,0.0,True,False,True,14,0.0,False,unverified_no_independent_evidence,source,171198602
+target,Yo,9001400005009,1,Yox1,1.0,False,False,False,84,0.0012845035812518325,False,derived_only_not_independently_checkable,target,171198602
+source,Hildon,,0,,0.0,True,True,True,43,0.0006003658042807479,False,confirmed_by_title_only,source,159366812
+target,Radnor,752836173242,1,Radnorx1,1.0,False,True,False,100,0.0012845035812518325,False,derived_only_not_independently_checkable,target,159366812
+source,Mineragua,90478410616,2,Mineraguax2,1.0,True,True,True,26,0.0003211258953129581,False,confirmed_by_co_listings,source,17049410
+target,Mineragua,732623753161,1,Mineraguax1,1.0,False,True,False,26,0.0003211258953129581,False,derived_only_not_independently_checkable,target,17049410
+source,President's Choice,,0,,0.0,True,True,True,259,0.0012565795903550535,False,confirmed_by_title_only,source,691140290
+target,Garant,7340083489457,3,Garantx3,1.0,False,True,False,191,0.0,False,derived_only_not_independently_checkable,target,691140290
+source,Lanjarón,,0,,0.0,True,True,True,59,0.0007958337405582006,False,confirmed_by_title_only,source,88157615
+target,Lanjarón,8410728180120,3,Lanjarónx3,1.0,False,False,False,59,0.0007958337405582006,False,derived_only_not_independently_checkable,target,88157615
+source,God Morgon,6415130087892,2,God Morgonx2,1.0,True,False,True,257,0.0,False,confirmed_by_co_listings,source,421076343
+target,God Morgon,6415130087953,2,God Morgonx2,1.0,False,True,False,257,0.0,False,derived_only_not_independently_checkable,target,421076343
+source,Ting,,0,,0.0,True,True,True,28,0.00037697387710651606,False,confirmed_by_title_only,source,726315819
+target,Dg,858629001065,3,Dgx2; Tingx1,0.6666666666666666,False,False,False,20,0.00022339192717423174,False,derived_only_not_independently_checkable,target,726315819
+source,BOB,,0,,0.0,True,True,True,85,0.0003909358725549055,False,confirmed_by_title_only,source,83491916
+target,BOB,7310090155539,5,BOBx5,1.0,False,True,False,85,0.0003909358725549055,False,derived_only_not_independently_checkable,target,83491916
+source,Cemilefendi,,0,,0.0,True,True,True,110,0.0015916674811164012,False,confirmed_by_title_only,source,125342983
+target,Cemil,8680462025654,1,Cemilx1,1.0,False,True,False,21,0.00011169596358711587,False,derived_only_not_independently_checkable,target,125342983
+source,Family Christodoulou,,0,,0.0,True,False,True,45,0.00037697387710651606,False,unverified_no_independent_evidence,source,278576552
+target,Naturgreen,8437007759440,3,Naturgreenx3,1.0,False,True,False,40,0.00026527791351940017,False,derived_only_not_independently_checkable,target,278576552
+source,Obsesso,,0,,0.0,True,False,True,146,0.0008935677086969269,False,unverified_no_independent_evidence,source,864077437
+target,Njie,7350068292408,4,Njiex4,1.0,False,True,False,76,0.00029320190441617914,False,derived_only_not_independently_checkable,target,864077437
+source,Solares,8410165500017,2,Solaresx2,1.0,True,False,True,21,4.1885986345168454e-05,False,confirmed_by_co_listings,source,56590130
+target,Solares,8410165500017,2,Solaresx2,1.0,False,True,False,21,4.1885986345168454e-05,False,derived_only_not_independently_checkable,target,56590130
+source,Alkalife,,0,,0.0,True,True,True,12,0.00012565795903550535,False,confirmed_by_title_only,source,9698426
+target,Nestlé,798235650229,1,Nestléx1,1.0,False,False,False,19,0.0005026318361420214,False,derived_only_not_independently_checkable,target,9698426
+source,Sir Up,,0,,0.0,True,True,True,51,1.3961995448389483e-05,False,confirmed_by_title_only,source,727161336
+target,Kampos Chioy,5204125100859,1,Kampos Chioyx1,1.0,False,True,False,33,0.0,False,derived_only_not_independently_checkable,target,727161336
+source,Sunita,,0,,0.0,True,True,True,147,0.0016614774583583486,False,confirmed_by_title_only,source,251699831
+target,Sunita,5018076100512,13,Sunitax13,1.0,False,True,False,147,0.0016614774583583486,False,derived_only_not_independently_checkable,target,251699831
+source,Produits U,,0,,0.0,True,False,True,33,0.0,False,unverified_no_independent_evidence,source,2534587
+target,Bravo,7310867561037,4,Bravox4,1.0,False,True,False,137,0.0006980997724194742,False,derived_only_not_independently_checkable,target,2534587
+source,Orange Crush,,0,,0.0,True,False,True,43,0.0014939335129776747,False,unverified_no_independent_evidence,source,859903348
+target,SoBe,739510001138,1,SoBex1,1.0,False,True,False,67,0.0002792399089677897,False,derived_only_not_independently_checkable,target,859903348
+source,Caresse Antillaise,,0,,0.0,True,False,True,62,0.0,False,unverified_no_independent_evidence,source,94031063
+target,Caresse Antillaise,3291337615280,4,Caresse Antillaisex4,1.0,False,True,False,62,0.0,False,derived_only_not_independently_checkable,target,94031063
+source,Ekobryggeriet,7350093030259,7,Ekobryggerietx7,1.0,True,False,True,68,9.773396813872638e-05,False,confirmed_by_co_listings,source,246356123
+target,Recoaro,8008720081011,3,Recoarox3,1.0,False,True,False,24,0.0003211258953129581,False,derived_only_not_independently_checkable,target,246356123
+source,Ozarka,22592637778,6,Ozarkax6,1.0,True,True,True,196,0.0025550451670552756,False,confirmed_by_co_listings,source,752244812
+target,Hildon,680332586276,1,Hildonx1,1.0,False,True,False,43,0.0006003658042807479,False,derived_only_not_independently_checkable,target,752244812
+source,Slimpie,,0,,0.0,True,False,True,106,0.00022339192717423174,False,unverified_no_independent_evidence,source,587335210
+target,Morga,7610491040992,2,Morgax2,1.0,False,True,False,57,0.0006143277997291373,False,derived_only_not_independently_checkable,target,587335210
+source,Bucked Up,,0,,0.0,True,True,True,56,0.0007539477542130321,False,confirmed_by_title_only,source,969441957
+target,Bucked Up,811374039691,3,Bucked Upx3,1.0,False,True,False,56,0.0007539477542130321,False,derived_only_not_independently_checkable,target,969441957
+source,Raptor,,0,,0.0,True,True,True,11,0.00016754394538067381,False,confirmed_by_title_only,source,580362375
+target,NOS,711403680477,1,NOSx1,1.0,False,True,False,169,0.00216410929450037,False,derived_only_not_independently_checkable,target,580362375
+source,Marcel,,0,,0.0,True,True,True,129,0.0011169596358711587,False,confirmed_by_title_only,source,78578616
+target,Marcel,3700749302300,3,Marcelx3,1.0,False,True,False,129,0.0011169596358711587,False,derived_only_not_independently_checkable,target,78578616
+source,Pedras Salgadas,,0,,0.0,True,False,True,61,5.5847981793557934e-05,False,unverified_no_independent_evidence,source,736543451
+target,Olvi,6419800052982,4,Olvix4,1.0,False,True,False,137,0.0017033634447035171,False,derived_only_not_independently_checkable,target,736543451
+source,Mello Yello,,0,,0.0,True,True,True,57,0.0007399857587646427,False,confirmed_by_title_only,source,508628351
+target,Mello Yello,702823656753,1,Mello Yellox1,1.0,False,True,False,57,0.0007399857587646427,False,derived_only_not_independently_checkable,target,508628351
+source,Anna's Best,,0,,0.0,True,True,True,29,0.0002513159180710107,False,confirmed_by_title_only,source,403076881
+target,Cool Best,8720157462187,2,Cool Bestx2,1.0,False,True,False,234,0.004062940675481339,False,derived_only_not_independently_checkable,target,403076881
+source,Ibc,72796000168,12,Ibcx12,1.0,True,True,True,81,0.0010052636722840428,False,confirmed_by_co_listings,source,75445737
+target,Maine Root,810161207695,1,Maine Rootx1,1.0,False,True,False,47,0.0007539477542130321,False,derived_only_not_independently_checkable,target,75445737
+source,Hill Country Fare,41220715954,1,Hill Country Farex1,1.0,True,True,True,13,0.00016754394538067381,False,confirmed_by_co_listings,source,78285482
+target,Dublin,897555002296,1,Dublinx1,1.0,False,True,False,27,0.00037697387710651606,False,derived_only_not_independently_checkable,target,78285482
+source,PLj,,0,,0.0,True,True,True,25,0.00030716389986456866,False,confirmed_by_title_only,source,530936591
+target,Tasting Good,8719075630310,2,Tasting Goodx2,1.0,False,True,False,25,0.0015777054856680117,False,derived_only_not_independently_checkable,target,530936591
+source,Clear American,78742128108,1,Clear Americanx1,1.0,True,True,True,126,0.0019127933764293593,False,confirmed_by_co_listings,source,10531195
+target,Clear American,681131780957,1,Clear Americanx1,1.0,False,True,False,126,0.0019127933764293593,False,derived_only_not_independently_checkable,target,10531195
+source,Publix,,0,,0.0,True,True,True,239,0.0033089929212683075,False,confirmed_by_title_only,source,689989863
+target,Pakola,8964000661871,1,Pakolax1,1.0,False,True,False,9,0.00011169596358711587,False,derived_only_not_independently_checkable,target,689989863
+source,Iceland,,0,,0.0,True,True,True,58,0.0008237577314549795,False,confirmed_by_title_only,source,76199200
+target,Hawaiian Springs,667103102262,1,Hawaiian Springsx1,1.0,False,True,False,29,0.0011867696131131061,False,derived_only_not_independently_checkable,target,76199200
+source,Meneau,,0,,0.0,True,False,True,181,0.00015358194993228433,False,unverified_no_independent_evidence,source,83047828
+target,Meneau,3274490970588,2,Meneaux2,1.0,False,True,False,181,0.00015358194993228433,False,derived_only_not_independently_checkable,target,83047828
+source,Chaudfontaine,5449000247223,2,Chaudfontainex2,1.0,True,False,True,83,0.0007120617678678636,False,confirmed_by_co_listings,source,142817540
+target,Chaudfontaine,5449000247223,2,Chaudfontainex2,1.0,False,True,False,83,0.0007120617678678636,False,derived_only_not_independently_checkable,target,142817540
+source,Oze,,0,,0.0,True,False,True,222,0.00242938720801977,False,unverified_no_independent_evidence,source,208957261
+target,What A Melon,5060167500305,1,What A Melonx1,1.0,False,True,False,37,0.0006143277997291373,False,derived_only_not_independently_checkable,target,208957261
+source,Cold Brew Tea,,0,,0.0,True,True,True,10,0.025131591807101072,True,generic_category_word,source,841312832
+target,Swoon,858344005546,5,Swoonx5,1.0,False,True,False,19,0.00023735392262262122,False,derived_only_not_independently_checkable,target,841312832
+source,Kiviks Musteri,7314720732534,7,Kiviks Musterix7,1.0,True,False,True,261,0.0,False,confirmed_by_co_listings,source,176170363
+target,Kiviks Musteri,7314720732534,7,Kiviks Musterix7,1.0,False,True,False,261,0.0,False,derived_only_not_independently_checkable,target,176170363
+source,Nygårda,7310401000220,4,Nygårdax4,1.0,True,False,True,137,0.0005445178224871899,False,confirmed_by_co_listings,source,516176587
+target,Apotekarnes,7310070733856,4,Apotekarnesx4,1.0,False,True,False,130,0.0006003658042807479,False,derived_only_not_independently_checkable,target,516176587
+source,Private Selection,11110827784,1,Private Selectionx1,1.0,True,True,True,36,0.00044678385434846347,False,confirmed_by_co_listings,source,32018613
+target,Bio Primo,2200081476772,2,Bio Primox2,1.0,False,True,False,21,0.00015358194993228433,False,derived_only_not_independently_checkable,target,32018613
+source,Tradition,,0,,0.0,True,True,True,106,0.001242617594906664,False,confirmed_by_title_only,source,841750186
+target,Bebivita,4018852022084,2,Bebivitax2,1.0,False,True,False,65,0.0005864038088323583,False,derived_only_not_independently_checkable,target,841750186
+source,Clive's Fruit Farm,,0,,0.0,True,False,True,15,0.00020942993172584225,False,unverified_no_independent_evidence,source,159214059
+target,Marcel,3700749300108,3,Marcelx3,1.0,False,True,False,129,0.0011169596358711587,False,derived_only_not_independently_checkable,target,159214059
+source,Aloha Maid,,0,,0.0,True,True,True,32,0.000460745849796853,False,confirmed_by_title_only,source,613535064
+target,Aloha Maid,835143015006,1,Aloha Maidx1,1.0,False,True,False,32,0.000460745849796853,False,derived_only_not_independently_checkable,target,613535064
+source,Mautner Markhof,,0,,0.0,True,False,True,48,0.0003909358725549055,False,unverified_no_independent_evidence,source,953060460
+target,Brookes,656382219808,1,Brookesx1,1.0,False,True,False,2,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,953060460
+source,Adrenaline Shoc,810014530048,7,Adrenaline Shocx5; A SHOCx2,0.7142857142857143,True,False,True,121,0.0015777054856680117,False,confirmed_by_co_listings,source,173671805
+target,Adrenaline Shoc,810014530031,8,Adrenaline Shocx7; A SHOCx1,0.875,False,True,False,121,0.0015777054856680117,False,derived_only_not_independently_checkable,target,173671805
+source,QNT,,0,,0.0,True,True,True,62,0.0007120617678678636,False,confirmed_by_title_only,source,702295022
+target,QNT,5404017402744,3,QNTx3,1.0,False,True,False,62,0.0007120617678678636,False,derived_only_not_independently_checkable,target,702295022
+source,Obsthof Retter,,0,,0.0,True,False,True,36,5.5847981793557934e-05,False,unverified_no_independent_evidence,source,78823228
+target,Smart Juice,894357002004,7,Smart Juicex7,1.0,False,True,False,88,0.0028482470714714546,False,derived_only_not_independently_checkable,target,78823228
+source,Bubbl'r,28435399780,4,Bubbl'rx4,1.0,True,True,True,123,0.0015218575038744538,False,confirmed_by_co_listings,source,508721166
+target,Aura Bora,850026937039,1,Aura Borax1,1.0,False,True,False,46,0.000432821858900074,False,derived_only_not_independently_checkable,target,508721166
+source,Soleil,,0,,0.0,True,True,True,45,0.0006282897951775268,False,confirmed_by_title_only,source,565234106
+target,Nixie,3804078275394,1,Nixiex1,1.0,False,True,False,78,0.000921491699593706,False,derived_only_not_independently_checkable,target,565234106
+source,Garant,7340083466076,3,Garantx3,1.0,True,False,True,191,0.0,False,confirmed_by_co_listings,source,118049674
+target,So Natural,5603493002886,1,So Naturalx1,1.0,False,True,False,93,0.0015777054856680117,False,derived_only_not_independently_checkable,target,118049674
+source,Alkaline88,853158004242,3,Alkaline88x3,1.0,True,True,True,100,0.0011588456222163272,False,confirmed_by_co_listings,source,292408091
+target,Alkaline88,853158004235,3,Alkaline88x3,1.0,False,True,False,100,0.0011588456222163272,False,derived_only_not_independently_checkable,target,292408091
+source,The Juice Company,4088600552538,1,The Juice Companyx1,1.0,True,True,True,40,0.0023037292489842646,False,confirmed_by_co_listings,source,779986442
+target,The Juice Company,4088600552538,1,The Juice Companyx1,1.0,False,True,False,40,0.0023037292489842646,False,derived_only_not_independently_checkable,target,779986442
+source,Cidou,,0,,0.0,True,True,True,62,0.0005864038088323583,False,confirmed_by_title_only,source,302639039
+target,Çamlica,8690504519164,1,Çamlicax1,1.0,False,False,False,92,0.0012286555994582746,False,derived_only_not_independently_checkable,target,302639039
+source,Farm Boy,,0,,0.0,True,True,True,143,0.0020105273445680857,False,confirmed_by_title_only,source,841257481
+target,Rieme,3292481350010,3,Riemex3,1.0,False,True,False,18,4.1885986345168454e-05,False,derived_only_not_independently_checkable,target,841257481
+source,ebe,5201156054557,2,ebex2,1.0,True,False,True,52,0.0,False,confirmed_by_co_listings,source,524237330
+target,ebe,5201156173296,2,ebex2,1.0,False,True,False,52,0.0,False,derived_only_not_independently_checkable,target,524237330
+source,Coldpress,5060268001251,2,Coldpressx2,1.0,True,True,True,48,0.0006003658042807479,False,confirmed_by_co_listings,source,713423372
+target,Coldpress,5060268001251,2,Coldpressx2,1.0,False,True,False,48,0.0006003658042807479,False,derived_only_not_independently_checkable,target,713423372
+source,Prosain,,0,,0.0,True,True,True,34,0.00013961995448389484,False,confirmed_by_title_only,source,688085456
+target,Prosain,3335880007823,3,Prosainx3,1.0,False,True,False,34,0.00013961995448389484,False,derived_only_not_independently_checkable,target,688085456
+source,Vi Drate,617285924831,1,Vi Dratex1,1.0,True,True,True,18,0.00022339192717423174,False,confirmed_by_co_listings,source,872371973
+target,Vi Drate,617285924831,1,Vi Dratex1,1.0,False,True,False,18,0.00022339192717423174,False,derived_only_not_independently_checkable,target,872371973
+source,Natur pur,,0,,0.0,True,True,True,2,0.0007539477542130321,False,confirmed_by_title_only,source,229516012
+target,Monoprix,3350033594142,1,Monoprixx1,1.0,False,True,False,144,0.0017452494310486854,False,derived_only_not_independently_checkable,target,229516012
+source,Big 8,,0,,0.0,True,True,True,104,0.004928584393281488,False,confirmed_by_title_only,source,726242335
+target,Peapod,688267098116,2,Peapodx2,1.0,False,True,False,180,0.002359577230777823,False,derived_only_not_independently_checkable,target,726242335
+source,Mezzo Mix,,0,,0.0,True,False,True,63,0.0008237577314549795,False,unverified_no_independent_evidence,source,47925302
+target,The Juice Company,4088600388816,1,The Juice Companyx1,1.0,False,True,False,40,0.0023037292489842646,False,derived_only_not_independently_checkable,target,47925302
+source,Proud Source,,0,,0.0,True,True,True,144,0.0012565795903550535,False,confirmed_by_title_only,source,658702369
+target,Open Water,761774124537,1,Open Waterx1,1.0,False,True,False,28,0.0017033634447035171,False,derived_only_not_independently_checkable,target,658702369
+source,BOB,7310090167532,6,BOBx6,1.0,True,False,True,85,0.0003909358725549055,False,confirmed_by_co_listings,source,55611218
+target,Prosain,3335880007717,1,Prosainx1,1.0,False,True,False,34,0.00013961995448389484,False,derived_only_not_independently_checkable,target,55611218
+source,Thonon,3468570221602,5,Thononx5,1.0,True,False,True,24,5.5847981793557934e-05,False,confirmed_by_co_listings,source,58081170
+target,Mondariz,8412042502312,2,Mondarizx2,1.0,False,True,False,40,0.0005584798179355794,False,derived_only_not_independently_checkable,target,58081170
+source,Barsmith,,0,,0.0,True,False,True,57,0.0006282897951775268,False,unverified_no_independent_evidence,source,849326971
+target,Frostie,793674820462,3,Frostiex3,1.0,False,True,False,129,0.0017871354173938539,False,derived_only_not_independently_checkable,target,849326971
+source,Wellsley Farms,,0,,0.0,True,False,True,34,0.0003211258953129581,False,unverified_no_independent_evidence,source,868857790
+target,Zephyrhills,685987084795,2,Zephyrhillsx2,1.0,False,True,False,111,0.0015078955084260643,False,derived_only_not_independently_checkable,target,868857790
+source,Zing Zang,,0,,0.0,True,True,True,56,0.0007260237633162532,False,confirmed_by_title_only,source,16317724
+target,Zing Zang,616003790116,5,Zing Zangx5,1.0,False,True,False,56,0.0007260237633162532,False,derived_only_not_independently_checkable,target,16317724
+source,Sade Organik,,0,,0.0,True,False,True,73,0.0,False,unverified_no_independent_evidence,source,380663756
+target,Moloko,4051454000357,2,Molokox2,1.0,False,True,False,16,0.00020942993172584225,False,derived_only_not_independently_checkable,target,380663756
+source,Meneau,,0,,0.0,True,False,True,181,0.00015358194993228433,False,unverified_no_independent_evidence,source,412602413
+target,Protein2O,858379004279,2,Protein2Ox2,1.0,False,True,False,32,0.0004188598634516845,False,derived_only_not_independently_checkable,target,412602413
+source,Zafer,,0,,0.0,True,False,True,31,0.0,False,unverified_no_independent_evidence,source,330203227
+target,Çamlica,8690504526391,2,Çamlicax2,1.0,False,False,False,92,0.0012286555994582746,False,derived_only_not_independently_checkable,target,330203227
+source,Edeka,4311501346587,2,Edekax2,1.0,True,True,True,105,0.0014241235357357273,False,confirmed_by_co_listings,source,122019798
+target,Eco+,8426633001405,4,Eco+x3; INT-SALIMx1,0.75,False,True,False,43,0.005263672284042836,False,derived_only_not_independently_checkable,target,122019798
+source,Venom,78000023749,4,Venomx4,1.0,True,True,True,58,0.0011309216313195483,False,confirmed_by_co_listings,source,8595669
+target,NOS,815154020008,11,NOSx11,1.0,False,True,False,169,0.00216410929450037,False,derived_only_not_independently_checkable,target,8595669
+source,4Bro,,0,,0.0,True,True,True,86,0.0007120617678678636,False,confirmed_by_title_only,source,750968944
+target,4Bro,4260667060083,4,4Brox4,1.0,False,True,False,86,0.0007120617678678636,False,derived_only_not_independently_checkable,target,750968944
+source,Coldpress,,0,,0.0,True,True,True,48,0.0006003658042807479,False,confirmed_by_title_only,source,16675307
+target,Coldpress,5060268001114,1,Coldpressx1,1.0,False,True,False,48,0.0006003658042807479,False,derived_only_not_independently_checkable,target,16675307
+source,River,,0,,0.0,True,False,True,68,0.0018010974128422434,False,unverified_no_independent_evidence,source,1043535946
+target,Kiviks Musteri,7314720732459,6,Kiviks Musterix6,1.0,False,True,False,261,0.0,False,derived_only_not_independently_checkable,target,1043535946
+source,Içim,,0,,0.0,True,False,True,48,0.00011169596358711587,False,unverified_no_independent_evidence,source,427040119
+target,Just Water,850031418066,1,Just Waterx1,1.0,False,True,False,82,0.0023875012216746016,False,derived_only_not_independently_checkable,target,427040119
+source,Moulin de Valdonne,,0,,0.0,True,False,True,172,4.1885986345168454e-05,False,unverified_no_independent_evidence,source,384958838
+target,Moulin de Valdonne,3272030030235,3,Moulin de Valdonnex3,1.0,False,True,False,172,4.1885986345168454e-05,False,derived_only_not_independently_checkable,target,384958838
+source,Clive's Fruit Farm,,0,,0.0,True,False,True,15,0.00020942993172584225,False,unverified_no_independent_evidence,source,91081980
+target,Actiph,5060477670057,2,Actiphx2,1.0,False,True,False,57,0.0007679097496614216,False,derived_only_not_independently_checkable,target,91081980
+source,Içim,,0,,0.0,True,False,True,48,0.00011169596358711587,False,unverified_no_independent_evidence,source,125509776
+target,Jardin Bio,3289196040565,2,Jardin Biox2,1.0,False,True,False,179,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,125509776
+source,Ekolo,,0,,0.0,True,True,True,140,0.0014660095220808958,False,confirmed_by_title_only,source,762531972
+target,Ekolo,8437010011023,3,Ekolox3,1.0,False,True,False,140,0.0014660095220808958,False,derived_only_not_independently_checkable,target,762531972
+source,Nooma,,0,,0.0,True,True,True,25,0.0003490498862097371,False,confirmed_by_title_only,source,100362630
+target,Nooma,720887069616,1,Noomax1,1.0,False,True,False,25,0.0003490498862097371,False,derived_only_not_independently_checkable,target,100362630
+source,Beebad,,0,,0.0,True,True,True,30,0.00037697387710651606,False,confirmed_by_title_only,source,668501249
+target,Beebad,8056326430139,2,Beebadx2,1.0,False,True,False,30,0.00037697387710651606,False,derived_only_not_independently_checkable,target,668501249
+source,Everfresh,,0,,0.0,True,True,True,33,0.00047470784524524244,False,confirmed_by_title_only,source,355972020
+target,Berri,607353953511,1,Berrix1,1.0,False,True,False,25,0.00030716389986456866,False,derived_only_not_independently_checkable,target,355972020
+source,Sir Up,,0,,0.0,True,False,True,51,1.3961995448389483e-05,False,unverified_no_independent_evidence,source,96743354
+target,Paquito,3250390001522,1,Paquitox1,1.0,False,True,False,11,0.0,False,derived_only_not_independently_checkable,target,96743354
+source,Garant,7340083480263,3,Garantx3,1.0,True,False,True,191,0.0,False,confirmed_by_co_listings,source,442913051
+target,Garant,7340083480263,3,Garantx3,1.0,False,True,False,191,0.0,False,derived_only_not_independently_checkable,target,442913051
+source,Jumbo,,0,,0.0,True,True,True,15,0.0003211258953129581,False,confirmed_by_title_only,source,54290452
+target,Fruit2O,278161195419,1,Fruit2Ox1,1.0,False,True,False,72,0.000460745849796853,False,derived_only_not_independently_checkable,target,54290452
+source,Proviant,,0,,0.0,True,False,True,47,0.0,False,unverified_no_independent_evidence,source,116229417
+target,La Casera,8410283363891,1,La Caserax1,1.0,False,True,False,130,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,116229417
+source,North Coast,,0,,0.0,True,True,True,48,0.0006841377769710847,False,confirmed_by_title_only,source,445083413
+target,Central Market,995561352890,1,Central Marketx1,1.0,False,True,False,17,0.00020942993172584225,False,derived_only_not_independently_checkable,target,445083413
+source,Naya,,0,,0.0,True,True,True,45,0.0005026318361420214,False,confirmed_by_title_only,source,465685050
+target,Hella,4102380025683,1,Hellax1,1.0,False,True,False,80,0.0010890356449743798,False,derived_only_not_independently_checkable,target,465685050
+source,Bossen,,0,,0.0,True,False,True,32,0.00037697387710651606,False,unverified_no_independent_evidence,source,344795396
+target,Bossen,754262746731,1,Bossenx1,1.0,False,True,False,32,0.00037697387710651606,False,derived_only_not_independently_checkable,target,344795396
+source,Aspire,,0,,0.0,True,True,True,136,0.0016335534674615697,False,confirmed_by_title_only,source,318287896
+target,Goat Fuel,850010701264,2,Goat Fuelx2,1.0,False,True,False,46,0.00023735392262262122,False,derived_only_not_independently_checkable,target,318287896
+source,Yedigun,8690574991358,2,Yedigunx2,1.0,True,False,True,86,6.980997724194742e-05,False,confirmed_by_co_listings,source,76884982
+target,Yedigun,8690574002115,1,Yedigunx1,1.0,False,True,False,86,6.980997724194742e-05,False,derived_only_not_independently_checkable,target,76884982
+source,Isostar,,0,,0.0,True,True,True,99,0.0010052636722840428,False,confirmed_by_title_only,source,364925563
+target,Mr. Fitzpatrick's,5060407070681,2,Mr. Fitzpatrick'sx2,1.0,False,True,False,34,0.00037697387710651606,False,derived_only_not_independently_checkable,target,364925563
+source,Basic Ayurveda,,0,,0.0,True,True,True,10,0.00016754394538067381,False,confirmed_by_title_only,source,394640053
+target,Cosmoveda,4032108138824,2,Cosmovedax2,1.0,False,True,False,89,0.0005724418133839688,False,derived_only_not_independently_checkable,target,394640053
+source,President's Choice,,0,,0.0,True,False,True,259,0.0012565795903550535,False,unverified_no_independent_evidence,source,374854268
+target,Peapod,688267000980,2,Peapodx2,1.0,False,True,False,180,0.002359577230777823,False,derived_only_not_independently_checkable,target,374854268
+source,Damla,,0,,0.0,True,False,True,41,0.0,False,unverified_no_independent_evidence,source,909276206
+target,BIKOS,5201946910339,2,BIKOSx2,1.0,False,True,False,95,0.0,False,derived_only_not_independently_checkable,target,909276206
+source,Ethiquable,3760278861259,2,Ethiquablex2,1.0,True,False,True,124,0.0,False,confirmed_by_co_listings,source,463848622
+target,Fruity King,8714862616010,2,Fruity Kingx2,1.0,False,True,False,95,0.0016195914720131801,False,derived_only_not_independently_checkable,target,463848622
+source,Sun-Rype,,0,,0.0,True,True,True,149,0.0014939335129776747,False,confirmed_by_title_only,source,841441993
+target,Lerum,7070841003211,2,Lerumx2,1.0,False,True,False,49,0.000432821858900074,False,derived_only_not_independently_checkable,target,841441993
+source,Yedigun,8690574820313,3,Yedigunx3,1.0,True,False,True,86,6.980997724194742e-05,False,confirmed_by_co_listings,source,407565077
+target,Rieme,3292482260028,1,Riemex1,1.0,False,True,False,18,4.1885986345168454e-05,False,derived_only_not_independently_checkable,target,407565077
+source,ESN,,0,,0.0,True,True,True,82,0.000837719726903369,False,confirmed_by_title_only,source,302004862
+target,ESN,4260631760902,3,ESNx3,1.0,False,True,False,82,0.000837719726903369,False,derived_only_not_independently_checkable,target,302004862
+source,Meneau,3274490970212,3,Meneaux3,1.0,True,False,True,181,0.00015358194993228433,False,confirmed_by_co_listings,source,959300328
+target,Meneau,3274490972360,1,Meneaux1,1.0,False,True,False,181,0.00015358194993228433,False,derived_only_not_independently_checkable,target,959300328
+source,Thirsty Planet,,0,,0.0,True,True,True,138,0.0025410831716068862,False,confirmed_by_title_only,source,159275338
+target,Trocadero,7310403034551,2,Trocaderox2,1.0,False,True,False,135,0.0014799715175292853,False,derived_only_not_independently_checkable,target,159275338
+source,Ethiquable,,0,,0.0,True,False,True,124,0.0,False,unverified_no_independent_evidence,source,914834084
+target,Rå,7034280001962,2,Råx2,1.0,False,False,False,22,0.00013961995448389484,False,derived_only_not_independently_checkable,target,914834084
+source,Puhdistamo,6430039223615,5,Puhdistamox5,1.0,True,False,True,123,2.7923990896778967e-05,False,confirmed_by_co_listings,source,732669269
+target,Clean Drink,7350089431114,4,Clean Drinkx4,1.0,False,True,False,101,0.003937282716445834,False,derived_only_not_independently_checkable,target,732669269
+source,President's Choice,,0,,0.0,True,False,True,259,0.0012565795903550535,False,unverified_no_independent_evidence,source,67377898
+target,Hildon,5017160000028,1,Hildonx1,1.0,False,True,False,43,0.0006003658042807479,False,derived_only_not_independently_checkable,target,67377898
+source,R Whites,,0,,0.0,True,True,True,65,0.0008097957360065901,False,confirmed_by_title_only,source,18614793
+target,Tuborg,5201309705145,1,Tuborgx1,1.0,False,True,False,61,0.0006980997724194742,False,derived_only_not_independently_checkable,target,18614793
+source,Mehustamo,7340191106574,2,Mehustamox2,1.0,True,False,True,58,0.0,False,confirmed_by_co_listings,source,524036039
+target,Mehustamo,7340191171060,2,Mehustamox2,1.0,False,True,False,58,0.0,False,derived_only_not_independently_checkable,target,524036039
+source,El Corte Inglés,,0,,0.0,True,False,True,205,0.0008796057132485375,False,unverified_no_independent_evidence,source,195773055
+target,Kiviks Musteri,7314720716558,2,Kiviks Musterix2,1.0,False,True,False,261,0.0,False,derived_only_not_independently_checkable,target,195773055
+source,Viveau,,0,,0.0,True,True,True,25,0.0002792399089677897,False,confirmed_by_title_only,source,841736656
+target,Viveau,627987101393,1,Viveaux1,1.0,False,True,False,25,0.0002792399089677897,False,derived_only_not_independently_checkable,target,841736656
+source,McCafé,49000075304,10,McCaféx10,1.0,True,True,True,39,6.980997724194742e-05,False,confirmed_by_co_listings,source,112585917
+target,Peet's Coffee,785357022867,3,Peet's Coffeex3,1.0,False,True,False,70,0.0007539477542130321,False,derived_only_not_independently_checkable,target,112585917
+source,Günbak,,0,,0.0,True,False,True,144,5.5847981793557934e-05,False,unverified_no_independent_evidence,source,909069030
+target,Sun Quench,4088600399287,1,Sun Quenchx1,1.0,False,True,False,30,0.00023735392262262122,False,derived_only_not_independently_checkable,target,909069030
+source,Stift,,0,,0.0,True,False,True,26,0.0,False,unverified_no_independent_evidence,source,78888962
+target,Vers Sap,8718989925826,1,Vers Sapx1,1.0,False,True,False,45,0.0,False,derived_only_not_independently_checkable,target,78888962
+source,Waldquelle,9001521001867,2,Waldquellex2,1.0,True,False,True,35,0.0,False,confirmed_by_co_listings,source,53419243
+target,Waldquelle,4015016002067,1,Waldquellex1,1.0,False,True,False,35,0.0,False,derived_only_not_independently_checkable,target,53419243
+source,Christinen,,0,,0.0,True,False,True,34,0.00044678385434846347,False,unverified_no_independent_evidence,source,47926787
+target,Premier,7611612513920,2,Premierx2,1.0,False,True,False,343,0.0005165938315904109,False,derived_only_not_independently_checkable,target,47926787
+source,Fritz- Spritz,,0,,0.0,True,False,True,11,0.0003211258953129581,False,unverified_no_independent_evidence,source,47999149
+target,Bio Gourmet,4039057416539,1,Bio Gourmetx1,1.0,False,True,False,27,0.0010471496586292113,False,derived_only_not_independently_checkable,target,47999149
+source,4Bro,4260667060083,4,4Brox4,1.0,True,True,True,86,0.0007120617678678636,False,confirmed_by_co_listings,source,444751585
+target,Get More,5060338920017,4,Get Morex4,1.0,False,True,False,94,0.0012286555994582746,False,derived_only_not_independently_checkable,target,444751585
+source,Christinen,,0,,0.0,True,True,True,34,0.00044678385434846347,False,confirmed_by_title_only,source,79949320
+target,Alkaline88,853158004075,1,Alkaline88x1,1.0,False,True,False,100,0.0011588456222163272,False,derived_only_not_independently_checkable,target,79949320
+source,Beetology,,0,,0.0,True,True,True,13,0.00016754394538067381,False,confirmed_by_title_only,source,71095805
+target,Bleichhof,4260447590595,1,Bleichhofx1,1.0,False,True,False,62,0.0007120617678678636,False,derived_only_not_independently_checkable,target,71095805
+source,4Bro,,0,,0.0,True,True,True,86,0.0007120617678678636,False,confirmed_by_title_only,source,747894136
+target,Oasis,3124480190994,2,Oasisx2,1.0,False,True,False,36,0.0008516817223517586,False,derived_only_not_independently_checkable,target,747894136
+source,Clearly Canadian,,0,,0.0,True,True,True,220,0.0026946651215391704,False,confirmed_by_title_only,source,432690638
+target,Clearly Canadian,6220171966071,1,Clearly Canadianx1,1.0,False,True,False,220,0.0026946651215391704,False,derived_only_not_independently_checkable,target,432690638
+source,Vitalhaus,,0,,0.0,True,False,True,134,0.00012565795903550535,False,unverified_no_independent_evidence,source,371058801
+target,Vitalhaus,4041685002572,1,Vitalhausx1,1.0,False,True,False,134,0.00012565795903550535,False,derived_only_not_independently_checkable,target,371058801
+source,Rougemont,,0,,0.0,True,False,True,41,0.00044678385434846347,False,unverified_no_independent_evidence,source,67563848
+target,Bravo,7310867561013,6,Bravox6,1.0,False,True,False,137,0.0006980997724194742,False,derived_only_not_independently_checkable,target,67563848
+source,Starry,,0,,0.0,True,True,True,221,0.0023875012216746016,False,confirmed_by_title_only,source,783880263
+target,Jocko,810076291109,2,Jockox2,1.0,False,True,False,57,0.0007958337405582006,False,derived_only_not_independently_checkable,target,783880263
+source,Dragonball Z,,0,,0.0,True,True,True,13,5.5847981793557934e-05,False,confirmed_by_title_only,source,909429100
+target,Rowdy Energy,850014705718,2,Rowdy Energyx2,1.0,False,True,False,71,0.0011588456222163272,False,derived_only_not_independently_checkable,target,909429100
+source,Oze,,0,,0.0,True,True,True,222,0.00242938720801977,False,confirmed_by_title_only,source,207503276
+target,Oze,8681349009910,1,Ozex1,1.0,False,True,False,222,0.00242938720801977,False,derived_only_not_independently_checkable,target,207503276
+source,QNT,5425002406950,5,QNTx5,1.0,True,True,True,62,0.0007120617678678636,False,confirmed_by_co_listings,source,131906984
+target,Rheinfels Quelle,4101130061889,1,Rheinfels Quellex1,1.0,False,True,False,51,0.0,False,derived_only_not_independently_checkable,target,131906984
+source,Sunita,,0,,0.0,True,False,True,147,0.0016614774583583486,False,unverified_no_independent_evidence,source,957830195
+target,Paradise,799793026969,1,Paradisex1,1.0,False,True,False,9,0.0007679097496614216,False,derived_only_not_independently_checkable,target,957830195
+source,Amy & Brian,,0,,0.0,True,False,True,126,0.0012565795903550535,False,unverified_no_independent_evidence,source,849780836
+target,Amy & Brian,721332820080,3,Amy & Brianx3,1.0,False,True,False,126,0.0012565795903550535,False,derived_only_not_independently_checkable,target,849780836
+source,Ozarka,22592777719,2,Ozarkax2,1.0,True,True,True,196,0.0025550451670552756,False,confirmed_by_co_listings,source,20411934
+target,Villi,6416884206461,2,Villix2,1.0,False,True,False,60,0.0,False,derived_only_not_independently_checkable,target,20411934
+source,Kas,,0,,0.0,True,True,True,127,0.0018988313809809698,False,confirmed_by_title_only,source,53926692
+target,Kas,8410494303112,1,Kasx1,1.0,False,True,False,127,0.0018988313809809698,False,derived_only_not_independently_checkable,target,53926692
+source,Kiju,,0,,0.0,True,True,True,90,0.0012286555994582746,False,confirmed_by_title_only,source,179763870
+target,Cock N Bull,810158581234,2,Cock N Bullx2,1.0,False,True,False,142,0.0019826033536713065,False,derived_only_not_independently_checkable,target,179763870
+source,Mont Roucous,3257971080648,5,Mont Roucousx5,1.0,True,False,True,63,0.0006422517906259162,False,confirmed_by_co_listings,source,517371316
+target,Mont,8024884248299,3,Montx3,1.0,False,True,False,50,0.0011169596358711587,False,derived_only_not_independently_checkable,target,517371316
+source,Jardin Bio,,0,,0.0,True,False,True,179,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,96647181
+target,Delhaize,5400119579650,1,Delhaizex1,1.0,False,True,False,41,0.0,False,derived_only_not_independently_checkable,target,96647181
+source,Mahbuba,,0,,0.0,True,False,True,133,0.0,False,unverified_no_independent_evidence,source,289925780
+target,Frutti,8690723581201,1,Fruttix1,1.0,False,True,False,33,0.0007958337405582006,False,derived_only_not_independently_checkable,target,289925780
+source,Aloha Maid,,0,,0.0,True,True,True,32,0.000460745849796853,False,confirmed_by_title_only,source,353289244
+target,De Mi Pais,896211003813,1,De Mi Paisx1,1.0,False,True,False,23,0.0002513159180710107,False,derived_only_not_independently_checkable,target,353289244
+source,Everfresh,,0,,0.0,True,True,True,33,0.00047470784524524244,False,confirmed_by_title_only,source,362962886
+target,Xyience,352154300780,1,Xyiencex1,1.0,False,True,False,88,0.0010890356449743798,False,derived_only_not_independently_checkable,target,362962886
+source,Green's,,0,,0.0,True,False,True,6,0.02085922119989389,True,generic_category_word,source,907683998
+target,Moulin de Valdonne,3272030001235,4,Moulin de Valdonnex4,1.0,False,True,False,172,4.1885986345168454e-05,False,derived_only_not_independently_checkable,target,907683998
+source,Produits U,,0,,0.0,True,False,True,33,0.0,False,unverified_no_independent_evidence,source,57538305
+target,Fruity King,4006220023191,3,Fruity Kingx3,1.0,False,True,False,95,0.0016195914720131801,False,derived_only_not_independently_checkable,target,57538305
+source,Cabreiroa,,0,,0.0,True,True,True,67,0.0009354536950420954,False,confirmed_by_title_only,source,75317993
+target,Cabreiroa,8411902002207,1,Cabreiroax1,1.0,False,True,False,67,0.0009354536950420954,False,derived_only_not_independently_checkable,target,75317993
+source,Bezoya,,0,,0.0,True,True,True,76,0.0010192256677324324,False,confirmed_by_title_only,source,465098047
+target,Mont Roucous,3257971080617,3,Mont Roucousx3,1.0,False,True,False,63,0.0006422517906259162,False,derived_only_not_independently_checkable,target,465098047
+source,House of broughton,,0,,0.0,True,True,True,37,0.0005165938315904109,False,confirmed_by_title_only,source,15792258
+target,House of broughton,5029396000710,1,House of broughtonx1,1.0,False,True,False,37,0.0005165938315904109,False,derived_only_not_independently_checkable,target,15792258
+source,Jeden Tag,,0,,0.0,True,False,True,26,0.0,False,unverified_no_independent_evidence,source,995887561
+target,Valio,6411200001287,2,Valiox2,1.0,False,True,False,275,0.00012565795903550535,False,derived_only_not_independently_checkable,target,995887561
+source,Lambda,,0,,0.0,True,True,True,34,0.00047470784524524244,False,confirmed_by_title_only,source,431969071
+target,Cidou,3760225491775,1,Cidoux1,1.0,False,True,False,62,0.0005864038088323583,False,derived_only_not_independently_checkable,target,431969071
+source,Doganay,,0,,0.0,True,True,True,163,0.0010192256677324324,False,confirmed_by_title_only,source,872633196
+target,Doganay,8693354007041,1,Doganayx1,1.0,False,True,False,163,0.0010192256677324324,False,derived_only_not_independently_checkable,target,872633196
+source,Saka,,0,,0.0,True,False,True,62,0.00033508789076134763,False,unverified_no_independent_evidence,source,145778438
+target,Babylove,4066447762983,1,Babylovex1,1.0,False,True,False,6,0.0,False,derived_only_not_independently_checkable,target,145778438
+source,Aksu Vital,,0,,0.0,True,True,True,171,0.00022339192717423174,False,confirmed_by_title_only,source,267426017
+target,Aksu Vital,8690088018923,4,Aksu Vitalx4,1.0,False,True,False,171,0.00022339192717423174,False,derived_only_not_independently_checkable,target,267426017
+source,Effect,,0,,0.0,True,False,True,49,0.0006701757815226953,False,unverified_no_independent_evidence,source,47920067
+target,Effect,4025127020799,2,Effectx2,1.0,False,True,False,49,0.0006701757815226953,False,derived_only_not_independently_checkable,target,47920067
+source,Red Rain,,0,,0.0,True,True,True,31,0.0009075297041453164,False,confirmed_by_title_only,source,395838408
+target,Red Rain,769553414459,1,Red Rainx1,1.0,False,True,False,31,0.0009075297041453164,False,derived_only_not_independently_checkable,target,395838408
+source,God Morgon,,0,,0.0,True,False,True,257,0.0,False,unverified_no_independent_evidence,source,831292940
+target,God Morgon,6415130050506,4,God Morgonx4,1.0,False,True,False,257,0.0,False,derived_only_not_independently_checkable,target,831292940
+source,Super Drink,858176002058,5,Super Drinkx5,1.0,True,True,True,116,0.005570836183907404,False,confirmed_by_co_listings,source,18737688
+target,NOS,769553414220,1,NOSx1,1.0,False,True,False,169,0.00216410929450037,False,derived_only_not_independently_checkable,target,18737688
+source,S Pellegrino,,0,,0.0,True,True,True,78,0.000865643717800148,False,confirmed_by_title_only,source,464905493
+target,Nutramino,5707577123082,1,Nutraminox1,1.0,False,True,False,57,0.0005445178224871899,False,derived_only_not_independently_checkable,target,464905493
+source,Elisha,,0,,0.0,True,True,True,6,8.377197269033691e-05,False,confirmed_by_title_only,source,752351567
+target,Marcel,3700749305035,2,Marcelx2,1.0,False,True,False,129,0.0011169596358711587,False,derived_only_not_independently_checkable,target,752351567
+source,Olympos,,0,,0.0,True,False,True,114,0.0,False,unverified_no_independent_evidence,source,171981612
+target,Prosain,3335880007823,3,Prosainx3,1.0,False,True,False,34,0.00013961995448389484,False,derived_only_not_independently_checkable,target,171981612
+source,Penta,,0,,0.0,True,True,True,43,0.0005724418133839688,False,confirmed_by_title_only,source,497607124
+target,Penta,679461100057,1,Pentax1,1.0,False,True,False,43,0.0005724418133839688,False,derived_only_not_independently_checkable,target,497607124
+source,Cemilefendi,,0,,0.0,True,True,True,110,0.0015916674811164012,False,confirmed_by_title_only,source,125267583
+target,Cemil,8680462025654,1,Cemilx1,1.0,False,True,False,21,0.00011169596358711587,False,derived_only_not_independently_checkable,target,125267583
+source,D'Arbo,,0,,0.0,True,False,True,77,0.00022339192717423174,False,unverified_no_independent_evidence,source,489391770
+target,Protein2O,858379004347,2,Protein2Ox2,1.0,False,True,False,32,0.0004188598634516845,False,derived_only_not_independently_checkable,target,489391770
+source,Kom Vida,8437017153108,2,Kom Vidax2,1.0,True,True,True,122,2.7923990896778967e-05,False,confirmed_by_co_listings,source,410761846
+target,Kom Vida,8437017153146,1,Kom Vidax1,1.0,False,True,False,122,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,410761846
+source,Tri Top,,0,,0.0,True,False,True,91,0.0008516817223517586,False,unverified_no_independent_evidence,source,436821649
+target,Tri Top,4055188068379,1,Tri Topx1,1.0,False,True,False,91,0.0008516817223517586,False,derived_only_not_independently_checkable,target,436821649
+source,Bolt 24,52000044218,5,Bolt 24x5,1.0,True,True,True,90,0.00022339192717423174,False,confirmed_by_co_listings,source,258663625
+target,Sports Water,87342598,1,Sports Waterx1,1.0,False,True,False,8,0.008181729332756238,False,derived_only_not_independently_checkable,target,258663625
+source,Cidou,,0,,0.0,True,True,True,62,0.0005864038088323583,False,confirmed_by_title_only,source,83085806
+target,Reflet de France,3245390020390,2,Reflet de Francex2,1.0,False,True,False,17,0.0,False,derived_only_not_independently_checkable,target,83085806
+source,Valensina,,0,,0.0,True,True,True,97,0.0011728076176647166,False,confirmed_by_title_only,source,830747687
+target,Caresse Antillaise,3291330001356,1,Caresse Antillaisex1,1.0,False,True,False,62,0.0,False,derived_only_not_independently_checkable,target,830747687
+source,Carola,,0,,0.0,True,True,True,48,0.0004188598634516845,False,confirmed_by_title_only,source,54715120
+target,Carola,3268651011784,3,Carolax3,1.0,False,True,False,48,0.0004188598634516845,False,derived_only_not_independently_checkable,target,54715120
+source,Rip It,42200006796,1,Rip Itx1,1.0,True,True,True,25,0.00033508789076134763,False,confirmed_by_co_listings,source,117615212
+target,NOS,815154020251,3,NOSx3,1.0,False,True,False,169,0.00216410929450037,False,derived_only_not_independently_checkable,target,117615212
+source,BIKOS,,0,,0.0,True,False,True,95,0.0,False,unverified_no_independent_evidence,source,409883752
+target,BIKOS,5201946900675,1,BIKOSx1,1.0,False,True,False,95,0.0,False,derived_only_not_independently_checkable,target,409883752
+source,Mio Mio,43000005897,3,Mio Miox3,1.0,True,True,True,29,0.0003630118816581266,False,confirmed_by_co_listings,source,221712501
+target,Orange Crush,752798350002,1,Orange Crushx1,1.0,False,True,False,43,0.0014939335129776747,False,derived_only_not_independently_checkable,target,221712501
+source,Community Coffee,,0,,0.0,True,True,True,37,0.0005026318361420214,False,confirmed_by_title_only,source,866547280
+target,Lucky Jack,20855346005530,1,Lucky Jackx1,1.0,False,True,False,39,0.0005445178224871899,False,derived_only_not_independently_checkable,target,866547280
+source,Erikli,,0,,0.0,True,False,True,169,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,229211957
+target,Relentless,5060466510265,5,Relentlessx5,1.0,False,True,False,118,0.0014380855311841168,False,derived_only_not_independently_checkable,target,229211957
+source,Chaudfontaine,5449000111692,2,Chaudfontainex2,1.0,True,False,True,83,0.0007120617678678636,False,confirmed_by_co_listings,source,67789418
+target,Chaudfontaine,5449000111739,2,Chaudfontainex2,1.0,False,True,False,83,0.0007120617678678636,False,derived_only_not_independently_checkable,target,67789418
+source,226ers,,0,,0.0,True,True,True,96,0.0012007316085614957,False,confirmed_by_title_only,source,539655627
+target,PowerBar,4029679840034,1,PowerBarx1,1.0,False,True,False,135,0.0006562137860743057,False,derived_only_not_independently_checkable,target,539655627
+source,Wandering Bear,,0,,0.0,True,False,True,147,0.0008097957360065901,False,unverified_no_independent_evidence,source,718240476
+target,Barissimo,100141411823,1,Barissimox1,1.0,False,True,False,23,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,718240476
+source,Kotimaista,6415712610715,2,Kotimaistax2,1.0,True,False,True,96,0.0,False,confirmed_by_co_listings,source,71713660
+target,Kotimaista,6415712400071,2,Kotimaistax2,1.0,False,True,False,96,0.0,False,derived_only_not_independently_checkable,target,71713660
+source,Farm Boy,,0,,0.0,True,True,True,143,0.0020105273445680857,False,confirmed_by_title_only,source,841572419
+target,Super Drink,858176002522,3,Super Drinkx3,1.0,False,True,False,116,0.005570836183907404,False,derived_only_not_independently_checkable,target,841572419
+source,Savia,,0,,0.0,True,True,True,35,0.000488669840693632,False,confirmed_by_title_only,source,580179838
+target,Roosvicee,8710395945696,2,Roosviceex2,1.0,False,True,False,135,0.0007120617678678636,False,derived_only_not_independently_checkable,target,580179838
+source,PowerBar,,0,,0.0,True,True,True,135,0.0006562137860743057,False,confirmed_by_title_only,source,532379100
+target,PowerBar,4029679123632,9,PowerBarx9,1.0,False,True,False,135,0.0006562137860743057,False,derived_only_not_independently_checkable,target,532379100
+source,Naya,,0,,0.0,True,True,True,45,0.0005026318361420214,False,confirmed_by_title_only,source,786107854
+target,Eska,671785400042,1,Eskax1,1.0,False,True,False,98,0.0009494156904904849,False,derived_only_not_independently_checkable,target,786107854
+source,Peace Tea,,0,,0.0,True,True,True,232,0.0026946651215391704,False,confirmed_by_title_only,source,841379196
+target,Wicky,8711900016344,1,Wickyx1,1.0,False,True,False,87,0.0011309216313195483,False,derived_only_not_independently_checkable,target,841379196
+source,Sprecher,,0,,0.0,True,True,True,93,0.0012705415858034431,False,confirmed_by_title_only,source,81480080
+target,Hi Ball,897351000878,5,Hi Ballx4; Hiball Energyx1,0.8,False,True,False,37,0.0007120617678678636,False,derived_only_not_independently_checkable,target,81480080
+source,4Bro,,0,,0.0,True,True,True,86,0.0007120617678678636,False,confirmed_by_title_only,source,750834038
+target,4Bro,4260667060786,1,4Brox1,1.0,False,True,False,86,0.0007120617678678636,False,derived_only_not_independently_checkable,target,750834038
+source,Turkey Hill,20735096338,2,Turkey Hillx2,1.0,True,True,True,125,0.0012705415858034431,False,confirmed_by_co_listings,source,963102914
+target,Fit,787670900402,1,Fitx1,1.0,False,True,False,17,0.001731287435600296,False,derived_only_not_independently_checkable,target,963102914
+source,Crystal Clear,,0,,0.0,True,True,True,117,0.001842983399187412,False,confirmed_by_title_only,source,55740572
+target,Crystal Clear,8715600246452,1,Crystal Clearx1,1.0,False,True,False,117,0.001842983399187412,False,derived_only_not_independently_checkable,target,55740572
+source,May Tea,3124480195326,2,May Teax2,1.0,True,False,True,258,0.00297390503050696,False,confirmed_by_co_listings,source,578263598
+target,May Tea,3124480195326,2,May Teax2,1.0,False,True,False,258,0.00297390503050696,False,derived_only_not_independently_checkable,target,578263598
+source,DubbelFrisss,8720157401964,2,DubbelFrisssx2,1.0,True,False,True,168,0.0,False,confirmed_by_co_listings,source,912116732
+target,DubbelFrisss,8720157401964,2,DubbelFrisssx2,1.0,False,True,False,168,0.0,False,derived_only_not_independently_checkable,target,912116732
+source,Oze,,0,,0.0,True,False,True,222,0.00242938720801977,False,unverified_no_independent_evidence,source,208885479
+target,Lakanto,843076001478,1,Lakantox1,1.0,False,True,False,38,0.00044678385434846347,False,derived_only_not_independently_checkable,target,208885479
+source,Inca Kola,,0,,0.0,True,True,True,42,0.0005305558270388003,False,confirmed_by_title_only,source,517056474
+target,Stewart's,352154328128,1,Stewart'sx1,1.0,False,True,False,153,0.0013543135584937799,False,derived_only_not_independently_checkable,target,517056474
+source,Everfresh,,0,,0.0,True,True,True,33,0.00047470784524524244,False,confirmed_by_title_only,source,356075621
+target,Xyience,352154300780,1,Xyiencex1,1.0,False,True,False,88,0.0010890356449743798,False,derived_only_not_independently_checkable,target,356075621
+source,Jardin Bio,,0,,0.0,True,False,True,179,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,81159701
+target,Alnavit,4260012974393,1,Alnavitx1,1.0,False,True,False,86,0.0006422517906259162,False,derived_only_not_independently_checkable,target,81159701
+source,Obsesso,,0,,0.0,True,False,True,146,0.0008935677086969269,False,unverified_no_independent_evidence,source,842033159
+target,Coldpress,5060268000209,1,Coldpressx1,1.0,False,True,False,48,0.0006003658042807479,False,derived_only_not_independently_checkable,target,842033159
+source,Schoenenberger,,0,,0.0,True,True,True,32,0.00033508789076134763,False,confirmed_by_title_only,source,275988746
+target,Schoenenberger,4006309020103,1,Schoenenbergerx1,1.0,False,True,False,32,0.00033508789076134763,False,derived_only_not_independently_checkable,target,275988746
+source,Strike Force,,0,,0.0,True,False,True,49,9.773396813872638e-05,False,unverified_no_independent_evidence,source,966974285
+target,Sunberry,856128004884,2,Sunberryx2,1.0,False,True,False,17,0.00023735392262262122,False,derived_only_not_independently_checkable,target,966974285
+source,Réal,,0,,0.0,True,True,True,102,0.007204389651368974,False,confirmed_by_title_only,source,67878005
+target,Realemon,5410233710228,1,Realemonx1,1.0,False,True,False,28,0.0003211258953129581,False,derived_only_not_independently_checkable,target,67878005
+source,Niehoffs Vaihinger,,0,,0.0,True,True,True,51,0.0006701757815226953,False,confirmed_by_title_only,source,915079232
+target,Garant,7340083411199,3,Garantx3,1.0,False,True,False,191,0.0,False,derived_only_not_independently_checkable,target,915079232
+source,Whole Foods Market,,0,,0.0,True,True,True,95,0.002485235189813328,False,confirmed_by_title_only,source,68706319
+target,Lete,8008627000177,2,Letex2,1.0,False,True,False,23,0.00030716389986456866,False,derived_only_not_independently_checkable,target,68706319
+source,London Essence Co,,0,,0.0,True,False,True,55,0.0023735392262262123,False,unverified_no_independent_evidence,source,445403395
+target,London Essence Co,5010102241107,2,London Essence Cox2,1.0,False,True,False,55,0.0023735392262262123,False,derived_only_not_independently_checkable,target,445403395
+source,Creative Roots,43000087275,4,Creative Rootsx4,1.0,True,True,True,42,0.0006980997724194742,False,confirmed_by_co_listings,source,653814658
+target,Fruity King,8714862708913,1,Fruity Kingx1,1.0,False,True,False,95,0.0016195914720131801,False,derived_only_not_independently_checkable,target,653814658
+source,R Whites,5010102119611,2,R Whitesx2,1.0,True,True,True,65,0.0008097957360065901,False,confirmed_by_co_listings,source,23131007
+target,R Whites,5010102119611,2,R Whitesx2,1.0,False,True,False,65,0.0008097957360065901,False,derived_only_not_independently_checkable,target,23131007
+source,Odwalla,,0,,0.0,True,True,True,57,0.0007260237633162532,False,confirmed_by_title_only,source,14852750
+target,Protein Water,5060438160115,1,Protein Waterx1,1.0,False,True,False,17,0.0045376485207265825,False,derived_only_not_independently_checkable,target,14852750
+source,Icee,,0,,0.0,True,True,True,38,0.000488669840693632,False,confirmed_by_title_only,source,873410104
+target,Rio,649424330555,1,Riox1,1.0,False,True,False,3,0.0001815059408290633,False,derived_only_not_independently_checkable,target,873410104
+source,Dark Blue,,0,,0.0,True,True,True,17,0.0019127933764293593,False,confirmed_by_title_only,source,351319158
+target,Full Throttle,655466867744,1,Full Throttlex1,1.0,False,True,False,61,0.0007958337405582006,False,derived_only_not_independently_checkable,target,351319158
+source,Crystal Clear,,0,,0.0,True,True,True,117,0.001842983399187412,False,confirmed_by_title_only,source,54220751
+target,Crystal Clear,8715600246452,1,Crystal Clearx1,1.0,False,True,False,117,0.001842983399187412,False,derived_only_not_independently_checkable,target,54220751
+source,Liquid Ice,,0,,0.0,True,True,True,26,0.007469667564888374,False,confirmed_by_title_only,source,935900948
+target,AA,8722200960855,2,AAx2,1.0,False,False,False,78,0.0009633776859388743,False,derived_only_not_independently_checkable,target,935900948
+source,River,,0,,0.0,True,False,True,68,0.0018010974128422434,False,unverified_no_independent_evidence,source,428908907
+target,Kist,810048481804,1,Kistx1,1.0,False,True,False,17,0.00022339192717423174,False,derived_only_not_independently_checkable,target,428908907
+source,Fun Light,7316110001008,2,Fun Lightx2,1.0,True,False,True,103,0.0023735392262262123,False,confirmed_by_co_listings,source,1046525407
+target,Rolnik,5997210702235,1,Rolnikx1,1.0,False,True,False,3,4.1885986345168454e-05,False,derived_only_not_independently_checkable,target,1046525407
+source,Kizilay,,0,,0.0,True,True,True,117,0.0004188598634516845,False,confirmed_by_title_only,source,290780600
+target,Hysope,3770014856401,1,Hysopex1,1.0,False,True,False,24,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,290780600
+source,Greenhouse,,0,,0.0,True,True,True,31,0.0011309216313195483,False,confirmed_by_title_only,source,841273394
+target,Evolution Fresh,762357474445,1,Evolution Freshx1,1.0,False,True,False,264,0.0031693729667844127,False,derived_only_not_independently_checkable,target,841273394
+source,Kayseri Pazarı,,0,,0.0,True,False,True,233,0.0,False,unverified_no_independent_evidence,source,231425617
+target,Kayseri Pazarı,8680462031655,1,Kayseri Pazarıx1,1.0,False,True,False,233,0.0,False,derived_only_not_independently_checkable,target,231425617
+source,Rotbäckchen,,0,,0.0,True,False,True,36,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,47906564
+target,Produits U,3256222240022,1,Produits Ux1,1.0,False,True,False,33,0.0,False,derived_only_not_independently_checkable,target,47906564
+source,Niehoffs Vaihinger,,0,,0.0,True,True,True,51,0.0006701757815226953,False,confirmed_by_title_only,source,431785827
+target,Cherry Good,5060174770371,3,Cherry Goodx3,1.0,False,True,False,15,0.005361406252181562,False,derived_only_not_independently_checkable,target,431785827
+source,Mahbuba,,0,,0.0,True,False,True,133,0.0,False,unverified_no_independent_evidence,source,289798881
+target,Hartridges,5060102621331,1,Hartridgesx1,1.0,False,True,False,25,0.00026527791351940017,False,derived_only_not_independently_checkable,target,289798881
+source,Rocky Mountain,,0,,0.0,True,True,True,15,0.0002513159180710107,False,confirmed_by_title_only,source,1034108691
+target,Rocky Mountain,855842004262,2,Rocky Mountainx2,1.0,False,True,False,15,0.0002513159180710107,False,derived_only_not_independently_checkable,target,1034108691
+source,ESI,,0,,0.0,True,False,True,22,8.377197269033691e-05,False,unverified_no_independent_evidence,source,212809474
+target,Savia,466125153852,1,Saviax1,1.0,False,True,False,35,0.000488669840693632,False,derived_only_not_independently_checkable,target,212809474
+source,Cal Valls,,0,,0.0,True,False,True,181,0.001954679362774528,False,unverified_no_independent_evidence,source,693355839
+target,Raikastamo,6430032800042,1,Raikastamox1,1.0,False,True,False,92,0.0,False,derived_only_not_independently_checkable,target,693355839
+source,Ozarka,22592446530,3,Ozarkax3,1.0,True,True,True,196,0.0025550451670552756,False,confirmed_by_co_listings,source,568032409
+target,Strike Force,100140709075,1,Strike Forcex1,1.0,False,True,False,49,9.773396813872638e-05,False,derived_only_not_independently_checkable,target,568032409
+source,Mix,,0,,0.0,True,True,True,64,0.03437443279393491,True,generic_category_word,source,552423542
+target,VUE,850027473291,1,VUEx1,1.0,False,True,False,9,0.00012565795903550535,False,derived_only_not_independently_checkable,target,552423542
+source,Mug,,0,,0.0,True,True,True,57,0.001326389567597001,False,confirmed_by_title_only,source,959981856
+target,SoBe,739510900400,2,SoBex2,1.0,False,True,False,67,0.0002792399089677897,False,derived_only_not_independently_checkable,target,959981856
+source,Gonrgy,4260456730586,2,Gonrgyx2,1.0,True,True,True,29,0.00037697387710651606,False,confirmed_by_co_listings,source,1040564365
+target,Gonrgy,4260456730586,2,Gonrgyx2,1.0,False,True,False,29,0.00037697387710651606,False,derived_only_not_independently_checkable,target,1040564365
+source,Thick- It,,0,,0.0,True,True,True,99,0.0021222233081552013,False,confirmed_by_title_only,source,956091711
+target,Thick & Easy,695145142519,1,Thick & Easyx1,1.0,False,True,False,159,0.003685966798374824,False,derived_only_not_independently_checkable,target,956091711
+source,Big 8,,0,,0.0,True,True,True,104,0.004928584393281488,False,confirmed_by_title_only,source,993458367
+target,Peapod,688267001222,2,Peapodx2,1.0,False,True,False,180,0.002359577230777823,False,derived_only_not_independently_checkable,target,993458367
+source,Ahoj Brause,,0,,0.0,True,False,True,12,0.0,False,unverified_no_independent_evidence,source,80191474
+target,Afri-Cola,4021375101761,1,Afri-Colax1,1.0,False,True,False,33,0.0004188598634516845,False,derived_only_not_independently_checkable,target,80191474
+source,Skinny Mixes,,0,,0.0,True,False,True,25,0.0003211258953129581,False,unverified_no_independent_evidence,source,199496622
+target,Ralph's,759740727196,1,Ralph'sx1,1.0,False,True,False,24,0.00030716389986456866,False,derived_only_not_independently_checkable,target,199496622
+source,Sourcy,,0,,0.0,True,False,True,224,9.773396813872638e-05,False,unverified_no_independent_evidence,source,55762341
+target,Sourcy,8715600239348,1,Sourcyx1,1.0,False,True,False,224,9.773396813872638e-05,False,derived_only_not_independently_checkable,target,55762341
+source,Quézac,3664320911537,3,Quézacx3,1.0,True,True,True,44,0.00047470784524524244,False,confirmed_by_co_listings,source,421217577
+target,Olvi,6419800052982,4,Olvix4,1.0,False,True,False,137,0.0017033634447035171,False,derived_only_not_independently_checkable,target,421217577
+source,Ekobryggeriet,,0,,0.0,True,False,True,68,9.773396813872638e-05,False,unverified_no_independent_evidence,source,981843714
+target,Premier,7611612515269,3,Premierx3,1.0,False,True,False,343,0.0005165938315904109,False,derived_only_not_independently_checkable,target,981843714
+source,Römerquelle,,0,,0.0,True,False,True,74,0.0,False,unverified_no_independent_evidence,source,430300205
+target,Frusano,4260137742556,1,Frusanox1,1.0,False,True,False,17,0.00023735392262262122,False,derived_only_not_independently_checkable,target,430300205
+source,Nesfruta,,0,,0.0,True,True,True,33,0.0004188598634516845,False,confirmed_by_title_only,source,777301725
+target,Sanavi,850888005310,1,Sanavix1,1.0,False,True,False,37,0.00044678385434846347,False,derived_only_not_independently_checkable,target,777301725
+source,Nature Blessed,18184790273,1,Nature Blessedx1,1.0,True,True,True,15,0.00019546793627745276,False,confirmed_by_co_listings,source,584758317
+target,Zing Zang,616003265713,2,Zing Zangx2,1.0,False,True,False,56,0.0007260237633162532,False,derived_only_not_independently_checkable,target,584758317
+source,Tang,,0,,0.0,True,True,True,191,0.002736551107884339,False,confirmed_by_title_only,source,1014479190
+target,Tang,702367905096,1,Tangx1,1.0,False,True,False,191,0.002736551107884339,False,derived_only_not_independently_checkable,target,1014479190
+source,Erikli,,0,,0.0,True,False,True,169,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,387721911
+target,Danival,3431590000557,1,Danivalx1,1.0,False,True,False,6,6.980997724194742e-05,False,derived_only_not_independently_checkable,target,387721911
+source,Amita,,0,,0.0,True,False,True,146,0.001731287435600296,False,unverified_no_independent_evidence,source,359892445
+target,Amita,5201005081673,2,Amitax2,1.0,False,True,False,146,0.001731287435600296,False,derived_only_not_independently_checkable,target,359892445
+source,Migros,,0,,0.0,True,True,True,74,0.0005724418133839688,False,confirmed_by_title_only,source,908244119
+target,Reflet de France,3245390022691,2,Reflet de Francex2,1.0,False,True,False,17,0.0,False,derived_only_not_independently_checkable,target,908244119
+source,Clever,,0,,0.0,True,True,True,44,0.0005584798179355794,False,confirmed_by_title_only,source,885971944
+target,Alnavit,42305187,2,Alnavitx2,1.0,False,True,False,86,0.0006422517906259162,False,derived_only_not_independently_checkable,target,885971944
+source,Fior di Loto,,0,,0.0,True,False,True,23,0.0,False,unverified_no_independent_evidence,source,58047099
+target,Pingo Doce,5607047012024,1,Pingo Docex1,1.0,False,True,False,11,0.0,False,derived_only_not_independently_checkable,target,58047099
+source,Mockingbird,5060406461718,4,Mockingbirdx4,1.0,True,False,True,57,0.0006980997724194742,False,confirmed_by_co_listings,source,517639675
+target,Proviva,7350000550498,5,Provivax5,1.0,False,True,False,222,0.0007679097496614216,False,derived_only_not_independently_checkable,target,517639675
+source,Active O2,,0,,0.0,True,True,True,77,0.0014380855311841168,False,confirmed_by_title_only,source,152568512
+target,Garant,7340083456664,3,Garantx3,1.0,False,True,False,191,0.0,False,derived_only_not_independently_checkable,target,152568512
+source,Loop,,0,,0.0,True,True,True,100,0.0009354536950420954,False,confirmed_by_title_only,source,841450045
+target,True North,815154024112,3,True Northx3,1.0,False,True,False,50,0.0018010974128422434,False,derived_only_not_independently_checkable,target,841450045
+source,Sambazon,,0,,0.0,True,False,True,46,0.000432821858900074,False,unverified_no_independent_evidence,source,72233549
+target,Frannie's,745559826205,1,Frannie'sx1,1.0,False,True,False,50,0.00047470784524524244,False,derived_only_not_independently_checkable,target,72233549
+source,Aksu Vital,,0,,0.0,True,False,True,171,0.00022339192717423174,False,unverified_no_independent_evidence,source,375195660
+target,Aksu Vital,8690088018893,7,Aksu Vitalx7,1.0,False,True,False,171,0.00022339192717423174,False,derived_only_not_independently_checkable,target,375195660
+source,Sourcy,,0,,0.0,True,False,True,224,9.773396813872638e-05,False,unverified_no_independent_evidence,source,54293000
+target,Healsi,5600377971696,2,Healsix2,1.0,False,True,False,24,0.00030716389986456866,False,derived_only_not_independently_checkable,target,54293000
+source,Vida,,0,,0.0,True,True,True,9,0.00012565795903550535,False,confirmed_by_title_only,source,1044614004
+target,Ramlösa,7310070004765,3,Ramlösax3,1.0,False,False,False,338,0.0,False,derived_only_not_independently_checkable,target,1044614004
+source,May Tea,,0,,0.0,True,True,True,258,0.00297390503050696,False,confirmed_by_title_only,source,78837304
+target,May Tea,3124480185167,5,May Teax5,1.0,False,True,False,258,0.00297390503050696,False,derived_only_not_independently_checkable,target,78837304
+source,Meneau,,0,,0.0,True,False,True,181,0.00015358194993228433,False,unverified_no_independent_evidence,source,123637764
+target,Morga,7610491085405,1,Morgax1,1.0,False,True,False,57,0.0006143277997291373,False,derived_only_not_independently_checkable,target,123637764
+source,Jardin Bio,,0,,0.0,True,False,True,179,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,81223081
+target,Caresse Antillaise,3291330001356,1,Caresse Antillaisex1,1.0,False,True,False,62,0.0,False,derived_only_not_independently_checkable,target,81223081
+source,Big 8,,0,,0.0,True,True,True,104,0.004928584393281488,False,confirmed_by_title_only,source,899475718
+target,Peapod,688267001222,2,Peapodx2,1.0,False,True,False,180,0.002359577230777823,False,derived_only_not_independently_checkable,target,899475718
+source,Angel Specialty Products,702334644621,1,Angel Specialty Productsx1,1.0,True,True,True,9,0.00015358194993228433,False,confirmed_by_co_listings,source,76600491
+target,Angel Specialty Products,702334644621,1,Angel Specialty Productsx1,1.0,False,True,False,9,0.00015358194993228433,False,derived_only_not_independently_checkable,target,76600491
+source,Cool Best,,0,,0.0,True,True,True,234,0.004062940675481339,False,confirmed_by_title_only,source,1041827803
+target,Frulite,5201005079403,3,Frulitex3,1.0,False,True,False,46,0.0005445178224871899,False,derived_only_not_independently_checkable,target,1041827803
+source,Aqua Esse,,0,,0.0,True,True,True,48,0.0006701757815226953,False,confirmed_by_title_only,source,251592610
+target,Fusion Select,810081770835,1,Fusion Selectx1,1.0,False,True,False,43,0.0013124275721486114,False,derived_only_not_independently_checkable,target,251592610
+source,Monchique,,0,,0.0,True,True,True,24,0.00033508789076134763,False,confirmed_by_title_only,source,836427278
+target,Mondariz,8412042502305,2,Mondarizx2,1.0,False,True,False,40,0.0005584798179355794,False,derived_only_not_independently_checkable,target,836427278
+source,Spezi,,0,,0.0,True,False,True,17,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,52258539
+target,Paulaner,4066600103448,4,Paulanerx4,1.0,False,True,False,20,0.0002513159180710107,False,derived_only_not_independently_checkable,target,52258539
+source,Slimpie,,0,,0.0,True,False,True,106,0.00022339192717423174,False,unverified_no_independent_evidence,source,54294950
+target,Slimpie,8719214811037,2,Slimpiex2,1.0,False,True,False,106,0.00022339192717423174,False,derived_only_not_independently_checkable,target,54294950
+source,Javy,785571473452,1,Javyx1,1.0,True,False,True,201,0.0015777054856680117,False,confirmed_by_co_listings,source,597396465
+target,Javy,785571473452,1,Javyx1,1.0,False,True,False,201,0.0015777054856680117,False,derived_only_not_independently_checkable,target,597396465
+source,William Fox,,0,,0.0,True,True,True,69,0.0009633776859388743,False,confirmed_by_title_only,source,59068988
+target,Frucci,3564700871508,2,Fruccix2,1.0,False,True,False,86,0.0007958337405582006,False,derived_only_not_independently_checkable,target,59068988
+source,Lowicz,5900397737594,3,Lowiczx3,1.0,True,False,True,10,0.00011169596358711587,False,confirmed_by_co_listings,source,12609331
+target,Lowicz,5900397737594,3,Lowiczx3,1.0,False,True,False,10,0.00011169596358711587,False,derived_only_not_independently_checkable,target,12609331
+source,Tea Zone,,0,,0.0,True,True,True,30,0.0004188598634516845,False,confirmed_by_title_only,source,613937907
+target,Buddha Bubbles Boba,784672206433,1,Buddha Bubbles Bobax1,1.0,False,True,False,30,0.0010890356449743798,False,derived_only_not_independently_checkable,target,613937907
+source,D'Arbo,,0,,0.0,True,False,True,77,0.00022339192717423174,False,unverified_no_independent_evidence,source,47988008
+target,Meneau,3274490970182,1,Meneaux1,1.0,False,True,False,181,0.00015358194993228433,False,derived_only_not_independently_checkable,target,47988008
+source,Les Fees Bio,,0,,0.0,True,False,True,39,1.3961995448389483e-05,False,unverified_no_independent_evidence,source,133162458
+target,Les Fees Bio,3760224570457,2,Les Fees Biox2,1.0,False,True,False,39,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,133162458
+source,Mr. Fitzpatrick's,,0,,0.0,True,True,True,34,0.00037697387710651606,False,confirmed_by_title_only,source,122962103
+target,Chaudfontaine,5449000273031,1,Chaudfontainex1,1.0,False,True,False,83,0.0007120617678678636,False,derived_only_not_independently_checkable,target,122962103
+source,Pureness,7350116311426,2,Purenessx2,1.0,True,True,True,39,0.0005305558270388003,False,confirmed_by_co_listings,source,969956216
+target,Pureness,7350116311426,2,Purenessx2,1.0,False,True,False,39,0.0005305558270388003,False,derived_only_not_independently_checkable,target,969956216
+source,Slimpie,,0,,0.0,True,False,True,106,0.00022339192717423174,False,unverified_no_independent_evidence,source,553514421
+target,Slimpie,8719214811167,3,Slimpiex3,1.0,False,True,False,106,0.00022339192717423174,False,derived_only_not_independently_checkable,target,553514421
+source,Stift,,0,,0.0,True,False,True,26,0.0,False,unverified_no_independent_evidence,source,81709213
+target,Fun,7310090395164,2,Funx2,1.0,False,True,False,170,0.0023735392262262123,False,derived_only_not_independently_checkable,target,81709213
+source,Bio Food,,0,,0.0,True,True,True,23,0.0018988313809809698,False,confirmed_by_title_only,source,249643217
+target,QNT,5425002401382,2,QNTx2,1.0,False,True,False,62,0.0007120617678678636,False,derived_only_not_independently_checkable,target,249643217
+source,Erbology,,0,,0.0,True,True,True,40,0.00047470784524524244,False,confirmed_by_title_only,source,149880103
+target,Premier,7611612516587,2,Premierx2,1.0,False,True,False,343,0.0005165938315904109,False,derived_only_not_independently_checkable,target,149880103
+source,Stift,,0,,0.0,True,False,True,26,0.0,False,unverified_no_independent_evidence,source,80679178
+target,Jeden Tag,4306188267867,1,Jeden Tagx1,1.0,False,True,False,26,0.0,False,derived_only_not_independently_checkable,target,80679178
+source,Erikli,,0,,0.0,True,False,True,169,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,908401849
+target,Erikli,8690793010502,3,Eriklix3,1.0,False,True,False,169,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,908401849
+source,Albi,,0,,0.0,True,False,True,115,0.0006143277997291373,False,unverified_no_independent_evidence,source,445414439
+target,PureThé,3551720039391,3,PureThéx3,1.0,False,False,False,23,0.0001815059408290633,False,derived_only_not_independently_checkable,target,445414439
+source,Nesfruta,,0,,0.0,True,True,True,33,0.0004188598634516845,False,confirmed_by_title_only,source,1006827951
+target,ebe,5201156633035,1,ebex1,1.0,False,True,False,52,0.0,False,derived_only_not_independently_checkable,target,1006827951
+source,S Pellegrino,41508302111,2,S Pellegrinox2,1.0,True,True,True,78,0.000865643717800148,False,confirmed_by_co_listings,source,811355449
+target,Hartridges,5060102622215,5,Hartridgesx5,1.0,False,True,False,25,0.00026527791351940017,False,derived_only_not_independently_checkable,target,811355449
+source,Full Circle Market,36800211254,2,Full Circle Marketx2,1.0,True,False,True,8,0.0002792399089677897,False,confirmed_by_co_listings,source,198319640
+target,Icee,898806002607,3,Iceex3,1.0,False,True,False,38,0.000488669840693632,False,derived_only_not_independently_checkable,target,198319640
+source,Albi,,0,,0.0,True,False,True,115,0.0006143277997291373,False,unverified_no_independent_evidence,source,447226739
+target,Meneau,3274490970595,3,Meneaux3,1.0,False,True,False,181,0.00015358194993228433,False,derived_only_not_independently_checkable,target,447226739
+source,Sir Up,,0,,0.0,True,False,True,51,1.3961995448389483e-05,False,unverified_no_independent_evidence,source,403080380
+target,Almdudler,9015160105930,1,Almdudlerx1,1.0,False,True,False,40,0.0005584798179355794,False,derived_only_not_independently_checkable,target,403080380
+source,ESN,,0,,0.0,True,True,True,82,0.000837719726903369,False,confirmed_by_title_only,source,302147372
+target,ESN,4250519605821,5,ESNx5,1.0,False,True,False,82,0.000837719726903369,False,derived_only_not_independently_checkable,target,302147372
+source,Günbak,,0,,0.0,True,False,True,144,5.5847981793557934e-05,False,unverified_no_independent_evidence,source,810191846
+target,Bleichhof,4260447590793,1,Bleichhofx1,1.0,False,True,False,62,0.0007120617678678636,False,derived_only_not_independently_checkable,target,810191846
+source,Radnor,,0,,0.0,True,True,True,100,0.0012845035812518325,False,confirmed_by_title_only,source,859341013
+target,Rainbow,6415718072104,2,Rainbowx2,1.0,False,True,False,160,0.0024154252125713808,False,derived_only_not_independently_checkable,target,859341013
+source,Pip Organic,,0,,0.0,True,True,True,63,0.0008796057132485375,False,confirmed_by_title_only,source,251659448
+target,4Bro,4260667060083,4,4Brox4,1.0,False,True,False,86,0.0007120617678678636,False,derived_only_not_independently_checkable,target,251659448
+source,Strathmore,,0,,0.0,True,True,True,47,0.0006562137860743057,False,confirmed_by_title_only,source,6652397
+target,Strathmore,5000382041863,2,Strathmorex2,1.0,False,True,False,47,0.0006562137860743057,False,derived_only_not_independently_checkable,target,6652397
+source,A&W,,0,,0.0,True,False,True,62,1.0,False,unverified_no_independent_evidence,source,68130594
+target,Peapod,688267001352,2,Peapodx2,1.0,False,True,False,180,0.002359577230777823,False,derived_only_not_independently_checkable,target,68130594
+source,Peace Tea,67000006647,5,Peace Teax5,1.0,True,False,True,232,0.0026946651215391704,False,confirmed_by_co_listings,source,967135454
+target,Seven Teas,855103006080,4,Seven Teasx4,1.0,False,True,False,45,0.0007539477542130321,False,derived_only_not_independently_checkable,target,967135454
+source,Fruit Fast,,0,,0.0,True,True,True,28,0.0037278527847199924,False,confirmed_by_title_only,source,614255170
+target,Frutti,8690723581201,1,Fruttix1,1.0,False,True,False,33,0.0007958337405582006,False,derived_only_not_independently_checkable,target,614255170
+source,Natural Brew,,0,,0.0,True,True,True,21,0.025131591807101072,True,generic_category_word,source,190436079
+target,Starbucks Frappuccino Vanilla,804090204825,1,Starbucks Frappuccino Vanillax1,1.0,False,True,False,72,0.0010052636722840428,False,derived_only_not_independently_checkable,target,190436079
+source,Içim,,0,,0.0,True,False,True,48,0.00011169596358711587,False,unverified_no_independent_evidence,source,880107624
+target,Friesche,8712800100942,2,Frieschex2,1.0,False,True,False,36,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,880107624
+source,Aurica,,0,,0.0,True,False,True,59,0.00019546793627745276,False,unverified_no_independent_evidence,source,173405062
+target,Bio Techusa,5999076233250,2,Bio Techusax2,1.0,False,True,False,74,0.00020942993172584225,False,derived_only_not_independently_checkable,target,173405062
+source,Stift,,0,,0.0,True,False,True,26,0.0,False,unverified_no_independent_evidence,source,81054050
+target,Rheinfels Quelle,4101130002912,1,Rheinfels Quellex1,1.0,False,True,False,51,0.0,False,derived_only_not_independently_checkable,target,81054050
+source,Skinny Mixes,,0,,0.0,True,False,True,25,0.0003211258953129581,False,unverified_no_independent_evidence,source,201466507
+target,Nu Naturals,739223006260,3,Nu Naturalsx3,1.0,False,True,False,16,0.00022339192717423174,False,derived_only_not_independently_checkable,target,201466507
+source,Moulin de Valdonne,,0,,0.0,True,False,True,172,4.1885986345168454e-05,False,unverified_no_independent_evidence,source,199835405
+target,Davincii,787776666233,1,Davinciix1,1.0,False,True,False,12,0.0,False,derived_only_not_independently_checkable,target,199835405
+source,Bar-le-Duc,8722200954236,3,Bar-le-Ducx3,1.0,True,True,True,103,0.0013124275721486114,False,confirmed_by_co_listings,source,512752621
+target,Bar-le-Duc,8722200964969,3,Bar-le-Ducx3,1.0,False,True,False,103,0.0013124275721486114,False,derived_only_not_independently_checkable,target,512752621
+source,Qcumber,,0,,0.0,True,True,True,28,0.0003909358725549055,False,confirmed_by_title_only,source,79479983
+target,Qcumber,721866642714,1,Qcumberx1,1.0,False,True,False,28,0.0003909358725549055,False,derived_only_not_independently_checkable,target,79479983
+source,Bezoya,,0,,0.0,True,False,True,76,0.0010192256677324324,False,unverified_no_independent_evidence,source,81093782
+target,Alnavit,42278924,3,Alnavitx3,1.0,False,True,False,86,0.0006422517906259162,False,derived_only_not_independently_checkable,target,81093782
+source,Sweetbird,,0,,0.0,True,True,True,50,0.0006282897951775268,False,confirmed_by_title_only,source,278867691
+target,George's,810158588004,2,George'sx2,1.0,False,True,False,20,0.0002513159180710107,False,derived_only_not_independently_checkable,target,278867691
+source,Dropp,,0,,0.0,True,True,True,16,0.00020942993172584225,False,confirmed_by_title_only,source,829932092
+target,Rebbl,710051617606,1,Rebblx1,1.0,False,True,False,42,0.00044678385434846347,False,derived_only_not_independently_checkable,target,829932092
+source,Obrilo,,0,,0.0,True,False,True,17,1.3961995448389483e-05,False,unverified_no_independent_evidence,source,422265888
+target,ESN,4250519604350,3,ESNx3,1.0,False,True,False,82,0.000837719726903369,False,derived_only_not_independently_checkable,target,422265888
+source,JOYBA,,0,,0.0,True,True,True,62,0.000865643717800148,False,confirmed_by_title_only,source,823433189
+target,Ralph's,753677049161,1,Ralph'sx1,1.0,False,True,False,24,0.00030716389986456866,False,derived_only_not_independently_checkable,target,823433189
+source,Slimpie,8719214811013,1,Slimpiex1,1.0,True,False,True,106,0.00022339192717423174,False,confirmed_by_co_listings,source,76620758
+target,Slimpie,8719214810436,2,Slimpiex2,1.0,False,True,False,106,0.00022339192717423174,False,derived_only_not_independently_checkable,target,76620758
+source,Faragello,,0,,0.0,True,True,True,1,1.3961995448389483e-05,False,confirmed_by_title_only,source,857532621
+target,Alkaline88,853158004037,4,Alkaline88x4,1.0,False,True,False,100,0.0011588456222163272,False,derived_only_not_independently_checkable,target,857532621
+source,Folkington's,,0,,0.0,True,True,True,54,0.0005305558270388003,False,confirmed_by_title_only,source,303744852
+target,Boston America,690543000027,1,Boston Americax1,1.0,False,True,False,10,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,303744852
+source,Albi,,0,,0.0,True,True,True,115,0.0006143277997291373,False,confirmed_by_title_only,source,49800872
+target,Marli,6415130027980,3,Marlix3,1.0,False,True,False,294,0.00378370076651355,False,derived_only_not_independently_checkable,target,49800872
+source,Cido,,0,,0.0,True,True,True,1,1.3961995448389483e-05,False,confirmed_by_title_only,source,277195985
+target,Eager,5060113200266,1,Eagerx1,1.0,False,True,False,52,0.0006841377769710847,False,derived_only_not_independently_checkable,target,277195985
+source,Bärenmarke,,0,,0.0,True,False,True,35,0.0,False,unverified_no_independent_evidence,source,457803667
+target,Minor Figures,5060406080155,3,Minor Figuresx3,1.0,False,True,False,48,0.0006003658042807479,False,derived_only_not_independently_checkable,target,457803667
+source,Ege Lokman,,0,,0.0,True,False,True,260,0.0005026318361420214,False,unverified_no_independent_evidence,source,386252862
+target,4Bro,4260667060908,1,4Brox1,1.0,False,True,False,86,0.0007120617678678636,False,derived_only_not_independently_checkable,target,386252862
+source,Collins,31439005489,1,Collinsx1,1.0,True,True,True,28,0.00037697387710651606,False,confirmed_by_co_listings,source,75890437
+target,Barsmith,744160230005,3,Barsmithx3,1.0,False,True,False,57,0.0006282897951775268,False,derived_only_not_independently_checkable,target,75890437
+source,United Sodas of America,,0,,0.0,True,False,True,18,0.00022339192717423174,False,unverified_no_independent_evidence,source,579536999
+target,Bawls,637910117070,4,Bawlsx4,1.0,False,True,False,82,0.0011448836267679376,False,derived_only_not_independently_checkable,target,579536999
+source,Active O2,,0,,0.0,True,True,True,77,0.0014380855311841168,False,confirmed_by_title_only,source,133643782
+target,Shine Water,860785000486,3,Shine Waterx3,1.0,False,True,False,45,0.0006422517906259162,False,derived_only_not_independently_checkable,target,133643782
+source,LIFEWTR,,0,,0.0,True,True,True,125,0.0016195914720131801,False,confirmed_by_title_only,source,173663881
+target,ZenWTR,852789008445,3,ZenWTRx3,1.0,False,True,False,65,0.0005584798179355794,False,derived_only_not_independently_checkable,target,173663881
+source,Eska,,0,,0.0,True,True,True,98,0.0009494156904904849,False,confirmed_by_title_only,source,841237577
+target,Eska,671785201007,2,Eskax2,1.0,False,True,False,98,0.0009494156904904849,False,derived_only_not_independently_checkable,target,841237577
+source,Sun Quench,,0,,0.0,True,False,True,30,0.00023735392262262122,False,unverified_no_independent_evidence,source,1046883222
+target,DubbelFrisss,8713300075426,1,DubbelFrisssx1,1.0,False,True,False,168,0.0,False,derived_only_not_independently_checkable,target,1046883222
+source,Erikli,,0,,0.0,True,False,True,169,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,908430333
+target,Erikli,8690793010038,2,Eriklix2,1.0,False,True,False,169,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,908430333
+source,Pip Organic,,0,,0.0,True,True,True,63,0.0008796057132485375,False,confirmed_by_title_only,source,251631676
+target,Cevita,7040518520358,1,Cevitax1,1.0,False,True,False,67,0.0008237577314549795,False,derived_only_not_independently_checkable,target,251631676
+source,Hochwald,,0,,0.0,True,False,True,15,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,258180626
+target,Black Forest,4104760401865,1,Black Forestx1,1.0,False,True,False,31,0.0033089929212683075,False,derived_only_not_independently_checkable,target,258180626
+source,Sun-Rype,57961018087,1,Sun-Rypex1,1.0,True,True,True,149,0.0014939335129776747,False,confirmed_by_co_listings,source,123998589
+target,Real Ketones,850001988902,1,Real Ketonesx1,1.0,False,True,False,16,0.00019546793627745276,False,derived_only_not_independently_checkable,target,123998589
+source,Raptor,,0,,0.0,True,True,True,11,0.00016754394538067381,False,confirmed_by_title_only,source,300591788
+target,Raptor,687408968417,1,Raptorx1,1.0,False,True,False,11,0.00016754394538067381,False,derived_only_not_independently_checkable,target,300591788
+source,Organic Health,,0,,0.0,True,True,True,62,0.0029320190441617915,False,confirmed_by_title_only,source,961119203
+target,Taksi,8720157464884,1,Taksix1,1.0,False,True,False,87,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,961119203
+source,Montellier,56918000434,2,Montellierx2,1.0,True,False,True,83,0.000865643717800148,False,confirmed_by_co_listings,source,755794542
+target,Deit,4104450003195,1,Deitx1,1.0,False,True,False,68,0.000921491699593706,False,derived_only_not_independently_checkable,target,755794542
+source,Obsesso,,0,,0.0,True,False,True,146,0.0008935677086969269,False,unverified_no_independent_evidence,source,864248362
+target,Peet's Coffee,785357017382,1,Peet's Coffeex1,1.0,False,True,False,70,0.0007539477542130321,False,derived_only_not_independently_checkable,target,864248362
+source,Plenish,,0,,0.0,True,True,True,30,0.0004188598634516845,False,confirmed_by_title_only,source,150010434
+target,Beebad,8056326430139,2,Beebadx2,1.0,False,True,False,30,0.00037697387710651606,False,derived_only_not_independently_checkable,target,150010434
+source,Kaiku,,0,,0.0,True,True,True,142,0.0018848693855325804,False,confirmed_by_title_only,source,582506647
+target,Kaiku,8432425091219,2,Kaikux2,1.0,False,True,False,142,0.0018848693855325804,False,derived_only_not_independently_checkable,target,582506647
+source,Qwell,,0,,0.0,True,True,True,8,0.00011169596358711587,False,confirmed_by_title_only,source,954007980
+target,Ramlösa,7310070003027,7,Ramlösax7,1.0,False,False,False,338,0.0,False,derived_only_not_independently_checkable,target,954007980
+source,Cactus Cooler,78000011609,2,Cactus Coolerx2,1.0,True,True,True,18,0.000432821858900074,False,confirmed_by_co_listings,source,300302244
+target,Mistic,680201880306,1,Misticx1,1.0,False,True,False,30,0.0003909358725549055,False,derived_only_not_independently_checkable,target,300302244
+source,Bullit,,0,,0.0,True,True,True,82,0.0008935677086969269,False,confirmed_by_title_only,source,957538171
+target,Bragulat,8431108105496,1,Bragulatx1,1.0,False,True,False,10,0.00013961995448389484,False,derived_only_not_independently_checkable,target,957538171
+source,Aksu Vital,,0,,0.0,True,True,True,171,0.00022339192717423174,False,confirmed_by_title_only,source,281736812
+target,Akmina,8693593310018,2,Akminax2,1.0,False,True,False,35,0.0,False,derived_only_not_independently_checkable,target,281736812
+source,Two Bears,,0,,0.0,True,True,True,55,0.0006562137860743057,False,confirmed_by_title_only,source,749914622
+target,Two Bears,628504309032,1,Two Bearsx1,1.0,False,True,False,55,0.0006562137860743057,False,derived_only_not_independently_checkable,target,749914622
+source,Greenhouse Juice,,0,,0.0,True,True,True,63,0.0011309216313195483,False,confirmed_by_title_only,source,992927700
+target,Nielsen-Massey,5015612151571,2,Nielsen-Masseyx2,1.0,False,True,False,2,2.7923990896778967e-05,False,derived_only_not_independently_checkable,target,992927700
+source,José Cuervo,,0,,0.0,True,True,True,65,0.0008516817223517586,False,confirmed_by_title_only,source,365953038
+target,José Cuervo,811538011167,5,José Cuervox5,1.0,False,False,False,65,0.0008516817223517586,False,derived_only_not_independently_checkable,target,365953038
+source,Rougemont,,0,,0.0,True,True,True,41,0.00044678385434846347,False,confirmed_by_title_only,source,841413294
+target,Bravo,7310867561013,6,Bravox6,1.0,False,True,False,137,0.0006980997724194742,False,derived_only_not_independently_checkable,target,841413294
+source,Ozarka,22592446219,3,Ozarkax3,1.0,True,True,True,196,0.0025550451670552756,False,confirmed_by_co_listings,source,71344157
+target,Römerquelle,2020005436367,1,Römerquellex1,1.0,False,False,False,74,0.0,False,derived_only_not_independently_checkable,target,71344157
+source,Bigallet,,0,,0.0,True,False,True,32,0.00020942993172584225,False,unverified_no_independent_evidence,source,123810994
+target,The Good Guys,6430070650166,2,The Good Guysx2,1.0,False,True,False,38,0.000460745849796853,False,derived_only_not_independently_checkable,target,123810994
+source,Organic Health,,0,,0.0,True,True,True,62,0.0029320190441617915,False,confirmed_by_title_only,source,949076136
+target,BioToday,8719153003708,1,BioTodayx1,1.0,False,True,False,30,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,949076136
+source,Plein fruit,,0,,0.0,True,False,True,25,0.0,False,unverified_no_independent_evidence,source,95497908
+target,Clear American,691338243056,1,Clear Americanx1,1.0,False,True,False,126,0.0019127933764293593,False,derived_only_not_independently_checkable,target,95497908
+source,Slush Puppie,5010438021015,2,Slush Puppiex2,1.0,True,False,True,21,0.0002792399089677897,False,confirmed_by_co_listings,source,740115312
+target,Blue Keld,5701161712478,3,Blue Keldx3,1.0,False,True,False,37,0.00013961995448389484,False,derived_only_not_independently_checkable,target,740115312
+source,Gold Medal,,0,,0.0,True,False,True,13,0.00012565795903550535,False,unverified_no_independent_evidence,source,1041184342
+target,Patience Fruit & Co,662166223305,2,Patience Fruit & Cox2,1.0,False,True,False,21,0.00016754394538067381,False,derived_only_not_independently_checkable,target,1041184342
+source,Ogeu,3119070910472,3,Ogeux3,1.0,True,False,True,32,0.00030716389986456866,False,confirmed_by_co_listings,source,934520202
+target,El Corte Inglés,8433329089876,2,El Corte Inglésx2,1.0,False,False,False,205,0.0008796057132485375,False,derived_only_not_independently_checkable,target,934520202
+source,Loop,,0,,0.0,True,False,True,100,0.0009354536950420954,False,unverified_no_independent_evidence,source,163862932
+target,God Morgon,7310865074539,1,God Morgonx1,1.0,False,True,False,257,0.0,False,derived_only_not_independently_checkable,target,163862932
+source,Niehoffs Vaihinger,,0,,0.0,True,True,True,51,0.0006701757815226953,False,confirmed_by_title_only,source,431789838
+target,Wesergold,4100060024346,1,Wesergoldx1,1.0,False,True,False,27,0.00026527791351940017,False,derived_only_not_independently_checkable,target,431789838
+source,Fuska,,0,,0.0,True,True,True,32,0.00022339192717423174,False,confirmed_by_title_only,source,833469890
+target,Fuska,8680014080735,1,Fuskax1,1.0,False,True,False,32,0.00022339192717423174,False,derived_only_not_independently_checkable,target,833469890
+source,Gülşah,,0,,0.0,True,True,True,33,0.00020942993172584225,False,confirmed_by_title_only,source,908708287
+target,Poli,882381057275,1,Polix1,1.0,False,True,False,55,0.0,False,derived_only_not_independently_checkable,target,908708287
+source,Poli,8694023200565,1,Polix1,1.0,True,False,True,55,0.0,False,confirmed_by_co_listings,source,551621389
+target,Poli,8694023200565,1,Polix1,1.0,False,True,False,55,0.0,False,derived_only_not_independently_checkable,target,551621389
+source,3D,,0,,0.0,True,False,True,81,0.0010611116540776007,False,unverified_no_independent_evidence,source,382623406
+target,nu3,4260593957686,2,nu3x2,1.0,False,True,False,13,0.00016754394538067381,False,derived_only_not_independently_checkable,target,382623406
+source,NONAGE,,0,,0.0,True,False,True,2,0.0,False,unverified_no_independent_evidence,source,135425684
+target,Achillea,8018161002001,1,Achilleax1,1.0,False,True,False,26,0.00019546793627745276,False,derived_only_not_independently_checkable,target,135425684
+source,Well,,0,,0.0,True,True,True,35,0.0010471496586292113,False,confirmed_by_title_only,source,841696724
+target,Jif,8717163859568,1,Jifx1,1.0,False,True,False,17,0.00023735392262262122,False,derived_only_not_independently_checkable,target,841696724
+source,Farm Boy,,0,,0.0,True,True,True,143,0.0020105273445680857,False,confirmed_by_title_only,source,1033851117
+target,Peet's Coffee,785357019331,5,Peet's Coffeex5,1.0,False,True,False,70,0.0007539477542130321,False,derived_only_not_independently_checkable,target,1033851117
+source,Daylesford,,0,,0.0,True,True,True,71,0.0009913016768356533,False,confirmed_by_title_only,source,153554995
+target,Marli,6415130036739,2,Marlix2,1.0,False,True,False,294,0.00378370076651355,False,derived_only_not_independently_checkable,target,153554995
+source,Gülşah,,0,,0.0,True,False,True,33,0.00020942993172584225,False,unverified_no_independent_evidence,source,811911947
+target,Thirsti,622356616874,1,Thirstix1,1.0,False,True,False,14,0.00019546793627745276,False,derived_only_not_independently_checkable,target,811911947
+source,Splash Blast,,0,,0.0,True,True,True,60,0.0019826033536713065,False,confirmed_by_title_only,source,904530530
+target,Selters,4058300156282,1,Seltersx1,1.0,False,True,False,14,0.0,False,derived_only_not_independently_checkable,target,904530530
+source,CForce,,0,,0.0,True,True,True,17,0.00015358194993228433,False,confirmed_by_title_only,source,522532861
+target,CForce,855891006125,1,CForcex1,1.0,False,True,False,17,0.00015358194993228433,False,derived_only_not_independently_checkable,target,522532861
+source,Dr Brown's,,0,,0.0,True,True,True,173,0.0016614774583583486,False,confirmed_by_title_only,source,220210595
+target,Krokus,5906732626035,1,Krokusx1,1.0,False,True,False,1,0.0,False,derived_only_not_independently_checkable,target,220210595
+source,Teavana,18200260438,3,Teavanax3,1.0,True,True,True,83,0.0009913016768356533,False,confirmed_by_co_listings,source,1032556519
+target,Kiju Organic,189727000712,1,Kiju Organicx1,1.0,False,True,False,24,0.0012286555994582746,False,derived_only_not_independently_checkable,target,1032556519
+source,Torku,,0,,0.0,True,False,True,37,0.0,False,unverified_no_independent_evidence,source,249993827
+target,Vitaorganic,3800500925752,1,Vitaorganicx1,1.0,False,True,False,35,0.0,False,derived_only_not_independently_checkable,target,249993827
+source,Cheribundi,,0,,0.0,True,False,True,96,0.0007260237633162532,False,unverified_no_independent_evidence,source,864132099
+target,Brämhults,7313619001416,1,Brämhultsx1,1.0,False,False,False,251,0.0014799715175292853,False,derived_only_not_independently_checkable,target,864132099
+source,Margaritaville,,0,,0.0,True,True,True,51,0.0006841377769710847,False,confirmed_by_title_only,source,955789718
+target,Barsmith,614362707226,1,Barsmithx1,1.0,False,True,False,57,0.0006282897951775268,False,derived_only_not_independently_checkable,target,955789718
+source,El Corte Inglés,,0,,0.0,True,False,True,205,0.0008796057132485375,False,unverified_no_independent_evidence,source,53874577
+target,Imsdal,7044610874920,3,Imsdalx3,1.0,False,True,False,55,0.0006562137860743057,False,derived_only_not_independently_checkable,target,53874577
+source,DubbelFrisss,8713300051505,2,DubbelFrisssx2,1.0,True,False,True,168,0.0,False,confirmed_by_co_listings,source,162881892
+target,DubbelFrisss,8713300051505,2,DubbelFrisssx2,1.0,False,True,False,168,0.0,False,derived_only_not_independently_checkable,target,162881892
+source,Bad Liebenwerda,,0,,0.0,True,False,True,73,0.0,False,unverified_no_independent_evidence,source,269397226
+target,Bad Liebenwerda,4013143110525,1,Bad Liebenwerdax1,1.0,False,True,False,73,0.0,False,derived_only_not_independently_checkable,target,269397226
+source,Boost,,0,,0.0,True,True,True,120,0.006199125979084931,False,confirmed_by_title_only,source,929773096
+target,Rowdy Energy,850014705008,2,Rowdy Energyx2,1.0,False,True,False,71,0.0011588456222163272,False,derived_only_not_independently_checkable,target,929773096
+source,Latitude 65,7350146812153,3,Latitude 65x3,1.0,True,False,True,56,0.00037697387710651606,False,confirmed_by_co_listings,source,1030903041
+target,Latitude 65,7350146812153,3,Latitude 65x3,1.0,False,True,False,56,0.00037697387710651606,False,derived_only_not_independently_checkable,target,1030903041
+source,No 1 Living,,0,,0.0,True,True,True,25,0.0006841377769710847,False,confirmed_by_title_only,source,1027331954
+target,Kist,793674480208,1,Kistx1,1.0,False,True,False,17,0.00022339192717423174,False,derived_only_not_independently_checkable,target,1027331954
+source,Ekobryggeriet,7330605001311,1,Ekobryggerietx1,1.0,True,False,True,68,9.773396813872638e-05,False,confirmed_by_co_listings,source,983156110
+target,Recoaro,8008720081011,3,Recoarox3,1.0,False,True,False,24,0.0003211258953129581,False,derived_only_not_independently_checkable,target,983156110
+source,Marcel,3700749300047,2,Marcelx2,1.0,True,False,True,129,0.0011169596358711587,False,confirmed_by_co_listings,source,432050917
+target,Marcel,3700749300016,4,Marcelx4,1.0,False,True,False,129,0.0011169596358711587,False,derived_only_not_independently_checkable,target,432050917
+source,Organic Health,,0,,0.0,True,True,True,62,0.0029320190441617915,False,confirmed_by_title_only,source,961432659
+target,Obsthof Retter,9005336008103,1,Obsthof Retterx1,1.0,False,True,False,36,5.5847981793557934e-05,False,derived_only_not_independently_checkable,target,961432659
+source,Private Selection,,0,,0.0,True,True,True,36,0.00044678385434846347,False,confirmed_by_title_only,source,966822508
+target,Bizzy,853204007548,2,Bizzyx2,1.0,False,True,False,38,0.0003909358725549055,False,derived_only_not_independently_checkable,target,966822508
+source,Dr. Goerg,,0,,0.0,True,True,True,54,0.0005305558270388003,False,confirmed_by_title_only,source,629159278
+target,Dr. Goerg,4260213391630,13,Dr. Goergx13,1.0,False,True,False,54,0.0005305558270388003,False,derived_only_not_independently_checkable,target,629159278
+source,Phocus,,0,,0.0,True,True,True,6,8.377197269033691e-05,False,confirmed_by_title_only,source,856492149
+target,Machu Picchu,3804078268266,1,Machu Picchux1,1.0,False,True,False,18,0.00016754394538067381,False,derived_only_not_independently_checkable,target,856492149
+source,Musselman's,,0,,0.0,True,True,True,14,0.0001815059408290633,False,confirmed_by_title_only,source,20132101
+target,Musselman's,6010851994940,1,Musselman'sx1,1.0,False,True,False,14,0.0001815059408290633,False,derived_only_not_independently_checkable,target,20132101
+source,Turkey Hill,20735092750,4,Turkey Hillx4,1.0,True,True,True,125,0.0012705415858034431,False,confirmed_by_co_listings,source,902256110
+target,Splenda,722776003749,2,Splendax2,1.0,False,True,False,74,0.0009633776859388743,False,derived_only_not_independently_checkable,target,902256110
+source,Peace Tea,67000001086,4,Peace Teax4,1.0,True,True,True,232,0.0026946651215391704,False,confirmed_by_co_listings,source,170983248
+target,Seven Teas,855103006080,4,Seven Teasx4,1.0,False,True,False,45,0.0007539477542130321,False,derived_only_not_independently_checkable,target,170983248
+source,Tang,,0,,0.0,True,True,True,191,0.002736551107884339,False,confirmed_by_title_only,source,72272964
+target,L&A,798235701013,1,L&Ax1,1.0,False,False,False,100,1.0,False,derived_only_not_independently_checkable,target,72272964
+source,Aqua Pacific,,0,,0.0,True,True,True,52,0.0007260237633162532,False,confirmed_by_title_only,source,251621253
+target,Viwa,5999885917396,1,Viwax1,1.0,False,True,False,19,0.00026527791351940017,False,derived_only_not_independently_checkable,target,251621253
+source,Organic Health,,0,,0.0,True,True,True,62,0.0029320190441617915,False,confirmed_by_title_only,source,948859879
+target,Cevita,7040518520372,2,Cevitax2,1.0,False,True,False,67,0.0008237577314549795,False,derived_only_not_independently_checkable,target,948859879
+source,Sade Organik,,0,,0.0,True,False,True,73,0.0,False,unverified_no_independent_evidence,source,282993181
+target,Lichtenauer,4013256991950,1,Lichtenauerx1,1.0,False,True,False,31,0.000432821858900074,False,derived_only_not_independently_checkable,target,282993181
+source,Organic Health,,0,,0.0,True,True,True,62,0.0029320190441617915,False,confirmed_by_title_only,source,961335205
+target,QNT,5404017402751,1,QNTx1,1.0,False,True,False,62,0.0007120617678678636,False,derived_only_not_independently_checkable,target,961335205
+source,Publix,,0,,0.0,True,True,True,239,0.0033089929212683075,False,confirmed_by_title_only,source,55769912
+target,Splenda,722776003749,2,Splendax2,1.0,False,True,False,74,0.0009633776859388743,False,derived_only_not_independently_checkable,target,55769912
+source,Yedigun,,0,,0.0,True,False,True,86,6.980997724194742e-05,False,unverified_no_independent_evidence,source,74513378
+target,Flawsome!,5060524790264,3,Flawsome!x3,1.0,False,True,False,17,0.00022339192717423174,False,derived_only_not_independently_checkable,target,74513378
+source,Römerquelle,1150070,1,Römerquellex1,1.0,True,False,True,74,0.0,False,confirmed_by_co_listings,source,252460537
+target,Römerquelle,90311307,1,Römerquellex1,1.0,False,False,False,74,0.0,False,derived_only_not_independently_checkable,target,252460537
+source,Ozarka,,0,,0.0,True,True,True,196,0.0025550451670552756,False,confirmed_by_title_only,source,82414438
+target,Loviseberg Råsaft,7350068170065,2,Loviseberg Råsaftx2,1.0,False,False,False,143,0.00012565795903550535,False,derived_only_not_independently_checkable,target,82414438
+source,Cemil,,0,,0.0,True,True,True,21,0.00011169596358711587,False,confirmed_by_title_only,source,220913990
+target,Cemil,8680050690035,1,Cemilx1,1.0,False,True,False,21,0.00011169596358711587,False,derived_only_not_independently_checkable,target,220913990
+source,Mug Root Beer,,0,,0.0,True,False,True,48,0.001326389567597001,False,unverified_no_independent_evidence,source,756811718
+target,Mug Root Beer,654690512833,1,Mug Root Beerx1,1.0,False,True,False,48,0.001326389567597001,False,derived_only_not_independently_checkable,target,756811718
+source,Moose Juice,,0,,0.0,True,True,True,20,0.0002792399089677897,False,confirmed_by_title_only,source,242872509
+target,Moose Juice,634158670480,1,Moose Juicex1,1.0,False,True,False,20,0.0002792399089677897,False,derived_only_not_independently_checkable,target,242872509
+source,Big Red,,0,,0.0,True,True,True,118,0.004928584393281488,False,confirmed_by_title_only,source,850975576
+target,La Casera,8410283348058,1,La Caserax1,1.0,False,True,False,130,1.3961995448389483e-05,False,derived_only_not_independently_checkable,target,850975576
+source,Blue Print,,0,,0.0,True,False,True,17,6.980997724194742e-05,False,unverified_no_independent_evidence,source,1763244
+target,Detox Water,854902007021,1,Detox Waterx1,1.0,False,True,False,7,0.0024991971852617177,False,derived_only_not_independently_checkable,target,1763244
+source,Thirsty Planet,,0,,0.0,True,True,True,138,0.0025410831716068862,False,confirmed_by_title_only,source,159219108
+target,Hampstead Tea,813427000689,5,Hampstead Teax5,1.0,False,True,False,30,0.00040489786800329504,False,derived_only_not_independently_checkable,target,159219108
+source,Nestlé,,0,,0.0,True,True,True,19,0.0005026318361420214,False,confirmed_by_title_only,source,483090740
+target,Recover 180,615764073544,1,Recover 180x1,1.0,False,True,False,10,0.000432821858900074,False,derived_only_not_independently_checkable,target,483090740
+source,Organic Health,,0,,0.0,True,True,True,62,0.0029320190441617915,False,confirmed_by_title_only,source,142466764
+target,NatureWorks,850044847686,1,NatureWorksx1,1.0,False,True,False,3,0.0,False,derived_only_not_independently_checkable,target,142466764
+source,Odwalla,14054026053,7,Odwallax7,1.0,True,True,True,57,0.0007260237633162532,False,confirmed_by_co_listings,source,10258851
+target,Deep RiverRock,5011020104512,1,Deep RiverRockx1,1.0,False,True,False,23,5.5847981793557934e-05,False,derived_only_not_independently_checkable,target,10258851
+source,Ege Lokman,,0,,0.0,True,False,True,260,0.0005026318361420214,False,unverified_no_independent_evidence,source,373380548
+target,Kampos Chioy,5204125100361,2,Kampos Chioyx2,1.0,False,True,False,33,0.0,False,derived_only_not_independently_checkable,target,373380548
+source,Well,,0,,0.0,True,True,True,35,0.0010471496586292113,False,confirmed_by_title_only,source,993091034
+target,Well,628451439332,1,Wellx1,1.0,False,True,False,35,0.0010471496586292113,False,derived_only_not_independently_checkable,target,993091034
+source,Publix,,0,,0.0,True,True,True,239,0.0033089929212683075,False,confirmed_by_title_only,source,690260347
+target,Nature's Promise,688267138072,1,Nature's Promisex1,1.0,False,True,False,11,0.00012565795903550535,False,derived_only_not_independently_checkable,target,690260347
+source,Loop,56719900063,3,Loopx3,1.0,True,True,True,100,0.0009354536950420954,False,confirmed_by_co_listings,source,250068791
+target,Dry,851818001426,2,Dryx2,1.0,False,True,False,96,0.002219957276293928,False,derived_only_not_independently_checkable,target,250068791
+source,Poli,,0,,0.0,True,False,True,55,0.0,False,unverified_no_independent_evidence,source,964905959
+target,Poli,8694023200732,2,Polix2,1.0,False,True,False,55,0.0,False,derived_only_not_independently_checkable,target,964905959
+source,Ege Lokman,,0,,0.0,True,False,True,260,0.0005026318361420214,False,unverified_no_independent_evidence,source,179803320
+target,Marli,6415130079866,3,Marlix3,1.0,False,True,False,294,0.00378370076651355,False,derived_only_not_independently_checkable,target,179803320
+source,Organic Health,,0,,0.0,True,True,True,62,0.0029320190441617915,False,confirmed_by_title_only,source,960246995
+target,Watt's,748252125101,1,Watt'sx1,1.0,False,True,False,5,0.00037697387710651606,False,derived_only_not_independently_checkable,target,960246995
+source,Ahoj Brause,,0,,0.0,True,False,True,12,0.0,False,unverified_no_independent_evidence,source,50800819
+target,Mangajo,5060040190180,1,Mangajox1,1.0,False,True,False,31,0.0003630118816581266,False,derived_only_not_independently_checkable,target,50800819
+source,Bacanha,,0,,0.0,True,True,True,52,0.00037697387710651606,False,confirmed_by_title_only,source,360334991
+target,Skratch Labs,858690007027,3,Skratch Labsx3,1.0,False,True,False,68,0.0008796057132485375,False,derived_only_not_independently_checkable,target,360334991
+source,Country Club,89087671518,2,Country Clubx2,1.0,True,True,True,8,0.0015358194993228432,False,confirmed_by_co_listings,source,71172249
+target,Royal Soda,3292090000269,2,Royal Sodax2,1.0,False,True,False,15,0.0018569453946358013,False,derived_only_not_independently_checkable,target,71172249
+source,DubbelFrisss,,0,,0.0,True,False,True,168,0.0,False,unverified_no_independent_evidence,source,55658100
+target,Monoprix,3350031895203,1,Monoprixx1,1.0,False,True,False,144,0.0017452494310486854,False,derived_only_not_independently_checkable,target,55658100
+source,Ozarka,22592446523,2,Ozarkax2,1.0,True,True,True,196,0.0025550451670552756,False,confirmed_by_co_listings,source,71970581
+target,Rieme,3292482260042,1,Riemex1,1.0,False,True,False,18,4.1885986345168454e-05,False,derived_only_not_independently_checkable,target,71970581
+source,Enervit,,0,,0.0,True,False,True,40,0.00026527791351940017,False,unverified_no_independent_evidence,source,160946502
+target,AA,87222395,1,AAx1,1.0,False,False,False,78,0.0009633776859388743,False,derived_only_not_independently_checkable,target,160946502
+source,Gevalia,43000065143,3,Gevaliax3,1.0,True,True,True,33,0.0004188598634516845,False,confirmed_by_co_listings,source,72962461
+target,Waiakea,850054035028,2,Waiakeax2,1.0,False,True,False,48,0.0006143277997291373,False,derived_only_not_independently_checkable,target,72962461
+source,President's Choice,,0,,0.0,True,False,True,259,0.0012565795903550535,False,unverified_no_independent_evidence,source,375165231
+target,Teinacher,4009228040085,1,Teinacherx1,1.0,False,True,False,6,8.377197269033691e-05,False,derived_only_not_independently_checkable,target,375165231
+source,Koza,,0,,0.0,True,False,True,181,2.7923990896778967e-05,False,unverified_no_independent_evidence,source,182558464
+target,Salt Stick,850063737005,2,Salt Stickx2,1.0,False,True,False,9,0.0009913016768356533,False,derived_only_not_independently_checkable,target,182558464
+source,Food Club,36800499416,5,Food Clubx5,1.0,True,True,True,52,0.0017452494310486854,False,confirmed_by_co_listings,source,221387064
+target,Cure Hydration,850025251839,2,Cure Hydrationx2,1.0,False,True,False,93,0.0011588456222163272,False,derived_only_not_independently_checkable,target,221387064
+source,Ege Lokman,,0,,0.0,True,False,True,260,0.0005026318361420214,False,unverified_no_independent_evidence,source,405778075
+target,Aronia Original,4250396905601,1,Aronia Originalx1,1.0,False,True,False,39,0.0018709073900841909,False,derived_only_not_independently_checkable,target,405778075
+source,Aloha Maid,73366118023,2,Aloha Maidx2,1.0,True,True,True,32,0.000460745849796853,False,confirmed_by_co_listings,source,310991494
+target,Aloha Maid,758236592188,1,Aloha Maidx1,1.0,False,True,False,32,0.000460745849796853,False,derived_only_not_independently_checkable,target,310991494
+source,Carola,3268651011784,3,Carolax3,1.0,True,False,True,48,0.0004188598634516845,False,confirmed_by_co_listings,source,935606053
+target,Imsdal,7044610874920,3,Imsdalx3,1.0,False,True,False,55,0.0006562137860743057,False,derived_only_not_independently_checkable,target,935606053
+source,Quellbrunn,,0,,0.0,True,True,True,25,0.00012565795903550535,False,confirmed_by_title_only,source,239299781
+target,Chaudfontaine,5000112648935,1,Chaudfontainex1,1.0,False,True,False,83,0.0007120617678678636,False,derived_only_not_independently_checkable,target,239299781
+source,Peace Tea,,0,,0.0,True,False,True,232,0.0026946651215391704,False,unverified_no_independent_evidence,source,163959502
+target,Bravo,7310867564113,3,Bravox3,1.0,False,True,False,137,0.0006980997724194742,False,derived_only_not_independently_checkable,target,163959502
+source,North Water,,0,,0.0,True,True,True,7,0.0018010974128422434,False,confirmed_by_title_only,source,786213552
+target,Imsdal,7044610876863,2,Imsdalx2,1.0,False,True,False,55,0.0006562137860743057,False,derived_only_not_independently_checkable,target,786213552
+source,Bigallet,,0,,0.0,True,True,True,32,0.00020942993172584225,False,confirmed_by_title_only,source,116835497
+target,Yo,9001400102999,1,Yox1,1.0,False,False,False,84,0.0012845035812518325,False,derived_only_not_independently_checkable,target,116835497
+source,Mix,,0,,0.0,True,True,True,64,0.03437443279393491,True,generic_category_word,source,552425687
+target,Drip Drop,850042830307,1,Drip Dropx1,1.0,False,True,False,56,0.000781871745109811,False,derived_only_not_independently_checkable,target,552425687

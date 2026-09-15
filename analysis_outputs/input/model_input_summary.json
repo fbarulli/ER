@@ -1,0 +1,677 @@
+{
+  "provenance": {
+    "commit_sha": "c0b4d352ce12698440dd8c0c7145cd5aae3cc83f",
+    "review_csv": "training_results/0915T075044186132Z/worker_1/report/human_review_features/human_review_enriched.csv",
+    "profile_default": "cleaned",
+    "include_evidence_default": false,
+    "structured_text_enabled": true,
+    "max_seq_length": 128,
+    "tokenizer_path": "/home/opc/ONE/ER-analysis-brand-input/artifacts/models/all-MiniLM-L6-v2",
+    "ubiquitous_doc_fraction": 0.5,
+    "canonical_corpus_rows": 13250,
+    "source_corpus_rows": 71623,
+    "review_rows": 585
+  },
+  "token_budget": [
+    {
+      "population": "canonical_corpus",
+      "side": "target",
+      "profile": "cleaned",
+      "records": 13250,
+      "max_seq_length": 128,
+      "mean_tokens": 51.40966037735849,
+      "median_tokens": 51.0,
+      "p95_tokens": 79.0,
+      "max_tokens": 201,
+      "truncated_records": 7,
+      "truncated_share": 0.0005283018867924528,
+      "tokens_lost_total": 216,
+      "mean_headroom_when_fits": 76.64713433512044
+    },
+    {
+      "population": "source_corpus",
+      "side": "source",
+      "profile": "cleaned",
+      "records": 71623,
+      "max_seq_length": 128,
+      "mean_tokens": 78.44566689471259,
+      "median_tokens": 76.0,
+      "p95_tokens": 119.0,
+      "max_tokens": 229,
+      "truncated_records": 1889,
+      "truncated_share": 0.026374209402007735,
+      "tokens_lost_total": 27478,
+      "mean_headroom_when_fits": 51.29073335818969
+    },
+    {
+      "population": "review_pairs",
+      "side": "source",
+      "profile": "cleaned",
+      "records": 585,
+      "max_seq_length": 128,
+      "mean_tokens": 76.03931623931624,
+      "median_tokens": 73.0,
+      "p95_tokens": 117.0,
+      "max_tokens": 213,
+      "truncated_records": 14,
+      "truncated_share": 0.023931623931623933,
+      "tokens_lost_total": 419,
+      "mean_headroom_when_fits": 53.96847635726795
+    },
+    {
+      "population": "review_pairs",
+      "side": "target",
+      "profile": "cleaned",
+      "records": 585,
+      "max_seq_length": 128,
+      "mean_tokens": 49.536752136752135,
+      "median_tokens": 49.0,
+      "p95_tokens": 77.0,
+      "max_tokens": 115,
+      "truncated_records": 0,
+      "truncated_share": 0.0,
+      "tokens_lost_total": 0,
+      "mean_headroom_when_fits": 78.46324786324786
+    },
+    {
+      "population": "review_pairs",
+      "side": "source",
+      "profile": "legacy",
+      "records": 585,
+      "max_seq_length": 128,
+      "mean_tokens": 100.63418803418803,
+      "median_tokens": 96.0,
+      "p95_tokens": 153.0,
+      "max_tokens": 228,
+      "truncated_records": 112,
+      "truncated_share": 0.19145299145299147,
+      "tokens_lost_total": 2207,
+      "mean_headroom_when_fits": 38.51162790697674
+    },
+    {
+      "population": "review_pairs",
+      "side": "target",
+      "profile": "legacy",
+      "records": 585,
+      "max_seq_length": 128,
+      "mean_tokens": 54.81196581196581,
+      "median_tokens": 54.0,
+      "p95_tokens": 83.0,
+      "max_tokens": 121,
+      "truncated_records": 0,
+      "truncated_share": 0.0,
+      "tokens_lost_total": 0,
+      "mean_headroom_when_fits": 73.1880341880342
+    },
+    {
+      "population": "review_pairs",
+      "side": "target",
+      "profile": "legacy+evidence",
+      "records": 585,
+      "max_seq_length": 128,
+      "mean_tokens": 114.85128205128206,
+      "median_tokens": 104.0,
+      "p95_tokens": 216.5999999999999,
+      "max_tokens": 446,
+      "truncated_records": 162,
+      "truncated_share": 0.27692307692307694,
+      "tokens_lost_total": 9104,
+      "mean_headroom_when_fits": 39.70685579196218
+    },
+    {
+      "population": "review_pairs",
+      "side": "source",
+      "profile": "legacy+evidence",
+      "records": 585,
+      "max_seq_length": 128,
+      "mean_tokens": 100.63418803418803,
+      "median_tokens": 96.0,
+      "p95_tokens": 153.0,
+      "max_tokens": 228,
+      "truncated_records": 112,
+      "truncated_share": 0.19145299145299147,
+      "tokens_lost_total": 2207,
+      "mean_headroom_when_fits": 38.51162790697674
+    }
+  ],
+  "group_composition": [
+    {
+      "population": "canonical_corpus",
+      "side": "target",
+      "profile": "cleaned",
+      "group": "brand",
+      "tokens": 18463,
+      "token_share": 0.09752374312004142,
+      "distinct_tokens": 1846,
+      "ubiquitous_token_share": 0.00016248713643503222,
+      "mean_idf": 7.334342755692871
+    },
+    {
+      "population": "canonical_corpus",
+      "side": "target",
+      "profile": "cleaned",
+      "group": "canonical",
+      "tokens": 67881,
+      "token_share": 0.35855544639178527,
+      "distinct_tokens": 3745,
+      "ubiquitous_token_share": 0.2231994225188197,
+      "mean_idf": 4.435946325462183
+    },
+    {
+      "population": "canonical_corpus",
+      "side": "target",
+      "profile": "cleaned",
+      "group": "mode_type",
+      "tokens": 2696,
+      "token_share": 0.014240589906929082,
+      "distinct_tokens": 5,
+      "ubiquitous_token_share": 0.0,
+      "mean_idf": 3.759349978168227
+    },
+    {
+      "population": "canonical_corpus",
+      "side": "target",
+      "profile": "cleaned",
+      "group": "structured",
+      "tokens": 100278,
+      "token_share": 0.5296802205812443,
+      "distinct_tokens": 357,
+      "ubiquitous_token_share": 0.40469494804443645,
+      "mean_idf": 2.5736748755772147
+    },
+    {
+      "population": "source_corpus",
+      "side": "source",
+      "profile": "cleaned",
+      "group": "brand",
+      "tokens": 101426,
+      "token_share": 0.05145941887071979,
+      "distinct_tokens": 2422,
+      "ubiquitous_token_share": 0.0002070475026127423,
+      "mean_idf": 7.3363540216070815
+    },
+    {
+      "population": "source_corpus",
+      "side": "source",
+      "profile": "cleaned",
+      "group": "title",
+      "tokens": 487771,
+      "token_share": 0.24747512671297164,
+      "distinct_tokens": 12799,
+      "ubiquitous_token_share": 0.0017016181773824193,
+      "mean_idf": 5.691307268252737
+    },
+    {
+      "population": "source_corpus",
+      "side": "source",
+      "profile": "cleaned",
+      "group": "attributes",
+      "tokens": 788053,
+      "token_share": 0.39982597577866963,
+      "distinct_tokens": 891,
+      "ubiquitous_token_share": 0.10721867691640029,
+      "mean_idf": 3.51188431285691
+    },
+    {
+      "population": "source_corpus",
+      "side": "source",
+      "profile": "cleaned",
+      "group": "structured",
+      "tokens": 593740,
+      "token_share": 0.30123947863763895,
+      "distinct_tokens": 501,
+      "ubiquitous_token_share": 0.5635429649341462,
+      "mean_idf": 2.343141903021353
+    },
+    {
+      "population": "review_pairs",
+      "side": "source",
+      "profile": "cleaned",
+      "group": "brand",
+      "tokens": 816,
+      "token_share": 0.053504688217166085,
+      "distinct_tokens": 496,
+      "ubiquitous_token_share": 0.0,
+      "mean_idf": 7.329326008039698
+    },
+    {
+      "population": "review_pairs",
+      "side": "source",
+      "profile": "cleaned",
+      "group": "title",
+      "tokens": 4086,
+      "token_share": 0.26791685791095665,
+      "distinct_tokens": 1329,
+      "ubiquitous_token_share": 0.0009789525208027412,
+      "mean_idf": 5.778174855601255
+    },
+    {
+      "population": "review_pairs",
+      "side": "source",
+      "profile": "cleaned",
+      "group": "attributes",
+      "tokens": 5492,
+      "token_share": 0.3601075339322012,
+      "distinct_tokens": 357,
+      "ubiquitous_token_share": 0.13073561544064094,
+      "mean_idf": 3.4575961088463063
+    },
+    {
+      "population": "review_pairs",
+      "side": "source",
+      "profile": "cleaned",
+      "group": "structured",
+      "tokens": 4857,
+      "token_share": 0.3184709199396761,
+      "distinct_tokens": 149,
+      "ubiquitous_token_share": 0.5633106856084003,
+      "mean_idf": 2.376419730088127
+    },
+    {
+      "population": "review_pairs",
+      "side": "target",
+      "profile": "cleaned",
+      "group": "brand",
+      "tokens": 797,
+      "token_share": 0.09997491219267436,
+      "distinct_tokens": 486,
+      "ubiquitous_token_share": 0.0,
+      "mean_idf": 7.4368820541455
+    },
+    {
+      "population": "review_pairs",
+      "side": "target",
+      "profile": "cleaned",
+      "group": "canonical",
+      "tokens": 2754,
+      "token_share": 0.34545910687405923,
+      "distinct_tokens": 547,
+      "ubiquitous_token_share": 0.2392883079157589,
+      "mean_idf": 4.3859888901729365
+    },
+    {
+      "population": "review_pairs",
+      "side": "target",
+      "profile": "cleaned",
+      "group": "mode_type",
+      "tokens": 115,
+      "token_share": 0.01442548921224285,
+      "distinct_tokens": 5,
+      "ubiquitous_token_share": 0.0,
+      "mean_idf": 3.7573685691385266
+    },
+    {
+      "population": "review_pairs",
+      "side": "target",
+      "profile": "cleaned",
+      "group": "structured",
+      "tokens": 4306,
+      "token_share": 0.5401404917210236,
+      "distinct_tokens": 141,
+      "ubiquitous_token_share": 0.41709242916860195,
+      "mean_idf": 2.572432426480768
+    }
+  ],
+  "field_coverage": [
+    {
+      "population": "canonical_corpus",
+      "field": "mode_brand",
+      "records": 13250,
+      "populated": 13250,
+      "populated_share": 1.0
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "mode_flavor",
+      "records": 13250,
+      "populated": 9830,
+      "populated_share": 0.7418867924528302
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "mode_type",
+      "records": 13250,
+      "populated": 7205,
+      "populated_share": 0.5437735849056604
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "salient_ngrams",
+      "records": 13250,
+      "populated": 13250,
+      "populated_share": 1.0
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "description_evidence",
+      "records": 13250,
+      "populated": 13250,
+      "populated_share": 1.0
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "breadcrumb_evidence",
+      "records": 13250,
+      "populated": 13250,
+      "populated_share": 1.0
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "volume",
+      "records": 13250,
+      "populated": 12348,
+      "populated_share": 0.9319245283018868
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "pack",
+      "records": 13250,
+      "populated": 3342,
+      "populated_share": 0.25222641509433963
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "package_type",
+      "records": 13250,
+      "populated": 2712,
+      "populated_share": 0.20467924528301887
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "flavor",
+      "records": 13250,
+      "populated": 9830,
+      "populated_share": 0.7418867924528302
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "carbonation",
+      "records": 13250,
+      "populated": 10843,
+      "populated_share": 0.8183396226415094
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "sweetener",
+      "records": 13250,
+      "populated": 5813,
+      "populated_share": 0.43871698113207547
+    },
+    {
+      "population": "canonical_corpus",
+      "field": "pulp",
+      "records": 13250,
+      "populated": 304,
+      "populated_share": 0.022943396226415093
+    },
+    {
+      "population": "source_corpus",
+      "field": "brand",
+      "records": 71623,
+      "populated": 71623,
+      "populated_share": 1.0
+    },
+    {
+      "population": "source_corpus",
+      "field": "title",
+      "records": 71623,
+      "populated": 71623,
+      "populated_share": 1.0
+    },
+    {
+      "population": "source_corpus",
+      "field": "attributes",
+      "records": 71623,
+      "populated": 71623,
+      "populated_share": 1.0
+    },
+    {
+      "population": "source_corpus",
+      "field": "description",
+      "records": 71623,
+      "populated": 71623,
+      "populated_share": 1.0
+    },
+    {
+      "population": "source_corpus",
+      "field": "category_path",
+      "records": 71623,
+      "populated": 71623,
+      "populated_share": 1.0
+    },
+    {
+      "population": "source_corpus",
+      "field": "barcode",
+      "records": 71623,
+      "populated": 71623,
+      "populated_share": 1.0
+    },
+    {
+      "population": "source_corpus",
+      "field": "category",
+      "records": 71623,
+      "populated": 71623,
+      "populated_share": 1.0
+    },
+    {
+      "population": "source_corpus",
+      "field": "volume",
+      "records": 71623,
+      "populated": 65194,
+      "populated_share": 0.910238331262304
+    },
+    {
+      "population": "source_corpus",
+      "field": "pack",
+      "records": 71623,
+      "populated": 71623,
+      "populated_share": 1.0
+    },
+    {
+      "population": "source_corpus",
+      "field": "package_type",
+      "records": 71623,
+      "populated": 13378,
+      "populated_share": 0.1867835751085545
+    },
+    {
+      "population": "source_corpus",
+      "field": "flavor",
+      "records": 71623,
+      "populated": 49956,
+      "populated_share": 0.697485444619745
+    },
+    {
+      "population": "source_corpus",
+      "field": "carbonation",
+      "records": 71623,
+      "populated": 56267,
+      "populated_share": 0.785599597894531
+    },
+    {
+      "population": "source_corpus",
+      "field": "sweetener",
+      "records": 71623,
+      "populated": 22094,
+      "populated_share": 0.30847632743671727
+    },
+    {
+      "population": "source_corpus",
+      "field": "pulp",
+      "records": 71623,
+      "populated": 1241,
+      "populated_share": 0.01732683635145135
+    }
+  ],
+  "truncation_loss": [
+    {
+      "population": "canonical_corpus",
+      "side": "target",
+      "group": "structured",
+      "tokens_lost": 216,
+      "truncated_records_attributed": 7
+    },
+    {
+      "population": "source_corpus",
+      "side": "source",
+      "group": "structured",
+      "tokens_lost": 27478,
+      "truncated_records_attributed": 1889
+    },
+    {
+      "population": "source_corpus",
+      "side": "source",
+      "group": "attributes",
+      "tokens_lost": 2,
+      "truncated_records_attributed": 1889
+    }
+  ],
+  "structured_asymmetry": [
+    {
+      "marker": "VOLUME",
+      "source_present": 554,
+      "target_present": 555,
+      "both": 548,
+      "source_only": 6,
+      "target_only": 7,
+      "neither": 24
+    },
+    {
+      "marker": "PACK_SIZE",
+      "source_present": 585,
+      "target_present": 160,
+      "both": 160,
+      "source_only": 425,
+      "target_only": 0,
+      "neither": 0
+    },
+    {
+      "marker": "PACKAGE_TYPE",
+      "source_present": 137,
+      "target_present": 124,
+      "both": 56,
+      "source_only": 81,
+      "target_only": 68,
+      "neither": 380
+    },
+    {
+      "marker": "FLAVOR",
+      "source_present": 393,
+      "target_present": 413,
+      "both": 359,
+      "source_only": 34,
+      "target_only": 54,
+      "neither": 138
+    },
+    {
+      "marker": "CARBONATION",
+      "source_present": 454,
+      "target_present": 472,
+      "both": 414,
+      "source_only": 40,
+      "target_only": 58,
+      "neither": 73
+    },
+    {
+      "marker": "SWEETENER_DIET",
+      "source_present": 138,
+      "target_present": 225,
+      "both": 86,
+      "source_only": 52,
+      "target_only": 139,
+      "neither": 308
+    },
+    {
+      "marker": "PULP",
+      "source_present": 7,
+      "target_present": 11,
+      "both": 4,
+      "source_only": 3,
+      "target_only": 7,
+      "neither": 571
+    }
+  ],
+  "profile_comparison": [
+    {
+      "metric": "true_pair_jaccard",
+      "population": "review_pairs",
+      "side": "both",
+      "cleaned": 0.31997419921717307,
+      "before": 0.18964989880414287,
+      "legacy_no_evidence": 0.18733843406026307,
+      "delta_vs_before": 0.1303243004130302
+    },
+    {
+      "metric": "cross_pair_jaccard",
+      "population": "review_pairs",
+      "side": "both",
+      "cleaned": 0.11900402329239083,
+      "before": 0.07356779924271958,
+      "legacy_no_evidence": 0.08158539889778632,
+      "delta_vs_before": 0.04543622404967125
+    },
+    {
+      "metric": "retrieval_margin",
+      "population": "review_pairs",
+      "side": "both",
+      "cleaned": 0.20097017592478222,
+      "before": 0.11608209956142329,
+      "legacy_no_evidence": 0.10575303516247675,
+      "delta_vs_before": 0.08488807636335893
+    },
+    {
+      "metric": "identical_product_24_jaccard",
+      "population": "review_pairs",
+      "side": "both",
+      "cleaned": 0.46461416676769457,
+      "before": 0.512887977774602,
+      "legacy_no_evidence": 0.23384659511967673,
+      "delta_vs_before": -0.048273811006907474
+    },
+    {
+      "metric": "mean_source_tokens",
+      "population": "review_pairs",
+      "side": "both",
+      "cleaned": 76.03931623931624,
+      "before": 100.63418803418803,
+      "legacy_no_evidence": 100.63418803418803,
+      "delta_vs_before": -24.594871794871793
+    },
+    {
+      "metric": "mean_target_tokens",
+      "population": "review_pairs",
+      "side": "both",
+      "cleaned": 49.536752136752135,
+      "before": 114.85128205128206,
+      "legacy_no_evidence": 54.81196581196581,
+      "delta_vs_before": -65.31452991452991
+    },
+    {
+      "metric": "target_truncated_records",
+      "population": "review_pairs",
+      "side": "both",
+      "cleaned": 0.0,
+      "before": 162.0,
+      "legacy_no_evidence": 0.0,
+      "delta_vs_before": -162.0
+    },
+    {
+      "metric": "evidence_channel_target_tokens",
+      "population": "review_pairs",
+      "side": "both",
+      "cleaned": 0.0,
+      "before": 60.03931623931624,
+      "legacy_no_evidence": 0.0,
+      "delta_vs_before": -60.03931623931624
+    },
+    {
+      "metric": "evidence_channel_source_tokens",
+      "population": "review_pairs",
+      "side": "both",
+      "cleaned": 0.0,
+      "before": 0.0,
+      "legacy_no_evidence": 0.0,
+      "delta_vs_before": 0.0
+    }
+  ]
+}
