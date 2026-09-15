@@ -73,9 +73,9 @@ colab:
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
   training_dataset_csv: "training_data/dataset_deduped_train_minus_3000.csv"
-  # Deterministic 128-row prefix of training_dataset_csv. It is the smallest
-  # checked smoke population that survives the pair/component/triple guards.
-  smoke_dataset_csv: "training_data/dataset_deduped_smoke_128.csv"
+  # Deterministic 1,000-row stratified sample of dataset_deduped, sized to
+  # exercise the GPU path end to end without the full-dataset runtime.
+  smoke_dataset_csv: "training_data/dataset_deduped_smoke_1000.csv"
   smoke_inference_sample: 5
   # Distributions the launcher asserts on the VM, per lane.  The Colab image
   # already ships torch/transformers/sentence-transformers/datasets/pandas/
@@ -668,7 +668,7 @@ hpo:
 sweep:
   payload_variants: ["title_only"]   # 07c variants beyond 'full'
   train_fracs: [0.25, 0.50, 0.75]    # 07d data-scaling curve
-  smoke_sample: 128                   # chain-check sample size (--sample)
+  smoke_sample: 1000                  # chain-check sample size (--sample)
   sweep_sample: 2000                  # step-2 smoke sweep size
   rerank_model: "rerank_minilm_l6"  # local registry key; DVC-shipped bundle
 

@@ -151,6 +151,12 @@ _RESULT_DOWNLOAD_EXCLUDED_DIRS = frozenset(_COLAB.result_download_excluded_dirs)
 # ends, large enough that the remote listing does not compete with the trainer
 # for the control channel.
 _INCREMENTAL_SYNC_SECONDS = 30
+# The trainer writes this file last inside a checkpoint directory, so its
+# presence is what distinguishes a finished checkpoint from one mid-write.
+_CHECKPOINT_MANIFEST_NAME = "checkpoint_manifest.json"
+# Bookkeeping written beside a locally retained checkpoint, recording which
+# remote checkpoint it is and the score that won it the slot.
+_LATEST_BEST_MARKER = "latest_best.json"
 _WORKER_MONITOR_SECONDS = _COLAB.worker_monitor_seconds
 _FINAL_INFERENCE = _COLAB.final_inference
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
@@ -1524,22 +1530,29 @@ def _extract_result_archive(
 
 
 class _IncrementalResultSync:
-    """Pull finished remote artifacts while training is still running.
+    """Keep the newest *best* checkpoint on the laptop while training runs.
 
-    The final download is a single archive transferred after the whole
-    lifecycle (train -> inference -> DVC publish) has collapsed to one moment,
-    so a 7 GB result set is dead time at the end.  Training and inference
-    produce files continuously, and those files are immutable once written, so
-    they can be transferred as they appear.
+    The end-of-run download is one archive transferred after the whole
+    lifecycle (train -> inference -> DVC publish) has collapsed to a single
+    moment, so the multi-GB checkpoint set is dead time at the end.  Training
+    writes a new ``checkpoint-<step>`` directory steadily, and each directory
+    is immutable once written, so the best one can be held locally as it
+    appears.
+
+    Retention is *latest-if-better, overwrite*: each worker keeps exactly one
+    local directory, ``latest_best``, and a remote checkpoint replaces it only
+    when its score strictly beats the score already held.  "Best" is dev
+    average precision when the run reports it, else lowest train loss, both
+    read from the ``live_status.json`` the trainer already publishes.
 
     This is a pure latency optimisation and never a correctness dependency:
 
-    * it copies only *complete* files, detected by requiring a stable
-      ``(size, mtime)`` across two consecutive polls, so a file being written
-      is never captured half-finished;
-    * everything it fetches is re-fetched and hash-verified by the authoritative
-      :func:`download_verified_training_results` pass, which remains the only
-      source of truth for a complete run;
+    * a checkpoint is copied only after its files keep their size across two
+      consecutive polls, so a directory still being written is never captured
+      half-finished;
+    * everything it fetches is re-fetched and hash-verified by the
+      authoritative :func:`download_verified_training_results` pass, which
+      remains the only source of truth for a complete run;
     * every failure is swallowed and logged; a flaky sync must not fail a run
       whose data still arrives by the normal path.
     """
@@ -1550,8 +1563,9 @@ class _IncrementalResultSync:
         self.workers = workers
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._seen: dict[str, tuple[int, float]] = {}
-        self._done: set[str] = set()
+        self._seen: dict[str, int] = {}
+        # worker -> (score, remote checkpoint dir) currently held locally.
+        self._held: dict[int, tuple[float, str]] = {}
         self._synced_bytes = 0
 
     def start(self) -> None:
@@ -1563,33 +1577,13 @@ class _IncrementalResultSync:
     def stop(self) -> None:
         self._stop.set()
         if self._thread is not None:
-            # Long enough for an in-flight file to land, short enough that a
-            # stuck sync cannot delay teardown: whatever it misses is still
+            # Long enough for an in-flight checkpoint to land, short enough that
+            # a stuck sync cannot delay teardown: whatever it misses is still
             # covered by the authoritative download.
             self._thread.join(timeout=120)
 
     def synced_bytes(self) -> int:
         return self._synced_bytes
-
-    def _candidates(self, remote_files: list[str]) -> list[str]:
-        """Remote paths worth fetching: not yet synced, not excluded."""
-        prefix = f"{self.remote_base}/worker_"
-        selected = []
-        for name in remote_files:
-            if not name.startswith(prefix):
-                continue
-            relative = Path(name).relative_to(self.remote_base)
-            if any(part in _RESULT_DOWNLOAD_EXCLUDED_DIRS for part in relative.parts):
-                continue
-            if relative.parts and relative.parts[0].startswith("worker_"):
-                path_in_worker = relative.parts[1:]
-            else:
-                path_in_worker = relative.parts
-            if path_in_worker and path_in_worker[0] == "wandb":
-                continue
-            if name not in self._done:
-                selected.append(name)
-        return selected
 
     def _loop(self) -> None:
         while not self._stop.wait(_INCREMENTAL_SYNC_SECONDS):
@@ -1612,48 +1606,129 @@ class _IncrementalResultSync:
                 flush=True,
             )
             return
-        for name in self._candidates(remote_files):
+        for worker in range(1, self.workers + 1):
             try:
-                size = _remote_file_size(name)
-            except BaseException:
-                continue
-            stamp = self._seen.get(name)
-            current = (size, 0.0)
-            if stamp is None or stamp[0] != size:
-                # First sighting, or still growing: wait for the next pass.
-                self._seen[name] = current
-                continue
-            local = self._local_path(name)
-            if local is None:
-                continue
-            local.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                _download_one_remote_file(name, local)
+                self._sync_worker(worker, remote_files)
             except BaseException as exc:
                 print(
-                    f"[result-sync] skip {local.name} "
-                    f"({type(exc).__name__}); final download covers it",
+                    f"[result-sync] worker {worker} skipped "
+                    f"({type(exc).__name__}: {exc}); final download covers it",
                     flush=True,
                 )
+
+    def _sync_worker(self, worker: int, remote_files: list[str]) -> None:
+        """Copy this worker's best-so-far checkpoint, if it beats the local one."""
+        prefix = f"{self.remote_base}/worker_{worker}/"
+        checkpoints: dict[str, list[str]] = {}
+        for name in remote_files:
+            if not name.startswith(prefix):
                 continue
-            self._done.add(name)
-            self._synced_bytes += size
-        if self._done:
-            print(
-                f"[result-sync] {len(self._done)} artifact(s), "
-                f"{_format_bytes(self._synced_bytes)} already transferred "
-                "while training ran",
-                flush=True,
+            parts = Path(name).relative_to(prefix).parts
+            if len(parts) < 2 or not parts[0].startswith("checkpoint-"):
+                continue
+            checkpoints.setdefault(parts[0], []).append(name)
+        if not checkpoints:
+            return
+        if worker in self._held:
+            cached_score, cached_dir = self._held[worker]
+        else:
+            cached_score, cached_dir = self._best_local(worker)
+            self._held[worker] = (cached_score, cached_dir)
+        candidates: list[tuple[float, str]] = []
+        for directory, files in checkpoints.items():
+            if directory == cached_dir:
+                continue
+            if not self._stable(directory, files):
+                continue
+            score = self._score(worker, directory)
+            if score is None:
+                continue
+            candidates.append((score, directory))
+        if not candidates:
+            return
+        best_score, best_dir = max(candidates, key=lambda item: (item[0], item[1]))
+        if cached_dir is not None and best_score <= cached_score:
+            return
+        destination = (
+            TRAINING_RESULTS / self.run_id / f"worker_{worker}" / "latest_best"
+        )
+        staging = destination.with_name("latest_best.staging")
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        transferred = 0
+        for name in sorted(checkpoints[best_dir]):
+            relative = Path(name).relative_to(prefix)
+            target = staging / Path(*relative.parts[1:])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _download_one_remote_file(name, target)
+            transferred += target.stat().st_size
+        (staging / _LATEST_BEST_MARKER).write_text(
+            json.dumps(
+                {"checkpoint": best_dir, "score": best_score, "worker": worker},
+                sort_keys=True,
             )
+            + "\n",
+            encoding="utf-8",
+        )
+        # Swap whole directories so the laptop never holds a half checkpoint.
+        superseded = destination.with_name(f"latest_best.superseded.{os.getpid()}")
+        if destination.exists():
+            os.replace(destination, superseded)
+        os.replace(staging, destination)
+        shutil.rmtree(superseded, ignore_errors=True)
+        self._held[worker] = (best_score, best_dir)
+        self._synced_bytes += transferred
+        print(
+            f"[result-sync] worker {worker} kept {best_dir} "
+            f"(score={best_score:.4f}, {_format_bytes(transferred)}) as latest_best",
+            flush=True,
+        )
 
-    def _local_path(self, remote: str) -> Path | None:
+    def _best_local(self, worker: int) -> tuple[float, str | None]:
+        """Score and checkpoint name already held locally, if any."""
+        pointer = TRAINING_RESULTS / self.run_id / f"worker_{worker}" / "latest_best"
+        marker = pointer / _LATEST_BEST_MARKER
+        if not marker.is_file():
+            return (float("-inf"), None)
         try:
-            relative = Path(remote).relative_to(self.remote_base)
-        except ValueError:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            return (float(payload["score"]), str(payload["checkpoint"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            return (float("-inf"), None)
+
+    def _stable(self, directory: str, files: list[str]) -> bool:
+        """True when every file kept its size across two consecutive polls."""
+        settled = True
+        for name in files:
+            size = _remote_file_size(name)
+            if self._seen.get(name) != size:
+                self._seen[name] = size
+                settled = False
+        # Without a manifest the checkpoint write is still in progress.
+        if not any(
+            Path(name).name == _CHECKPOINT_MANIFEST_NAME for name in files
+        ):
+            return False
+        return settled
+
+    def _score(self, worker: int, directory: str) -> float | None:
+        """Score one checkpoint, higher is better, from the trainer heartbeat."""
+        remote = f"{self.remote_base}/worker_{worker}/live_status.json"
+        try:
+            payload = json.loads(_read_remote_text(remote))
+        except BaseException:
             return None
-        return TRAINING_RESULTS / self.run_id / relative
-
-
+        step = payload.get("step")
+        if step is None or not directory.endswith(f"-{int(step)}"):
+            # The heartbeat names a different checkpoint than this directory.
+            return None
+        average_precision = payload.get("dev_average_precision")
+        if average_precision is not None:
+            return float(average_precision)
+        loss = payload.get("train_loss")
+        if loss is not None:
+            return -float(loss)
+        return None
 def _download_one_remote_file(remote: str, local: Path) -> None:
     """Fetch one remote file through the module's Colab CLI wrapper.
 
@@ -1688,6 +1763,33 @@ def _remote_file_size(remote: str) -> int:
         if line.startswith("@@SIZE@@"):
             return int(line[len("@@SIZE@@"):])
     raise RuntimeError("remote stat returned no marker")
+
+
+def _read_remote_text(remote: str) -> str:
+    """Read one small remote file through the shared stdin-exec channel."""
+    script = (
+        "import base64, pathlib\n"
+        f"p = pathlib.Path({remote!r})\n"
+        "print('@@TEXT@@' + base64.b64encode("
+        "p.read_bytes() if p.is_file() else b'').decode('ascii'))\n"
+    )
+    proc = subprocess.Popen(
+        _colab_command("exec", "-s", SESSION, "--timeout", "60"),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    out, err = proc.communicate(script, timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(f"remote read failed: {err[-200:]}")
+    for line in out.splitlines():
+        if line.startswith("@@TEXT@@"):
+            payload = line[len("@@TEXT@@"):]
+            if not payload:
+                raise RuntimeError(f"remote file is missing: {remote}")
+            return base64.b64decode(payload).decode("utf-8")
+    raise RuntimeError("remote read returned no marker")
 
 
 def download_verified_training_results(remote_base: str, workers: int) -> None:
