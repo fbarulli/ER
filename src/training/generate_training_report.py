@@ -815,7 +815,25 @@ def generate_report(
 
         confusion_df = pd.DataFrame(confusion_rows)
         confusion_df.to_csv(out / "confusion_matrices.csv", index=False)
-        pd.DataFrame(ranking_rows).to_csv(out / "ranking_hits_at_k.csv", index=False)
+        ranking_df = pd.DataFrame(ranking_rows)
+        ranking_df.to_csv(out / "ranking_hits_at_k.csv", index=False)
+        if not ranking_df.empty:
+            fig, ax = plt.subplots(figsize=(7.5, 4.5), constrained_layout=True)
+            for fold, group in ranking_df.groupby("fold", sort=True):
+                ax.plot(
+                    group["k"], group["recall_at_k"], marker="o",
+                    label=f"fold {int(fold)}",
+                )
+            ax.set(
+                xlabel="candidate K",
+                ylabel="candidate recall",
+                title="ANN candidate recall@K (per-source query)",
+                ylim=(0, 1.05),
+                xticks=[1, 5, 10],
+            )
+            ax.grid(alpha=0.25)
+            ax.legend()
+            _save(fig, out / "candidate_recall_at_k.png")
 
         # ROC, PR and class score distributions use only the scored TEST pairs.
         fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
