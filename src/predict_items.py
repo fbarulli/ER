@@ -24,7 +24,13 @@ from core.structured_features import (
     sku_info as sku_structured_info,
     vector as structured_vector,
 )
-from pipeline import canonical_model_text, clean_sku_text, load_canonical_map, strip_schema_words
+from pipeline import (
+    canonical_evidence_text,
+    canonical_model_text,
+    clean_sku_text,
+    load_canonical_map,
+    strip_schema_words,
+)
 
 
 def main() -> None:
@@ -103,6 +109,10 @@ def main() -> None:
                 clean_sku_text(
                     row.get("title", ""),
                     row.get("attributes", row.get("attr", "")),
+                    row.get("brand", ""),
+                    row.get("description", row.get("description_short_eng", "")),
+                    row.get("category", ""),
+                    row.get("category_path", row.get("breadcrumbs_eng", "")),
                 )
             ),
             info,
@@ -112,7 +122,17 @@ def main() -> None:
     ]
     item_texts = [
         append_structured_text(
-            strip_schema_words(canonical_model_text(canonical[item_id])),
+            strip_schema_words(canonical_model_text(" ".join((
+                canonical[item_id],
+                str(canonical_record_map.get(item_id, {}).get("mode_brand", "")),
+                str(canonical_record_map.get(item_id, {}).get("mode_type", "")),
+                canonical_evidence_text(
+                    canonical_record_map.get(item_id, {}).get("description_evidence", "")
+                ),
+                canonical_evidence_text(
+                    canonical_record_map.get(item_id, {}).get("breadcrumb_evidence", "")
+                ),
+            )))),
             info,
             enabled=sf_text,
         )
