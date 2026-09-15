@@ -386,6 +386,79 @@ quality, the assignment-level over/under-merge rates, and the final submission.
 
 ---
 
+## 6b. Verification of the implementer's LATER work (symmetry + separation metrics)
+
+Added after the interruption described in §10. **Measured at HEAD `3fdc039`** — after this point
+other agents continued committing (`4f5be42`, `c3cac78`, …) and began editing `src/pipeline.py`,
+`src/training/training.py`, `config/training.yaml` again, so these numbers are pinned to that HEAD
+rather than to whatever the tree holds now.
+
+### Symmetry on REAL data (not fixtures)
+
+`/tmp/symmetry_realdata.py`, 3 000 real source rows that have a canonical, both sides built through
+the shared builder:
+
+```
+real rows audited: 3000
+  presence agreement (both sides carry a pack token, or neither):
+      legacy  :  119/3000 =   4.0%
+      cleaned : 3000/3000 = 100.0%
+  both sides UNOBSERVED : 2881
+    (a) text   same implicit token on both sides : 2881/2881
+    (a) vector same presence bit on both sides   : 2881/2881
+  exactly one side OBSERVED : 60   (b) evidence never overwritten: 60/60
+  both sides OBSERVED       : 59
+RESULT: symmetric on real data, evidence preserved
+```
+
+So the claimed properties hold on real data, in **both channels**: where neither side observed a
+pack, both now emit the same implicit token and both numeric vectors set the same presence bit; and
+where one side *did* observe a pack, that observation is never overwritten by the default.
+
+**The trap, recorded because it is the reason this defect survived so long:** "unobserved" must be
+read from the parser's own confidence (source) and from the canonical `pack_set` (target) — **not**
+from `sku_info`'s output. `sku_info` collapses "nothing observed" into a hardcoded `{1.0}`, so its
+output is never empty and a symmetry check derived from it measures nothing. My first attempt made
+exactly that mistake and reported 0 rows in the symmetric bucket; the numbers above are from the
+corrected check.
+
+**Legacy byte-identity was NOT sacrificed.** On the stabilised tree, `legacy` still reproduces the
+frozen golden bytes on **855/855 rows × 2 sides** (0 mismatches), so the rollback contract survives
+the symmetry rework intact. Measured, not assumed.
+
+Side effect worth recording: on the final tree the earlier honest counter-result is **gone**. On the
+24 `source_is_target_row` rows the cleaned Jaccard is now `0.5377` against legacy `0.5129` (it was
+`0.4646` before accent folding + symmetry), and the review-band margin rose from `+0.2005` to
+`+0.2157` (true `0.3754` vs cross `0.1597`).
+
+### Separation metrics
+
+`/tmp/separation_verify.py`, run on the real labeled-pair and canonical artifacts, **no model and no
+training**:
+
+```
+spec: enabled=True min_pairs_per_class=30 min_value_support=20 flag_below=0.1
+inputs: labeled_pairs=19918 canonical_records=13250
+[separation] 8 attributes, 1,147 values scored, 98 flagged weak, 1,007 withheld for support
+
+values under the support floor (20 in BOTH classes): 1007
+  of those, flagged as defects: 0
+    brand  100         n_pos=0 n_neg=1  separation=-1.0  reportable=False flagged_weak=False
+    brand  5 alive     n_pos=0 n_neg=1  separation=-1.0  reportable=False flagged_weak=False
+    brand  abant       n_pos=0 n_neg=1  separation=-1.0  reportable=False flagged_weak=False
+
+real reporting path: generate_training_report._attribute_separation_section exists=True
+  files written by the real path: ['attribute_separation_summary.csv', 'attribute_separation_values.csv']
+RESULT: separation metrics verified
+```
+
+Answering the three things I was asked to check:
+* **wired into the real reporting path** — yes, `generate_training_report._attribute_separation_section`
+  runs and writes both artifacts into the report directory (executed, above);
+* **a low-support brand is not reported as a defect** — 1 007 values are under the support floor and
+  **0** of them are flagged; each is still reported with its counts. That is the property, and it holds;
+* **runs without training** — yes: labelled pairs + canonical attributes only, CPU, no model.
+
 ## 7. What I committed, and the push
 
 ### Commits on `training` for this work
@@ -492,3 +565,41 @@ To https://github.com/fbarulli/ER.git
 7. Multiple agents were writing to this checkout during the session (a third was running in
    `/home/opc/ONE/ER-analysis-brand-input`). The tree was re-verified green at the moment of commit;
    if another agent continues afterwards, that verification no longer covers its output.
+
+---
+
+## 10. Contention episode — disclosed in full
+
+The Phase-0 wait condition I was given was *"`MODEL_INPUT_FIX_REPORT.md` exists AND `git log` shows a
+commit newer than `2a15852` touching the model-input code"*. **Both were already true when I started
+waiting** (`bfe539d`), and agent A was in fact still working — it went on to make four more
+substantial commits (`27b1cb0`, `e326c46`, `f38358bf`-series and `f996718`) and other agents were
+active in the same checkout and in sibling worktrees. The condition was therefore too loose, and I
+began writing before agent A had stopped.
+
+What that cost, stated plainly:
+
+* I edited files agent A was also editing (`src/core/model_input.py`, `src/core/schemas.py`,
+  `src/training/prepared_bundle.py`, `src/training/zero_shot_sims.py`, `scripts/*`,
+  `tests/test_mining_hypotheses.py`, `tests/test_model_input_contract.py`). None of my edits
+  corrupted its work and none of its edits reverted mine, but that was luck, not process.
+* Agent A's `git add` swept my working-tree edits into **its** commit `e326c46`, so the blast-radius
+  fixes M1-M4 and the corrections C1-C3 are authored under its message rather than a commit of mine.
+  The content is present and is described in this report.
+* After the interruption I switched to committing **only files agent A could not be touching**:
+  `.gitignore`, `SESSION_HANDOFF_2026-09-15.md`, `AGENT_BRIEF_MATCHER_ROUTING.md`,
+  `FINALIZATION_REPORT.md`, `PRESENT.md`, `ANN_OLD_NEW_RUN_MANIFEST.md`, `colab_retrieved/`. Those are
+  commits `056fab8` and `addc705`. I never staged `src/`, `tests/` or `config/` once the new rule
+  was in force.
+* I then re-ran the strict stability rule — **three consecutive checks at least 3 minutes apart with
+  `git log -1` unchanged, no modified files under `src/`/`tests/`/`config/`, and no `.git/index.lock`**
+  — before re-verifying and finalising. The tree did **not** stabilise on the first attempt
+  (another agent began editing `config/training.yaml`, `src/cli/colab.py`, `src/core/schemas.py`
+  again at 16:42); verification and the final commit were done after it did.
+* Everything in §6b and the re-run byte-identity check were executed on the **stabilised** tree, not
+  on a moving one.
+
+Honest residual: the ANN A/B in §6 was measured on the tree committed at `e326c46`. Later commits
+(`f996718` truncation guard, and the colab/dvc work) do not change the composed strings — the
+truncation guard only counts and traces, and the colab/dvc work is outside the composition — so the
+measurement stands, but it was not re-run after them.
