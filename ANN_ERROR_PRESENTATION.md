@@ -9,7 +9,7 @@ directory after the next inference completes.
 
 <table>
 <tr><th>Plot</th><th>Current run</th><th>Next run</th></tr>
-<tr><td>Overall ANN quality</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/holdout_operating_metrics.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/holdout_operating_metrics.png"></td></tr>
+<tr><td>Pairwise and clustering quality</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/ann_cluster_quality.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/ann_cluster_quality.png"></td></tr>
 <tr><td>Error rate by attribute</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/attribute_error_breakdown.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/attribute_error_breakdown.png"></td></tr>
 <tr><td>ANN candidate recall</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/ann_ranking_hits_corrected.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/ann_ranking_hits_corrected.png"></td></tr>
 <tr><td>AUC threshold tuning</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/auc_threshold_tuning.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/auc_threshold_tuning.png"></td></tr>
