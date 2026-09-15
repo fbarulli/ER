@@ -215,3 +215,54 @@ ONE extraction change (the `no_pulp` branch). Measured both deltas on 71,623 row
    duplicated count as distinct data (`train.py:1107-1115`).
 6. **Composite `Pack blocker` reason** collapses pack/volume/package_type (and 8.6% categorical) into one string;
    the balanced pool's `pair_type` stratum is a 3-dimension mixture no trace can decompose.
+
+
+---
+
+## 9. Calibration-gate review queue (owner question: which dataset features should gate)
+
+**The question's population was the wrong one, and the queue is already gone.**
+
+| population | size | what it actually is |
+|---|---|---|
+| pipeline `fallback` | 45,494 | pipeline LABEL gate undecideds (untrusted parsed volume/pack). NOT calibration items. |
+| calibration candidates (pipeline `proceed`) | 1,592 | the real calibration population |
+| calibration `human_review` BEFORE the routing fix | 1,591 (99.94%) | caused by deferring when ANY of 7 critical dimensions was unknown |
+| calibration `human_review` AFTER the routing fix | **0** | `DEFERRAL_DIMENSIONS = ("pack", "volume")` — deferral now matches what `missing_pack_or_volume_route` names |
+
+Verified on the committed artifacts: `auto_merge` is now **1,592/1,592**, 0 rejects, 0 review. The all-seven
+requirement was unsatisfiable because `pulp_set` is populated on ~2.3% of canonicals; it was a rule bug, fixed
+by the routing agent, not a missing-feature problem.
+
+### The six unused dataset features do NOT qualify as gate criteria — for two independent reasons
+
+**(1) There is no ground truth to validate any criterion.** Of the 43,684 evaluable pipeline-fallback pairs:
+- identical GTIN both sides: **0**
+- identical canonical text (the pipeline's own true-match rule): **55 (0.126%)**
+- → **43,629 pairs (99.87%) carry no label of any kind.**
+
+Statistical power, Wilson 95%: a 55-positive sample cannot certify a 0.5% error floor — the upper bound is
+**0.065 even at ZERO observed errors**. Certifying ≤0.5% needs ~**600** labels (bound 0.0064) or ~**1,000**
+(bound 0.0038). Any "feature X is a safe gate criterion" claim on current data is unfalsifiable.
+
+**(2) The features do not separate the populations anyway.** Measured on 43,684 gate-fallback pairs vs a
+20,000-pair gate-hard_no sample:
+
+| signal | gate fallback | gate hard_no | verdict |
+|---|---|---|---|
+| `brand` equal | 99.6% | 99.9% | no signal — candidate pairs are same-brand by construction |
+| `category_path` equal | 18.4% | 17.2% | no separation |
+| `retailer` equal | 39.1% | 41.7% | no separation; and a cross-retailer pair is the SAME product |
+| `country` equal | 88.4% | 77.3% | weak; same trap |
+| `description` Jaccard | median 0.093 (p90 0.714) | median 0.077 (p90 0.500) | overlapping; p90 is the only hint |
+
+**`price` is absent from the table deliberately: it cannot gate.** Price differences encode retailer/country
+and promotions, not product identity, so a price criterion is a false-merge machine.
+
+**Conclusion:** wiring any of `description`, `category_path`, `price`, `retailer`, `country`, `url`, `image_url`
+into the calibration gate would add risk without resolving a queue that no longer exists. The preconditions are
+(a) a populated calibration review population, and (b) ~600-1,000 human labels to certify a precision floor.
+Until both hold, the correct action is **no new gate criteria**.
+
+**Still worth doing independently:** the `both_equal` GTIN stratum bypasses the cosine threshold entirely, so a
+perfect Rand Index there tests nothing — the calibration design flaw already recorded in `PRESENT.md`.
