@@ -349,6 +349,41 @@ def check_colab_cli() -> None:
         )
 
 
+def _colab_launch_lock_path() -> Path:
+    lock_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", SESSION)
+    return _COLAB_CLI_STATE_DIR / f"launcher-{lock_name}.lock"
+
+
+def _process_start_ticks(pid: int) -> int | None:
+    """Return Linux's immutable process-start marker, if it is available."""
+    try:
+        return int((Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")).split()[21])
+    except (FileNotFoundError, IndexError, ValueError):
+        return None
+
+
+def _read_colab_launch_owner(lock_path: Path) -> dict[str, object] | None:
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _colab_launch_lock_is_held(lock_path: Path) -> bool:
+    """Probe the advisory lock without altering its owner metadata."""
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return False
+    finally:
+        handle.close()
+
+
 def acquire_colab_launch_lock():
     """Prevent independent launchers from sharing and tearing down one VM.
 
@@ -359,8 +394,7 @@ def acquire_colab_launch_lock():
     Colab-side failure, so refuse the second launch before it touches Colab.
     """
     _COLAB_CLI_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    lock_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", SESSION)
-    lock_path = _COLAB_CLI_STATE_DIR / f"launcher-{lock_name}.lock"
+    lock_path = _colab_launch_lock_path()
     handle = lock_path.open("a+", encoding="utf-8")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -374,8 +408,11 @@ def acquire_colab_launch_lock():
     handle.truncate()
     handle.write(json.dumps({
         "pid": os.getpid(),
+        "pid_start_ticks": _process_start_ticks(os.getpid()),
         "session": SESSION,
         "started_at": datetime.now(timezone.utc).isoformat(),
+        "command": sys.argv,
+        "owner_token": uuid.uuid4().hex,
     }) + "\n")
     handle.flush()
     return handle
@@ -3465,7 +3502,69 @@ def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
     _verify_manifest_downloads(manifests)
 
 
-def stop() -> None:
+def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
+    """Ask a verified launcher owner to exit after its VM is stopped.
+
+    PID reuse makes a bare PID unsafe.  New lock records include Linux's
+    process-start ticks, so this only sends SIGTERM when the recorded process
+    is demonstrably still the same process that acquired the lock.
+    """
+    lock_path = _colab_launch_lock_path()
+    if not _colab_launch_lock_is_held(lock_path):
+        print("[stop] local launcher lock is already released")
+        return
+    owner = _read_colab_launch_owner(lock_path)
+    if owner is None:
+        print(
+            f"[warn] local launcher lock remains held but has no readable owner metadata: {lock_path}",
+            file=sys.stderr,
+        )
+        return
+    pid = owner.get("pid")
+    expected_start = owner.get("pid_start_ticks")
+    if not isinstance(pid, int) or not isinstance(expected_start, int):
+        print(
+            "[warn] local launcher lock remains held by a legacy or unverifiable owner; "
+            f"metadata={owner}. It cannot be signalled safely.",
+            file=sys.stderr,
+        )
+        return
+    actual_start = _process_start_ticks(pid)
+    if actual_start != expected_start:
+        print(
+            "[warn] local launcher lock remains held, but its recorded owner no longer "
+            f"matches pid={pid}; refusing to signal a potentially reused PID.",
+            file=sys.stderr,
+        )
+        return
+    if pid == os.getpid():
+        print("[stop] current launcher owns the local session lock")
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        print(f"[stop] recorded launcher pid={pid} has already exited")
+    except PermissionError:
+        print(
+            f"[warn] local launcher pid={pid} owns the lock but cannot be signalled",
+            file=sys.stderr,
+        )
+        return
+    else:
+        print(f"[stop] requested shutdown from local launcher pid={pid}")
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not _colab_launch_lock_is_held(lock_path):
+            print("[stop] local launcher lock released")
+            return
+        time.sleep(0.2)
+    print(
+        f"[warn] local launcher lock is still held after {timeout_seconds:g}s: {lock_path}",
+        file=sys.stderr,
+    )
+
+
+def stop(*, stop_local_owner: bool = False) -> None:
     print(f"[stop] tearing down '{SESSION}'")
     # RULING 2026-09-10 (silent-degradation audit): JUSTIFIED-KEEP.
     # stop() runs in main()'s finally — if the lane itself raised, the
@@ -3507,6 +3606,8 @@ def stop() -> None:
             f"to check). Original error: {exc}",
             file=sys.stderr,
         )
+    if stop_local_owner:
+        stop_local_launch_owner()
     print("[stop] VM release requested")
 
 
@@ -3684,7 +3785,7 @@ def main() -> None:
         )
 
     if args.what == "stop":
-        stop()
+        stop(stop_local_owner=True)
         return
 
     start_live_log()
