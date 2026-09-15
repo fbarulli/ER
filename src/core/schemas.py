@@ -968,17 +968,34 @@ class TrainingSpec(BaseModel):
     class ModelInputSpec(BaseModel):
         """Model-input text composition (config/training.yaml training.model_input:).
 
-        ONE profile switch plus the single granular decision the profiles
-        disagree about — whether the description/breadcrumb evidence channel
-        participates in the model text.  ``cleaned`` is defined as excluding
-        that channel, so the contradictory combination is rejected here
+        ONE profile switch plus the granular decisions the profiles disagree
+        about.  ``cleaned`` is defined as excluding the description/breadcrumb
+        evidence channel, so the contradictory combination is rejected here
         rather than being silently ignored at the call site.
+
+        The three ``emit_*``/``keep_*`` flags are the redundancy removals,
+        measured on the real 13,250 canonicals: ``[FIELD_*]`` markers account
+        for 55,100 of 209,134 tokens (26.35%), ``pack_qty_1`` appears in 75.8%
+        of texts, and a plain attribute word is fully covered by its structured
+        twin (``still``/``carbonation_still`` 100.0%, ``carbonated``/
+        ``carbonation_carbonated`` 99.8%).  Each is INDEPENDENTLY selectable so
+        every removal can be A/B'd and rolled back by config alone; all three
+        default to today's bytes.
         """
 
         model_config = ConfigDict(extra="forbid")
 
         profile: Literal["legacy", "cleaned"]
         include_evidence: bool
+        # Emit the [FIELD_*] group markers in the structured tail.
+        emit_field_markers: bool = True
+        # Keep a plain token that its structured twin already carries
+        # ("still" beside "carbonation_still").
+        keep_redundant_attribute_words: bool = True
+        # Emit the singleton pack token "pack_qty_1". The numeric structured
+        # vector carries pack presence and value independently, so the text
+        # token is not the only record of it.
+        emit_singleton_pack_token: bool = True
 
         @model_validator(mode="after")
         def _cleaned_excludes_evidence(self) -> TrainingSpec.ModelInputSpec:
@@ -990,21 +1007,49 @@ class TrainingSpec(BaseModel):
                 )
             return self
 
+        @model_validator(mode="after")
+        def _legacy_keeps_its_bytes(self) -> TrainingSpec.ModelInputSpec:
+            """Refuse a removal flag under ``legacy`` instead of ignoring it.
+
+            ``legacy`` reproduces the committed pre-change bytes, which the
+            golden fixtures pin; a removal flag selected there would be
+            silently dropped at the call site, and a config value that does
+            nothing is worse than one that fails.
+            """
+            if self.profile == "legacy" and not (
+                self.emit_field_markers
+                and self.keep_redundant_attribute_words
+                and self.emit_singleton_pack_token
+            ):
+                raise ValueError(
+                    "training.model_input.profile 'legacy' reproduces the "
+                    "committed bytes exactly, so the redundancy flags cannot "
+                    "apply; set profile: cleaned to select a removal"
+                )
+            return self
+
     class ModelInputComposition(BaseModel):
         """The ACTIVE encoder-text contract, as recorded on artifacts.
 
-        ``profile``/``include_evidence`` say WHICH composition was selected;
-        ``fingerprint`` is a stable digest of those two, so an artifact can
-        name its input contract and two artifacts built from different
-        compositions are distinguishable without diffing the text itself.
-        Written to the run trace, the checkpoint manifest, the prepared-bundle
-        manifest and the ANN reuse fingerprint — one record, not four shapes.
+        The fields say WHICH composition was selected; ``fingerprint`` is a
+        stable digest of ALL of them, so an artifact can name its input
+        contract and two artifacts built from different compositions are
+        distinguishable without diffing the text itself. Written to the run
+        trace, the checkpoint manifest, the prepared-bundle manifest and the
+        ANN reuse fingerprint — one record, not four shapes.
+
+        The redundancy flags are part of the identity ON PURPOSE: flipping one
+        changes the encoder text, so leaving it out would let a persisted index
+        outlive the composition that built it — the silent stale-index seam.
         """
 
         model_config = ConfigDict(extra="forbid")
 
         profile: Literal["legacy", "cleaned"]
         include_evidence: bool
+        emit_field_markers: bool
+        keep_redundant_attribute_words: bool
+        emit_singleton_pack_token: bool
         fingerprint: str = Field(min_length=64, max_length=64)
 
         @classmethod
@@ -1014,6 +1059,9 @@ class TrainingSpec(BaseModel):
             payload = {
                 "profile": spec.profile,
                 "include_evidence": spec.include_evidence,
+                "emit_field_markers": spec.emit_field_markers,
+                "keep_redundant_attribute_words": spec.keep_redundant_attribute_words,
+                "emit_singleton_pack_token": spec.emit_singleton_pack_token,
             }
             return cls(
                 **payload,

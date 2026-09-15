@@ -437,6 +437,25 @@ training:
   model_input:
     profile: "cleaned"
     include_evidence: false
+    # ── redundancy removals (measured on the real 13,250 canonicals) ───────
+    # Each is independently selectable so it can be A/B'd and rolled back by
+    # config alone. Defaults reproduce today's bytes exactly. Setting any of
+    # them against profile: legacy is REJECTED at config load — legacy is the
+    # byte-for-byte pre-change stream and an ignored flag would be a silent
+    # no-op. See MODEL_INPUT_FIX_REPORT.md for the paired ANN A/B per variant.
+    # Shipped defaults below are the MEASURED optimum (paired ANN A/B on the
+    # recovered checkpoint-44, each variant judged at its own Youden optimum):
+    #   both removals on : 13.4 tok/text (-26.0%), Youden .7688 -> .7786,
+    #                      FP 123 -> 122, FN 784 -> 734, recall@1 .7769 -> .7784
+    #   markers alone    : -21.6% tokens, Youden +.0118, recall@1 -.0029
+    #   pack_qty_1 alone :  -8.7% tokens, Youden +.0015, recall@1 +.0042
+    emit_field_markers: false         # [FIELD_*] markers were 26.35% of tokens
+    # KEPT DELIBERATELY. Dropping a plain word whose structured twin is present
+    # measured Youden +.0083 but recall@1 -.0315 (3.15pp BELOW baseline), which
+    # breaks the standing "keep retrieval recall at or above baseline" bar. The
+    # flag stays selectable so the trade can be revisited.
+    keep_redundant_attribute_words: true
+    emit_singleton_pack_token: false  # "pack_qty_1" sits in 75.8% of texts
   # Switchable through er-colab --loss. contrastive = OnlineContrastiveLoss
   # over labeled (pos=1/neg=0) hard pairs; mnrl =
   # MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.

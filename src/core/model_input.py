@@ -176,7 +176,63 @@ def _normalized_tokens(text: object, *, drop_schema_words: bool) -> list[str]:
     return [t for t in split.split() if len(t) > 1 and t not in MINIMAL_STOPWORDS]
 
 
-def _cleaned_sku_text(row, info: Mapping[str, object]) -> str:
+# The structured channel prefixes that can carry a plain token's twin, e.g.
+# "carbonation_still" beside "still". Used by the redundancy removal below.
+_STRUCTURED_PREFIXES = (
+    "carbonation_",
+    "sweetener_",
+    "pulp_",
+    "flavor_",
+    "package_type_",
+)
+
+
+def _reduce_redundancy(text: str, *, spec: TrainingSpec.ModelInputSpec) -> str:
+    """Apply the configured redundancy removals to ONE composed text.
+
+    Measured on the real 13,250 canonicals (209,134 tokens, 15.8/text); each
+    removal is independently selectable so it can be A/B'd and rolled back by
+    config alone, and all three default to today's bytes:
+
+    * ``emit_field_markers`` — the ``[FIELD_*]`` group markers are 55,100 tokens
+      = 26.35% of the payload and carry structure only.
+    * ``keep_redundant_attribute_words`` — a plain token whose structured twin
+      is present in the SAME text is pure duplication: ``still``/
+      ``carbonation_still`` co-occur on 100.0% of the rows that carry ``still``,
+      ``carbonated``/``carbonation_carbonated`` on 99.8%. The twin is emitted
+      from the same attribute set, so dropping the plain token loses no
+      attribute. Measured coverage is deliberately used instead of a hardcoded
+      pair list: the corpus also carries ``sweetener_diet_sugar``, whose suffix
+      is ``diet_sugar``, so plain ``sugar`` is NOT covered and is NOT dropped.
+    * ``emit_singleton_pack_token`` — ``pack_qty_1`` sits in 75.8% of texts. The
+      numeric structured vector records pack presence and value independently,
+      so the text token is not the only record of it; a real multi-pack
+      (``pack_qty_6``) is untouched.
+    """
+    if (
+        spec.emit_field_markers
+        and spec.keep_redundant_attribute_words
+        and spec.emit_singleton_pack_token
+    ):
+        return text  # nothing selected: leave the string byte-identical
+    tokens = text.split()
+    if not spec.emit_field_markers:
+        tokens = [t for t in tokens if not t.startswith("[FIELD_")]
+    if not spec.keep_redundant_attribute_words:
+        structured = {t for t in tokens if t.startswith(_STRUCTURED_PREFIXES)}
+        twins = {done.split("_", 1)[1] for done in structured}
+        tokens = [t for t in tokens if not (t in twins and t not in structured)]
+    if not spec.emit_singleton_pack_token:
+        tokens = [t for t in tokens if t != "pack_qty_1"]
+        # A group marker must not survive with no value left in its group.
+        if not any(t.startswith("pack_qty_") for t in tokens):
+            tokens = [t for t in tokens if t != "[FIELD_PACK_SIZE]"]
+    return " ".join(tokens)
+
+
+def _cleaned_sku_text(
+    row, info: Mapping[str, object], *, spec: TrainingSpec.ModelInputSpec
+) -> str:
     """[Brand] [Title] [Attributes], in that order, with no other field.
 
     The three blocks are emitted as plain tokens in a fixed order rather than
@@ -195,12 +251,18 @@ def _cleaned_sku_text(row, info: Mapping[str, object]) -> str:
     tokens += _normalized_tokens(
         row_metadata_text(row, "attributes", "attr"), drop_schema_words=True
     )
-    symmetric = model_input_info(info)
-    return append_text(" ".join(tokens), symmetric, enabled=_structured_text_enabled())
+    symmetric = model_input_info(info, spec=spec)
+    return _reduce_redundancy(
+        append_text(" ".join(tokens), symmetric, enabled=_structured_text_enabled()),
+        spec=spec,
+    )
 
 
 def _cleaned_canonical_text(
-    record: Mapping[str, object], info: Mapping[str, object]
+    record: Mapping[str, object],
+    info: Mapping[str, object],
+    *,
+    spec: TrainingSpec.ModelInputSpec,
 ) -> str:
     """[Brand] [Title] [Attributes] for the canonical side, same normalizer."""
     from core.structured_features import append_text
@@ -219,8 +281,11 @@ def _cleaned_canonical_text(
         *canonical,
         *_normalized_tokens(record.get("mode_type", ""), drop_schema_words=True),
     ]
-    symmetric = model_input_info(info)
-    return append_text(" ".join(tokens), symmetric, enabled=_structured_text_enabled())
+    symmetric = model_input_info(info, spec=spec)
+    return _reduce_redundancy(
+        append_text(" ".join(tokens), symmetric, enabled=_structured_text_enabled()),
+        spec=spec,
+    )
 
 
 def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
@@ -303,7 +368,7 @@ def build_sku_text(
     """
     resolved = _resolve(spec)
     if resolved.profile == "cleaned":
-        return _cleaned_sku_text(row, info)
+        return _cleaned_sku_text(row, info, spec=resolved)
     return _legacy_sku_text(row, info)
 
 
@@ -316,5 +381,5 @@ def build_canonical_text(
     """Model text for one canonical (target) record."""
     resolved = _resolve(spec)
     if resolved.profile == "cleaned":
-        return _cleaned_canonical_text(record, info)
+        return _cleaned_canonical_text(record, info, spec=resolved)
     return _legacy_canonical_text(record, info, evidence=resolved.include_evidence)

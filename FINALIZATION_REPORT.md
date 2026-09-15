@@ -962,6 +962,101 @@ file documents the pinned image and the local venv is simply not that image. It 
 independently confirm the caveat already recorded in §6.3(1): **the local stack is not the declared
 stack**, which is why the ANN A/B reproduced only as a paired comparison and not in absolute terms.
 
+## 7i. Redundant-word removal in the model payload — measured, shipped, config-gated
+
+Owner task: cut redundant tokens, canonical side first, config-gated, nothing assumed.
+
+### The brief's numbers verified on the real 13,250 canonicals
+```
+canonicals 13,250 · total tokens 209,134 · mean 15.8 tokens/text
+[FIELD_*] markers : 55,100 tokens = 26.3%          (brief: 55,100 = 26.3%)   ✓
+still 57.1% + carbonation_still 57.1%,  P(twin|plain) = 100.0%              ✓
+carbonated 29.1% + carbonation_carbonated 29.0%, P(twin|plain) = 99.8%      ✓
+pack_qty_1 : 75.8% of texts (10,042 tokens)                                 ✓
+```
+One refinement: **8** tokens sit in the ≥50% band, not 4 — five are `[FIELD_*]`. Excluding markers it is exactly **4**, so the brief is right for non-marker tokens.
+
+**`sugar` is NOT removable, by measurement not assumption.** There is no `sweetener_sugar` twin (0.0%); the corpus carries `sweetener_diet_sugar` (22.3%) and `sweetener_diet_no_sugar` (15.8%), whose suffix is `diet_sugar`, so plain `sugar` (57.3%) is not covered and is left alone.
+
+### The paired ANN A/B — six variants, one protocol
+Same harness as §6: recovered `checkpoint-44`, `max_seq_length: 128`, structured features fused
+exactly as the lanes do, every one of the 6,898 labelled holdout pairs re-scored, **each variant
+judged at its own Youden optimum** (judging at a threshold fitted to another variant flips the sign
+of the conclusion — that is how §6 nearly went wrong). Both sides transformed, so the pack symmetry
+is not silently reintroduced.
+
+| variant | tok/text | AUC | Youden | thr | P | R | FP | FN | r@1 | r@5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `cleaned` (shipped baseline) | 18.1 | 0.9520 | 0.7688 | 0.7317 | 0.9747 | 0.8579 | 123 | 784 | 0.7769 | 0.9543 |
+| + no markers | 14.2 | 0.9553 | 0.7806 | 0.6871 | 0.9736 | 0.8755 | 131 | 687 | 0.7740 | 0.9516 |
+| + no `pack_qty_1` | 16.6 | 0.9512 | 0.7702 | 0.7177 | 0.9733 | 0.8652 | 131 | 744 | 0.7811 | 0.9551 |
+| **+ no markers, no `pack_qty_1` (SHIPPED)** | **13.4** | **0.9541** | **0.7786** | 0.6879 | **0.9751** | 0.8670 | **122** | **734** | **0.7784** | 0.9522 |
+| + no redundant words | 16.0 | 0.9547 | 0.7771 | 0.7135 | 0.9764 | 0.8605 | 115 | 770 | 0.7454 | 0.9473 |
+| + all three | 11.3 | 0.9545 | 0.7815 | 0.6598 | 0.9743 | 0.8735 | 127 | 698 | 0.7470 | 0.9402 |
+
+Deltas against the shipped baseline:
+
+```
+no markers              tokens -3.9 (-21.6%)  J +0.0118  AUC +0.0033  FP  +8  FN -97  r@1 -0.0029
+no pack_qty_1           tokens -1.6 ( -8.7%)  J +0.0015  AUC -0.0008  FP  +8  FN -40  r@1 +0.0042
+no markers + no pack1   tokens -4.7 (-26.0%)  J +0.0098  AUC +0.0021  FP  -1  FN -50  r@1 +0.0014
+no redundant words      tokens -2.1 (-11.8%)  J +0.0083  AUC +0.0027  FP  -8  FN -14  r@1 -0.0315
+all three               tokens -6.9 (-37.9%)  J +0.0127  AUC +0.0025  FP  +4  FN -86  r@1 -0.0299
+```
+
+### The decision, and the one removal I did NOT ship
+
+**Shipped: `emit_field_markers: false` and `emit_singleton_pack_token: false`.**
+The combination dominates: **−26.0% tokens**, Youden `0.7688 → 0.7786`, AUC `0.9520 → 0.9541`,
+FP `123 → 122`, FN `784 → 734`, precision up, and **recall@1 `0.7769 → 0.7784` — above baseline**,
+so the standing "keep retrieval recall at or above baseline" bar is met.
+
+**Not shipped: `keep_redundant_attribute_words` stays `true`.** Dropping the plain word whose
+structured twin is present improves separation (Youden +0.0083) and lowers FP, but it costs
+**recall@1 −0.0315, i.e. 3.15 pp BELOW baseline**, which breaks that same standing bar. The plain
+flavor words (`lemon`, `apple`, `orange`, …) evidently carry lexical signal the `flavor_*` twin does
+not fully replace. The flag remains independently selectable so the trade can be revisited — it is
+turned off, not removed. This is the "measure with and without; if removing them costs separation,
+keep them and say so with the number" instruction, answered with the number.
+
+### Final measured reduction with the SHIPPED config (real corpus, end-to-end)
+
+```
+CANONICAL side (13,250 texts): 209,134 tokens (15.8/text) -> 143,992 (10.9/text)
+                               removed 65,142 = 31.1%
+SOURCE   side (3,000 real rows): 82,354 tokens (27.5/text) -> 67,072 (22.4/text)
+                               removed 15,282 = 18.6%
+
+before: monini coffee concentrate new improved version [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_coffee
+after : monini coffee concentrate new improved version volume_ml_1000 flavor_coffee
+```
+
+### Config-gating, identity, and the ANN fingerprint
+
+* Extends the **existing** `TrainingSpec.ModelInputSpec` — no second switch mechanism. Three
+  positive-polarity booleans with today's bytes as their field defaults, each independently
+  selectable so every removal can be A/B'd and rolled back by config alone.
+* `legacy` **cannot** select a removal: the validator rejects it, because a flag silently ignored
+  under the byte-for-byte stream is worse than one that fails. Pinned by
+  `test_a_reduction_flag_is_refused_under_legacy`.
+* The flags are part of **`ModelInputComposition`**, so they ride the run trace, the checkpoint
+  manifest, the prepared-bundle manifest and the ANN reuse fingerprint. Verified: flipping any one
+  moves the ANN fingerprint (`440a45e3191cd2e5` → `51822a03f8b00d63` / `07a75ccd3112a6ac` /
+  `62198ed181f8516b`), pinned by `test_a_reduction_flag_changes_the_composition_fingerprint` at both
+  the composition and the ANN level. Had they been left out, a flag flip would have changed the text
+  while the index stayed "valid" — the exact seam §7d/§9-6b closed.
+* `legacy` stays byte-identical: `test_legacy_profile_reproduces_golden_bytes` passes untouched
+  against the frozen 855-row fixture.
+
+### Test movement
+**420 passed, 2 skipped** (was 407 before this change). One pre-existing test was legitimately
+affected and updated with justification: `test_default_selection_is_reachable_without_any_config_argument`
+asserted the no-argument path equals a constructor constant, which stopped being true once the
+shipped config deliberately differs from the field defaults; it now asserts the built TEXT is
+identical with and without an explicit spec — a stronger statement of its actual intent (that the
+path resolves through `load_config`). No coverage was removed; the shipped-default pin was extended
+to the three new flags.
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):

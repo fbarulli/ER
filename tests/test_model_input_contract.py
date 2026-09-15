@@ -87,11 +87,26 @@ def test_shipped_config_defaults_to_the_cleaned_profile() -> None:
     spec = model_input_spec()
     assert spec.profile == "cleaned"
     assert spec.include_evidence is False
+    # The redundancy removals are part of the shipped default too, so pin them:
+    # the measured optimum is markers off and the singleton pack token off,
+    # with the redundant attribute words KEPT (dropping them cost recall@1).
+    assert spec.emit_field_markers is False
+    assert spec.emit_singleton_pack_token is False
+    assert spec.keep_redundant_attribute_words is True
 
 
 def test_default_selection_is_reachable_without_any_config_argument() -> None:
-    """Omitting ``spec`` must use the config, not an implicit constant."""
-    assert model_input_spec() == CLEANED
+    """Omitting ``spec`` must use the config, not an implicit constant.
+
+    Asserted on the BUILT TEXT rather than on equality with a constructor
+    constant: the shipped config deliberately differs from the bare
+    ``ModelInputSpec`` field defaults (markers off, singleton pack off), and
+    what this test exists to prove is that the no-argument path resolves
+    through ``load_config`` — not which values the config happens to hold.
+    """
+    row = pd.Series(_group("review_band_585")[0]["sku"])
+    info = sku_info(row.get("title", ""), row.get("attributes", ""))
+    assert build_sku_text(row, info) == build_sku_text(row, info, spec=model_input_spec())
 
 
 def test_cleaned_profile_refuses_to_also_request_the_evidence_channel() -> None:
@@ -573,6 +588,155 @@ def test_ann_fingerprint_inputs_cover_the_composition_code() -> None:
     finally:
         pipeline._MODEL_STOP = saved
     assert after != before, "the schema-stop symbol must affect the composed text"
+
+
+# ── redundancy removals (measured on the real 13,250 canonicals) ───────────
+
+
+def _spec(**kw) -> TrainingSpec.ModelInputSpec:
+    base = dict(profile="cleaned", include_evidence=False)
+    base.update(kw)
+    return TrainingSpec.ModelInputSpec(**base)
+
+
+def _canon(record) -> list[str]:
+    return build_canonical_text(
+        record["canonical_record"],
+        canonical_info(record["canonical_record"]),
+        spec=RECORD_SPEC,
+    ).split()
+
+
+# One real review-band row whose canonical carries BOTH duplicated pairs and
+# the singleton pack token, so every removal has something to act on.
+RECORD_SPEC = _spec()
+_ROW = _group("review_band_585")[0]
+
+
+def test_field_markers_are_optional_and_remove_only_markers() -> None:
+    """``[FIELD_*]`` are 26.35% of the payload and carry structure only."""
+    kept = build_canonical_text(
+        _ROW["canonical_record"], canonical_info(_ROW["canonical_record"]),
+        spec=_spec(emit_field_markers=True),
+    ).split()
+    dropped = build_canonical_text(
+        _ROW["canonical_record"], canonical_info(_ROW["canonical_record"]),
+        spec=_spec(emit_field_markers=False),
+    ).split()
+    assert any(t.startswith("[FIELD_") for t in kept)
+    assert not any(t.startswith("[FIELD_") for t in dropped)
+    # removing markers must not touch any other token
+    assert dropped == [t for t in kept if not t.startswith("[FIELD_")]
+
+
+def test_redundant_attribute_word_is_dropped_only_when_its_twin_is_present() -> None:
+    """A plain token equal to a structured twin's suffix is pure duplication.
+
+    Measured on the real corpus: ``still``/``carbonation_still`` co-occur on
+    100.0% of the rows carrying ``still``, ``carbonated``/
+    ``carbonation_carbonated`` on 99.8%. The rule is derived from the twins
+    actually present in the text, not a hardcoded pair list, so it can never
+    drop a word whose attribute the twin does not already carry.
+    """
+    from core.model_input import _reduce_redundancy
+
+    # both twins present -> both plain words go, the twins stay
+    text = "powerking pear carbonated still [FIELD_CARBONATION] carbonation_still carbonation_carbonated"
+    reduced = _reduce_redundancy(text, spec=_spec(keep_redundant_attribute_words=False))
+    assert "carbonated" not in reduced.split() and "still" not in reduced.split()
+    assert "carbonation_still" in reduced and "carbonation_carbonated" in reduced
+
+    # no twin -> nothing is dropped, even for the same words
+    plain = "powerking pear carbonated still"
+    assert _reduce_redundancy(plain, spec=_spec(keep_redundant_attribute_words=False)) == plain
+
+    # the measured counter-example: plain `sugar` has NO `sweetener_sugar` twin
+    # (the corpus has `sweetener_diet_sugar`, suffix `diet_sugar`), so it stays.
+    sugar = "cola sugar [FIELD_SWEETENER_DIET] sweetener_diet_sugar"
+    assert "sugar" in _reduce_redundancy(
+        sugar, spec=_spec(keep_redundant_attribute_words=False)
+    ).split()
+
+
+def test_singleton_pack_token_is_optional_and_multi_packs_survive() -> None:
+    """``pack_qty_1`` sits in 75.8% of texts; the vector still carries pack."""
+    from core.model_input import _reduce_redundancy
+
+    with_1 = "water [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_pear"
+    reduced = _reduce_redundancy(with_1, spec=_spec(emit_singleton_pack_token=False))
+    assert "pack_qty_1" not in reduced
+    # the group marker must not survive with no value left in its group
+    assert "[FIELD_PACK_SIZE]" not in reduced
+    assert "volume_ml_500" in reduced and "flavor_pear" in reduced
+
+    with_6 = "water [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_pear"
+    kept = _reduce_redundancy(with_6, spec=_spec(emit_singleton_pack_token=False))
+    assert "pack_qty_6" in kept and "[FIELD_PACK_SIZE]" in kept
+
+
+def test_reduction_flags_default_to_todays_bytes() -> None:
+    """All three removals off == today's composition, byte for byte."""
+    from core.model_input import _reduce_redundancy
+
+    today = build_canonical_text(
+        _ROW["canonical_record"], canonical_info(_ROW["canonical_record"]),
+        spec=_spec(),
+    )
+    assert _reduce_redundancy(today, spec=_spec()) == today
+
+
+def test_a_reduction_flag_changes_the_composition_fingerprint() -> None:
+    """Flipping a removal must move the identity an index is gated on.
+
+    The flags live in config, so unless they are part of the composition record
+    a flag flip would change the encoder text while the ANN reuse fingerprint
+    stayed identical — a stale index served as valid.
+    """
+    import hashlib
+    import json
+
+    import training.rand_matching as rm
+
+    base = TrainingSpec.ModelInputComposition.from_spec(_spec())
+    for flag in (
+        "emit_field_markers",
+        "keep_redundant_attribute_words",
+        "emit_singleton_pack_token",
+    ):
+        other = TrainingSpec.ModelInputComposition.from_spec(_spec(**{flag: False}))
+        assert other.fingerprint != base.fingerprint, flag
+        assert getattr(other, flag) is False
+
+        # ...and the ANN REUSE fingerprint moves with it, so a persisted index
+        # cannot outlive the composition that built it.
+        def ann_digest(composition) -> str:
+            original = rm.model_input_composition
+            rm.model_input_composition = lambda: composition
+            try:
+                return hashlib.sha256(
+                    json.dumps(
+                        rm.preprocessing_fingerprint_inputs({"enabled": True}),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+            finally:
+                rm.model_input_composition = original
+
+        assert ann_digest(other) != ann_digest(base), flag
+
+
+def test_a_reduction_flag_is_refused_under_legacy() -> None:
+    """legacy is the byte-for-byte stream; an ignored flag would be a no-op."""
+    for flag in (
+        "emit_field_markers",
+        "keep_redundant_attribute_words",
+        "emit_singleton_pack_token",
+    ):
+        with pytest.raises(ValidationError, match="legacy"):
+            TrainingSpec.ModelInputSpec(
+                profile="legacy", include_evidence=True, **{flag: False}
+            )
 
 
 def test_run_trace_records_the_active_composition() -> None:
