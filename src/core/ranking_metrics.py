@@ -25,8 +25,10 @@ named apart:
   — the POOLED definition, the primary keys returned by ``ranking_at_k``.
 * ``hits_at_1`` / ``precision_at_{k}`` / ``recall_at_{k}``
   — RESERVED for the PER-QUERY retrieval definition, returned by
-  ``ranking_at_k_by_query`` (and pinned by ``core.schemas.FoldMetrics`` /
-  consumed by ``training/generate_training_report.py``).
+  ``ranking_at_k_by_query`` (pinned by ``core.schemas.FoldMetrics`` and
+  consumed by ``training/generate_training_report.py``; for the zero-shot
+  sweep the pooled values are what ``core.schemas.EVAL_SUMMARY_COLUMNS``
+  carries today via the deprecated bare aliases).
 * ``query_hits_at_1`` / ``query_precision_at_{k}`` / ``query_recall_at_{k}``
   — explicit aliases of the per-query values, for readers who want the
   concept in the name.

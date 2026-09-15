@@ -153,7 +153,7 @@ class PoolContractTests(unittest.TestCase):
         fixture = Fixture()
         # g000 and g001 share a two-barcode component; query both of them plus
         # singletons, and let every canonical be a candidate.
-        rows = list(range(0, 12))
+        rows = list(range(12))
         pool = pool_for(fixture, rows, n=20)
         competitor = pool.labels == 0
         self.assertTrue(competitor.any())
@@ -184,7 +184,7 @@ class PoolContractTests(unittest.TestCase):
 
     def test_competitors_never_are_known_true_matches(self) -> None:
         fixture = Fixture()
-        rows = list(range(0, 8))
+        rows = list(range(8))
         excluded = frozenset(
             {("g002", "x000"), ("x000", "g002")}
         )
@@ -199,6 +199,53 @@ class PoolContractTests(unittest.TestCase):
         # a query whose whole competing universe is excluded is COUNTED
         self.assertEqual(pool.coverage["pool_queries_excluded"], 0)
         self.assertGreater(len(pairs), 0)
+
+    def test_self_loop_only_graph_still_gives_a_full_pool(self) -> None:
+        """The LIVE shape: every positive is (row, its OWN canonical).
+
+        ``pipeline.build_training_data`` emits positives that link a row to the
+        canonical of its own barcode, so on real data the positive-pair graph
+        has no cross-barcode edge at all and every component is a singleton.
+        The own-component rule must still exclude the query's own canonical
+        (it shares the barcode) and every query must still get N competitors.
+        """
+        n = 40
+        row_bc = np.asarray(
+            [f"g{i:03d}" for i in range(n)] + [f"g{i:03d}" for i in range(n)],
+            dtype=object,
+        )
+        pos = np.asarray([[i, n + i] for i in range(n)], dtype=int)
+        component = component_index(pos, row_bc)
+        # all-singleton components: exactly the live-data situation
+        self.assertEqual(len(np.unique(component)), n)
+        queries = np.asarray([[i, n + i] for i in range(n)], dtype=int)
+        pool = build_evaluation_pool(
+            queries,
+            [f"p{i}" for i in range(n)],
+            competitor_rows=np.arange(n, 2 * n, dtype=int),
+            row_component=component,
+            row_bc=row_bc,
+            n_competitors=12,
+            seed=5,
+            ks=KS,
+        )
+        self.assertEqual(pool.coverage["pool_queries_evaluated"], n)
+        self.assertEqual(pool.coverage["pool_queries_excluded"], 0)
+        self.assertEqual(pool.coverage["pool_size_min"], 13)
+        # the query's OWN canonical is never a competitor, even though the
+        # component rule is the only thing excluding it
+        for row in range(n):
+            block = pool.pairs[pool.query_keys == f"p{row}"]
+            self.assertIn(n + row, block[:, 1].tolist())
+            self.assertEqual(int(np.sum(block[:, 1] == n + row)), 1)
+        # balanced exposure: 40 queries x 12 draws over 40 candidates
+        self.assertAlmostEqual(
+            pool.coverage["pool_candidate_exposure_mean"], 12.0, delta=1.0
+        )
+        self.assertLessEqual(
+            pool.coverage["pool_candidate_exposure_max"],
+            pool.coverage["pool_candidate_exposure_min"] + 2,
+        )
 
     def test_query_with_no_eligible_competitor_is_counted_not_dropped(self) -> None:
         fixture = Fixture()
@@ -287,7 +334,7 @@ class PoolContractTests(unittest.TestCase):
 
     def test_draw_is_balanced_across_queries(self) -> None:
         fixture = Fixture()
-        rows = list(range(0, 12))
+        rows = list(range(12))
         pool = pool_for(fixture, rows, n=12)
         # every query has the SAME pool size ...
         self.assertEqual(pool.coverage["pool_size_min"], pool.coverage["pool_size_max"])
@@ -302,8 +349,8 @@ class PoolContractTests(unittest.TestCase):
 class PoolDeterminismTests(unittest.TestCase):
     def test_repeated_calls_are_identical(self) -> None:
         fixture = Fixture()
-        first = pool_for(fixture, list(range(0, 16)), n=12)
-        second = pool_for(fixture, list(range(0, 16)), n=12)
+        first = pool_for(fixture, list(range(16)), n=12)
+        second = pool_for(fixture, list(range(16)), n=12)
         np.testing.assert_array_equal(first.pairs, second.pairs)
         np.testing.assert_array_equal(first.labels, second.labels)
         np.testing.assert_array_equal(first.query_keys, second.query_keys)
@@ -311,7 +358,7 @@ class PoolDeterminismTests(unittest.TestCase):
 
     def test_shuffled_input_order_does_not_change_the_pool(self) -> None:
         fixture = Fixture()
-        rows = list(range(0, 16))
+        rows = list(range(16))
         pool = pool_for(fixture, rows, n=12)
         shuffled = pool_for(fixture, rows[::-1], n=12)
         # keys are matched, not positions: the block of each query must match
@@ -364,6 +411,9 @@ class PoolDeterminismTests(unittest.TestCase):
                 capture_output=True, text=True, check=True, env=env,
             )
             digests.append(result.stdout.strip())
+        # a 64-hex sha256 each, so an empty capture cannot pass vacuously
+        for digest in digests:
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
         self.assertEqual(len(set(digests)), 1, f"hash-seed dependent draw: {digests}")
 
     def test_component_index_is_order_and_hash_independent(self) -> None:
@@ -445,7 +495,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_pool_coverage_is_reported_in_the_metric_record(self) -> None:
         fixture = Fixture()
-        pool = pool_for(fixture, list(range(0, 10)), n=12)
+        pool = pool_for(fixture, list(range(10)), n=12)
         record = ranking_at_k_by_query(
             pool.labels, pool.labels.astype(float), pool.query_keys, KS
         )
@@ -477,7 +527,7 @@ class MetricDiscriminationTests(unittest.TestCase):
     def test_metric_distinguishes_constant_from_oracle_on_the_pool(self) -> None:
         fixture = Fixture()
         n = competitors_per_query(KS)
-        pool = pool_for(fixture, list(range(0, fixture.n_source)), n=n)
+        pool = pool_for(fixture, list(range(fixture.n_source)), n=n)
         oracle = ranking_at_k_by_query(
             pool.labels, pool.labels.astype(float), pool.query_keys, KS
         )
@@ -513,7 +563,7 @@ class MetricDiscriminationTests(unittest.TestCase):
 
     def test_real_model_shaped_scores_beat_chance(self) -> None:
         fixture = Fixture()
-        pool = pool_for(fixture, list(range(0, 20)), n=12)
+        pool = pool_for(fixture, list(range(20)), n=12)
         rng = np.random.default_rng(3)
         # a "model" that ranks the positive well but not perfectly
         scores = rng.normal(0.0, 1.0, len(pool.labels))
@@ -539,7 +589,7 @@ class PooledVersusPerQueryTests(unittest.TestCase):
     def test_bare_names_are_reserved_for_the_per_query_meaning(self) -> None:
         """One concept per name: the pooled and per-query values DIFFER."""
         fixture = Fixture()
-        pool = pool_for(fixture, list(range(0, 12)), n=12)
+        pool = pool_for(fixture, list(range(12)), n=12)
         scores = pool.labels.astype(float)
         per_query = ranking_at_k_by_query(
             pool.labels, scores, pool.query_keys, KS
@@ -587,7 +637,7 @@ class PooledVersusPerQueryTests(unittest.TestCase):
 class EncodeCostTests(unittest.TestCase):
     def test_added_encode_rows_counts_only_new_payload_rows(self) -> None:
         fixture = Fixture()
-        pool = pool_for(fixture, list(range(0, 10)), n=12)
+        pool = pool_for(fixture, list(range(10)), n=12)
         pool_rows = np.unique(pool.pairs.ravel())
         # everything already encoded => nothing added
         self.assertEqual(added_encode_rows(pool_rows, pool_rows), 0)
@@ -602,7 +652,7 @@ class EncodeCostTests(unittest.TestCase):
         """The pool draws Q*N competitors but encodes only UNIQUE rows."""
         fixture = Fixture()
         n = competitors_per_query(KS)
-        rows = list(range(0, fixture.n_source))
+        rows = list(range(fixture.n_source))
         pool = pool_for(fixture, rows, n=n)
         pool_rows = np.unique(pool.pairs.ravel())
         incidences = pool.coverage["pool_draw_incidences"]
