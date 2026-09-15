@@ -15,6 +15,9 @@ from training.rand_matching import (
 
 SETTINGS = {
     "enabled": True,
+    # The measured optimum: every critical dimension except sweetener, whose
+    # veto costs 74 true matches to remove 6 false merges.
+    "veto_dimensions": ["volume", "pack", "package_type", "flavor", "carbonation", "pulp"],
     "pack_mismatch_veto": True,
     "volume_mismatch_veto": True,
     "package_type_mismatch_veto": True,
@@ -240,11 +243,14 @@ def test_non_decisive_dimensions_still_reject_when_they_actually_conflict():
         sweetener={"no_sugar"},
         pulp={"no_pulp"},
     )
+    # sweetener is deliberately absent: the measurement put its veto at 6 false
+    # merges removed against 74 TRUE MATCHES lost, so it is excluded by config
+    # (see the veto_dimensions rationale). It is still audited -- asserted
+    # separately below -- it simply no longer hard-blocks.
     for dimension, value, expected in (
         ("package_type", {"can"}, "package_type_mismatch"),
         ("flavor", {"orange"}, "flavor_mismatch"),
         ("carbonation", {"still"}, "carbonation_mismatch"),
-        ("sweetener", {"sugar"}, "sweetener_mismatch"),
         ("pulp", {"with_pulp"}, "pulp_mismatch"),
         ("pack", {12}, "pack_mismatch"),
         ("volume", {1000}, "volume_mismatch"),
@@ -536,7 +542,6 @@ def test_extended_critical_dimensions_conflict_like_pack_and_volume():
     )
     for dimension, value, expected in (
         ("carbonation", {"still"}, "carbonation_mismatch"),
-        ("sweetener", {"sugar"}, "sweetener_mismatch"),
         ("pulp", {"with_pulp"}, "pulp_mismatch"),
         ("flavor", {"orange"}, "flavor_mismatch"),
     ):
@@ -551,6 +556,72 @@ def test_extended_critical_dimensions_conflict_like_pack_and_volume():
         assert gate["targeted_gate_route"] == "reject", dimension
         assert expected in gate["targeted_gate_reason"], dimension
         assert expected.split("_")[0] in gate["targeted_critical_conflicts"], dimension
+
+
+def test_a_sweetener_clash_is_audited_but_does_not_veto():
+    """The measured exclusion: reported, never hidden, and selectable back.
+
+    Measured on the 6,898 labelled holdout pairs at the operating threshold,
+    the sweetener veto removes 6 false merges and 74 TRUE MATCHES -- the only
+    dimension whose veto costs more than it saves. So it is out of the veto and
+    still in the audit columns, and putting it back is a config edit.
+    """
+    base = dict(
+        pack={6}, volume={750}, package_type={"bottle"}, flavor={"cola"},
+        carbonation={"carbonated"}, sweetener={"no_sugar"}, pulp={"no_pulp"},
+    )
+    gate = targeted_veto_gate(
+        _info(**base),
+        _info(**{**base, "sweetener": {"sugar"}}),
+        sku_brand="Acme",
+        candidate_brand="Acme",
+        exact_gtin=False,
+        config=SETTINGS,
+    )
+    assert gate["targeted_gate_route"] != "reject"
+    assert "sweetener_mismatch" not in gate["targeted_gate_reason"]
+    # ...but the conflict is still on the record
+    assert "sweetener" in gate["targeted_critical_conflicts"]
+    assert "sweetener" not in gate["targeted_vetoed_conflicts"]
+
+    # selecting it back restores the old hard block
+    restored = targeted_veto_gate(
+        _info(**base),
+        _info(**{**base, "sweetener": {"sugar"}}),
+        sku_brand="Acme",
+        candidate_brand="Acme",
+        exact_gtin=False,
+        config={**SETTINGS, "veto_dimensions": [*SETTINGS["veto_dimensions"], "sweetener"]},
+    )
+    assert restored["targeted_gate_route"] == "reject"
+    assert "sweetener_mismatch" in restored["targeted_gate_reason"]
+
+
+def test_absent_evidence_never_vetoes_in_any_dimension():
+    """The doctrine, pinned across every dimension: absent is not a conflict.
+
+    A gate that fired on absence would block true matches en masse -- the same
+    failure mode as the text-level removal, one level up.
+    """
+    full = dict(
+        pack={6}, volume={750}, package_type={"bottle"}, flavor={"cola"},
+        carbonation={"carbonated"}, sweetener={"sugar"}, pulp={"no_pulp"},
+    )
+    for dimension in (
+        "pack", "volume", "package_type", "flavor", "carbonation", "sweetener", "pulp",
+    ):
+        absent = dict(full)
+        absent[dimension] = set()
+        gate = targeted_veto_gate(
+            _info(**full),
+            _info(**absent),
+            sku_brand="Acme",
+            candidate_brand="Acme",
+            exact_gtin=False,
+            config=SETTINGS,
+        )
+        assert gate["targeted_gate_route"] != "reject", dimension
+        assert f"{dimension}_mismatch" not in gate["targeted_gate_reason"], dimension
 
 
 def test_exact_gtin_lock_bypasses_conflicts_and_missingness():

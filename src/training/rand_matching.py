@@ -377,6 +377,12 @@ def targeted_veto_gate(
         "targeted_package_type_b": json.dumps(sorted(right_package_type)),
         "targeted_pack_gate_pass": int(pack_gate_pass),
         "targeted_critical_conflicts": ",".join(critical["conflicts"]),
+        # The conflicts that were allowed to veto -- the difference between
+        # this and targeted_critical_conflicts is exactly what the configured
+        # veto set excludes, so the decision stays inspectable.
+        "targeted_vetoed_conflicts": ",".join(
+            d for d in critical["conflicts"] if d in set(settings["veto_dimensions"])
+        ),
         "targeted_critical_agreements": ",".join(critical["agreements"]),
         "targeted_brand_a": left_brand,
         "targeted_brand_b": right_brand,
@@ -396,8 +402,16 @@ def targeted_veto_gate(
             "targeted_gate_route": "auto_merge",
         }
 
+    # Only the configured dimensions may hard-block. Every conflict is still
+    # reported in targeted_critical_conflicts below, so an excluded dimension
+    # is AUDITED rather than hidden -- it simply stops spending true matches.
+    # The default set is the measured optimum: adding "sweetener" back removes
+    # one more false merge and costs 74 true ones (see config/training.yaml).
+    veto_dimensions = set(settings["veto_dimensions"])
     veto_reasons: list[str] = [
-        f"{dimension}_mismatch" for dimension in critical["conflicts"]
+        f"{dimension}_mismatch"
+        for dimension in critical["conflicts"]
+        if dimension in veto_dimensions
     ]
     if brand_conflict and bool(settings["brand_mismatch_veto"]):
         veto_reasons.append("brand_mismatch")

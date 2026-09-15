@@ -1322,6 +1322,101 @@ Two consequences worth an owner decision, neither of which I changed unilaterall
    I did **not** edit it: one writer per file, and the Colab agent owns it. Flagged so it is not
    discovered by a Colab launch.
 
+## 7m. The rejected text removal, converted into GATING — measured
+
+Owner task: cut the false merges without paying the recall that the text-level removal charged
+(recall@1 −0.0315). Gating spends nothing the model sees, so true pairs still match.
+
+### First finding: the veto already covered every dimension
+
+The brief assumed the gate vetoes on volume/pack and that the categorical attributes needed adding.
+Executed against the shared contract, `critical_attribute_evaluation` **already** classifies all seven
+`CRITICAL_ATTRIBUTE_DIMENSIONS` — and already implements the "explicit disagreement only" doctrine:
+
+```
+dimension      both-observed+different -> conflict?   absent-one-side -> conflict?
+  volume / pack / package_type / flavor / carbonation / sweetener     True    False (unknown=True)
+```
+
+So no second conflict mechanism was built and nothing was added. What was missing was the
+**measurement**, and it turned out to point the other way: one dimension had to come OUT.
+
+### The measurement (`/tmp/gate_attribute_measure.py`, 6,898 labelled holdout pairs, shipped scores, Youden threshold 0.6879)
+
+**Leading with the number that killed the text removal — TRUE MATCHES LOST:**
+
+| veto set | false merges removed | **TRUE LOST** | FP | TP | precision | recall |
+|---|---|---|---|---|---|---|
+| NONE (no gate) | 0 | 0 | 122 | 4784 | 0.9751 | 0.8670 |
+| only volume | 60 | **0** | 62 | 4784 | 0.9872 | 0.8670 |
+| only pack | 20 | **0** | 102 | 4784 | 0.9791 | 0.8670 |
+| only package_type | 13 | **0** | 109 | 4784 | 0.9777 | 0.8670 |
+| only flavor | 1 | **0** | 121 | 4784 | 0.9753 | 0.8670 |
+| only carbonation | 0 | **0** | 122 | 4784 | 0.9751 | 0.8670 |
+| **only sweetener** | 6 | **74** | 116 | 4710 | 0.9760 | **0.8536** |
+| only pulp | 3 | **0** | 119 | 4784 | 0.9757 | 0.8670 |
+| ALL SEVEN — **the control (old gate)** | 82 | **74** | 40 | 4710 | **0.9916** | **0.8536** |
+| volume+pack+package_type (2nd control) | 80 | **0** | 42 | 4784 | 0.9913 | 0.8670 |
+| **ALL EXCEPT sweetener — SHIPPED** | **81** | **0** | 41 | 4784 | 0.9915 | **0.8670** |
+
+**`sweetener` is the only dimension whose veto costs more than it saves: 6 false merges removed against
+74 true matches lost — 12:1 the wrong way.** The old seven-dimension veto removes 82 false merges but
+pays 74 true matches for it, dropping recall 0.8670 → 0.8536 for +0.0014 precision.
+
+**Shipped configuration: every critical dimension except `sweetener`.**
+* false merges removed **81 of 82** (one fewer than the old gate),
+* **true matches lost: 0**,
+* precision 0.9751 → **0.9915** (+1.64 pp) at **recall unchanged at 0.8670**.
+
+That is the same precision the old gate bought, minus the recall it was spending — and it beats the
+rejected text-level removal outright, which paid 3.15 pp of recall@1 for its gain.
+
+### Where the noisy attribute actually is, and one claim that does not reproduce
+
+The brief cited carbonation disagreeing with itself **49%** of the time within one GTIN. Measured on the
+12,986 GTINs with members, counting a GTIN as self-disagreeing when its members' union carries more than
+one value:
+
+```
+carbonation    512/12986  ( 3.9%)     <- the cited 49% does not reproduce on this definition
+sweetener      678/12986  ( 5.2%)
+flavor        4003/12986  (30.8%)
+package_type    69/12986  ( 0.5%)
+```
+
+The genuinely multi-valued dimension here is **flavor (30.8%)**, yet its veto costs *nothing* (1 false
+merge removed, 0 true lost). The reason is the disjointness rule: two listings of one product with
+`{pear}` and `{pear, citrus}` **overlap**, so they are not a conflict — difference alone never fires.
+That is direct evidence for "observed on both sides AND genuinely different" over any looser rule, and
+the opposite of what a 49%-self-disagreement figure would predict. Carbonation is inert on this
+population (0 removed, 0 lost): kept, because it is free and defensible, not because it earns its place.
+
+`pulp` is observable on only 134/6,898 pairs; it is kept for the 3 false merges it removes for free.
+
+### What was implemented
+
+* **Config-driven set** — `rand_matching.targeted_veto_gates.veto_dimensions`, with the per-dimension
+  measurement in the comment so the exclusion is auditable where it is configured. Adding `sweetener`
+  back restores the old behaviour by a config edit alone.
+* **Pydantic at the boundary** — `list[str]` with `min_length=1` plus a validator that rejects a
+  non-critical or repeated dimension, following the existing `require_agreement` pattern. A gate that
+  can veto nothing is a different feature, not a configuration.
+* **Nothing hidden** — the full conflict list stays in `targeted_critical_conflicts`; a new
+  `targeted_vetoed_conflicts` records which of them were allowed to block, so the gap between the two
+  *is* the configured exclusion.
+* **Nothing weakened** — a real conflict in an included dimension still rejects (`volume_mismatch`
+  observed end to end); a pair with insufficient decisive evidence still defers.
+
+### Tests
+**429 passed, 2 skipped** (was 427), 0 new lint findings vs `2a15852`. Two pre-existing tests were
+legitimately affected and updated: both enumerated `sweetener` among the dimensions that must reject,
+which is precisely what the measurement changed. Their intent was preserved (a real conflict in a
+veto-eligible dimension still hard-rejects, and the narrowed deferral scope must not weaken it) and two
+new tests pin the decision: `test_a_sweetener_clash_is_audited_but_does_not_veto` (not rejected, still in
+`targeted_critical_conflicts`, not in `targeted_vetoed_conflicts`, and restored to a hard block by
+selecting it back) and `test_absent_evidence_never_vetoes_in_any_dimension` (the doctrine, across all
+seven).
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):

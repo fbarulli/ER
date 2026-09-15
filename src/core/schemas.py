@@ -787,6 +787,10 @@ class RandMatchingSpec(BaseModel):
         model_config = ConfigDict(extra="forbid")
 
         enabled: bool
+        # Dimensions allowed to hard-block a non-exact match. A subset of the
+        # shared critical dimensions, and it must not be empty: a gate that can
+        # veto nothing is a different feature, not a configuration.
+        veto_dimensions: list[str] = Field(min_length=1)
         pack_mismatch_veto: bool
         volume_mismatch_veto: bool
         package_type_mismatch_veto: bool
@@ -795,6 +799,25 @@ class RandMatchingSpec(BaseModel):
         volume_relative_tolerance: float = Field(ge=0.0, le=1.0)
         volume_absolute_tolerance_ml: float = Field(ge=0.0)
         preserve_exact_gtin: bool
+
+        @field_validator("veto_dimensions")
+        @classmethod
+        def _veto_dimensions_are_critical(cls, values: list[str]) -> list[str]:
+            from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
+
+            allowed = set(CRITICAL_ATTRIBUTE_DIMENSIONS)
+            unknown = sorted(set(values) - allowed)
+            if unknown:
+                raise ValueError(
+                    "rand_matching.targeted_veto_gates.veto_dimensions names "
+                    f"non-critical dimensions {unknown}; allowed: {sorted(allowed)}"
+                )
+            if len(set(values)) != len(values):
+                raise ValueError(
+                    "rand_matching.targeted_veto_gates.veto_dimensions repeats a "
+                    f"dimension: {values}"
+                )
+            return values
 
     output_dir: str = Field(min_length=1)
     truth_splits: RandTruthSplitsSpec

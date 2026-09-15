@@ -357,6 +357,24 @@ rand_matching:
   # to the human-review route and excluded from automatic graph edges.
   targeted_veto_gates:
     enabled: true
+    # Which dimensions may HARD-BLOCK a non-exact match. The veto requires a
+    # value observed on BOTH sides that genuinely disagrees; absent evidence is
+    # classified "unknown" and never vetoes (that is the doctrine, and it is
+    # pinned by tests). Measured per dimension on the 6,898 labelled holdout
+    # pairs at the operating threshold, leading with the number that matters --
+    # TRUE MATCHES LOST:
+    #   volume        60 false merges removed,  0 true lost
+    #   pack          20,  0        package_type 13, 0
+    #   flavor         1,  0        carbonation   0, 0        pulp 3, 0
+    #   sweetener      6 false merges removed, 74 TRUE LOST   <-- 12:1 against
+    # The full seven remove 82 false merges but lose 74 true matches, dropping
+    # recall 0.8670 -> 0.8536 for +0.001 precision. Excluding sweetener keeps 81
+    # of the 82 and loses NONE: precision 0.9751 -> 0.9915 at UNCHANGED recall.
+    # Sweetener's rule fires on a positive-vs-diet clash, which within one GTIN
+    # is usually a parsing artefact rather than a different product, so it is
+    # kept in the audit columns and left out of the veto. Add it back here to
+    # restore the old behaviour -- the measurement above is the argument.
+    veto_dimensions: [volume, pack, package_type, flavor, carbonation, pulp]
     pack_mismatch_veto: true
     volume_mismatch_veto: true
     package_type_mismatch_veto: true
