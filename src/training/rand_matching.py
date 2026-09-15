@@ -84,10 +84,12 @@ from core.structured_features import (
     append_text as append_structured_text,
     canonical_info as canonical_structured_info,
     fuse_numpy,
+    sku_info as sku_structured_info,
     vector as structured_vector,
 )
 from core.unit_canonicalization import UNIT_CANONICALIZATION_VERSION
 from pipeline import (
+    canonical_evidence_text,
     canonical_model_text,
     clean_sku_text,
     load_canonical_map,
@@ -1011,13 +1013,17 @@ class RandMatcher:
         ]
         item_texts = [
             append_structured_text(
-                strip_schema_words(canonical_model_text(" ".join(
+                strip_schema_words(canonical_model_text(" ".join((
                     self.canonical[item_id],
                     str(self.record_map[item_id].get("mode_brand", "")),
                     str(self.record_map[item_id].get("mode_type", "")),
-                    str(self.record_map[item_id].get("description_evidence", "")),
-                    str(self.record_map[item_id].get("breadcrumb_evidence", "")),
-                ))),
+                    canonical_evidence_text(
+                        self.record_map[item_id].get("description_evidence", "")
+                    ),
+                    canonical_evidence_text(
+                        self.record_map[item_id].get("breadcrumb_evidence", "")
+                    ),
+                )))),
                 info,
                 enabled=self.structured_text,
             )
@@ -1102,12 +1108,27 @@ class RandMatcher:
         """Return a GTIN only when it is a valid identity signal."""
         return trusted_gtin(value)
 
-    def _text_and_info(self, frame: pd.DataFrame) -> tuple[list[str], list[dict]]:
-        infos = [
+    def _text_and_info(
+        self, frame: pd.DataFrame
+    ) -> tuple[list[str], list[dict], list[dict]]:
+        # Keep gate attributes confidence-aware: an absent pack count remains
+        # unknown to the gate.  The model-side structured channel has a
+        # separate source representation whose missing pack count defaults to
+        # the canonical singleton token pack_qty_1.
+        gate_infos = [
             sku_attribute_info(
                 row_metadata_text(row, "title"),
                 row_metadata_text(row, "attributes", "attr"),
             )
+            for _, row in frame.iterrows()
+        ]
+        model_infos = [
+            sku_structured_info(
+                row_metadata_text(row, "title"),
+                row_metadata_text(row, "attributes", "attr"),
+            )
+            if self.structured_enabled
+            else {"volume": set(), "pack": set()}
             for _, row in frame.iterrows()
         ]
         texts = [
@@ -1125,9 +1146,9 @@ class RandMatcher:
                 info,
                 enabled=self.structured_text,
             )
-            for (_, row), info in zip(frame.iterrows(), infos, strict=True)
+            for (_, row), info in zip(frame.iterrows(), model_infos, strict=True)
         ]
-        return texts, infos
+        return texts, gate_infos, model_infos
 
     _INVALID_SKU_SENTINELS = INVALID_ID_SENTINELS
 
@@ -1233,8 +1254,8 @@ class RandMatcher:
         if top_k < 1:
             raise ValueError("top_k must be positive")
         frame = self._normalise_skus(skus)
-        texts, sku_infos = self._text_and_info(frame)
-        embeddings = self._encode_skus(texts, sku_infos)
+        texts, gate_infos, model_infos = self._text_and_info(frame)
+        embeddings = self._encode_skus(texts, model_infos)
         hit_labels, _ = self.ann_index.query(embeddings, top_k=top_k)
 
         rows: list[dict[str, object]] = []
@@ -1248,7 +1269,7 @@ class RandMatcher:
                 rows.append(
                     self._candidate_row(
                         row,
-                        sku_infos[position],
+                        gate_infos[position],
                         embeddings[position],
                         index,
                         candidate_rank,

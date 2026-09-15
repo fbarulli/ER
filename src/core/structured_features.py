@@ -105,10 +105,14 @@ def sku_info(
     extracted = extract_all(str(title), str(attributes))
     volume = {float(extracted.get("volume_ml") or 0.0)}
     pack_qty = extracted.get("pack_qty")
+    # The pipeline's parser uses pack_qty=1 with zero confidence as its
+    # explicit "no pack count observed" sentinel.  The model-side structured
+    # channel must still emit the same singleton token as canonical records;
+    # gate code intentionally keeps using confidence-aware unknown semantics.
     pack = (
         {float(pack_qty)}
         if pack_qty is not None and float(extracted.get("pack_confidence") or 0.0) > 0.0
-        else set()
+        else {1.0}
     )
     return info_from_sets(
         volume,

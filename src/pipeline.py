@@ -21,6 +21,7 @@ Public surface (old DATA_PIPE imports keep working):
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import re
@@ -1170,6 +1171,48 @@ _CANON_KEEP_DIGIT = re.compile(
 )
 
 
+def canonical_evidence_text(value: object) -> str:
+    """Render canonical evidence as deterministic plain model text.
+
+    ``description_evidence`` and ``breadcrumb_evidence`` are stored as lists
+    in the canonical record model, but CSV round-trips load those cells as
+    strings containing Python-list reprs.  Never pass either representation
+    directly to the encoder: list brackets, quotes, and escape syntax are
+    serialization artifacts rather than product evidence.
+
+    The parser accepts both in-memory sequences and the legacy CSV repr.  A
+    scalar is treated as one evidence value, and sequence values are sorted
+    by their normalized text so the model input is byte-stable regardless of
+    source ordering.
+    """
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        try:
+            parsed = ast.literal_eval(raw)
+        except (SyntaxError, ValueError):
+            parsed = value
+        if isinstance(parsed, (list, tuple, set, frozenset)):
+            values = parsed
+        else:
+            values = (value,)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        values = value
+    else:
+        values = (value,)
+
+    normalized = {
+        normalize_text(item).strip()
+        for item in values
+        if item is not None and str(item).strip()
+    }
+    return " ".join(sorted(normalized))
+
+
 def canonical_model_text(canonical: str) -> str:
     """Number-free base canonical for the MODEL payload.
 
@@ -2045,13 +2088,17 @@ def build_training_data(
     ]
     canon_texts = [
         append_structured_text(
-            strip_schema_words(canonical_model_text(" ".join(
+            strip_schema_words(canonical_model_text(" ".join((
                 str(canon_map[g]),
                 str(canonical_record_map.get(g, {}).get("mode_brand", "")),
                 str(canonical_record_map.get(g, {}).get("mode_type", "")),
-                str(canonical_record_map.get(g, {}).get("description_evidence", "")),
-                str(canonical_record_map.get(g, {}).get("breadcrumb_evidence", "")),
-            ))), info,
+                canonical_evidence_text(
+                    canonical_record_map.get(g, {}).get("description_evidence", "")
+                ),
+                canonical_evidence_text(
+                    canonical_record_map.get(g, {}).get("breadcrumb_evidence", "")
+                ),
+            )))), info,
             enabled=structured_append_to_text,
         )
         for g, info in zip(canon_gtins, canon_structured, strict=True)

@@ -8,9 +8,31 @@ from core.attribute_conflicts import (
     conflict_columns,
     sku_attribute_info,
 )
-from core.structured_features import append_text, info_from_sets
+from core.structured_features import append_text, info_from_sets, sku_info
 from core.unit_canonicalization import canonical_pack_count, canonical_volume_ml
-from pipeline import extract_all
+from pipeline import canonical_evidence_text, extract_all
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (["Made with apples", "No added sugar"], "made with apples no added sugar"),
+        ("['Made with apples', 'No added sugar']", "made with apples no added sugar"),
+        ('["Made with apples", "No added sugar"]', "made with apples no added sugar"),
+        ("[]", ""),
+        ("plain evidence", "plain evidence"),
+    ],
+)
+def test_canonical_evidence_is_plain_deterministic_text(
+    value: object, expected: str
+) -> None:
+    result = canonical_evidence_text(value)
+    assert result == expected
+    assert not any(marker in result for marker in ("[", "]", "'", '"'))
+
+
+def test_canonical_evidence_sequence_order_is_stable() -> None:
+    assert canonical_evidence_text({"zebra", "apple"}) == "apple zebra"
 
 
 @pytest.mark.parametrize(
@@ -41,6 +63,29 @@ def test_pipeline_canonicalizes_title_and_attribute_units() -> None:
     assert title["pack_qty"] == 12
     assert attributes["volume_ml"] == 750.0
     assert attributes["pack_qty"] == 6
+
+
+def test_source_structured_pack_defaults_to_singleton_when_count_is_unknown() -> None:
+    info = sku_info("Plain tea", "")
+
+    assert info["pack"] == {1.0}
+    assert "[FIELD_PACK_SIZE] pack_qty_1" in append_text("plain tea", info)
+    # The gate's separate confidence-aware parser must not inherit the
+    # model-only singleton default.
+    assert sku_attribute_info("Plain tea", "")["pack"] == set()
+
+
+@pytest.mark.parametrize(
+    ("title", "attributes", "expected_pack"),
+    [
+        ("Sparkling water 12-pack", "", 12.0),
+        ("Sparkling water", "Count per Unit: 6", 6.0),
+    ],
+)
+def test_source_structured_pack_preserves_explicit_counts(
+    title: str, attributes: str, expected_pack: float
+) -> None:
+    assert sku_info(title, attributes)["pack"] == {expected_pack}
 
 
 def test_structured_tokens_are_canonical_before_encoder_input() -> None:
