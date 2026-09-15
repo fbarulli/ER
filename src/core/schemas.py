@@ -1733,6 +1733,10 @@ class ColabSpec(BaseModel):
     mixed_mining_profile: str = Field(min_length=1)
     sims_model: str = Field(min_length=1)
     log_poll_seconds: int = Field(ge=1, le=30)
+    # First detached-stage probe delay.  A stage whose work is seconds long (the
+    # dependency install is ~2.4 s of work) otherwise pays a full poll interval
+    # plus a round trip just to be noticed.
+    log_poll_initial_seconds: float = Field(gt=0.0, le=30.0)
     probe_timeout_seconds: int = Field(ge=60, le=1800)
     probe_retries: int = Field(ge=1, le=10)
     probe_retry_backoff_seconds: int = Field(ge=1, le=120)
@@ -1756,6 +1760,10 @@ class ColabSpec(BaseModel):
     dvc_events_file: str = Field(min_length=1)
     dvc_push_retries: int = Field(ge=1, le=10)
     dvc_push_backoff_seconds: int = Field(ge=1, le=120)
+    # Quiet window the streaming checkpoint publisher waits for before it
+    # flushes, so a burst of saves leaves as ONE `dvc push` while a single
+    # ready checkpoint is still published promptly.
+    dvc_publish_debounce_seconds: float = Field(gt=0.0, le=600.0)
     final_inference: FinalInferenceSpec
 
 

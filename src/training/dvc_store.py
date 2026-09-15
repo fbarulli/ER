@@ -1,6 +1,6 @@
 """Publish one worker's output through an isolated DVC project."""
 from __future__ import annotations
-import argparse, fcntl, json, os, shutil, subprocess, tempfile, time, traceback
+import argparse, fcntl, json, os, shutil, subprocess, tempfile, threading, time, traceback
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -295,17 +295,11 @@ def publish_checkpoint(
             # success while discovering no top-level tracked outputs, which
             # leaves the resume pointer referring to a nonexistent remote
             # object. Push the exact native pointer explicitly.
-            print(f"[checkpoint-dvc] pushing target {native_relative}", flush=True)
-            _run(["dvc", "push", str(native_relative)], source)
-            # A successful push process is not sufficient evidence on its
-            # own. Require DVC's cloud comparison to report this exact
-            # pointer in sync before making the resume metadata visible.
-            cloud_status = _run(["dvc", "status", "--cloud", str(native_relative)], source)
-            if not _dvc_status_is_clean(cloud_status):
-                raise RuntimeError(
-                    f"DVC cloud status is not clean for {native_relative}: "
-                    f"{cloud_status.strip()}"
-                )
+            # One push implementation for every caller: a successful process
+            # is not sufficient evidence on its own, so _push_targets also
+            # requires DVC's cloud comparison to report this exact pointer in
+            # sync before the resume metadata is made visible.
+            _push_targets(source, [str(native_relative)])
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     # Expose the durable resume pointer only after the exact target push has
@@ -380,11 +374,27 @@ def publish_checkpoints(
             if missing:
                 raise RuntimeError(f"DVC did not create checkpoint pointers: {missing}")
             native_relatives = [str(path.relative_to(source)) for path in native_pointers]
-            print(f"[checkpoint-dvc] pushing {len(native_relatives)} checkpoint targets together", flush=True)
-            _run(["dvc", "push", *native_relatives], source)
-            cloud_status = _run(["dvc", "status", "--cloud", *native_relatives], source)
-            if not _dvc_status_is_clean(cloud_status):
-                raise RuntimeError(f"DVC cloud status is not clean for checkpoint batch: {cloud_status.strip()}")
+            # Targets the streaming publisher already verified are on the
+            # remote; pushing them again would be a second network round trip
+            # for no durability gain.  Whatever is left still goes as ONE push.
+            already_published = _streamer_verified(source)
+            remaining = [
+                target for target in native_relatives if target not in already_published
+            ]
+            if remaining:
+                print(
+                    f"[checkpoint-dvc] pushing {len(remaining)} checkpoint target(s) "
+                    f"together ({len(native_relatives) - len(remaining)} already "
+                    "published while training ran)",
+                    flush=True,
+                )
+                _push_targets(source, remaining)
+            else:
+                print(
+                    f"[checkpoint-dvc] all {len(native_relatives)} checkpoint "
+                    "target(s) were already published while training ran",
+                    flush=True,
+                )
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     import yaml
@@ -396,7 +406,193 @@ def publish_checkpoints(
         pointer.parent.mkdir(parents=True, exist_ok=True)
         pointer.write_text(yaml.safe_dump(pointer_data, sort_keys=False), encoding="utf-8")
         _write_dvc_event(source, "checkpoint_publish_verified", checkpoint=str(snapshot), pointer=str(pointer))
+    stop_checkpoint_streamer(source)
     return pointers
+
+
+def _push_targets(source: Path, targets: list[str]) -> None:
+    """Push exactly these targets and require a clean cloud comparison.
+
+    The single network step, shared by the streaming publisher and the final
+    batch so there is one push implementation and one definition of "pushed"
+    (a zero exit code is not enough — DVC's own cloud status must agree).
+    """
+    print(f"[checkpoint-dvc] pushing {len(targets)} target(s): {' '.join(targets)}", flush=True)
+    _run(["dvc", "push", *targets], source)
+    cloud_status = _run(["dvc", "status", "--cloud", *targets], source)
+    if not _dvc_status_is_clean(cloud_status):
+        raise RuntimeError(
+            f"DVC cloud status is not clean for {targets}: {cloud_status.strip()}"
+        )
+
+
+class _CheckpointStreamer:
+    """Publish staged checkpoint targets while training is still running.
+
+    The trainer already signals availability once per save by calling
+    :func:`stage_checkpoint`; that signal now also feeds this publisher, so no
+    caller changes are needed.  The publisher owns a single background thread:
+
+    * it never runs on the training thread, and never takes a lock the training
+      thread needs — the training path's only interaction is an append;
+    * it waits for a config-owned quiet window (``dvc_publish_debounce_seconds``)
+      after the most recent signal, so a burst of saves within the window leaves
+      as ONE ``dvc push`` rather than one push per file, while a single ready
+      file is still flushed promptly;
+    * every failure is a warning that leaves the target for the final batch, so
+      a slow or broken remote can never stall or fail a training run.
+    """
+
+    def __init__(self, source: Path, *, debounce_seconds: float) -> None:
+        self.source = source
+        self.debounce_seconds = debounce_seconds
+        self._condition = threading.Condition()
+        self._pending: list[str] = []
+        self._verified: set[str] = set()
+        self._failed: list[str] = []
+        self._stopped = False
+        self._push_count = 0
+        self._last_push_started: float | None = None
+        self._last_push_seconds: float | None = None
+        self._thread = threading.Thread(
+            target=self._loop, name="dvc-stream-publisher", daemon=True
+        )
+        self._thread.start()
+
+    # -- producer side (called from the trainer's staging executor) ----------
+    def signal(self, target: str) -> None:
+        """Record one available target.  Never blocks, never raises."""
+        with self._condition:
+            if target not in self._pending and target not in self._verified:
+                self._pending.append(target)
+            self._condition.notify_all()
+
+    def verified(self) -> set[str]:
+        with self._condition:
+            return set(self._verified)
+
+    def failures(self) -> list[str]:
+        with self._condition:
+            return list(self._failed)
+
+    def snapshot(self) -> dict[str, float | int | None]:
+        """Observable state, for the launcher's run metadata and for tests."""
+        with self._condition:
+            return {
+                "debounce_seconds": self.debounce_seconds,
+                "pending": len(self._pending),
+                "verified": len(self._verified),
+                "failed": len(self._failed),
+                "pushes": self._push_count,
+                "last_push_started": self._last_push_started,
+                "last_push_seconds": self._last_push_seconds,
+            }
+
+    def _loop(self) -> None:
+        while True:
+            with self._condition:
+                while not self._pending and not self._stopped:
+                    self._condition.wait()
+                if self._stopped:
+                    return
+                # Coalesce: wait for quiet, extending only when a NEW target
+                # arrives.  Re-arming on the batch already being held would
+                # never reach a deadline, because that batch is always present.
+                deadline = time.monotonic() + self.debounce_seconds
+                coalescing = len(self._pending)
+                while not self._stopped:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._condition.wait(timeout=remaining)
+                    if len(self._pending) > coalescing:
+                        coalescing = len(self._pending)
+                        deadline = time.monotonic() + self.debounce_seconds
+                batch, self._pending = self._pending, []
+                self._push_count += 1
+            self._push(batch)
+
+    def _push(self, batch: list[str]) -> None:
+        started = time.monotonic()
+        try:
+            token = os.environ.get("DVC_API_KEY")
+            if not token:
+                raise RuntimeError("DVC_API_KEY is required to publish a checkpoint")
+            lock_path = self.source / ".dvc-push.lock"
+            with lock_path.open("w", encoding="utf-8") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                try:
+                    _configure(self.source, token)
+                    _push_targets(self.source, batch)
+                finally:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        except BaseException as exc:  # a broken remote must never fail training
+            with self._condition:
+                self._failed.extend(batch)
+                self._last_push_started = started
+                self._last_push_seconds = time.monotonic() - started
+            print(
+                f"[checkpoint-dvc] streaming publish failed ({exc!r}); "
+                f"{len(batch)} target(s) kept for the final batch",
+                flush=True,
+            )
+            return
+        with self._condition:
+            self._verified.update(batch)
+            self._last_push_started = started
+            self._last_push_seconds = time.monotonic() - started
+            pending_now = len(self._pending)
+        for target in batch:
+            _write_dvc_event(
+                self.source, "checkpoint_publish_verified", checkpoint=target,
+                pointer="streaming",
+            )
+        print(
+            f"[checkpoint-dvc] streamed {len(batch)} target(s) in "
+            f"{self._last_push_seconds:.1f}s while training continued "
+            f"({pending_now} already queued)",
+            flush=True,
+        )
+
+    def stop(self) -> None:
+        with self._condition:
+            self._stopped = True
+            self._condition.notify_all()
+        self._thread.join(timeout=60)
+
+
+_STREAMERS: dict[str, _CheckpointStreamer] = {}
+_STREAMERS_LOCK = threading.Lock()
+
+
+def checkpoint_streamer(source: Path) -> _CheckpointStreamer:
+    """The one streaming publisher for a worker's result directory."""
+    key = str(source.resolve())
+    with _STREAMERS_LOCK:
+        streamer = _STREAMERS.get(key)
+        if streamer is None:
+            debounce = float(
+                common.training_cfg().colab.dvc_publish_debounce_seconds
+            )
+            streamer = _CheckpointStreamer(source, debounce_seconds=debounce)
+            _STREAMERS[key] = streamer
+        return streamer
+
+
+def _streamer_verified(source: Path) -> set[str]:
+    """Targets the streaming publisher has already pushed and verified."""
+    with _STREAMERS_LOCK:
+        streamer = _STREAMERS.get(str(source.resolve()))
+    return streamer.verified() if streamer is not None else set()
+
+
+def stop_checkpoint_streamer(source: Path) -> None:
+    """Stop and forget a worker's streaming publisher."""
+    key = str(source.resolve())
+    with _STREAMERS_LOCK:
+        streamer = _STREAMERS.pop(key, None)
+    if streamer is not None:
+        streamer.stop()
 
 
 def stage_checkpoint(source: Path, checkpoint: Path) -> None:
@@ -405,6 +601,11 @@ def stage_checkpoint(source: Path, checkpoint: Path) -> None:
     This is deliberately called at each Trainer save, so its contents enter
     the local DVC cache while the checkpoint is available.  The caller later
     invokes :func:`publish_checkpoints` once to upload every staged target.
+
+    The same call also signals the streaming publisher, so a checkpoint that
+    exists is on the remote shortly after it lands instead of only at the end
+    of the run.  Signalling is an append on a background publisher: it does no
+    network work here and cannot block the caller.
     """
     token = os.environ.get("DVC_API_KEY")
     if not token:
@@ -420,6 +621,9 @@ def stage_checkpoint(source: Path, checkpoint: Path) -> None:
             _run(["dvc", "add", str(relative)], source)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    native_pointer = checkpoint.with_name(f"{checkpoint.name}.dvc")
+    if native_pointer.is_file():
+        checkpoint_streamer(source).signal(str(native_pointer.relative_to(source)))
 
 
 def _pointer_outputs(source: Path, pointer: Path) -> list[Path]:

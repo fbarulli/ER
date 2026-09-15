@@ -134,6 +134,10 @@ colab:
   mixed_mining_profile: "masking_only"
   sims_model: "minilm_l6"
   log_poll_seconds: 2
+  # First probe delay for a detached stage, before backing off to
+  # log_poll_seconds.  The dependency install is ~2.4 s of work, so a full
+  # interval spent waiting to notice it is pure setup latency.
+  log_poll_initial_seconds: 0.25
   probe_timeout_seconds: 600
   probe_retries: 4
   probe_retry_backoff_seconds: 5
@@ -166,6 +170,10 @@ colab:
   dvc_events_file: "dvc_events.jsonl"
   dvc_push_retries: 5
   dvc_push_backoff_seconds: 15
+  # Quiet window the streaming checkpoint publisher waits for before it pushes.
+  # Saves landing inside one window leave as a single `dvc push`; a lone
+  # checkpoint is still published within this window.
+  dvc_publish_debounce_seconds: 20.0
   # FINAL inference over the whole deduped catalog (61,529 rows). It is not a
   # validation sample: the 3,000 held-out rows are used for the threshold view
   # only, which is why this block is not called "validation_inference".

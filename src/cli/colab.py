@@ -122,6 +122,7 @@ _DVC_ENABLED = bool(_COLAB.dvc_enabled)
 _DVC_WORKERS = _COLAB.dvc_workers if _DVC_ENABLED else 0
 _DVC_DISABLED_FLAG = "0" if _DVC_ENABLED else "1"
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
+_LOG_POLL_INITIAL_SECONDS = float(_COLAB.log_poll_initial_seconds)
 _PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
 _PROBE_RETRIES = _COLAB.probe_retries
 _PROBE_RETRY_BACKOFF_SECONDS = _COLAB.probe_retry_backoff_seconds
@@ -640,7 +641,13 @@ print(json.dumps({{"pid": running_pid, "log": str(log_path), "status": str(statu
         )
         print(f"[{stage}] remote pid={launched.get('pid')}", flush=True)
         offset = 0
+        delay = _LOG_POLL_INITIAL_SECONDS
+        probes = 0
+        poll_started = time.perf_counter()
+        poll_seconds = 0.0
         while True:
+            probes += 1
+            poll_seconds = time.perf_counter() - poll_started
             probe = _BOOTSTRAP + f"""
 import json, pathlib
 log_path = pathlib.Path({remote_log!r})
@@ -673,9 +680,19 @@ print(json.dumps(payload), flush=True)
                         f"remote stage {stage} failed (rc={returncode}); "
                         f"system log contains the streamed output; remote log={remote_log}"
                     )
-                print(f"[{stage}] completed successfully", flush=True)
+                print(
+                    f"[{stage}] completed successfully after {poll_seconds:.2f}s "
+                    f"of polling ({probes} probe(s))",
+                    flush=True,
+                )
                 return
-            time.sleep(_LOG_POLL_SECONDS)
+            # A stage whose work is seconds long must not pay a full poll
+            # interval, nor a round trip per interval, merely to be noticed.
+            # Start tight and back off to the configured steady interval, so
+            # short stages are seen almost immediately and long ones cost the
+            # same few probes as before.
+            delay = min(_LOG_POLL_SECONDS, max(_LOG_POLL_INITIAL_SECONDS, delay * 2))
+            time.sleep(delay)
     except BaseException as exc:
         raise RuntimeError(
             f"remote stage {stage} lost its control connection; "
