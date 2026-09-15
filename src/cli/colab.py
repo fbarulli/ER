@@ -544,7 +544,7 @@ def run_detached_stage(stage: str, command_expr: str, timeout: int) -> None:
     # Two launches can occur within the same UTC second (especially after a
     # failed preflight). Microseconds keep the remote result root unique and
     # prevent FileExistsError from aborting before workers launch.
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     remote_log = f"{REMOTE_ROOT}/results/logs/colab_stages/{stage}_{stamp}.log"
     remote_status = f"{remote_log}.status"
     remote_pid = f"{remote_log}.pid"
@@ -810,7 +810,7 @@ def run_detached_train_and_tail(args: list[str]) -> None:
     client disconnect cannot kill training or swallow its traceback.
     """
     # Keep single-worker roots collision-proof for rapid retries as well.
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     remote_log = f"{REMOTE_ROOT}/results/logs/colab_train_{stamp}.log"
     remote_status = f"{remote_log}.status"
     launch = _BOOTSTRAP + _remote_auth_env_script() + f"""
@@ -897,7 +897,7 @@ def run_parallel_train_and_tail(
             f"worker loss list must contain exactly {workers} values; "
             f"got {len(worker_losses)}"
         )
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     remote_base = (
         f"{REMOTE_ROOT}/results/concurrent_train_{resume_run}"
         if resume_run
@@ -1910,7 +1910,7 @@ def _prepare_local_training_bundles(
     payload: str = "full",
 ) -> list[Path]:
     """Build and validate one complete input bundle per worker locally."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     root = RESULTS / "prepared_training" / stamp
     root.mkdir(parents=True, exist_ok=False)
     model_key = model or str(training_cfg().training.base_model)
@@ -2066,7 +2066,7 @@ def run_single_train_and_stream(
     prepared_bundle: Path | None = None, validation_inference: bool = True,
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     remote_validation_inputs = (
@@ -2180,7 +2180,7 @@ def run_hpo(
         f"trial_jobs={trial_jobs}, resume={resume}, persistence={persistence}) ..."
     )
     run_id = (
-        datetime.now(timezone.utc).strftime("hpo_%Y%m%dT%H%M%SZ")
+        datetime.now(timezone.utc).strftime("hpo_%m%dT%H%M%SZ")
         + "_" + uuid.uuid4().hex[:8]
     )
     mask_effect_flag = "--mask-effect" if _MASK_EFFECT_AFTER_TRAIN else "--no-mask-effect"
@@ -2237,7 +2237,7 @@ if {resume!r}:
 
 def run_logged(args, label, extra_env=None):
     log_path = hpo_root / "logs" / (
-        f"colab_{{label}}_{{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}}.log"
+        f"colab_{{label}}_{{datetime.now(timezone.utc).strftime('%m%dT%H%M%SZ')}}.log"
     )
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = {{**os.environ, "PYTHONUNBUFFERED": "1"}}
@@ -2354,7 +2354,7 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
 def run_sims() -> None:
     """Run the configured zero-shot embedding model lane on the VM."""
     print(f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
-    run_id = datetime.now(timezone.utc).strftime("zero_shot_%Y%m%dT%H%M%S%fZ")
+    run_id = datetime.now(timezone.utc).strftime("zero_shot_%m%dT%H%M%S%fZ")
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import os, subprocess, sys
 os.environ["EUROMONITOR_RUN_ID"] = {run_id!r}
@@ -2385,7 +2385,7 @@ def run_mixed(
             "mixed lane requires an embedding model registry key: "
             f"{model_key!r}"
         )
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_mixed_{stamp}"
     train_args = [
         "-u",
@@ -2424,7 +2424,7 @@ worker_specs = [
 ]
 
 def emit_snapshot(label, out, proc):
-    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    stamp = time.strftime("%m%dT%H%M%SZ", time.gmtime())
     commands = (
         ["ps", "-eo", "pid,ppid,pgid,etime,stat,%cpu,%mem,rss,args", "--forest"],
         ["nvidia-smi", "--query-gpu=index,name,temperature.gpu,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
