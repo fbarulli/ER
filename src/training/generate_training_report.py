@@ -710,18 +710,36 @@ def generate_report(
                 continue
             y = part["label"].to_numpy(dtype=int)
             scores = part["score"].to_numpy(dtype=float)
-            order = np.argsort(-scores, kind="stable")
-            ranked = y[order]
+            # Retrieval ranking is per source SKU/query.  Ranking the whole
+            # pair table globally makes top-k recall meaningless when there
+            # are thousands of positives and only k rows are inspected.
+            source_column = "sku_id_a" if "sku_id_a" in part.columns else "source_sku_id"
+            if source_column not in part.columns:
+                raise ValueError(
+                    "pair dump lacks a source SKU column required for retrieval metrics"
+                )
+            query_groups = [
+                group.sort_values("score", ascending=False, kind="stable")
+                for _, group in part.groupby(source_column, sort=False)
+                if bool((group["label"].astype(int) == 1).any())
+            ]
             for k in (1, 5, 10):
-                top = ranked[: min(k, len(ranked))]
+                query_hits = []
+                query_precisions = []
+                for group in query_groups:
+                    top = group.head(k)["label"].to_numpy(dtype=int)
+                    query_hits.append(int(top.sum() > 0))
+                    query_precisions.append(float(top.mean()) if len(top) else 0.0)
+                n_queries = len(query_groups)
                 ranking_rows.append(
                     {
                         "fold": fold,
                         "k": k,
-                        "hits_at_k": int(top.sum()),
-                        "available_k": int(len(top)),
-                        "precision_at_k": float(top.mean()) if len(top) else 0.0,
-                        "recall_at_k": float(top.sum() / max(int(y.sum()), 1)),
+                        "hits_at_k": int(sum(query_hits)),
+                        "available_k": int(n_queries),
+                        "queries": int(n_queries),
+                        "precision_at_k": float(np.mean(query_precisions)) if query_precisions else 0.0,
+                        "recall_at_k": float(sum(query_hits) / max(n_queries, 1)),
                     }
                 )
             thresholds = {"dev_youden": float(row["youden_thr"])}
