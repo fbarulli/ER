@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from core.ann_config import load_ann_config
 from training.hnsw_index import PersistentHnswIndex
@@ -53,3 +54,28 @@ def test_hnsw_round_trip_preserves_catalog_identity(tmp_path: Path) -> None:
     assert labels.shape == (4, 2)
     assert labels[:, 0].tolist() == [0, 1, 2, 3]
     assert np.all(distances[:, 0] < 1e-5)
+
+
+def test_hnsw_rejects_stale_preprocessing_fingerprint(tmp_path: Path) -> None:
+    embeddings = np.eye(2, dtype=np.float32)
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    index = PersistentHnswIndex(
+        tmp_path / "index", ef_construction=20, M=4, ef_search=10
+    )
+    index.build(
+        embeddings,
+        ["a", "b"],
+        checkpoint=checkpoint,
+        model_name="ann-smoke",
+        preprocessing_fingerprint="unit-v1",
+    )
+
+    with pytest.raises(ValueError, match="preprocessing_fingerprint"):
+        index.load(
+            ids=["a", "b"],
+            dim=2,
+            checkpoint=checkpoint,
+            model_name="ann-smoke",
+            preprocessing_fingerprint="unit-v2",
+        )

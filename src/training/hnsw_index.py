@@ -76,6 +76,7 @@ class PersistentHnswIndex:
         *,
         checkpoint: Path,
         model_name: str,
+        preprocessing_fingerprint: str | None = None,
     ) -> dict[str, object]:
         matrix = normalize_embeddings(embeddings)
         normalized_ids = [str(value) for value in ids]
@@ -125,6 +126,7 @@ class PersistentHnswIndex:
             "M": self.M,
             "ef_search": self.ef_search,
             "id_sha256": _ids_sha256(normalized_ids),
+            "preprocessing_fingerprint": preprocessing_fingerprint,
             "files": {
                 "index": INDEX_FILENAME,
                 "embeddings": EMBEDDINGS_FILENAME,
@@ -146,6 +148,7 @@ class PersistentHnswIndex:
         dim: int | None = None,
         checkpoint: Path,
         model_name: str,
+        preprocessing_fingerprint: str | None = None,
     ) -> dict[str, object]:
         """Load an artifact only when its identity and index contract match."""
         required = [
@@ -177,6 +180,7 @@ class PersistentHnswIndex:
             "ef_construction": self.ef_construction,
             "M": self.M,
             "id_sha256": _ids_sha256(normalized_ids),
+            "preprocessing_fingerprint": preprocessing_fingerprint,
         }
         mismatches = {
             key: (metadata.get(key), value)

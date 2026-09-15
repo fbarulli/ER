@@ -10,8 +10,10 @@ from __future__ import annotations
 import ast
 from collections.abc import Mapping
 
+from core.unit_canonicalization import canonical_pack_count, canonical_volume_ml
 
-def _value_set(value: object) -> set[object]:
+
+def _value_set(value: object, *, kind: str) -> set[object]:
     """Parse a canonical CSV set field without trusting CSV dtype inference."""
     if value is None:
         return set()
@@ -23,15 +25,24 @@ def _value_set(value: object) -> set[object]:
     except (SyntaxError, ValueError) as exc:
         raise ValueError(f"invalid canonical attribute set: {value!r}") from exc
     if isinstance(parsed, (list, tuple, set)):
-        return set(parsed)
+        canonicalizer = canonical_volume_ml if kind == "volume" else canonical_pack_count
+        normalized = set()
+        for item in parsed:
+            try:
+                normalized.add(canonicalizer(item))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"invalid canonical {kind} value: {item!r}"
+                ) from exc
+        return normalized
     raise ValueError(f"canonical attribute set is not a sequence: {value!r}")
 
 
 def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
     """Return the structured attributes used by the canonical record lane."""
     return {
-        "volume": _value_set(record.get("volume_set")),
-        "pack": _value_set(record.get("pack_set")),
+        "volume": _value_set(record.get("volume_set"), kind="volume"),
+        "pack": _value_set(record.get("pack_set"), kind="pack"),
         "flavor": str(record.get("mode_flavor", "")).strip().lower(),
     }
 
@@ -47,7 +58,7 @@ def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
     # volume look like a real conflict.
     try:
         volume = (
-            {float(volume_ml)}
+            {canonical_volume_ml(volume_ml)}
             if volume_ml is not None and float(volume_ml) > 0
             else set()
         )
@@ -57,7 +68,7 @@ def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
     pack_confidence = extracted.get("pack_confidence")
     try:
         pack = (
-            {int(pack_qty)}
+            {canonical_pack_count(pack_qty)}
             if pack_qty is not None
             and int(pack_qty) >= 1
             and float(pack_confidence or 0.0) > 0.0

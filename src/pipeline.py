@@ -110,23 +110,28 @@ def normalize_text(text: str) -> str:
 
 
 def extract_volume_from_title(title: str) -> dict:
+    from core.unit_canonicalization import canonical_volume_ml
+
     t = normalize_text(title)
     m = VOLUME_PATTERN_US_EXT.search(t)
     if m:
         value = float(m.group(1))
         unit = m.group(2).lower()
         raw = m.group(0)
-        if "oz" in unit or "ounce" in unit:
-            ml = value * 29.5735
+        if value <= 0:
+            ml = 0.0
+            conf = 0.0
+        elif "oz" in unit or "ounce" in unit:
+            ml = canonical_volume_ml(value, unit)
             conf = 0.85 if ("fl" in unit or "fluid" in unit) else 0.75
         elif "qt" in unit or "quart" in unit:
-            ml = value * 946.353
+            ml = canonical_volume_ml(value, unit)
             conf = 0.95
         elif "pt" in unit or "pint" in unit:
-            ml = value * 473.176
+            ml = canonical_volume_ml(value, unit)
             conf = 0.95
         elif "gal" in unit or "gallon" in unit:
-            ml = value * 3785.41
+            ml = canonical_volume_ml(value, unit)
             conf = 0.95
         else:
             ml = 0.0
@@ -143,21 +148,24 @@ def extract_volume_from_title(title: str) -> dict:
         value = float(m.group(1))
         unit = m.group(2).lower()
         raw = m.group(0)
-        if unit == "ml" or "milliliter" in unit or unit == "cc":
-            ml = value
+        if value <= 0:
+            ml = 0.0
+            conf = 0.0
+        elif unit == "ml" or "milliliter" in unit or unit == "cc":
+            ml = canonical_volume_ml(value, unit)
             conf = 0.98 if "." in m.group(1) else 0.95
         elif unit == "cl" or "centiliter" in unit:
-            ml = value * 10
+            ml = canonical_volume_ml(value, unit)
             conf = 0.95
         elif unit in ("l", "lt", "ltr") or "liter" in unit or "litre" in unit:
-            ml = value * 1000
+            ml = canonical_volume_ml(value, unit)
             conf = 0.98 if "." in m.group(1) else 0.95
         else:
             ml = 0.0
             conf = 0.0
         if ml > 0:
             return {
-                "volume_ml": round(ml, 2),
+                "volume_ml": ml,
                 "confidence": conf,
                 "raw_match": raw,
                 "parse_status": "metric_volume",
@@ -225,21 +233,30 @@ def extract_pack_from_title(title: str) -> tuple:
 def parse_attribute_volume_pack(
     attr_str: str,
 ) -> tuple[float, float, int, float]:  # (vol_ml, vol_conf, pack_qty, pack_conf)
+    from core.unit_canonicalization import canonical_pack_count, canonical_volume_ml
+
     vol_ml = 0.0
     vol_conf = 0.0
     pack_qty = 1
     pack_conf = 0.0
     if not attr_str or attr_str == "nan":
         return vol_ml, vol_conf, pack_qty, pack_conf
-    m_vol = re.search(r"Volume:\s*(\d+(?:\.\d+)?)", attr_str, re.IGNORECASE)
+    m_vol = re.search(
+        r"Volume:\s*(\d+(?:[.,]\d+)?)\s*"
+        r"(ml|milliliters?|millilitres?|cc|cl|centiliters?|centilitres?|"
+        r"l|lt|ltr|liters?|litres?|fl\.?\s*oz|fluid\s+ounces?|oz\.?|"
+        r"ounces?|qt|quarts?|pt|pints?|gal|gallons?)?",
+        attr_str,
+        re.IGNORECASE,
+    )
     if m_vol:
-        vol_ml = float(m_vol.group(1))
+        vol_ml = canonical_volume_ml(m_vol.group(1), m_vol.group(2) or "ml")
         vol_conf = 0.9
     m_pack = re.search(r"Count per Unit:\s*(\d+)", attr_str, re.IGNORECASE)
     if m_pack and int(m_pack.group(1)) > 0:
         # zero-guard: same contract as extract_pack_from_title — a 0 here is
         # export noise, not a pack count (default 1 with conf 0 below)
-        pack_qty = int(m_pack.group(1))
+        pack_qty = canonical_pack_count(m_pack.group(1))
         pack_conf = 0.9
     return vol_ml, vol_conf, pack_qty, pack_conf
 

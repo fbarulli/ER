@@ -116,7 +116,7 @@ colab:
   validation_inference:
     enabled: true
     source_csv: "artifacts/data/dataset_deduped.csv"
-    input_csv: "artifacts/data/dataset_deduped_sample_3000.csv"
+    input_csv: "artifacts/data/dataset_deduped_sample_1500.csv"
     output_dir: "validation_inference"
     batch_size: 128
     device: "cpu"
@@ -269,6 +269,17 @@ rand_matching:
     one_missing: 0.60
     both_missing: 0.80
   brand_conflict_veto: true
+  # Missing evidence must not be compensated for by lowering the global
+  # threshold. For non-exact candidates only, reduce confidence when the same
+  # critical attributes are absent from both endpoints. This is monotonic: it
+  # can reject uncertain links but can never introduce a new merge.
+  confidence_penalty_mask:
+    enabled: true
+    critical_attributes: [volume, pack, flavor]
+    minimum_joint_missing: 2
+    penalty_per_joint_missing: 0.01
+    max_penalty: 0.03
+    preserve_exact_gtin: true
   target_recall: 0.90
   threshold_tie_break:
     - "rand_index"

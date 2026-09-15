@@ -82,6 +82,7 @@ from core.structured_features import (
     fuse_numpy,
     vector as structured_vector,
 )
+from core.unit_canonicalization import UNIT_CANONICALIZATION_VERSION
 from pipeline import (
     canonical_model_text,
     clean_sku_text,
@@ -189,6 +190,39 @@ def _brand_conflict(left: object, right: object) -> bool:
     )
 
 
+def confidence_penalty_mask(
+    sku_info: dict[str, object],
+    candidate_info: dict[str, object],
+    *,
+    exact_gtin: bool,
+    config: dict[str, object] | None = None,
+) -> tuple[float, str]:
+    """Return a monotonic score penalty for jointly missing evidence.
+
+    A field contributes only when it is absent on *both* endpoints. This
+    avoids treating a one-sided parser miss as a conflict. Exact identities
+    remain untouched by default, and the mask never raises a score.
+    """
+    settings = config or rand_matching_cfg()["confidence_penalty_mask"]
+    if not bool(settings["enabled"]):
+        return 0.0, "disabled"
+    if exact_gtin and bool(settings["preserve_exact_gtin"]):
+        return 0.0, "exact_gtin_preserved"
+    attributes = [str(value) for value in settings["critical_attributes"]]
+    jointly_missing = [
+        attribute
+        for attribute in attributes
+        if not sku_info.get(attribute) and not candidate_info.get(attribute)
+    ]
+    if len(jointly_missing) < int(settings["minimum_joint_missing"]):
+        return 0.0, "sufficient_attribute_evidence"
+    penalty = min(
+        float(settings["max_penalty"]),
+        len(jointly_missing) * float(settings["penalty_per_joint_missing"]),
+    )
+    return penalty, "jointly_missing:" + ",".join(jointly_missing)
+
+
 def _threshold_selection_key(row: dict[str, float | int]) -> tuple[float, ...]:
     """Encode the configured threshold tie-break policy for ``max``."""
     values = {
@@ -254,6 +288,7 @@ class _SubmissionProvenance(BaseModel):
     final_threshold: float
     threshold_by_gtin_status: dict[str, float]
     brand_conflict_veto: bool
+    confidence_penalty_mask: dict[str, object]
     unmatched_prefix: str
     rows: int
     unique_items: int
@@ -321,6 +356,9 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "sku_gtin_valid",
             "candidate_rank",
             "retrieval_source",
+            "raw_score",
+            "confidence_penalty",
+            "confidence_penalty_reason",
             "gate_reason",
             "sku_title",
             "sku_attributes",
@@ -475,6 +513,12 @@ def candidate_gate_fields(
     sku_gtin = metadata_text(row_metadata_text(row, "barcode", "gtin")).strip()
     status = gtin_status(sku_gtin, candidate_gtin)
     exact = int(status == "both_equal")
+    confidence_penalty, confidence_penalty_reason = confidence_penalty_mask(
+        sku_info,
+        candidate_info,
+        exact_gtin=bool(exact),
+    )
+    adjusted_score = max(-1.0, float(score) - confidence_penalty)
     brand_conflict = int(
         bool(rand_matching_cfg()["brand_conflict_veto"])
         and _brand_conflict(
@@ -501,7 +545,10 @@ def candidate_gate_fields(
         "candidate_gtin": candidate_gtin,
         "candidate_rank": candidate_rank,
         "retrieval_source": retrieval_source,
-        "score": float(score),
+        "raw_score": float(score),
+        "confidence_penalty": confidence_penalty,
+        "confidence_penalty_reason": confidence_penalty_reason,
+        "score": adjusted_score,
         "exact_gtin": exact,
         "gtin_status": status,
         "gate_reason": gate_reason,
@@ -601,6 +648,16 @@ class RandMatcher:
             and bool(self.structured_config["feed_to_loss"])
             else 0.0
         )
+        self.preprocessing_fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "structured_features": self.structured_config,
+                    "unit_canonicalization": UNIT_CANONICALIZATION_VERSION,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
 
         item_infos = [
             canonical_structured_info(self.record_map[item_id])
@@ -639,6 +696,7 @@ class RandMatcher:
                     ids=self.item_ids,
                     checkpoint=self.checkpoint,
                     model_name=model_name,
+                    preprocessing_fingerprint=self.preprocessing_fingerprint,
                 )
                 self.item_embeddings = self.ann_index.embeddings
                 if self.item_embeddings is None:
@@ -667,6 +725,7 @@ class RandMatcher:
                 self.item_ids,
                 checkpoint=self.checkpoint,
                 model_name=model_name,
+                preprocessing_fingerprint=self.preprocessing_fingerprint,
             )
             print(
                 f"built HNSW index count={metadata['count']:,} "
@@ -2498,6 +2557,9 @@ def _write_provenance(
         final_threshold=final_threshold,
         threshold_by_gtin_status=_final_threshold_by_gtin_status(),
         brand_conflict_veto=bool(rand_matching_cfg()["brand_conflict_veto"]),
+        confidence_penalty_mask=dict(
+            rand_matching_cfg()["confidence_penalty_mask"]
+        ),
         unmatched_prefix=_unmatched_prefix(),
         rows=len(submission),
         unique_items=int(submission["ITEM_ID"].nunique()),

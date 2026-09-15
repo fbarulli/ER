@@ -18,8 +18,10 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 
+from core.unit_canonicalization import canonical_pack_count, canonical_volume_ml
 
-def _as_set(value: object) -> set[float]:
+
+def _as_set(value: object, *, kind: str) -> set[float]:
     if value is None:
         return set()
     if isinstance(value, (set, list, tuple, np.ndarray)):
@@ -34,12 +36,28 @@ def _as_set(value: object) -> set[float]:
             raise ValueError(f"invalid structured attribute set: {value!r}") from exc
     if not isinstance(values, (set, list, tuple, np.ndarray)):
         raise ValueError(f"structured attribute must be a sequence: {value!r}")
-    return {float(x) for x in values if float(x) > 0}
+    canonicalizer = canonical_volume_ml if kind == "volume" else canonical_pack_count
+    normalized: set[float] = set()
+    for item in values:
+        try:
+            if float(item) <= 0:
+                # Zero is the pipeline's explicit unknown sentinel.
+                continue
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid structured {kind} value: {item!r}") from exc
+        try:
+            normalized.add(float(canonicalizer(item)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid structured {kind} value: {item!r}") from exc
+    return normalized
 
 
 def info_from_sets(volume: object, pack: object) -> dict[str, set[float]]:
     """Normalize a SKU/canonical record into the shared set representation."""
-    return {"volume": _as_set(volume), "pack": _as_set(pack)}
+    return {
+        "volume": _as_set(volume, kind="volume"),
+        "pack": _as_set(pack, kind="pack"),
+    }
 
 
 def sku_info(title: object, attributes: object) -> dict[str, set[float]]:
@@ -68,8 +86,8 @@ def _number_token(prefix: str, value: float) -> str:
 
 def text_tokens(info: Mapping[str, object]) -> list[str]:
     """Return deterministic, tokenizer-safe-ish normalized attribute tokens."""
-    volumes = sorted(_as_set(info.get("volume")))
-    packs = sorted(_as_set(info.get("pack")))
+    volumes = sorted(_as_set(info.get("volume"), kind="volume"))
+    packs = sorted(_as_set(info.get("pack"), kind="pack"))
     return [*_number_tokens("volume_ml_", volumes), *_number_tokens("pack_qty_", packs)]
 
 
@@ -108,8 +126,8 @@ def vector(info: Mapping[str, object], *, volume_scale_ml: float, pack_scale: fl
             float(min(len(ordered), max_set_size) / max_set_size),
         ]
 
-    return block(_as_set(info.get("volume")), volume_scale_ml) + block(
-        _as_set(info.get("pack")), pack_scale
+    return block(_as_set(info.get("volume"), kind="volume"), volume_scale_ml) + block(
+        _as_set(info.get("pack"), kind="pack"), pack_scale
     )
 
 

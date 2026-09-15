@@ -557,6 +557,30 @@ class RandMatchingSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    class ConfidencePenaltyMaskSpec(BaseModel):
+        """Conservative penalty for non-exact pairs with shared missing evidence."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        enabled: bool
+        critical_attributes: list[Literal["volume", "pack", "flavor"]] = Field(
+            min_length=1
+        )
+        minimum_joint_missing: int = Field(ge=1)
+        penalty_per_joint_missing: float = Field(ge=0.0, le=1.0)
+        max_penalty: float = Field(ge=0.0, le=1.0)
+        preserve_exact_gtin: bool
+
+        @model_validator(mode="after")
+        def _mask_is_valid(self) -> RandMatchingSpec.ConfidencePenaltyMaskSpec:
+            if len(set(self.critical_attributes)) != len(self.critical_attributes):
+                raise ValueError("critical_attributes must not contain duplicates")
+            if self.minimum_joint_missing > len(self.critical_attributes):
+                raise ValueError(
+                    "minimum_joint_missing cannot exceed critical_attributes count"
+                )
+            return self
+
     output_dir: str = Field(min_length=1)
     truth_splits: RandTruthSplitsSpec
     stratum_sweep: RandStratumSweepSpec
@@ -568,6 +592,7 @@ class RandMatchingSpec(BaseModel):
     threshold_step: float = Field(gt=0.0)
     threshold_by_gtin_status: dict[str, float]
     brand_conflict_veto: bool
+    confidence_penalty_mask: ConfidencePenaltyMaskSpec
     target_recall: float = Field(gt=0.0, le=1.0)
     threshold_tie_break: list[
         Literal["rand_index", "fewest_unmatched_skus", "lowest_threshold"]
