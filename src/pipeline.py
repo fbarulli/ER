@@ -2144,8 +2144,6 @@ def build_training_data(
         gtin_to_row=gtin_to_row,
         stats=stats,
     )
-    return _bundle.model_dump()
-
     # ── CONSOLIDATED TRACE: pairs + mining funnel ──────────────────────────
     # The former per-stage files (negative_resolution_manifest.csv,
     # payload_pairs.csv) folded into the ONE trace (core.tracing). Stage 2
@@ -2286,3 +2284,5 @@ def build_training_data(
         f"[trace] pairs steps written -> {trace_path()} | {_kinds}",
         flush=True,
     )
+    return _bundle.model_dump()
+
