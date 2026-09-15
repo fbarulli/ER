@@ -1684,7 +1684,7 @@ def _optuna_env_script() -> str:
     return f"os.environ['OPTUNA_STORAGE_URL'] = {url!r}\n"
 
 
-def _remote_auth_env_script() -> str:
+def _remote_auth_env_script(*, include_optuna: bool = False) -> str:
     """Credential exports used by remote subprocess launch cells only."""
     key = _env_value("DVC_API_KEY")
     if key:
@@ -1693,7 +1693,8 @@ def _remote_auth_env_script() -> str:
     else:
         print("[dvc] DVC_API_KEY absent from .env; durable DVC upload will fail")
         dvc = ""
-    return _wandb_env_script() + _optuna_env_script() + dvc
+    optuna = _optuna_env_script() if include_optuna else ""
+    return _wandb_env_script() + optuna + dvc
 
 
 def run_data_prep() -> None:
@@ -2181,7 +2182,7 @@ def run_hpo(
     )
     mask_effect_flag = "--mask-effect" if _MASK_EFFECT_AFTER_TRAIN else "--no-mask-effect"
     resume_pointers = _hpo_resume_pointer_payload() if resume else {}
-    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
+    script = _BOOTSTRAP + _remote_auth_env_script(include_optuna=True) + f"""
 import concurrent.futures, json, os, pathlib, shutil, subprocess, sys, time
 from datetime import datetime, timezone
 from core.common import F, hpo_cfg, resolve_model
