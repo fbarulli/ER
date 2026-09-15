@@ -1105,7 +1105,14 @@ _VOLUME_PACK_RE = re.compile(
 )
 
 
-def clean_sku_text(title: str, attribute: str = "", brand: str = "") -> str:
+def clean_sku_text(
+    title: str,
+    attribute: str = "",
+    brand: str = "",
+    description: str = "",
+    category: str = "",
+    breadcrumbs: str = "",
+) -> str:
     """The OFFICIAL cleaned sku text the model sees.
 
     normalize(title) + ' ' + normalize(attribute), volume/pack tokens
@@ -1114,7 +1121,15 @@ def clean_sku_text(title: str, attribute: str = "", brand: str = "") -> str:
     removed; name-embedded digits b12/o2/alkaline88 and this row's numeric
     brand tokens survive — data/number_tokens_reference.csv, 95.2% coverage).
     """
-    text = normalize_text(title) + " " + normalize_text(attribute or "")
+    context = " ".join(
+        part for part in (
+            f"brand {brand}" if brand else "",
+            f"description {description}" if description else "",
+            f"category {category}" if category else "",
+            f"breadcrumbs {breadcrumbs}" if breadcrumbs else "",
+        ) if part
+    )
+    text = normalize_text(title) + " " + normalize_text(attribute or "") + " " + normalize_text(context)
     text = _VOLUME_PACK_RE.sub(" ", text)
     toks = [t for t in text.split() if t not in MINIMAL_STOPWORDS and len(t) > 1]
     return strip_number_tokens(" ".join(toks), spell_numeric_brand(brand or ""))
@@ -1968,6 +1983,10 @@ def build_training_data(
     bc = df["barcode"].fillna("").astype(str).str.strip()
     title = df["title"].fillna("")
     attrs = df["attributes"].fillna("")
+    descriptions = df.get("description", pd.Series("", index=df.index)).fillna("")
+    categories = df.get("category", pd.Series("", index=df.index)).fillna("")
+    breadcrumbs = df.get("category_path", pd.Series("", index=df.index)).fillna("")
+    brands = df.get("brand", pd.Series("", index=df.index)).fillna("")
 
     # Keep the structured source of truth alongside every payload endpoint.
     # The old text lane deliberately removed these tokens; that made the
@@ -1985,18 +2004,18 @@ def build_training_data(
     if payload_variant == "full":
         sku_texts = [
             append_structured_text(
-                strip_schema_words(clean_sku_text(t, a)), info,
+                strip_schema_words(clean_sku_text(t, a, b, d, c, p)), info,
                 enabled=structured_append_to_text,
             )
-            for t, a, info in zip(title, attrs, sku_structured, strict=True)
+            for t, a, b, d, c, p, info in zip(title, attrs, brands, descriptions, categories, breadcrumbs, sku_structured, strict=True)
         ]
     elif payload_variant == "title_only":
         sku_texts = [
             append_structured_text(
-                strip_schema_words(clean_sku_text(t)), info,
+                strip_schema_words(clean_sku_text(t, "", b, "", c, p)), info,
                 enabled=structured_append_to_text,
             )
-            for t, info in zip(title, sku_structured, strict=True)
+            for t, b, c, p, info in zip(title, brands, categories, breadcrumbs, sku_structured, strict=True)
         ]
     else:
         raise SystemExit(f"unknown payload variant: {payload_variant}")
@@ -2026,7 +2045,13 @@ def build_training_data(
     ]
     canon_texts = [
         append_structured_text(
-            strip_schema_words(canonical_model_text(canon_map[g])), info,
+            strip_schema_words(canonical_model_text(" ".join(
+                str(canon_map[g]),
+                str(canonical_record_map.get(g, {}).get("mode_brand", "")),
+                str(canonical_record_map.get(g, {}).get("mode_type", "")),
+                str(canonical_record_map.get(g, {}).get("description_evidence", "")),
+                str(canonical_record_map.get(g, {}).get("breadcrumb_evidence", "")),
+            ))), info,
             enabled=structured_append_to_text,
         )
         for g, info in zip(canon_gtins, canon_structured, strict=True)

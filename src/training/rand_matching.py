@@ -1011,7 +1011,13 @@ class RandMatcher:
         ]
         item_texts = [
             append_structured_text(
-                strip_schema_words(canonical_model_text(self.canonical[item_id])),
+                strip_schema_words(canonical_model_text(" ".join(
+                    self.canonical[item_id],
+                    str(self.record_map[item_id].get("mode_brand", "")),
+                    str(self.record_map[item_id].get("mode_type", "")),
+                    str(self.record_map[item_id].get("description_evidence", "")),
+                    str(self.record_map[item_id].get("breadcrumb_evidence", "")),
+                ))),
                 info,
                 enabled=self.structured_text,
             )
@@ -1111,6 +1117,9 @@ class RandMatcher:
                         row_metadata_text(row, "title"),
                         row_metadata_text(row, "attributes", "attr"),
                         row_metadata_text(row, "brand"),
+                        row_metadata_text(row, "description", "description_short_eng"),
+                        row_metadata_text(row, "category", "category_path"),
+                        row_metadata_text(row, "category_path", "breadcrumbs_eng"),
                     )
                 ),
                 info,
