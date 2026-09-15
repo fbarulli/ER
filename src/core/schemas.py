@@ -27,11 +27,49 @@ TWO jobs:
        FoldSets              TRAIN.folds.component_folds output
        EvalSummaryRow        one model_evaluation_summary.csv row (the
                              zero-shot lane's report boundary)
+       TraceRow              one core.tracing.TRACE_COLUMNS row (the
+                             consolidated pipeline trace)
 
      Frame checks (DataFrame column/domain contracts) live in
      check_canonical_records_frame / check_gate_results_frame /
-     check_labeled_pairs_frame / check_eval_summary_frame — used at CSV
-     write/read boundaries.
+     check_labeled_pairs_frame / check_eval_summary_frame /
+     check_zero_shot_similarity_frame / check_cross_country_pair_frame /
+     check_trace_frame — used at CSV write/read boundaries. Every one of
+     them is registered by name in FRAME_CHECKERS (the discovery surface).
+
+HOW core.tracing WIRES THE TRACE CONTRACT (interface for the tracing owner —
+this module does NOT import core.tracing's writers and core/tracing.py does
+not need a new column tuple: TRACE_FRAME_COLUMNS *IS* core.tracing's own
+TRACE_COLUMNS, imported, never re-declared):
+
+    from core.schemas import TraceRow, check_trace_frame
+
+    # 1. row boundary — ``record()`` builds one row; validate it there so a
+    #    hand-written row (a scope typo, a dropped_count the arithmetic
+    #    disagrees with) dies at the producer, not in the CSV:
+        TraceRow.model_validate(row)          # returns the validated row
+
+    # 2. frame boundary — ``assert_trace_frame`` and ``TraceRun.write``
+    #    call the frame checker; it takes and returns a DataFrame and raises
+    #    ValueError (ValidationError is a ValueError), exactly like the
+    #    other check_*_frame contracts:
+        def assert_trace_frame(frame, *, path=""):
+            try:
+                check_trace_frame(frame)
+            except ValueError as exc:
+                raise ValueError(f"trace frame {path}: {exc}") from exc
+
+    # 3. WRITE boundary — call it on the concatenated frame BEFORE
+    #    ``core.manifest.atomic_write_csv`` in TraceRun.write, so a
+    #    corrupted stage can never land in results/logs/trace.csv:
+        frame = pd.concat([existing, self.rows()], ignore_index=True)
+        check_trace_frame(frame)
+        atomic_write_csv(frame, target, index=False)
+
+    The checker accepts BOTH shapes the trace actually takes: the in-memory
+    frame (None / NaN counts) and the CSV read-back frame
+    (``read_trace`` uses dtype=str + keep_default_na=False, so an absent
+    count arrives as ""). A non-empty, non-numeric count cell still fails.
 
 Doctrine (owner Q27): NO FALLBACKS. Optional-with-default means
 "config may omit it" ONLY where the model declares a default and the
@@ -43,6 +81,8 @@ from __future__ import annotations
 
 import itertools
 import math
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -55,9 +95,13 @@ from pydantic import (
     StrictBool,
     StrictStr,
     TypeAdapter,
+    ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
+
+from core.tracing import TRACE_COLUMNS as TRACE_FRAME_COLUMNS
 
 
 THRESHOLD_TIE_BREAK_CRITERIA = (
@@ -2253,6 +2297,161 @@ def check_labeled_pairs_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ── consolidated trace (core.tracing, results/logs/trace.csv) ──────────────
+#
+# TRACE_FRAME_COLUMNS is core.tracing.TRACE_COLUMNS, IMPORTED (see the module
+# docstring): the row contract is declared exactly once, in the module that
+# writes it. A copy here would be the "second declaration" this tree removed.
+
+TRACE_SCOPES: tuple[str, ...] = ("run", "entity", "group")
+TraceScope = Literal["run", "entity", "group"]
+
+
+class TraceRow(BaseModel):
+    """One row of the consolidated pipeline trace (core.tracing.TRACE_COLUMNS).
+
+    The trace is the tree's narrative artifact — read top to bottom it IS the
+    data flow — so its row contract carries the same teeth as every other
+    boundary contract:
+
+      scope         run | entity | group, literally; a typo'd scope would
+                    silently create a fourth population nobody counts.
+      stage / step  both non-empty (whitespace-only counts as empty: the
+                    reader greps these, so a blank one is a lost row).
+      at            a real timezone-aware ISO-8601 instant, not free text.
+      detail        JSON-encoded TEXT by contract (core.tracing._detail_text
+                    serializes it), so a dict here is a producer bug.
+      counts        in/out/dropped non-negative ints or None, with
+                    dropped_count DERIVED: the arithmetic (in - out) lives
+                    here ONCE and a disagreement is a ValidationError. A row
+                    may not state a drop it cannot derive, and may not lose
+                    the derivation while stating both ends.
+
+    ``extra="forbid"`` in the same style as the other row specs: an
+    undeclared trace column is a producer that believes in a contract this
+    module does not have.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage: str = Field(min_length=1)
+    step: str = Field(min_length=1)
+    scope: TraceScope
+    key: str
+    in_count: int | None = Field(ge=0)
+    out_count: int | None = Field(ge=0)
+    dropped_count: int | None = Field(ge=0)
+    reason: str
+    detail: str
+    source: str
+    producer: str
+    at: str
+
+    @field_validator("in_count", "out_count", "dropped_count", mode="before")
+    @classmethod
+    def _count_cell(cls, v: object) -> object:
+        """Absent counts arrive three ways; only those three mean None.
+
+        core.tracing.record emits Python None; the in-memory frame turns it
+        into NaN; core.tracing.read_trace reads dtype=str with
+        keep_default_na=False, so it comes back as "". Everything else —
+        including a boolean, which is an int subclass — is handed to the int
+        validator so non-numeric text still FAILS instead of reading as
+        "no count".
+        """
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError(f"trace count must be an integer, got bool {v!r}")
+        if isinstance(v, str):
+            text = v.strip()
+            return None if not text else text
+        if isinstance(v, float) and math.isnan(v):
+            return None
+        return v
+
+    @field_validator("stage", "step")
+    @classmethod
+    def _not_blank(cls, v: str, info: ValidationInfo) -> str:
+        if not v.strip():
+            raise ValueError(f"trace {info.field_name} must be non-empty")
+        return v
+
+    @field_validator("at")
+    @classmethod
+    def _iso_instant(cls, v: str) -> str:
+        try:
+            parsed = datetime.fromisoformat(v)
+        except ValueError as exc:
+            raise ValueError(
+                f"trace at={v!r} is not an ISO-8601 instant "
+                f"(core.tracing.record emits datetime.now(timezone.utc).isoformat())"
+            ) from exc
+        if parsed.tzinfo is None:
+            raise ValueError(
+                f"trace at={v!r} has no UTC offset; the trace is stamped with "
+                f"datetime.now(timezone.utc).isoformat()"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _dropped_is_derived(self) -> TraceRow:
+        """dropped_count == in_count - out_count, or the row is a lie.
+
+        The arithmetic is written ONCE, here, and never re-implemented in a
+        producer: core.tracing.record derives it, this validator proves it.
+        """
+        if self.in_count is None or self.out_count is None:
+            if self.dropped_count is not None:
+                raise ValueError(
+                    "trace dropped_count is derived from in_count/out_count, "
+                    f"so a row cannot state dropped_count={self.dropped_count} "
+                    "without both ends"
+                )
+            return self
+        derived = self.in_count - self.out_count
+        if derived < 0:
+            raise ValueError(
+                f"trace out_count {self.out_count} exceeds in_count "
+                f"{self.in_count} — a step cannot emit more than it received"
+            )
+        if self.dropped_count is None:
+            raise ValueError(
+                f"trace row carries in_count={self.in_count} and "
+                f"out_count={self.out_count} but no dropped_count "
+                f"(the derived value is {derived})"
+            )
+        if self.dropped_count != derived:
+            raise ValueError(
+                f"trace dropped_count {self.dropped_count} contradicts "
+                f"in_count - out_count ({self.in_count} - {self.out_count} = "
+                f"{derived})"
+            )
+        return self
+
+
+def check_trace_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """trace.csv contract: exact columns (order included), every row a valid
+    TraceRow. Returns df unchanged (assert-only boundary, like the others).
+
+    Row errors are re-raised as ValueError carrying the row index — a
+    5000-row trace otherwise reports a violation with no way to find it.
+    """
+    cols = tuple(df.columns)
+    if cols != TRACE_FRAME_COLUMNS:
+        raise ValueError(
+            f"trace frame columns {cols} != contract {TRACE_FRAME_COLUMNS}"
+        )
+    for index, row in enumerate(df.to_dict("records")):
+        try:
+            TraceRow.model_validate(row)
+        except ValidationError as exc:
+            raise ValueError(
+                f"trace frame row {index} violates TraceRow: {exc}"
+            ) from exc
+    return df
+
+
 # ── zero-shot evaluation summary (model_evaluation_summary.csv) ────────────
 
 # cosine similarity lives in [-1, 1] but float32 dot products overshoot
@@ -2361,6 +2560,28 @@ def check_eval_summary_frame(df: pd.DataFrame) -> pd.DataFrame:
             f"(columns {list(num.columns)})"
         )
     return df
+
+
+# ── frame-checker registry (the discovery surface) ─────────────────────────
+#
+# Named lookup for every frame contract in this module, so a consumer that
+# only knows the ARTIFACT (or the tracing owner wiring assert_trace_frame)
+# can reach the checker without importing each name by hand:
+#
+#     from core.schemas import FRAME_CHECKERS
+#     FRAME_CHECKERS["trace"](frame)
+#
+# The values are the checker functions themselves — this is a directory, not
+# a second declaration: it defines no columns and no domains.
+FRAME_CHECKERS: dict[str, Callable[[pd.DataFrame], pd.DataFrame]] = {
+    "canonical_records": check_canonical_records_frame,
+    "gate_results": check_gate_results_frame,
+    "labeled_pairs": check_labeled_pairs_frame,
+    "cross_country_pairs": check_cross_country_pair_frame,
+    "zero_shot_similarity": check_zero_shot_similarity_frame,
+    "eval_summary": check_eval_summary_frame,
+    "trace": check_trace_frame,
+}
 
 
 # ── verdict-map adapter (the number-token reference CSV) ──────────────────
