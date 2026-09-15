@@ -390,9 +390,9 @@ targeted funnel unchanged by the base-class refactor.
 * `tests/test_consolidated_trace.py` — the pair census identity now includes the
   new population and asserts its key is present, not silently zero.
 
-No test was deleted or weakened; per-file test-function counts vs `HEAD`:
-total 361 → 384, **no file has fewer** (`test_cross_brand_negatives.py` +22,
-`test_mining_hypotheses.py` +1).
+No test was deleted or weakened; per-file test-function counts vs the commit
+this one sits on (`fc466a6^`): total 361 → 384, **no file has fewer**
+(`test_cross_brand_negatives.py` +22, `test_mining_hypotheses.py` +1).
 
 **Files changed:** `src/core/hard_negatives.py` (funnel base + cross-brand funnel
 + miner + wrapper), `src/core/schemas.py`, `config/training.yaml`,
@@ -402,8 +402,8 @@ assembly + counters + the no-replacement fix), `src/training/training.py`
 `tests/test_mining_hypotheses.py`, `tests/test_datapoint_coverage.py`,
 `tests/test_consolidated_trace.py`, `CROSS_BRAND_NEGATIVES_REPORT.md` (this file).
 
-**Suite:** `PYTHONPATH=src .venv/bin/python -m pytest tests/ -q` →
-**386 passed, 2 skipped**. Ruff (`--select F,E9`, the repo's rule set):
+**Suite:** `PYTHONPATH=src .venv/bin/python -m pytest tests/ -q` at commit
+`fc466a6` → **401 passed, 2 skipped**. Ruff (`--select F,E9`, the repo's rule set):
 **4 findings before, 4 after, 0 introduced**; the new test file is clean under
 the full default rule set.
 
@@ -441,8 +441,9 @@ module.
 
 ## 10. EXECUTED vs READ
 
-**EXECUTED (real data, commands above):** the full baseline suite before and after
-(334 → 386 passed); the miner's funnel on 13,250 canonicals / 133,127 candidates;
+**EXECUTED (real data, commands above):** the full suite before and after the
+change (334 passed at the branch point → **401 passed, 2 skipped** at `fc466a6`,
+with the concurrent agents' commits in between); the miner's funnel on 13,250 canonicals / 133,127 candidates;
 the target sweep; every emitted row re-checked for same-canonical / same-brand /
 attribute-conflict / label-error (all 0); the 0-label-conflict and duplication
 identities over the whole bundle; the fold split and per-fold counts; the two
