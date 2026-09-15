@@ -156,10 +156,12 @@ _INCREMENTAL_SYNC_SECONDS = 30
 _CHECKPOINT_MANIFEST_NAME = "checkpoint_manifest.json"
 # Checkpoints live at
 # ``worker_N/_checkpoints/<model>/<run>_f0/checkpoint-<step>/<file>``, so a
-# checkpoint file is five levels below the worker root.  The walk is bounded at
-# that depth to stay inside the exec budget however large the run's log and
-# wandb trees grow -- an unbounded walk is what timed out on the T4 lane.
-_CHECKPOINT_LISTING_DEPTH = 5
+# checkpoint file is four levels below the ``_checkpoints`` root; that is the
+# only depth either the step lookup or the file listing needs, because a
+# checkpoint can only be identified by listing something inside it.  The walk
+# is bounded to stay inside the exec budget however large the run's log and
+# wandb trees grow -- an unbounded walk is what timed out on T4.
+_CHECKPOINT_LISTING_DEPTH = 4
 # The directory holding every checkpoint of a run, directly under a worker.
 _CHECKPOINT_ROOT_NAME = "_checkpoints"
 # Bookkeeping written beside a locally retained checkpoint, recording which
@@ -1571,7 +1573,6 @@ class _IncrementalResultSync:
         self.workers = workers
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._seen: dict[str, int] = {}
         # worker -> (score, remote checkpoint dir) currently held locally.
         self._held: dict[int, tuple[float, str]] = {}
         self._synced_bytes = 0
@@ -1618,43 +1619,36 @@ class _IncrementalResultSync:
                 )
 
     def _sync_worker(self, worker: int) -> None:
-        """Copy this worker's best-so-far checkpoint, if it beats the local one."""
-        prefix = f"{self.remote_base}/worker_{worker}/"
-        checkpoints: dict[str, list[str]] = {}
-        for name in _list_remote(
-            prefix, max_depth=_CHECKPOINT_LISTING_DEPTH
-        ):
-            parts = Path(name).relative_to(prefix).parts
-            # A checkpoint is any path *below* a directory named checkpoint-*,
-            # wherever the trainer nested it: the model and run-folder levels
-            # above it are not fixed, so match on the directory, not its depth.
-            for index, part in enumerate(parts[:-1]):
-                if part.startswith("checkpoint-"):
-                    checkpoints.setdefault(
-                        Path(*parts[: index + 1]).as_posix(), []
-                    ).append(name)
-                    break
-        if not checkpoints:
+        """Copy this worker's best-so-far checkpoint, if it beats the local one.
+
+        The trainer's ``live_status.json`` heartbeat names the checkpoint it
+        just finished, so one small read replaces walking the run's tree.  That
+        walk is what timed out on the T4 lane: listing the whole checkpoint,
+        log, and wandb tree on a 30 s cadence cannot finish inside the exec
+        budget while training is competing for the same control channel.
+        """
+        heartbeat = self._heartbeat(worker)
+        if heartbeat is None:
+            return
+        step, score = heartbeat
+        directory = self._checkpoint_directory(worker, step)
+        if directory is None:
             return
         if worker in self._held:
             cached_score, cached_dir = self._held[worker]
         else:
             cached_score, cached_dir = self._best_local(worker)
             self._held[worker] = (cached_score, cached_dir)
-        candidates: list[tuple[float, str]] = []
-        for directory, files in checkpoints.items():
-            if directory == cached_dir:
-                continue
-            if not self._stable(directory, files):
-                continue
-            score = self._score(worker, directory)
-            if score is None:
-                continue
-            candidates.append((score, directory))
-        if not candidates:
+        if directory == cached_dir or score <= cached_score:
             return
-        best_score, best_dir = max(candidates, key=lambda item: (item[0], item[1]))
-        if cached_dir is not None and best_score <= cached_score:
+        files = _list_remote(directory, max_depth=_CHECKPOINT_LISTING_DEPTH)
+        if not files:
+            return
+        if not any(
+            Path(name).name == _CHECKPOINT_MANIFEST_NAME for name in files
+        ):
+            # The manifest is written last, so its absence means this
+            # checkpoint is still being written and must not be copied yet.
             return
         destination = (
             TRAINING_RESULTS / self.run_id / f"worker_{worker}" / "latest_best"
@@ -1663,15 +1657,28 @@ class _IncrementalResultSync:
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True, exist_ok=True)
         transferred = 0
-        for name in sorted(checkpoints[best_dir]):
-            relative = Path(name).relative_to(prefix)
-            target = staging / Path(*relative.parts[1:])
+        checkpoint_name = Path(directory).name
+        # Path of the checkpoint relative to the worker root, so the marker
+        # records where it actually lives rather than just its leaf name.
+        checkpoint_rel = (
+            Path(directory)
+            .relative_to(Path(f"{self.remote_base}/worker_{worker}"))
+            .as_posix()
+        )
+        for name in sorted(files):
+            target = staging / checkpoint_name / Path(name).relative_to(directory)
             target.parent.mkdir(parents=True, exist_ok=True)
             _download_one_remote_file(name, target)
             transferred += target.stat().st_size
         (staging / _LATEST_BEST_MARKER).write_text(
             json.dumps(
-                {"checkpoint": best_dir, "score": best_score, "worker": worker},
+                {
+                    "checkpoint": directory,
+                    "relative": checkpoint_rel,
+                    "score": score,
+                    "step": step,
+                    "worker": worker,
+                },
                 sort_keys=True,
             )
             + "\n",
@@ -1683,13 +1690,55 @@ class _IncrementalResultSync:
             os.replace(destination, superseded)
         os.replace(staging, destination)
         shutil.rmtree(superseded, ignore_errors=True)
-        self._held[worker] = (best_score, best_dir)
+        self._held[worker] = (score, directory)
         self._synced_bytes += transferred
         print(
-            f"[result-sync] worker {worker} kept {best_dir} "
-            f"(score={best_score:.4f}, {_format_bytes(transferred)}) as latest_best",
+            f"[result-sync] worker {worker} kept {checkpoint_name} "
+            f"(step {step}, score={score:.4f}, "
+            f"{_format_bytes(transferred)}) as latest_best",
             flush=True,
         )
+
+    def _heartbeat(self, worker: int) -> tuple[int, float] | None:
+        """The step and score the trainer last reported, if it reported one."""
+        remote = f"{self.remote_base}/worker_{worker}/live_status.json"
+        try:
+            payload = json.loads(_read_remote_text(remote))
+        except BaseException:
+            return None
+        step = payload.get("step")
+        if step is None:
+            return None
+        average_precision = payload.get("dev_average_precision")
+        if average_precision is not None:
+            return (int(step), float(average_precision))
+        loss = payload.get("train_loss")
+        if loss is not None:
+            return (int(step), -float(loss))
+        return None
+
+    def _checkpoint_directory(self, worker: int, step: int) -> str | None:
+        """Locate ``checkpoint-<step>`` without walking the whole run tree.
+
+        The trainer nests it under model and run folders whose names are not
+        known here, so the two levels above it are matched by glob.  This is a
+        bounded probe of one small subtree, not a walk of the whole run: only
+        ``_checkpoints/<model>/<run>_f0`` is examined.
+        """
+        root = f"{self.remote_base}/worker_{worker}/{_CHECKPOINT_ROOT_NAME}"
+        try:
+            matches = _list_remote(root, max_depth=_CHECKPOINT_LISTING_DEPTH)
+        except BaseException:
+            return None
+        wanted = f"checkpoint-{step}"
+        # The listing reports files, so the checkpoint is the directory
+        # *containing* them: matching on the file's own name would only ever
+        # compare against names like checkpoint_manifest.json and find nothing.
+        for name in matches:
+            candidate = Path(name)
+            if candidate.parent.name == wanted:
+                return str(candidate.parent)
+        return None
 
     def _best_local(self, worker: int) -> tuple[float, str | None]:
         """Score and checkpoint name already held locally, if any."""
@@ -1703,39 +1752,7 @@ class _IncrementalResultSync:
         except (OSError, ValueError, KeyError, TypeError):
             return (float("-inf"), None)
 
-    def _stable(self, directory: str, files: list[str]) -> bool:
-        """True when every file kept its size across two consecutive polls."""
-        settled = True
-        for name in files:
-            size = _remote_file_size(name)
-            if self._seen.get(name) != size:
-                self._seen[name] = size
-                settled = False
-        # Without a manifest the checkpoint write is still in progress.
-        if not any(
-            Path(name).name == _CHECKPOINT_MANIFEST_NAME for name in files
-        ):
-            return False
-        return settled
 
-    def _score(self, worker: int, directory: str) -> float | None:
-        """Score one checkpoint, higher is better, from the trainer heartbeat."""
-        remote = f"{self.remote_base}/worker_{worker}/live_status.json"
-        try:
-            payload = json.loads(_read_remote_text(remote))
-        except BaseException:
-            return None
-        step = payload.get("step")
-        if step is None or not directory.endswith(f"-{int(step)}"):
-            # The heartbeat names a different checkpoint than this directory.
-            return None
-        average_precision = payload.get("dev_average_precision")
-        if average_precision is not None:
-            return float(average_precision)
-        loss = payload.get("train_loss")
-        if loss is not None:
-            return -float(loss)
-        return None
 def _download_one_remote_file(remote: str, local: Path) -> None:
     """Fetch one remote file through the module's Colab CLI wrapper.
 
@@ -1747,29 +1764,6 @@ def _download_one_remote_file(remote: str, local: Path) -> None:
         "download", "-s", SESSION, remote, str(local),
         timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS,
     )
-
-
-def _remote_file_size(remote: str) -> int:
-    """Size of one remote file, via the same stdin-exec channel as listing."""
-    script = (
-        "import pathlib\n"
-        f"p = pathlib.Path({remote!r})\n"
-        "print('@@SIZE@@' + str(p.stat().st_size if p.is_file() else -1))\n"
-    )
-    proc = subprocess.Popen(
-        _colab_command("exec", "-s", SESSION, "--timeout", "60"),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    out, err = proc.communicate(script, timeout=60)
-    if proc.returncode != 0:
-        raise RuntimeError(f"remote stat failed: {err[-200:]}")
-    for line in out.splitlines():
-        if line.startswith("@@SIZE@@"):
-            return int(line[len("@@SIZE@@"):])
-    raise RuntimeError("remote stat returned no marker")
 
 
 def _read_remote_text(remote: str) -> str:
