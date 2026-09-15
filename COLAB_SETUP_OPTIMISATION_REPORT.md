@@ -1,8 +1,9 @@
 # Colab setup-path optimisation — measured breakdown and changes
 
-Branch `training`, commits **`4f5be42`** (production change) and **`aaf7838`**
-(report + profiler); pushed as `3fdc039..aaf7838  training -> training`, so
-`ER/training` and the local `training` both point at `aaf7838`.
+Branch `training`. The substantive commits are **`4f5be42`** (production
+change + tests) and **`aaf7838`** (this report + the profiler), pushed as
+`3fdc039..aaf7838  training -> training`; any commit after `aaf7838` is a
+docs-only correction to this file, so `ER/training` is at or after `aaf7838`.
 Baseline before any change: **334 passed, 2 skipped**. After: **357 passed, 2 skipped**
 (the 23 extra tests are this change's own; no existing test was modified).
 
@@ -336,9 +337,10 @@ measurement.**
 * **`4f5be42`** `perf(colab): overlap local bundle build with VM setup; cut redundant remote work`
   — the production change and its tests.
 * **`aaf7838`** `docs(colab): setup-time report and a re-runnable phase profiler`
-  — `scripts/profile_colab_setup.py` and this report.
-* Pushed: `3fdc039..aaf7838  training -> training`; `ER/training` == local
-  `training` == `aaf7838`.
+  — `scripts/profile_colab_setup.py` and this report; plus docs-only
+  corrections after it.
+* Pushed: `3fdc039..aaf7838  training -> training`, then `aaf7838..412216a`;
+  `ER/training` tracks the local `training` branch.
 * Files changed: `src/cli/colab.py`, `src/core/schemas.py`,
   `config/training.yaml`, `tests/test_colab_setup_path.py` (new),
   `scripts/profile_colab_setup.py` (new), `COLAB_SETUP_OPTIMISATION_REPORT.md`
