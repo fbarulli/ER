@@ -2003,11 +2003,25 @@ def build_training_data(
     cfg = load_config()
     structured_cfg = cfg["training"]["structured_features"]
     structured_enabled = bool(structured_cfg["enabled"])
-    from core.model_input import build_canonical_text, build_sku_text
+    from core.model_input import (
+        build_canonical_text,
+        build_sku_text,
+        model_input_provenance,
+    )
     from core.structured_features import (
         canonical_info as canonical_structured_info,
         sku_info as sku_structured_info,
         vector as structured_vector,
+    )
+
+    # The encoder text this stage materializes is an INPUT CONTRACT for every
+    # downstream artifact (embeddings, ANN index, checkpoints, reports), so the
+    # active composition is recorded on the run before any text is built — a
+    # reader can then tell which composition produced what, after the fact.
+    trace.add(
+        "payload",
+        "model_input_composition",
+        detail=model_input_provenance(),
     )
 
     thr_pos = float(cfg["pairs"]["proceed_sim_threshold"])

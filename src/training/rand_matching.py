@@ -80,7 +80,11 @@ from core.graph_diagnostics import (
 from core.gtin import is_valid_gtin_checksum
 from core.manifest import sha256_file
 from core.schemas import GTIN_STATUSES, THRESHOLD_TIE_BREAK_CRITERIA
-from core.model_input import build_canonical_text, build_sku_text
+from core.model_input import (
+    build_canonical_text,
+    build_sku_text,
+    model_input_provenance,
+)
 from core.structured_features import (
     canonical_info as canonical_structured_info,
     fuse_numpy,
@@ -93,6 +97,23 @@ from training.hnsw_index import PersistentHnswIndex, normalize_embeddings
 
 
 ASSIGNMENT_COLUMNS = ("SKU_ID", "ITEM_ID", "score", "gtin_status")
+
+
+def preprocessing_fingerprint_inputs(structured_config: dict) -> dict[str, object]:
+    """Everything that changes the encoder TEXT a persisted index was built on.
+
+    A persisted ANN index is reusable only while these inputs are unchanged.
+    ``model_input`` belongs here because switching the composition changes the
+    item embeddings without touching the catalog or the checkpoint, so without
+    it a profile switch would silently reuse an index built on the other text.
+    """
+    return {
+        "structured_features": structured_config,
+        "model_input": model_input_provenance(),
+        "unit_canonicalization": UNIT_CANONICALIZATION_VERSION,
+    }
+
+
 METRIC_COLUMNS = (
     "n",
     "rand_index",
@@ -994,10 +1015,7 @@ class RandMatcher:
         )
         self.preprocessing_fingerprint = hashlib.sha256(
             json.dumps(
-                {
-                    "structured_features": self.structured_config,
-                    "unit_canonicalization": UNIT_CANONICALIZATION_VERSION,
-                },
+                preprocessing_fingerprint_inputs(self.structured_config),
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode("utf-8")

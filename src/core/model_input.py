@@ -32,7 +32,12 @@ from collections.abc import Mapping
 from core.common import load_config, row_metadata_text
 from core.schemas import TrainingSpec
 
-__all__ = ["build_canonical_text", "build_sku_text", "model_input_spec"]
+__all__ = [
+    "build_canonical_text",
+    "build_sku_text",
+    "model_input_provenance",
+    "model_input_spec",
+]
 
 # Percentage evidence, captured before normalize_text removes the sign.
 # "0-2%" is a range (juice content bands), "100%" a single value.
@@ -45,6 +50,19 @@ def model_input_spec() -> TrainingSpec.ModelInputSpec:
     return TrainingSpec.ModelInputSpec.model_validate(
         load_config()["training"]["model_input"]
     )
+
+
+def model_input_provenance() -> dict[str, object]:
+    """The ACTIVE composition, for fingerprints, traces and manifests.
+
+    Any artifact whose contents depend on the encoder text — a persisted
+    embedding index above all — must be able to name the exact input contract
+    that produced it.  Changing the profile changes the text but NOT the
+    catalog, the checkpoint or the code path, so without this the artifact
+    looks reusable when it is not.
+    """
+    spec = model_input_spec()
+    return {"profile": spec.profile, "include_evidence": spec.include_evidence}
 
 
 def _structured_text_enabled() -> bool:

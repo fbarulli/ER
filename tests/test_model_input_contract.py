@@ -23,6 +23,7 @@ from core.model_input import (
     _normalized_tokens,
     build_canonical_text,
     build_sku_text,
+    model_input_provenance,
     model_input_spec,
 )
 from core.schemas import TrainingSpec
@@ -374,3 +375,101 @@ def test_both_lanes_call_the_shared_builder() -> None:
         source = inspect.getsource(module)
         calls = source.count("build_sku_text(") + source.count("build_canonical_text(")
         assert calls == expected, f"{module.__name__}: {calls} shared-builder calls"
+
+
+# ── blast radius: the composition is provenance, not just behaviour ────────
+
+
+def test_composition_provenance_tracks_the_config() -> None:
+    """The provenance an artifact records must be the ACTIVE selection."""
+    provenance = model_input_provenance()
+    assert provenance == {"profile": "cleaned", "include_evidence": False}
+    assert provenance == model_input_spec().model_dump()
+
+
+def test_ann_fingerprint_inputs_include_the_composition() -> None:
+    """A persisted ANN index must not survive a composition change.
+
+    Chain: the composition is part of the fingerprint inputs (here), and a
+    fingerprint mismatch makes ``PersistentHnswIndex.load`` raise
+    (tests/test_hnsw_index.py). Without the first link a profile switch would
+    silently reuse an index whose embeddings came from the other text.
+    """
+    from training.rand_matching import preprocessing_fingerprint_inputs
+
+    inputs = preprocessing_fingerprint_inputs({"enabled": True})
+    assert inputs["model_input"] == model_input_provenance()
+    assert set(inputs) >= {
+        "structured_features",
+        "model_input",
+        "unit_canonicalization",
+    }
+
+    # Same config twice -> same fingerprint; a different composition -> different one.
+    import hashlib
+    import json
+
+    def digest(payload: dict) -> str:
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    assert digest(inputs) == digest(preprocessing_fingerprint_inputs({"enabled": True}))
+    other = dict(inputs, model_input={"profile": "legacy", "include_evidence": True})
+    assert digest(other) != digest(inputs)
+
+
+def test_run_trace_records_the_active_composition() -> None:
+    """The payload stage must stamp the composition onto the run trace.
+
+    Static guard: the payload stage writes a run-scope trace row naming the
+    composition before it builds any text, so a downstream artifact can be
+    traced back to the input contract that produced it.
+    """
+    import inspect
+
+    import pipeline
+
+    source = inspect.getsource(pipeline)
+    assert '"model_input_composition"' in source
+    assert "detail=model_input_provenance()" in source
+
+    from core.tracing import TraceRun
+
+    trace = TraceRun("pairs", run_id="unit")
+    row = trace.add("payload", "model_input_composition", detail=model_input_provenance())
+    assert row["step"] == "payload.model_input_composition"
+    assert row["scope"] == "run"
+    assert "cleaned" in str(row["detail"])
+
+
+def test_checkpoint_manifest_records_the_active_composition(tmp_path: Path) -> None:
+    """A checkpoint must name the input contract its weights were trained on."""
+    import json
+    from types import SimpleNamespace
+
+    from training.training import _write_checkpoint_manifest
+
+    class _AutoModel:
+        config = SimpleNamespace(pad_token_id=0, bos_token_id=None, eos_token_id=None)
+        generation_config = None
+
+    class _Model(list):
+        tokenizer = None
+
+    model = _Model([SimpleNamespace(auto_model=_AutoModel())])
+    _write_checkpoint_manifest(
+        tmp_path,
+        epoch=1,
+        global_step=1,
+        model=model,
+        optimizer=None,
+        scheduler=None,
+        scaler=None,
+        trainer_state=SimpleNamespace(log_history=[]),
+        trainer_control=None,
+        training_args=None,
+    )
+    manifest = json.loads((tmp_path / "checkpoint_manifest.json").read_text())
+    assert manifest["model_input"] == model_input_provenance()
+    assert manifest["format"] == "euromonitor-hf-resume-v1"

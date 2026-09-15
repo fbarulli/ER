@@ -6,7 +6,7 @@ quality or score deltas** — no training was run, no GPU was used, and every nu
 **string level** on real committed artifacts.
 
 Repo `/home/opc/ONE/EuromonitoR`, branch `training`. Baseline suite: **290 passed, 2 skipped**.
-After: **309 passed, 2 skipped**. The `cleaned` composition is the **shipped default**; `legacy` remains
+After: **313 passed, 2 skipped**. The `cleaned` composition is the **shipped default**; `legacy` remains
 selectable from config and is still byte-identical to the pre-change output (§9).
 
 ---
@@ -261,7 +261,7 @@ text-builder gap, and is out of scope here.
 
 ## 6. Tests
 
-**290 passed, 2 skipped → 309 passed, 2 skipped.** No pre-existing test needed changing:
+**290 passed, 2 skipped → 313 passed, 2 skipped.** No pre-existing test needed changing:
 `tests/test_unit_canonicalization.py:91-98` pins the exact `append_text` output
 (`"water [FIELD_VOLUME] volume_ml_237 [FIELD_PACK_SIZE] pack_qty_12"`) and still passes unchanged,
 because `append_text` and the structured channel were left exactly as they were.
@@ -274,12 +274,13 @@ path drifts. The default is nevertheless pinned by its own test
 (`test_shipped_config_defaults_to_the_cleaned_profile`, plus a test that the no-argument selection
 equals it), so the default is covered by the suite rather than being accidental.
 
-New: **`tests/test_model_input_contract.py`** (19 tests) — legacy byte-equivalence over all 855 fixture
+New: **`tests/test_model_input_contract.py`** (23 tests) — legacy byte-equivalence over all 855 fixture
 rows on both sides; the shipped default is pinned to cleaned; the no-argument path resolves to it;
 legacy stays selectable as the fallback; the contradiction is rejected; evidence ablation; compound
 splitting; number and percentage preservation; evidence excluded on both lanes; one normalizer across
 lanes; no literal markers; margin improvement; true-pairs-far-above-cross-pairs; different brands stay
-distinct; `title_only` variant semantics; both lanes call the shared builder.
+distinct; `title_only` variant semantics; both lanes call the shared builder; the composition is in the
+ANN fingerprint inputs; the run trace and the checkpoint manifest record it.
 
 New fixture: **`tests/fixtures/model_input_golden.json`** (855 records, 2.0 MiB), captured from the
 **unmodified** code before any edit — 585 review-band pairs, 120 dataset rows, 150 singleton-GTIN rows.
@@ -287,14 +288,16 @@ New fixture: **`tests/fixtures/model_input_golden.json`** (855 records, 2.0 MiB)
 Files changed:
 
 ```
-config/training.yaml          | +17   model_input block
+config/training.yaml          | +17   model_input block (default: cleaned)
 src/core/schemas.py           | +26   TrainingSpec.ModelInputSpec
-src/core/model_input.py       | new   the shared builder
-src/pipeline.py               | -50/+... third call site consolidated
-src/predict_items.py          | -42      scoring lane consolidated
-src/training/rand_matching.py | -44      training lane consolidated
-tests/test_model_input_contract.py | new
-tests/fixtures/model_input_golden.json | new
+src/core/model_input.py       | new   the shared builder + model_input_provenance()
+src/pipeline.py               | payload call sites consolidated + composition trace row
+src/predict_items.py          | -42   scoring lane consolidated
+src/training/rand_matching.py | training lane consolidated; fingerprint inputs
+src/training/training.py      | +7    checkpoint manifest records the composition
+scripts/show_model_input_comparison.py | 4th call site consolidated (see 10.1)
+tests/test_model_input_contract.py | new (23 tests)
+tests/fixtures/model_input_golden.json | new (855 frozen legacy rows)
 MODEL_INPUT_FIX_REPORT.md     | new
 ```
 
@@ -304,7 +307,7 @@ MODEL_INPUT_FIX_REPORT.md     | new
 
 **EXECUTED** (all CPU, no training, no GPU):
 
-* `pytest tests/ -q` before (290 passed / 2 skipped) and after (309 / 2) the change, including a run
+* `pytest tests/ -q` before (290 passed / 2 skipped) and after (313 / 2) the change, including a run
   after the default was flipped from `legacy` to `cleaned` — which broke no test.
 * A no-argument-default check over all 855 fixture rows: the default equals the `cleaned` profile on
   855/855 rows, never equals the captured legacy string, and the explicit `legacy` selection still
@@ -403,3 +406,163 @@ Do not set `cleaned` with `include_evidence: true`; config load rejects it with 
 `tests/test_model_input_contract.py::test_legacy_profile_reproduces_golden_bytes` fails loudly if the
 `legacy` profile ever stops reproducing the captured strings, so a fallback that silently changed
 output cannot ship.
+
+---
+
+## 10. Blast radius map
+
+The change alters **the text the encoder consumes**. Everything below is what that touches.
+"Verified" means I executed or read the specific thing; "not checked" is stated as such.
+
+### 10.1 Consumers of the builder (verified by grep — 4 call sites, not 3)
+
+| # | Consumer | Path | Effect |
+|---|---|---|---|
+| 1 | `src/predict_items.py:100,104` | **scoring lane** — SKU + canonical text | Emits different text, so predictions, scores and the assignment CSV change. |
+| 2 | `src/training/rand_matching.py:1031` + `:1137` | **training lane** — item texts and SKU texts for candidate retrieval / ANN | Different item embeddings; different retrieved candidates. |
+| 3 | `src/pipeline.py:2065,2093` | **payload stage** of `run_within_brand_pipeline` | The payload that produces embeddings and the pair bundle. |
+| 4 | `scripts/show_model_input_comparison.py:117,128` | audit/diagnostic that produced the user's 12 exemplars | **Was a 4th copy-pasted composition** — found and consolidated in this round. Previously it would have kept printing the legacy strings after the lanes moved on, i.e. the diagnostic would have lied. |
+
+Transitive consumers, traced:
+
+* `src/training/complete_colab_worker.py:132` runs `python -m predict_items` as a subprocess → **predictions regenerate**.
+* `src/training/build_ann_index.py:23` constructs `RandMatcher` → **ANN build path affected**.
+* `src/training/rand_matching.py:3203` is the CLI entry (`er-rand-match`) → **operational entry point affected**.
+* `src/training/training.py:1665` calls `refresh_finetuned_ann` (`src/training/ann_refresh.py:57`), which produces the `ann_finetuned` presented population and rewrites negative text from the ANN index → **depends on embeddings built from this text**.
+* `src/core/hard_negatives.py`, masking and the pair bundle consume the text indirectly; **not individually re-verified** — they take the payload, not the composition.
+
+**Not affected (verified):** the **NER lane**. `ner.data_prep.output_csv`,
+`ner.semantic_training.INPUT_CSV` and `ner.semantic_evaluation.input_csv` all point at
+`${results_dir}/dataset_model_input.csv` (root `dataset_model_input.csv`, 4.3 MB), and **no file under
+`src/ner/` references `clean_sku_text`, `canonical_model_text`, `strip_schema_words` or
+`core.model_input`**. That artifact looks like a model-input file but belongs to a different lane.
+
+### 10.2 Artifacts that become stale or non-comparable
+
+| Artifact | Affected? | Must be | Local? |
+|---|---|---|---|
+| `results/ann_index/` (`catalog.hnsw` 24 MB, `catalog_embeddings.npy` 20 MB, mapping, metadata) | **VERIFIED STALE.** Stored `preprocessing_fingerprint` is `None`; the active fingerprint is `6221c7d9…`. `PersistentHnswIndex.load` raises `ValueError: persisted HNSW metadata is stale` (executed). | **REBUILD** | **Actionable** — and automatic: `rand_matching` catches the `ValueError` and sets `rebuild_ann_index = True`. Untracked/ignored. |
+| `training_results/0915T063500554948Z/worker_2/_checkpoints/all-MiniLM-L6-v2/r0915T063500554948Z-worker_2-ann_embedding_f0/checkpoint-44` | **NON-COMPARABLE.** Weights stay loadable, but every metric they produced was measured on the other composition. | **RETRAIN** | **IMPOSSIBLE locally** (no training in this task). Untracked/ignored. |
+| The other checkpoint sets: `0915T063500554948Z/worker_1`, `20260914T160246465306Z/worker_2`, `20260914T192428300299Z/worker_1`, `mixed_20260913T220423946172Z/worker_1` | Same as above — **all trained on the legacy text.** | **RETRAIN** | **IMPOSSIBLE locally.** |
+| Cached embeddings (`results/ann_index/catalog_embeddings.npy`) | **VERIFIED STALE** — same fingerprint gate as the index. | **REBUILD** | **Actionable (automatic).** |
+| `results/canonical_records.csv`, `results/gate_results.csv` | **VERIFIED NOT AFFECTED.** They are *inputs* to the change, not outputs: the diff to `pipeline.py` is confined to the payload block (the two builder calls plus the trace row) and touches no canonical-generation or gate function. Files on disk unchanged. | Nothing | n/a |
+| `dataset.csv` (root, 54 MB) | Read-only original data; unchanged. | Nothing | n/a |
+| `dataset_model_input.csv` (root) | **VERIFIED NOT AFFECTED** — NER lane (§10.1). | Nothing | n/a |
+| Prior reports/metrics: everything under `training_results/*` (0 tracked files), the **tracked** root `report.json`, the untracked `training.log`, and `training_results/0915T075044186132Z/worker_1/report/human_review_features/model_input_comparison.{md,txt,csv}` | **NON-COMPARABLE / SUPERSEDED.** Scores in them were produced from the legacy text; the comparison files were rendered by the script now consolidated, so re-running it prints the cleaned composition. | Re-run / supersede | **Actionable** (re-run the diagnostic); scores need retraining. |
+| `results/logs/training_trace.csv` | Gains the new `payload.model_input_composition` row. | Regenerate | **Actionable** (next payload run). Untracked/ignored. |
+| `tests/fixtures/model_input_golden.json` (mine) | **MUST NOT be regenerated.** It is the frozen *legacy* contract captured before any edit. Regenerating it from current code would silently destroy the rollback guarantee. | Keep frozen | n/a |
+
+### 10.3 Tests, fixtures and config keys
+
+* **New:** `tests/test_model_input_contract.py` (23 tests), `tests/fixtures/model_input_golden.json`
+  (855 frozen legacy rows).
+* **Unaffected, still passing:** `tests/test_unit_canonicalization.py:91-98` (`append_text` untouched),
+  `tests/test_hnsw_index.py:59` (the fingerprint-mismatch path it already proves is now load-bearing for
+  this change), `tests/test_datapoint_coverage.py` (producer scan unchanged).
+* **New config keys:** `training.model_input.profile`, `training.model_input.include_evidence`, validated
+  by `TrainingSpec.ModelInputSpec`. No key removed or renamed.
+
+---
+
+## 11. No coverage gaps
+
+The change emits **no new datapoint population**. What it newly emits is a **provenance** value
+(`model_input_provenance()`), which is registered in the existing mechanisms rather than a new one.
+Both halves were executed.
+
+### 11.1 The datapoint-population registry is still gap-free (executed)
+
+Using the same three producer idioms and the same `PRODUCER_FILES` list as
+`tests/test_datapoint_coverage.py`, then driving the real `_write_datapoint_usage`:
+
+```
+scanned tags            : 9
+registered populations  : 8 -> ['ann_finetuned','attribute_conflict','gate','gate_positive',
+                                'hard_positive','masked_positive','random_easy',
+                                'targeted_attribute_conflict']
+declared fallback tags  : ['hard_neg','hard_negative','unknown']  (rejected loudly, not populations)
+EMITTED BUT UNREGISTERED: NONE
+
+ fold                  population  registered  expected_pairs  presentations  distinct  status
+    0               ann_finetuned        True               1              1         1      ok
+    0          attribute_conflict        True               1              1         1      ok
+    0                        gate        True               1              1         1      ok
+    0               gate_positive        True               1              1         1      ok
+    0               hard_positive        True               1              1         1      ok
+    0             masked_positive        True               1              1         1      ok
+    0                 random_easy        True               1              1         1      ok
+    0 targeted_attribute_conflict        True               1              1         1      ok
+
+populations visited by the audit : 8   == registered set : True
+rows flagged unregistered : NONE      rows with status 'missing' : NONE
+n_unregistered_datapoint_populations = 0     n_missing_datapoint_populations = 0
+```
+
+**Negative control** — a tag that is emitted but not declared must fail loudly, not vanish:
+
+```
+raised as required: UnregisteredDatapointPopulationError
+message: fold 0: producer-emitted datapoint population(s) outside DATAPOINT_POPULATION_SPEC:
+         'not_a_registered_population' (expected_pairs=1, presentations=1).
+coverage artifact still written before raising: True
+the undeclared tag IS present in the artifact: True (status=['unregistered'], registered=[False])
+```
+
+So the property requested holds: **emitted set == registered set == visited set**, and the failure mode
+(a name emitted but never registered, dropping rows silently while the audit reports success) raises
+instead of passing quietly.
+
+### 11.2 The gap this change WOULD have opened — found and closed
+
+The registry was not the only silent-reuse seam. A persisted ANN index is reusable only if the text that
+produced its embeddings is unchanged, and that was gated by `preprocessing_fingerprint`, built (before
+this change) from `structured_features` + `unit_canonicalization` **only**
+(`rand_matching.py:995`). Switching composition changes the text but not the catalog, the checkpoint or
+the code path — so a profile switch would have **silently reused an index built on the other composition**:
+stale embeddings served as valid, which is the same failure mode in a different mechanism.
+
+Closed by adding the composition to the fingerprint inputs
+(`training.rand_matching.preprocessing_fingerprint_inputs`) and proving the rejection executes:
+
+```
+stored fingerprint : None
+active fingerprint : 6221c7d9fa9a98210f92235c2c32cc32e3efe18faf56e62e3e1af8dd97fcceb5
+=> mismatch (index must be rebuilt): True
+load REJECTED as required -> ValueError
+  message: persisted HNSW metadata is stale: {'M': (32, 16),
+           'preprocessing_fingerprint': (None, '6221c7d9…')}
+```
+
+`tests/test_model_input_contract.py::test_ann_fingerprint_inputs_include_the_composition` pins the first
+link of the chain; `tests/test_hnsw_index.py:59` already pins the second.
+
+---
+
+## 12. Composition traceability (trace + manifest + fingerprint)
+
+Requirement: any artifact must be traceable to the exact input contract that produced it. Three
+existing mechanisms now carry `model_input_provenance()` — no parallel mechanism was added:
+
+1. **Run trace** — the payload stage writes a run-scope row before building any text
+   (`pipeline.py`, step `payload.model_input_composition`, `scope="run"`), so the data-prep trace names
+   the composition:
+   `detail: {"include_evidence": false, "profile": "cleaned"}`.
+2. **Checkpoint manifest** — `_write_checkpoint_manifest` now writes
+   `"model_input": {"profile": ..., "include_evidence": ...}` into `checkpoint_manifest.json`, so a
+   retrained checkpoint declares the composition its weights were trained on and two checkpoints from
+   different compositions are distinguishable after the fact.
+   `test_checkpoint_manifest_records_the_active_composition` executes the real writer.
+3. **ANN fingerprint** — the composition is hashed into the index's reuse contract (§11.2), so an index
+   cannot outlive the composition that built it.
+
+The audit script `scripts/show_model_input_comparison.py` also prints the active composition in its
+markdown header and per-row blocks, and its "exact model input" fields now come from the shared builder —
+verified by running it (to `/tmp`, never `results/`), which emitted the cleaned text
+`marcel lemon still sugar strawberry nectar [FIELD_VOLUME] volume_ml_250 …` for a real row.
+
+### Residual, reported not fixed
+
+A **checkpoint is not validated against the composition at scoring time.** `predict_items --model <ckpt>`
+will happily run a legacy-trained checkpoint over cleaned text; the ANN fingerprint guards the index,
+not the weights. Closing it needs a load-time check against the manifest key added above, which is a
+retraining-workflow decision rather than a text-builder one. Stated so the retrain can decide.

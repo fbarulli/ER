@@ -9,13 +9,17 @@ pipeline additions separately so a reviewer can see what changed.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
 
-from core.common import load_config
+from core.model_input import (
+    build_canonical_text,
+    build_sku_text,
+    model_input_provenance,
+)
 from core.structured_features import (
-    append_text as append_structured_text,
     canonical_info as canonical_structured_info,
     sku_info as sku_structured_info,
 )
@@ -85,9 +89,7 @@ def main() -> None:
         if gtin:
             targets[gtin] = group.iloc[0].to_dict()
     canonical_map = canon.set_index(canon["gtin"].astype(str)).to_dict("index")
-    cfg = load_config()["training"]["structured_features"]
-    structured_enabled = bool(cfg["enabled"])
-    structured_text = structured_enabled and bool(cfg["append_to_text"])
+    composition = model_input_provenance()
 
     rows: list[dict[str, object]] = []
     blocks: list[str] = []
@@ -108,7 +110,11 @@ def main() -> None:
         )
         cleaned_source = strip_schema_words(base_source)
         source_info = sku_structured_info(text(source_row.get("title")), text(source_row.get("attributes")))
-        source_model = append_structured_text(cleaned_source, source_info, enabled=structured_text)
+        # The EXACT payload the encoder receives comes from the shared builder,
+        # so this audit view can never disagree with what the lanes actually
+        # feed the model. The intermediate columns below document the ORIGINAL
+        # (legacy) composition steps and are explanatory only.
+        source_model = build_sku_text(pd.Series(source_row), source_info)
 
         canonical_base = " ".join((
             text(canonical_row.get("canonical")),
@@ -119,11 +125,12 @@ def main() -> None:
         ))
         canonical_clean = strip_schema_words(canonical_model_text(canonical_base))
         target_info = canonical_structured_info(canonical_row)
-        target_model = append_structured_text(canonical_clean, target_info, enabled=structured_text)
+        target_model = build_canonical_text(canonical_row, target_info)
 
         row = {
             "SKU_ID": sku_id,
             "NEAREST_ITEM_ID": target_id,
+            "model_input_composition": json.dumps(composition, sort_keys=True),
             "SCORE": text(item.get("SCORE")),
             "source_original_features": source_features,
             "source_base_cleaned": base_source,
@@ -147,6 +154,7 @@ def main() -> None:
             "\n".join([
                 "=" * 100,
                 f"ROW {len(rows)} | SKU_ID={sku_id} | candidate GTIN={target_id} | score={text(item.get('SCORE'))}",
+                f"MODEL INPUT COMPOSITION: {composition}",
                 "SOURCE — ORIGINAL FEATURES",
                 *(f"  {k}: {v}" for k, v in source_features.items()),
                 "SOURCE — PIPELINE CHANGES",
@@ -174,6 +182,7 @@ def main() -> None:
         "# Model input comparison",
         "",
         "Each review row is shown independently. The model-input blocks are exact strings; no fields are abbreviated.",
+        f"Model-input composition in force: `{composition}`. The exact-input blocks are produced by `core.model_input`; the intermediate steps describe the original (legacy) composition and are explanatory only.",
         "",
     ]
     for number, row in enumerate(rows, start=1):
