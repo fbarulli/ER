@@ -189,10 +189,16 @@ def extract_pack_from_title(title: str) -> tuple:
     if m:
         return int(m.group(1)), 0.90
     # "Pack of N" / "Case of N" (including parentheses)
-    m = re.search(r"\(\s*(?:pack|case)\s+of\s+(\d+)\s*\)", t, re.IGNORECASE)
+    m = re.search(
+        r"\(\s*(?:packs?|packages?|cases?)\s+of\s+(\d+)\s*\)",
+        t,
+        re.IGNORECASE,
+    )
     if m:
         return int(m.group(1)), 0.90
-    m = re.search(r"\b(?:pack|case)\s+of\s+(\d+)\b", t, re.IGNORECASE)
+    m = re.search(
+        r"\b(?:packs?|packages?|cases?)\s+of\s+(\d+)\b", t, re.IGNORECASE
+    )
     if m:
         return int(m.group(1)), 0.90
     # "N pack" / "N pk" / "N ct" / "N count". ZERO-GUARD (found by the
@@ -202,7 +208,7 @@ def extract_pack_from_title(title: str) -> tuple:
     # pack_set with an impossible 0 (nothing can overlap it except another
     # 0). Skip zero captures and keep scanning for the real count.
     m = re.search(
-        r"\b(\d+)\s*(?:pcs?|pieces?|pack|packs|pk|case|cases|units?|ct|count)\b",
+        r"\b(\d+)\s*(?:pcs?|pieces?|packs?|packages?|pk|cases?|units?|ct|count)\b",
         t,
         re.IGNORECASE,
     )

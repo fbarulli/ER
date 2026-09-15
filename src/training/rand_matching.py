@@ -50,6 +50,8 @@ from core.ann_config import load_ann_config
 from core.attribute_conflicts import (
     canonical_attribute_info,
     conflict_columns,
+    flavor_overlap_metrics,
+    normalized_flavor_tokens,
     sku_attribute_info,
 )
 from core.common import (
@@ -209,11 +211,9 @@ def confidence_penalty_mask(
     if exact_gtin and bool(settings["preserve_exact_gtin"]):
         return 0.0, "exact_gtin_preserved"
     attributes = [str(value) for value in settings["critical_attributes"]]
-    jointly_missing = [
-        attribute
-        for attribute in attributes
-        if not sku_info.get(attribute) and not candidate_info.get(attribute)
-    ]
+    jointly_missing = _jointly_missing_attributes(
+        sku_info, candidate_info, attributes
+    )
     if len(jointly_missing) < int(settings["minimum_joint_missing"]):
         return 0.0, "sufficient_attribute_evidence"
     penalty = min(
@@ -221,6 +221,56 @@ def confidence_penalty_mask(
         len(jointly_missing) * float(settings["penalty_per_joint_missing"]),
     )
     return penalty, "jointly_missing:" + ",".join(jointly_missing)
+
+
+def _jointly_missing_attributes(
+    sku_info: dict[str, object],
+    candidate_info: dict[str, object],
+    attributes: list[str] | tuple[str, ...] | None = None,
+) -> list[str]:
+    """Name shared missing evidence without filtering the candidate pair."""
+    fields = attributes or ("volume", "pack", "flavor")
+    return [
+        attribute
+        for attribute in fields
+        if not sku_info.get(attribute) and not candidate_info.get(attribute)
+    ]
+
+
+def flavor_overlap_penalty(
+    sku_info: dict[str, object],
+    candidate_info: dict[str, object],
+    *,
+    exact_gtin: bool,
+    config: dict[str, object] | None = None,
+) -> tuple[float, float, float, str]:
+    """Return Jaccard, overlap, bounded penalty, and an audit reason.
+
+    Missing flavor is handled by :func:`confidence_penalty_mask`, not treated
+    as a mismatch here.  The overlap coefficient lets a specific multi-token
+    flavor (``apple lemon``) match its shared canonical flavor (``apple``),
+    while Jaccard is retained in the trace for diagnosis.
+    """
+    settings = config or rand_matching_cfg()["flavor_overlap_penalty"]
+    left = sku_info.get("flavor")
+    right = candidate_info.get("flavor")
+    jaccard, overlap = flavor_overlap_metrics(left, right)
+    if not bool(settings["enabled"]):
+        return jaccard, overlap, 0.0, "disabled"
+    if exact_gtin and bool(settings["preserve_exact_gtin"]):
+        return jaccard, overlap, 0.0, "exact_gtin_preserved"
+    if (
+        not normalized_flavor_tokens(left)
+        or not normalized_flavor_tokens(right)
+    ):
+        return jaccard, overlap, 0.0, "insufficient_flavor_evidence"
+    minimum = float(settings["minimum_overlap"])
+    if overlap >= minimum:
+        return jaccard, overlap, 0.0, "sufficient_flavor_overlap"
+    severity = (minimum - overlap) / minimum
+    max_penalty = float(settings["max_penalty"])
+    penalty = min(max_penalty, severity * max_penalty)
+    return jaccard, overlap, penalty, "low_flavor_overlap"
 
 
 def _threshold_selection_key(row: dict[str, float | int]) -> tuple[float, ...]:
@@ -289,6 +339,7 @@ class _SubmissionProvenance(BaseModel):
     threshold_by_gtin_status: dict[str, float]
     brand_conflict_veto: bool
     confidence_penalty_mask: dict[str, object]
+    flavor_overlap_penalty: dict[str, object]
     unmatched_prefix: str
     rows: int
     unique_items: int
@@ -359,6 +410,12 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "raw_score",
             "confidence_penalty",
             "confidence_penalty_reason",
+            "jointly_missing_attributes",
+            "jointly_missing_attribute_count",
+            "flavor_jaccard",
+            "flavor_overlap",
+            "flavor_penalty",
+            "flavor_penalty_reason",
             "gate_reason",
             "sku_title",
             "sku_attributes",
@@ -518,7 +575,18 @@ def candidate_gate_fields(
         candidate_info,
         exact_gtin=bool(exact),
     )
-    adjusted_score = max(-1.0, float(score) - confidence_penalty)
+    flavor_jaccard, flavor_overlap, flavor_penalty, flavor_penalty_reason = (
+        flavor_overlap_penalty(
+            sku_info,
+            candidate_info,
+            exact_gtin=bool(exact),
+        )
+    )
+    adjusted_score = max(
+        -1.0,
+        float(score) - confidence_penalty - flavor_penalty,
+    )
+    jointly_missing = _jointly_missing_attributes(sku_info, candidate_info)
     brand_conflict = int(
         bool(rand_matching_cfg()["brand_conflict_veto"])
         and _brand_conflict(
@@ -548,6 +616,12 @@ def candidate_gate_fields(
         "raw_score": float(score),
         "confidence_penalty": confidence_penalty,
         "confidence_penalty_reason": confidence_penalty_reason,
+        "jointly_missing_attributes": ",".join(jointly_missing),
+        "jointly_missing_attribute_count": len(jointly_missing),
+        "flavor_jaccard": flavor_jaccard,
+        "flavor_overlap": flavor_overlap,
+        "flavor_penalty": flavor_penalty,
+        "flavor_penalty_reason": flavor_penalty_reason,
         "score": adjusted_score,
         "exact_gtin": exact,
         "gtin_status": status,
@@ -2559,6 +2633,9 @@ def _write_provenance(
         brand_conflict_veto=bool(rand_matching_cfg()["brand_conflict_veto"]),
         confidence_penalty_mask=dict(
             rand_matching_cfg()["confidence_penalty_mask"]
+        ),
+        flavor_overlap_penalty=dict(
+            rand_matching_cfg()["flavor_overlap_penalty"]
         ),
         unmatched_prefix=_unmatched_prefix(),
         rows=len(submission),

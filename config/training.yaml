@@ -280,6 +280,15 @@ rand_matching:
     penalty_per_joint_missing: 0.01
     max_penalty: 0.03
     preserve_exact_gtin: true
+  # Flavor evidence is compared as normalized token sets instead of raw
+  # strings.  A bounded score penalty is applied only when both endpoints
+  # expose flavor evidence and their overlap is weak.  Exact-GTIN candidates
+  # remain locked and retain their unadjusted semantic score.
+  flavor_overlap_penalty:
+    enabled: true
+    minimum_overlap: 0.50
+    max_penalty: 0.05
+    preserve_exact_gtin: true
   target_recall: 0.90
   threshold_tie_break:
     - "rand_index"

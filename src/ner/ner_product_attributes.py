@@ -35,12 +35,12 @@ WEIGHT_RE = re.compile(
 PACK_COUNT_RES = (
     re.compile(rf"\b(?P<count>\d+)\s*(?=x|×)", re.IGNORECASE),
     re.compile(
-        r"\b(?:pack|pk|case|carton|box|tray|bundle|set)\s+(?:of\s+)?"
+        r"\b(?:packs?|packages?|pk|cases?|cartons?|boxes?|trays?|bundles?|sets?)\s+(?:of\s+)?"
         r"(?P<count>\d+)\b",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?P<count>\d+)\s*(?:pack|pk|ct|count|pcs?\.?(?:\b)|"
+        r"\b(?P<count>\d+)\s*(?:packs?|packages?|pk|ct|count|pcs?\.?(?:\b)|"
         r"pieces?|units?|bottles?|cans?|sachets?|sticks?|capsules?|"
         r"tablets?)\b",
         re.IGNORECASE,

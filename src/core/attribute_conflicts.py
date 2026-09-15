@@ -8,9 +8,108 @@ from disagreeing with the population that was actually mined.
 from __future__ import annotations
 
 import ast
+import re
+import unicodedata
 from collections.abc import Mapping
 
 from core.unit_canonicalization import canonical_pack_count, canonical_volume_ml
+
+
+_FLAVOR_NOISE = frozenset(
+    {
+        "flavor",
+        "flavored",
+        "flavour",
+        "flavoured",
+        "profile",
+        "taste",
+    }
+)
+_FLAVOR_TOKEN_ALIASES = {
+    "berries": "berry",
+    "cocoanut": "coconut",
+}
+_FLAVOR_LEXICON = frozenset(
+    {
+        "aloe",
+        "apple",
+        "berry",
+        "cherry",
+        "chocolate",
+        "citrus",
+        "coconut",
+        "coffee",
+        "cola",
+        "cranberry",
+        "elderflower",
+        "ginger",
+        "grapefruit",
+        "grape",
+        "lemon",
+        "lime",
+        "mango",
+        "mint",
+        "orange",
+        "passionfruit",
+        "passion",
+        "peach",
+        "pear",
+        "pineapple",
+        "pomegranate",
+        "raspberry",
+        "rhubarb",
+        "rose",
+        "strawberry",
+        "tonic",
+        "tropical",
+        "fruit",
+        "vanilla",
+        "watermelon",
+    }
+)
+
+
+def normalized_flavor_tokens(value: object) -> frozenset[str]:
+    """Return stable flavor evidence tokens for overlap-based comparison.
+
+    Separators commonly found in catalog exports (commas, underscores,
+    slashes, ampersands, and hyphens) are deliberately equivalent.  Generic
+    flavor-label words are removed so they cannot create false overlap.
+    """
+    text = unicodedata.normalize("NFKD", str(value or "").casefold())
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    tokens = re.findall(r"[a-z0-9]+", text)
+    return frozenset(
+        _FLAVOR_TOKEN_ALIASES.get(token, token)
+        for token in tokens
+        if token not in _FLAVOR_NOISE
+    )
+
+
+def flavor_overlap_metrics(left: object, right: object) -> tuple[float, float]:
+    """Return ``(Jaccard, overlap coefficient)`` for flavor evidence.
+
+    Empty evidence is explicit rather than treated as disagreement: both
+    values are zero and callers decide whether missingness needs a separate
+    confidence mask.
+    """
+    left_tokens = normalized_flavor_tokens(left)
+    right_tokens = normalized_flavor_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0, 0.0
+    intersection = len(left_tokens & right_tokens)
+    return (
+        intersection / len(left_tokens | right_tokens),
+        intersection / min(len(left_tokens), len(right_tokens)),
+    )
+
+
+def _flavor_evidence(*values: object) -> str:
+    """Collect all recognized flavor mentions, not just the first regex hit."""
+    tokens: set[str] = set()
+    for value in values:
+        tokens.update(normalized_flavor_tokens(value) & _FLAVOR_LEXICON)
+    return " ".join(sorted(tokens))
 
 
 def _value_set(value: object, *, kind: str) -> set[object]:
@@ -43,7 +142,9 @@ def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
     return {
         "volume": _value_set(record.get("volume_set"), kind="volume"),
         "pack": _value_set(record.get("pack_set"), kind="pack"),
-        "flavor": str(record.get("mode_flavor", "")).strip().lower(),
+        "flavor": _flavor_evidence(
+            record.get("mode_flavor", ""), record.get("canonical", "")
+        ),
     }
 
 
@@ -79,7 +180,9 @@ def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
     return {
         "volume": volume,
         "pack": pack,
-        "flavor": str(extracted.get("flavor") or "").strip().lower(),
+        "flavor": _flavor_evidence(
+            extracted.get("flavor") or "", title, attributes
+        ),
     }
 
 
@@ -96,7 +199,9 @@ def attribute_conflict_types(
         set(left["pack"]) & set(right["pack"])
     ):
         conflicts.append("pack")
-    if left["flavor"] and right["flavor"] and left["flavor"] != right["flavor"]:
+    if left["flavor"] and right["flavor"] and flavor_overlap_metrics(
+        left["flavor"], right["flavor"]
+    )[1] == 0.0:
         conflicts.append("flavor")
     return conflicts
 
@@ -112,3 +217,13 @@ def conflict_columns(
         "flavor_conflict": int("flavor" in conflicts),
         "attribute_conflict_type": "+".join(conflicts) if conflicts else "none",
     }
+
+
+__all__ = [
+    "attribute_conflict_types",
+    "canonical_attribute_info",
+    "conflict_columns",
+    "flavor_overlap_metrics",
+    "normalized_flavor_tokens",
+    "sku_attribute_info",
+]

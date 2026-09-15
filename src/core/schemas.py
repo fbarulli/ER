@@ -581,6 +581,16 @@ class RandMatchingSpec(BaseModel):
                 )
             return self
 
+    class FlavorOverlapPenaltySpec(BaseModel):
+        """Bounded penalty for non-exact pairs with weak flavor overlap."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        enabled: bool
+        minimum_overlap: float = Field(gt=0.0, le=1.0)
+        max_penalty: float = Field(ge=0.0, le=1.0)
+        preserve_exact_gtin: bool
+
     output_dir: str = Field(min_length=1)
     truth_splits: RandTruthSplitsSpec
     stratum_sweep: RandStratumSweepSpec
@@ -593,6 +603,7 @@ class RandMatchingSpec(BaseModel):
     threshold_by_gtin_status: dict[str, float]
     brand_conflict_veto: bool
     confidence_penalty_mask: ConfidencePenaltyMaskSpec
+    flavor_overlap_penalty: FlavorOverlapPenaltySpec
     target_recall: float = Field(gt=0.0, le=1.0)
     threshold_tie_break: list[
         Literal["rand_index", "fewest_unmatched_skus", "lowest_threshold"]
