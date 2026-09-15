@@ -63,10 +63,10 @@ the fix has to be in how much weight the brand axis carries (see §7).
 
 Three of the classes the brief anticipated are **empty, and the emptiness is falsifiable**:
 `scripts/analyze_brand_matching.py --selftest` proves all nine classes are reachable from 15
-synthetic cases (`Côteaux`/`Coteaux`, `S.A. Dampt`/`SA Dampt`, `Quellbrunn GmbH`/`Quellbrunn`,
-`Coca Cola`/`Cola Coca`, `Mont Roucous`/`Mont`, `Cemilefendi`/`Cemil`, the three absence
-cases, `Albi`/`Marli`, `River City`/`City River Drink`, `Ting`/`Dg`). The detector works; the
-population contains no instances.
+synthetic cases (`run_selftest` lists them by label): diacritics, punctuation, case+spacing,
+identical, corporate suffix, token order, truncation, prefix, both/source/target absent,
+distinct brands, shared generic word, token subset, brand only in title. The detector works;
+the population contains no instances of the three empty classes.
 
 ### The normalisation ladder is empty
 
