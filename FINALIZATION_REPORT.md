@@ -697,6 +697,101 @@ minershape as owning `core/hard_negatives.py` + `sample_balanced_pairs.py` + `ra
 **Owner decision, not mine:** merge them, or delete them as superseded. `main`/`ER/main` divergence is
 a separate question about the default branch.
 
+## 7f. The main agent's four files — verified, and already committed
+
+The heads-up listed four files as **uncommitted**. They are **not**: all four are clean against
+`HEAD` and landed in `3fdc039 fix(colab,dvc): keep-alive is CPU-only; .env is the single credential
+origin` (with follow-ups `4f5be42`, `c3cac78`). So there was nothing left to sweep into a
+finalization commit — **nothing was reverted, and nothing can be lost**: they are already in
+`training` and already pushed. I verified the described behaviour is actually present rather than
+trusting either the description or the commit message.
+
+### Executed verification — 20/20 (`/tmp/verify_main_agent_files.py`)
+
+```
+== 1. syntax / imports ==
+[PASS] parses: src/cli/colab.py
+[PASS] parses: src/cli/colab_cli_entry.py
+[PASS] parses: run_ann_full_data.py
+[PASS] parses: src/training/dvc_store.py
+[PASS] imports: cli.colab, cli.colab_cli_entry, training.dvc_store
+
+== 2. keep-alive invariant ==
+[PASS] GPU + --keep-alive is refused — ValueError: --keep-alive is CPU-only (a retained GPU VM
+       consumes accelerator quota indefinitely); requested --gpu T4. Use --gpu CPU or drop it.
+[PASS] CPU + --keep-alive passes the guard and publishes the marker
+       — preflight reached=True  EUROMONITOR_KEEP_ALIVE_ALLOWED='1'
+[PASS] CPU without --keep-alive publishes 0 — marker='0'
+[PASS] _spawn_keep_alive denied when marker='0'      — "not marked keep-alive-eligible"
+[PASS] _spawn_keep_alive denied when marker unset    — same
+
+== 3. dvc credential ==
+[PASS] _remote_owner derives the account from the configured url
+       — 'https://dagshub.com/fbarulli/ER.dvc' -> 'fbarulli'
+[PASS] _remote_owner raises on 'https://dagshub.com'   (no guessing)
+[PASS] _remote_owner raises on 'https://dagshub.com/'
+[PASS] _remote_owner raises on 'not-a-url'
+[PASS] first call writes the credential (auth + derived user + token)
+[PASS] second call re-applies a ROTATED token (the reported bug)
+[PASS] the workspace was not re-initialised
+
+== 4. no hardcoded account / no duplicate block ==
+[PASS] no hardcoded 'fbarulli' in dvc_store.py
+[PASS] exactly one remote-auth block (single _configure_workspace helper)
+[PASS] both call sites use the shared helper
+
+RESULT: 20/20 passed
+```
+
+**The keep-alive invariant fires, observed directly.** A GPU launch with `--keep-alive` raises
+`ValueError: --keep-alive is CPU-only ... requested --gpu T4`; the identical CPU launch passes the
+guard, reaches the preflight and publishes `EUROMONITOR_KEEP_ALIVE_ALLOWED=1`. The spawn point is
+independently default-deny: with the marker `'0'` **and** with it unset, `_spawn_keep_alive` raises
+`"refusing to start Colab keep-alive: this session was not marked keep-alive-eligible"` — and it
+raises *before* `subprocess.Popen`, so no VM can be retained by a caller that skips the launcher.
+
+**The rotation fix is proved against a real temp workspace** (local `dvc init` / `remote modify`
+only — no network, the real remote was never contacted). `config.local` after the first call:
+
+```
+['remote "dagshub"']
+    auth = basic
+    user = fbarulli          <- derived from colab.dvc_remote_url, not hardcoded
+    password = TOKEN_FIRST
+```
+
+and after a **second** call with a rotated token, on the same already-initialised workspace:
+
+```
+    password = TOKEN_ROTATED
+```
+
+The old token is gone and `.dvc/` was not re-created, which is exactly the reported bug: the
+credential used to be applied only when `.dvc/` did not yet exist, so a rotated `DVC_API_KEY` in
+`.env` was ignored for the life of the workspace.
+
+*(One `FAIL` in my first run was **my** assertion, not the code — I grepped `config.local` for the
+literal string `.dvc`, which is the directory name, not file content. Corrected and re-run: 20/20.)*
+
+### `run_ann_full_data.py`, all three claims checked
+
+```
+-        "--keep-alive",                                              <- removed
+-    print("... epochs=10 keep_alive=true", ...)                     <- was wrong
++    print("... epochs=10 keep_alive=false", ...)                    <- corrected
+-It does not download or tear down the VM; use manual_download_results.py
++launcher tears the GPU VM down on every outcome: a retained GPU VM consumes
++accelerator quota indefinitely, so keep-alive is CPU-only ...       <- docstring updated
+```
+
+The only surviving `keep_alive` strings in that launcher are the docstring explanation and the
+corrected printed line.
+
+### Suite with these four files in the tree
+
+`pytest tests/ -q` → **386 passed, 2 skipped**. `results/` and `dataset.csv` untouched.
+`git status --porcelain` for all four files is empty, i.e. **committed and safe**.
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):
