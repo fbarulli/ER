@@ -2505,6 +2505,10 @@ def run_train(
             final_inference=not train_only,
             inference_sample=inference_sample,
             inference_device=inference_device,
+            # A remote dataset already shares the checkout's training_data
+            # tree; the legacy worker-input copy assumes every input is under
+            # RESULTS and is not applicable to this path.
+            copy_remote_inputs=remote_dataset_csv is None,
         )
     return run_parallel_train_and_tail(
         args, workers, resume_run=resume_run,
@@ -3204,6 +3208,7 @@ def run_single_train_and_stream(
     prepared_bundle: Path | None = None, final_inference: bool = True,
     inference_sample: int | None = None,
     inference_device: str | None = None,
+    copy_remote_inputs: bool = True,
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
     stamp = _lane_run_stamp()
@@ -3224,7 +3229,7 @@ def run_single_train_and_stream(
         args.extend(["--bundle", remote_bundle])
     remote_input_loop = (
         "for name in ():"
-        if prepared_bundle is not None
+        if prepared_bundle is not None or not copy_remote_inputs
         else 'for name in (F["canonical_records"], F["gate_results"], F["labeled_pairs"]):'
     )
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
@@ -4269,7 +4274,7 @@ def main() -> None:
             raise ValueError("--refresh-data is incompatible with local-prepared GPU training")
         if args.refresh_data:
             run_data_prep()
-        elif not prepared_train_runtime:
+        elif args.what != "smoke" and not prepared_train_runtime:
             verify_training_inputs()
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
         # (run_train was unconditional) — hours of unintended GPU quota
