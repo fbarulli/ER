@@ -17,20 +17,14 @@ from core.common import (
     load_dataset_deduped,
     rand_matching_cfg,
 )
+from core.model_input import build_canonical_text, build_sku_text
 from core.structured_features import (
-    append_text as append_structured_text,
     canonical_info as canonical_structured_info,
     fuse_numpy,
     sku_info as sku_structured_info,
     vector as structured_vector,
 )
-from pipeline import (
-    canonical_evidence_text,
-    canonical_model_text,
-    clean_sku_text,
-    load_canonical_map,
-    strip_schema_words,
-)
+from pipeline import load_canonical_map
 
 
 def main() -> None:
@@ -76,7 +70,6 @@ def main() -> None:
 
     sf_cfg = load_config()["training"]["structured_features"]
     sf_enabled = bool(sf_cfg["enabled"])
-    sf_text = sf_enabled and bool(sf_cfg["append_to_text"])
     sf_weight = (
         float(sf_cfg["embedding_weight"])
         if sf_enabled and bool(sf_cfg["feed_to_loss"])
@@ -104,38 +97,11 @@ def main() -> None:
         for item_id in item_ids
     ]
     sku_texts = [
-        append_structured_text(
-            strip_schema_words(
-                clean_sku_text(
-                    row.get("title", ""),
-                    row.get("attributes", row.get("attr", "")),
-                    row.get("brand", ""),
-                    row.get("description", row.get("description_short_eng", "")),
-                    row.get("category", ""),
-                    row.get("category_path", row.get("breadcrumbs_eng", "")),
-                )
-            ),
-            info,
-            enabled=sf_text,
-        )
+        build_sku_text(row, info)
         for (_, row), info in zip(skus.iterrows(), sku_infos, strict=True)
     ]
     item_texts = [
-        append_structured_text(
-            strip_schema_words(canonical_model_text(" ".join((
-                canonical[item_id],
-                str(canonical_record_map.get(item_id, {}).get("mode_brand", "")),
-                str(canonical_record_map.get(item_id, {}).get("mode_type", "")),
-                canonical_evidence_text(
-                    canonical_record_map.get(item_id, {}).get("description_evidence", "")
-                ),
-                canonical_evidence_text(
-                    canonical_record_map.get(item_id, {}).get("breadcrumb_evidence", "")
-                ),
-            )))),
-            info,
-            enabled=sf_text,
-        )
+        build_canonical_text(canonical_record_map.get(item_id, {}), info)
         for item_id, info in zip(item_ids, item_infos, strict=True)
     ]
     model = load_local_sentence_transformer(str(Path(args.model)), device=args.device)

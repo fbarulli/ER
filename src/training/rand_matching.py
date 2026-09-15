@@ -80,21 +80,15 @@ from core.graph_diagnostics import (
 from core.gtin import is_valid_gtin_checksum
 from core.manifest import sha256_file
 from core.schemas import GTIN_STATUSES, THRESHOLD_TIE_BREAK_CRITERIA
+from core.model_input import build_canonical_text, build_sku_text
 from core.structured_features import (
-    append_text as append_structured_text,
     canonical_info as canonical_structured_info,
     fuse_numpy,
     sku_info as sku_structured_info,
     vector as structured_vector,
 )
 from core.unit_canonicalization import UNIT_CANONICALIZATION_VERSION
-from pipeline import (
-    canonical_evidence_text,
-    canonical_model_text,
-    clean_sku_text,
-    load_canonical_map,
-    strip_schema_words,
-)
+from pipeline import load_canonical_map
 from training.hnsw_index import PersistentHnswIndex, normalize_embeddings
 
 
@@ -993,9 +987,6 @@ class RandMatcher:
             str(checkpoint), device="cuda" if torch.cuda.is_available() else "cpu"
         )
         self.structured_enabled = bool(self.structured_config["enabled"])
-        self.structured_text = self.structured_enabled and bool(
-            self.structured_config["append_to_text"]
-        )
         self.structured_weight = (
             float(self.structured_config["embedding_weight"])
             if self.structured_enabled and bool(self.structured_config["feed_to_loss"])
@@ -1019,21 +1010,7 @@ class RandMatcher:
             for item_id in self.item_ids
         ]
         item_texts = [
-            append_structured_text(
-                strip_schema_words(canonical_model_text(" ".join((
-                    self.canonical[item_id],
-                    str(self.record_map[item_id].get("mode_brand", "")),
-                    str(self.record_map[item_id].get("mode_type", "")),
-                    canonical_evidence_text(
-                        self.record_map[item_id].get("description_evidence", "")
-                    ),
-                    canonical_evidence_text(
-                        self.record_map[item_id].get("breadcrumb_evidence", "")
-                    ),
-                )))),
-                info,
-                enabled=self.structured_text,
-            )
+            build_canonical_text(self.record_map[item_id], info)
             for item_id, info in zip(self.item_ids, item_infos, strict=True)
         ]
         item_features = np.asarray(
@@ -1139,20 +1116,7 @@ class RandMatcher:
             for _, row in frame.iterrows()
         ]
         texts = [
-            append_structured_text(
-                strip_schema_words(
-                    clean_sku_text(
-                        row_metadata_text(row, "title"),
-                        row_metadata_text(row, "attributes", "attr"),
-                        row_metadata_text(row, "brand"),
-                        row_metadata_text(row, "description", "description_short_eng"),
-                        row_metadata_text(row, "category", "category_path"),
-                        row_metadata_text(row, "category_path", "breadcrumbs_eng"),
-                    )
-                ),
-                info,
-                enabled=self.structured_text,
-            )
+            build_sku_text(row, info)
             for (_, row), info in zip(frame.iterrows(), model_infos, strict=True)
         ]
         return texts, gate_infos, model_infos

@@ -818,6 +818,31 @@ class TrainingSpec(BaseModel):
         pack_scale: float = Field(gt=0.0)
         max_set_size: int = Field(ge=1)
 
+    class ModelInputSpec(BaseModel):
+        """Model-input text composition (config/training.yaml training.model_input:).
+
+        ONE profile switch plus the single granular decision the profiles
+        disagree about — whether the description/breadcrumb evidence channel
+        participates in the model text.  ``cleaned`` is defined as excluding
+        that channel, so the contradictory combination is rejected here
+        rather than being silently ignored at the call site.
+        """
+
+        model_config = ConfigDict(extra="forbid")
+
+        profile: Literal["legacy", "cleaned"]
+        include_evidence: bool
+
+        @model_validator(mode="after")
+        def _cleaned_excludes_evidence(self) -> TrainingSpec.ModelInputSpec:
+            if self.profile == "cleaned" and self.include_evidence:
+                raise ValueError(
+                    "training.model_input.profile 'cleaned' excludes the "
+                    "description/breadcrumb evidence channel by definition; "
+                    "set include_evidence: false, or profile: legacy to keep it"
+                )
+            return self
+
     class LateEpochLrDecaySpec(BaseModel):
         """Config-owned LR reduction for the later training epochs."""
 
@@ -841,6 +866,7 @@ class TrainingSpec(BaseModel):
     late_epoch_lr_decay: LateEpochLrDecaySpec
     random_easy_negatives: RandomEasyNegativesSpec
     structured_features: StructuredFeaturesSpec
+    model_input: ModelInputSpec
 
     # The default SentenceTransformer path is a tied-weight two-tower
     # encoder: SKU and canonical text are encoded independently, then

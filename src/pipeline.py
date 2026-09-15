@@ -2003,11 +2003,8 @@ def build_training_data(
     cfg = load_config()
     structured_cfg = cfg["training"]["structured_features"]
     structured_enabled = bool(structured_cfg["enabled"])
-    structured_append_to_text = structured_enabled and bool(
-        structured_cfg["append_to_text"]
-    )
+    from core.model_input import build_canonical_text, build_sku_text
     from core.structured_features import (
-        append_text as append_structured_text,
         canonical_info as canonical_structured_info,
         sku_info as sku_structured_info,
         vector as structured_vector,
@@ -2026,10 +2023,6 @@ def build_training_data(
     bc = df["barcode"].fillna("").astype(str).str.strip()
     title = df["title"].fillna("")
     attrs = df["attributes"].fillna("")
-    descriptions = df.get("description", pd.Series("", index=df.index)).fillna("")
-    categories = df.get("category", pd.Series("", index=df.index)).fillna("")
-    breadcrumbs = df.get("category_path", pd.Series("", index=df.index)).fillna("")
-    brands = df.get("brand", pd.Series("", index=df.index)).fillna("")
 
     # Keep the structured source of truth alongside every payload endpoint.
     # The old text lane deliberately removed these tokens; that made the
@@ -2043,25 +2036,21 @@ def build_training_data(
 
     # ── clean sku text per row (variant: full = title+attr, title_only) ──
     # schema words (type/content/material/...) die on the MODEL side only —
-    # the gate's inputs are untouched (owner 2026-09-07: stage-2 strip)
+    # the gate's inputs are untouched (owner 2026-09-07: stage-2 strip).
+    # Both variants go through core.model_input, the shared builder.
     if payload_variant == "full":
-        sku_texts = [
-            append_structured_text(
-                strip_schema_words(clean_sku_text(t, a, b, d, c, p)), info,
-                enabled=structured_append_to_text,
-            )
-            for t, a, b, d, c, p, info in zip(title, attrs, brands, descriptions, categories, breadcrumbs, sku_structured, strict=True)
-        ]
+        model_frame = df
     elif payload_variant == "title_only":
-        sku_texts = [
-            append_structured_text(
-                strip_schema_words(clean_sku_text(t, "", b, "", c, p)), info,
-                enabled=structured_append_to_text,
-            )
-            for t, b, c, p, info in zip(title, brands, categories, breadcrumbs, sku_structured, strict=True)
-        ]
+        model_frame = df.copy()
+        for column in ("attributes", "attr", "description", "description_short_eng"):
+            if column in model_frame.columns:
+                model_frame[column] = ""
     else:
         raise SystemExit(f"unknown payload variant: {payload_variant}")
+    sku_texts = [
+        build_sku_text(row, info)
+        for (_, row), info in zip(model_frame.iterrows(), sku_structured, strict=True)
+    ]
 
     # ── payload: sku rows + canonical entries (in sorted-gtin order) ──
     payload = list(sku_texts)
@@ -2087,20 +2076,7 @@ def build_training_data(
         for g in canon_gtins
     ]
     canon_texts = [
-        append_structured_text(
-            strip_schema_words(canonical_model_text(" ".join((
-                str(canon_map[g]),
-                str(canonical_record_map.get(g, {}).get("mode_brand", "")),
-                str(canonical_record_map.get(g, {}).get("mode_type", "")),
-                canonical_evidence_text(
-                    canonical_record_map.get(g, {}).get("description_evidence", "")
-                ),
-                canonical_evidence_text(
-                    canonical_record_map.get(g, {}).get("breadcrumb_evidence", "")
-                ),
-            )))), info,
-            enabled=structured_append_to_text,
-        )
+        build_canonical_text(canonical_record_map.get(g, {}), info)
         for g, info in zip(canon_gtins, canon_structured, strict=True)
     ]
     payload.extend(canon_texts)
