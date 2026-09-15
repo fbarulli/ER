@@ -671,3 +671,41 @@ def test_pair_arrays_contract_still_holds_when_constructed():
         )
     with pytest.raises(ValidationError, match=r"must be \(N,2\)"):
         PairArrays(pos=np.array([0, 1]), neg=np.empty((0, 2), dtype=int), n_payload=2)
+
+
+# ── TrainingData.structured_features: the ragged gap the audit found ───────
+
+
+def _training_data(**over: object) -> TrainingData:
+    stats = TrainingStats(
+        n_rows=2, n_sku_with_canonical=1, n_pos_empty_dropped=0,
+        n_empty_sku_texts=0, n_empty_canon_texts=0, n_canonicals=1,
+        n_pos_gate_rows=0, n_neg_same_canonical_dropped=0, n_neg_gate_rows=0,
+        n_neg_resolved=0, n_neg_hard_no_band=0, n_neg_forward_resolved=0,
+        n_neg_reverse_resolved=0, n_neg_forward_source_unresolved=0,
+        n_neg_forward_target_unresolved=0, n_neg_reverse_source_unresolved=0,
+        n_neg_reverse_target_unresolved=0, n_neg_resolution_dropped=0,
+        n_neg_dropped=0,
+    )
+    kw: dict[str, object] = {
+        "payload": ["a", "b"],
+        "structured_features": [[0.0] * 10, [1.0] * 10],
+        "row_bc": np.array(["1", "2"]),
+        "pos": np.array([[0, 1]]),
+        "neg": np.empty((0, 2), dtype=int),
+        "gtin_to_row": {},
+        "stats": stats,
+    }
+    kw.update(over)
+    return TrainingData(**kw)
+
+
+def test_training_data_accepts_a_rectangular_feature_matrix():
+    assert len(_training_data().structured_features) == 2
+
+
+def test_training_data_rejects_a_ragged_feature_matrix():
+    """core.structured_features.vector() is fixed-width; a ragged list would
+    only surface later as numpy's 'inhomogeneous shape'."""
+    with pytest.raises(ValidationError, match="must be a rectangular matrix"):
+        _training_data(structured_features=[[0.0] * 10, [1.0] * 9])

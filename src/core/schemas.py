@@ -1688,6 +1688,18 @@ class TrainingData(BaseModel):
                 "structured_features length "
                 f"{len(self.structured_features)} != payload length {n}"
             )
+        # Rectangularity (audit gap closed): consumers call np.asarray() on
+        # this list, so a RAGGED one dies several frames away with numpy's
+        # "inhomogeneous shape" instead of with the field named.
+        # core.structured_features.vector() is fixed-width by construction;
+        # this assertion is what keeps it that way.
+        if self.structured_features:
+            widths = {len(row) for row in self.structured_features}
+            if len(widths) > 1:
+                raise ValueError(
+                    "structured_features must be a rectangular matrix, got "
+                    f"row widths {sorted(widths)}"
+                )
         for name in ("pos", "neg", "targeted_attribute_neg"):
             arr = getattr(self, name)
             if arr.size and int(arr.max()) >= n:
