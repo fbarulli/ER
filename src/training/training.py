@@ -186,7 +186,7 @@ def require_no_failed_folds(rows: list[dict], *, lane: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 from core.mlflow_ctx import MlflowCtx
-from core.ranking_metrics import ranking_at_k
+from core.ranking_metrics import ranking_at_k_by_query
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Training (ST 6 modern Trainer path with HF early stopping)
@@ -1958,6 +1958,9 @@ def _sku_payload_metadata(index: int, row, barcode: str, text: str) -> dict:
         "pack": sorted(info["pack"]),
         "package_type": sorted(info["package_type"]),
         "flavor": str(info["flavor"]),
+        "carbonation": sorted(info["carbonation"]),
+        "sweetener": sorted(info["sweetener"]),
+        "pulp": sorted(info["pulp"]),
         "volume_confidence": "",
         "pack_confidence": "",
         "text": text,
@@ -1985,6 +1988,9 @@ def _canonical_payload_metadata(
         "pack": sorted(info["pack"]),
         "package_type": sorted(info["package_type"]),
         "flavor": str(info["flavor"]),
+        "carbonation": sorted(info["carbonation"]),
+        "sweetener": sorted(info["sweetener"]),
+        "pulp": sorted(info["pulp"]),
         "volume_confidence": metadata_text(record["volume_confidence"]),
         "pack_confidence": metadata_text(record["pack_confidence"]),
         "text": text,
@@ -2095,7 +2101,11 @@ def _pair_metadata(
             "category",
             "volume",
             "pack",
+            "package_type",
             "flavor",
+            "carbonation",
+            "sweetener",
+            "pulp",
             "volume_confidence",
             "pack_confidence",
         ):
@@ -4488,8 +4498,19 @@ def train_one_config(
             from core.common import load_config as _lc
 
             _pr_auc = float(average_precision_score(_y, _all))
-            _ranking = ranking_at_k(
-                _y, _all, tuple(_lc()["evaluation"]["retrieval_ks"])
+            # Retrieval is evaluated per source SKU/query.  A global ranking
+            # over the concatenated pair table makes recall@K approximately
+            # 1 / number_of_positive_rows and is not a retrieval metric.
+            _eval_pairs = np.vstack([test_pos, hard_test])
+            _query_ids = np.asarray(
+                [str(df["product_id"].iloc[int(i)]) for i in _eval_pairs[:, 0]],
+                dtype=str,
+            )
+            _ranking = ranking_at_k_by_query(
+                _y,
+                _all,
+                _query_ids,
+                tuple(_lc()["evaluation"]["retrieval_ks"]),
             )
 
             _fixed_thr = float(_lc()["split"]["fixed_threshold"])

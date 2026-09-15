@@ -13,6 +13,13 @@ import unicodedata
 from collections.abc import Mapping
 
 from core.unit_canonicalization import canonical_pack_count, canonical_volume_ml
+from core.critical_attributes import (
+    CRITICAL_ATTRIBUTE_DIMENSIONS,
+    FLAVOR_ALIASES,
+    FLAVOR_LEXICON,
+    categorical_conflict,
+    extract_critical_claims,
+)
 
 
 _FLAVOR_NOISE = frozenset(
@@ -25,50 +32,6 @@ _FLAVOR_NOISE = frozenset(
         "taste",
     }
 )
-_FLAVOR_TOKEN_ALIASES = {
-    "berries": "berry",
-    "cocoanut": "coconut",
-}
-_FLAVOR_LEXICON = frozenset(
-    {
-        "aloe",
-        "apple",
-        "berry",
-        "cherry",
-        "chocolate",
-        "citrus",
-        "coconut",
-        "coffee",
-        "cola",
-        "cranberry",
-        "elderflower",
-        "ginger",
-        "grapefruit",
-        "grape",
-        "lemon",
-        "lime",
-        "mango",
-        "mint",
-        "orange",
-        "passionfruit",
-        "passion",
-        "peach",
-        "pear",
-        "pineapple",
-        "pomegranate",
-        "raspberry",
-        "rhubarb",
-        "rose",
-        "strawberry",
-        "tonic",
-        "tropical",
-        "fruit",
-        "vanilla",
-        "watermelon",
-    }
-)
-
-
 def normalized_flavor_tokens(value: object) -> frozenset[str]:
     """Return stable flavor evidence tokens for overlap-based comparison.
 
@@ -76,11 +39,13 @@ def normalized_flavor_tokens(value: object) -> frozenset[str]:
     slashes, ampersands, and hyphens) are deliberately equivalent.  Generic
     flavor-label words are removed so they cannot create false overlap.
     """
+    if isinstance(value, (set, frozenset, list, tuple)):
+        return frozenset().union(*(normalized_flavor_tokens(item) for item in value))
     text = unicodedata.normalize("NFKD", str(value or "").casefold())
     text = "".join(char for char in text if not unicodedata.combining(char))
     tokens = re.findall(r"[a-z0-9]+", text)
     return frozenset(
-        _FLAVOR_TOKEN_ALIASES.get(token, token)
+        FLAVOR_ALIASES.get(token, token)
         for token in tokens
         if token not in _FLAVOR_NOISE
     )
@@ -108,7 +73,7 @@ def _flavor_evidence(*values: object) -> str:
     """Collect all recognized flavor mentions, not just the first regex hit."""
     tokens: set[str] = set()
     for value in values:
-        tokens.update(normalized_flavor_tokens(value) & _FLAVOR_LEXICON)
+        tokens.update(normalized_flavor_tokens(value) & FLAVOR_LEXICON)
     return " ".join(sorted(tokens))
 
 
@@ -162,15 +127,28 @@ def _string_value_set(value: object, *, kind: str) -> set[str]:
 
 def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
     """Return the structured attributes used by the canonical record lane."""
+    inferred = extract_critical_claims(
+        record.get("canonical", ""), record.get("mode_flavor", "")
+    )
+
+    def evidence(field: str, inferred_field: str) -> set[str]:
+        value = record.get(field)
+        if value is None or not str(value).strip():
+            return set(inferred[inferred_field])
+        return _string_value_set(value, kind=field)
+
+    flavor_set = evidence("flavor_set", "flavor")
     return {
         "volume": _value_set(record.get("volume_set"), kind="volume"),
         "pack": _value_set(record.get("pack_set"), kind="pack"),
         "package_type": _string_value_set(
             record.get("package_type_set"), kind="package_type"
         ),
-        "flavor": _flavor_evidence(
-            record.get("mode_flavor", ""), record.get("canonical", "")
-        ),
+        "flavor": " ".join(sorted(flavor_set)),
+        "flavor_set": flavor_set,
+        "carbonation": evidence("carbonation_set", "carbonation"),
+        "sweetener": evidence("sweetener_set", "sweetener"),
+        "pulp": evidence("pulp_set", "pulp"),
     }
 
 
@@ -203,6 +181,7 @@ def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
         )
     except (TypeError, ValueError):
         pack = set()
+    flavor_set = set(extracted.get("flavor_set") or set())
     return {
         "volume": volume,
         "pack": pack,
@@ -211,10 +190,82 @@ def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
             for value in extracted.get("package_types") or []
             if str(value).strip()
         },
-        "flavor": _flavor_evidence(
-            extracted.get("flavor") or "", title, attributes
-        ),
+        "flavor": " ".join(sorted(flavor_set)),
+        "flavor_set": flavor_set,
+        "carbonation": set(extracted.get("carbonation_set") or set()),
+        "sweetener": set(extracted.get("sweetener_set") or set()),
+        "pulp": set(extracted.get("pulp_set") or set()),
     }
+
+
+def critical_attribute_evaluation(
+    left: Mapping[str, object],
+    right: Mapping[str, object],
+    *,
+    volume_relative_tolerance: float = 0.0,
+    volume_absolute_tolerance_ml: float = 0.0,
+) -> dict[str, list[str]]:
+    """Classify every shared critical dimension as agree/conflict/unknown."""
+    conflicts: list[str] = []
+    unknown: list[str] = []
+    agreements: list[str] = []
+    for dimension in CRITICAL_ATTRIBUTE_DIMENSIONS:
+        left_value = (
+            left.get("flavor_set") or normalized_flavor_tokens(left.get("flavor"))
+            if dimension == "flavor"
+            else left.get(dimension)
+        )
+        right_value = (
+            right.get("flavor_set") or normalized_flavor_tokens(right.get("flavor"))
+            if dimension == "flavor"
+            else right.get(dimension)
+        )
+        left_set = set(left_value or set())
+        right_set = set(right_value or set())
+        if not left_set or not right_set:
+            unknown.append(dimension)
+            continue
+        if dimension == "volume":
+            compatible = any(
+                abs(float(a) - float(b))
+                <= max(
+                    float(volume_absolute_tolerance_ml),
+                    float(volume_relative_tolerance) * max(abs(float(a)), abs(float(b))),
+                )
+                for a in left_set
+                for b in right_set
+            )
+            conflict = not compatible
+        elif dimension == "flavor":
+            conflict = flavor_overlap_metrics(left_set, right_set)[1] == 0.0
+        else:
+            conflict = categorical_conflict(dimension, {dimension: left_set}, {dimension: right_set})
+        (conflicts if conflict else agreements).append(dimension)
+    return {"conflicts": conflicts, "unknown": unknown, "agreements": agreements}
+
+
+def pack_gate(
+    left: Mapping[str, object],
+    right: Mapping[str, object],
+    *,
+    volume_relative_tolerance: float = 0.0,
+    volume_absolute_tolerance_ml: float = 0.0,
+) -> bool:
+    """Compatibility gate retained under its public historical name.
+
+    It now evaluates the complete shared critical-attribute contract, not
+    only packaging. It returns ``True`` only when every dimension has explicit
+    compatible evidence. Explicit conflict and unknown evidence both return
+    ``False``; callers use :func:`critical_attribute_evaluation` to route the
+    former to reject and the latter to review.
+    """
+    result = critical_attribute_evaluation(
+        left,
+        right,
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+    )
+    return not result["conflicts"] and not result["unknown"]
 
 
 def attribute_conflict_types(
@@ -238,10 +289,10 @@ def attribute_conflict_types(
         and not (left_package_types & right_package_types)
     ):
         conflicts.append("package_type")
-    if left["flavor"] and right["flavor"] and flavor_overlap_metrics(
-        left["flavor"], right["flavor"]
-    )[1] == 0.0:
-        conflicts.append("flavor")
+    evaluation = critical_attribute_evaluation(left, right)
+    for dimension in ("flavor", "carbonation", "sweetener", "pulp"):
+        if dimension in evaluation["conflicts"]:
+            conflicts.append(dimension)
     return conflicts
 
 
@@ -255,6 +306,9 @@ def conflict_columns(
         "pack_conflict": int("pack" in conflicts),
         "package_type_conflict": int("package_type" in conflicts),
         "flavor_conflict": int("flavor" in conflicts),
+        "carbonation_conflict": int("carbonation" in conflicts),
+        "sweetener_conflict": int("sweetener" in conflicts),
+        "pulp_conflict": int("pulp" in conflicts),
         "attribute_conflict_type": "+".join(conflicts) if conflicts else "none",
     }
 
@@ -263,7 +317,9 @@ __all__ = [
     "attribute_conflict_types",
     "canonical_attribute_info",
     "conflict_columns",
+    "critical_attribute_evaluation",
     "flavor_overlap_metrics",
     "normalized_flavor_tokens",
+    "pack_gate",
     "sku_attribute_info",
 ]

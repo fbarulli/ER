@@ -53,6 +53,7 @@ REASON_PREFIX_TO_TYPE = (
     ("No volume overlap", "volume"),
     ("No pack overlap", "pack"),
     ("Flavor mismatch:", "flavor"),
+    ("Critical attribute mismatch:", "critical_attribute"),
     ("Package type mismatch", "package_type"),
     ("Package material mismatch", "package_material"),
 )

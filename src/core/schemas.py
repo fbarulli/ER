@@ -1042,13 +1042,15 @@ class AnnMiningSpec(BaseModel):
 
 
 class AttributeConflictMiningSpec(BaseModel):
-    """Same-brand/category volume, pack, or flavor conflict miner knobs."""
+    """Same-brand/name critical-attribute conflict miner knobs."""
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
     target: int = Field(ge=0)
     band: str
+    min_similarity: float = Field(gt=0.0, lt=1.0)
+    same_product_name: bool
 
     @field_validator("band")
     @classmethod
@@ -1452,6 +1454,10 @@ class ExtractedAttributes(BaseModel):
     pack_confidence: float = Field(ge=0.0, le=1.0)
     package_types: list[str] = Field(default_factory=list)
     package_materials: list[str] = Field(default_factory=list)
+    flavor_set: set[str] = Field(default_factory=set)
+    carbonation_set: set[str] = Field(default_factory=set)
+    sweetener_set: set[str] = Field(default_factory=set)
+    pulp_set: set[str] = Field(default_factory=set)
 
 
 class GateResult(BaseModel):
@@ -1481,6 +1487,10 @@ class CanonicalRecord(BaseModel):
     pack_set: set[int]
     package_type_set: set[str] = Field(default_factory=set)
     package_material_set: set[str] = Field(default_factory=set)
+    flavor_set: set[str] = Field(default_factory=set)
+    carbonation_set: set[str] = Field(default_factory=set)
+    sweetener_set: set[str] = Field(default_factory=set)
+    pulp_set: set[str] = Field(default_factory=set)
     volume_confidence: float = Field(ge=0.0, le=1.0)
     pack_confidence: float = Field(ge=0.0, le=1.0)
     volume_consistency: float = Field(ge=0.0, le=1.0)
@@ -1576,6 +1586,8 @@ class TrainingStats(BaseModel):
     n_neg_reverse_target_unresolved: int = Field(ge=0)
     n_neg_resolution_dropped: int = Field(ge=0)
     n_neg_dropped: int = Field(ge=0)
+    n_targeted_attribute_candidates: int = Field(default=0, ge=0)
+    n_targeted_attribute_resolved: int = Field(default=0, ge=0)
 
 
 class TrainingData(BaseModel):
@@ -1590,6 +1602,9 @@ class TrainingData(BaseModel):
     row_bc: np.ndarray
     pos: np.ndarray
     neg: np.ndarray
+    targeted_attribute_neg: np.ndarray = Field(
+        default_factory=lambda: np.empty((0, 2), dtype=int)
+    )
     gtin_to_row: dict[str, int]
     stats: TrainingStats
 
@@ -1601,7 +1616,7 @@ class TrainingData(BaseModel):
             raise ValueError(f"row_bc must be 1-D, got shape {arr.shape}")
         return arr
 
-    @field_validator("pos", "neg")
+    @field_validator("pos", "neg", "targeted_attribute_neg")
     @classmethod
     def _pair_matrix(cls, v: Any) -> np.ndarray:
         arr = np.asarray(v)
@@ -1629,7 +1644,7 @@ class TrainingData(BaseModel):
                 "structured_features length "
                 f"{len(self.structured_features)} != payload length {n}"
             )
-        for name in ("pos", "neg"):
+        for name in ("pos", "neg", "targeted_attribute_neg"):
             arr = getattr(self, name)
             if arr.size and int(arr.max()) >= n:
                 raise ValueError(
@@ -1987,6 +2002,10 @@ CANONICAL_RECORDS_COLUMNS: tuple[str, ...] = (
     "pack_set",
     "package_type_set",
     "package_material_set",
+    "flavor_set",
+    "carbonation_set",
+    "sweetener_set",
+    "pulp_set",
     "volume_confidence",
     "pack_confidence",
     "volume_consistency",

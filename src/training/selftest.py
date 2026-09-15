@@ -997,18 +997,18 @@ def oracle_phrase_variants() -> None:
         return {s for s in sel if s in PHRASE_VARIANTS}
 
     cases = {
-        # sugar-free family -> sugar_free
-        "Sugar Free Cola": "sugar_free",
-        "Sugar-Free Cola": "sugar_free",
-        "sugarfree Cola": "sugar_free",
-        "sugarless Cola": "sugar_free",
-        "free sugar Cola": "sugar_free",
-        "free of sugar Cola": "sugar_free",
-        "without sugar Cola": "sugar_free",
-        "zero sugar Cola": "sugar_free+no_sugar",
-        "no sugar Cola": "sugar_free+no_sugar",
-        "no added sugar Cola": "sugar_free+no_sugar",
-        "without added sugar Cola": "sugar_free+no_sugar",
+        # sugar-free family -> one atomic no_sugar token
+        "Sugar Free Cola": "no_sugar",
+        "Sugar-Free Cola": "no_sugar",
+        "sugarfree Cola": "no_sugar",
+        "sugarless Cola": "no_sugar",
+        "free sugar Cola": "no_sugar",
+        "free of sugar Cola": "no_sugar",
+        "without sugar Cola": "no_sugar",
+        "zero sugar Cola": "no_sugar",
+        "no sugar Cola": "no_sugar",
+        "no added sugar Cola": "no_added_sugar",
+        "without added sugar Cola": "no_added_sugar",
         "with added sugar Cola": "added_sugar",  # positive claim, NOT sugar-free
         # pulp family (previously dead keep-tokens: with/no stopworded away)
         "Cola with pulp": "with_pulp",

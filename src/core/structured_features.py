@@ -75,13 +75,24 @@ def _as_string_set(value: object, *, kind: str) -> set[str]:
 
 
 def info_from_sets(
-    volume: object, pack: object, package_type: object = None
+    volume: object,
+    pack: object,
+    package_type: object = None,
+    *,
+    flavor: object = None,
+    carbonation: object = None,
+    sweetener: object = None,
+    pulp: object = None,
 ) -> dict[str, set[float] | set[str]]:
     """Normalize a SKU/canonical record into the shared set representation."""
     return {
         "volume": _as_set(volume, kind="volume"),
         "pack": _as_set(pack, kind="pack"),
         "package_type": _as_string_set(package_type, kind="package_type"),
+        "flavor": _as_string_set(flavor, kind="flavor"),
+        "carbonation": _as_string_set(carbonation, kind="carbonation"),
+        "sweetener": _as_string_set(sweetener, kind="sweetener"),
+        "pulp": _as_string_set(pulp, kind="pulp"),
     }
 
 
@@ -99,16 +110,38 @@ def sku_info(
         if pack_qty is not None and float(extracted.get("pack_confidence") or 0.0) > 0.0
         else set()
     )
-    return info_from_sets(volume, pack, extracted.get("package_types"))
+    return info_from_sets(
+        volume,
+        pack,
+        extracted.get("package_types"),
+        flavor=extracted.get("flavor_set"),
+        carbonation=extracted.get("carbonation_set"),
+        sweetener=extracted.get("sweetener_set"),
+        pulp=extracted.get("pulp_set"),
+    )
 
 
 def canonical_info(
     record: Mapping[str, object],
 ) -> dict[str, set[float] | set[str]]:
+    from core.critical_attributes import extract_critical_claims
+
+    inferred = extract_critical_claims(
+        record.get("canonical", ""), record.get("mode_flavor", "")
+    )
+
+    def evidence(field: str, inferred_field: str) -> object:
+        value = record.get(field)
+        return value if value is not None and str(value).strip() else inferred[inferred_field]
+
     return info_from_sets(
         record.get("volume_set"),
         record.get("pack_set"),
         record.get("package_type_set"),
+        flavor=evidence("flavor_set", "flavor"),
+        carbonation=evidence("carbonation_set", "carbonation"),
+        sweetener=evidence("sweetener_set", "sweetener"),
+        pulp=evidence("pulp_set", "pulp"),
     )
 
 
@@ -118,17 +151,45 @@ def _number_token(prefix: str, value: float) -> str:
 
 
 def text_tokens(info: Mapping[str, object]) -> list[str]:
-    """Return deterministic, tokenizer-safe-ish normalized attribute tokens."""
+    """Return deterministic field-marked tokens appended to model text.
+
+    Existing value tokens are retained (for example ``volume_ml_500``), while
+    stable ``[FIELD_*]`` markers make field boundaries explicit.  The encoder
+    still receives one ordinary string and the numeric feature vector keeps
+    its existing dimensionality.
+    """
     volumes = sorted(_as_set(info.get("volume"), kind="volume"))
     packs = sorted(_as_set(info.get("pack"), kind="pack"))
     package_types = sorted(
         _as_string_set(info.get("package_type"), kind="package_type")
     )
-    return [
-        *_number_tokens("volume_ml_", volumes),
-        *_number_tokens("pack_qty_", packs),
-        *(f"package_type_{value.replace(' ', '_')}" for value in package_types),
+    categorical = {
+        "FLAVOR": sorted(_as_string_set(info.get("flavor"), kind="flavor")),
+        "CARBONATION": sorted(
+            _as_string_set(info.get("carbonation"), kind="carbonation")
+        ),
+        "SWEETENER_DIET": sorted(
+            _as_string_set(info.get("sweetener"), kind="sweetener")
+        ),
+        "PULP": sorted(_as_string_set(info.get("pulp"), kind="pulp")),
+    }
+    groups: list[tuple[str, list[str]]] = [
+        ("VOLUME", _number_tokens("volume_ml_", volumes)),
+        ("PACK_SIZE", _number_tokens("pack_qty_", packs)),
+        (
+            "PACKAGE_TYPE",
+            [f"package_type_{value.replace(' ', '_')}" for value in package_types],
+        ),
+        *[
+            (name, [f"{name.casefold()}_{value.replace(' ', '_')}" for value in values])
+            for name, values in categorical.items()
+        ],
     ]
+    tokens: list[str] = []
+    for field, values in groups:
+        if values:
+            tokens.extend((f"[FIELD_{field}]", *values))
+    return tokens
 
 
 def _number_tokens(prefix: str, values: Sequence[float]) -> list[str]:

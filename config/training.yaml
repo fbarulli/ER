@@ -539,8 +539,10 @@ mining:
     max_per_brand: 100        # endpoint diversity cap per brand
   attribute_conflict:
     enabled: true
-    target: 12000             # maximum volume/pack/flavor-conflict pairs
-    band: "0.45-0.95"        # cosine band for same-brand/category conflicts
+    target: 12000             # maximum shared critical-attribute conflict pairs
+    band: "0.50-0.95"        # dynamic cosine band; lower bound is strict (>0.50)
+    min_similarity: 0.50      # static gate Jaccard must be strictly greater
+    same_product_name: true   # normalized name removes pack/size/container only
 
 # Named concurrent-run selectors. They toggle methods only; all miner knobs
 # remain in mining.ann / mining.attribute_conflict above.

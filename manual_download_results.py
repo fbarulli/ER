@@ -31,8 +31,12 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def run_colab(*args: str, timeout: int) -> None:
-    subprocess.run(["colab", *args], check=True, timeout=timeout)
+def run_colab(*args: str, timeout: int, config: Path | None = None) -> None:
+    command = ["colab"]
+    if config is not None:
+        command.extend(["--config", str(config)])
+    command.extend(args)
+    subprocess.run(command, check=True, timeout=timeout)
 
 
 def safe_extract(archive: Path, destination: Path) -> None:
@@ -104,6 +108,12 @@ def main() -> None:
     parser.add_argument("--remote-base", required=True)
     parser.add_argument("--destination", type=Path)
     parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("colab_cli_state/sessions.json"),
+        help="Colab CLI session-state file used by the launcher",
+    )
+    parser.add_argument(
         "--no-teardown",
         action="store_true",
         help="download and verify, but leave the remote session running",
@@ -121,7 +131,10 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="manual-download-") as temp:
         temp_dir = Path(temp)
         remote_archiver(args.remote_base, temp_dir / "archive.py")
-        run_colab("exec", "-s", args.session, "--timeout", "3600", "-f", str(temp_dir / "archive.py"), timeout=3700)
+        run_colab(
+            "exec", "-s", args.session, "--timeout", "3600",
+            "-f", str(temp_dir / "archive.py"), timeout=3700, config=args.config
+        )
 
     for kind in ("results", "checkpoints"):
         remote_archive = f"{args.remote_base}/manual_download_{kind}.tar.gz"
@@ -129,8 +142,14 @@ def main() -> None:
         local_archive = destination / f"manual_download_{kind}.tar.gz"
         local_manifest = destination / f"manual_download_{kind}_manifest.json"
         try:
-            run_colab("download", "-s", args.session, remote_archive, str(local_archive), timeout=3600)
-            run_colab("download", "-s", args.session, remote_manifest, str(local_manifest), timeout=600)
+            run_colab(
+                "download", "-s", args.session, remote_archive, str(local_archive),
+                timeout=3600, config=args.config
+            )
+            run_colab(
+                "download", "-s", args.session, remote_manifest, str(local_manifest),
+                timeout=600, config=args.config
+            )
         except subprocess.CalledProcessError:
             if kind == "checkpoints" and args.allow_missing_checkpoints:
                 print("No checkpoint archive was available; ordinary results may still be complete.")
@@ -153,7 +172,7 @@ def main() -> None:
     if not args.no_teardown:
         print(f"Tearing down remote session: {args.session}")
         try:
-            run_colab("stop", "-s", args.session, timeout=120)
+            run_colab("stop", "-s", args.session, timeout=120, config=args.config)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(
                 "Downloads verified, but remote teardown failed; retry `colab stop "

@@ -11,9 +11,136 @@ from __future__ import annotations
 
 from collections import defaultdict
 from itertools import combinations
+import re
 
 import numpy as np
 import pandas as pd
+
+
+def normalized_product_name(title: object, brand: object) -> str:
+    """Stable product-name key with pack/size/container evidence removed.
+
+    Flavor, carbonation, sweetener/diet, and pulp words deliberately remain;
+    they are identity-bearing and must not make two different variants look
+    like the same product name.
+    """
+    from core.critical_attributes import normalized_attribute_text
+
+    text = normalized_attribute_text(title)
+    brand_tokens = set(normalized_attribute_text(brand).split())
+    text = re.sub(
+        r"\b\d+(?:[.,]\d+)?\s*(?:ml|cl|l|lt|ltr|liters?|litres?|"
+        r"fl\s*oz|fluid\s+ounces?|oz|ounces?|qt|quarts?|pt|pints?|"
+        r"gal|gallons?)\b",
+        " ",
+        text,
+    )
+    text = re.sub(
+        r"\b(?:pack|case|count)\s*(?:of\s*)?\d+\b|"
+        r"\b\d+\s*(?:pack|packs|pk|count|ct|units?|pieces?|pcs|"
+        r"bottles?|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)\b",
+        " ",
+        text,
+    )
+    container_noise = {
+        "pack", "packs", "case", "count", "ct", "unit", "units",
+        "bottle", "bottles", "can", "cans", "tin", "tins", "carton",
+        "cartons", "box", "boxes", "packet", "packets", "sachet",
+        "sachets", "bag", "bags",
+    }
+    return " ".join(
+        token
+        for token in text.split()
+        if token not in brand_tokens and token not in container_noise
+    )
+
+
+def mine_targeted_attribute_negatives(
+    df: pd.DataFrame,
+    gates: pd.DataFrame,
+    canonical_records: pd.DataFrame,
+    gtin_to_row: dict[str, int],
+    gtin_to_canon_idx: dict[str, int],
+    *,
+    existing: np.ndarray | None = None,
+    n_target: int,
+    min_similarity: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Mine same-brand/name critical-attribute negatives from gate evidence.
+
+    ``similarity`` is the existing gate candidate's short-canonical-token
+    Jaccard score. The threshold is strict (``score > min_similarity``).
+    Both directions are emitted as source-SKU -> other-canonical pairs and
+    all critical conflicts come from the same evaluator used at inference.
+    """
+    if n_target <= 0:
+        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+    from core.attribute_conflicts import (
+        canonical_attribute_info,
+        critical_attribute_evaluation,
+    )
+
+    records = {
+        str(row["gtin"]): row
+        for row in canonical_records.to_dict("records")
+    }
+    existing_keys = {
+        (int(a), int(b)) for a, b in (existing if existing is not None else [])
+    }
+    ranked = gates.assign(
+        candidate_similarity=pd.to_numeric(gates["similarity"], errors="coerce")
+    )
+    ranked = ranked[ranked["candidate_similarity"].gt(float(min_similarity))]
+    ranked = ranked.sort_values(
+        ["candidate_similarity", "gtin1", "gtin2"],
+        ascending=[False, True, True],
+        kind="stable",
+    )
+    found: list[tuple[int, int, float]] = []
+    for row in ranked.itertuples(index=False):
+        left_gtin, right_gtin = str(row.gtin1), str(row.gtin2)
+        if left_gtin not in records or right_gtin not in records:
+            continue
+        if left_gtin not in gtin_to_row or right_gtin not in gtin_to_row:
+            continue
+        if left_gtin not in gtin_to_canon_idx or right_gtin not in gtin_to_canon_idx:
+            continue
+        left_record, right_record = records[left_gtin], records[right_gtin]
+        left_row, right_row = gtin_to_row[left_gtin], gtin_to_row[right_gtin]
+        left_brand = str(left_record.get("mode_brand", "")).strip().casefold()
+        right_brand = str(right_record.get("mode_brand", "")).strip().casefold()
+        if not left_brand or left_brand != right_brand:
+            continue
+        left_name = normalized_product_name(df.iloc[left_row].get("title", ""), left_brand)
+        right_name = normalized_product_name(df.iloc[right_row].get("title", ""), right_brand)
+        if not left_name or left_name != right_name:
+            continue
+        evaluation = critical_attribute_evaluation(
+            canonical_attribute_info(left_record),
+            canonical_attribute_info(right_record),
+        )
+        if not evaluation["conflicts"]:
+            continue
+        score = float(row.candidate_similarity)
+        for pair in (
+            (left_row, gtin_to_canon_idx[right_gtin]),
+            (right_row, gtin_to_canon_idx[left_gtin]),
+        ):
+            pair = (int(pair[0]), int(pair[1]))
+            if pair in existing_keys:
+                continue
+            existing_keys.add(pair)
+            found.append((pair[0], pair[1], score))
+            if len(found) >= int(n_target):
+                break
+        if len(found) >= int(n_target):
+            break
+    if not found:
+        return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
+    return (
+        np.asarray([(a, b) for a, b, _ in found], dtype=int),
+        np.asarray([score for _, _, score in found], dtype=float),
+    )
 
 
 def mine_attribute_conflict_negatives(
@@ -80,6 +207,13 @@ def mine_attribute_conflict_negatives(
         if old is None or title_len > len(str(df.iloc[old].get("title", ""))):
             reps[gtin] = i
 
+    product_names = {
+        gtin: normalized_product_name(
+            df.iloc[row].get("title", ""), canon_by_gtin[gtin]["brand"]
+        )
+        for gtin, row in reps.items()
+    }
+
     existing_keys = {
         (int(a), int(b)) for a, b in (existing if existing is not None else [])
     }
@@ -98,11 +232,16 @@ def mine_attribute_conflict_negatives(
             ):
                 continue
             target = canon_by_gtin[target_gtin]
+            if (
+                not product_names.get(source_gtin)
+                or product_names.get(source_gtin) != product_names.get(target_gtin)
+            ):
+                continue
             if not attribute_conflict_types(source, target):
                 continue
             target_row = canon_idx[target_gtin]
             score = float(np.dot(emb[source_row], emb[target_row]))
-            if not cosine_lo <= score <= cosine_hi:
+            if not float(cosine_lo) < score <= float(cosine_hi):
                 continue
             pair = (int(source_row), int(target_row))
             if pair in existing_keys:

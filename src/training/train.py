@@ -766,6 +766,10 @@ def _main_inner(_mlf, _wandb) -> None:
         data["pos"],
         data["neg"],
     )
+    targeted_attribute_neg = np.asarray(
+        data.get("targeted_attribute_neg", np.empty((0, 2), dtype=int)),
+        dtype=int,
+    ).reshape(-1, 2)
     s = data["stats"]
     _wandb.log_config(
         {
@@ -1036,10 +1040,24 @@ def _main_inner(_mlf, _wandb) -> None:
     if not mining_enabled:
         print("[mining] disabled by config; skipping ANN and supplemental mining", flush=True)
 
-    # Supplemental mining targets the same-brand/category attribute-conflict
-    # population that the gate's 6,051 hard negatives cannot exhaust. The
-    # original gate negatives remain intact; these are additional label-0
-    # training rows selected from the configured cosine band.
+    # Static targeted candidates come from the existing gate similarity and
+    # shared critical-attribute evaluator. They are available to every loss,
+    # including MNRL; dynamic cosine refresh remains contrastive-only.
+    if attribute_conflict_enabled and len(targeted_attribute_neg):
+        neg = np.vstack([neg, targeted_attribute_neg]) if len(neg) else targeted_attribute_neg
+        train_neg = (
+            np.vstack([train_neg, targeted_attribute_neg])
+            if len(train_neg)
+            else targeted_attribute_neg.copy()
+        )
+        targeted_sources = np.full(
+            len(targeted_attribute_neg), "targeted_attribute_conflict", dtype=object
+        )
+        neg_sources = np.concatenate([neg_sources, targeted_sources])
+        train_neg_sources = np.concatenate([train_neg_sources, targeted_sources])
+
+    # Supplemental dynamic mining uses the same dimension contract after a
+    # fine-tuned embedding population exists.
     if attribute_conflict_enabled and emb0.size:
         from core.hard_negatives import mine_attribute_conflict_negatives
 
@@ -1098,7 +1116,15 @@ def _main_inner(_mlf, _wandb) -> None:
         {
             "n_gate_negative_pairs": int(np.sum(neg_sources == "gate")),
             "n_attribute_conflict_negative_pairs": int(
-                np.sum(neg_sources == "attribute_conflict")
+                np.sum(
+                    np.isin(
+                        neg_sources,
+                        ["attribute_conflict", "targeted_attribute_conflict"],
+                    )
+                )
+            ),
+            "n_targeted_attribute_negative_pairs": int(
+                np.sum(neg_sources == "targeted_attribute_conflict")
             ),
         }
     )
@@ -1113,7 +1139,8 @@ def _main_inner(_mlf, _wandb) -> None:
         }
     )
     print(
-        f"[attribute-conflicts] +{len(_attr_neg):,} supplemental label-0 pairs "
+        f"[attribute-conflicts] +{len(targeted_attribute_neg):,} targeted static, "
+        f"+{len(_attr_neg):,} supplemental dynamic label-0 pairs "
         f"(baseline gate hard-negatives preserved; total {len(neg):,})",
         flush=True,
     )

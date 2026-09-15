@@ -46,6 +46,7 @@ from core.schemas import (
     check_verdict_map,
 )
 from ner.ner_product_attributes import extract_title_attributes
+from core.critical_attributes import extract_critical_claims
 
 # ============================================================================
 # EXTRACTION
@@ -77,12 +78,6 @@ def _load_concept_folds() -> dict[str, str]:
 STOPWORDS = _load_stopwords("STOPWORDS")
 
 # ── regex patterns (owner's second_extraction.py verbatim) ──────────────────
-FLAVOR_PATTERN = re.compile(
-    r"\b(lemon|lime|orange|strawberry|raspberry|peach|apple|cherry|"
-    r"mango|pineapple|coconut|watermelon|berry|berries|cola|coffee|"
-    r"ginger|mint|vanilla|chocolate|tonic|citrus|aloe|rose)\b",
-    re.IGNORECASE,
-)
 VOLUME_PATTERN_METRIC_EXT = re.compile(
     r"(\d+(?:\.\d+)?)\s*(ml|milliliters?|cc|cl|centiliters?|l|lt|ltr|liters?|litres?)\b",
     re.IGNORECASE,
@@ -276,10 +271,12 @@ def parse_attribute_volume_pack(
 def extract_all(sku_name: str, attribute: str) -> dict:
     """Extract structured fields plus salient tokens from a single SKU row."""
     t = normalize_text(sku_name)
-    # Flavor and type
-    flavor = (
-        FLAVOR_PATTERN.search(t).group(1).lower() if FLAVOR_PATTERN.search(t) else ""
-    )
+    # Critical categorical evidence is parsed once for the canonical, model,
+    # mining, and inference lanes.  Keep the historical scalar flavor as a
+    # deterministic first value for compatibility with existing CSV readers.
+    critical = extract_critical_claims(sku_name, attribute)
+    flavor_set = set(critical["flavor"])
+    flavor = sorted(flavor_set)[0] if flavor_set else ""
     if re.search(r"\bcoconut\s+water\b", t):
         ptype = "coconut water"
     elif re.search(r"\bmineral\s+water\b", t) or re.search(r"\bwater\b", t):
@@ -341,12 +338,100 @@ def extract_all(sku_name: str, attribute: str) -> dict:
         pack_confidence=pack_conf,
         package_types=title_attributes["package_types"],
         package_materials=title_attributes["package_materials"],
+        flavor_set=flavor_set,
+        carbonation_set=set(critical["carbonation"]),
+        sweetener_set=set(critical["sweetener"]),
+        pulp_set=set(critical["pulp"]),
     ).model_dump()
 
 
 # ============================================================================
 # GATING
 # ============================================================================
+def pack_gate(
+    score: float,
+    sku_a: object,
+    sku_b: object,
+    *,
+    volume_relative_tolerance: float = 0.0,
+    volume_absolute_tolerance_ml: float = 0.0,
+) -> bool:
+    """Return whether known package identity attributes are compatible.
+
+    ``score`` is accepted for a stable gate-call interface but is deliberately
+    not used: a high semantic score cannot override a known pack, package-type,
+    or volume conflict.  Empty values remain unknown and are handled by the
+    existing confidence/fallback logic.
+    """
+    del score
+
+    def _value(obj: object, *names: str):
+        if isinstance(obj, dict):
+            for name in names:
+                if name in obj:
+                    return obj[name]
+        else:
+            for name in names:
+                if hasattr(obj, name):
+                    return getattr(obj, name)
+        return None
+
+    def _set(value: object) -> set:
+        if value is None or value == "":
+            return set()
+        if isinstance(value, (set, frozenset, list, tuple)):
+            return set(value)
+        return {value}
+
+    for left_names, right_names in (
+        (("pack_size", "pack_set", "pack_qty"), ("pack_size", "pack_set", "pack_qty")),
+        (("package_type", "package_type_set"), ("package_type", "package_type_set")),
+    ):
+        left = _set(_value(sku_a, *left_names))
+        right = _set(_value(sku_b, *right_names))
+        if left and right and left != right:
+            return False
+
+    left_volume = _set(_value(sku_a, "volume", "volume_set", "volume_ml"))
+    right_volume = _set(_value(sku_b, "volume", "volume_set", "volume_ml"))
+    if left_volume and right_volume and not any(
+        abs(float(a) - float(b))
+        <= max(
+            float(volume_absolute_tolerance_ml),
+            float(volume_relative_tolerance) * max(abs(float(a)), abs(float(b))),
+        )
+        for a in left_volume
+        for b in right_volume
+    ):
+        return False
+
+    def _tokens(obj: object) -> set[str]:
+        raw = _value(obj, "canonical") or ""
+        return {part.casefold() for token in str(raw).split() for part in token.split("_")}
+
+    def _claim_set(obj: object, dimension: str) -> set[str]:
+        explicit = _value(obj, f"{dimension}_set")
+        if explicit:
+            return _set(explicit)
+        found = extract_critical_claims(str(_value(obj, "canonical") or ""))[dimension]
+        return set(found)
+
+    for dimension in ("carbonation", "sweetener", "pulp"):
+        left = _claim_set(sku_a, dimension)
+        right = _claim_set(sku_b, dimension)
+        if left and right:
+            if dimension == "sweetener":
+                conflict = (
+                    ("sugar" in left and bool(right & {"no_sugar", "diet"}))
+                    or ("sugar" in right and bool(left & {"no_sugar", "diet"}))
+                )
+            else:
+                conflict = not bool(left & right)
+            if conflict:
+                return False
+    return True
+
+
 def three_way_gate(
     attrs1: dict,
     attrs2: dict,
@@ -376,6 +461,16 @@ def three_way_gate(
             consistency_fallback_threshold = float(
                 _g.consistency_fallback_threshold
             )
+    if not pack_gate(
+        0.0,
+        attrs1,
+        attrs2,
+        volume_relative_tolerance=float(vol_tolerance),
+    ):
+        return GateResult(
+            decision="hard_no",
+            reason="Pack blocker: pack size, package type, or volume mismatch",
+        ).model_dump()
     # raw confidence check
     if (
         attrs1["volume_confidence"] < raw_conf_threshold
@@ -416,15 +511,28 @@ def three_way_gate(
         if left and right and not (left & right):
             return GateResult(decision="hard_no", reason=reason).model_dump()
 
-    # flavor check (only if both have a non-empty flavor): kills the
-    # flavor-blind proceed tail (ZUMOSOL apple vs orange nectar at the
-    # same size/pack — measured 258 proceed pairs below sim 0.40)
-    flavor1 = attrs1.get("mode_flavor", "")
-    flavor2 = attrs2.get("mode_flavor", "")
-    if flavor1 and flavor2 and flavor1 != flavor2:
+    # Every explicit categorical conflict uses the same dimension/evidence
+    # definition as targeted mining and final inference. Unknown stays
+    # unknown here; it is not fabricated into a conflict or an agreement.
+    from core.attribute_conflicts import (
+        canonical_attribute_info,
+        critical_attribute_evaluation,
+    )
+
+    critical = critical_attribute_evaluation(
+        canonical_attribute_info(attrs1),
+        canonical_attribute_info(attrs2),
+        volume_relative_tolerance=float(vol_tolerance),
+    )
+    categorical_conflicts = [
+        name
+        for name in critical["conflicts"]
+        if name in {"flavor", "carbonation", "sweetener", "pulp"}
+    ]
+    if categorical_conflicts:
         return GateResult(
             decision="hard_no",
-            reason=f"Flavor mismatch: {flavor1} vs {flavor2}",
+            reason="Critical attribute mismatch: " + ",".join(categorical_conflicts),
         ).model_dump()
 
     # consistency check
@@ -439,7 +547,7 @@ def three_way_gate(
         ).model_dump()
 
     return GateResult(
-        decision="proceed", reason="Volume, pack, flavor all compatible"
+        decision="proceed", reason="Known critical attributes compatible"
     ).model_dump()
 
 
@@ -492,8 +600,9 @@ KEEP_TOKENS = {
     "still",
     "sparkling",
     "pulp",
+    "sugar",
     "no_sugar",
-    "sugar_free",
+    "no_added_sugar",
     "added_sugar",
     "with_pulp",
     "no_pulp",
@@ -510,12 +619,10 @@ KEEP_TOKENS = {
 # free SUGAR FREE…" — two adjacent compounds) / "free of sugar" 0 (not in
 # this export but covered by the ruling) / "no sugar" 7,123 / "no added
 # sugar" 4,039 / "without added sugar" 39.
-# NOTE: "no sugar" is ALSO sugar-free (a no-sugar product IS sugar-free),
-# so it fires both keep-tokens — both are true statements about the
-# product. "added sugar" (positive, "with added sugar") stays its own
-# token: the OPPOSITE claim of "no added sugar".
+# All sugar-free spellings use one ``no_sugar`` token. ``no added sugar`` is
+# deliberately separate because it does not prove absence of natural sugar.
 PHRASE_VARIANTS = {
-    "sugar_free": [
+    "no_sugar": [
         re.compile(r"\bsugar\s*[- ]?\s*free\b"),          # sugar free / sugar-free / sugarfree
         re.compile(r"\bsugarfree\b"),                     # fused (no separator survived)
         re.compile(r"\bsugarless\b"),                     # sweetener synonym
@@ -523,14 +630,10 @@ PHRASE_VARIANTS = {
         re.compile(r"\bwithout\s+sugar\b"),               # without sugar
         re.compile(r"\bzero\s+sugar\b"),                  # zero sugar
         re.compile(r"\bno\s+sugar\b"),                    # no sugar IS sugar-free
-        re.compile(r"\bno\s+added\s+sugar\b"),            # no added sugar IS sugar-free
-        re.compile(r"\bwithout\s+added\s+sugar\b"),       # without added sugar
     ],
-    "no_sugar": [
-        re.compile(r"\bno\s+sugar\b"),
+    "no_added_sugar": [
         re.compile(r"\bno\s+added\s+sugar\b"),
         re.compile(r"\bwithout\s+added\s+sugar\b"),
-        re.compile(r"\bzero\s+sugar\b"),
     ],
     "added_sugar": [
         re.compile(r"\bwith\s+added\s+sugar\b"),          # the POSITIVE claim only
@@ -743,6 +846,10 @@ def generate_canonical(
     }
     package_type_set = {value for x in extracted for value in x["package_types"]}
     package_material_set = {value for x in extracted for value in x["package_materials"]}
+    flavor_set = {value for x in extracted for value in x["flavor_set"]}
+    carbonation_set = {value for x in extracted for value in x["carbonation_set"]}
+    sweetener_set = {value for x in extracted for value in x["sweetener_set"]}
+    pulp_set = {value for x in extracted for value in x["pulp_set"]}
 
     # Confidence / consistency
     vol_confs = [x["volume_confidence"] for x in extracted if x["volume_ml"] > 0]
@@ -786,6 +893,13 @@ def generate_canonical(
         parts.append(mode_flavor)
     if mode_type:
         parts.append(mode_type)
+    # Explicit categorical fields are spoken before free-form n-grams. This
+    # guarantees that polarity survives canonical generation even when its
+    # source phrase is not among the top TF-IDF n-grams.
+    parts.extend(sorted(carbonation_set))
+    parts.extend(sorted(sweetener_set))
+    parts.extend(sorted(pulp_set))
+    parts.extend(sorted(flavor_set - ({mode_flavor} if mode_flavor else set())))
     # token-once: filter the salient n-grams against every word already
     # spoken (brand/flavor/type parts + earlier n-grams). STRICT novelty
     # (owner directive 2026-09-08: 'we cant have repeated strings'): the
@@ -898,6 +1012,10 @@ def generate_canonical(
         pack_set=pack_set,
         package_type_set=package_type_set,
         package_material_set=package_material_set,
+        flavor_set=flavor_set,
+        carbonation_set=carbonation_set,
+        sweetener_set=sweetener_set,
+        pulp_set=pulp_set,
         volume_confidence=round(vol_conf, 3),
         pack_confidence=round(pack_conf, 3),
         volume_consistency=round(volume_consistency, 3),
@@ -1504,7 +1622,16 @@ def run_within_brand_pipeline(
     # DETERMINISM: set->display columns render in
     # PYTHONHASHSEED-random order otherwise; sort the DISPLAY (after all
     # gate logic consumed the real sets) so the CSV is byte-reproducible.
-    for _col in ("volume_set", "pack_set", "package_type_set", "package_material_set"):
+    for _col in (
+        "volume_set",
+        "pack_set",
+        "package_type_set",
+        "package_material_set",
+        "flavor_set",
+        "carbonation_set",
+        "sweetener_set",
+        "pulp_set",
+    ):
         df_canon[_col] = df_canon[_col].map(lambda s: sorted(s))
     # Same for the pair ROW ORDER: candidate_pairs is a SET, so iteration
     # order is process-random. Gate decisions themselves are order-free —
@@ -1740,6 +1867,29 @@ def build_training_data(
     rev = np.stack([b[ok2].astype(int), cb[ok2].astype(int)], axis=1)
     neg = np.vstack([fwd, rev]) if len(fwd) or len(rev) else np.empty((0, 2), dtype=int)
 
+    # Targeted critical-attribute candidates lower the similarity floor from
+    # the generic gate-negative threshold while retaining the same brand/name
+    # and explicit-conflict requirements. They remain a separate population
+    # so training can enable/disable them through the mining profile and keep
+    # source provenance intact.
+    from core.hard_negatives import mine_targeted_attribute_negatives
+
+    targeted_cfg = cfg["mining"]["attribute_conflict"]
+    targeted_attribute_neg, targeted_attribute_scores = (
+        mine_targeted_attribute_negatives(
+            df,
+            gates,
+            canonical_records,
+            gtin_to_row,
+            gtin_to_canon_idx,
+            existing=neg,
+            n_target=int(targeted_cfg["target"]),
+            min_similarity=float(targeted_cfg["min_similarity"]),
+        )
+        if bool(targeted_cfg["same_product_name"])
+        else (np.empty((0, 2), dtype=int), np.empty((0,), dtype=float))
+    )
+
     n_forward_source_unresolved = int(a.isna().sum())
     n_forward_target_unresolved = int(ca.isna().sum())
     n_reverse_source_unresolved = int(b.isna().sum())
@@ -1769,10 +1919,18 @@ def build_training_data(
         "n_neg_reverse_target_unresolved": n_reverse_target_unresolved,
         "n_neg_resolution_dropped": n_resolution_dropped,
         "n_neg_dropped": n_resolution_dropped,
+        "n_targeted_attribute_candidates": int(len(targeted_attribute_scores)),
+        "n_targeted_attribute_resolved": int(len(targeted_attribute_neg)),
     }
     print(
         f"[payload-stage] pairs resolved positives={len(pos):,} "
         f"hard_negatives={len(neg):,} unresolved_or_dropped={n_resolution_dropped:,}",
+        flush=True,
+    )
+    print(
+        f"[targeted-attribute-negatives] {len(targeted_attribute_neg):,} "
+        f"same-brand/name explicit-conflict pairs with gate similarity "
+        f"> {float(targeted_cfg['min_similarity']):.2f}",
         flush=True,
     )
     _resolution_log = RESULTS / "logs"
@@ -1813,8 +1971,24 @@ def build_training_data(
                 "text_b": payload[j],
             }
         )
+    for i, j in targeted_attribute_neg:
+        _rows.append(
+            {
+                "kind": "neg_targeted_attribute",
+                "payload_idx_a": int(i),
+                "payload_idx_b": int(j),
+                "barcode_a": row_bc[i],
+                "barcode_b": row_bc[j],
+                "text_a": payload[i],
+                "text_b": payload[j],
+            }
+        )
     pd.DataFrame(_rows).to_csv(_vis_dir / "payload_pairs.csv", index=False)
-    _kinds = {"pos": int(len(pos)), "neg_hard": int(len(neg))}
+    _kinds = {
+        "pos": int(len(pos)),
+        "neg_hard": int(len(neg)),
+        "neg_targeted_attribute": int(len(targeted_attribute_neg)),
+    }
     print(
         f"[payload-visibility] {len(_rows):,} pairs dumped -> "
         f"results/logs/payload_pairs.csv | {_kinds}",
@@ -1832,6 +2006,7 @@ def build_training_data(
         row_bc=np.array(row_bc),
         pos=pos,
         neg=neg,
+        targeted_attribute_neg=targeted_attribute_neg,
         gtin_to_row=gtin_to_row,
         stats=stats,
     )

@@ -50,10 +50,13 @@ from core.ann_config import load_ann_config
 from core.attribute_conflicts import (
     canonical_attribute_info,
     conflict_columns,
+    critical_attribute_evaluation,
     flavor_overlap_metrics,
     normalized_flavor_tokens,
+    pack_gate,
     sku_attribute_info,
 )
+from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
 from core.common import (
     CONFIG_PATH,
     F,
@@ -220,12 +223,11 @@ def targeted_veto_gate(
     exact_gtin: bool,
     config: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Classify a non-exact candidate as auto, veto, or human review.
+    """Classify a candidate using the shared critical-attribute contract.
 
-    Known pack, volume, package-type, and brand contradictions are hard
-    vetoes. One-sided or joint pack/volume absence is routed to review so
-    unknown evidence can never become an automatic graph edge. Exact GTIN
-    remains an auditable lock and bypasses every targeted veto.
+    Any explicit conflict hard-blocks a non-exact match. Missing evidence is
+    unknown and routes to review. ``pack_gate`` is retained as the public
+    boolean audit field but now evaluates every critical dimension.
     """
     settings = config or rand_matching_cfg()["targeted_veto_gates"]
     left_pack = set(sku_info.get("pack") or set())
@@ -238,6 +240,19 @@ def targeted_veto_gate(
     right_brand = _normalize_brand(candidate_brand)
     relative_tolerance = float(settings["volume_relative_tolerance"])
     absolute_tolerance_ml = float(settings["volume_absolute_tolerance_ml"])
+
+    critical = critical_attribute_evaluation(
+        sku_info,
+        candidate_info,
+        volume_relative_tolerance=relative_tolerance,
+        volume_absolute_tolerance_ml=absolute_tolerance_ml,
+    )
+    pack_gate_pass = pack_gate(
+        sku_info,
+        candidate_info,
+        volume_relative_tolerance=relative_tolerance,
+        volume_absolute_tolerance_ml=absolute_tolerance_ml,
+    )
 
     pack_conflict = bool(left_pack and right_pack and not (left_pack & right_pack))
     volume_conflict = bool(
@@ -256,16 +271,13 @@ def targeted_veto_gate(
         and right_package_type
         and not (left_package_type & right_package_type)
     )
-    missing = [
-        name
-        for name, present in (
-            ("pack_a", bool(left_pack)),
-            ("pack_b", bool(right_pack)),
-            ("volume_a", bool(left_volume)),
-            ("volume_b", bool(right_volume)),
-        )
-        if not present
-    ]
+    missing = []
+    for dimension in CRITICAL_ATTRIBUTE_DIMENSIONS:
+        key = "flavor_set" if dimension == "flavor" else dimension
+        if not sku_info.get(key):
+            missing.append(f"{dimension}_a")
+        if not candidate_info.get(key):
+            missing.append(f"{dimension}_b")
     common = {
         "targeted_pack_conflict": int(pack_conflict),
         "targeted_volume_conflict": int(volume_conflict),
@@ -279,6 +291,9 @@ def targeted_veto_gate(
         "targeted_volume_ml_b": json.dumps(sorted(right_volume)),
         "targeted_package_type_a": json.dumps(sorted(left_package_type)),
         "targeted_package_type_b": json.dumps(sorted(right_package_type)),
+        "targeted_pack_gate_pass": int(pack_gate_pass),
+        "targeted_critical_conflicts": ",".join(critical["conflicts"]),
+        "targeted_critical_agreements": ",".join(critical["agreements"]),
         "targeted_brand_a": left_brand,
         "targeted_brand_b": right_brand,
         "targeted_volume_relative_tolerance": relative_tolerance,
@@ -297,15 +312,11 @@ def targeted_veto_gate(
             "targeted_gate_route": "auto_merge",
         }
 
-    veto_reasons: list[str] = []
-    if pack_conflict and bool(settings["pack_mismatch_veto"]):
-        veto_reasons.append("pack_mismatch")
-    if volume_conflict and bool(settings["volume_mismatch_veto"]):
-        veto_reasons.append("volume_mismatch")
+    veto_reasons: list[str] = [
+        f"{dimension}_mismatch" for dimension in critical["conflicts"]
+    ]
     if brand_conflict and bool(settings["brand_mismatch_veto"]):
         veto_reasons.append("brand_mismatch")
-    if package_type_conflict and bool(settings["package_type_mismatch_veto"]):
-        veto_reasons.append("package_type_mismatch")
     if veto_reasons:
         return common | {
             "targeted_gate_decision": "veto",
@@ -315,7 +326,7 @@ def targeted_veto_gate(
     if missing:
         return common | {
             "targeted_gate_decision": "defer",
-            "targeted_gate_reason": "missing_pack_or_volume:" + ",".join(missing),
+            "targeted_gate_reason": "missing_critical_attributes:" + ",".join(missing),
             "targeted_gate_route": str(settings["missing_pack_or_volume_route"]),
         }
     return common | {
@@ -554,7 +565,11 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "sku_retailer",
             "sku_volume",
             "sku_pack",
+            "sku_package_type",
             "sku_flavor",
+            "sku_carbonation",
+            "sku_sweetener",
+            "sku_pulp",
             "sku_title_present",
             "sku_attributes_present",
             "sku_brand_present",
@@ -564,7 +579,11 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "sku_retailer_present",
             "sku_volume_present",
             "sku_pack_present",
+            "sku_package_type_present",
             "sku_flavor_present",
+            "sku_carbonation_present",
+            "sku_sweetener_present",
+            "sku_pulp_present",
             "source_row_index",
             "true_item_id",
             "calibration_fold",
@@ -572,23 +591,37 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "candidate_brand",
             "candidate_volume",
             "candidate_pack",
+            "candidate_package_type",
             "candidate_flavor",
+            "candidate_carbonation",
+            "candidate_sweetener",
+            "candidate_pulp",
             "candidate_brand_present",
             "candidate_volume_present",
             "candidate_pack_present",
+            "candidate_package_type_present",
             "candidate_flavor_present",
+            "candidate_carbonation_present",
+            "candidate_sweetener_present",
+            "candidate_pulp_present",
             "brand_conflict",
             "attribute_conflict_type",
             "attribute_matches",
             "targeted_pack_conflict",
             "targeted_volume_conflict",
             "targeted_brand_conflict",
+            "targeted_package_type_conflict",
+            "targeted_pack_gate_pass",
+            "targeted_critical_conflicts",
+            "targeted_critical_agreements",
             "targeted_missing_attributes",
             "targeted_missing_attribute_count",
             "targeted_pack_a",
             "targeted_pack_b",
             "targeted_volume_ml_a",
             "targeted_volume_ml_b",
+            "targeted_package_type_a",
+            "targeted_package_type_b",
             "targeted_brand_a",
             "targeted_brand_b",
             "targeted_volume_relative_tolerance",
@@ -738,7 +771,7 @@ def candidate_gate_fields(
         )
     conflict_names = [
         name
-        for name in ("volume", "pack", "package_type", "flavor")
+        for name in CRITICAL_ATTRIBUTE_DIMENSIONS
         if bool(rules[f"{name}_conflict"])
     ]
     rules["attribute_conflict_type"] = (
@@ -816,6 +849,9 @@ def candidate_gate_fields(
             sorted(sku_info.get("package_type") or set())
         ),
         "sku_flavor": str(sku_info["flavor"]),
+        "sku_carbonation": json.dumps(sorted(sku_info.get("carbonation") or set())),
+        "sku_sweetener": json.dumps(sorted(sku_info.get("sweetener") or set())),
+        "sku_pulp": json.dumps(sorted(sku_info.get("pulp") or set())),
         "sku_title_present": _field_present(row, "title"),
         "sku_attributes_present": _field_present(row, "attributes", "attr"),
         "sku_brand_present": _field_present(row, "brand"),
@@ -827,6 +863,9 @@ def candidate_gate_fields(
         "sku_pack_present": int(bool(sku_info["pack"])),
         "sku_package_type_present": int(bool(sku_info.get("package_type"))),
         "sku_flavor_present": int(bool(sku_info["flavor"])),
+        "sku_carbonation_present": int(bool(sku_info.get("carbonation"))),
+        "sku_sweetener_present": int(bool(sku_info.get("sweetener"))),
+        "sku_pulp_present": int(bool(sku_info.get("pulp"))),
         "source_row_index": source_row_index,
         "candidate_text": metadata_text(candidate_record.get("canonical")),
         "candidate_brand": metadata_text(candidate_record.get("mode_brand")),
@@ -835,11 +874,17 @@ def candidate_gate_fields(
         "candidate_pack": json.dumps(sorted(candidate_info["pack"])),
         "candidate_package_type": json.dumps(sorted(candidate_info["package_type"])),
         "candidate_flavor": str(candidate_info["flavor"]),
+        "candidate_carbonation": json.dumps(sorted(candidate_info.get("carbonation") or set())),
+        "candidate_sweetener": json.dumps(sorted(candidate_info.get("sweetener") or set())),
+        "candidate_pulp": json.dumps(sorted(candidate_info.get("pulp") or set())),
         "candidate_brand_present": _value_present(candidate_record.get("mode_brand")),
         "candidate_volume_present": int(bool(candidate_info["volume"])),
         "candidate_pack_present": int(bool(candidate_info["pack"])),
         "candidate_package_type_present": int(bool(candidate_info["package_type"])),
         "candidate_flavor_present": int(bool(candidate_info["flavor"])),
+        "candidate_carbonation_present": int(bool(candidate_info.get("carbonation"))),
+        "candidate_sweetener_present": int(bool(candidate_info.get("sweetener"))),
+        "candidate_pulp_present": int(bool(candidate_info.get("pulp"))),
         "rule_ok": int(rules["attribute_conflict_type"] == "none"),
         "attribute_conflict_type": str(rules["attribute_conflict_type"]),
         "attribute_matches": int(
@@ -850,6 +895,9 @@ def candidate_gate_fields(
                     "pack_conflict",
                     "package_type_conflict",
                     "flavor_conflict",
+                    "carbonation_conflict",
+                    "sweetener_conflict",
+                    "pulp_conflict",
                 )
             )
         ),

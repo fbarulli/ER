@@ -695,27 +695,6 @@ def generate_report(
     fig.tight_layout()
     _save(fig, out / "ranking_quality_by_epoch.png")
 
-    # Ranking and threshold metrics from the holdout CSV.
-    rank_names = [
-        "hits_at_1", "precision_at_1", "recall_at_1", "precision_at_5",
-        "recall_at_5", "precision_at_10", "recall_at_10",
-    ]
-    rank_present = [c for c in rank_names if c in ok.columns]
-    if rank_present:
-        fig, ax = plt.subplots(figsize=(9, 4.8))
-        x = np.arange(len(rank_present))
-        width = 0.8 / max(len(ok), 1)
-        for i, (_, row) in enumerate(ok.iterrows()):
-            ax.bar(x + i * width, row[rank_present].astype(float), width, label=f"fold {int(row['fold'])}")
-        ax.set_xticks(x + width * (len(ok) - 1) / 2, [c.replace("_", " ") for c in rank_present], rotation=25, ha="right")
-        ax.set_ylim(0, 1.05)
-        ax.set_ylabel("score")
-        ax.set_title("Holdout ranking metrics")
-        ax.grid(axis="y", alpha=0.25)
-        ax.legend()
-        fig.tight_layout()
-        _save(fig, out / "holdout_ranking_metrics.png")
-
     operating = ["auc", "pr_auc", "acc_at_thr"]
     operating += [c for c in (f1_col, precision_col, recall_col) if c]
     operating = [c for c in operating if c in ok.columns]
@@ -818,6 +797,70 @@ def generate_report(
         ranking_df = pd.DataFrame(ranking_rows)
         ranking_df.to_csv(out / "ranking_hits_at_k.csv", index=False)
         if not ranking_df.empty:
+            # Replace legacy global-pair ranking fields in the summary with
+            # the per-source-query values just computed above.  This keeps
+            # metrics_summary.csv, report.json, and the plots consistent.
+            for fold, group in ranking_df.groupby("fold", sort=True):
+                metric_values = {
+                    "hits_at_1": float(group.loc[group["k"].eq(1), "recall_at_k"].iloc[0]),
+                }
+                for k in (1, 5, 10):
+                    hit = group[group["k"].eq(k)]
+                    if not hit.empty:
+                        metric_values[f"precision_at_{k}"] = float(hit.iloc[0]["precision_at_k"])
+                        metric_values[f"recall_at_{k}"] = float(hit.iloc[0]["recall_at_k"])
+                mask = ok["fold"].astype(int).eq(int(fold))
+                for column, value in metric_values.items():
+                    if column in ok.columns:
+                        ok.loc[mask, column] = value
+            summary = ok[[c for c in summary_cols if c in ok.columns]].copy()
+            summary.to_csv(out / "metrics_summary.csv", index=False)
+            aggregate = {
+                c: {"mean": float(ok[c].mean()), "std": float(ok[c].std(ddof=0))}
+                for c in summary.columns
+                if c != "fold" and pd.api.types.is_numeric_dtype(ok[c])
+            }
+
+            # Plot the same per-source-query values written to the audit CSV.
+            # Keep the historical all-metrics bar layout for easy comparison,
+            # but never read the legacy global-pair fields from fold_metrics.
+            rank_names = [
+                "hits_at_1", "precision_at_1", "recall_at_1", "precision_at_5",
+                "recall_at_5", "precision_at_10", "recall_at_10",
+            ]
+            plot_rows = []
+            for fold, group in ranking_df.groupby("fold", sort=True):
+                values = {
+                    "hits_at_1": float(group.loc[group["k"].eq(1), "recall_at_k"].iloc[0]),
+                }
+                for k in (1, 5, 10):
+                    hit = group[group["k"].eq(k)].iloc[0]
+                    values[f"precision_at_{k}"] = float(hit["precision_at_k"])
+                    values[f"recall_at_{k}"] = float(hit["recall_at_k"])
+                plot_rows.append((int(fold), values))
+            fig, ax = plt.subplots(figsize=(9, 4.8), constrained_layout=True)
+            x = np.arange(len(rank_names))
+            width = 0.8 / max(len(plot_rows), 1)
+            for i, (fold, values) in enumerate(plot_rows):
+                ax.bar(
+                    x + i * width,
+                    [values[name] for name in rank_names],
+                    width,
+                    label=f"fold {fold}",
+                )
+            ax.set_xticks(
+                x + width * (len(plot_rows) - 1) / 2,
+                [name.replace("_", " ") for name in rank_names],
+                rotation=25,
+                ha="right",
+            )
+            ax.set_ylim(0, 1.05)
+            ax.set_ylabel("score")
+            ax.set_title("Holdout ranking metrics (per-source query)")
+            ax.grid(axis="y", alpha=0.25)
+            ax.legend()
+            _save(fig, out / "holdout_ranking_metrics.png")
+
             fig, ax = plt.subplots(figsize=(7.5, 4.5), constrained_layout=True)
             for fold, group in ranking_df.groupby("fold", sort=True):
                 ax.plot(
