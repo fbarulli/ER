@@ -473,6 +473,9 @@ Answering the three things I was asked to check:
 | `f996718` | truncation guard with a counted, traceable budget |
 | `056fab8` | **this session** — finalize the session record; commit the remaining meaningful files |
 | `addc705` | **this session** — the final ANN measurement + the truncation-guard caveat |
+| `7c9f0ae` | **this session** — verify the symmetry rework on real data + the separation metrics |
+| `95b330d` | **this session** — the project-wide rules passes and the reuse audit |
+| `16e04e3` | **this session** — the encoder-text fingerprint did not cover the vocabulary |
 
 Corrections C1-C3 and blast-radius fixes M1-M4 were in the working tree while the implementer was
 still committing and were swept into `e326c46` by its `git add`; the content is what is described
@@ -498,12 +501,12 @@ Committed by this session's own commits:
 `results/` is **clean** (`git status --porcelain -- results/` empty); no regenerated
 `results/*.csv` was committed, and `dataset.csv` was only ever opened read-only.
 
-Push result:
+Push result (final):
 
 ```
 $ git push ER training
 To https://github.com/fbarulli/ER.git
-   f996718..addc705  training -> training
+   88e70b4..16e04e3  training -> training
 ```
 
 `git rev-list --count ER/training..HEAD` afterwards: **0**. No force-push, no history rewrite.
@@ -527,7 +530,7 @@ agent flagged the same discrepancy in its own report §25.
 | 1c | one path derivation | **PASS with one justified duplicate** | `src/cli/colab_cli_entry.py:17` has its own `_find_project_root`, duplicating `core.common._find_project_root`. Its docstring states why: that wrapper is launched with the Colab CLI's interpreter, "which has neither the repo on `sys.path` nor its deps, so `core.common/TRAIN_ROOT` cannot be imported here". Justified and documented, not a defect. |
 | 2 | **Transparency** — every number has its command | **PASS after one reproduction failure of my own** | I re-derived the golden fixture from `2a15852` (855/855), the 585-band margins, pack presence agreement, the separation counts, and agent A's `27.4% → 100%`. Its `18.8% → 82.6%` did **not** reproduce on my first two readings — it is **full 10-dimensional structured-vector equality over all 855 fixture rows** (`legacy 18.8% → cleaned 82.6%`), which I then reproduced exactly. My failure, not a fault in the number; the report simply does not state the definition, which is a one-line gap worth closing. |
 | 2b | no silent drop / default / fallback in the changed paths | **PASS** | the three control-flow sites that looked suspicious are all sound: `token_budget_report` skips only in-budget texts and **counts** every out-of-budget one and every dropped `[FIELD_*]` group; `attribute_separation` skips only values with zero support in **both** classes and reports `n_values_withheld_for_support`; `zero_shot_sims:86` catches a `pd.isna` type error and still returns the value. |
-| 3 | **No dead code / no bloat** | **PASS after 2 fixes** | `ruff check --select F,E9` over `src/ scripts/ tests/` diffed against the same run on an extraction of `2a15852`: **2 findings introduced by this work, 0 removed by it** (22 pre-existing repo-wide, unchanged). Both new ones — an unused `json` import and an unused `row` binding, both mine — are fixed. I also removed a genuinely dead accumulation in the same script (`targets`, 7 lines) whose only reader was an unused variable. The flag-file scan is clean. |
+| 3 | **No dead code / no bloat** | **PASS after 2 fixes** | `ruff check --select F,E9` over `src/ scripts/ tests/` diffed against the same run on an extraction of `2a15852`: **2 findings introduced by this work, 0 removed by it** (22 pre-existing repo-wide, unchanged). Both new ones — an unused `json` import and an unused `row` binding, both mine — are fixed. I also removed a genuinely dead accumulation in the same script (`targets`, 7 lines) whose only reader was an unused variable, plus two pre-existing dead symbols in `rand_matching.py` (an unused `sklearn` import and an unused local) while fixing §7d there. The repo-wide F/E9 count is now **17, below the 20-finding `2a15852` baseline, with zero new findings**. |
 | 4 | **Pydantic at boundaries** | **PASS** | every new boundary structure is a pydantic model in `core.schemas` and is genuinely used: `TrainingSpec.ModelInputSpec`, `TrainingSpec.ModelInputComposition`, `AttributeSeparationSpec`, `TokenBudgetReport` (+ the two column tuples). `PreparedBundleManifest` gained a typed `model_input` field. No loose dict or tuple crosses a boundary. |
 | 5 | **Config over constants** | **PASS** | every new tunable is in `config/*.yaml` read through `core.common.load_config`: `training.model_input.{profile,include_evidence}`, `training.structured_features.implicit_pack_qty`, `evaluation.attribute_separation.{enabled,min_pairs_per_class,min_value_support,flag_below}`, plus the two `paths.yaml` bindings. Scanned the new modules for numeric literals: the hits are indices, guards (`max_seq_length < 1`), docstring statistics and a CLI display width — no domain constant. |
 | 6 | **Tests** — green, no coverage deleted | **PASS** | `pytest tests/ -q` → **383 passed, 2 skipped** (run with other agents' in-flight edits present, so it is a floor, not a ceiling). Per-file test-function counts versus `2a15852`: **no file has fewer**; totals 200 → 290. The one test I rewrote asserts a strictly stronger pair of invariants than the one it replaced, and a second was added. |
@@ -565,6 +568,68 @@ becomes stale" can only be answered for the artifacts that exist on disk today.
 | `token_budget_report` + `TokenBudgetReport` | no truncation/token-budget helper existed; the truncation was previously invisible. |
 | `preprocessing_fingerprint_inputs()` | a named accessor over a dict that was already inline — it makes the fingerprint's inputs auditable and testable. It is **not** a second fingerprint. |
 | `implicit_pack_qty()` made public | it was `_implicit_pack_qty`, and the contract test needs to state the expected value; making it public avoided duplicating the config read in the test. |
+
+## 7d. New gap found while running the rules checklist
+
+### The ANN reuse fingerprint did not cover the normalisation vocabulary
+
+`preprocessing_fingerprint_inputs()` documents itself as *"everything that changes the encoder TEXT
+a persisted index was built on"*. It covered `structured_features`, `model_input` and
+`unit_canonicalization` — but the composed text also depends on **`config/vocabulary.json`** twice
+over: `core.model_input._normalized_tokens` filters with `MINIMAL_STOPWORDS`
+(`config/vocabulary.json:MINIMAL_STOPWORDS`), and `strip_schema_words` uses the same file. So a
+vocabulary edit changes the encoder text while leaving every fingerprint input identical, and a
+persisted index built before the edit is **silently reused** — the same seam that was closed for
+`model_input`, in a second input. It is not hypothetical: commit `88e70b4` had just changed
+`config/vocabulary.json`.
+
+Reproduced **before** the fix (`/tmp/vocab_fingerprint_proof.py`):
+
+```
+MINIMAL_STOPWORDS entries  : 99
+composed-text hash         : ee18d78e99f1db58
+ANN fingerprint            : 3bbb1f1c4b36c162
+after a vocabulary edit:
+composed-text hash         : d1be608c9d5746f2
+ANN fingerprint            : 3bbb1f1c4b36c162
+text changed               : True
+fingerprint changed        : False
+RESULT: SILENT STALE-INDEX REUSE REPRODUCED
+```
+
+**Fixed** in `16e04e3`: the vocabulary's sha256 joins the fingerprint inputs, reusing the existing
+`core.common.VOCABULARY_CONFIG_PATH` and the existing `core.manifest.sha256_file` — no new path
+constant, no new hasher. Pinned by
+`test_ann_fingerprint_inputs_cover_the_normalisation_vocabulary`, which asserts both halves (the file
+is in the fingerprint, and the vocabulary really does change the composed text).
+
+### The conventions file: the premise was wrong again
+
+The instruction said a `CONVENTIONS.md` had been created in the main checkout. **It does not exist** —
+not in this repo, not in any sibling checkout, not anywhere under `/home/opc` or `/` to depth 6
+(`find / -maxdepth 6 -name 'CONVENTIONS.md'` returns nothing). What exists is **`AGENTS.local.md`**
+(5 230 B), whose ten sections are exactly the ones described: SSOT with the table of single sources
+of truth, reuse-before-you-write, transparency/EXECUTED-vs-READ, no dead code, pydantic at
+boundaries, config over constants, tests, repo/artifact safety, reporting discipline, blast radius.
+
+I did **not** create `CONVENTIONS.md`. Writing it would have meant inventing a file the owner
+believes exists, and copying the rules into a second document is the duplication §2 of those very
+rules forbids.
+
+Both names are now ignored in `.gitignore` with an explanatory comment, so the intent holds whichever
+name the owner settles on:
+
+```
+$ git check-ignore -v CONVENTIONS.md
+.gitignore:87:CONVENTIONS.md	CONVENTIONS.md
+$ git check-ignore -v AGENTS.local.md
+.gitignore:86:AGENTS.local.md	AGENTS.local.md
+$ git status --porcelain | grep -E 'CONVENTIONS|AGENTS.local'   # -> no output
+```
+
+`AGENTS.local.md` is still on disk, still untracked, still not deleted. The earlier machine-local
+`​.git/info/exclude` entry was removed now that the rule lives in the tracked `.gitignore`, so the
+behaviour is reproducible on any clone instead of only on this machine.
 
 ## 8. EXECUTED vs READ
 
