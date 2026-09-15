@@ -97,10 +97,12 @@ Prepared 19 packages in 678ms      <-- was 37.19s
 Installed 19 packages in 267ms
 ```
 
-**Dependency install: 42.96 s → 18.90 s** against the uv+sdist run on an
-identical VM, and **81.13 s → 18.90 s** against the original pip+sdist baseline
-(**−77 %**). The stage is now ~2.5 s of work plus ~16 s of detached-stage launch
-and completion detection. Knob: `colab.runtime_packages.prebuilt_wheels`.
+**Dependency install, measured on real CPU VMs: 81.13 s (pip+sdist) → 42.96 s
+(uv+sdist) → 7.10 / 18.90 / 35.70 s (uv+wheel)** across three runs, with the
+stage's internal work stable at 1.52 s resolve + 0.72 s prepare + 0.20 s install
+(§2.6). Against the 62.75 s T4 pip baseline the change is worth **27–56 s** per
+launch; the residual spread is detached-stage launch and detection latency, not
+the install. Knob: `colab.runtime_packages.prebuilt_wheels`.
 
 ### 2.2 The prepared-bundle build is cached — **MEASURED: 429.72 s → 1.12 s**
 
@@ -153,6 +155,9 @@ prewarmed run identity, and `_upload_validation_inputs` joins it. Real VM:
 ```
 
 The join is **0.0 s**: the whole transfer completed inside the dependency stage.
+Confirmed again in the final run (§2.6), where the log reads
+`[upload] joining the validation upload started before the VM setup` and
+`uploads_current_tree = 42.58 s` is charged to the stage that already overlapped.
 Against the measured 56.47 s serial uploads that is the full phase removed.
 
 Failure handling is explicit, not optimistic: a concurrent upload that fails or
@@ -184,6 +189,86 @@ The bundle-build row is real but conditional: it is the saving when a lane is
 re-launched against unchanged dataset, config and bundle-producing sources. When
 any of those change, the build runs exactly as before — which is the correct
 behaviour, and was observed when a concurrent agent edited `src/core/model_input.py`.
+
+---
+
+### 2.6 Final confirmation run (real CPU VMs, requested explicitly)
+
+Two further CPU-only VM runs were made purely to confirm the two changes with
+real behavioural risk, plus the reuse and the prewarm. Both VMs were torn down
+and verified gone (`colab sessions` → none).
+
+**The build starts before the launcher has finished paying for the VM.** Run 1's
+log, in order:
+
+```
+line  2  [local-prepare] building 1 bundle(s) concurrently with the VM dependency install
+line 11  [session] provisioning my-highram-session (cpu) ...
+line 14  [confirm] provision = 28.29s
+```
+
+The build was already running before provisioning *started*, and was still in
+flight when provisioning returned 28.29 s later.
+
+**The installer is uv, and it is the real path** (run 2, a fresh VM):
+
+```
+[deps] prebuilt wheel=/content/.../hnswlib-0.8.0-cp313-cp313-linux_x86_64.whl replaces hnswlib
+[deps] installer=uv /usr/local/bin/uv pip install --python /usr/bin/python3 <wheel> sentence-transformers ...
+Resolved 123 packages in 1.52s
+Prepared 19 packages in 720ms
+Installed 19 packages in 203ms
+[confirm] deps = 7.10s
+```
+
+**The reuse fires on a real VM, against what the branch actually ships.** The
+remote tip ships `training_data/dataset_deduped.csv`, and run 2 logged it twice,
+on both upload paths:
+
+```
+[upload] validation source=…/training_data/dataset_deduped.csv reused the verified VM
+         checkout copy /content/EuromonitoR/training_data/dataset_deduped.csv
+         (sha256 matches; not uploaded)
+```
+
+**The provenance is unchanged.** The source CSV's content hash is identical to
+the one a real historical run recorded, so the reuse serves exactly the bytes the
+provenance already describes — only the recorded `path` string differs (it now
+names the checkout copy):
+
+```
+recorded path  : /content/EuromonitoR/prepared_training/0915T061957915598Z/validation/source_dataset_deduped.csv
+recorded sha256: 3050b45636d6d557e6f04494291ab1cb   rows 61,529  bytes 46,428,599
+local sha256   : 3050b45636d6d557e6f04494291ab1cb   rows 61,529  bytes 46,428,599
+```
+
+**The join reports the prewarm, and nothing reports a mismatch.** Run 2:
+
+```
+[local-prepare] joining the build started before the VM setup
+[confirm] local_prepare_join = 0.0s
+```
+
+`different request` never appears in either run's log. In run 2 the build was a
+**cache hit**, so it had already finished before provisioning completed
+(`build_alive_when_session_ready: false` is the cache working, not the overlap
+failing — run 1 is the run that demonstrates the overlap, above).
+
+### Measured dependency-install durations, all on real CPU VMs
+
+| configuration | wall clock |
+|---|---|
+| pip + sdist (the original behaviour, §1.1) | 81.13 s |
+| uv + sdist | 42.96 s |
+| **uv + prebuilt wheel** | **7.10 s / 18.90 s / 35.70 s** across three VMs |
+
+The work inside the stage is stable and small — 1.52 s resolve, 0.72 s prepare,
+0.20 s install — so the 7–36 s spread is detached-stage launch plus completion
+detection (`log_poll_seconds: 2`) and network variance for the 16.2 MiB `mlflow`
+download, not the install itself. Against the **62.75 s** T4 pip baseline this
+change is worth **27–56 s** per launch; against the measured 81.13 s CPU-VM pip
+baseline, **45–74 s**. Only the internal 2.4 s is free of that spread, and it is
+the part the wheel removed.
 
 ---
 
@@ -310,9 +395,20 @@ missing); the cache hit/miss/invalid/disabled paths; both self-join regression
 guards; and the `main()` ordering assertions that both prewarms start before the
 launcher pays for the VM. Full suite **414 passed, 2 skipped** at `e6ccea3`.
 
+**CONFIRMED in a dedicated CPU-VM run** (§2.6): the build starts before
+provisioning completes, `[deps] installer=uv` is the real path, the source-CSV
+reuse fires against what the branch actually ships, the provenance content hash
+is unchanged, the join reports the prewarm, and no run logs `different request`.
+
 **NOT verified:** the multi-worker lanes (`dual-train`, `smoke` with >1 worker)
 and the HPO/zero-shot lanes; their code paths are shared but only the one-worker
 `train` lane was exercised on a VM.
+
+**Repository hygiene:** the leftover `stash@{0}: FOREIGN WIP (colab runtime
+packages)` was verified to be a strict subset of HEAD — every hunk it carried is
+either present in the commits above or was superseded by them (the
+`final_inference` rename, the wheel-aware installer, the prewarm split) — and was
+dropped, so it cannot later be mistaken for uncommitted work.
 
 ---
 
