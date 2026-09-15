@@ -272,10 +272,14 @@ def _plan_sample(
 ) -> dict[str, int]:
     """Allocate the entity-row budget across buckets (deterministic).
 
-    Pass 1 gives every non-empty bucket ``min(count, per_reason)`` rows so no
-    reason is invisible; pass 2 spends whatever budget is left on the largest
-    populations first. Buckets are ordered by ``(-count, name)``, so the plan
-    depends only on the data, never on dict iteration order.
+    Pass 1 gives every non-empty bucket ``min(count, per_reason)`` rows while
+    RESERVING one row for each bucket still to come, so a bucket can never be
+    squeezed out by a bigger one ahead of it (with a budget smaller than the
+    number of buckets that reservation is impossible; those buckets still get
+    their exact census row, which carries sample keys). Pass 2 spends whatever
+    budget is left on the largest populations first. Buckets are ordered by
+    ``(-count, name)``, so the plan depends only on the data, never on dict
+    iteration order.
     """
     buckets = sorted(counts, key=lambda name: (-int(counts[name]), name))
     quota = {name: 0 for name in buckets}
@@ -286,8 +290,15 @@ def _plan_sample(
     def spent() -> int:
         return sum(quota.values())
 
-    for name in buckets:
-        give = min(int(counts[name]), int(per_reason), budget - spent())
+    for position, name in enumerate(buckets):
+        if int(counts[name]) <= 0:
+            continue
+        reserve = sum(
+            1 for later in buckets[position + 1 :] if int(counts[later]) > 0
+        )
+        give = min(
+            int(counts[name]), int(per_reason), budget - spent() - reserve
+        )
         if give > 0:
             quota[name] = give
     for name in buckets:
@@ -367,6 +378,36 @@ def _commit(
     if not parts:
         return incoming.reset_index(drop=True)
     return pd.concat(parts, ignore_index=True)
+
+
+def _as_int_or_none(value: object) -> int | None:
+    """Counts stay integral across a re-write (pandas would emit 132.0)."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+    return int(float(text))
+
+
+def _normalize_counts(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep the three count columns integral-or-empty in the written file.
+
+    Reading the file back (strings) and concatenating it with freshly built
+    rows (ints) makes pandas infer a float dtype, and the next reader then sees
+    ``132.0`` for a row count. Normalizing at the write boundary keeps the
+    published cells as integers.
+    """
+    for column in ("in_count", "out_count", "dropped_count"):
+        if column in frame.columns:
+            # dtype="object" explicitly: a plain list of ints + None would be
+            # inferred as float64 and the file would carry 132.0 again.
+            frame[column] = pd.Series(
+                [_as_int_or_none(value) for value in frame[column].tolist()],
+                dtype="object",
+                index=frame.index,
+            )
+    return frame
 
 
 class TraceRun:
@@ -608,6 +649,7 @@ class TraceRun:
         incoming = self.rows()
         incoming["run_id"] = self.run_id
         frame = _commit(read_trace(target), incoming, run_id=self.run_id, stage=self.stage)
+        frame = _normalize_counts(frame)
         assert_trace_frame(frame, path=target)
         atomic_write_csv(frame, target, index=False)
         return target
