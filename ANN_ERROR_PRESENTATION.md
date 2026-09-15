@@ -4,15 +4,15 @@ Validation set: 3,000 SKUs. The next run should be compared against this same
 split (or a deliberately versioned replacement) so changes are attributable.
 
 Each row is the same plot from the current run beside the corresponding
-plot from the next run. Replace `NEXT_RUN_REPORT` with the new ANN report
+plot from the next run. Replace `training_results/0915T075044186132Z/worker_1/report` with the new ANN report
 directory after the next inference completes.
 
 <table>
 <tr><th>Plot</th><th>Current run</th><th>Next run</th></tr>
-<tr><td>Pairwise and clustering quality</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/ann_cluster_quality.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/ann_cluster_quality.png"></td></tr>
-<tr><td>Error rate by attribute</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/attribute_error_breakdown.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/attribute_error_breakdown.png"></td></tr>
-<tr><td>ANN candidate recall</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/ann_ranking_hits_corrected.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/ann_ranking_hits_corrected.png"></td></tr>
-<tr><td>AUC threshold tuning</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/auc_threshold_tuning.png"></td><td><img width="100%" src="NEXT_RUN_REPORT/auc_threshold_tuning.png"></td></tr>
+<tr><td>Pairwise and clustering quality</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/ann_cluster_quality.png"></td><td><img width="100%" src="training_results/0915T075044186132Z/worker_1/report/ann_cluster_quality.png"></td></tr>
+<tr><td>Error rate by attribute</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/attribute_error_breakdown.png"></td><td><img width="100%" src="training_results/0915T075044186132Z/worker_1/report/attribute_error_breakdown.png"></td></tr>
+<tr><td>ANN candidate recall</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/ann_ranking_hits_corrected.png"></td><td><img width="100%" src="training_results/0915T075044186132Z/worker_1/report/ann_ranking_hits_corrected.png"></td></tr>
+<tr><td>AUC threshold tuning</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/auc_threshold_tuning.png"></td><td><img width="100%" src="training_results/0915T075044186132Z/worker_1/report/auc_threshold_tuning.png"></td></tr>
 </table>
 
 Baseline: adjusted Rand `0.9900`, pair recall `0.9803`, pair precision `1.0000`,
