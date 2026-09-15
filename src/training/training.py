@@ -1374,6 +1374,8 @@ class DvcCheckpointCallback(TrainerCallback):
 
     def __init__(self):
         self._pending: list[tuple[Path, str, Path]] = []
+        self._stage_futures = []
+        self._stage_executor = None
 
     @staticmethod
     def _snapshot(checkpoint: Path) -> Path:
@@ -1428,9 +1430,18 @@ class DvcCheckpointCallback(TrainerCallback):
                 f"missing {', '.join(missing)}"
             )
         snapshot = self._snapshot(checkpoint)
+        from concurrent.futures import ThreadPoolExecutor
         from training.dvc_store import stage_checkpoint
 
-        stage_checkpoint(RESULTS, snapshot)
+        if self._stage_executor is None:
+            self._stage_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="dvc-stage"
+            )
+        # Snapshot creation is synchronous so Trainer rotation cannot remove
+        # the checkpoint. Hashing/staging runs off the training thread.
+        self._stage_futures.append(
+            self._stage_executor.submit(stage_checkpoint, RESULTS, snapshot)
+        )
         import hashlib
         key = hashlib.sha256(str(checkpoint.parent.resolve()).encode()).hexdigest()[:16]
         self._pending.append((snapshot, f"{checkpoint.name}--{key}", checkpoint))
@@ -1444,6 +1455,10 @@ class DvcCheckpointCallback(TrainerCallback):
 
         pending = self._pending
         try:
+            # Preserve the durability guarantee: no checkpoint batch push can
+            # begin until every asynchronous local dvc add has completed.
+            for future in self._stage_futures:
+                future.result()
             for pointer in publish_checkpoints(RESULTS, pending, already_staged=True):
                 print(f"    [checkpoint-dvc] verified -> {pointer.relative_to(RESULTS)}", flush=True)
         finally:
@@ -1456,6 +1471,10 @@ class DvcCheckpointCallback(TrainerCallback):
                 except OSError:
                     pass
             self._pending = []
+            if self._stage_executor is not None:
+                self._stage_executor.shutdown(wait=True)
+                self._stage_executor = None
+            self._stage_futures = []
         return control
 
 
