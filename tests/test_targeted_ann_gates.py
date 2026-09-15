@@ -163,6 +163,10 @@ def test_missing_pack_or_volume_is_human_review_not_auto_merge():
     )
     assert gate["targeted_gate_decision"] == "defer"
     assert gate["targeted_gate_route"] == "human_review"
+    # The deferral reason names the SCOPED evidence that actually deferred, so
+    # the audit trail can never claim a categorical dimension deferred a pair
+    # (the setting is ``missing_pack_or_volume_route``).
+    assert gate["targeted_gate_reason"] == "missing_pack_or_volume:pack_b"
     assert gate["targeted_missing_attributes"] == "pack_b"
     assert gate["targeted_missing_attribute_count"] == 1
     # Unknown evidence is NOT a conflict, and must not be reported as one.
@@ -172,8 +176,201 @@ def test_missing_pack_or_volume_is_human_review_not_auto_merge():
     assert gate["targeted_pack_gate_pass"] == 0
 
 
-def test_all_dimensions_known_and_agreeing_is_the_only_auto_merge_path():
-    """The strict audit predicate passes only with complete, agreeing evidence."""
+def test_absent_non_decisive_dimensions_do_not_defer_an_otherwise_clean_pair():
+    """Absence of a veto-only dimension is reported, not treated as deferral.
+
+    Regression (commit 346f401 widened ``missing`` from pack/volume to all
+    seven critical dimensions): on the live 1,592-pair gate-positive population
+    that left 1 pair (0.06%) auto-mergeable, because ``pulp_set`` is populated
+    on only ~2% of canonical records, so ``auto_merge`` was effectively dead.
+    ``pipeline.three_way_gate`` labels such a pair ``proceed`` with reason
+    "Known critical attributes compatible" -- unknown is neither conflict nor
+    agreement there -- so deferring on it here contradicts the very label the
+    candidate population is drawn from.
+    """
+    pair = dict(
+        pack={6},
+        volume={750},
+        package_type={"bottle"},
+        flavor={"cola"},
+        carbonation={"carbonated"},
+        sweetener={"no_sugar"},
+        pulp={"no_pulp"},
+    )
+    # Both endpoints lose pulp/sweetener/carbonation: veto-only dimensions with
+    # no evidence on either side, and no conflict anywhere.
+    left = {**_info(**pair), "pulp": set(), "pulp_set": set(),
+            "sweetener": set(), "sweetener_set": set()}
+    right = {**_info(**pair), "pulp": set(), "pulp_set": set(),
+             "sweetener": set(), "sweetener_set": set(),
+             "carbonation": set(), "carbonation_set": set()}
+    gate = targeted_veto_gate(
+        left,
+        right,
+        sku_brand="Acme",
+        candidate_brand="Acme",
+        exact_gtin=False,
+        config=SETTINGS,
+    )
+    assert gate["targeted_gate_route"] == "auto_merge"
+    assert gate["targeted_gate_decision"] == "allow"
+    # The audit census still reports EVERY missing dimension, in dimension
+    # order and with the flavor_set key honoured.
+    assert gate["targeted_missing_attributes"] == (
+        "carbonation_b,sweetener_a,sweetener_b,pulp_a,pulp_b"
+    )
+    assert gate["targeted_missing_attribute_count"] == 5
+    assert gate["targeted_critical_conflicts"] == ""
+    assert gate["targeted_pack_gate_pass"] == 0
+
+
+def test_non_decisive_dimensions_still_reject_when_they_actually_conflict():
+    """The scoped deferral must not weaken a real veto.
+
+    Only the DEFERRAL scope narrowed. Every critical dimension still hard
+    rejects on explicit conflict, including while another dimension's evidence
+    is absent.
+    """
+    base = dict(
+        pack={6},
+        volume={750},
+        package_type={"bottle"},
+        flavor={"cola"},
+        carbonation={"carbonated"},
+        sweetener={"no_sugar"},
+        pulp={"no_pulp"},
+    )
+    for dimension, value, expected in (
+        ("package_type", {"can"}, "package_type_mismatch"),
+        ("flavor", {"orange"}, "flavor_mismatch"),
+        ("carbonation", {"still"}, "carbonation_mismatch"),
+        ("sweetener", {"sugar"}, "sweetener_mismatch"),
+        ("pulp", {"with_pulp"}, "pulp_mismatch"),
+        ("pack", {12}, "pack_mismatch"),
+        ("volume", {1000}, "volume_mismatch"),
+    ):
+        conflicted = {**base, dimension: value}
+        # ``pulp`` is additionally absent on the candidate in every case, so a
+        # blanket missing-deferral would have masked the veto.
+        conflicted["pulp"] = conflicted.get("pulp", set())
+        candidate = _info(**{**conflicted, "pulp": set() if dimension != "pulp" else value})
+        gate = targeted_veto_gate(
+            _info(**base),
+            candidate,
+            sku_brand="Acme",
+            candidate_brand="Acme",
+            exact_gtin=False,
+            config=SETTINGS,
+        )
+        assert gate["targeted_gate_route"] == "reject", dimension
+        assert expected in gate["targeted_gate_reason"], dimension
+
+
+def test_jointly_absent_decisive_evidence_still_defers():
+    """A pair with no decisive pack/volume evidence at all still defers.
+
+    This is the case the ``missing_pack_or_volume_route`` dial exists for: the
+    decision cannot be made, so it must not be made automatically.
+    """
+    gate = targeted_veto_gate(
+        _info(),
+        _info(),
+        sku_brand="Acme",
+        candidate_brand="Acme",
+        exact_gtin=False,
+        config=SETTINGS,
+    )
+    assert gate["targeted_gate_decision"] == "defer"
+    assert gate["targeted_gate_route"] == "human_review"
+    assert gate["targeted_gate_reason"] == (
+        "missing_pack_or_volume:volume_a,volume_b,pack_a,pack_b"
+    )
+    assert gate["targeted_missing_attribute_count"] == 14
+
+
+def test_deferral_scope_is_pack_and_volume():
+    """Pin the scope itself so a future widening cannot silently return."""
+    from training.rand_matching import DEFERRAL_DIMENSIONS
+
+    assert DEFERRAL_DIMENSIONS == ("pack", "volume")
+    # Every deferral dimension must be a real critical dimension, and the
+    # reported census must cover strictly more than the deferral scope.
+    from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
+
+    assert set(DEFERRAL_DIMENSIONS) < set(CRITICAL_ATTRIBUTE_DIMENSIONS)
+
+
+def test_live_gate_positive_population_is_not_starved_of_auto_merge():
+    """The regression, pinned on the LIVE frozen artifacts.
+
+    Every pair the training gate labelled ``proceed`` is by construction
+    compatible on every dimension with explicit evidence on both sides
+    (``pipeline.three_way_gate`` hard-rejects on volume/pack overlap failure),
+    so the calibration gate must not take their automatic merge away. Before
+    the fix this population routed 1,591/1,592 (99.94%) to human review,
+    because ``pulp_set`` is populated on ~2% of canonical records.
+    """
+    from core.attribute_conflicts import canonical_attribute_info
+    from core.common import F, canonical_records_frame
+
+    gate_path = F["gate_results"]
+    if not gate_path.exists():
+        pytest.skip("frozen gate_results.csv is unavailable")
+    gates = pd.read_csv(gate_path, dtype=str, keep_default_na=False)
+    records = canonical_records_frame()
+    by_gtin = {str(row["gtin"]): row.to_dict() for _, row in records.iterrows()}
+    proceed = gates[gates["gate_decision"] == "proceed"]
+    assert len(proceed) > 0, "frozen gate artifact has no proceed population"
+
+    info_cache: dict[str, dict] = {}
+
+    def info(gtin: str) -> dict:
+        if gtin not in info_cache:
+            info_cache[gtin] = canonical_attribute_info(by_gtin[gtin])
+        return info_cache[gtin]
+
+    routes = {"auto_merge": 0, "human_review": 0, "reject": 0}
+    resolved = 0
+    missing_census: dict[str, int] = {}
+    for _, row in proceed.iterrows():
+        left_gtin, right_gtin = str(row["gtin1"]), str(row["gtin2"])
+        if left_gtin not in by_gtin or right_gtin not in by_gtin:
+            continue
+        resolved += 1
+        gate = targeted_veto_gate(
+            info(left_gtin),
+            info(right_gtin),
+            sku_brand=by_gtin[left_gtin].get("mode_brand"),
+            candidate_brand=by_gtin[right_gtin].get("mode_brand"),
+            exact_gtin=left_gtin == right_gtin,
+        )
+        routes[str(gate["targeted_gate_route"])] += 1
+        for token in str(gate["targeted_missing_attributes"]).split(","):
+            if token:
+                missing_census[token] = missing_census.get(token, 0) + 1
+
+    assert resolved == len(proceed)
+    # No conflict can exist in this population: an explicit conflict is exactly
+    # what the training gate refuses to label ``proceed``.
+    assert routes["reject"] == 0
+    assert routes["human_review"] == 0
+    assert routes["auto_merge"] == resolved
+    # The audit census is untouched by the routing scope: these absence counts
+    # are what the diagnostics consume, and they must keep being reported.
+    assert missing_census["pulp_a"] > 0
+    assert missing_census["pulp_b"] > 0
+    assert missing_census["package_type_a"] > 0
+
+
+def test_all_dimensions_known_and_agreeing_is_the_cleanest_auto_merge_path():
+    """Complete, agreeing evidence passes the strict audit predicate.
+
+    Note the predicate is an AUDIT field (``targeted_pack_gate_pass``), not the
+    routing rule: ``targeted_gate_route`` may also auto-merge a pair whose
+    veto-only dimensions are absent, as
+    ``test_absent_non_decisive_dimensions_do_not_defer_an_otherwise_clean_pair``
+    pins.
+    """
     full = dict(
         pack={6},
         volume={750},
