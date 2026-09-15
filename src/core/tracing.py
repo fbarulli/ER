@@ -116,7 +116,7 @@ def record(
         if incoming is not None and outgoing is not None
         else None
     )
-    return {
+    row = {
         "stage": str(stage),
         "step": str(step),
         "scope": scope,
@@ -130,6 +130,14 @@ def record(
         "producer": PRODUCER,
         "at": datetime.now(timezone.utc).isoformat(),
     }
+    # ROW BOUNDARY (pydantic contract, core.schemas.TraceRow): the counted
+    # arithmetic lives in exactly one place there, so a row that cannot be
+    # reasoned about is rejected here rather than written and discovered later.
+    # Imported lazily: core.schemas imports this module's TRACE_COLUMNS.
+    from core.schemas import TraceRow
+
+    TraceRow.model_validate(row)
+    return row
 
 
 def read_trace(path: Path | None = None) -> pd.DataFrame:
@@ -265,13 +273,19 @@ class TraceRun:
         return pd.DataFrame(self._rows, columns=list(TRACE_COLUMNS))
 
     def write(self, path: Path | None = None) -> Path:
-        """Append this stage's rows to the consolidated trace."""
+        """Append this stage's rows to the consolidated trace.
+
+        WRITE BOUNDARY: the concatenated frame is validated against the
+        pydantic contract BEFORE the atomic write, so a frame that cannot be
+        reasoned about never lands in the artifact every reader trusts.
+        """
         from core.manifest import atomic_write_csv
 
         target = path if path is not None else trace_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         existing = read_trace(target)
         frame = pd.concat([existing, self.rows()], ignore_index=True)
+        assert_trace_frame(frame, path=target)
         atomic_write_csv(frame, target, index=False)
         return target
 
@@ -298,33 +312,21 @@ def sample_keys(values: object, *, limit: int = 5) -> list[str]:
 
 
 def assert_trace_frame(frame: pd.DataFrame, *, path: object = "") -> None:
-    """Fail loudly if a trace frame violates the row contract."""
-    missing = [column for column in TRACE_COLUMNS if column not in frame.columns]
-    if missing:
-        raise ValueError(
-            f"trace frame {path} is missing columns {missing}; "
-            f"expected {list(TRACE_COLUMNS)}"
-        )
-    extra = [column for column in frame.columns if column not in TRACE_COLUMNS]
-    if extra:
-        raise ValueError(
-            f"trace frame {path} carries undeclared columns {extra}; "
-            f"expected {list(TRACE_COLUMNS)}"
-        )
-    if frame.empty:
+    """Fail loudly if a trace frame violates the pydantic row contract.
+
+    Delegates to :func:`core.schemas.check_trace_frame`, which owns the single
+    declaration of the counted arithmetic (``dropped_count == in_count -
+    out_count``) and of the row schema. This wrapper only adds the frame's
+    path to the message so a violation names the file it came from.
+    """
+    if frame.empty and not any(column in frame.columns for column in TRACE_COLUMNS):
         return
-    blank = frame["stage"].astype(str).str.strip().eq("") | frame["step"].astype(
-        str
-    ).str.strip().eq("")
-    if bool(blank.any()):
-        raise ValueError(
-            f"trace frame {path} has {int(blank.sum())} rows without stage/step"
-        )
-    unknown = ~frame["scope"].astype(str).isin([SCOPE_RUN, SCOPE_ENTITY, SCOPE_GROUP])
-    if bool(unknown.any()):
-        raise ValueError(
-            f"trace frame {path} has {int(unknown.sum())} rows with an unknown scope"
-        )
+    from core.schemas import check_trace_frame
+
+    try:
+        check_trace_frame(frame)
+    except ValueError as exc:
+        raise ValueError(f"trace frame {path}: {exc}") from exc
 
 
 def merge_entity_rows(
