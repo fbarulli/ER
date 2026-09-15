@@ -131,7 +131,6 @@ _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 _COLAB_CLI_STATE_DIR = TRAIN_ROOT / "colab_cli_state"
 _COLAB_CLI_CONFIG = _COLAB_CLI_STATE_DIR / "sessions.json"
 _COLAB_CLI_ENTRYPOINT = Path(__file__).with_name("colab_cli_entry.py")
-_COLAB_LAUNCH_LOCK = _COLAB_CLI_STATE_DIR / "launcher.lock"
 LIVE_LOG_PATH: Path | None = None
 TRAINING_LOG_PATH: Path | None = None
 _live_log = None
@@ -298,14 +297,16 @@ def acquire_colab_launch_lock():
     Colab-side failure, so refuse the second launch before it touches Colab.
     """
     _COLAB_CLI_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    handle = _COLAB_LAUNCH_LOCK.open("a+", encoding="utf-8")
+    lock_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", SESSION)
+    lock_path = _COLAB_CLI_STATE_DIR / f"launcher-{lock_name}.lock"
+    handle = lock_path.open("a+", encoding="utf-8")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
         handle.close()
         raise RuntimeError(
             f"a Colab launcher already owns session '{SESSION}'; "
-            f"refusing a concurrent lane (lock: {_COLAB_LAUNCH_LOCK})"
+            f"refusing a concurrent lane (lock: {lock_path})"
         ) from exc
     handle.seek(0)
     handle.truncate()
