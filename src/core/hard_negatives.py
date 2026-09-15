@@ -10,6 +10,7 @@ sample and the exclusion is visible, never hidden.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass, field
 from itertools import combinations
 import re
 
@@ -23,11 +24,28 @@ def normalized_product_name(title: object, brand: object) -> str:
     Flavor, carbonation, sweetener/diet, and pulp words deliberately remain;
     they are identity-bearing and must not make two different variants look
     like the same product name.
+
+    FUSED MULTIPLIER FORM (audit 2026-09-15): the two generic expressions
+    below need a word boundary in front of the size, so a FUSED token such as
+    ``18x33cl`` / ``12x330ml`` / ``6x1.5l`` was never normalized — ``x`` and
+    ``3`` are both word characters, so the size part is unreachable and the
+    whole token survived as if it were identity-bearing. On the live gate
+    candidate window 2,396 candidates carried a fused token and **115 conflict
+    candidates were rejected by name equality alone** (every one of them a gate
+    ``hard_no`` with reason ``Pack blocker``; 101 volume, 39 pack conflicts) —
+    i.e. the name key silently made those pack/volume negatives unreachable.
+    The fused form is normalized first; ``N x M`` with spaces still falls
+    through to the generic passes.
     """
     from core.critical_attributes import normalized_attribute_text
 
     text = normalized_attribute_text(title)
     brand_tokens = set(normalized_attribute_text(brand).split())
+    text = re.sub(
+        r"\b\d+\s*[x×]\s*\d+(?:[.,]\d+)?\s*[a-z]*\b",
+        " ",
+        text,
+    )
     text = re.sub(
         r"\b\d+(?:[.,]\d+)?\s*(?:ml|cl|l|lt|ltr|liters?|litres?|"
         r"fl\s*oz|fluid\s+ounces?|oz|ounces?|qt|quarts?|pt|pints?|"
@@ -55,6 +73,186 @@ def normalized_product_name(title: object, brand: object) -> str:
     )
 
 
+def flavor_variant_product_name(name: object) -> str:
+    """Product name with identity-bearing FLAVOR words removed.
+
+    Used by the miner's flavour-variant rule: two canonicals that present the
+    same name once flavour tokens are dropped are candidate flavour conflicts
+    (``pear soda`` vs ``raspberry soda``), which strict name equality can
+    never reach because the flavour word is part of the name by design.
+    """
+    from core.critical_attributes import FLAVOR_LEXICON
+
+    return " ".join(
+        token for token in str(name or "").split() if token not in FLAVOR_LEXICON
+    )
+
+
+@dataclass
+class MiningFunnel:
+    """Step-by-step accounting of one targeted-attribute mining pass.
+
+    WHY THIS EXISTS (audit 2026-09-15): the miner used to return only its
+    output, so "why did this lane stop at N pairs?" could not be answered from
+    the run — the caller had to re-implement every filter to find out. On the
+    live artifacts the answer was that the name-equality filter alone killed
+    93% of the candidate window, which no output count reveals. The funnel is
+    the miner's OWN readback: candidate -> similarity floor -> canonical
+    resolution -> same-canonical guard -> brand -> name -> conflict -> emitted,
+    with per-filter drop counts and a conflict-dimension census.
+
+    DELIVERY CONTRACT (an out-of-tree caller can consume it):
+    ``mine_targeted_attribute_negatives(..., funnel=<MiningFunnel instance>)``
+    fills the passed instance in place and still returns ``(pairs, scores)``,
+    so no existing caller changes. ``mine_targeted_attribute_negatives_with_funnel``
+    is the same call returning the instance as a third value. ``stages()``
+    yields ``(step, in_count, out_count, reason)`` rows ready for
+    ``core.tracing.TraceRun.add``; ``to_dict()`` is the JSON detail payload.
+    See the trace-owner call documented on the miner itself.
+
+    The two ``*_census`` mappings are computed ONLY when a funnel is passed
+    (they require an attribute evaluation per rejected candidate, ~40k on the
+    live window); every count above them is exact either way.
+    """
+
+    miner: str = "targeted_attribute_negatives"
+    n_target: int = 0
+    min_similarity: float = 0.0
+    volume_relative_tolerance: float = 0.0
+    volume_absolute_tolerance_ml: float = 0.0
+    name_match: str = "flavor_variant"
+    skipped_reason: str = ""
+    gate_rows: int = 0
+    above_similarity_floor: int = 0
+    above_floor_hard_no: int = 0
+    above_floor_proceed: int = 0
+    above_floor_fallback: int = 0
+    dropped_not_in_canonical_records: int = 0
+    dropped_no_representative_row: int = 0
+    dropped_no_canonical_index: int = 0
+    dropped_same_canonical: int = 0
+    dropped_brand_mismatch: int = 0
+    dropped_name_mismatch: int = 0
+    dropped_no_attribute_conflict: int = 0
+    dropped_already_in_baseline: int = 0
+    flavor_variant_candidates: int = 0
+    passed_all_filters: int = 0
+    emitted_pairs: int = 0
+    conflict_dimension_census: dict[str, int] = field(default_factory=dict)
+    name_blocked_conflict_dimension_census: dict[str, int] = field(default_factory=dict)
+
+    def stages(self) -> list[tuple[str, int, int, str]]:
+        """Return the funnel as ordered ``(step, in_count, out_count, reason)``.
+
+        Counts are cumulative down the funnel: each step's ``out_count`` is the
+        next step's ``in_count``, so a trace read top-to-bottom is the data
+        flow and no step can silently lie about its own attrition.
+        """
+        steps: list[tuple[str, int, int, str]] = []
+        cursor = int(self.gate_rows)
+        for name, dropped, reason in self._drop_order():
+            steps.append((name, cursor, cursor - int(dropped), reason))
+            cursor -= int(dropped)
+        steps.append((
+            "emitted",
+            cursor,
+            int(self.emitted_pairs),
+            "pairs emitted after baseline de-duplication and the target cap",
+        ))
+        return steps
+
+    def _drop_order(self) -> list[tuple[str, int, str]]:
+        return [
+            (
+                "gate_similarity_floor",
+                self.gate_rows - self.above_similarity_floor,
+                f"gate similarity not strictly above {self.min_similarity:g}",
+            ),
+            (
+                "canonical_records_resolution",
+                self.dropped_not_in_canonical_records,
+                "endpoint GTIN has no canonical record",
+            ),
+            (
+                "representative_row_resolution",
+                self.dropped_no_representative_row,
+                "endpoint GTIN has no source row in the SKU frame",
+            ),
+            (
+                "canonical_index_resolution",
+                self.dropped_no_canonical_index,
+                "endpoint GTIN has no payload canonical index",
+            ),
+            (
+                "same_canonical_guard",
+                self.dropped_same_canonical,
+                "both GTINs resolve to the same canonical item (true match)",
+            ),
+            (
+                "brand_equality",
+                self.dropped_brand_mismatch,
+                "canonical brands differ or are empty",
+            ),
+            (
+                "product_name_equality",
+                self.dropped_name_mismatch,
+                f"normalized product names differ (name_match={self.name_match})",
+            ),
+            (
+                "critical_attribute_conflict",
+                self.dropped_no_attribute_conflict,
+                "no critical attribute conflict under the gate's own tolerance",
+            ),
+            (
+                "baseline_deduplication",
+                self.dropped_already_in_baseline,
+                "pair already present in the baseline negative population",
+            ),
+        ]
+
+    def bottleneck(self) -> str:
+        """The single step that dropped the most candidates."""
+        named = [(name, dropped) for name, dropped, _ in self._drop_order()]
+        return max(named, key=lambda item: item[1])[0] if named else ""
+
+    def candidate_ceiling_pct(self) -> float:
+        """Emitted share of the candidates that cleared the similarity floor."""
+        if not self.above_similarity_floor:
+            return 0.0
+        return 100.0 * self.passed_all_filters / self.above_similarity_floor
+
+    def to_dict(self) -> dict[str, object]:
+        """JSON-serializable readback for a trace ``detail`` column."""
+        return {
+            "miner": self.miner,
+            "name_match": self.name_match,
+            "target": int(self.n_target),
+            "min_similarity": float(self.min_similarity),
+            "volume_relative_tolerance": float(self.volume_relative_tolerance),
+            "volume_absolute_tolerance_ml": float(self.volume_absolute_tolerance_ml),
+            "skipped_reason": self.skipped_reason,
+            "gate_rows": int(self.gate_rows),
+            "above_similarity_floor": int(self.above_similarity_floor),
+            "above_floor_by_decision": {
+                "hard_no": int(self.above_floor_hard_no),
+                "proceed": int(self.above_floor_proceed),
+                "fallback": int(self.above_floor_fallback),
+            },
+            "dropped": {
+                name: int(dropped) for name, dropped, _ in self._drop_order()
+            },
+            "flavor_variant_candidates": int(self.flavor_variant_candidates),
+            "passed_all_filters": int(self.passed_all_filters),
+            "emitted_pairs": int(self.emitted_pairs),
+            "bottleneck": self.bottleneck(),
+            "candidate_to_emitted_pct": round(self.candidate_ceiling_pct(), 4),
+            "conflict_dimension_census": dict(sorted(self.conflict_dimension_census.items())),
+            "name_blocked_conflict_dimension_census": dict(
+                sorted(self.name_blocked_conflict_dimension_census.items())
+            ),
+        }
+
+
 def mine_targeted_attribute_negatives(
     df: pd.DataFrame,
     gates: pd.DataFrame,
@@ -68,6 +266,8 @@ def mine_targeted_attribute_negatives(
     volume_relative_tolerance: float = 0.0,
     volume_absolute_tolerance_ml: float = 0.0,
     canonical_map: dict[str, str] | None = None,
+    name_match: str = "flavor_variant",
+    funnel: MiningFunnel | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mine same-brand/name critical-attribute negatives from gate evidence.
 
@@ -92,15 +292,82 @@ def mine_targeted_attribute_negatives(
     made the two lanes disagree on the same pair — a pair whose volumes sit
     inside the gate's ``vol_tolerance`` was labelled ``proceed`` by the gate
     (a positive) while this miner emitted it as a hard negative. Live check
-    found exactly such a pair (`8002267004212` / `8002267025644`: identical
+    found exactly such a pair (`8002267004212`/`8002267025644`: identical
     canonical text, volumes 480 vs 500 = 4.0% <= 0.05, gate ``proceed``).
+
+    NAME RULE (audit 2026-09-15): strict name equality is the filter that
+    actually bounds this lane — on the live gate artifact it dropped 40,269 of
+    the 43,209 candidates that reached it (93.2%), and because the flavour word
+    is part of the name BY DESIGN, no flavour-conflict pair could ever be
+    emitted (5,549 flavour-conflict candidates above the floor, 0 reachable,
+    while the gate itself labels 876 rows "Critical attribute mismatch:
+    flavor"). ``name_match="flavor_variant"`` (default) admits a candidate
+    whose names are equal once FLAVOR_LEXICON tokens are dropped ONLY when the
+    pair carries an explicit flavour conflict AND the training gate already
+    labels that same row ``hard_no``. The gate is the label authority: this
+    rule can only re-expose pairs the gate has itself called label 0, never
+    relabel a ``proceed``/``fallback`` row. ``name_match="exact"`` restores the
+    pre-audit behaviour (196 pairs on the live artifact vs 504 with the rule).
+
+    FUNNEL (audit 2026-09-15): pass a :class:`MiningFunnel` through ``funnel=``
+    to receive the miner's own step-by-step accounting. The consolidated-trace
+    owner should call the miner as::
+
+        from core.hard_negatives import (
+            MiningFunnel, mine_targeted_attribute_negatives,
+        )
+        funnel = MiningFunnel()
+        targeted_neg, targeted_scores = mine_targeted_attribute_negatives(
+            df, gates, canonical_records, gtin_to_row, gtin_to_canon_idx,
+            existing=neg, n_target=int(targeted_cfg["target"]),
+            min_similarity=float(targeted_cfg["min_similarity"]),
+            volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
+            canonical_map=canon_map, funnel=funnel,
+        )
+        for step, in_count, out_count, reason in funnel.stages():
+            pair_trace.add(
+                "mining", f"targeted_attribute_funnel.{step}",
+                in_count=in_count, out_count=out_count,
+                reason=reason, detail=funnel.to_dict(),
+                source="gate_results.csv + canonical_records.csv",
+            )
+
+    The returned pair/score arrays keep their historical shape and order.
     """
+    name_match = str(name_match)
+    if name_match not in {"exact", "flavor_variant"}:
+        raise ValueError(
+            "name_match must be 'exact' or 'flavor_variant'; "
+            f"got {name_match!r}"
+        )
+    if funnel is not None:
+        funnel.miner = "targeted_attribute_negatives"
+        funnel.n_target = int(n_target)
+        funnel.min_similarity = float(min_similarity)
+        funnel.volume_relative_tolerance = float(volume_relative_tolerance)
+        funnel.volume_absolute_tolerance_ml = float(volume_absolute_tolerance_ml)
+        funnel.name_match = name_match
+        funnel.gate_rows = int(len(gates))
     if n_target <= 0:
+        if funnel is not None:
+            funnel.skipped_reason = "n_target <= 0"
         return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
     from core.attribute_conflicts import (
         canonical_attribute_info,
         critical_attribute_evaluation,
     )
+
+    def _census(target: dict[str, int], dimensions: object) -> None:
+        for dimension in dimensions or ():
+            target[str(dimension)] = target.get(str(dimension), 0) + 1
+
+    def _evaluate(left: object, right: object) -> dict[str, list[str]]:
+        return critical_attribute_evaluation(
+            canonical_attribute_info(left),
+            canonical_attribute_info(right),
+            volume_relative_tolerance=float(volume_relative_tolerance),
+            volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
+        )
 
     records = {
         str(row["gtin"]): row
@@ -113,6 +380,12 @@ def mine_targeted_attribute_negatives(
         candidate_similarity=pd.to_numeric(gates["similarity"], errors="coerce")
     )
     ranked = ranked[ranked["candidate_similarity"].gt(float(min_similarity))]
+    if funnel is not None:
+        funnel.above_similarity_floor = int(len(ranked))
+        decisions = ranked["gate_decision"].astype(str).value_counts().to_dict() if "gate_decision" in ranked else {}
+        funnel.above_floor_hard_no = int(decisions.get("hard_no", 0))
+        funnel.above_floor_proceed = int(decisions.get("proceed", 0))
+        funnel.above_floor_fallback = int(decisions.get("fallback", 0))
     ranked = ranked.sort_values(
         ["candidate_similarity", "gtin1", "gtin2"],
         ascending=[False, True, True],
@@ -122,35 +395,79 @@ def mine_targeted_attribute_negatives(
     for row in ranked.itertuples(index=False):
         left_gtin, right_gtin = str(row.gtin1), str(row.gtin2)
         if left_gtin not in records or right_gtin not in records:
+            if funnel is not None:
+                funnel.dropped_not_in_canonical_records += 1
             continue
         if left_gtin not in gtin_to_row or right_gtin not in gtin_to_row:
+            if funnel is not None:
+                funnel.dropped_no_representative_row += 1
             continue
         if left_gtin not in gtin_to_canon_idx or right_gtin not in gtin_to_canon_idx:
+            if funnel is not None:
+                funnel.dropped_no_canonical_index += 1
             continue
         # Same canonical item => true match, never a label-0 pair.
         if canonical_map is not None:
             left_canon = canonical_map.get(left_gtin)
             right_canon = canonical_map.get(right_gtin)
             if left_canon is not None and left_canon == right_canon:
+                if funnel is not None:
+                    funnel.dropped_same_canonical += 1
                 continue
         left_record, right_record = records[left_gtin], records[right_gtin]
         left_row, right_row = gtin_to_row[left_gtin], gtin_to_row[right_gtin]
         left_brand = str(left_record.get("mode_brand", "")).strip().casefold()
         right_brand = str(right_record.get("mode_brand", "")).strip().casefold()
         if not left_brand or left_brand != right_brand:
+            if funnel is not None:
+                funnel.dropped_brand_mismatch += 1
             continue
         left_name = normalized_product_name(df.iloc[left_row].get("title", ""), left_brand)
         right_name = normalized_product_name(df.iloc[right_row].get("title", ""), right_brand)
-        if not left_name or left_name != right_name:
-            continue
-        evaluation = critical_attribute_evaluation(
-            canonical_attribute_info(left_record),
-            canonical_attribute_info(right_record),
-            volume_relative_tolerance=float(volume_relative_tolerance),
-            volume_absolute_tolerance_ml=float(volume_absolute_tolerance_ml),
-        )
+        exact_name = bool(left_name) and left_name == right_name
+        evaluation: dict[str, list[str]] | None = None
+        if not exact_name:
+            relaxed = (
+                name_match == "flavor_variant"
+                and bool(left_name)
+                and bool(right_name)
+                and flavor_variant_product_name(left_name)
+                == flavor_variant_product_name(right_name)
+                and flavor_variant_product_name(left_name) != ""
+                and str(getattr(row, "gate_decision", "")) == "hard_no"
+            )
+            if funnel is not None:
+                # Census of what the NAME filter blocks: the evidence that
+                # made flavour/pulp negatives structurally unreachable.
+                evaluation = _evaluate(left_record, right_record)
+                _census(
+                    funnel.name_blocked_conflict_dimension_census,
+                    evaluation["conflicts"],
+                )
+            if not relaxed:
+                if funnel is not None:
+                    funnel.dropped_name_mismatch += 1
+                continue
+            if evaluation is None:
+                evaluation = _evaluate(left_record, right_record)
+            if "flavor" not in evaluation["conflicts"]:
+                # The names differ only by flavour words, but the shared
+                # evaluator sees no flavour conflict: nothing identity-bearing
+                # separates them, so this is not a negative.
+                if funnel is not None:
+                    funnel.dropped_name_mismatch += 1
+                continue
+            if funnel is not None:
+                funnel.flavor_variant_candidates += 1
+        if evaluation is None:
+            evaluation = _evaluate(left_record, right_record)
         if not evaluation["conflicts"]:
+            if funnel is not None:
+                funnel.dropped_no_attribute_conflict += 1
             continue
+        if funnel is not None:
+            _census(funnel.conflict_dimension_census, evaluation["conflicts"])
+            funnel.passed_all_filters += 1
         score = float(row.candidate_similarity)
         for pair in (
             (left_row, gtin_to_canon_idx[right_gtin]),
@@ -158,6 +475,8 @@ def mine_targeted_attribute_negatives(
         ):
             pair = (int(pair[0]), int(pair[1]))
             if pair in existing_keys:
+                if funnel is not None:
+                    funnel.dropped_already_in_baseline += 1
                 continue
             existing_keys.add(pair)
             found.append((pair[0], pair[1], score))
@@ -165,12 +484,55 @@ def mine_targeted_attribute_negatives(
                 break
         if len(found) >= int(n_target):
             break
+    if funnel is not None:
+        funnel.emitted_pairs = int(len(found))
     if not found:
         return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
     return (
         np.asarray([(a, b) for a, b, _ in found], dtype=int),
         np.asarray([score for _, _, score in found], dtype=float),
     )
+
+
+def mine_targeted_attribute_negatives_with_funnel(
+    df: pd.DataFrame,
+    gates: pd.DataFrame,
+    canonical_records: pd.DataFrame,
+    gtin_to_row: dict[str, int],
+    gtin_to_canon_idx: dict[str, int],
+    *,
+    existing: np.ndarray | None = None,
+    n_target: int,
+    min_similarity: float,
+    volume_relative_tolerance: float = 0.0,
+    volume_absolute_tolerance_ml: float = 0.0,
+    canonical_map: dict[str, str] | None = None,
+    name_match: str = "flavor_variant",
+) -> tuple[np.ndarray, np.ndarray, MiningFunnel]:
+    """Same call as :func:`mine_targeted_attribute_negatives`, returning its funnel.
+
+    This is the seam an out-of-tree caller (the consolidated-trace owner) uses
+    to record the lane's attrition without re-implementing any filter. The
+    signature is pinned to the miner's by
+    ``tests/test_mining_hypotheses.py::test_funnel_wrapper_signature_matches_miner``.
+    """
+    funnel = MiningFunnel()
+    pairs, scores = mine_targeted_attribute_negatives(
+        df,
+        gates,
+        canonical_records,
+        gtin_to_row,
+        gtin_to_canon_idx,
+        existing=existing,
+        n_target=n_target,
+        min_similarity=min_similarity,
+        volume_relative_tolerance=volume_relative_tolerance,
+        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
+        canonical_map=canonical_map,
+        name_match=name_match,
+        funnel=funnel,
+    )
+    return pairs, scores, funnel
 
 
 def mine_attribute_conflict_negatives(
