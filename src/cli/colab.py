@@ -1557,9 +1557,9 @@ class _IncrementalResultSync:
 
     This is a pure latency optimisation and never a correctness dependency:
 
-    * a checkpoint is copied only after its files keep their size across two
-      consecutive polls, so a directory still being written is never captured
-      half-finished;
+    * a checkpoint is copied only once its ``checkpoint_manifest.json`` exists,
+      which the trainer writes last, so a directory still being written is
+      never captured half-finished;
     * everything it fetches is re-fetched and hash-verified by the
       authoritative :func:`download_verified_training_results` pass, which
       remains the only source of truth for a complete run;
