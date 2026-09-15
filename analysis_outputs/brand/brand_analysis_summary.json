@@ -1,13 +1,36 @@
 {
   "provenance": {
-    "commit_sha": "c0b4d352ce12698440dd8c0c7145cd5aae3cc83f",
+    "commit_sha": "e9d1ca66ed913a43a74bae32b8410829ef8b7519",
     "review_csv": "training_results/0915T075044186132Z/worker_1/report/human_review_features/human_review_enriched.csv",
-    "dataset_binding": "dataset.csv",
-    "canonical_records_binding": "canonical_records.csv",
     "population_rows": 585,
-    "containment_partial_ratio_min": 95.0,
-    "containment_min_chars": 4,
-    "distinct_token_set_max": 70.0,
+    "thresholds": [
+      {
+        "name": "title_corroboration_min_chars",
+        "value": 3.0,
+        "origin": "script default"
+      },
+      {
+        "name": "key_containment_min_chars",
+        "value": 4.0,
+        "origin": "script default"
+      },
+      {
+        "name": "gtin_claim_min_share",
+        "value": 0.5,
+        "origin": "script default"
+      },
+      {
+        "name": "gtin_rival_min_share",
+        "value": 0.5,
+        "origin": "script default"
+      },
+      {
+        "name": "generic_token_doc_fraction",
+        "value": 0.01,
+        "origin": "script default"
+      }
+    ],
+    "config_block_present": false,
     "char_ngram_range": [
       2,
       5
@@ -24,6 +47,8 @@
       "mean_score": 0.0,
       "mean_ratio": 0.0,
       "mean_tfidf_cosine_char": 0.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
       "resolves_under_normalisation": false
     },
     {
@@ -32,6 +57,8 @@
       "mean_score": 0.0,
       "mean_ratio": 0.0,
       "mean_tfidf_cosine_char": 0.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
       "resolves_under_normalisation": false
     },
     {
@@ -40,14 +67,18 @@
       "mean_score": 0.0,
       "mean_ratio": 0.0,
       "mean_tfidf_cosine_char": 0.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
       "resolves_under_normalisation": false
     },
     {
-      "brand_class": "identical_normalized",
+      "brand_class": "same_brand_verified",
       "rows": 197,
       "mean_score": 0.6936211997482378,
       "mean_ratio": 100.0,
       "mean_tfidf_cosine_char": 1.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
       "resolves_under_normalisation": false
     },
     {
@@ -56,53 +87,71 @@
       "mean_score": 0.0,
       "mean_ratio": 0.0,
       "mean_tfidf_cosine_char": 0.0,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
       "resolves_under_normalisation": true
     },
     {
-      "brand_class": "containment_or_truncation",
-      "rows": 4,
-      "mean_score": 0.6818080842494965,
-      "mean_ratio": 60.41666666666667,
-      "mean_tfidf_cosine_char": 0.35491034920869935,
-      "resolves_under_normalisation": true
-    },
-    {
-      "brand_class": "brand_present_only_in_title",
-      "rows": 4,
-      "mean_score": 0.6921907216310501,
-      "mean_ratio": 19.476190476190478,
-      "mean_tfidf_cosine_char": 0.015236442812818104,
+      "brand_class": "brand_field_defect",
+      "rows": 8,
+      "mean_score": 0.6793239489197731,
+      "mean_ratio": 21.913859852884244,
+      "mean_tfidf_cosine_char": 0.005989376742127756,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": true,
       "resolves_under_normalisation": false
     },
     {
-      "brand_class": "distinct_brand_true_hard_negative",
-      "rows": 378,
-      "mean_score": 0.668206074092754,
-      "mean_ratio": 23.63200371019878,
-      "mean_tfidf_cosine_char": 0.011405714106152418,
+      "brand_class": "evidence_disagreement",
+      "rows": 4,
+      "mean_score": 0.7050164490938187,
+      "mean_ratio": 29.027777777777775,
+      "mean_tfidf_cosine_char": 0.03949341873126272,
+      "is_true_hard_negative": false,
+      "is_brand_field_defect": false,
       "resolves_under_normalisation": false
     },
     {
-      "brand_class": "partial_overlap_needs_review",
-      "rows": 2,
-      "mean_score": 0.6856217980384827,
-      "mean_ratio": 66.66666666666667,
-      "mean_tfidf_cosine_char": 0.3874385817149699,
+      "brand_class": "different_brand_verified_hard_negative",
+      "rows": 246,
+      "mean_score": 0.6692075416809176,
+      "mean_ratio": 24.825263377660367,
+      "mean_tfidf_cosine_char": 0.02130160605662715,
+      "is_true_hard_negative": true,
+      "is_brand_field_defect": false,
+      "resolves_under_normalisation": false
+    },
+    {
+      "brand_class": "different_brand_unverified_hard_negative",
+      "rows": 130,
+      "mean_score": 0.665918632195546,
+      "mean_ratio": 22.979733719394357,
+      "mean_tfidf_cosine_char": 0.008621080652686703,
+      "is_true_hard_negative": true,
+      "is_brand_field_defect": false,
       "resolves_under_normalisation": false
     }
   ],
   "impact": {
     "population_rows": 585,
-    "brand_agrees_under_crude_rule": 197,
-    "brand_disagrees_crude": 388,
-    "resolved_by_normalisation": 4,
-    "remains_true_hard_negative": 380,
-    "resolved_share_of_population": 0.006837606837606838,
-    "resolved_share_of_mismatches": 0.010309278350515464,
-    "hard_negative_share_of_mismatches": 0.979381443298969,
-    "mean_score_brand_agrees": 0.6936211997482378,
-    "mean_score_brand_disagrees": 0.6686833371821138,
-    "score_separation": 0.02493786256612396,
-    "mean_score_hard_negative": 0.6682977357977316
+    "brand_agrees_raw_string": 197,
+    "brand_differs_raw_string": 388,
+    "brand_agrees_verified": 197,
+    "brand_differs_verified": 376,
+    "brand_field_defects": 8,
+    "evidence_disagreements": 4,
+    "true_hard_negatives": 376,
+    "contradictions_found_by_co_listings": 0,
+    "pairs_with_same_gtin": 48,
+    "same_gtin_conflicting_brands": 0,
+    "key_containment_rows": 4,
+    "resolved_by_normalisation": 0,
+    "resolved_share_of_population": 0.0,
+    "separation_raw_string": 0.02493786256612396,
+    "separation_verified": 0.02493786256612396,
+    "separation_excluding_defects": 0.02555078102768804,
+    "mean_score_brand_agrees_verified": 0.6936211997482378,
+    "mean_score_brand_differs_verified": 0.6680704187205497,
+    "mean_score_true_hard_negative": 0.6680704187205497
   }
 }
