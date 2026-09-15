@@ -353,7 +353,13 @@ def component_index(pos_pairs: np.ndarray, row_bc: np.ndarray) -> np.ndarray:
     for node, root in roots.items():
         if root not in smallest or node < smallest[root]:
             smallest[root] = node
-    ids = {root: index for index, root in enumerate(sorted(smallest.values()))}
+    # ids are handed out in the order of each component's SMALLEST barcode, so
+    # the numbering itself is order- and hash-independent; the table is keyed
+    # by ROOT (the id of a component is looked up by root, not by member).
+    ids = {
+        root: index
+        for index, root in enumerate(sorted(smallest, key=lambda root: smallest[root]))
+    }
     result = np.full(len(row_bc), -1, dtype=int)
     for position, bc in enumerate(row_bc):
         node = str(bc)
@@ -484,9 +490,14 @@ def build_evaluation_pool(
         priority[row] = sorted(set(candidates))
 
     barcode_of_row = np.asarray([str(bc).strip() for bc in row_bc], dtype=object)
+    universe_members = {int(row) for row in universe}
 
     def eligible(query_row: int, candidate_row: int) -> bool:
         if candidate_row < 0 or candidate_row >= len(barcode_of_row):
+            return False
+        # a priority pair must still be a member of the fold's candidate
+        # universe — otherwise it would smuggle a non-fold candidate in
+        if candidate_row not in universe_members:
             return False
         if row_component[candidate_row] == row_component[query_row]:
             return False
@@ -598,7 +609,11 @@ def build_evaluation_pool(
             list(zip(pair_queries, pair_candidates, strict=True)), dtype=int
         ).reshape(-1, 2),
         labels=np.asarray(pair_labels, dtype=int),
-        query_keys=np.asarray([key_of_row[row] for row in pair_queries], dtype=object),
+        # fixed-width unicode, NOT dtype=object: the per-query metric groups
+        # with ``query_ids == query``, and on a 100-candidate x 5,847-query
+        # pool an object array turns that vectorized comparison into element
+        # wise Python compares (measured 0.3 ms vs 45 ms per query).
+        query_keys=np.asarray([key_of_row[row] for row in pair_queries], dtype=str),
         query_rows=np.asarray(evaluated_rows, dtype=int),
         coverage=coverage,
     )
