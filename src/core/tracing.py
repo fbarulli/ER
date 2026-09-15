@@ -151,25 +151,49 @@ def trace_path() -> Path:
 
 
 def resolve_run_id() -> str:
-    """Resolve the run id for THIS process (see the module docstring).
+    """Resolve the run id for THIS process (see the module docstring)."""
+    return str(resolve_run_identity()["run_id"])
 
-    Resolution order: explicit trace override → launcher run id → content
-    fingerprint of the run's shared artifacts → ``run-unbound`` (no artifacts
-    yet: the row is still labelled, never anonymous).
+
+def resolve_run_identity() -> dict[str, object]:
+    """Resolve the run id AND how it was resolved.
+
+    The provenance matters as much as the value: when a file holds two runs, a
+    reader must be able to see WHY they are two runs. The resolution rule plus
+    the fingerprint inputs are written into each stage's ``run_identity`` row.
     """
     for variable in (TRACE_RUN_ENV, LAUNCHER_RUN_ENV):
         value = str(os.environ.get(variable, "")).strip()
         if value:
-            return value
-    return _artifact_run_fingerprint()
+            return {
+                "run_id": value,
+                "resolution": f"explicit env {variable}",
+                "sources": {},
+            }
+    sources = run_artifact_fingerprint()
+    if not sources:
+        return {
+            "run_id": RUN_UNBOUND,
+            "resolution": "no run artifact on disk yet",
+            "sources": {},
+        }
+    joined = "|".join(
+        f"{name}:{entry['size']}:{entry['sha256']}"
+        for name, entry in sources.items()
+    )
+    return {
+        "run_id": f"run-{hashlib.sha256(joined.encode()).hexdigest()[:12]}",
+        "resolution": "content fingerprint of the run artifacts",
+        "sources": sources,
+    }
 
 
-def _artifact_run_fingerprint() -> str:
-    """Fingerprint the shared artifacts that define the current run."""
+def run_artifact_fingerprint() -> dict[str, dict[str, object]]:
+    """Size + sha256 of every artifact that defines the current run."""
     from core.common import F
     from core.manifest import sha256_file
 
-    parts: list[str] = []
+    found: dict[str, dict[str, object]] = {}
     for key in RUN_FINGERPRINT_SOURCES:
         bound = F.get(key)
         if bound is None:
@@ -177,10 +201,12 @@ def _artifact_run_fingerprint() -> str:
         path = Path(bound)
         if not path.exists():
             continue
-        parts.append(f"{key}:{path.stat().st_size}:{sha256_file(path)}")
-    if not parts:
-        return RUN_UNBOUND
-    return f"run-{hashlib.sha256('|'.join(parts).encode()).hexdigest()[:12]}"
+        found[key] = {
+            "path": path.as_posix(),
+            "size": int(path.stat().st_size),
+            "sha256": sha256_file(path),
+        }
+    return found
 
 
 def _detail_text(detail: object) -> str:
@@ -428,6 +454,7 @@ class TraceRun:
         # fingerprint is taken from, so an early resolution would tag stage 1
         # with the PREVIOUS run and split the two stages apart.
         self._run_id = run_id
+        self._identity: dict[str, object] | None = None
         self._rows: list[dict[str, object]] = []
 
     def __len__(self) -> int:
@@ -636,7 +663,9 @@ class TraceRun:
         }
 
     def rows(self) -> pd.DataFrame:
-        return pd.DataFrame(self._rows, columns=list(TRACE_COLUMNS))
+        """This stage's rows: the ``run_identity`` row, then the recorded steps."""
+        rows = [self._identity_row(), *self._rows]
+        return pd.DataFrame(rows, columns=list(TRACE_COLUMNS))
 
     def write(self, path: Path | None = None) -> Path:
         """Commit this stage's rows to the consolidated trace."""
@@ -644,8 +673,6 @@ class TraceRun:
 
         target = path if path is not None else trace_path()
         target.parent.mkdir(parents=True, exist_ok=True)
-        if self._run_id is None:
-            self._run_id = resolve_run_id()
         incoming = self.rows()
         incoming["run_id"] = self.run_id
         frame = _commit(read_trace(target), incoming, run_id=self.run_id, stage=self.stage)
@@ -653,6 +680,42 @@ class TraceRun:
         assert_trace_frame(frame, path=target)
         atomic_write_csv(frame, target, index=False)
         return target
+
+    def _identity_row(self) -> dict[str, object]:
+        """The stage's first row: which run these rows belong to, and why.
+
+        Written automatically (not by the caller) so every stage commit is
+        self-describing: the run id, the rule that produced it, and the size +
+        sha256 of each artifact the fingerprint was taken from. Two runs in one
+        file are therefore explainable from the file.
+        """
+        if self._run_id is None:
+            identity = resolve_run_identity()
+            self._run_id = str(identity["run_id"])
+            self._identity = identity
+        identity = self._identity or {
+            "run_id": self.run_id,
+            "resolution": "explicit run id supplied by the caller",
+            "sources": {},
+        }
+        return record(
+            self.stage,
+            "run_identity",
+            reason=f"run id resolved by {identity['resolution']}",
+            detail={
+                "run_id": identity["run_id"],
+                "resolution": identity["resolution"],
+                "policy": (
+                    "run-scoped idempotent append: a stage REPLACES its own rows "
+                    "for this run; different runs stay distinguishable by run_id"
+                ),
+                "sources": identity["sources"],
+                "rows_in_stage": len(self._rows),
+            },
+            source="config/paths.yaml layout training_trace",
+            run_id=self.run_id,
+            at=self._stamp(),
+        )
 
     def _stamp(self) -> str:
         """One timestamp per row; stages share it so rows read as a snapshot."""
@@ -800,6 +863,8 @@ __all__ = [
     "read_trace",
     "record",
     "resolve_run_id",
+    "resolve_run_identity",
+    "run_artifact_fingerprint",
     "sample_keys",
     "trace_path",
 ]

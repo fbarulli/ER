@@ -177,8 +177,13 @@ def test_row_contract_accepts_what_the_writers_produce(tmp_path):
     assert list(frame.columns) == list(TRACE_COLUMNS)
     assert_trace_frame(frame)
     assert set(frame["run_id"]) == {"run-contract"}
+    # the stage's first row states the run identity and how it was resolved
+    assert list(frame["step"]) == ["run_identity", "step.sub", "step.group"]
+    identity = detail_json(frame.iloc[0]["detail"])
+    assert identity["run_id"] == "run-contract"
+    assert "resolution" in identity and "policy" in identity
     # dropped_count is DERIVED, never hand-written
-    assert int(frame.iloc[0]["dropped_count"]) == 2
+    assert int(frame[frame["step"] == "step.sub"].iloc[0]["dropped_count"]) == 2
 
 
 def test_row_contract_rejects_anonymous_and_malformed_rows(tmp_path):
@@ -220,7 +225,7 @@ def test_two_consecutive_identical_runs_do_not_duplicate_rows(tmp_path):
     first = _one_run()
     second = _one_run()
 
-    assert len(first) == 2
+    assert len(first) == 3  # run_identity + two step rows
     assert len(second) == len(first)
     assert list(second["step"]) == list(first["step"])
     assert_trace_frame(second)
@@ -242,9 +247,10 @@ def test_a_stage_rerun_replaces_in_place_and_keeps_the_flow_order(tmp_path):
     again.write(target)
 
     frame = read_trace(target)
-    assert list(frame["stage"]) == ["data_prep", "data_prep", "pairs"]
-    assert list(frame["step"]) == ["a.first", "a.extra", "b.second"]
-    assert int(frame.iloc[0]["in_count"]) == 2  # the re-run's numbers, not the stale ones
+    steps = frame[frame["step"] != "run_identity"]
+    assert list(steps["stage"]) == ["data_prep", "data_prep", "pairs"]
+    assert list(steps["step"]) == ["a.first", "a.extra", "b.second"]
+    assert int(steps.iloc[0]["in_count"]) == 2  # the re-run's numbers, not the stale ones
 
 
 def test_two_different_runs_stay_distinguishable(tmp_path):
@@ -256,9 +262,10 @@ def test_two_different_runs_stay_distinguishable(tmp_path):
 
     frame = read_trace(target)
     assert set(frame["run_id"]) == {"run-one", "run-two"}
-    assert len(frame) == 2
+    assert len(frame) == 4  # a run_identity row + a step row per run
     for run_id in ("run-one", "run-two"):
-        assert len(frame[frame["run_id"] == run_id]) == 1
+        rows = frame[frame["run_id"] == run_id]
+        assert list(rows["step"]) == ["run_identity", "gtin_guard.identity_claims_evaluated"]
     assert_trace_frame(frame)
 
 
@@ -290,7 +297,7 @@ def test_old_runs_age_out_but_whole_runs_at_a_time(tmp_path):
     frame = read_trace(target)
     kept = list(dict.fromkeys(frame["run_id"]))
     assert kept == [f"run-{index}" for index in range(3, 8)], kept
-    assert len(frame) == 5
+    assert len(frame) == 10  # a run_identity row + a step row per retained run
 
 
 # ── 3. entity sampling: exact census + stratified sample ───────────────────
@@ -359,6 +366,13 @@ def test_two_stage_live_run_covers_every_row_and_every_pair(
     # ── both stages are present after a normal two-stage invocation ─────────
     assert set(frame["stage"]) == {"data_prep", "pairs"}
     assert len(frame[frame["stage"] == "pairs"]) > 0
+    # … and each stage states its own run identity, with the fingerprint inputs
+    identities = frame[frame["step"] == "run_identity"]
+    assert set(identities["stage"]) == {"data_prep", "pairs"}
+    for _, row in identities.iterrows():
+        identity = detail_json(row["detail"])
+        assert identity["run_id"] == row["run_id"]
+        assert set(identity["sources"]) == {"canonical_records", "gate_results"}
 
     # ── no duplicate rows: no two rows are identical except for their stamp
     without_stamp = frame.drop(columns=["at"])
