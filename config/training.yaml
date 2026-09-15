@@ -318,7 +318,7 @@ training:
   # over labeled (pos=1/neg=0) hard pairs; mnrl =
   # MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
   loss: "mnrl"
-  contrastive_margin: 0.3     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
+  contrastive_margin: 0.1     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
   hard_positives: true        # generate volume-verified cross-country pairs
                               # and join them to the training positives
   epochs: 10
