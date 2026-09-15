@@ -84,8 +84,8 @@ class DataFilesSpec(BaseModel):
 
     dataset: str
     dataset_deduped: str
-    dataset_deduped_sample_3000: str
-    dataset_deduped_train_minus_3000: str
+    dataset_deduped_sample_1500: str
+    dataset_deduped_train_minus_1500: str
     sku_to_rep: str
     canonical_records: str
     gate_results: str
