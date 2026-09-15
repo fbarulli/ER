@@ -572,6 +572,19 @@ def run_colab_exec_stream(
             bufsize=1,
         )
         captured: list[str] = []
+        heartbeat_stop = threading.Event()
+
+        def emit_heartbeat() -> None:
+            started = time.monotonic()
+            while not heartbeat_stop.wait(30):
+                print(
+                    f"[stream] {log_name or 'remote stage'} still active "
+                    f"({time.monotonic() - started:.0f}s elapsed; awaiting remote output)",
+                    flush=True,
+                )
+
+        heartbeat = threading.Thread(target=emit_heartbeat, daemon=True)
+        heartbeat.start()
         out_thread = threading.Thread(target=stream_output, args=(process.stdout, "[out]", captured))
         err_thread = threading.Thread(target=stream_output, args=(process.stderr, "[err]", captured))
         out_thread.start()
@@ -586,6 +599,8 @@ def run_colab_exec_stream(
             process.wait()
             out_thread.join()
             err_thread.join()
+            heartbeat_stop.set()
+            heartbeat.join(timeout=1)
             output = "".join(captured)
             raise RuntimeError(
                 f"Remote execution timed out after {timeout}s.\n"
@@ -594,6 +609,8 @@ def run_colab_exec_stream(
             ) from exc
         out_thread.join()
         err_thread.join()
+        heartbeat_stop.set()
+        heartbeat.join(timeout=1)
         if process.returncode == 0:
             return
         output = "".join(captured)
@@ -3257,6 +3274,8 @@ base = pathlib.Path({remote_base!r})
 out = base / "worker_1"
 base.mkdir(parents=True, exist_ok=False)
 out.mkdir()
+print(f"[worker] setup complete: results={{out}}", flush=True)
+print("[worker] resolving versioned checkout inputs", flush=True)
 {remote_input_loop}
     relative = name.relative_to(root / "results")
     source = root / "results" / relative
@@ -3284,6 +3303,7 @@ if {prepare_remote_labeled_pairs!r}:
         )
 command = [sys.executable, *{args!r}]
 log_path = out / "training.log"
+print("[worker] inputs ready; launching training process", flush=True)
 print(f"[train-launch] worker 1 streaming directly: {{' '.join(command)}}", flush=True)
 with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
     process = subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE,
@@ -3295,6 +3315,7 @@ with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
     rc = process.wait()
 if rc:
     raise RuntimeError(f"worker 1 failed (rc={{rc}}); log={{log_path}}")
+print("[worker] training process finished", flush=True)
 run_completion = {final_inference!r}
 completion = [
     sys.executable, "-m", "training.complete_colab_worker",
@@ -3310,6 +3331,7 @@ if {inference_device!r} is not None:
 if not { _DVC_ENABLED!r}:
     completion.append("--skip-dvc")
 if run_completion:
+    print("[worker] starting final validation inference", flush=True)
     print("[train] training complete; running validation inference and final DVC publication", flush=True)
     with log_path.open("a", encoding="utf-8", buffering=1) as log_file:
         process = subprocess.Popen(
