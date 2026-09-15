@@ -46,6 +46,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -155,6 +156,14 @@ _original_stderr = None
 _SUPPRESS_LIVE_LOG = False
 
 
+# The lane's fixed split, asserted rather than derived: training consumes the
+# deduped catalog with the held-out IDs removed, and inference scores precisely
+# that held-out population.
+_EXPECTED_TRAINING_ROWS = 58_529
+_EXPECTED_INFERENCE_ROWS = 3_000
+_EXPECTED_SOURCE_ROWS = _EXPECTED_TRAINING_ROWS + _EXPECTED_INFERENCE_ROWS
+
+
 def training_lifecycle_preflight(
     *, workers: int, model: str | None, masking_profile: str,
     train_only: bool = False,
@@ -171,15 +180,38 @@ def training_lifecycle_preflight(
         "inference": pd.read_csv(sample_path, usecols=["product_id"], dtype=str),
     }
     ids = {key: set(frame["product_id"]) for key, frame in frames.items()}
+    for name, frame in frames.items():
+        duplicate_count = int(frame["product_id"].duplicated().sum())
+        if duplicate_count:
+            raise RuntimeError(
+                f"{name} input contains {duplicate_count:,} duplicate product ID row(s)"
+            )
     overlap = ids["training"] & ids["inference"]
     if overlap:
-        raise RuntimeError(f"training/inference overlap contains {len(overlap)} product IDs")
-    if ids["training"] | ids["inference"] != ids["source"]:
-        raise RuntimeError("training remainder plus inference sample does not reconstruct source")
-    if len(frames["training"]) != 58_529 or len(frames["inference"]) != 3_000:
+        raise RuntimeError(
+            f"training/inference overlap contains {len(overlap):,} product IDs"
+        )
+    reconstructed = ids["training"] | ids["inference"]
+    if reconstructed != ids["source"]:
+        missing = len(ids["source"] - reconstructed)
+        extra = len(reconstructed - ids["source"])
+        raise RuntimeError(
+            "training remainder plus inference sample does not reconstruct source: "
+            f"missing={missing:,} extra={extra:,}"
+        )
+    if (
+        len(frames["training"]) != _EXPECTED_TRAINING_ROWS
+        or len(frames["inference"]) != _EXPECTED_INFERENCE_ROWS
+        or len(frames["source"]) != _EXPECTED_SOURCE_ROWS
+    ):
         raise RuntimeError(
             "unexpected split sizes: "
-            f"training={len(frames['training'])} inference={len(frames['inference'])}"
+            f"training={len(frames['training']):,} "
+            f"(expected {_EXPECTED_TRAINING_ROWS:,}), "
+            f"inference={len(frames['inference']):,} "
+            f"(expected {_EXPECTED_INFERENCE_ROWS:,}), "
+            f"source={len(frames['source']):,} "
+            f"(expected {_EXPECTED_SOURCE_ROWS:,})"
         )
     profiles = _expand_worker_profiles(masking_profile, workers, "masking")
     model_key = model or str(training_cfg().training.base_model)
@@ -193,6 +225,7 @@ def training_lifecycle_preflight(
         "inference_dataset": str(sample_path),
         "inference_rows": len(frames["inference"]),
         "source_dataset": str(source_path),
+        "source_rows": len(frames["source"]),
         "product_id_overlap": 0,
         "reconstructs_source": True,
         "train_only": train_only,
@@ -1600,7 +1633,7 @@ def _forget_cached_session() -> None:
             command = proc_cmdline.read_bytes().replace(b"\0", b" ").decode(errors="replace")
         except OSError:
             command = ""
-        if "colab_cli_entry.py" in command and "keep-alive" in command:
+        if _is_keep_alive_daemon(command):
             try:
                 os.kill(keep_alive_pid, 15)
                 print(f"[session] stopped stale local keep-alive pid={keep_alive_pid}", flush=True)
@@ -1611,6 +1644,70 @@ def _forget_cached_session() -> None:
     temporary.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, _COLAB_CLI_CONFIG)
     print(f"[session] removed stale cached record for '{SESSION}'", flush=True)
+
+
+def _is_keep_alive_daemon(command: str) -> bool:
+    """Whether a /proc command line is this wrapper's keep-alive daemon."""
+    return (
+        _COLAB_CLI_ENTRYPOINT.name in command
+        and "keep-alive" in command
+    )
+
+
+def keep_alive_daemon_pids() -> list[int]:
+    """PIDs of keep-alive daemons serving THIS session.
+
+    The CLI records the pid of the daemon it spawned, but a backstop must not
+    depend on the CLI's bookkeeping being present or correct, so the process
+    table is the source of truth and the recorded pid is only a hint.
+    """
+    found: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            command = (
+                (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            )
+        except OSError:
+            continue
+        if _is_keep_alive_daemon(command) and SESSION in command:
+            found.append(int(entry.name))
+    return sorted(found)
+
+
+def stop_keep_alive_daemon(*, reason: str) -> int:
+    """Stop this session's keep-alive daemon and report how many were stopped.
+
+    The daemon is what provisioning needs, so it is always allowed to start.
+    On a lane that must never be retained it is stopped as soon as the launcher
+    owns the run: the launcher's own teardown remains the primary release, and
+    this is the backstop that keeps a crash from leaving the VM held open by
+    its own daemon.  A daemon that cannot be found is reported loudly rather
+    than passed over in silence.
+    """
+    pids = keep_alive_daemon_pids()
+    if not pids:
+        print(
+            f"[session] no keep-alive daemon found for '{SESSION}' ({reason}); "
+            "the VM is released by the launcher's own teardown",
+            flush=True,
+        )
+        return 0
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except OSError as exc:
+            print(
+                f"[session] could not stop keep-alive pid={pid} ({exc!r}); "
+                "the VM is released by the launcher's own teardown",
+                flush=True,
+            )
+            continue
+        print(f"[session] stopped keep-alive daemon pid={pid} ({reason})", flush=True)
+    return len(pids)
 
 
 def ensure_session() -> None:
@@ -3485,22 +3582,23 @@ def main() -> None:
     if GPU.upper() != "CPU" and not args.allow_gpu:
         raise ValueError("GPU launch requires --allow-gpu")
 
-    # The CLI's keep-alive daemon starts with the session and is what
-    # PROVISIONING needs, so the wrapper must never deny it: denying it stops
-    # `colab new` working at all, on every lane.  What is restricted is
-    # RETENTION -- whether the VM is left running when the work ends.
+    # Two different decisions used to be one, and conflating them stopped every
+    # GPU lane from provisioning at all:
+    #
+    #   the DAEMON   is spawned by `colab new` itself and is what provisioning
+    #                needs.  It is always allowed, on every lane.
+    #   RETENTION    is whether the VM is still running when the work ends.
+    #                That is CPU-only, and a GPU lane never keeps it.
     os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
     if args.keep_alive and GPU.upper() != "CPU":
-        # Retention on a GPU lane is a deliberate, owner-approved choice: on the
-        # first run with a new input contract neither the Colab transfer nor DVC
-        # is trusted, and the manual checksum-verified pull is the guarantee.
-        # Loud, not blocked -- and the run is not finished until the pull is done
-        # and `colab stop` has released the VM.
-        print(
-            f"[warn] retaining a {GPU} VM on purpose: accelerator quota is spent "
-            "for as long as it lives. Pull and verify the results, then run "
-            "`colab stop`.",
-            flush=True,
+        # Retention is the operator-facing flag, and it stays refused rather
+        # than downgraded to a warning: a caller who asked to keep a GPU VM
+        # must not be able to mistake a warning for a retained VM, and a
+        # retained GPU VM bills accelerator quota for as long as it lives.
+        raise ValueError(
+            "--keep-alive is CPU-only (a retained GPU VM consumes accelerator "
+            f"quota indefinitely); requested --gpu {GPU}. Use --gpu CPU or drop "
+            "--keep-alive."
         )
 
     if args.preflight_only:
@@ -3580,6 +3678,14 @@ def main() -> None:
         if bundle_request is not None and not args.resume_run:
             start_validation_upload_prewarm()
         ensure_session()
+        if GPU.upper() != "CPU":
+            # Backstop, not the primary release: the launcher's own teardown
+            # still runs in `finally`.  A GPU VM must never be left held open
+            # by its own daemon if this process dies, so the daemon is stopped
+            # now that provisioning is done and the launcher owns the run --
+            # the VM then idle-terminates instead of burning accelerator quota
+            # indefinitely.
+            stop_keep_alive_daemon(reason=f"GPU lane ({GPU}) must never be retained")
         prepare_remote_layout(minimal_runtime=prepared_train_runtime)
         install_deps(minimal_runtime=prepared_train_runtime)
         if args.what in {"train", "dual-train", "smoke", "mixed"}:
