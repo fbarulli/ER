@@ -143,7 +143,7 @@ class PersistentHnswIndex:
         self,
         *,
         ids: Sequence[str],
-        dim: int,
+        dim: int | None = None,
         checkpoint: Path,
         model_name: str,
     ) -> dict[str, object]:
@@ -160,6 +160,11 @@ class PersistentHnswIndex:
         metadata = json.loads(
             (self.output_dir / METADATA_FILENAME).read_text(encoding="utf-8")
         )
+        if dim is None:
+            try:
+                dim = int(metadata["dim"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("persisted HNSW metadata has no valid dimension") from exc
         normalized_ids = [str(value) for value in ids]
         expected = {
             "backend": "hnswlib",

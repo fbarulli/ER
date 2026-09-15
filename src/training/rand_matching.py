@@ -616,23 +616,9 @@ class RandMatcher:
             )
             for item_id, info in zip(self.item_ids, item_infos, strict=True)
         ]
-        item_embeddings = self.model.encode(
-            item_texts,
-            batch_size=self.batch_size,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            show_progress_bar=True,
-        )
         item_features = np.asarray(
             [self._structured_vector(info) for info in item_infos],
             dtype=np.float32,
-        )
-        self.item_embeddings = normalize_embeddings(
-            fuse_numpy(
-                item_embeddings,
-                item_features,
-                self.structured_weight,
-            )
         )
         ann_settings = load_ann_config()
         ann_cfg = ann_settings.index
@@ -651,15 +637,31 @@ class RandMatcher:
             try:
                 self.ann_index.load(
                     ids=self.item_ids,
-                    dim=self.item_embeddings.shape[1],
                     checkpoint=self.checkpoint,
                     model_name=model_name,
                 )
+                self.item_embeddings = self.ann_index.embeddings
+                if self.item_embeddings is None:
+                    raise ValueError("persisted HNSW index loaded without embeddings")
                 print(f"loaded persisted HNSW index from {self.ann_index.output_dir}")
             except (FileNotFoundError, ValueError) as exc:
                 print(f"persisted HNSW index needs rebuild: {exc}")
                 rebuild_ann_index = True
         if rebuild_ann_index:
+            item_embeddings = self.model.encode(
+                item_texts,
+                batch_size=self.batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=True,
+            )
+            self.item_embeddings = normalize_embeddings(
+                fuse_numpy(
+                    item_embeddings,
+                    item_features,
+                    self.structured_weight,
+                )
+            )
             metadata = self.ann_index.build(
                 self.item_embeddings,
                 self.item_ids,
