@@ -104,6 +104,7 @@ colab:
     - "_checkpoint_upload_staging"
     - "_checkpoints"
   worker_monitor_seconds: 15
+  dvc_enabled: false
   # One lane-level DVC publisher is separate from trainer/HPO workers.
   dvc_workers: 1
   # DVC's internal content-transfer jobs. This controls parallel object
@@ -116,7 +117,7 @@ colab:
   validation_inference:
     enabled: true
     source_csv: "artifacts/data/dataset_deduped.csv"
-    input_csv: "artifacts/data/dataset_deduped_sample_3000.csv"
+    input_csv: "artifacts/data/dataset_deduped.csv"
     output_dir: "validation_inference"
     batch_size: 128
     device: "cpu"
@@ -487,7 +488,7 @@ hpo:
     uniformity_weight: [0.0, 0.05]  # trial-level anti-collapse regularizer
   n_trials: 20                # default TPE trial budget (was --n-trials 20)
   n_jobs: 2                   # default parallel HPO trial workers
-  persistence: "dvc"         # DVC-backed HPO snapshots
+  persistence: "none"        # DVC disabled; retain HPO state only in the run workspace
   calibration_folds: 3        # canonical-disjoint folds for the trial proxy
   # ── selection protocol (test-leak fix, 2026-09-12) ─────────────────────
   # WHICH signal a sweep ranks configs on, per split mode. Holdout sweeps

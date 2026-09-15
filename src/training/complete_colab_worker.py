@@ -47,24 +47,32 @@ def _write_input_provenance(
     sample_ids = pd.read_csv(
         sample_csv, usecols=["product_id"], dtype=str, keep_default_na=False
     )["product_id"]
-    overlap = sorted(set(training_ids) & set(sample_ids))
-    reconstructed = set(training_ids) | set(sample_ids)
-    if overlap:
-        raise ValueError(
-            f"training complement overlaps validation sample on {len(overlap)} product IDs"
-        )
-    if reconstructed != source_ids:
-        raise ValueError(
-            "training complement plus validation sample does not reconstruct the deduped source: "
-            f"missing={len(source_ids - reconstructed)} extra={len(reconstructed - source_ids)}"
-        )
+    training_id_set = set(training_ids)
+    sample_id_set = set(sample_ids)
+    full_inference = sample_id_set == source_ids
+    overlap = sorted(training_id_set & sample_id_set)
+    reconstructed = training_id_set | sample_id_set
+    if full_inference:
+        if not training_id_set <= source_ids:
+            raise ValueError("training input contains product IDs absent from the deduped source")
+    else:
+        if overlap:
+            raise ValueError(
+                f"training complement overlaps validation sample on {len(overlap)} product IDs"
+            )
+        if reconstructed != source_ids:
+            raise ValueError(
+                "training complement plus validation sample does not reconstruct the deduped source: "
+                f"missing={len(source_ids - reconstructed)} extra={len(reconstructed - source_ids)}"
+            )
     payload = {
         "schema": "validation-input-provenance-v1",
         "deduped_source": _csv_identity(source_csv),
         "training_complement": _csv_identity(training_csv),
         "sku_sample": _csv_identity(sample_csv),
-        "training_validation_product_id_overlap": 0,
-        "complement_reconstructs_source": True,
+        "training_validation_product_id_overlap": len(overlap),
+        "complement_reconstructs_source": not full_inference,
+        "full_deduped_inference": full_inference,
         "sku_sample_unique_product_ids": int(sample_ids.nunique()),
         "sku_sample_ids_present_in_source": int(len(sample_ids)),
     }

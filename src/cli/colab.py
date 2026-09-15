@@ -109,7 +109,9 @@ _MIXED_MINING_PROFILE = _COLAB.mixed_mining_profile
 _MASKING_ENABLED = training_cfg().masking.enabled
 _MASKING_PROFILE = str(training_cfg().masking.profile)
 _COLLAPSE_GUARDRAIL_PROFILE = str(training_cfg().collapse_guardrail.profile)
-_DVC_WORKERS = _COLAB.dvc_workers
+_DVC_ENABLED = bool(_COLAB.dvc_enabled)
+_DVC_WORKERS = _COLAB.dvc_workers if _DVC_ENABLED else 0
+_DVC_DISABLED_FLAG = "0" if _DVC_ENABLED else "1"
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
 _PROBE_RETRIES = _COLAB.probe_retries
@@ -119,6 +121,7 @@ _SMOKE_EPOCHS = _COLAB.smoke_epochs
 _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
 _RESULT_DOWNLOAD_TIMEOUT_SECONDS = _COLAB.result_download_timeout_seconds
 _RESULT_DOWNLOAD_HEARTBEAT_SECONDS = _COLAB.result_download_heartbeat_seconds
+_REMOTE_UPLOAD_RETRIES = 3
 _RESULT_ARCHIVE_NAME = _COLAB.result_archive_name
 _RESULT_MANIFEST_NAME = _COLAB.result_manifest_name
 _RESULT_DOWNLOAD_EXCLUDED_DIRS = frozenset(_COLAB.result_download_excluded_dirs)
@@ -271,6 +274,25 @@ def _result_event(
     detail_text = " ".join(f"{key}={value}" for key, value in details.items())
     print(f"[result-state] {stage} {state}{suffix}" + (f" | {detail_text}" if detail_text else ""), flush=True)
 
+
+def _record_remote_run(remote_base: str, *, workers: int, lane: str) -> None:
+    """Persist the remote location before uploads or training begin."""
+    run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    root = TRAINING_RESULTS / run_id
+    root.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "lane": lane,
+        "remote_base": remote_base,
+        "run_id": run_id,
+        "session": SESSION,
+        "workers": workers,
+    }
+    (root / "remote_run.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(f"[run] remote metadata recorded -> {root / 'remote_run.json'}", flush=True)
+
 # The clone contains the committed raw export and number-token reference;
 # data_prep regenerates deduped data and all downstream CSVs on the VM.
 
@@ -363,6 +385,22 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
         raise
 
 
+def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
+    """Retry transient Colab upload/control-channel failures."""
+    for attempt in range(1, _REMOTE_UPLOAD_RETRIES + 1):
+        try:
+            colab("upload", "-s", SESSION, str(source), remote, timeout=timeout)
+            return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if attempt == _REMOTE_UPLOAD_RETRIES:
+                raise
+            delay = min(30, 5 * attempt)
+            print(
+                f"[upload] retry {attempt}/{_REMOTE_UPLOAD_RETRIES - 1} for {source.name} "
+                f"after transient failure; waiting {delay}s",
+                flush=True,
+            )
+            time.sleep(delay)
 def run_colab_exec_stream(
     session: str,
     script: str,
@@ -904,6 +942,7 @@ def run_parallel_train_and_tail(
         else f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     )
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    _record_remote_run(remote_base, workers=workers, lane="train")
     remote_bundles = (
         _upload_prepared_bundles(run_id=run_id, bundles=prepared_bundles)
         if prepared_bundles is not None
@@ -1052,6 +1091,8 @@ for number in range(1, {workers} + 1):
         "--validation-source", {remote_validation_inputs['source']!r},
         "--training-input", {remote_validation_inputs['training']!r},
     ]
+    if not { _DVC_ENABLED!r}:
+        completion_args.append("--skip-dvc")
     completion_command = " ".join(shlex.quote(part) for part in completion_args)
     completion_clause = (
         f'if [ "$rc" -eq 0 ]; then echo "[worker-process] training complete; running validation inference and final DVC publication"; {{completion_command}}; rc=$?; fi; '
@@ -1066,7 +1107,7 @@ for number in range(1, {workers} + 1):
            "WANDB_RUN_NAME": training_name,
            "EUROMONITOR_RUN_ID": training_name,
            "EUROMONITOR_MINING_PROFILE": worker_profile,
-           "EUROMONITOR_REMOTE_TRAINING": "1"}}
+           "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": {_DVC_DISABLED_FLAG!r}}}
     live_status_path.write_text(json.dumps({{
         "updated_at": time.time(), "event": "launched", "step": 0,
         "wandb_run_name": env["WANDB_RUN_NAME"],
@@ -1619,12 +1660,12 @@ def install_deps(*, minimal_runtime: bool = False) -> None:
     # log/status pair that the launcher can retrieve before teardown.
     packages = (
         "'sentence-transformers', 'datasets', 'accelerate', "
-        "'scikit-learn', 'pandas', 'numpy', 'hnswlib', 'mlflow', 'wandb', 'dvc'"
+        "'scikit-learn', 'pandas', 'numpy', 'hnswlib', 'mlflow', 'wandb'"
         if minimal_runtime
         else
         "'sentence-transformers', 'datasets', 'accelerate', 'evaluate', "
         "'scikit-learn', 'pandas', 'numpy', 'hnswlib', 'mlflow', 'optuna', "
-        "'psycopg[binary]', 'wandb', 'dvc', 'dagshub'"
+        "'psycopg[binary]', 'wandb'"
     )
     run_detached_stage(
         "00_deps",
@@ -1689,6 +1730,8 @@ def _optuna_env_script() -> str:
 
 def _remote_auth_env_script(*, include_optuna: bool = False) -> str:
     """Credential exports used by remote subprocess launch cells only."""
+    if not _DVC_ENABLED:
+        return _wandb_env_script() + (_optuna_env_script() if include_optuna else "")
     key = _env_value("DVC_API_KEY")
     if key:
         print("[dvc] DVC_API_KEY loaded from local .env and injected into VM process")
@@ -2000,13 +2043,8 @@ pathlib.Path({str(Path(remote).parent)!r}).mkdir(parents=True, exist_ok=True)
                 retry_safe=False,
             )
             print(f"[upload] prepared bundle file={source} -> {remote}", flush=True)
-            colab(
-                "upload",
-                "-s",
-                SESSION,
-                str(source),
-                remote,
-                timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS,
+            _upload_with_retries(
+                source, remote, timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS
             )
         remote_paths.append(f"{remote_dir}/worker_{number}/{bundle.name}")
     return remote_paths
@@ -2033,13 +2071,16 @@ def _upload_validation_inputs(run_id: str) -> dict[str, str]:
         "training": _validation_input_path(_COLAB.training_dataset_csv),
         "sample": _validation_input_path(_VALIDATION_INFERENCE.input_csv),
     }
-    remotes = {
-        key: f"{REMOTE_ROOT}/prepared_training/{run_id}/validation/{key}_{source.name}"
-        for key, source in sources.items()
-    }
+    remote_dir = f"{REMOTE_ROOT}/prepared_training/{run_id}/validation"
+    remotes: dict[str, str] = {}
+    remote_by_source: dict[str, str] = {}
+    for key, source in sources.items():
+        source_key = str(source.resolve())
+        remotes[key] = remote_by_source.setdefault(
+            source_key, f"{remote_dir}/{key}_{source.name}"
+        )
     if not _VALIDATION_INFERENCE.enabled:
         return remotes
-    remote_dir = str(Path(next(iter(remotes.values()))).parent)
     run_colab_exec_stream(
         SESSION,
         _BOOTSTRAP
@@ -2051,13 +2092,20 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
         log_name="validation_input_dir",
         retry_safe=False,
     )
+    uploaded: set[str] = set()
     for key, source in sources.items():
         remote = remotes[key]
+        if remote in uploaded:
+            print(
+                f"[upload] validation {key}={source} reusing existing remote copy {remote}",
+                flush=True,
+            )
+            continue
         print(f"[upload] validation {key}={source} -> {remote}", flush=True)
-        colab(
-            "upload", "-s", SESSION, str(source), remote,
-            timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS,
+        _upload_with_retries(
+            source, remote, timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS
         )
+        uploaded.add(remote)
     return remotes
 
 
@@ -2069,6 +2117,7 @@ def run_single_train_and_stream(
     stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
+    _record_remote_run(remote_base, workers=1, lane="train")
     remote_validation_inputs = (
         _upload_validation_inputs(run_id)
         if validation_inference else {"sample": "", "source": "", "training": ""}
@@ -2110,7 +2159,7 @@ env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
        "WANDB_RUN_NAME": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_RUN_ID": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_MINING_PROFILE": {run_label if run_label in ("mining_enabled", "masking_only") else ""!r},
-       "EUROMONITOR_REMOTE_TRAINING": "1"}}
+       "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": {_DVC_DISABLED_FLAG!r}}}
 command = [sys.executable, *{args!r}]
 log_path = out / "training.log"
 print(f"[train-launch] worker 1 streaming directly: {{' '.join(command)}}", flush=True)
@@ -2132,6 +2181,8 @@ completion = [
         "--validation-source", {remote_validation_inputs['source']!r},
         "--training-input", {remote_validation_inputs['training']!r},
 ]
+if not { _DVC_ENABLED!r}:
+    completion.append("--skip-dvc")
 if run_completion:
     print("[train] training complete; running validation inference and final DVC publication", flush=True)
     with log_path.open("a", encoding="utf-8", buffering=1) as log_file:
@@ -2387,6 +2438,7 @@ def run_mixed(
         )
     stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_mixed_{stamp}"
+    _record_remote_run(remote_base, workers=2, lane="mixed")
     train_args = [
         "-u",
         "-m",
@@ -3058,7 +3110,10 @@ def main() -> None:
         close_live_log()
         release_colab_launch_lock(launch_lock)
 
-    print("\n[done] artifacts persisted to the configured DVC remote")
+    if _DVC_ENABLED:
+        print("\n[done] artifacts persisted to the configured DVC remote")
+    else:
+        print("\n[done] artifacts retained locally; DVC disabled")
 
 
 if __name__ == "__main__":
