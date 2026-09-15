@@ -4,7 +4,7 @@ Owner session date: 2026-09-15. Base of all work: **`2cfd772`** (branch `verify/
 worktree `/home/opc/ONE/ER-verify-346f401`), whose parent is **`346f401`** (the commit under review,
 branch `training`).
 
-**FINAL CONSOLIDATED TIP: `377676e`, tag `session-2026-09-15-final`, 247 tests passing (2 skipped).**
+**FINAL CONSOLIDATED TIP: `09a8ca8`+ (tag `session-2026-09-15-final`), 247 tests passing (2 skipped).**
 Every agent branch is merged into `verify/ssot-346f401`; `results/canonical_records.csv`,
 `results/gate_results.csv` and `dataset.csv` are verified byte-identical to `346f401`, and
 `results/` plus every worktree are clean. The bundle is current at 112M.
@@ -162,3 +162,56 @@ checksum). The commit's own artifacts are `88,683 / 45,494 / 1,592` — the delt
 the confidence-aware gate re-routes.
 
 **Never commit `results/*.csv` from a verification run** — they are regenerated artifacts; restore them.
+
+
+---
+
+## 8. Later findings (after the first handoff)
+
+### Verified by the adversarial verifier (falsified two of my own claims)
+- **BLOCKER (mine)**: deleting the `gate_visibility.csv` writer left `data_prep.py` still declaring it as an
+  expected manifest output, so `finish_manifest` raised `FileNotFoundError` AFTER the stage did all its work.
+  FIXED (`54a65c3`); verified `[manifest] data_prep complete … closure 71,623 == 13,250 + 45,260`.
+- **The `pairs` trace block was unreachable**, placed after `build_training_data`'s only `return`. This is why
+  the trace had no stage-2 rows. FIXED (`ad1214d`).
+- **`sample_balanced_pairs` still fails** after the reason-registration fix: `Requested 3,000 rows, but balanced
+  pool has only 986` — the POSITIVE side binds (`2*min(493, 7,967)`), not the composite reason.
+- **The ranking degeneracy is total, not 90.5%**: a constant scorer scores `hits@1 = 1.0000` (tying an oracle)
+  and the worst possible scorer still scores 0.9051.
+
+### Mining hypotheses (minershape agent)
+- **H1 label conflict REFUTED** — 0 (text_a, text_b) tuples carry both labels.
+- **H2 confirmed + FIXED**: flavour conflicts were structurally unmineable (5,549 candidates, 0 reachable).
+  Added a gate-confirmed flavour-variant name rule → emitted pairs 196 → **568**, base set fully retained, 0
+  `proceed` rows relabelled. Pulp remains unreachable (78 candidates; a pulp rule would reach only 2).
+- **H2b FIXED**: `normalized_product_name` leaked fused pack notation (`18x33cl`), blocking 115 candidates.
+- **H3 CONFIRMED**: `target: 12000` is unreachable by ~21×; true ceiling **568**.
+- **H6 FIXED**: the miner now returns a typed `MiningFunnel`; the trace emits one row per real filter.
+
+### Capture delta (capture agent) — the premise was wrong, and it corrected me
+The extraction changes belong to **`346f401`**, not `2cfd772`; the pinned pair `346f401 → 2cfd772` has exactly
+ONE extraction change (the `no_pulp` branch). Measured both deltas on 71,623 rows:
+- `8c44e72 → 346f401`: flavour **10,795 gained / 0 lost**; 2,502 pure pick-moves (not 8,462 — the rest also
+  changed the token set).
+- `346f401 → 2cfd772`: pulp 0 gained / 5 stopped / 11 changed — **16/16 CORRECT REJECTIONS, 0 regressions**,
+  with an identity proof that the affected population IS the removed branch's match set (16 of 18).
+  A **third inversion** was found: `"with … Pulp"` + a following `No-` claim across a `|` boundary (3 rows).
+- **Sweetener split is faithful**: 0 false `no_sugar`; 826/826 co-emissions literally justified.
+- **`gate_results.csv` never had `*_set` columns** (7 cols only) — corrects an earlier note.
+
+### Open items the owner must decide on
+1. **The committed artifacts are stale.** `canonical_records.csv` matches the BEFORE code 13,250/13,250 on all
+   four dimensions and still carries 7 inverted `no_pulp` tokens; `gate_results.csv` is reproducible only from
+   `346f401` code (proceed 1,592 vs 1,737 now). **Regeneration is required before any report from `results/` is
+   trustworthy.**
+2. **Blob flavour pollution**: only 2,824 of 22,659 blob-only flavour tokens come from a `Flavour:` field;
+   2,756 come from non-flavour fields (`Water Type`, `Energy Source`, `Sweetener`, …) — e.g.
+   `Caffeine + Water, Unflavored` → flavour `coffee`. A wrong capture is worse than a gap.
+3. **Carbonation both-states**: 563 canonicals emit both `still` and `carbonated`; **485 are manufactured purely
+   by union over member rows**, which no per-row guard can see.
+4. **Honest uncaptured sweetener gaps**: `low sugar` 575 rows, `light/low calorie` 720, `unsweetened` 478,
+   `less sugar` 16, `reduced sugar` 14, `no sweetener` 19.
+5. **`rng.choice(..., replace=True)`** duplicates 11,602 negative rows at live scale while reporting the
+   duplicated count as distinct data (`train.py:1107-1115`).
+6. **Composite `Pack blocker` reason** collapses pack/volume/package_type (and 8.6% categorical) into one string;
+   the balanced pool's `pair_type` stratum is a 3-dimension mixture no trace can decompose.
