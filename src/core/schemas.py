@@ -241,6 +241,7 @@ class DataConfig(BaseModel):
     embedding_model_keys: list[str] = Field(min_length=1)
 
     model_validator(mode="after")
+
     @classmethod
     def _files_roots_resolve(cls, v: "DataConfig") -> "DataConfig":
         """Every files./layouts. binding must carry a known root token +
@@ -427,7 +428,9 @@ class RobustValidationSpec(BaseModel):
                 "evaluation.robust_validation.operating_thresholds must contain "
                 "exactly balanced_review and high_precision"
             )
-        if any(not 0.0 < float(value) < 1.0 for value in self.operating_thresholds.values()):
+        if any(
+            not 0.0 < float(value) < 1.0 for value in self.operating_thresholds.values()
+        ):
             raise ValueError(
                 "evaluation.robust_validation.operating_thresholds must be in (0, 1)"
             )
@@ -591,6 +594,20 @@ class RandMatchingSpec(BaseModel):
         max_penalty: float = Field(ge=0.0, le=1.0)
         preserve_exact_gtin: bool
 
+    class TargetedVetoGatesSpec(BaseModel):
+        """Hard attribute guards for non-exact automatic assignments."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        enabled: bool
+        pack_mismatch_veto: bool
+        volume_mismatch_veto: bool
+        brand_mismatch_veto: bool
+        missing_pack_or_volume_route: Literal["human_review"]
+        volume_relative_tolerance: float = Field(ge=0.0, le=1.0)
+        volume_absolute_tolerance_ml: float = Field(ge=0.0)
+        preserve_exact_gtin: bool
+
     output_dir: str = Field(min_length=1)
     truth_splits: RandTruthSplitsSpec
     stratum_sweep: RandStratumSweepSpec
@@ -602,15 +619,14 @@ class RandMatchingSpec(BaseModel):
     threshold_step: float = Field(gt=0.0)
     threshold_by_gtin_status: dict[str, float]
     brand_conflict_veto: bool
+    targeted_veto_gates: TargetedVetoGatesSpec
     confidence_penalty_mask: ConfidencePenaltyMaskSpec
     flavor_overlap_penalty: FlavorOverlapPenaltySpec
     target_recall: float = Field(gt=0.0, le=1.0)
     threshold_tie_break: list[
         Literal["rand_index", "fewest_unmatched_skus", "lowest_threshold"]
     ] = Field(min_length=3, max_length=3)
-    threshold_reconciliation_scope: Literal[
-        "final_assignment_gtin_and_attribute_gates"
-    ]
+    threshold_reconciliation_scope: Literal["final_assignment_gtin_and_attribute_gates"]
     threshold_min_fold_support: int = Field(ge=2)
     calibration_proxy_source: str = Field(min_length=1)
     calibration_different_gtin_selection: Literal[
@@ -890,7 +906,13 @@ class AuditSpec(BaseModel):
     #   order. An orchestrator lane may append its own later; this list is
     #   the required-minimum registry the verify pass walks.
     manifest_stages: list[str] = Field(
-        default=["dedupe", "data_prep", "labeled_pairs", "evaluate_models", "zero_shot_sims"],
+        default=[
+            "dedupe",
+            "data_prep",
+            "labeled_pairs",
+            "evaluate_models",
+            "zero_shot_sims",
+        ],
         min_length=0,
     )
 
@@ -902,9 +924,7 @@ class AuditSpec(BaseModel):
         every SKU lands in exactly one bucket."""
         bs = self.strip_ladder_bands
         if float(bs[0].lo) != 0.0:
-            raise ValueError(
-                f"strip_ladder_bands must start at lo=0.0, got {bs[0].lo}"
-            )
+            raise ValueError(f"strip_ladder_bands must start at lo=0.0, got {bs[0].lo}")
         for a, b in itertools.pairwise(bs):
             if float(a.hi) != float(b.lo):
                 raise ValueError(
@@ -999,7 +1019,9 @@ class AnnMiningSpec(BaseModel):
         try:
             lo, hi = (float(x) for x in v.split("-"))
         except ValueError as e:
-            raise ValueError(f'mining.ann.band must be "lo-hi" floats, got {v!r}') from e
+            raise ValueError(
+                f'mining.ann.band must be "lo-hi" floats, got {v!r}'
+            ) from e
         if not lo < hi:
             raise ValueError(f"mining.ann.band must satisfy lo < hi, got {v!r}")
         return v
@@ -1010,9 +1032,7 @@ class AnnMiningSpec(BaseModel):
         try:
             lo, hi = (float(x) for x in v.split("-"))
         except ValueError as e:
-            raise ValueError(
-                'mining.ann.score_quantiles must be "lo-hi" floats'
-            ) from e
+            raise ValueError('mining.ann.score_quantiles must be "lo-hi" floats') from e
         if not 0.0 <= lo < hi <= 1.0:
             raise ValueError(
                 "mining.ann.score_quantiles must satisfy 0 <= lo < hi <= 1"
@@ -1140,13 +1160,11 @@ class CollapseGuardrailSpec(BaseModel):
     def _ordered(self) -> CollapseGuardrailSpec:
         if self.median_penalty_start > self.reject_median:
             raise ValueError(
-                "collapse_guardrail.median_penalty_start must not exceed "
-                "reject_median"
+                "collapse_guardrail.median_penalty_start must not exceed reject_median"
             )
         if self.p90_penalty_start < self.median_penalty_start:
             raise ValueError(
-                "collapse_guardrail.p90_penalty_start must be >= "
-                "median_penalty_start"
+                "collapse_guardrail.p90_penalty_start must be >= median_penalty_start"
             )
         return self
 
@@ -1262,7 +1280,9 @@ class ValidationInferenceSpec(BaseModel):
         if any(value < 0.0 or value > 1.0 for value in values):
             raise ValueError("validation inference thresholds must be in [0, 1]")
         if values != sorted(set(values)):
-            raise ValueError("validation inference thresholds must be unique and sorted")
+            raise ValueError(
+                "validation inference thresholds must be unique and sorted"
+            )
         return values
 
 
@@ -1399,7 +1419,6 @@ class TrainingConfig(BaseModel):
         return self
 
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # BOUNDARY CONTRACTS — pipeline transforms
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1506,7 +1525,9 @@ class PairArrays(BaseModel):
         arr = np.asarray(v)
         if arr.size == 0:
             if arr.shape != (0, 2):
-                raise ValueError(f"empty pair array must be shape (0,2), got {arr.shape}")
+                raise ValueError(
+                    f"empty pair array must be shape (0,2), got {arr.shape}"
+                )
             return arr.astype(int)
         if arr.ndim != 2 or arr.shape[1] != 2:
             raise ValueError(f"pair array must be (N,2), got {arr.shape}")
@@ -1600,9 +1621,7 @@ class TrainingData(BaseModel):
     def _shapes_agree(self) -> TrainingData:
         n = len(self.payload)
         if len(self.row_bc) != n:
-            raise ValueError(
-                f"row_bc length {len(self.row_bc)} != payload length {n}"
-            )
+            raise ValueError(f"row_bc length {len(self.row_bc)} != payload length {n}")
         if len(self.structured_features) != n:
             raise ValueError(
                 "structured_features length "
@@ -1674,17 +1693,13 @@ class MaskingResult(BaseModel):
     def _shapes_agree(self) -> MaskingResult:
         n = len(self.payload)
         if len(self.row_bc) != n:
-            raise ValueError(
-                f"row_bc length {len(self.row_bc)} != payload length {n}"
-            )
+            raise ValueError(f"row_bc length {len(self.row_bc)} != payload length {n}")
         if self.pos.size and int(self.pos.max()) >= n:
             raise ValueError(
                 f"pos index {int(self.pos.max())} out of range (payload={n})"
             )
         if self.n_added != len(self.audit):
-            raise ValueError(
-                f"n_added {self.n_added} != audit rows {len(self.audit)}"
-            )
+            raise ValueError(f"n_added {self.n_added} != audit rows {len(self.audit)}")
         return self
 
     def audit_dicts(self) -> list[dict]:
@@ -1774,9 +1789,7 @@ class DataTuple(BaseModel):
                 f"structured_features length {len(self.structured_features)} != payload length {n}"
             )
         if len(self.row_bc) != n:
-            raise ValueError(
-                f"row_bc length {len(self.row_bc)} != payload length {n}"
-            )
+            raise ValueError(f"row_bc length {len(self.row_bc)} != payload length {n}")
         if n < self.n_df:
             raise ValueError(f"payload length {n} < df rows {self.n_df}")
         if len(self.country) < n:
@@ -1791,9 +1804,7 @@ class DataTuple(BaseModel):
                     f"{name} index {int(arr.max())} out of range (payload={n})"
                 )
         if self.emb0.size and self.emb0.shape[0] != n:
-            raise ValueError(
-                f"emb0 rows {self.emb0.shape[0]} != payload length {n}"
-            )
+            raise ValueError(f"emb0 rows {self.emb0.shape[0]} != payload length {n}")
         return self
 
 
@@ -1909,7 +1920,10 @@ class CalibrationPartition(BaseModel):
                 raise ValueError(
                     f"{name} must be an (n, 2) pair array, got shape {pool.shape}"
                 )
-        if len(self.positive_fit) + len(self.positive_reserved) != self.n_positive_pairs:
+        if (
+            len(self.positive_fit) + len(self.positive_reserved)
+            != self.n_positive_pairs
+        ):
             raise ValueError("positive calibration partition changed its population")
         if (
             len(self.negative_fit)
@@ -1928,7 +1942,9 @@ class CalibrationPartition(BaseModel):
             )
         reserved_positive_identities = self.identities(self.positive_reserved)
         fit_positive_identities = self.identities(self.positive_fit)
-        fit_negative_leak = self.identities(self.negative_fit) & reserved_positive_identities
+        fit_negative_leak = (
+            self.identities(self.negative_fit) & reserved_positive_identities
+        )
         if fit_negative_leak:
             raise ValueError(
                 f"{len(fit_negative_leak)} reserved positive identities occur in "
@@ -2069,10 +2085,13 @@ def check_zero_shot_similarity_frame(df: pd.DataFrame) -> pd.DataFrame:
     for column in sim_columns:
         values = pd.to_numeric(df[column], errors="coerce")
         if values.isna().any():
-            raise ValueError(f"zero-shot similarity column {column!r} has non-numeric values")
+            raise ValueError(
+                f"zero-shot similarity column {column!r} has non-numeric values"
+            )
     for row in df[list(ZERO_SHOT_TRACE_COLUMNS)].to_dict("records"):
         ZeroShotTraceRow.model_validate(row)
     return df
+
 
 CROSS_COUNTRY_PAIR_COLUMNS: tuple[str, ...] = (
     "sku_id_a",
@@ -2162,8 +2181,7 @@ def check_gate_results_frame(df: pd.DataFrame) -> pd.DataFrame:
     cols = tuple(df.columns)
     if cols != GATE_RESULTS_COLUMNS:
         raise ValueError(
-            f"gate_results frame columns {cols} != contract "
-            f"{GATE_RESULTS_COLUMNS}"
+            f"gate_results frame columns {cols} != contract {GATE_RESULTS_COLUMNS}"
         )
     bad = set(df["gate_decision"].unique()) - set(GATE_DECISIONS)
     if bad:
@@ -2171,13 +2189,11 @@ def check_gate_results_frame(df: pd.DataFrame) -> pd.DataFrame:
     s = pd.to_numeric(df["similarity"], errors="coerce")
     if s.isna().any() or ((s < 0) | (s > 1)).any():
         raise ValueError(
-            f"gate_results.similarity outside [0,1]: "
-            f"min {s.min()}, max {s.max()}"
+            f"gate_results.similarity outside [0,1]: min {s.min()}, max {s.max()}"
         )
-    gtin_empty = (
-        df["gtin1"].fillna("").astype(str).str.strip().eq("")
-        | df["gtin2"].fillna("").astype(str).str.strip().eq("")
-    )
+    gtin_empty = df["gtin1"].fillna("").astype(str).str.strip().eq("") | df[
+        "gtin2"
+    ].fillna("").astype(str).str.strip().eq("")
     if gtin_empty.any():
         raise ValueError(f"{int(gtin_empty.sum())} rows with empty gtin endpoint")
     self_pairs = (df["gtin1"] == df["gtin2"]).sum()
@@ -2195,8 +2211,7 @@ def check_labeled_pairs_frame(df: pd.DataFrame) -> pd.DataFrame:
     cols = tuple(df.columns)
     if cols != LABELED_PAIRS_COLUMNS:
         raise ValueError(
-            f"labeled_pairs frame columns {cols} != contract "
-            f"{LABELED_PAIRS_COLUMNS}"
+            f"labeled_pairs frame columns {cols} != contract {LABELED_PAIRS_COLUMNS}"
         )
     bad = set(pd.to_numeric(df["true_label"], errors="coerce").dropna().unique()) - {
         0,
@@ -2206,10 +2221,9 @@ def check_labeled_pairs_frame(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"true_label outside {{0,1}}: {sorted(bad)}")
     if pd.to_numeric(df["true_label"], errors="coerce").isna().any():
         raise ValueError("true_label has non-numeric rows")
-    gtin_empty = (
-        df["gtin1"].fillna("").astype(str).str.strip().eq("")
-        | df["gtin2"].fillna("").astype(str).str.strip().eq("")
-    )
+    gtin_empty = df["gtin1"].fillna("").astype(str).str.strip().eq("") | df[
+        "gtin2"
+    ].fillna("").astype(str).str.strip().eq("")
     if gtin_empty.any():
         raise ValueError(f"{int(gtin_empty.sum())} rows with empty gtin endpoint")
     dups = df.duplicated(subset=["gtin1", "gtin2"]).sum()
@@ -2310,8 +2324,7 @@ def check_eval_summary_frame(df: pd.DataFrame) -> pd.DataFrame:
     cols = tuple(df.columns)
     if cols != EVAL_SUMMARY_COLUMNS:
         raise ValueError(
-            f"eval summary frame columns {cols} != contract "
-            f"{EVAL_SUMMARY_COLUMNS}"
+            f"eval summary frame columns {cols} != contract {EVAL_SUMMARY_COLUMNS}"
         )
     rows = [EvalSummaryRow.model_validate(r) for r in df.to_dict("records")]
     if len(rows) != len(df):

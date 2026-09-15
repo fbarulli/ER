@@ -19,8 +19,7 @@ class CandidateGraphFrameSpec(BaseModel):
         missing = sorted(self.required_columns - set(frame.columns))
         if missing:
             raise ValueError(
-                "candidate graph input contract violated: "
-                f"missing={missing}"
+                f"candidate graph input contract violated: missing={missing}"
             )
 
 
@@ -103,13 +102,14 @@ def candidate_graph_diagnostics(
     # rand_matching._annotate_candidates). Keep those accepted edges in the
     # diagnostic graph so false-positive components cannot be hidden merely
     # because their valid GTINs differ.
-    accepted = candidates[
-        candidates["exact_gtin"].astype(bool)
-        | (
-            candidates["rule_ok"].astype(bool)
-            & candidates["score"].ge(float(threshold))
-        )
-    ]
+    thresholded = candidates["rule_ok"].astype(bool) & candidates["score"].ge(
+        float(threshold)
+    )
+    if "targeted_gate_route" in candidates.columns:
+        thresholded &= candidates["targeted_gate_route"].astype(str).eq("auto_merge")
+    if "brand_conflict" in candidates.columns:
+        thresholded &= candidates["brand_conflict"].astype(int).eq(0)
+    accepted = candidates[candidates["exact_gtin"].astype(bool) | thresholded]
     if accepted.empty:
         return empty_candidate_graph_diagnostics()
 

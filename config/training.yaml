@@ -260,15 +260,28 @@ rand_matching:
   batch_size: 128
   # The sensitivity surface must reach the lower one_missing/different
   # operating range; exact-GTIN remains locked independently of this grid.
-  threshold_min: 0.60
+  threshold_min: 0.61
   threshold_max: 0.98
   threshold_step: 0.01
   threshold_by_gtin_status:
     both_equal: 0.80
     different: 0.80
-    one_missing: 0.60
+    one_missing: 0.61
     both_missing: 0.80
   brand_conflict_veto: true
+  # Strict, auditable guards for thresholded (non-exact-GTIN) candidates.
+  # Exact GTIN remains a lock and bypasses these guards.  Unknown pack or
+  # volume evidence is never silently treated as agreement: it is exported
+  # to the human-review route and excluded from automatic graph edges.
+  targeted_veto_gates:
+    enabled: true
+    pack_mismatch_veto: true
+    volume_mismatch_veto: true
+    brand_mismatch_veto: true
+    missing_pack_or_volume_route: "human_review"
+    volume_relative_tolerance: 0.05
+    volume_absolute_tolerance_ml: 5.0
+    preserve_exact_gtin: true
   # Missing evidence must not be compensated for by lowering the global
   # threshold. For non-exact candidates only, reduce confidence when the same
   # critical attributes are absent from both endpoints. This is monotonic: it

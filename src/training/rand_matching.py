@@ -186,10 +186,131 @@ def _brand_conflict(left: object, right: object) -> bool:
     left_normalized = _normalize_brand(left)
     right_normalized = _normalize_brand(right)
     return bool(
-        left_normalized
-        and right_normalized
-        and left_normalized != right_normalized
+        left_normalized and right_normalized and left_normalized != right_normalized
     )
+
+
+def _sets_overlap_with_volume_tolerance(
+    left: set[object],
+    right: set[object],
+    *,
+    relative_tolerance: float,
+    absolute_tolerance_ml: float,
+) -> bool:
+    """Return whether any canonical volume pair agrees within tolerance."""
+    for left_value in left:
+        for right_value in right:
+            left_ml = float(left_value)
+            right_ml = float(right_value)
+            allowed = max(
+                float(absolute_tolerance_ml),
+                float(relative_tolerance) * max(abs(left_ml), abs(right_ml)),
+            )
+            if abs(left_ml - right_ml) <= allowed:
+                return True
+    return False
+
+
+def targeted_veto_gate(
+    sku_info: dict[str, object],
+    candidate_info: dict[str, object],
+    *,
+    sku_brand: object,
+    candidate_brand: object,
+    exact_gtin: bool,
+    config: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Classify a non-exact candidate as auto, veto, or human review.
+
+    Known pack, volume, and brand contradictions are hard vetoes.  One-sided
+    or joint pack/volume absence is routed to review so unknown evidence can
+    never become an automatic graph edge.  Exact GTIN remains an auditable
+    lock and bypasses every targeted veto.
+    """
+    settings = config or rand_matching_cfg()["targeted_veto_gates"]
+    left_pack = set(sku_info.get("pack") or set())
+    right_pack = set(candidate_info.get("pack") or set())
+    left_volume = set(sku_info.get("volume") or set())
+    right_volume = set(candidate_info.get("volume") or set())
+    left_brand = _normalize_brand(sku_brand)
+    right_brand = _normalize_brand(candidate_brand)
+    relative_tolerance = float(settings["volume_relative_tolerance"])
+    absolute_tolerance_ml = float(settings["volume_absolute_tolerance_ml"])
+
+    pack_conflict = bool(left_pack and right_pack and not (left_pack & right_pack))
+    volume_conflict = bool(
+        left_volume
+        and right_volume
+        and not _sets_overlap_with_volume_tolerance(
+            left_volume,
+            right_volume,
+            relative_tolerance=relative_tolerance,
+            absolute_tolerance_ml=absolute_tolerance_ml,
+        )
+    )
+    brand_conflict = bool(left_brand and right_brand and left_brand != right_brand)
+    missing = [
+        name
+        for name, present in (
+            ("pack_a", bool(left_pack)),
+            ("pack_b", bool(right_pack)),
+            ("volume_a", bool(left_volume)),
+            ("volume_b", bool(right_volume)),
+        )
+        if not present
+    ]
+    common = {
+        "targeted_pack_conflict": int(pack_conflict),
+        "targeted_volume_conflict": int(volume_conflict),
+        "targeted_brand_conflict": int(brand_conflict),
+        "targeted_missing_attributes": ",".join(missing),
+        "targeted_missing_attribute_count": len(missing),
+        "targeted_pack_a": json.dumps(sorted(left_pack)),
+        "targeted_pack_b": json.dumps(sorted(right_pack)),
+        "targeted_volume_ml_a": json.dumps(sorted(left_volume)),
+        "targeted_volume_ml_b": json.dumps(sorted(right_volume)),
+        "targeted_brand_a": left_brand,
+        "targeted_brand_b": right_brand,
+        "targeted_volume_relative_tolerance": relative_tolerance,
+        "targeted_volume_absolute_tolerance_ml": absolute_tolerance_ml,
+    }
+    if exact_gtin and bool(settings["preserve_exact_gtin"]):
+        return common | {
+            "targeted_gate_decision": "exact_gtin_lock",
+            "targeted_gate_reason": "exact_gtin_preserved",
+            "targeted_gate_route": "auto_merge",
+        }
+    if not bool(settings["enabled"]):
+        return common | {
+            "targeted_gate_decision": "allow",
+            "targeted_gate_reason": "disabled",
+            "targeted_gate_route": "auto_merge",
+        }
+
+    veto_reasons: list[str] = []
+    if pack_conflict and bool(settings["pack_mismatch_veto"]):
+        veto_reasons.append("pack_mismatch")
+    if volume_conflict and bool(settings["volume_mismatch_veto"]):
+        veto_reasons.append("volume_mismatch")
+    if brand_conflict and bool(settings["brand_mismatch_veto"]):
+        veto_reasons.append("brand_mismatch")
+    if veto_reasons:
+        return common | {
+            "targeted_gate_decision": "veto",
+            "targeted_gate_reason": "+".join(veto_reasons),
+            "targeted_gate_route": "reject",
+        }
+    if missing:
+        return common | {
+            "targeted_gate_decision": "defer",
+            "targeted_gate_reason": "missing_pack_or_volume:" + ",".join(missing),
+            "targeted_gate_route": str(settings["missing_pack_or_volume_route"]),
+        }
+    return common | {
+        "targeted_gate_decision": "allow",
+        "targeted_gate_reason": "attributes_compatible",
+        "targeted_gate_route": "auto_merge",
+    }
 
 
 def confidence_penalty_mask(
@@ -211,9 +332,7 @@ def confidence_penalty_mask(
     if exact_gtin and bool(settings["preserve_exact_gtin"]):
         return 0.0, "exact_gtin_preserved"
     attributes = [str(value) for value in settings["critical_attributes"]]
-    jointly_missing = _jointly_missing_attributes(
-        sku_info, candidate_info, attributes
-    )
+    jointly_missing = _jointly_missing_attributes(sku_info, candidate_info, attributes)
     if len(jointly_missing) < int(settings["minimum_joint_missing"]):
         return 0.0, "sufficient_attribute_evidence"
     penalty = min(
@@ -259,10 +378,7 @@ def flavor_overlap_penalty(
         return jaccard, overlap, 0.0, "disabled"
     if exact_gtin and bool(settings["preserve_exact_gtin"]):
         return jaccard, overlap, 0.0, "exact_gtin_preserved"
-    if (
-        not normalized_flavor_tokens(left)
-        or not normalized_flavor_tokens(right)
-    ):
+    if not normalized_flavor_tokens(left) or not normalized_flavor_tokens(right):
         return jaccard, overlap, 0.0, "insufficient_flavor_evidence"
     minimum = float(settings["minimum_overlap"])
     if overlap >= minimum:
@@ -319,6 +435,7 @@ def _threshold_grid(
 # Pydantic output-contract models (column-set validation at write time)
 # ---------------------------------------------------------------------------
 
+
 class _FileProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1)
@@ -340,6 +457,7 @@ class _SubmissionProvenance(BaseModel):
     brand_conflict_veto: bool
     confidence_penalty_mask: dict[str, object]
     flavor_overlap_penalty: dict[str, object]
+    targeted_veto_gates: dict[str, object]
     unmatched_prefix: str
     rows: int
     unique_items: int
@@ -385,9 +503,7 @@ class _MetricColumnSpec(BaseModel):
         actual = set(frame.columns)
         missing = sorted(self.required_columns - actual)
         if missing:
-            raise ValueError(
-                f"{label} metric contract violated: missing={missing}"
-            )
+            raise ValueError(f"{label} metric contract violated: missing={missing}")
         unexpected = sorted(actual - self.required_columns - self.optional_columns)
         if unexpected:
             raise ValueError(
@@ -452,6 +568,22 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "brand_conflict",
             "attribute_conflict_type",
             "attribute_matches",
+            "targeted_pack_conflict",
+            "targeted_volume_conflict",
+            "targeted_brand_conflict",
+            "targeted_missing_attributes",
+            "targeted_missing_attribute_count",
+            "targeted_pack_a",
+            "targeted_pack_b",
+            "targeted_volume_ml_a",
+            "targeted_volume_ml_b",
+            "targeted_brand_a",
+            "targeted_brand_b",
+            "targeted_volume_relative_tolerance",
+            "targeted_volume_absolute_tolerance_ml",
+            "targeted_gate_decision",
+            "targeted_gate_reason",
+            "targeted_gate_route",
             # annotation (_annotate_candidates)
             "effective_threshold",
             "brand_compatible",
@@ -522,9 +654,7 @@ def _ensure_source_row_identity(frame: pd.DataFrame) -> pd.DataFrame:
             index=result.index,
             name=SOURCE_ROW_INDEX_COLUMN,
         )
-    invalid = identity.eq("") | identity.str.lower().isin(
-        INVALID_ID_SENTINELS
-    )
+    invalid = identity.eq("") | identity.str.lower().isin(INVALID_ID_SENTINELS)
     if invalid.any():
         raise ValueError("source_row_index contains blank or sentinel values")
     if identity.duplicated().any():
@@ -566,10 +696,36 @@ def candidate_gate_fields(
 ) -> dict[str, object]:
     """Build the shared candidate gate record used by all matching lanes."""
     candidate_info = canonical_attribute_info(candidate_record)
-    rules = conflict_columns(sku_info, candidate_info)
     sku_gtin = metadata_text(row_metadata_text(row, "barcode", "gtin")).strip()
     status = gtin_status(sku_gtin, candidate_gtin)
     exact = int(status == "both_equal")
+    targeted_gate = targeted_veto_gate(
+        sku_info,
+        candidate_info,
+        sku_brand=row_metadata_text(row, "brand"),
+        candidate_brand=candidate_record.get("mode_brand"),
+        exact_gtin=bool(exact),
+    )
+    rules = conflict_columns(sku_info, candidate_info)
+    # The ANN assignment lane owns a configurable volume tolerance.  Replace
+    # the generic exact-set volume result with the targeted gate result while
+    # retaining the shared flavor classification and exact pack semantics.
+    targeted_settings = rand_matching_cfg()["targeted_veto_gates"]
+    if bool(targeted_settings["enabled"]):
+        rules["volume_conflict"] = int(
+            bool(targeted_settings["volume_mismatch_veto"])
+            and bool(targeted_gate["targeted_volume_conflict"])
+        )
+        rules["pack_conflict"] = int(
+            bool(targeted_settings["pack_mismatch_veto"])
+            and bool(targeted_gate["targeted_pack_conflict"])
+        )
+    conflict_names = [
+        name for name in ("volume", "pack", "flavor") if bool(rules[f"{name}_conflict"])
+    ]
+    rules["attribute_conflict_type"] = (
+        "+".join(conflict_names) if conflict_names else "none"
+    )
     confidence_penalty, confidence_penalty_reason = confidence_penalty_mask(
         sku_info,
         candidate_info,
@@ -589,13 +745,16 @@ def candidate_gate_fields(
     jointly_missing = _jointly_missing_attributes(sku_info, candidate_info)
     brand_conflict = int(
         bool(rand_matching_cfg()["brand_conflict_veto"])
-        and _brand_conflict(
-            row_metadata_text(row, "brand"),
-            candidate_record.get("mode_brand"),
+        and bool(targeted_gate["targeted_brand_conflict"])
+        and (
+            not bool(targeted_settings["enabled"])
+            or bool(targeted_settings["brand_mismatch_veto"])
         )
     )
     gate_reason = (
-        "different_gtin_thresholded"
+        str(targeted_gate["targeted_gate_reason"])
+        if targeted_gate["targeted_gate_route"] != "auto_merge"
+        else "different_gtin_thresholded"
         if status == "different"
         else "exact_gtin"
         if exact
@@ -665,6 +824,7 @@ def candidate_gate_fields(
                 for key in ("volume_conflict", "pack_conflict", "flavor_conflict")
             )
         ),
+        **targeted_gate,
     }
 
 
@@ -697,8 +857,7 @@ class RandMatcher:
         if records["gtin"].duplicated().any():
             raise RuntimeError("canonical_records.csv contains duplicate GTIN rows")
         self.record_map = {
-            str(row["gtin"]): row.to_dict()
-            for _, row in records.iterrows()
+            str(row["gtin"]): row.to_dict() for _, row in records.iterrows()
         }
         missing_records = sorted(set(self.item_ids) - set(self.record_map))
         if missing_records:
@@ -712,14 +871,12 @@ class RandMatcher:
             str(checkpoint), device="cuda" if torch.cuda.is_available() else "cpu"
         )
         self.structured_enabled = bool(self.structured_config["enabled"])
-        self.structured_text = (
-            self.structured_enabled
-            and bool(self.structured_config["append_to_text"])
+        self.structured_text = self.structured_enabled and bool(
+            self.structured_config["append_to_text"]
         )
         self.structured_weight = (
             float(self.structured_config["embedding_weight"])
-            if self.structured_enabled
-            and bool(self.structured_config["feed_to_loss"])
+            if self.structured_enabled and bool(self.structured_config["feed_to_loss"])
             else 0.0
         )
         self.preprocessing_fingerprint = hashlib.sha256(
@@ -806,10 +963,7 @@ class RandMatcher:
                 f"dim={metadata['dim']} at {self.ann_index.output_dir}"
             )
 
-        print(
-            f"loaded {len(self.item_ids):,} canonical items from "
-            f"{self.checkpoint}"
-        )
+        print(f"loaded {len(self.item_ids):,} canonical items from {self.checkpoint}")
 
     def _structured_vector(self, info: dict) -> np.ndarray:
         return structured_vector(
@@ -1023,10 +1177,17 @@ def _annotate_candidates(
     frame["brand_compatible"] = frame["brand_conflict"].eq(0) | frame[
         "exact_gtin"
     ].astype(bool)
+    targeted_route = (
+        frame["targeted_gate_route"].astype(str)
+        if "targeted_gate_route" in frame.columns
+        else pd.Series("auto_merge", index=frame.index, dtype=str)
+    )
+    targeted_auto_merge = targeted_route.eq("auto_merge")
     frame["accepted"] = frame["gtin_compatible"] & (
         frame["exact_gtin"].astype(bool)
         | (
-            frame["rule_ok"].astype(bool)
+            targeted_auto_merge
+            & frame["rule_ok"].astype(bool)
             & frame["brand_compatible"]
             & frame["score_pass"]
         )
@@ -1068,15 +1229,17 @@ def _annotate_candidates(
         ["bypass_exact_gtin", "pass"],
         default="fail",
     )
-    frame["assignment_gate"] = np.where(
-        frame["accepted"],
-        "accepted_candidate",
-        "rejected_candidate",
+    frame["assignment_gate"] = np.select(
+        [frame["accepted"], targeted_route.eq("human_review")],
+        ["accepted_candidate", "human_review_candidate"],
+        default="rejected_candidate",
     )
     frame["rejection_reason"] = np.select(
         [
             ~frame["gtin_compatible"],
             frame["exact_gtin"].astype(bool),
+            targeted_route.eq("reject"),
+            targeted_route.eq("human_review"),
             frame["brand_conflict"].astype(bool),
             ~frame["rule_ok"].astype(bool),
             ~frame["score_pass"],
@@ -1084,6 +1247,8 @@ def _annotate_candidates(
         [
             "gtin_conflict",
             "exact_gtin_lock",
+            "targeted_attribute_veto",
+            "human_review_missing_pack_or_volume",
             "brand_conflict",
             "attribute_conflict",
             "below_threshold",
@@ -1124,9 +1289,7 @@ def _assignments_with_trace(
     selected = accepted.drop_duplicates("SKU_ID", keep="first").copy()
     selected_keys = selected[["SKU_ID", "candidate_gtin"]].assign(selected=1)
     trace = frame.copy()
-    trace_keys = pd.MultiIndex.from_frame(
-        trace[["SKU_ID", "candidate_gtin"]]
-    )
+    trace_keys = pd.MultiIndex.from_frame(trace[["SKU_ID", "candidate_gtin"]])
     selected_key_index = pd.MultiIndex.from_frame(
         selected_keys[["SKU_ID", "candidate_gtin"]]
     )
@@ -1142,16 +1305,14 @@ def _assignments_with_trace(
         "selected_best_candidate",
         trace["assignment_gate"],
     )
-    best = selected[
-        ["SKU_ID", "candidate_gtin", "score", "gtin_status"]
-    ].rename(columns={"candidate_gtin": "ITEM_ID"})
+    best = selected[["SKU_ID", "candidate_gtin", "score", "gtin_status"]].rename(
+        columns={"candidate_gtin": "ITEM_ID"}
+    )
     best = best.loc[:, list(ASSIGNMENT_COLUMNS)]
     all_skus = candidates[["SKU_ID"]].drop_duplicates()
     output = all_skus.merge(best, on="SKU_ID", how="left")
     prefix = _unmatched_prefix()
-    output["ITEM_ID"] = output["ITEM_ID"].fillna(
-        prefix + output["SKU_ID"].astype(str)
-    )
+    output["ITEM_ID"] = output["ITEM_ID"].fillna(prefix + output["SKU_ID"].astype(str))
     return output, trace
 
 
@@ -1209,19 +1370,30 @@ def _truth_audit_context(
     candidate_truth = candidates.assign(
         true_item_id=candidates["SKU_ID"].map(true_item_by_sku)
     )
-    retrieved_by_sku = candidate_truth.assign(
-        is_true_candidate=lambda frame: frame["candidate_gtin"].astype(str).eq(
-            frame["true_item_id"].astype(str)
+    retrieved_by_sku = (
+        candidate_truth.assign(
+            is_true_candidate=lambda frame: (
+                frame["candidate_gtin"]
+                .astype(str)
+                .eq(frame["true_item_id"].astype(str))
+            )
         )
-    ).groupby("SKU_ID")["is_true_candidate"].any()
-    trace_truth = trace.assign(
-        true_item_id=trace["SKU_ID"].map(true_item_by_sku)
+        .groupby("SKU_ID")["is_true_candidate"]
+        .any()
     )
-    accepted_by_sku = trace_truth.assign(
-        is_true_accepted=lambda frame: frame["candidate_gtin"].astype(str).eq(
-            frame["true_item_id"].astype(str)
-        ) & frame["accepted"].astype(bool)
-    ).groupby("SKU_ID")["is_true_accepted"].any()
+    trace_truth = trace.assign(true_item_id=trace["SKU_ID"].map(true_item_by_sku))
+    accepted_by_sku = (
+        trace_truth.assign(
+            is_true_accepted=lambda frame: (
+                frame["candidate_gtin"]
+                .astype(str)
+                .eq(frame["true_item_id"].astype(str))
+                & frame["accepted"].astype(bool)
+            )
+        )
+        .groupby("SKU_ID")["is_true_accepted"]
+        .any()
+    )
 
     summary = predictions[["SKU_ID", "ITEM_ID"]].copy()
     summary["true_item_id"] = summary["SKU_ID"].map(true_item_by_sku)
@@ -1301,7 +1473,9 @@ def _combination_count(n: int) -> int:
     return n * (n - 1) // 2
 
 
-def _pairwise_counts(true_labels: pd.Series, predicted_labels: pd.Series) -> dict[str, int]:
+def _pairwise_counts(
+    true_labels: pd.Series, predicted_labels: pd.Series
+) -> dict[str, int]:
     """Compute pairwise clustering confusion counts without an O(n²) matrix."""
     frame = pd.DataFrame(
         {"true": true_labels.astype(str), "predicted": predicted_labels.astype(str)}
@@ -1385,18 +1559,16 @@ def pair_disagreements(
     merged = merged.merge(evidence, on="SKU_ID", how="left", validate="one_to_one")
     trace_candidates = trace[["SKU_ID", "candidate_gtin"]].copy()
     trace_candidates["SKU_ID"] = trace_candidates["SKU_ID"].astype(str)
-    trace_candidates["candidate_gtin"] = trace_candidates["candidate_gtin"].astype(
-        str
-    )
+    trace_candidates["candidate_gtin"] = trace_candidates["candidate_gtin"].astype(str)
     for column, default in (
         ("retrieval_source", "unknown"),
         ("score_pass", False),
         ("accepted", False),
     ):
-        trace_candidates[column] = (
-            trace[column] if column in trace else default
-        )
-    trace_candidates["retrieval_source"] = trace_candidates["retrieval_source"].astype(str)
+        trace_candidates[column] = trace[column] if column in trace else default
+    trace_candidates["retrieval_source"] = trace_candidates["retrieval_source"].astype(
+        str
+    )
     true_candidate_rows = trace_candidates.merge(
         truth_frame,
         on="SKU_ID",
@@ -1419,7 +1591,9 @@ def pair_disagreements(
     def error_count(frame: pd.DataFrame, other_column: str) -> int:
         return int(
             _combination_count(len(frame))
-            - sum(_combination_count(int(n)) for n in frame.groupby(other_column).size())
+            - sum(
+                _combination_count(int(n)) for n in frame.groupby(other_column).size()
+            )
         )
 
     def pair_row(
@@ -1450,7 +1624,9 @@ def pair_disagreements(
             failure_stage = "attribute_gate_rejection"
         else:
             failure_stage = "ranking_or_assignment"
-        generation_status = "generated" if generated else "unretrieved_candidate_generation_failure"
+        generation_status = (
+            "generated" if generated else "unretrieved_candidate_generation_failure"
+        )
         return {
             "sku_id_a": sku_a,
             "sku_id_b": sku_b,
@@ -1460,9 +1636,7 @@ def pair_disagreements(
             "true_group_id": _pair_group_value(
                 left["true_item_id"], right["true_item_id"]
             ),
-            "predicted_group_id": _pair_group_value(
-                left["ITEM_ID"], right["ITEM_ID"]
-            ),
+            "predicted_group_id": _pair_group_value(left["ITEM_ID"], right["ITEM_ID"]),
             "pair_score": min(finite_scores) if len(finite_scores) == 2 else np.nan,
             "edge_exists": int(left["ITEM_ID"] == right["ITEM_ID"]),
             "candidate_generated": generated,
@@ -1545,7 +1719,10 @@ def prediction_metrics(
             f"missing_predictions={missing_predictions[:10]}, "
             f"unexpected_predictions={unexpected_predictions[:10]}"
         )
-    if truth_frame["SKU_ID"].duplicated().any() or pred_frame["SKU_ID"].duplicated().any():
+    if (
+        truth_frame["SKU_ID"].duplicated().any()
+        or pred_frame["SKU_ID"].duplicated().any()
+    ):
         raise ValueError("metric inputs must contain one row per SKU_ID")
     merged = truth_frame.merge(
         pred_frame,
@@ -1563,18 +1740,14 @@ def prediction_metrics(
         counts["fp"],
         counts["fn"],
     )
-    intersections = merged.groupby(
-        ["true_item_id", "ITEM_ID"], sort=False
-    ).size()
+    intersections = merged.groupby(["true_item_id", "ITEM_ID"], sort=False).size()
     predicted_sizes = merged.groupby("ITEM_ID").size()
     true_sizes = merged.groupby("true_item_id").size()
     group_precision = []
     group_recall = []
     for (true_id, predicted_id), intersection in intersections.items():
         group_precision.extend(
-            [
-                float(intersection / predicted_sizes[predicted_id])
-            ] * int(intersection)
+            [float(intersection / predicted_sizes[predicted_id])] * int(intersection)
         )
         group_recall.extend(
             [float(intersection / true_sizes[true_id])] * int(intersection)
@@ -1606,11 +1779,7 @@ def prediction_metrics(
         "unmatched_skus": int(
             merged["ITEM_ID"].astype(str).str.startswith(_unmatched_prefix()).sum()
         ),
-        **{
-            key: graph[key]
-            for key in METRIC_COLUMNS
-            if key.startswith("diagnostic_")
-        },
+        **{key: graph[key] for key in METRIC_COLUMNS if key.startswith("diagnostic_")},
         **counts,
     }
     if tuple(metrics) != METRIC_COLUMNS:
@@ -1647,8 +1816,7 @@ def gtin_metrics(
     if len(merged) != len(truth_frame):
         raise ValueError("GTIN-stratified metric population changed during merge")
     groups = [
-        (status, merged[merged["gtin_status"].eq(status)])
-        for status in GTIN_STATUSES
+        (status, merged[merged["gtin_status"].eq(status)]) for status in GTIN_STATUSES
     ]
     groups.append(("ALL", merged))
     rows = []
@@ -1685,9 +1853,7 @@ def gtin_metrics(
                 **prediction_metrics(
                     group[["SKU_ID", "ITEM_ID"]],
                     group[["SKU_ID", "true_item_id"]],
-                    candidates=candidates[
-                        candidates["SKU_ID"].isin(group["SKU_ID"])
-                    ],
+                    candidates=candidates[candidates["SKU_ID"].isin(group["SKU_ID"])],
                     threshold=threshold,
                     include_graph_diagnostics=include_graph_diagnostics,
                 ),
@@ -1750,17 +1916,16 @@ def _candidate_labels(
         how="inner",
     )
     scores = scored["score"].to_numpy(dtype=float)
-    labels = scored["candidate_gtin"].astype(str).eq(
-        scored["true_item_id"].astype(str)
-    ).to_numpy(dtype=int)
+    labels = (
+        scored["candidate_gtin"]
+        .astype(str)
+        .eq(scored["true_item_id"].astype(str))
+        .to_numpy(dtype=int)
+    )
     retrieved = set(scored["SKU_ID"].astype(str))
     missing = sorted(set(truth["SKU_ID"].astype(str)) - retrieved)
     if missing:
-        floor = (
-            float(np.nextafter(scores.min(), -np.inf))
-            if len(scores)
-            else -np.inf
-        )
+        floor = float(np.nextafter(scores.min(), -np.inf)) if len(scores) else -np.inf
         scores = np.concatenate([scores, np.full(len(missing), floor)])
         labels = np.concatenate([labels, np.ones(len(missing), dtype=int)])
     return scores, labels
@@ -1806,9 +1971,9 @@ def _retrieval_diagnostics(
     ann_true_candidate_skus: set[str] = set()
     if "retrieval_source" in candidates:
         ann_sources = candidates.loc[
-            candidates["retrieval_source"].astype(str).str.contains(
-                "semantic_top_k", regex=False
-            ),
+            candidates["retrieval_source"]
+            .astype(str)
+            .str.contains("semantic_top_k", regex=False),
             ["SKU_ID", "candidate_gtin"],
         ].copy()
         ann_sources["SKU_ID"] = ann_sources["SKU_ID"].astype(str)
@@ -1876,24 +2041,22 @@ def _load_calibration_frame(
         raise ValueError("calibration input does not match the deduped dataset")
     calibration["SKU_ID"] = calibration["SKU_ID"].astype(str)
     calibration["true_item_id"] = calibration["true_item_id"].astype(str)
-    folds_per_item = calibration.groupby("true_item_id")[
-        "calibration_fold"
-    ].nunique()
+    folds_per_item = calibration.groupby("true_item_id")["calibration_fold"].nunique()
     if (folds_per_item > 1).any():
         raise ValueError(
             "calibration is not canonical-disjoint: an item appears in multiple folds"
         )
     fold_count = int(calibration["calibration_fold"].nunique())
-    minimum_support = int(
-        matcher.config["rand_matching"]["threshold_min_fold_support"]
-    )
+    minimum_support = int(matcher.config["rand_matching"]["threshold_min_fold_support"])
     if fold_count < minimum_support:
         raise ValueError(
             "calibration has insufficient fold support for a meaningful median: "
             f"observed={fold_count}, required={minimum_support}"
         )
     calibration["gtin_status"] = [
-        matcher.gtin_status(row_metadata_text(row, "barcode", "gtin"), row["true_item_id"])
+        matcher.gtin_status(
+            row_metadata_text(row, "barcode", "gtin"), row["true_item_id"]
+        )
         for _, row in calibration.iterrows()
     ]
     return calibration
@@ -1905,12 +2068,8 @@ def _fold_partitions(
     candidates: pd.DataFrame,
     fold: object,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    fit_skus = set(
-        calibration.loc[calibration["calibration_fold"] != fold, "SKU_ID"]
-    )
-    check_skus = set(
-        calibration.loc[calibration["calibration_fold"] == fold, "SKU_ID"]
-    )
+    fit_skus = set(calibration.loc[calibration["calibration_fold"] != fold, "SKU_ID"])
+    check_skus = set(calibration.loc[calibration["calibration_fold"] == fold, "SKU_ID"])
     return (
         truth[truth.SKU_ID.isin(fit_skus)],
         truth[truth.SKU_ID.isin(check_skus)],
@@ -1984,9 +2143,7 @@ def _alternative_thresholds(
             "fitted" if not np.isnan(precision_val) else "target_recall_unreachable"
         )
     if np.isnan(precision_val) and len(scores):
-        achieved_recall = _recall_at_threshold(
-            scores, labels, float(np.min(scores))
-        )
+        achieved_recall = _recall_at_threshold(scores, labels, float(np.min(scores)))
     elif np.isnan(precision_val):
         achieved_recall = float("nan")
     else:
@@ -2104,9 +2261,7 @@ def _plateau_diagnostic(
     ]
     by_threshold = all_rows.groupby("threshold", as_index=False).rand_index.mean()
     best_rand = float(by_threshold.rand_index.max())
-    near_best = by_threshold[
-        by_threshold.rand_index >= best_rand - plateau_tolerance
-    ]
+    near_best = by_threshold[by_threshold.rand_index >= best_rand - plateau_tolerance]
     result: dict = {
         "criterion": (
             f"mean Rand Index within {plateau_tolerance:g} of best across "
@@ -2194,9 +2349,7 @@ def calibrate_threshold(
             {
                 "check_fold": fold,
                 "selected_threshold": float(best_threshold),
-                "fit_rand_index": float(
-                    fit_by_threshold[best_threshold]["rand_index"]
-                ),
+                "fit_rand_index": float(fit_by_threshold[best_threshold]["rand_index"]),
                 "fit_youden_threshold": float(youden_info["threshold"]),
                 "fit_youden_reason": youden_info["reason"],
                 fit_col: float(precision_info["threshold"]),
@@ -2217,12 +2370,8 @@ def calibrate_threshold(
                 "without_true_candidate": retrieval["without_true_candidate"],
                 "true_candidate_recall": retrieval["true_candidate_recall"],
                 "ann_with_true_candidate": retrieval["ann_with_true_candidate"],
-                "ann_without_true_candidate": retrieval[
-                    "ann_without_true_candidate"
-                ],
-                "ann_true_candidate_recall": retrieval[
-                    "ann_true_candidate_recall"
-                ],
+                "ann_without_true_candidate": retrieval["ann_without_true_candidate"],
+                "ann_true_candidate_recall": retrieval["ann_true_candidate_recall"],
                 "reconciliation_scope": _reconciliation_scope(),
             }
         )
@@ -2280,12 +2429,16 @@ def _write_calibration_outputs(
         alternatives_df,
         "threshold comparison metrics",
     )
-    selected_df.to_csv(output_dir / output_names["threshold_selection_by_fold"], index=False)
+    selected_df.to_csv(
+        output_dir / output_names["threshold_selection_by_fold"], index=False
+    )
     sensitivity_df.to_csv(
         output_dir / output_names["threshold_sensitivity_by_gtin_status"],
         index=False,
     )
-    alternatives_df.to_csv(output_dir / output_names["threshold_comparison"], index=False)
+    alternatives_df.to_csv(
+        output_dir / output_names["threshold_comparison"], index=False
+    )
     _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(
         calibration_trace,
         "calibration diagnostics",
@@ -2347,7 +2500,12 @@ def _write_sensitivity_plot(
             continue
         curve = group.groupby("threshold", as_index=False).rand_index.mean()
         axis.plot(curve.threshold, curve.rand_index, marker="o", label=status)
-    axis.axvline(final_threshold, color="black", linestyle="--", label=f"final={final_threshold:.2f}")
+    axis.axvline(
+        final_threshold,
+        color="black",
+        linestyle="--",
+        label=f"final={final_threshold:.2f}",
+    )
     axis.set(
         xlabel="Cosine threshold",
         ylabel="Rand Index",
@@ -2423,29 +2581,32 @@ def _ann_missed_true_matches(
     rows = trace.drop(
         columns=["true_item_id", "true_candidate_retrieved", "true_candidate_accepted"],
         errors="ignore",
-    ).merge(
-        true, on="SKU_ID", how="inner", validate="many_to_one"
-    )
+    ).merge(true, on="SKU_ID", how="inner", validate="many_to_one")
     is_true = rows["candidate_gtin"].astype(str).eq(rows["true_item_id"].astype(str))
-    is_ann = rows["retrieval_source"].astype(str).str.contains(
-        "semantic_top_k", regex=False
+    is_ann = (
+        rows["retrieval_source"].astype(str).str.contains("semantic_top_k", regex=False)
     )
     true_rows = rows.loc[is_true].copy()
     ann_true_ids = set(true_rows.loc[is_ann.loc[true_rows.index], "SKU_ID"].astype(str))
     missed_ids = set(true["SKU_ID"]) - ann_true_ids
     missed_true = true_rows.loc[true_rows["SKU_ID"].astype(str).isin(missed_ids)].copy()
-    ann_rows = rows.loc[rows["retrieval_source"].astype(str).str.contains(
-        "semantic_top_k", regex=False
-    )].copy()
+    ann_rows = rows.loc[
+        rows["retrieval_source"].astype(str).str.contains("semantic_top_k", regex=False)
+    ].copy()
     ann_best = (
-        ann_rows.sort_values(["SKU_ID", "candidate_rank", "score"], ascending=[True, True, False])
-        .drop_duplicates("SKU_ID")
-        [["SKU_ID", "candidate_gtin", "score", "candidate_rank"]]
-        .rename(columns={
-            "candidate_gtin": "ann_top_candidate_gtin",
-            "score": "ann_top_candidate_score",
-            "candidate_rank": "ann_top_candidate_rank",
-        })
+        ann_rows.sort_values(
+            ["SKU_ID", "candidate_rank", "score"], ascending=[True, True, False]
+        )
+        .drop_duplicates("SKU_ID")[
+            ["SKU_ID", "candidate_gtin", "score", "candidate_rank"]
+        ]
+        .rename(
+            columns={
+                "candidate_gtin": "ann_top_candidate_gtin",
+                "score": "ann_top_candidate_score",
+                "candidate_rank": "ann_top_candidate_rank",
+            }
+        )
     )
     selected = trace.loc[
         trace["selected"].astype(bool), ["SKU_ID", "candidate_gtin", "score"]
@@ -2455,17 +2616,23 @@ def _ann_missed_true_matches(
             "score": "union_selected_score",
         }
     )
-    result = missed_true.merge(ann_best, on="SKU_ID", how="left", validate="one_to_one").merge(
-        selected, on="SKU_ID", how="left", validate="one_to_one"
+    result = missed_true.merge(
+        ann_best, on="SKU_ID", how="left", validate="one_to_one"
+    ).merge(selected, on="SKU_ID", how="left", validate="one_to_one")
+    result = result.rename(
+        columns={
+            "retrieval_source": "true_candidate_retrieval_source",
+            "score": "true_candidate_score",
+            "score_pass": "true_candidate_score_pass",
+            "accepted": "true_candidate_accepted",
+            "attribute_gate": "true_candidate_attribute_gate",
+        }
     )
-    result = result.rename(columns={
-        "retrieval_source": "true_candidate_retrieval_source",
-        "score": "true_candidate_score",
-        "score_pass": "true_candidate_score_pass",
-        "accepted": "true_candidate_accepted",
-        "attribute_gate": "true_candidate_attribute_gate",
-    })
-    return result.reindex(columns=_ANN_MISS_COLUMNS).sort_values("SKU_ID").reset_index(drop=True)
+    return (
+        result.reindex(columns=_ANN_MISS_COLUMNS)
+        .sort_values("SKU_ID")
+        .reset_index(drop=True)
+    )
 
 
 def _retrieval_ablation_metrics(
@@ -2477,9 +2644,9 @@ def _retrieval_ablation_metrics(
     modes = {
         "union_ann_plus_rescue": candidates,
         "ann_only": candidates.loc[
-            candidates["retrieval_source"].astype(str).str.contains(
-                "semantic_top_k", regex=False
-            )
+            candidates["retrieval_source"]
+            .astype(str)
+            .str.contains("semantic_top_k", regex=False)
         ].copy(),
     }
     rows: list[dict[str, object]] = []
@@ -2497,7 +2664,14 @@ def _retrieval_ablation_metrics(
             population,
             include_graph_diagnostics=True,
         )
-        rows.extend({"retrieval_mode": mode, "ann_top_k": int(rand_matching_cfg()["top_k"]), **row} for row in metrics)
+        rows.extend(
+            {
+                "retrieval_mode": mode,
+                "ann_top_k": int(rand_matching_cfg()["top_k"]),
+                **row,
+            }
+            for row in metrics
+        )
     return pd.DataFrame(rows)
 
 
@@ -2510,9 +2684,7 @@ def _evaluate_holdout(
         load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
     )
     base["SKU_ID"] = base["SKU_ID"].astype(str)
-    unknown_ids = sorted(
-        set(holdout_labels["SKU_ID"]) - set(base["SKU_ID"])
-    )
+    unknown_ids = sorted(set(holdout_labels["SKU_ID"]) - set(base["SKU_ID"]))
     if unknown_ids:
         raise ValueError(
             "holdout input contains SKU_ID values absent from the dataset: "
@@ -2531,7 +2703,9 @@ def _evaluate_holdout(
     holdout["SKU_ID"] = holdout["SKU_ID"].astype(str)
     holdout["true_item_id"] = holdout["true_item_id"].astype(str)
     holdout["gtin_status"] = [
-        matcher.gtin_status(row_metadata_text(row, "barcode", "gtin"), row["true_item_id"])
+        matcher.gtin_status(
+            row_metadata_text(row, "barcode", "gtin"), row["true_item_id"]
+        )
         for _, row in holdout.iterrows()
     ]
     candidates = matcher.score_candidates(holdout)
@@ -2577,9 +2751,7 @@ def _sha256_path(path: Path) -> tuple[str, int]:
         raise FileNotFoundError(f"provenance path does not exist: {path}")
     digest = hashlib.sha256()
     files = sorted(
-        child
-        for child in path.rglob("*")
-        if child.is_file() and not child.is_symlink()
+        child for child in path.rglob("*") if child.is_file() and not child.is_symlink()
     )
     for child in files:
         digest.update(str(child.relative_to(path)).encode("utf-8"))
@@ -2631,12 +2803,9 @@ def _write_provenance(
         final_threshold=final_threshold,
         threshold_by_gtin_status=_final_threshold_by_gtin_status(),
         brand_conflict_veto=bool(rand_matching_cfg()["brand_conflict_veto"]),
-        confidence_penalty_mask=dict(
-            rand_matching_cfg()["confidence_penalty_mask"]
-        ),
-        flavor_overlap_penalty=dict(
-            rand_matching_cfg()["flavor_overlap_penalty"]
-        ),
+        confidence_penalty_mask=dict(rand_matching_cfg()["confidence_penalty_mask"]),
+        flavor_overlap_penalty=dict(rand_matching_cfg()["flavor_overlap_penalty"]),
+        targeted_veto_gates=dict(rand_matching_cfg()["targeted_veto_gates"]),
         unmatched_prefix=_unmatched_prefix(),
         rows=len(submission),
         unique_items=int(submission["ITEM_ID"].nunique()),
@@ -2654,8 +2823,7 @@ def _write_provenance(
     )
     provenance_path = output_dir / output_name
     provenance_path.write_text(
-        json.dumps(provenance.model_dump(mode="json"), indent=2, sort_keys=True)
-        + "\n",
+        json.dumps(provenance.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     print(f"provenance: {provenance_path}")
@@ -2808,7 +2976,9 @@ def write_outputs(
             "final_threshold": final_threshold,
             "rows": len(submission),
             "unique_items": submission.ITEM_ID.nunique(),
-            "unmatched": int(submission.ITEM_ID.str.startswith(_unmatched_prefix()).sum()),
+            "unmatched": int(
+                submission.ITEM_ID.str.startswith(_unmatched_prefix()).sum()
+            ),
             "path": str(output_dir / output_names["submission"]),
         }
     )
@@ -2839,13 +3009,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--checkpoint",
-        help="fine-tuned SentenceTransformer directory "
-        "(or FINETUNED_CHECKPOINT)",
+        help="fine-tuned SentenceTransformer directory (or FINETUNED_CHECKPOINT)",
     )
     parser.add_argument(
         "--calibration-input",
-        help="canonical-disjoint calibration CSV "
-        "(or CALIBRATION_INPUT)",
+        help="canonical-disjoint calibration CSV (or CALIBRATION_INPUT)",
     )
     parser.add_argument(
         "--holdout-input",
@@ -2889,18 +3057,15 @@ def main() -> None:
 
     if not checkpoint.is_dir():
         raise FileNotFoundError(
-            "FINETUNED_CHECKPOINT must point to a checkpoint directory: "
-            f"{checkpoint}"
+            f"FINETUNED_CHECKPOINT must point to a checkpoint directory: {checkpoint}"
         )
     if not calibration_input.is_file():
         raise FileNotFoundError(
-            "CALIBRATION_INPUT must point to a calibration CSV: "
-            f"{calibration_input}"
+            f"CALIBRATION_INPUT must point to a calibration CSV: {calibration_input}"
         )
     if not holdout_input.is_file():
         raise FileNotFoundError(
-            "HOLDOUT_INPUT must point to a frozen holdout CSV: "
-            f"{holdout_input}"
+            f"HOLDOUT_INPUT must point to a frozen holdout CSV: {holdout_input}"
         )
     ann_cfg = load_ann_config()
     matcher = RandMatcher(
