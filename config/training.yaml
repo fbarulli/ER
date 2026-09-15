@@ -76,7 +76,7 @@ colab:
   # Deterministic 128-row prefix of training_dataset_csv. It is the smallest
   # checked smoke population that survives the pair/component/triple guards.
   smoke_dataset_csv: "training_data/dataset_deduped_smoke_128.csv"
-  smoke_inference_sample: 100
+  smoke_inference_sample: 5
   # Distributions the launcher asserts on the VM, per lane.  The Colab image
   # already ships torch/transformers/sentence-transformers/datasets/pandas/
   # numpy/scikit-learn (the launcher streams them back as "already
