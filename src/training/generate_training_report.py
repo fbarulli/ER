@@ -460,6 +460,302 @@ def _rand_metric_aggregate(rows: list[dict[str, object]]) -> dict[str, dict[str,
     }
 
 
+_PRESENTED_PREFIX = "n_presented_"
+_NEG_SOURCE_PREFIX = "n_train_neg_source_"
+_NEG_SOURCE_FUNNEL_SUFFIXES = ("_present", "_selected", "_backprop")
+
+
+def _datapoint_population_registry() -> dict[str, object]:
+    """Read the training-side datapoint-population registry (lazy, guarded).
+
+    The registry lives in ``training.training`` because that module OWNS the
+    per-fold coverage audit. The import happens here, never at module scope, so
+    the report stays runnable on a worker without the full training stack — and
+    a failure is REPORTED in the report (``available: False`` plus the error),
+    never swallowed: an unavailable registry means the report can only be
+    data-driven and has to say so out loud.
+    """
+    try:
+        from training.training import (
+            DATAPOINT_FALLBACK_TAGS,
+            KNOWN_DATAPOINT_POPULATIONS,
+            NEGATIVE_SOURCE_DATAPOINT_POPULATIONS,
+        )
+    except Exception as exc:  # environment dependent; reported, not hidden
+        return {
+            "available": False,
+            "known": (),
+            "negative_sources": (),
+            "fallbacks": (),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "available": True,
+        "known": tuple(KNOWN_DATAPOINT_POPULATIONS),
+        "negative_sources": tuple(NEGATIVE_SOURCE_DATAPOINT_POPULATIONS),
+        "fallbacks": tuple(sorted(DATAPOINT_FALLBACK_TAGS)),
+        "error": "",
+    }
+
+
+def _datapoint_coverage_section(
+    ok: pd.DataFrame, registry: dict[str, object]
+) -> dict[str, object]:
+    """Surface every datapoint population, including the silent zeros.
+
+    The per-fold coverage audit writes its evidence into the fold-metrics row
+    (``datapoint_coverage/*`` keys in W&B, ``n_presented_*`` /
+    ``n_train_neg_source_*`` columns in CSV). report.json carried all of them
+    only as anonymous numeric columns, so a population with ZERO pairs — the
+    state in which a whole producer lane can silently contribute nothing — was
+    invisible in the human-facing output.
+
+    Two things this section makes explicit that the raw columns did not:
+
+    * every population the run reported, INCLUDING those with zero
+      presentations, plus the registry populations the run never reported at
+      all (``registered_but_absent``);
+    * the per-fold negative-source accounting identity
+      (``sum(n_train_neg_source_<src>) == total train-fold negatives``) with an
+      explicit ``identity_holds`` flag and the unattributed residue, so a
+      population that escapes the census is a reported breach instead of a
+      missing column.
+
+    ``tracked: False`` when a fold carries no coverage columns at all (the
+    audit runs for the contrastive loss only) — an untracked run must not look
+    like a fully covered one.
+    """
+    known = tuple(registry.get("known") or ())
+    registered_negative_sources = tuple(registry.get("negative_sources") or ())
+    source_columns = [
+        column
+        for column in ok.columns
+        if column.startswith(_NEG_SOURCE_PREFIX)
+        and not column.endswith(_NEG_SOURCE_FUNNEL_SUFFIXES)
+        and column not in {"n_train_neg_source_total", "n_train_neg_source_registered",
+                           "n_train_neg_source_unregistered"}
+    ]
+    presented_columns = [
+        column for column in ok.columns if column.startswith(_PRESENTED_PREFIX)
+    ]
+    folds: dict[str, object] = {}
+    identity_breaches: list[str] = []
+    unregistered_seen: set[str] = set()
+    zero_presentation: dict[str, list[str]] = {}
+    unattributed_total = 0
+    for _, row in ok.iterrows():
+        fold = int(row["fold"])
+        populations = {
+            column[len(_PRESENTED_PREFIX):]: int(row[column])
+            for column in presented_columns
+        }
+        sources: dict[str, dict[str, object]] = {}
+        for column in source_columns:
+            source = column[len(_NEG_SOURCE_PREFIX):]
+            entry = sources.setdefault(source, {"total": 0, "present": 0,
+                                                "selected": 0, "backprop": 0})
+            entry["total"] = int(row[column])
+            for suffix in _NEG_SOURCE_FUNNEL_SUFFIXES:
+                funnel_column = f"{column}{suffix}"
+                if funnel_column in ok.columns:
+                    entry[suffix[1:]] = int(row[funnel_column])
+        declared_total = (
+            int(row["n_train_neg_source_total"])
+            if "n_train_neg_source_total" in ok.columns
+            else sum(int(entry["total"]) for entry in sources.values())
+        )
+        declared_from_run = "n_train_neg_source_total" in ok.columns
+        census = sum(int(entry["total"]) for entry in sources.values())
+        unattributed = int(
+            row["n_train_neg_usage_rows_unattributed"]
+            if "n_train_neg_usage_rows_unattributed" in ok.columns
+            else 0
+        )
+        unattributed_total += unattributed
+        holds = census == declared_total
+        if not holds:
+            identity_breaches.append(
+                f"fold {fold}: census={census} != declared_total={declared_total}"
+            )
+        regressed = sorted(
+            name
+            for name in sources
+            if known and name not in known
+        )
+        unregistered_seen.update(regressed)
+        zeros = sorted(name for name, value in populations.items() if value == 0)
+        if zeros:
+            zero_presentation[f"fold_{fold}"] = zeros
+        folds[f"fold_{fold}"] = {
+            "tracked": bool(populations) or bool(sources),
+            "populations": populations,
+            "populations_with_zero_presentations": zeros,
+            "negative_sources": sources,
+            "negative_source_census": census,
+            "negative_source_declared_total": declared_total,
+            "negative_source_identity_holds": holds,
+            # False for a metrics file written before the run recorded its own
+            # fold total: the report must not claim an assertion it could only
+            # re-derive from the census it is checking.
+            "negative_source_identity_asserted_from_run": declared_from_run,
+            "unregistered_negative_sources": regressed,
+            "usage_rows_unattributed": unattributed,
+            "missing_populations": int(row["n_missing_datapoint_populations"])
+            if "n_missing_datapoint_populations" in ok.columns
+            else None,
+            "ambiguous_pair_attributions": int(
+                row["n_coverage_ambiguous_pair_attributions"]
+            )
+            if "n_coverage_ambiguous_pair_attributions" in ok.columns
+            else None,
+        }
+    registered_but_absent = (
+        sorted(
+            name
+            for name in known
+            if f"{_PRESENTED_PREFIX}{name}" not in ok.columns
+            and f"{_NEG_SOURCE_PREFIX}{name}" not in ok.columns
+        )
+        if known
+        else []
+    )
+    return {
+        "registry_available": bool(registry.get("available")),
+        "registry_error": str(registry.get("error", "")),
+        "registry_populations": list(known),
+        "registry_negative_sources": list(registered_negative_sources),
+        "registry_fallback_tags": list(registry.get("fallbacks") or ()),
+        "folds": folds,
+        "registered_but_absent": registered_but_absent,
+        "unregistered_negative_sources_seen": sorted(unregistered_seen),
+        "populations_with_zero_presentations": zero_presentation,
+        "usage_rows_unattributed": unattributed_total,
+        "negative_source_identity_breaches": identity_breaches,
+        "identity_statement": (
+            "sum(n_train_neg_source_<src>) over every registered negative "
+            "source == total train-fold negatives, per fold"
+        ),
+    }
+
+
+def _datapoint_coverage_rows(
+    section: dict[str, object]
+) -> list[dict[str, object]]:
+    """Flatten the coverage section to one row per (fold, population).
+
+    A population the registry declares but the run never reported at all is
+    the strongest form of invisibility, so it gets a row here with
+    ``reported=0`` and ``zero_presented=1``: the absence is readable in the
+    file instead of being implied by a column that is simply missing.
+    """
+    rows: list[dict[str, object]] = []
+    absent = list(section.get("registered_but_absent") or [])
+    registry = list(section.get("registry_populations") or [])
+    for fold_key, fold in sorted((section.get("folds") or {}).items()):
+        fold_number = int(str(fold_key).split("_")[-1])
+        populations = dict(fold["populations"])
+        for name in absent:
+            populations.setdefault(name, 0)
+        for name, presentations in sorted(populations.items()):
+            sources = fold["negative_sources"]
+            entry = sources.get(name, {})
+            rows.append(
+                {
+                    "fold": fold_number,
+                    "population": name,
+                    "presentations": int(presentations),
+                    "zero_presented": int(presentations == 0),
+                    "reported": int(name in fold["populations"]),
+                    "registered": int(not registry or name in registry),
+                    "negative_source_pairs": int(entry.get("total", 0)),
+                    "negative_source_present": int(entry.get("present", 0)),
+                    "negative_source_selected": int(entry.get("selected", 0)),
+                    "negative_source_backprop": int(entry.get("backprop", 0)),
+                }
+            )
+    return rows
+
+
+def _print_datapoint_coverage(section: dict[str, object]) -> None:
+    """Human-facing summary of the coverage section (never silent)."""
+    print("\n[report] datapoint coverage", flush=True)
+    if not section.get("registry_available"):
+        print(
+            "  WARNING: datapoint-population registry unavailable "
+            f"({section.get('registry_error')}) — report is data-driven only, "
+            "registered-but-absent populations cannot be listed.",
+            flush=True,
+        )
+    folds = section.get("folds") or {}
+    if not folds:
+        print("  no folds in the metrics frame", flush=True)
+        return
+    for fold_key, fold in sorted(folds.items()):
+        if not fold["tracked"]:
+            print(
+                f"  {fold_key}: NOT TRACKED — no datapoint-coverage columns in "
+                "this run (the audit covers the contrastive loss only); the "
+                "absence of a population here is not evidence it contributed.",
+                flush=True,
+            )
+            continue
+        populations = fold["populations"]
+        print(
+            f"  {fold_key}: {len(populations)} population(s) reported, "
+            f"{len(fold['populations_with_zero_presentations'])} with ZERO "
+            "presentations"
+            + (
+                " -> " + ", ".join(fold["populations_with_zero_presentations"])
+                if fold["populations_with_zero_presentations"]
+                else ""
+            ),
+            flush=True,
+        )
+        for name, presentations in sorted(populations.items()):
+            print(f"      {name:32s} presentations={presentations:,}", flush=True)
+        print(
+            "      negative sources: "
+            + ", ".join(
+                f"{name}={entry['total']:,}"
+                for name, entry in sorted(fold["negative_sources"].items())
+            )
+            + f" | census={fold['negative_source_census']:,} "
+            f"declared={fold['negative_source_declared_total']:,} "
+            f"identity_holds={fold['negative_source_identity_holds']}"
+            + (
+                ""
+                if fold["negative_source_identity_asserted_from_run"]
+                else " (declared total re-derived: metrics file predates the "
+                "run-recorded fold total)"
+            ),
+            flush=True,
+        )
+    if section.get("registered_but_absent"):
+        print(
+            "  WARNING: registry populations this run never reported at all: "
+            + ", ".join(section["registered_but_absent"]),
+            flush=True,
+        )
+    if section.get("unregistered_negative_sources_seen"):
+        print(
+            "  WARNING: negative sources outside the registry were seen: "
+            + ", ".join(section["unregistered_negative_sources_seen"]),
+            flush=True,
+        )
+    if section.get("negative_source_identity_breaches"):
+        print(
+            "  WARNING: negative-source accounting identity breached: "
+            + "; ".join(section["negative_source_identity_breaches"]),
+            flush=True,
+        )
+    if section.get("usage_rows_unattributed"):
+        print(
+            f"  WARNING: {section['usage_rows_unattributed']:,} negative usage "
+            "row(s) had no attributable registered source.",
+            flush=True,
+        )
+
+
 def generate_report(
     metrics_path: str | Path,
     pair_paths: list[str | Path],
@@ -1165,6 +1461,22 @@ def generate_report(
             output[key] = _numeric_row(row, exclude=set(key_columns))
         return output
 
+    datapoint_coverage = _datapoint_coverage_section(
+        ok, _datapoint_population_registry()
+    )
+    _print_datapoint_coverage(datapoint_coverage)
+    # A flat, reviewable companion to report.json: one row per (fold,
+    # population) with the registry verdict, so a ZERO-presentation population
+    # is a row in a file as well as a line in the console output.
+    pd.DataFrame(
+        _datapoint_coverage_rows(datapoint_coverage),
+        columns=[
+            "fold", "population", "presentations", "zero_presented", "reported",
+            "registered", "negative_source_pairs", "negative_source_present",
+            "negative_source_selected", "negative_source_backprop",
+        ],
+    ).to_csv(out / "datapoint_coverage.csv", index=False)
+
     report = {
         "report_version": 3,
         "folds": int(len(ok)),
@@ -1178,6 +1490,12 @@ def generate_report(
             }
             for key, values in aggregate.items()
         },
+        # Datapoint/negative-source coverage is a first-class part of the
+        # report, not just anonymous numeric columns: every population the run
+        # produced (including those with zero presentations), the populations
+        # the registry declares that this run never reported, and the per-fold
+        # negative-source accounting identity.
+        "datapoint_coverage": datapoint_coverage,
         "score_overlap": _numeric_csv(out / "score_distribution_overlap.csv", ("split",)),
         "confusion": _numeric_csv(out / "confusion_matrices.csv", ("fold", "operating_point")),
         "threshold_sweep": _numeric_csv(out / "threshold_sweep.csv", ("fold", "threshold")),
