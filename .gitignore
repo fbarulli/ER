@@ -89,3 +89,6 @@ package.json
 # Ignored so the tree stays clean while the file remains present on disk.
 # Do not commit it; do not delete it.
 AGENTS.local.md
+
+# Every CSV is generated or local-only; the tree ships code, not data.
+*.csv
