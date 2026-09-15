@@ -151,9 +151,63 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(args.out_dir / "model_input_comparison.csv", index=False)
     (args.out_dir / "model_input_comparison.txt").write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
+    markdown: list[str] = [
+        "# Model input comparison",
+        "",
+        "Each review row is shown independently. The model-input blocks are exact strings; no fields are abbreviated.",
+        "",
+    ]
+    for number, row in enumerate(rows, start=1):
+        markdown.extend([
+            f"## Row {number}: `{row['SKU_ID']}` → `{row['NEAREST_ITEM_ID']}`",
+            f"Score: `{row['SCORE']}`",
+            "",
+            "### Source: original features",
+            "",
+        ])
+        markdown.extend(f"- **{key}:** {value}" for key, value in row["source_original_features"].items())
+        markdown.extend([
+            "",
+            "### Source: pipeline changes",
+            "",
+            f"- **Base cleaned:** `{row['source_base_cleaned']}`",
+            f"- **After schema-word removal:** `{row['source_after_schema_strip']}`",
+            f"- **Structured fields extracted:** `{row['source_structured_info']}`",
+            "",
+            "### Source: exact model input",
+            "",
+            "```text",
+            str(row["source_exact_model_text"]),
+            "```",
+            "",
+            "### Candidate target: original features",
+            "",
+        ])
+        markdown.extend(f"- **{key}:** {value}" for key, value in row["target_original_features"].items())
+        markdown.extend([
+            "",
+            "### Candidate target: canonical record and pipeline changes",
+            "",
+        ])
+        markdown.extend(f"- **{key}:** {value}" for key, value in row["target_canonical_record"].items())
+        markdown.extend([
+            "",
+            f"- **Canonical base:** `{row['target_base_canonical']}`",
+            f"- **After canonical cleaning:** `{row['target_after_canonical_cleaning']}`",
+            f"- **Structured fields extracted:** `{row['target_structured_info']}`",
+            "",
+            "### Candidate target: exact model input",
+            "",
+            "```text",
+            str(row["target_exact_model_text"]),
+            "```",
+            "",
+        ])
+    (args.out_dir / "model_input_comparison.md").write_text("\n".join(markdown), encoding="utf-8")
     print("\n\n".join(blocks))
     print(f"\n[saved] {args.out_dir / 'model_input_comparison.txt'}")
     print(f"[saved] {args.out_dir / 'model_input_comparison.csv'}")
+    print(f"[saved] {args.out_dir / 'model_input_comparison.md'}")
 
 
 if __name__ == "__main__":
