@@ -15,8 +15,18 @@ now the src/training/ module chain):
   sims   — the configured zero-shot embedding lane. The current config uses
            minilm_l6 and scores against the same canonical fingerprint
            contract as training.
-  smoke  — the 1k chain check on GPU (fast verification the remote
-           environment reproduces the local results contract).
+  smoke  — the chain check (fast verification the remote environment
+           reproduces the local results contract). Runs on CPU by default,
+           and its sample size is config-owned, not a literal here:
+           sweep.smoke_sample in config/training.yaml (128). That value is
+           the minimum this lane may use, not a free tuning knob — it is the
+           smallest population that still clears the fold pair/component/
+           triple guards in src/training/folds.py, and the matching dataset
+           must be the same-length prefix (colab.smoke_dataset_csv,
+           training_data/dataset_deduped_smoke_128.csv). Smaller values are
+           not rejected up front; they fail later as an empty calibration
+           reservation. On CPU the final validation inference is also pinned
+           to CPU (inference_device) instead of the accelerator.
 
 Every lane reuses the shared bootstrap: the VM clones the configured public
 training branch, regenerates all derived CSVs (byte-deterministic: canonicals
@@ -136,6 +146,11 @@ _REMOTE_UPLOAD_RETRIES = 3
 _RESULT_ARCHIVE_NAME = _COLAB.result_archive_name
 _RESULT_MANIFEST_NAME = _COLAB.result_manifest_name
 _RESULT_DOWNLOAD_EXCLUDED_DIRS = frozenset(_COLAB.result_download_excluded_dirs)
+# Poll interval for the incremental result sync that runs during training.
+# Small enough that a finished checkpoint is on the laptop well before the run
+# ends, large enough that the remote listing does not compete with the trainer
+# for the control channel.
+_INCREMENTAL_SYNC_SECONDS = 30
 _WORKER_MONITOR_SECONDS = _COLAB.worker_monitor_seconds
 _FINAL_INFERENCE = _COLAB.final_inference
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
@@ -1246,10 +1261,16 @@ print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
         run_colab_exec_capture(SESSION, launch, timeout=_WORKER_TIMEOUT_SECONDS)
     )
     print(f"[train] remote workers={launched['workers']} base={launched['base']}", flush=True)
+    # Fetch finished artifacts from every worker while they train, so the end
+    # of the run is a short delta rather than the whole result set.  Stopped
+    # before the authoritative download so the two cannot race on one file.
+    syncer = _IncrementalResultSync(remote_base, run_id, workers=workers)
+    syncer.start()
     offsets = {str(item["worker"]): 0 for item in launched["workers"]}
     live_signatures: dict[str, str] = {}
-    while True:
-        probe = _BOOTSTRAP + f"""
+    try:
+        while True:
+            probe = _BOOTSTRAP + f"""
 import json, pathlib
 base = pathlib.Path({remote_base!r})
 offsets = {offsets!r}
@@ -1281,46 +1302,48 @@ for number in range(1, {workers} + 1):
 payload["done"] = all(value is not None for value in payload["status"].values())
 print(json.dumps(payload), flush=True)
 """
-        payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS))
-        offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
-        _mirror_resume_pointers(run_id, payload["resume"])
-        for worker, live in payload["live"].items():
-            signature = json.dumps(live, sort_keys=True)
-            if live_signatures.get(worker) == signature:
-                continue
-            live_signatures[worker] = signature
-            metrics = []
-            for key, label in (("train_loss", "train_loss"), ("dev_average_precision", "dev_ap"),
-                               ("dev_accuracy", "dev_acc")):
-                if live.get(key) is not None:
-                    metrics.append(f"{label}={float(live[key]):.4f}")
-            if live.get("rss_mb") is not None:
-                metrics.append(f"rss={float(live['rss_mb']):.0f}MB")
-            if live.get("gpu_free_gb") is not None:
-                metrics.append(
-                    f"gpu={float(live.get('gpu_allocated_gb', 0)):.2f}G alloc/"
-                    f"{float(live['gpu_free_gb']):.2f}G free"
-                )
-            position = f"step {live.get('step', 0)}/{live.get('max_steps', '?')}"
-            print(f"[worker {worker}] {live.get('event', 'running')} | {position}" +
-                  (" | " + " | ".join(metrics) if metrics else "") +
-                  (f" | W&B {live['wandb_url']}" if live.get("wandb_url") else ""), flush=True)
-        for worker, chunk in payload["chunks"].items():
-            # Forward the complete worker log. Detached workers write to the
-            # remote file; keep it out of the root system log to avoid a
-            # second copy of the worker's training log.
-            with _LiveLogSuppressed():
-                for line in str(chunk).splitlines():
-                    _write_training_log(f"[worker {worker}] {line}\n")
-                    print(f"[worker {worker}] {line}", flush=True)
-        if payload["done"]:
-            failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
-            if failed:
-                raise RuntimeError(f"parallel trainers failed: {failed}")
-            download_verified_training_results(remote_base, workers)
-            print(f"[train] all {workers} remote workers completed successfully", flush=True)
-            return remote_base, workers
-        time.sleep(_LOG_POLL_SECONDS)
+            payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS))
+            offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
+            _mirror_resume_pointers(run_id, payload["resume"])
+            for worker, live in payload["live"].items():
+                signature = json.dumps(live, sort_keys=True)
+                if live_signatures.get(worker) == signature:
+                    continue
+                live_signatures[worker] = signature
+                metrics = []
+                for key, label in (("train_loss", "train_loss"), ("dev_average_precision", "dev_ap"),
+                                   ("dev_accuracy", "dev_acc")):
+                    if live.get(key) is not None:
+                        metrics.append(f"{label}={float(live[key]):.4f}")
+                if live.get("rss_mb") is not None:
+                    metrics.append(f"rss={float(live['rss_mb']):.0f}MB")
+                if live.get("gpu_free_gb") is not None:
+                    metrics.append(
+                        f"gpu={float(live.get('gpu_allocated_gb', 0)):.2f}G alloc/"
+                        f"{float(live['gpu_free_gb']):.2f}G free"
+                    )
+                position = f"step {live.get('step', 0)}/{live.get('max_steps', '?')}"
+                print(f"[worker {worker}] {live.get('event', 'running')} | {position}" +
+                      (" | " + " | ".join(metrics) if metrics else "") +
+                      (f" | W&B {live['wandb_url']}" if live.get("wandb_url") else ""), flush=True)
+            for worker, chunk in payload["chunks"].items():
+                # Forward the complete worker log. Detached workers write to the
+                # remote file; keep it out of the root system log to avoid a
+                # second copy of the worker's training log.
+                with _LiveLogSuppressed():
+                    for line in str(chunk).splitlines():
+                        _write_training_log(f"[worker {worker}] {line}\n")
+                        print(f"[worker {worker}] {line}", flush=True)
+            if payload["done"]:
+                failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
+                if failed:
+                    raise RuntimeError(f"parallel trainers failed: {failed}")
+                download_verified_training_results(remote_base, workers)
+                print(f"[train] all {workers} remote workers completed successfully", flush=True)
+                return remote_base, workers
+            time.sleep(_LOG_POLL_SECONDS)
+    finally:
+        syncer.stop()
 
 
 def _sha256_file(path: Path) -> str:
@@ -1498,6 +1521,173 @@ def _extract_result_archive(
         return manifest
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
+
+
+class _IncrementalResultSync:
+    """Pull finished remote artifacts while training is still running.
+
+    The final download is a single archive transferred after the whole
+    lifecycle (train -> inference -> DVC publish) has collapsed to one moment,
+    so a 7 GB result set is dead time at the end.  Training and inference
+    produce files continuously, and those files are immutable once written, so
+    they can be transferred as they appear.
+
+    This is a pure latency optimisation and never a correctness dependency:
+
+    * it copies only *complete* files, detected by requiring a stable
+      ``(size, mtime)`` across two consecutive polls, so a file being written
+      is never captured half-finished;
+    * everything it fetches is re-fetched and hash-verified by the authoritative
+      :func:`download_verified_training_results` pass, which remains the only
+      source of truth for a complete run;
+    * every failure is swallowed and logged; a flaky sync must not fail a run
+      whose data still arrives by the normal path.
+    """
+
+    def __init__(self, remote_base: str, run_id: str, *, workers: int) -> None:
+        self.remote_base = remote_base
+        self.run_id = run_id
+        self.workers = workers
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._seen: dict[str, tuple[int, float]] = {}
+        self._done: set[str] = set()
+        self._synced_bytes = 0
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._loop, name=f"result-sync-{self.run_id}", daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            # Long enough for an in-flight file to land, short enough that a
+            # stuck sync cannot delay teardown: whatever it misses is still
+            # covered by the authoritative download.
+            self._thread.join(timeout=120)
+
+    def synced_bytes(self) -> int:
+        return self._synced_bytes
+
+    def _candidates(self, remote_files: list[str]) -> list[str]:
+        """Remote paths worth fetching: not yet synced, not excluded."""
+        prefix = f"{self.remote_base}/worker_"
+        selected = []
+        for name in remote_files:
+            if not name.startswith(prefix):
+                continue
+            relative = Path(name).relative_to(self.remote_base)
+            if any(part in _RESULT_DOWNLOAD_EXCLUDED_DIRS for part in relative.parts):
+                continue
+            if relative.parts and relative.parts[0].startswith("worker_"):
+                path_in_worker = relative.parts[1:]
+            else:
+                path_in_worker = relative.parts
+            if path_in_worker and path_in_worker[0] == "wandb":
+                continue
+            if name not in self._done:
+                selected.append(name)
+        return selected
+
+    def _loop(self) -> None:
+        while not self._stop.wait(_INCREMENTAL_SYNC_SECONDS):
+            try:
+                self._pass()
+            except BaseException as exc:  # never fail the run from the syncer
+                print(
+                    f"[result-sync] pass failed ({type(exc).__name__}: {exc}); "
+                    "final download still covers every file",
+                    flush=True,
+                )
+
+    def _pass(self) -> None:
+        try:
+            remote_files = _list_remote(self.remote_base)
+        except BaseException as exc:  # a listing failure must not escape a pass
+            print(
+                f"[result-sync] listing failed ({type(exc).__name__}: {exc}); "
+                "final download still covers every file",
+                flush=True,
+            )
+            return
+        for name in self._candidates(remote_files):
+            try:
+                size = _remote_file_size(name)
+            except BaseException:
+                continue
+            stamp = self._seen.get(name)
+            current = (size, 0.0)
+            if stamp is None or stamp[0] != size:
+                # First sighting, or still growing: wait for the next pass.
+                self._seen[name] = current
+                continue
+            local = self._local_path(name)
+            if local is None:
+                continue
+            local.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                _download_one_remote_file(name, local)
+            except BaseException as exc:
+                print(
+                    f"[result-sync] skip {local.name} "
+                    f"({type(exc).__name__}); final download covers it",
+                    flush=True,
+                )
+                continue
+            self._done.add(name)
+            self._synced_bytes += size
+        if self._done:
+            print(
+                f"[result-sync] {len(self._done)} artifact(s), "
+                f"{_format_bytes(self._synced_bytes)} already transferred "
+                "while training ran",
+                flush=True,
+            )
+
+    def _local_path(self, remote: str) -> Path | None:
+        try:
+            relative = Path(remote).relative_to(self.remote_base)
+        except ValueError:
+            return None
+        return TRAINING_RESULTS / self.run_id / relative
+
+
+def _download_one_remote_file(remote: str, local: Path) -> None:
+    """Fetch one remote file through the module's Colab CLI wrapper.
+
+    Indirection that keeps the incremental syncer patchable: inside this module
+    the name ``colab`` is both the module and the CLI wrapper function, so a
+    test cannot patch the wrapper without shadowing the module.
+    """
+    colab(
+        "download", "-s", SESSION, remote, str(local),
+        timeout=_RESULT_DOWNLOAD_TIMEOUT_SECONDS,
+    )
+
+
+def _remote_file_size(remote: str) -> int:
+    """Size of one remote file, via the same stdin-exec channel as listing."""
+    script = (
+        "import pathlib\n"
+        f"p = pathlib.Path({remote!r})\n"
+        "print('@@SIZE@@' + str(p.stat().st_size if p.is_file() else -1))\n"
+    )
+    proc = subprocess.Popen(
+        _colab_command("exec", "-s", SESSION, "--timeout", "60"),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    out, err = proc.communicate(script, timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(f"remote stat failed: {err[-200:]}")
+    for line in out.splitlines():
+        if line.startswith("@@SIZE@@"):
+            return int(line[len("@@SIZE@@"):])
+    raise RuntimeError("remote stat returned no marker")
 
 
 def download_verified_training_results(remote_base: str, workers: int) -> None:
@@ -2905,16 +3095,29 @@ if run_completion:
 print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
 """
     print("[run] starting one trainer with direct live stdout streaming ...", flush=True)
-    run_colab_exec_stream(
-        SESSION,
-        script,
-        timeout=_WORKER_TIMEOUT_SECONDS,
-        log_name="train",
-        exclude_from_live_log=True,
-        training_output=True,
-    )
+    # Stream finished artifacts back while the trainer runs, so the end-of-run
+    # download is a short delta instead of the whole result set.  The stream is
+    # stopped before the authoritative download so the two never race on the
+    # same local file.
+    syncer = _IncrementalResultSync(remote_base, run_id, workers=1)
+    syncer.start()
+    try:
+        run_colab_exec_stream(
+            SESSION,
+            script,
+            timeout=_WORKER_TIMEOUT_SECONDS,
+            log_name="train",
+            exclude_from_live_log=True,
+            training_output=True,
+        )
+    finally:
+        syncer.stop()
     download_verified_training_results(remote_base, 1)
-    print("[train] single worker completed; results downloaded", flush=True)
+    print(
+        f"[train] single worker completed; results downloaded "
+        f"({_format_bytes(syncer.synced_bytes())} arrived during the run)",
+        flush=True,
+    )
     return remote_base, 1
 
 

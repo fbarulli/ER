@@ -13,6 +13,11 @@ DVC_EXCLUDED_DIRS = frozenset({
     "_checkpoint_upload_staging", "wandb", "mlruns",
 })
 
+# A verification pull is intentionally bounded: one target per command made a
+# large result set spend most of its time starting DVC and negotiating with the
+# remote, while an unbounded list can exceed the operating system argv limit.
+_VERIFY_PULL_ARGV_BYTES = 48 * 1024
+
 
 def _write_dvc_event(source: Path, event: str, **values: object) -> None:
     """Append structured DVC state beside the worker's result bundle."""
@@ -24,13 +29,27 @@ def _write_dvc_event(source: Path, event: str, **values: object) -> None:
     print(f"[dvc-state] {event} | {json.dumps(values, sort_keys=True)}", flush=True)
 
 def _run(command: list[str], cwd: Path) -> str:
-    if command[:2] == ["dvc", "push"] and "--jobs" not in command:
+    # ``--jobs`` parallelises DVC's internal object transfer. It is valid for
+    # push and pull alike; injecting it only for push left every pull (the
+    # verification pull restores a whole result set) single-threaded.
+    if command[:2] in (["dvc", "push"], ["dvc", "pull"]) and "--jobs" not in command:
         jobs = str(common.training_cfg().colab.dvc_jobs)
         command = [command[0], command[1], "--jobs", jobs, *command[2:]]
-    shown = ["<redacted>" if command[i - 1:i] == ["password"] else part for i, part in enumerate(command)]
+    hidden_after = {"password", "access_key_id", "secret_access_key"}
+    shown = [
+        "<redacted>" if command[i - 1:i] and command[i - 1] in hidden_after else part
+        for i, part in enumerate(command)
+    ]
     print(f"[dvc] running: {' '.join(shown)}", flush=True)
     cfg = common.training_cfg().colab
-    attempts = cfg.dvc_push_retries if command[:2] == ["dvc", "push"] else 1
+    # Pushes can be interrupted after the object reached the remote, and pulls
+    # and cloud-status checks are read-only.  All three are safe to retry.  Do
+    # not retry ``dvc add`` or configuration mutations: a later attempt could
+    # observe a changed worker directory and falsely describe a different run.
+    retry_safe = command[:2] in (
+        ["dvc", "push"], ["dvc", "pull"], ["dvc", "status"],
+    )
+    attempts = cfg.dvc_push_retries if retry_safe else 1
     for attempt in range(1, attempts + 1):
         _write_dvc_event(
             cwd,
@@ -84,7 +103,14 @@ def _run(command: list[str], cwd: Path) -> str:
             return result.stdout or ""
         if attempt < attempts:
             delay = cfg.dvc_push_backoff_seconds * (2 ** (attempt - 1))
-            print(f"[dvc] command failed; retry {attempt}/{attempts - 1} in {delay}s", flush=True)
+            # Report the remaining attempts, not attempts-1: the message is
+            # read while a remote is failing, and the off-by-one made a
+            # 5-attempt run claim only 4.
+            print(
+                f"[dvc] command failed (rc={result.returncode}); "
+                f"retry {attempt}/{attempts - 1} in {delay}s",
+                flush=True,
+            )
             time.sleep(delay)
     raise RuntimeError(f"DVC command failed ({result.returncode}): {' '.join(shown)}")
 
@@ -128,6 +154,24 @@ def _tracked_outputs(source: Path) -> list[Path]:
     return outputs
 
 
+def _bounded_pointer_batches(pointers: list[Path], source: Path) -> list[list[str]]:
+    """Group DVC targets without risking an overlong process argument list."""
+    batches: list[list[str]] = []
+    batch: list[str] = []
+    batch_bytes = 0
+    for pointer in pointers:
+        target = str(pointer.relative_to(source))
+        target_bytes = len(os.fsencode(target)) + 1
+        if batch and batch_bytes + target_bytes > _VERIFY_PULL_ARGV_BYTES:
+            batches.append(batch)
+            batch, batch_bytes = [], 0
+        batch.append(target)
+        batch_bytes += target_bytes
+    if batch:
+        batches.append(batch)
+    return batches
+
+
 def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, str]]:
     """Pull into a clean directory; prove the remote is independently readable."""
     tracked = _tracked_outputs(source)
@@ -146,10 +190,9 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
             target = verify / pointer.relative_to(source)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(pointer, target)
-        # Pull pointers one at a time. A single argv containing every result
-        # pointer grows with checkpoint/report count and can exceed the
-        # process argument limit on large runs; individual pulls also make
-        # the failing pointer explicit in the traceback.
+        # Pull in bounded batches. This amortizes DVC process startup and
+        # remote negotiation across a run's pointers without risking argv
+        # exhaustion for a large result set.
         pointers = [
             pointer
             for pointer in sorted(source.rglob("*.dvc"))
@@ -159,8 +202,8 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
                 and "_checkpoints" not in pointer.parts
             )
         ]
-        for pointer in pointers:
-            _run(["dvc", "pull", "--force", str(pointer.relative_to(source))], verify)
+        for targets in _bounded_pointer_batches(pointers, source):
+            _run(["dvc", "pull", "--force", *targets], verify)
         result = []
         for original in tracked:
             restored = verify / original.relative_to(source)
@@ -189,6 +232,15 @@ def _remote_owner(remote: str) -> str:
     return parts[0]
 
 
+def _dagshub_s3_endpoint() -> str:
+    """Return the repository-scoped S3 endpoint documented by DagsHub."""
+    repo = common.training_cfg().colab.dagshub_repo.strip("/")
+    owner, separator, name = repo.partition("/")
+    if not separator or not owner or not name or "/" in name:
+        raise ValueError(f"invalid DagsHub repository identifier: {repo!r}")
+    return f"https://dagshub.com/{owner}/{name}.s3"
+
+
 def _configure_workspace(root: Path, *, token: str, remote: str) -> None:
     """Create the isolated workspace once, then always re-authenticate it.
 
@@ -198,13 +250,38 @@ def _configure_workspace(root: Path, *, token: str, remote: str) -> None:
     ignore a rotated token for the entire lifetime of the workspace.
     """
     os.environ["DVC_SITE_CACHE_DIR"] = str(root / ".dvc-site-cache")
+    s3_remote = remote.startswith("s3://")
     if not (root / ".dvc").is_dir():
         _run(["dvc", "init", "--no-scm"], root)
         _run(["dvc", "config", "cache.dir", str(root / ".dvc-cache")], root)
         _run(["dvc", "remote", "add", "--default", "dagshub", remote], root)
-    _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], root)
-    _run(["dvc", "remote", "modify", "dagshub", "--local", "user", _remote_owner(remote)], root)
-    _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], root)
+    if s3_remote:
+        # DagsHub's S3-compatible endpoint authenticates with an access-key /
+        # secret pair issued by the repo's DagsHub settings; it is NOT the
+        # DagsHub API token.  Passing one token as both halves (the previous
+        # implementation) authenticates as the literal string "token:token",
+        # which the endpoint rejects, so require the real pair explicitly and
+        # fail with a fixable message instead of an opaque 403.
+        access_key = os.environ.get("DVC_S3_ACCESS_KEY_ID")
+        secret_key = os.environ.get("DVC_S3_SECRET_ACCESS_KEY")
+        if not access_key or not secret_key:
+            raise RuntimeError(
+                "an s3:// DVC remote requires DVC_S3_ACCESS_KEY_ID and "
+                "DVC_S3_SECRET_ACCESS_KEY (the DagsHub repo's S3 credentials, "
+                "found under Settings -> Data -> Storage); the DVC_API_KEY "
+                "token is not a substitute. Use the https:// remote, or set "
+                "both variables."
+            )
+        # Keep credentials in config.local, never in tracked DVC metadata.
+        _run(["dvc", "remote", "modify", "dagshub", "endpointurl", _dagshub_s3_endpoint()], root)
+        _run(["dvc", "remote", "modify", "dagshub", "--local", "access_key_id", access_key], root)
+        _run(["dvc", "remote", "modify", "dagshub", "--local", "secret_access_key", secret_key], root)
+    else:
+        # The https:// DagsHub remote authenticates with basic auth: the repo
+        # owner as the user and the DVC API token as the password.
+        _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], root)
+        _run(["dvc", "remote", "modify", "dagshub", "--local", "user", _remote_owner(remote)], root)
+        _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], root)
 
 
 def _configure(source: Path, token: str) -> str:
@@ -416,9 +493,18 @@ def _push_targets(source: Path, targets: list[str]) -> None:
     The single network step, shared by the streaming publisher and the final
     batch so there is one push implementation and one definition of "pushed"
     (a zero exit code is not enough — DVC's own cloud status must agree).
+
+    Every target must travel in ONE ``dvc push``: a push per file pays DVC's
+    process startup and remote handshake once per file, which dominates the
+    transfer for a run with many small result files. ``--jobs`` inside that
+    single push is what parallelises the object transfers.
     """
     print(f"[checkpoint-dvc] pushing {len(targets)} target(s): {' '.join(targets)}", flush=True)
     _run(["dvc", "push", *targets], source)
+    # Confirm the push landed. `dvc status --cloud` is the only independent
+    # evidence that the object reached the remote rather than merely leaving
+    # the local cache; it costs one process start, not a transfer, because
+    # everything matching is already uploaded.
     cloud_status = _run(["dvc", "status", "--cloud", *targets], source)
     if not _dvc_status_is_clean(cloud_status):
         raise RuntimeError(
