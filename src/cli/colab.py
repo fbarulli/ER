@@ -2305,10 +2305,13 @@ def _optuna_env_script() -> str:
     return f"os.environ['OPTUNA_STORAGE_URL'] = {url!r}\n"
 
 
-def _remote_auth_env_script(*, include_optuna: bool = False) -> str:
+def _remote_auth_env_script(
+    *, include_optuna: bool = False, include_wandb: bool = True,
+) -> str:
     """Credential exports used by remote subprocess launch cells only."""
+    wandb = _wandb_env_script() if include_wandb else ""
     if not _DVC_ENABLED:
-        return _wandb_env_script() + (_optuna_env_script() if include_optuna else "")
+        return wandb + (_optuna_env_script() if include_optuna else "")
     key = _env_value("DVC_API_KEY")
     if key:
         print("[dvc] DVC_API_KEY loaded from local .env and injected into VM process")
@@ -2317,7 +2320,7 @@ def _remote_auth_env_script(*, include_optuna: bool = False) -> str:
         print("[dvc] DVC_API_KEY absent from .env; durable DVC upload will fail")
         dvc = ""
     optuna = _optuna_env_script() if include_optuna else ""
-    return _wandb_env_script() + optuna + dvc
+    return wandb + optuna + dvc
 
 
 def run_data_prep() -> None:
@@ -2441,6 +2444,7 @@ def run_train(
     worker_losses: list[str] | None = None,
     train_only: bool = False,
     remote_dataset_csv: str | None = None,
+    remote_validation_csv: str | None = None,
 ) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the configured VM runtime ...")
@@ -2509,6 +2513,9 @@ def run_train(
             # tree; the legacy worker-input copy assumes every input is under
             # RESULTS and is not applicable to this path.
             copy_remote_inputs=remote_dataset_csv is None,
+            remote_validation_csv=remote_validation_csv,
+            prepare_remote_labeled_pairs=remote_dataset_csv is not None,
+            include_wandb=remote_dataset_csv is None,
         )
     return run_parallel_train_and_tail(
         args, workers, resume_run=resume_run,
@@ -3209,16 +3216,25 @@ def run_single_train_and_stream(
     inference_sample: int | None = None,
     inference_device: str | None = None,
     copy_remote_inputs: bool = True,
+    remote_validation_csv: str | None = None,
+    prepare_remote_labeled_pairs: bool = False,
+    include_wandb: bool = True,
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
     stamp = _lane_run_stamp()
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     _record_remote_run(remote_base, workers=1, lane="train")
-    remote_validation_inputs = (
-        _upload_validation_inputs(run_id)
-        if final_inference else {"sample": "", "source": "", "training": ""}
-    )
+    if not final_inference:
+        remote_validation_inputs = {"sample": "", "source": "", "training": ""}
+    elif remote_validation_csv is not None:
+        remote_validation_inputs = {
+            "sample": remote_validation_csv,
+            "source": remote_validation_csv,
+            "training": remote_validation_csv,
+        }
+    else:
+        remote_validation_inputs = _upload_validation_inputs(run_id)
     if prepared_bundle is not None:
         remote_bundle = _upload_prepared_bundles(
             run_id=Path(remote_base).name.removeprefix("concurrent_train_"),
@@ -3232,7 +3248,7 @@ def run_single_train_and_stream(
         if prepared_bundle is not None or not copy_remote_inputs
         else 'for name in (F["canonical_records"], F["gate_results"], F["labeled_pairs"]):'
     )
-    script = _BOOTSTRAP + _remote_auth_env_script() + f"""
+    script = _BOOTSTRAP + _remote_auth_env_script(include_wandb=include_wandb) + f"""
 import os, pathlib, shutil, subprocess, sys
 from core.common import F
 root = pathlib.Path({REMOTE_ROOT!r})
@@ -3257,6 +3273,14 @@ env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
        "EUROMONITOR_RUN_ID": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_MINING_PROFILE": {run_label if run_label in ("mining_enabled", "masking_only") else ""!r},
        "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": {_DVC_DISABLED_FLAG!r}}}
+if {prepare_remote_labeled_pairs!r}:
+    calibration = out / "training" / "labeled_pairs.csv"
+    if not calibration.is_file():
+        print(f"[data] generating worker calibration input: {{calibration}}", flush=True)
+        subprocess.run(
+            [sys.executable, "-m", "training.labeled_pairs"],
+            cwd=root, env=env, check=True,
+        )
 command = [sys.executable, *{args!r}]
 log_path = out / "training.log"
 print(f"[train-launch] worker 1 streaming directly: {{' '.join(command)}}", flush=True)
@@ -4289,15 +4313,18 @@ def main() -> None:
             local_training_run = run_train(
                 args.train_frac, _SMOKE_EPOCHS, sample=_SMOKE_SAMPLE,
                 workers=_SMOKE_WORKERS,
+                inference_sample=_SMOKE_SAMPLE,
+                inference_device="cpu",
                 run_label=args.run_label,
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
                 loss=args.loss,
                 # The smoke lane's full CSV is already in the Git checkout.
-                # It does no input upload and intentionally skips the separate
-                # validation-inference stage, which needs held-out CSVs.
-                train_only=True,
+                # It tests inference against the same file without uploading
+                # a separate held-out split.
+                train_only=False,
                 remote_dataset_csv="training_data/dataset_deduped.csv",
+                remote_validation_csv=f"{REMOTE_ROOT}/training_data/dataset_deduped.csv",
             )
         elif args.what == "dual-train":
             if args.resume_run:
