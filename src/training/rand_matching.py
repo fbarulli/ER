@@ -139,6 +139,30 @@ ASSIGNMENT_SORT_ASCENDING = (True, False, False, False, True)
 SOURCE_ROW_INDEX_COLUMN = "source_row_index"
 INVALID_ID_SENTINELS = frozenset({"", "nan", "none", "null"})
 
+# ---------------------------------------------------------------------------
+# Deferral scope of ``targeted_veto_gate``.
+#
+# The gate has exactly three outcomes: hard reject on explicit conflict,
+# deferral to the human-review route, or auto_merge. The deferral covers ONE
+# case: the *decisive* identity evidence -- the pack count and the volume that
+# the dial ``missing_pack_or_volume_route`` and its config comment both name --
+# is unknown on a side the decision needs. It is not an evidence-completeness
+# requirement.
+#
+# The other five critical dimensions (package_type, flavor, carbonation,
+# sweetener, pulp) are veto-only: an explicit conflict rejects, and their
+# ABSENCE is already handled by a dedicated, bounded lever
+# (``confidence_penalty_mask``, "A field contributes only when it is absent on
+# both endpoints. This avoids treating a one-sided parser miss as a conflict").
+# Requiring all seven to be explicit instead made ``auto_merge`` unreachable:
+# on the live 1,592-pair gate-positive population it left 1 pair (0.06%)
+# auto-mergeable, because ``pulp_set`` is populated on only ~2% of canonical
+# records.
+#
+# ``targeted_missing_attributes``/``..._count`` still report EVERY dimension,
+# so the audit census that the diagnostics rely on is unchanged.
+DEFERRAL_DIMENSIONS: tuple[str, ...] = ("pack", "volume")
+
 # One row per *unordered* holdout SKU pair for which the truth and the
 # predicted assignment disagree about whether the SKUs are the same item.
 # These are deliberately pair-level, rather than candidate-level, records:
@@ -224,10 +248,16 @@ def targeted_veto_gate(
 ) -> dict[str, object]:
     """Classify a candidate using the shared critical-attribute contract.
 
-    Any explicit conflict hard-blocks a non-exact match. Missing evidence is
-    unknown and routes to review. ``targeted_pack_gate_pass`` is retained as
-    the public boolean audit field and mirrors the full critical-attribute
-    outcome computed below (all dimensions explicit and agreeing).
+    Any explicit conflict in any critical dimension hard-blocks a non-exact
+    match. Unknown pack or volume evidence -- the decisive identity evidence
+    the ``missing_pack_or_volume_route`` dial names -- routes to review, so it
+    can never silently become an automatic graph edge. Absence of the
+    veto-only categorical dimensions does not defer: it is reported in
+    ``targeted_missing_attributes`` for audit and is bounded instead by
+    ``confidence_penalty_mask`` (see ``DEFERRAL_DIMENSIONS``).
+    ``targeted_pack_gate_pass`` is retained as the public boolean audit field
+    and mirrors the full critical-attribute outcome computed below (all
+    dimensions explicit and agreeing).
     """
     settings = config or rand_matching_cfg()["targeted_veto_gates"]
     left_pack = set(sku_info.get("pack") or set())
@@ -272,13 +302,17 @@ def targeted_veto_gate(
         and right_package_type
         and not (left_package_type & right_package_type)
     )
-    missing = []
+    missing: list[str] = []
+    deferral_missing: list[str] = []
     for dimension in CRITICAL_ATTRIBUTE_DIMENSIONS:
         key = "flavor_set" if dimension == "flavor" else dimension
-        if not sku_info.get(key):
-            missing.append(f"{dimension}_a")
-        if not candidate_info.get(key):
-            missing.append(f"{dimension}_b")
+        decisive = dimension in DEFERRAL_DIMENSIONS
+        for side, info in (("a", sku_info), ("b", candidate_info)):
+            if info.get(key):
+                continue
+            missing.append(f"{dimension}_{side}")
+            if decisive:
+                deferral_missing.append(f"{dimension}_{side}")
     common = {
         "targeted_pack_conflict": int(pack_conflict),
         "targeted_volume_conflict": int(volume_conflict),
@@ -324,10 +358,11 @@ def targeted_veto_gate(
             "targeted_gate_reason": "+".join(veto_reasons),
             "targeted_gate_route": "reject",
         }
-    if missing:
+    if deferral_missing:
         return common | {
             "targeted_gate_decision": "defer",
-            "targeted_gate_reason": "missing_critical_attributes:" + ",".join(missing),
+            "targeted_gate_reason": "missing_pack_or_volume:"
+            + ",".join(deferral_missing),
             "targeted_gate_route": str(settings["missing_pack_or_volume_route"]),
         }
     return common | {
