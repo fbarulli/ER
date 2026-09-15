@@ -1263,6 +1263,65 @@ working tree     M .gitignore  <- the other agent's *.csv line, left uncommitted
                  M COLAB_SETUP_OPTIMISATION_REPORT.md  <- the other agent's
 ```
 
+## 7l. The settled inference/training split, bound through the one root
+
+Owner ruling: **inference runs on the 3,000 only; training on the 58,529; nothing infers over the full
+catalog.** That resolves the contradiction flagged in §7k and restores the preflight's original
+disjointness contract.
+
+```
+colab.training_dataset_csv        training_data/dataset_deduped_train_minus_3000.csv   58,529
+colab.final_inference.input_csv   training_data/dataset_deduped_sample_3000.csv        3,000  <- fed to inference
+colab.final_inference.source_csv  training_data/dataset_deduped.csv                   61,529  <- identity anchor
+colab.final_inference.output_dir  final_inference
+```
+Every one of those, plus `canonical_records.csv` and `gate_results.csv`, resolves through the single
+`training_data` root, and all five exist on disk.
+
+**The preflight contract verified by execution**, not assumed:
+```
+inference sample : 3,000   training : 58,529   source (anchor) : 61,529
+training ∩ inference           : 0        (contract requires 0)
+training ∪ inference == source : True
+counts reconstruct             : 61529 == 61529 -> True
+RESULT: the preflight's original disjointness contract holds
+```
+Per instruction I changed **nothing** in the guard (`src/cli/colab.py:173-177` still asserts
+disjointness and reconstruction) and did not touch `run_ann_full_data.py`, which the Colab agent owns.
+
+**Two stray-reference hits remain and both are accurate**, not strays: `dedupe.py:23` documents
+`artifacts/data/sku_to_rep.csv` and `build_reference.py:4` documents
+`artifacts/data/number_tokens_reference.csv` — both files genuinely still live under `artifacts/data/`
+with `data:` bindings; only the five migrated inputs moved.
+
+Tests: `test_config_key_is_final_inference_and_the_old_one_is_gone` legitimately changed — it pinned the
+pre-split binding — and now pins all three paths AND that each starts with `training_data/`, so a stray
+`artifacts/data/` or `results/` reference fails the suite. **427 passed, 2 skipped.**
+
+### ⚠️ Blast radius of the untracking commit, and one assertion it strands
+
+`2fdd44e chore: untrack all CSVs; the tree ships code, not data` went further than the file set I was
+migrating: **HEAD now contains ZERO `.csv` files.** `dataset.csv` (the raw export), the three frozen
+inputs under `training_data/`, and the `results/` artifacts are all untracked; they survive on disk only.
+
+Two consequences worth an owner decision, neither of which I changed unilaterally:
+
+1. **A fresh clone cannot run the pipeline.** `dataset.csv` is the raw export and the source of truth;
+   the repo's own `.gitignore` used to say *"Reproducible training input: keep the raw export in Git"*.
+   That intent is now overridden by a blanket `*.csv`, and `dataset.csv` is both untracked **and** ignored
+   (`git check-ignore` → `.gitignore:94:*.csv`).
+2. **`run_ann_full_data.py:49` is stranded by the split.** Its `"inference input config"` check still
+   expects `final_inference.input_csv == "training_data/dataset_deduped.csv"`, which the settled split
+   deliberately changes to the 3,000 sample. Executed against the current config it reports exactly that
+   single failure:
+   ```
+   training input config      True
+   inference input config     False   <- expects dataset_deduped.csv, now the 3,000 sample
+   inference source config    True
+   ```
+   I did **not** edit it: one writer per file, and the Colab agent owns it. Flagged so it is not
+   discovered by a Colab launch.
+
 ## 8. EXECUTED vs READ
 
 **EXECUTED** (CPU only; no training, no GPU, no Colab):

@@ -171,8 +171,12 @@ colab:
   # only, which is why this block is not called "validation_inference".
   final_inference:
     enabled: true
+    # The identity anchor: the FULL deduped catalog. training + sample must
+    # reconstruct exactly this, which is what the preflight asserts.
     source_csv: "training_data/dataset_deduped.csv"
-    input_csv: "training_data/dataset_deduped.csv"
+    # The file actually FED TO INFERENCE: the 3,000 held-out sample. Inference
+    # runs on the 3,000 only -- it never scores the whole catalog.
+    input_csv: "training_data/dataset_deduped_sample_3000.csv"
     output_dir: "final_inference"
     # REQUIRED, not a preference: final inference must actually run on the GPU
     # when one is present. The worker refuses to start rather than silently
