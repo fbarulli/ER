@@ -1,8 +1,19 @@
 # Colab setup-path optimisation — measured breakdown and changes
 
-Branch `training`, commit **`4f5be42`** (`3fdc039..4f5be42`, pushed to `ER`).
+Branch `training`, commits **`4f5be42`** (production change) and **`aaf7838`**
+(report + profiler); pushed as `3fdc039..aaf7838  training -> training`, so
+`ER/training` and the local `training` both point at `aaf7838`.
 Baseline before any change: **334 passed, 2 skipped**. After: **357 passed, 2 skipped**
 (the 23 extra tests are this change's own; no existing test was modified).
+
+A note on how this was verified: another agent was concurrently editing shared
+files in the same checkout (`src/core/schemas.py`, `config/training.yaml`,
+`src/core/hard_negatives.py`, `src/pipeline.py`, `src/training/*`) for the
+cross-brand mining lane, and at one point their in-flight schema change broke
+`training_cfg()` for everyone. Every test run and every file listing reported
+here was therefore taken from a throwaway worktree **at my commit**, not from
+the live checkout. The shared checkout's uncommitted changes are not mine and
+are not in either commit.
 
 The setup path is the launcher work between `session_created` and the first
 training cell: `ensure_session` → `prepare_remote_layout` → `install_deps` →
@@ -323,9 +334,11 @@ measurement.**
 ## 5. Commits, files, tests
 
 * **`4f5be42`** `perf(colab): overlap local bundle build with VM setup; cut redundant remote work`
-  — pushed: `3fdc039..4f5be42  training -> training`.
-* Follow-up commit: `scripts/profile_colab_setup.py` + this report (no
-  production code change).
+  — the production change and its tests.
+* **`aaf7838`** `docs(colab): setup-time report and a re-runnable phase profiler`
+  — `scripts/profile_colab_setup.py` and this report.
+* Pushed: `3fdc039..aaf7838  training -> training`; `ER/training` == local
+  `training` == `aaf7838`.
 * Files changed: `src/cli/colab.py`, `src/core/schemas.py`,
   `config/training.yaml`, `tests/test_colab_setup_path.py` (new),
   `scripts/profile_colab_setup.py` (new), `COLAB_SETUP_OPTIMISATION_REPORT.md`
