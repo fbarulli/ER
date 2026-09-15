@@ -104,18 +104,106 @@ ANN_MINING_ENABLED = bool(_ANN_MINING_CFG["enabled"])
 MASK_TRACK_PER_EPOCH = bool(load_config()["masking"]["track_per_epoch"])
 TRACK_DATAPOINT_USAGE = bool(load_config()["training"]["track_datapoint_usage"])
 _UNIFORMITY_CFG = load_config()["training"]["uniformity_regularization"]
-# Keep the coverage artifact explicit about every population that can enter
-# the training/evaluation lane, including configured-but-empty populations.
-KNOWN_DATAPOINT_POPULATIONS = (
-    "gate_positive",
-    "hard_positive",
-    "masked_positive",
-    "gate",
-    "attribute_conflict",
-    "random_easy",
-    "ann_finetuned",
+# ── DATAPOINT POPULATION REGISTRY (SSOT for the coverage audit) ────────────
+# DERIVED FROM THE PRODUCERS, not hand-kept beside them (audit A4-2). Every
+# tag a producer can write into a pair-population list or a negative-source
+# array is declared here together with the emitter that writes it, so a tag
+# cannot be "known" without naming whoever produces it, and a registered
+# population cannot be forgotten by the coverage audit.
+#
+#   role == "positive"        -> emitted by _training_pair_populations
+#   role == "negative_source" -> emitted into neg_sources/train_neg_sources
+#   role == "presented_label" -> only ever a PRESENTATION label (a negative
+#                                whose text was replaced), never a source tag
+#   dynamic == True           -> mining-refresh population: "configured" only
+#                                while its producer is enabled by config
+#
+# Two guards keep this table honest, because the defect was a SILENT omission:
+#   * runtime — _write_datapoint_usage raises
+#     UnregisteredDatapointPopulationError at the point of use when a producer
+#     emits a tag this table does not declare (the coverage artifact is still
+#     written first, so the evidence survives the failure);
+#   * static — tests/test_datapoint_coverage.py scans the producers named below
+#     and fails if the scanned tag set and this table ever diverge.
+DATAPOINT_POPULATION_SPEC: dict[str, dict[str, object]] = {
+    "gate_positive": {
+        "emitter": "training.training._training_pair_populations",
+        "role": "positive",
+        "dynamic": False,
+    },
+    "hard_positive": {
+        "emitter": "training.training._training_pair_populations",
+        "role": "positive",
+        "dynamic": False,
+    },
+    "masked_positive": {
+        "emitter": "training.training._training_pair_populations",
+        "role": "positive",
+        "dynamic": False,
+    },
+    "gate": {
+        "emitter": "training.train: neg_sources = np.full(len(neg), 'gate')",
+        "role": "negative_source",
+        "dynamic": False,
+    },
+    # Static targeted-attribute negatives (train.py: np.full(
+    # len(targeted_attribute_neg), "targeted_attribute_conflict")). Missing
+    # from this registry until audit A4-2, which is exactly why 350
+    # negatives/fold could be presented with no coverage row and no
+    # present/selected/backprop counters.
+    "targeted_attribute_conflict": {
+        "emitter": "training.train: np.full(len(targeted_attribute_neg), ...)",
+        "role": "negative_source",
+        "dynamic": False,
+    },
+    "attribute_conflict": {
+        "emitter": "training.train: np.full(len(_attr_neg), 'attribute_conflict')",
+        "role": "negative_source",
+        "dynamic": True,
+    },
+    "random_easy": {
+        "emitter": "training.training._mix_random_easy_training_negatives",
+        "role": "negative_source",
+        "dynamic": False,
+    },
+    "ann_finetuned": {
+        "emitter": "training.ann_refresh.refresh_finetuned_ann",
+        "role": "presented_label",
+        "dynamic": True,
+    },
+}
+KNOWN_DATAPOINT_POPULATIONS = tuple(DATAPOINT_POPULATION_SPEC)
+# Populations whose producer is config-gated: they are "configured" only while
+# the producer reports itself enabled (was the local literal {"ann_finetuned",
+# "attribute_conflict"} at the coverage site — derived now).
+DYNAMIC_DATAPOINT_POPULATIONS = frozenset(
+    name for name, spec in DATAPOINT_POPULATION_SPEC.items() if spec["dynamic"]
 )
+# Populations that can appear as a NEGATIVE SOURCE tag in the train fold.
+# Derived, so the per-fold negative-source census enumerates every producer
+# instead of a hardcoded sub-list that silently skipped a population.
+NEGATIVE_SOURCE_DATAPOINT_POPULATIONS = tuple(
+    name
+    for name, spec in DATAPOINT_POPULATION_SPEC.items()
+    if spec["role"] == "negative_source"
+)
+# Fallback labels the same code paths emit when a source array is absent or
+# short. They are NOT registered populations: the audit rejects them LOUDLY
+# (they mean pair provenance was lost), and this set exists so the failure
+# message can name the emitter. Scanned by the divergence test as well.
+DATAPOINT_FALLBACK_TAGS = frozenset({"hard_negative", "hard_neg", "unknown"})
 EVAL_ONLY_DATAPOINT_POPULATIONS: set[str] = set()
+
+
+class UnregisteredDatapointPopulationError(RuntimeError):
+    """A producer emitted a datapoint population the registry does not know.
+
+    Raised at the point of use by the per-fold coverage audit, AFTER the
+    coverage artifact for that fold has been written, so an undeclared
+    population is both loud and still inspectable. Silence was the defect
+    (audit A4-2): a tag outside the registry used to be dropped from the
+    coverage rows with no warning at all.
+    """
 
 # DEFAULT_CFG REMOVED (audit 2026-09-09): zero readers since the entry
 # (train.py) constructs its own cfg dict; a stale epochs=2 default here
@@ -2413,16 +2501,24 @@ def _write_datapoint_usage(
     )
     coverage_rows: list[dict] = []
     missing: list[str] = []
-    dynamic_names = {"ann_finetuned", "attribute_conflict"}
+    unregistered: list[str] = []
+    # Derived from the registry spec: a dynamic population is "configured" only
+    # while its producer says it is enabled.
+    dynamic_names = set(DYNAMIC_DATAPOINT_POPULATIONS)
     configured_populations = (
-        (set(KNOWN_DATAPOINT_POPULATIONS) - dynamic_names)
-        | dynamic_populations
+        (set(KNOWN_DATAPOINT_POPULATIONS) - dynamic_names) | dynamic_populations
     )
     all_populations = configured_populations | set(expected) | set(by_population)
     for population in sorted(all_populations):
         expected_rows = int(expected.get(population, 0))
         item = by_population.get(population, {"presentations": 0, "pair_ids": set()})
         presentations = int(item["presentations"])
+        # The load-bearing ladder below is unchanged (ok/missing/eval_only/
+        # not_reached/unavailable). The ONLY added outcome is "unregistered",
+        # and it never masks an existing signal: a name the registry does not
+        # know may not be reported as "ok"/"unavailable" as if it were a
+        # declared population, while `missing` and `eval_only` keep their
+        # exact meaning.
         if expected_rows > 0:
             status = "ok" if presentations > 0 else "missing"
         elif population in EVAL_ONLY_DATAPOINT_POPULATIONS:
@@ -2431,12 +2527,18 @@ def _write_datapoint_usage(
             status = "ok" if presentations > 0 else "not_reached"
         else:
             status = "ok" if presentations > 0 else "unavailable"
+        registered = population in KNOWN_DATAPOINT_POPULATIONS
+        if not registered:
+            unregistered.append(population)
+            if status not in {"missing", "eval_only"}:
+                status = "unregistered"
         if status == "missing":
             missing.append(population)
         coverage_rows.append(
             {
                 "fold": int(fold_i),
                 "population": population,
+                "registered": bool(registered),
                 "expected_pairs": expected_rows,
                 "presentations": presentations,
                 "distinct_pairs_presented": len(item["pair_ids"]),
@@ -2448,6 +2550,15 @@ def _write_datapoint_usage(
         f"datapoint_type_coverage_fold{fold_i}.csv",
         run_tag,
         sample,
+    )
+    _assert_datapoint_coverage_identity(
+        fold_i=fold_i,
+        coverage_rows=coverage_rows,
+        presentation_counts=presentation_counts,
+        observed=observed,
+        pair_populations=pair_populations,
+        unregistered=unregistered,
+        by_population=by_population,
     )
     if missing:
         print(
@@ -2466,7 +2577,277 @@ def _write_datapoint_usage(
     return {
         **{f"n_presented_{key}": int(value) for key, value in observed.items()},
         "n_missing_datapoint_populations": int(len(missing)),
+        "n_unregistered_datapoint_populations": int(len(unregistered)),
+        "n_coverage_populations": int(len(coverage_rows)),
+        "n_coverage_registered_populations": int(
+            sum(1 for row in coverage_rows if row["registered"])
+        ),
+        "n_coverage_ambiguous_pair_attributions": _ambiguous_pair_attributions(
+            by_population
+        ),
     }
+
+
+def _ambiguous_pair_attributions(by_population: dict[str, dict[str, object]]) -> int:
+    """Count pairs attributed to more than one population in the same fold.
+
+    A pair presented under two labels is not a coverage hole (both labels are
+    reported), but it is a TRACEABILITY fact: the ANN refresh rewrites a
+    negative's text between epochs, so one negative can be presented as
+    ``attribute_conflict`` early and as ``ann_finetuned`` later. The per-fold
+    identity therefore reconciles PRESENTATIONS exactly and reports pair
+    attribution exclusivity as a separate, visible number instead of silently
+    assuming it.
+    """
+    seen: dict[int, str] = {}
+    ambiguous: set[int] = set()
+    for population, item in by_population.items():
+        for pair_id in item.get("pair_ids", set()):
+            pair_id = int(pair_id)
+            if seen.setdefault(pair_id, population) != population:
+                ambiguous.add(pair_id)
+    return len(ambiguous)
+
+
+def _assert_datapoint_coverage_identity(
+    *,
+    fold_i: int,
+    coverage_rows: list[dict],
+    presentation_counts: dict[tuple, int],
+    observed: dict,
+    pair_populations: list[str],
+    unregistered: list[str],
+    by_population: dict[str, dict[str, object]],
+) -> None:
+    """Assert the per-fold accounting identities and fail LOUDLY on breach.
+
+    Identity 1 (closure): the presentations booked by the trainer
+    (``presentation_counts``) equal the presentations attributed by the
+    coverage rows, and equal ``observed``. A row that quietly failed to
+    aggregate, or a presentation keyed under a population outside the rows,
+    breaks this sum.
+
+    Identity 2 (attribution): every population carrying presentations, and
+    every population the fold expected, is a REGISTERED producer population.
+    An unregistered name here means provenance was lost between a producer and
+    the audit, so the fold raises ``UnregisteredDatapointPopulationError``
+    after the artifact is on disk.
+
+    Identity 3 (full census): the rows cover every pair of the fold dataset —
+    ``expected_pairs`` sums to ``len(pair_populations)`` — so no pair can be
+    absent from the audit.
+    """
+    total_recorded = int(sum(int(count) for count in presentation_counts.values()))
+    total_rows = int(sum(int(row["presentations"]) for row in coverage_rows))
+    total_observed = int(sum(int(count) for count in observed.values()))
+    if not (total_recorded == total_rows == total_observed):
+        raise ValueError(
+            f"datapoint-coverage identity 1 (presentation closure) broken in "
+            f"fold {fold_i}: presentation_counts={total_recorded} "
+            f"coverage_rows={total_rows} observed={total_observed}"
+        )
+    total_expected = int(sum(int(row["expected_pairs"]) for row in coverage_rows))
+    if total_expected != len(pair_populations):
+        raise ValueError(
+            f"datapoint-coverage identity 3 (full census) broken in fold "
+            f"{fold_i}: sum(expected_pairs)={total_expected} != "
+            f"len(pair_populations)={len(pair_populations)}"
+        )
+    if unregistered:
+        by_row = {str(row["population"]): row for row in coverage_rows}
+        detail = "; ".join(
+            f"{name!r} (expected_pairs="
+            f"{int(by_row.get(name, {}).get('expected_pairs', 0))}, "
+            f"presentations="
+            f"{int(by_row.get(name, {}).get('presentations', 0))})"
+            for name in sorted(unregistered)
+        )
+        raise UnregisteredDatapointPopulationError(
+            f"fold {fold_i}: producer-emitted datapoint population(s) outside "
+            f"DATAPOINT_POPULATION_SPEC: {detail}. Register the tag in "
+            "training.training.DATAPOINT_POPULATION_SPEC (with its emitter) or "
+            "fix the producer: an undeclared population is invisible to the "
+            "coverage audit, and silence here is the defect. The fold coverage "
+            "artifact was written before this failure so the evidence survives."
+        )
+    ambiguous = _ambiguous_pair_attributions(by_population)
+    if ambiguous:
+        print(
+            f"    [datapoint-coverage] WARNING: fold {fold_i}: {ambiguous:,} "
+            "pair(s) presented under more than one population label "
+            "(ANN refresh re-attribution); presentations still reconcile "
+            "exactly, pair-level exclusivity does not hold for these.",
+            flush=True,
+        )
+
+
+# Roles that may legitimately label a label-0 (negative) row in the loss's
+# per-pair usage rows. Derived from the registry, never a literal sub-list:
+# the previous hardcoded {"gate", "attribute_conflict", "random_easy"} skipped
+# every other producer and silently under-counted present/selected/backprop.
+ATTRIBUTABLE_NEGATIVE_USAGE_ROLES = frozenset({"negative_source", "presented_label"})
+
+
+def _negative_source_accounting(
+    *,
+    fold_i: int,
+    tr_negs: np.ndarray,
+    tr_neg_sources: np.ndarray,
+    usage_rows: list[dict],
+) -> dict[str, int]:
+    """Per-fold census of every negative SOURCE that reached the train fold.
+
+    Producer-side completeness: the source array (``tr_neg_sources``) is the
+    authoritative provenance of the fold's negatives, so it is enumerated in
+    full with ``np.unique`` — every producer tag, registered or not.
+
+    Identities asserted here (all non-tautological):
+
+    * N1 (closure) — the per-source counts sum to ``len(tr_negs)`` AND to
+      ``len(tr_neg_sources)``. A provenance array shorter than the pair array
+      would break this, so a truncated source array can no longer hide.
+    * N2 (funnel) — per source, ``backprop <= selected <= present <= total``.
+    * N3 (registry conformance) — every source tag is declared in
+      ``DATAPOINT_POPULATION_SPEC``; a fallback tag (``hard_negative`` etc.)
+      means provenance was lost. Breach raises
+      ``UnregisteredDatapointPopulationError`` instead of silently dropping the
+      tag from the census.
+    """
+    sources = [str(source) for source in np.unique(tr_neg_sources)]
+    totals = {
+        source: int(np.sum(tr_neg_sources == source)) for source in sources
+    }
+    unregistered = sorted(
+        source for source in sources if source not in KNOWN_DATAPOINT_POPULATIONS
+    )
+    source_coverage: dict[str, int] = {}
+    for source in sources:
+        source_coverage[f"n_train_neg_source_{source}"] = totals[source]
+
+    # A usage row is attributable when its population is a registered
+    # negative-source tag or a registered presentation label (ann_finetuned:
+    # a negative whose TEXT was replaced by the ANN refresh, whose SOURCE
+    # remains the pair's original tag). Registered positives cannot label a
+    # negative row, and a fallback tag means provenance was lost.
+    source_names = NEGATIVE_SOURCE_DATAPOINT_POPULATIONS
+    attributable = {
+        name
+        for name, spec in DATAPOINT_POPULATION_SPEC.items()
+        if spec["role"] in ATTRIBUTABLE_NEGATIVE_USAGE_ROLES
+    }
+    usage_counts: dict[str, dict[str, int]] = {
+        name: {"present": 0, "selected": 0, "backprop": 0}
+        for name in attributable
+    }
+    usage_by_label: dict[str, int] = {}
+    unattributed_usage = 0
+    for usage in usage_rows:
+        label = str(usage.get("population", "unknown"))
+        if label not in attributable:
+            unattributed_usage += 1
+            usage_by_label[label] = usage_by_label.get(label, 0) + 1
+            continue
+        # ROW counts with the same additive semantics the previous literal
+        # sub-list used (one usage row per pair_id from pair_usage_rows), so
+        # an existing counter can only gain producers, never change meaning.
+        usage_counts[label]["present"] += int(bool(usage.get("present_count", 0)))
+        usage_counts[label]["selected"] += int(bool(usage.get("hard_selected_count", 0)))
+        usage_counts[label]["backprop"] += int(bool(usage.get("backprop_count", 0)))
+
+    # Registered negative sources are always in the census (explicit zero),
+    # including one whose producer is config-enabled but contributed nothing.
+    for name in source_names:
+        source_coverage.setdefault(f"n_train_neg_source_{name}", 0)
+
+    denominator = int(len(tr_negs))
+    funnel_breaches: list[str] = []
+    for name in sorted(attributable):
+        counts = usage_counts[name]
+        for suffix, key in (
+            ("_present", "present"),
+            ("_selected", "selected"),
+            ("_backprop", "backprop"),
+        ):
+            source_coverage[f"n_train_neg_source_{name}{suffix}"] = counts[key]
+        # The funnel bound only applies to a real SOURCE tag: a presentation
+        # label (ann_finetuned) replaces a negative's text without moving it
+        # between sources, so its total is 0 by construction.
+        bound = (
+            source_coverage.setdefault(f"n_train_neg_source_{name}", 0)
+            if name in source_names
+            else denominator
+        )
+        for key in ("present", "selected", "backprop"):
+            if counts[key] > bound:
+                funnel_breaches.append(f"{name}: {key}={counts[key]} > total={bound}")
+        if counts["selected"] > counts["present"]:
+            funnel_breaches.append(
+                f"{name}: selected={counts['selected']} > present={counts['present']}"
+            )
+        if counts["backprop"] > counts["selected"]:
+            funnel_breaches.append(
+                f"{name}: backprop={counts['backprop']} > selected={counts['selected']}"
+            )
+
+    for name in source_names:
+        source_coverage[f"pct_train_neg_source_{name}"] = (
+            source_coverage[f"n_train_neg_source_{name}"] / denominator
+            if denominator
+            else 0.0
+        )
+    source_coverage["n_train_neg_source_total"] = denominator
+    source_coverage["n_train_neg_source_registered"] = sum(
+        totals.get(name, 0) for name in source_names
+    )
+    source_coverage["n_train_neg_source_unregistered"] = sum(
+        totals[name] for name in unregistered
+    )
+    source_coverage["n_train_neg_usage_rows_unattributed"] = int(unattributed_usage)
+
+    if unregistered or unattributed_usage:
+        # Checked BEFORE the numeric identities: when provenance is missing the
+        # closure sum breaks as a CONSEQUENCE, and naming the undeclared tag is
+        # the actionable cause.
+        raise UnregisteredDatapointPopulationError(
+            f"fold {fold_i}: negative provenance outside "
+            f"DATAPOINT_POPULATION_SPEC. unregistered source tag(s)="
+            f"{ {name: totals[name] for name in unregistered} }; "
+            f"usage-row population label(s) not attributable to a registered "
+            f"negative source={usage_by_label}. Register the tag in "
+            "training.training.DATAPOINT_POPULATION_SPEC (with its emitter) or "
+            "fix the producer: such rows were previously dropped from the "
+            "present/selected/backprop census with no warning."
+        )
+    if source_coverage["n_train_neg_source_registered"] != denominator:
+        raise ValueError(
+            f"negative-source identity N1 (closure) broken in fold {fold_i}: "
+            f"registered sources sum to "
+            f"{source_coverage['n_train_neg_source_registered']} but the fold "
+            f"has {denominator} negatives; unregistered="
+            f"{ {name: totals[name] for name in unregistered} }"
+        )
+    if len(tr_neg_sources) != denominator:
+        raise ValueError(
+            f"negative-source identity N1 (closure) broken in fold {fold_i}: "
+            f"{len(tr_neg_sources)} provenance tags for {denominator} pairs"
+        )
+    if funnel_breaches:
+        raise ValueError(
+            f"negative-source identity N2 (funnel) broken in fold {fold_i}: "
+            + "; ".join(funnel_breaches)
+        )
+
+    print(
+        f"    [negative-source] fold {fold_i}: "
+        + " | ".join(
+            f"{name}={source_coverage[f'n_train_neg_source_{name}']:,} "
+            f"({source_coverage[f'pct_train_neg_source_{name}']:.2%})"
+            for name in source_names
+        )
+        + f" of {denominator:,} train-fold negatives (no unattributed source)",
+        flush=True,
+    )
+    return source_coverage
 
 
 def _dynamic_mask_negative_transform(
@@ -3928,54 +4309,18 @@ def train_one_config(
                     )
             # Source accounting is computed after the fold boundary and from
             # the same pair IDs used by the loss. This directly answers how
-            # many gate versus attribute-conflict negatives landed in the
-            # training fold and how many received selection/backprop.
-            source_coverage: dict[str, int] = {}
-            for source in np.unique(tr_neg_sources):
-                source = str(source)
-                source_coverage[f"n_train_neg_source_{source}"] = int(
-                    np.sum(tr_neg_sources == source)
-                )
-            for usage in usage_rows:
-                source = str(usage.get("population", "unknown"))
-                if source not in {"gate", "attribute_conflict", "random_easy"}:
-                    continue
-                source_coverage[f"n_train_neg_source_{source}_present"] = (
-                    source_coverage.get(
-                        f"n_train_neg_source_{source}_present", 0
-                    ) + int(bool(usage.get("present_count", 0)))
-                )
-                source_coverage[f"n_train_neg_source_{source}_selected"] = (
-                    source_coverage.get(
-                        f"n_train_neg_source_{source}_selected", 0
-                    ) + int(bool(usage.get("hard_selected_count", 0)))
-                )
-                source_coverage[f"n_train_neg_source_{source}_backprop"] = (
-                    source_coverage.get(
-                        f"n_train_neg_source_{source}_backprop", 0
-                    ) + int(bool(usage.get("backprop_count", 0)))
-                )
-            for source in ("gate", "attribute_conflict", "random_easy"):
-                for suffix in ("", "_present", "_selected", "_backprop"):
-                    source_coverage.setdefault(
-                        f"n_train_neg_source_{source}{suffix}", 0
-                    )
-                source_coverage[f"pct_train_neg_source_{source}"] = (
-                    source_coverage[f"n_train_neg_source_{source}"]
-                    / len(tr_negs)
-                    if len(tr_negs)
-                    else 0.0
-                )
-            print(
-                f"    [negative-source] fold {fold_i}: "
-                f"gate={source_coverage['n_train_neg_source_gate']:,} "
-                f"({source_coverage['pct_train_neg_source_gate']:.2%}) | "
-                f"attribute_conflict={source_coverage['n_train_neg_source_attribute_conflict']:,} "
-                f"({source_coverage['pct_train_neg_source_attribute_conflict']:.2%}) "
-                f"random_easy={source_coverage['n_train_neg_source_random_easy']:,} "
-                f"({source_coverage['pct_train_neg_source_random_easy']:.2%}) "
-                f"of {len(tr_negs):,} train-fold negatives",
-                flush=True,
+            # many gate / targeted-attribute / attribute-conflict / random-easy
+            # negatives landed in the training fold and how many received
+            # selection/backprop. The source list is DERIVED from
+            # DATAPOINT_POPULATION_SPEC (never a literal sub-list), and the
+            # helper asserts the closure + funnel identities and raises
+            # UnregisteredDatapointPopulationError on an undeclared producer
+            # tag instead of silently omitting it (audit A4-2).
+            source_coverage = _negative_source_accounting(
+                fold_i=fold_i,
+                tr_negs=tr_negs,
+                tr_neg_sources=tr_neg_sources,
+                usage_rows=usage_rows,
             )
             if wandb_ctx is not None:
                 wandb_ctx.log_metrics(
