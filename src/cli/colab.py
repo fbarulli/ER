@@ -1067,6 +1067,7 @@ def run_parallel_train_and_tail(
     inference_device: str | None = None,
     remote_checkout_inputs: bool = False,
     remote_validation_csv: str | None = None,
+    incremental_sync: bool = True,
 ) -> tuple[str, int]:
     """Run isolated full-data trainers concurrently and mirror worker logs."""
     if worker_losses is not None and len(worker_losses) != workers:
@@ -1301,8 +1302,12 @@ print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
     # Fetch finished artifacts from every worker while they train, so the end
     # of the run is a short delta rather than the whole result set.  Stopped
     # before the authoritative download so the two cannot race on one file.
-    syncer = _IncrementalResultSync(remote_base, run_id, workers=workers)
-    syncer.start()
+    syncer = (
+        _IncrementalResultSync(remote_base, run_id, workers=workers)
+        if incremental_sync else None
+    )
+    if syncer is not None:
+        syncer.start()
     offsets = {str(item["worker"]): 0 for item in launched["workers"]}
     live_signatures: dict[str, str] = {}
     try:
@@ -1380,7 +1385,8 @@ print(json.dumps(payload), flush=True)
                 return remote_base, workers
             time.sleep(_LOG_POLL_SECONDS)
     finally:
-        syncer.stop()
+        if syncer is not None:
+            syncer.stop()
 
 
 def _sha256_file(path: Path) -> str:
@@ -2472,6 +2478,7 @@ def run_train(
     train_only: bool = False,
     remote_dataset_csv: str | None = None,
     remote_validation_csv: str | None = None,
+    incremental_sync: bool = True,
 ) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the configured VM runtime ...")
@@ -2542,6 +2549,7 @@ def run_train(
             # Calibration pairs are now a versioned checkout input.
             prepare_remote_labeled_pairs=False,
             include_wandb=remote_dataset_csv is None,
+            incremental_sync=incremental_sync,
         )
     return run_parallel_train_and_tail(
         args, workers, resume_run=resume_run,
@@ -2562,6 +2570,7 @@ def run_train(
         inference_device=inference_device,
         remote_checkout_inputs=remote_dataset_csv is not None,
         remote_validation_csv=remote_validation_csv,
+        incremental_sync=incremental_sync,
     )
 
 
@@ -3247,6 +3256,7 @@ def run_single_train_and_stream(
     remote_validation_csv: str | None = None,
     prepare_remote_labeled_pairs: bool = False,
     include_wandb: bool = True,
+    incremental_sync: bool = True,
 ) -> tuple[str, int]:
     """Run one worker in the Colab exec stream so W&B is visible immediately."""
     stamp = _lane_run_stamp()
@@ -3367,8 +3377,9 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
     # download is a short delta instead of the whole result set.  The stream is
     # stopped before the authoritative download so the two never race on the
     # same local file.
-    syncer = _IncrementalResultSync(remote_base, run_id, workers=1)
-    syncer.start()
+    syncer = _IncrementalResultSync(remote_base, run_id, workers=1) if incremental_sync else None
+    if syncer is not None:
+        syncer.start()
     try:
         # A long-lived ``colab exec`` stream can stall before the kernel begins
         # evaluating the worker cell. Run the exact same script outside the
@@ -3380,11 +3391,12 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
             timeout=_WORKER_TIMEOUT_SECONDS,
         )
     finally:
-        syncer.stop()
+        if syncer is not None:
+            syncer.stop()
     download_verified_training_results(remote_base, 1)
     print(
         f"[train] single worker completed; results downloaded "
-        f"({_format_bytes(syncer.synced_bytes())} arrived during the run)",
+        f"({_format_bytes(syncer.synced_bytes() if syncer is not None else 0)} arrived during the run)",
         flush=True,
     )
     return remote_base, 1
@@ -4363,6 +4375,9 @@ def main() -> None:
                 train_only=False,
                 remote_dataset_csv="data/dataset_deduped.csv",
                 remote_validation_csv=f"{REMOTE_ROOT}/data/dataset_deduped.csv",
+                # The status/log poll is the only Colab control-channel user
+                # during smoke; checkpoint syncing waits for full runs.
+                incremental_sync=False,
             )
         elif args.what == "dual-train":
             if args.resume_run:
