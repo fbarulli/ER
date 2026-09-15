@@ -1018,20 +1018,52 @@ stack**, which is why the ANN A/B reproduced only as a paired comparison and not
    within score bands rather than over the whole pair pool) and stage attribution (whether an error
    originates at retrieval or at scoring). The briefing states these remain with agent A; I did not
    implement them and did not silently substitute anything for them.
-6b. **The fingerprint covers data inputs but not the composition CODE.** After the §7d fix the ANN
-   reuse contract is `{structured_features, model_input, unit_canonicalization, vocabulary}` — all
-   data/config. But the text is also produced by code that is *not* config: `pipeline.SCHEMA_WORDS`
-   (`src/pipeline.py:1249`) and `_MODEL_STOP` (`:1292`) are module constants, and
-   `core.model_input._normalized_tokens` is the normaliser itself. Editing any of them changes the
-   encoder text while every fingerprint input stays identical, so a persisted index is silently
-   reused — the same seam again, one level up. The run manifest already records `git_sha`
-   (`core.manifest._environment`), so a pipeline run is attributable; the **index metadata is not**.
-   Exact patch, not applied because the invalidation granularity is an owner call (it would force a
-   rebuild on any edit to those files, including a docstring):
-   in `src/training/rand_matching.py::preprocessing_fingerprint_inputs`, add
-   `"composition_code": sha256_file(Path(pipeline.__file__))` reusing the existing
-   `core.manifest.sha256_file`, or record `git_sha` from `core.manifest._environment` into
-   `PersistentHnswIndex.build`'s metadata alongside `preprocessing_fingerprint`.
+6b. **CLOSED — the fingerprint now covers the composition CODE.** (Was: "data inputs but not the
+   composition code".) The owner ruled for the **coarse** granularity, so
+   `preprocessing_fingerprint_inputs` gained a `composition_code` component holding the digest of the
+   two modules that produce the encoder text — `pipeline` (`SCHEMA_WORDS` at `src/pipeline.py:1249`,
+   `_MODEL_STOP` at `:1292`, `normalize_text`, `strip_schema_words`) and `core.model_input`
+   (`_normalized_tokens`). It reuses the existing `core.manifest.sha256_file`; no new helper, no new
+   path constant, no second hashing mechanism.
+
+   The new fingerprint input set is:
+
+   ```
+   structured_features   {enabled: ...}
+   model_input           {profile, include_evidence, fingerprint}
+   unit_canonicalization <UNIT_CANONICALIZATION_VERSION>
+   vocabulary            sha256(config/vocabulary.json)
+   composition_code      {core.model_input: sha256(...), pipeline: sha256(...)}
+   ```
+
+   End-to-end evidence (`/tmp/fingerprint_code_proof.py`, hermetic — the edited copies live in `/tmp`
+   and are wired in via the modules' own path attributes, because `src/pipeline.py` was held by
+   another agent at the time):
+
+   ```
+   baseline fingerprint : d381d84369d7066b
+   (1) pipeline.py edited (file)  -> b892ea7447781dcc   changed=True
+       the schema-stop symbol drives the text: ['cola','auditmarker'] -> ['cola']  changed=True
+   (2) vocabulary.json edited     -> 8444598e22f8bfbd   changed=True
+   (4) digests equal the real files: pipeline=True core.model_input=True vocabulary=True
+   RESULT: a code/vocabulary FILE edit invalidates the index
+   ```
+
+   The old vocabulary reproduction was itself corrected while doing this: it originally simulated the
+   edit by monkeypatching `pipeline.MINIMAL_STOPWORDS` **in memory**, which is not a file edit and so
+   never moved a file-hash component. Re-run as a real file edit it now behaves:
+
+   ```
+   after a vocabulary FILE edit:
+   composed-text hash : d1be608c9d5746f2   ANN fingerprint : 80f8dbb307f440c2
+   text changed: True   fingerprint changed: True   -> no gap
+   ```
+
+   Pinned by `test_ann_fingerprint_inputs_cover_the_composition_code`, which asserts the digests equal
+   the real files' digests, that they are stable across calls (a stable tree must not churn the
+   index), that a modified copy digests differently, and that the schema-stop symbol genuinely drives
+   the composed text. Cost accepted deliberately: an unrelated edit inside either module forces one
+   **visible** rebuild — over-invalidation costs time, under-invalidation costs correctness silently.
 7. Multiple agents were writing to this checkout during the session (a third was running in
    `/home/opc/ONE/ER-analysis-brand-input`). The tree was re-verified green at the moment of commit;
    if another agent continues afterwards, that verification no longer covers its output.

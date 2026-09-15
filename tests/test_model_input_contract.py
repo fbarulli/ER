@@ -524,6 +524,57 @@ def test_ann_fingerprint_inputs_cover_the_normalisation_vocabulary() -> None:
     assert after != before, "the fixture row must carry a token the vocabulary controls"
 
 
+def test_ann_fingerprint_inputs_cover_the_composition_code() -> None:
+    """Editing composition CODE must invalidate the index, not just config/data.
+
+    ``pipeline.SCHEMA_WORDS`` / ``_MODEL_STOP`` and
+    ``core.model_input._normalized_tokens`` produce the encoder text but are
+    neither configuration nor data, so without their digests a code edit would
+    silently keep a persisted index valid — the same silent-reuse seam, one
+    level up from the vocabulary.
+
+    The granularity is deliberately COARSE (the whole module, not the single
+    symbol): an unrelated edit inside either file costs one visible rebuild,
+    whereas under-invalidation serves a stale index that nobody sees.
+    """
+    import shutil
+    import tempfile
+
+    import pipeline
+    import core.model_input as model_input_module
+    from core.manifest import sha256_file
+    from training.rand_matching import preprocessing_fingerprint_inputs
+
+    inputs = preprocessing_fingerprint_inputs({"enabled": True})
+    code = inputs["composition_code"]
+    assert set(code) == {"core.model_input", "pipeline"}
+    assert code["pipeline"] == sha256_file(pipeline.__file__)
+    assert code["core.model_input"] == sha256_file(model_input_module.__file__)
+    assert len(code["pipeline"]) == 64
+    # Stable across calls: the same tree must not churn the index.
+    assert preprocessing_fingerprint_inputs({"enabled": True})["composition_code"] == code
+
+    # Content-sensitive: a file edit changes the digest that gates reuse.
+    with tempfile.TemporaryDirectory(prefix="fpcode-") as tmp:
+        copy = Path(tmp) / "pipeline_copy.py"
+        shutil.copy2(pipeline.__file__, copy)
+        copy.write_text(copy.read_text(encoding="utf-8") + "\n# simulated edit\n", encoding="utf-8")
+        assert sha256_file(copy) != sha256_file(pipeline.__file__)
+
+    # ...and the symbol really does drive the text the index was built from.
+    # strip_schema_words reads _MODEL_STOP, so patching it is exactly what a
+    # SCHEMA_WORDS edit in the file amounts to.
+    probe = "cola type carbonization auditmarker"
+    before = _normalized_tokens(probe, drop_schema_words=True)
+    saved = pipeline._MODEL_STOP
+    try:
+        pipeline._MODEL_STOP = saved | {"auditmarker"}
+        after = _normalized_tokens(probe, drop_schema_words=True)
+    finally:
+        pipeline._MODEL_STOP = saved
+    assert after != before, "the schema-stop symbol must affect the composed text"
+
+
 def test_run_trace_records_the_active_composition() -> None:
     """The payload stage must stamp the composition onto the run trace.
 

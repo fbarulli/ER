@@ -84,6 +84,7 @@ from core.model_input import (
     model_input_info,
     model_input_composition,
 )
+from core import model_input as model_input_module
 from core.structured_features import (
     canonical_info as canonical_structured_info,
     fuse_numpy,
@@ -91,6 +92,7 @@ from core.structured_features import (
     vector as structured_vector,
 )
 from core.unit_canonicalization import UNIT_CANONICALIZATION_VERSION
+import pipeline
 from pipeline import load_canonical_map
 from training.hnsw_index import PersistentHnswIndex, normalize_embeddings
 
@@ -112,12 +114,28 @@ def preprocessing_fingerprint_inputs(structured_config: dict) -> dict[str, objec
       the encoder text while leaving every other input identical. Measured: an
       added stopword moved the composed-text digest and left this fingerprint
       byte-identical, which is the same silent-reuse seam in a second input.
+    * ``composition_code`` — the text is also produced by CODE that is not
+      config at all: ``pipeline.SCHEMA_WORDS`` / ``_MODEL_STOP`` (module
+      constants) and ``core.model_input._normalized_tokens`` (the normaliser).
+      Editing either file changes the encoder text while every data input above
+      stays identical, so without their digests a code edit would silently keep
+      a stale index valid — the same seam one level up.
+
+      The granularity is deliberately COARSE (whole module, not the individual
+      symbols): an unrelated edit inside either file forces one rebuild, which
+      costs time, whereas the alternative this closes is a stale index served
+      as valid, which nobody sees. Over-invalidation is visible and cheap;
+      under-invalidation is silent and wrong.
     """
     return {
         "structured_features": structured_config,
         "model_input": model_input_composition().model_dump(),
         "unit_canonicalization": UNIT_CANONICALIZATION_VERSION,
         "vocabulary": sha256_file(VOCABULARY_CONFIG_PATH),
+        "composition_code": {
+            "core.model_input": sha256_file(model_input_module.__file__),
+            "pipeline": sha256_file(pipeline.__file__),
+        },
     }
 
 
