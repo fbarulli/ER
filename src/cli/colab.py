@@ -1051,7 +1051,7 @@ for number in range(1, {workers} + 1):
     ]
     completion_command = " ".join(shlex.quote(part) for part in completion_args)
     completion_clause = (
-        "if [ \"$rc\" -eq 0 ]; then echo '[worker-process] training complete; running validation inference and final DVC publication'; {{completion_command}}; rc=$?; fi; "
+        f'if [ "$rc" -eq 0 ]; then echo "[worker-process] training complete; running validation inference and final DVC publication"; {{completion_command}}; rc=$?; fi; '
         if {validation_inference!r} else ""
     )
     log_path, status_path = out / "training.log", out / "training.status"
