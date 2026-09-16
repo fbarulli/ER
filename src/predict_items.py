@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import time
 
 import numpy as np
 import pandas as pd
@@ -53,6 +54,10 @@ def main() -> None:
         help="Minimum cosine score for assigning a canonical ITEM_ID",
     )
     args = parser.parse_args()
+    started = time.monotonic()
+
+    def status(message: str) -> None:
+        print(f"[inference] {message} ({time.monotonic() - started:.1f}s)", flush=True)
 
     if args.input:
         skus = pd.read_csv(args.input, dtype=str, keep_default_na=False)
@@ -62,11 +67,13 @@ def main() -> None:
         if args.sample <= 0:
             raise ValueError("--sample must be positive")
         skus = skus.sample(n=min(args.sample, len(skus)), random_state=42).reset_index(drop=True)
+    status(f"loaded SKU input rows={len(skus):,} device={args.device} batch_size={args.batch_size}")
     if "SKU_ID" not in skus.columns and "product_id" in skus.columns:
         skus = skus.rename(columns={"product_id": "SKU_ID"})
     if "SKU_ID" not in skus.columns:
         raise ValueError("Input data must contain SKU_ID or product_id")
 
+    status("loading canonical map")
     canonical = load_canonical_map()
     item_ids = list(canonical.keys())
     if not item_ids:
@@ -79,6 +86,7 @@ def main() -> None:
         if sf_enabled and bool(sf_cfg["feed_to_loss"])
         else 0.0
     )
+    status(f"loaded canonical map items={len(item_ids):,}; reading canonical records")
     canonical_records = pd.read_csv(
         F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
     )
@@ -89,6 +97,7 @@ def main() -> None:
     # model_input_info applies the active composition's unobserved-attribute
     # rule (implicit pack 1.0 on both sides for 'cleaned', untouched for
     # 'legacy') so the TEXT and the NUMERIC VECTOR can never disagree.
+    status("building structured SKU inputs")
     sku_infos = [
         model_input_info(
             sku_structured_info(
@@ -99,6 +108,7 @@ def main() -> None:
         else {"volume": set(), "pack": set()}
         for _, row in skus.iterrows()
     ]
+    status("building structured canonical inputs")
     item_infos = [
         model_input_info(
             canonical_structured_info(canonical_record_map.get(item_id, {}))
@@ -107,10 +117,12 @@ def main() -> None:
         else {"volume": set(), "pack": set()}
         for item_id in item_ids
     ]
+    status("building SKU encoder texts")
     sku_texts = [
         build_sku_text(row, info)
         for (_, row), info in zip(skus.iterrows(), sku_infos, strict=True)
     ]
+    status("building canonical encoder texts")
     item_texts = [
         build_canonical_text(canonical_record_map.get(item_id, {}), info)
         for item_id, info in zip(item_ids, item_infos, strict=True)
@@ -123,7 +135,9 @@ def main() -> None:
             "fall back to CPU silently. Pass --device cpu to run on CPU on "
             "purpose."
         )
+    status("loading fine-tuned model")
     model = load_local_sentence_transformer(str(Path(args.model)), device=args.device)
+    status(f"encoding {len(sku_texts):,} SKU texts")
     sku_embeddings = model.encode(
         sku_texts,
         batch_size=args.batch_size,
@@ -131,6 +145,7 @@ def main() -> None:
         normalize_embeddings=True,
         show_progress_bar=True,
     )
+    status(f"encoded SKU texts; encoding {len(item_texts):,} canonical texts")
     item_embeddings = model.encode(
         item_texts,
         batch_size=args.batch_size,
@@ -138,6 +153,7 @@ def main() -> None:
         normalize_embeddings=True,
         show_progress_bar=True,
     )
+    status("encoded canonical texts; fusing structured features")
     sku_features = np.asarray(
         [
             structured_vector(
@@ -166,6 +182,7 @@ def main() -> None:
     item_embeddings = fuse_numpy(item_embeddings.cpu().numpy(), item_features, sf_weight)
     sku_embeddings = torch.as_tensor(sku_embeddings)
     item_embeddings = torch.as_tensor(item_embeddings)
+    status("retrieving nearest canonical items")
     nearest = util.semantic_search(sku_embeddings, item_embeddings, top_k=1)
 
     unmatched_prefix = rand_matching_cfg()["unmatched_prefix"]
@@ -191,6 +208,7 @@ def main() -> None:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.to_csv(output_path, index=False)
+    status(f"completed predictions={len(output):,} output={output_path}")
 
 
 if __name__ == "__main__":
