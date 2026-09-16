@@ -632,7 +632,11 @@ def run_colab_exec_stream(
 
 
 def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
-    """Execute a remote probe while retaining stdout for structured parsing."""
+    """Execute a bounded remote probe while retaining stdout for parsing.
+
+    Probes serve the live training log.  They must reveal control-channel
+    failures promptly instead of becoming an opaque multi-minute wait.
+    """
     last_error = ""
     for attempt in range(1, _PROBE_RETRIES + 1):
         try:
@@ -645,24 +649,45 @@ def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
                 bufsize=1,
             )
             captured: list[str] = []
+            heartbeat_stop = threading.Event()
 
             def stream_probe_output() -> None:
                 assert process.stdout is not None
                 for line in process.stdout:
                     captured.append(line)
+                    # The normal worker probe emits one JSON payload, which
+                    # is decoded below.  Surface non-JSON diagnostics now so
+                    # an upstream client/kernel failure is visible at once.
+                    if not line.lstrip().startswith(("{", "[")):
+                        print(f"[probe-out] {line.rstrip()}", flush=True)
+
+            def emit_heartbeat() -> None:
+                started = time.monotonic()
+                while not heartbeat_stop.wait(15):
+                    print(
+                        f"[probe] awaiting remote log/status "
+                        f"({time.monotonic() - started:.0f}s; timeout={timeout}s)",
+                        flush=True,
+                    )
 
             reader = threading.Thread(target=stream_probe_output, daemon=True)
+            heartbeat = threading.Thread(target=emit_heartbeat, daemon=True)
             reader.start()
+            heartbeat.start()
             assert process.stdin is not None
             process.stdin.write(script)
             process.stdin.close()
             process.wait(timeout=timeout + 30)
             reader.join()
+            heartbeat_stop.set()
+            heartbeat.join(timeout=1)
             output = "".join(captured)
         except subprocess.TimeoutExpired as exc:
             process.kill()
             process.wait()
             reader.join()
+            heartbeat_stop.set()
+            heartbeat.join(timeout=1)
             last_error = f"probe timeout: {exc}"
             print(
                 f"[probe] timeout after {timeout}s on attempt {attempt}/{_PROBE_RETRIES}",

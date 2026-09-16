@@ -384,7 +384,7 @@ class ValidationUploadPrewarmTests(unittest.TestCase):
 
 
 class LauncherOrderTests(unittest.TestCase):
-    """main() must start the build before it starts paying for the VM."""
+    """Checkout-native full training must avoid local upload prewarms."""
 
     def test_main_starts_the_local_build_before_the_dependency_install(self):
         order: list[str] = []
@@ -419,15 +419,9 @@ class LauncherOrderTests(unittest.TestCase):
              ):
             colab.main()
 
-        self.assertEqual(order[:2], ["prewarm", "upload_prewarm"], order)
-        # Both overlaps must begin before the launcher starts paying for the VM.
-        self.assertLess(order.index("prewarm"), order.index("install_deps"), order)
-        self.assertLess(order.index("upload_prewarm"), order.index("session"), order)
-        prewarm.assert_called_once()
-        upload_prewarm.assert_called_once()
-        self.assertEqual(
-            sorted(prewarm.call_args.kwargs), ["model", "profiles", "sample"]
-        )
+        self.assertEqual(order[:2], ["session", "layout"], order)
+        prewarm.assert_not_called()
+        upload_prewarm.assert_not_called()
 
     def test_a_resumed_run_does_not_prewarm_its_uploads(self):
         """A resumed lane keeps its existing run identity and uploads serially."""
@@ -761,11 +755,8 @@ class LaneBundleRequestTests(unittest.TestCase):
         }
         return mock.Mock(**{**base, **overrides})
 
-    def test_train_lane_uses_cli_workers_and_sample(self):
-        request = colab._lane_bundle_request(self._args("train"))
-        self.assertEqual(len(request["profiles"]), 3)
-        self.assertEqual(request["sample"], 111)
-        self.assertEqual(request["model"], "minilm_l6")
+    def test_train_lane_uses_the_committed_checkout_bundle(self):
+        self.assertIsNone(colab._lane_bundle_request(self._args("train")))
 
     def test_dual_train_lane_uses_two_workers(self):
         request = colab._lane_bundle_request(self._args("dual-train"))
