@@ -3482,18 +3482,26 @@ if run_completion:
         )
 print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
 """
-    print("[run] streaming one trainer directly into colab_system.log ...", flush=True)
-    # The standard one-worker lane has one Colab control connection.  Stream
-    # the worker cell on that connection so its output is appended directly to
-    # the system transcript; do not launch a detached stage and immediately
-    # contend with it using training-log probes.
+    print(
+        "[run] starting one trainer as a detached remote stage; polling its durable log ...",
+        flush=True,
+    )
+    # Stream finished artifacts back while the trainer runs, so the end-of-run
+    # download is a short delta instead of the whole result set.  The stream is
+    # stopped before the authoritative download so the two never race on the
+    # same local file.
     syncer = _IncrementalResultSync(remote_base, run_id, workers=1) if incremental_sync else None
     if syncer is not None:
         syncer.start()
     try:
-        run_colab_exec_stream(
-            SESSION, script, timeout=_WORKER_TIMEOUT_SECONDS,
-            log_name="train",
+        # A long-lived ``colab exec`` stream can stall before the kernel begins
+        # evaluating the worker cell. Run the exact same script outside the
+        # notebook kernel instead; its log, PID, and exit status are then
+        # independently visible through the short polling probes.
+        run_detached_stage(
+            "train",
+            ["/usr/bin/python3", "-c", script],
+            timeout=_WORKER_TIMEOUT_SECONDS,
         )
     finally:
         if syncer is not None:
@@ -4525,12 +4533,6 @@ def main() -> None:
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
                 loss=args.loss,
                 train_only=args.train_only,
-                inference_device="cuda" if GPU.upper() != "CPU" else "cpu",
-                # This lane has one Colab kernel control channel.  Keep the
-                # proven pre-sync behaviour: polling is its sole user while
-                # the detached ANN trainer runs; results are verified and
-                # downloaded authoritatively once it completes.
-                incremental_sync=False,
             )
         if local_hpo_run is not None:
             print("[hpo] publishing snapshots on local CPU ...", flush=True)
