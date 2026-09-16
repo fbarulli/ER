@@ -1173,6 +1173,9 @@ run_labels = {run_labels!r}
 worker_losses = {worker_losses!r}
 masking_profiles = {masking_profiles!r}
 collapse_guardrail_profiles = {collapse_guardrail_profiles!r}
+remote_bundles = {remote_bundles!r}
+inference_sample = {inference_sample!r}
+inference_device = {inference_device!r}
 started = []
 for number in range(1, {workers} + 1):
     worker_profile = (
@@ -1276,9 +1279,9 @@ for number in range(1, {workers} + 1):
     if worker_losses is not None:
         loss_index = worker_args.index("--loss") + 1
         worker_args[loss_index] = worker_losses[number - 1]
-    if {remote_bundles is not None!r}:
+    if remote_bundles is not None:
         worker_args[worker_args.index("training.train")] = "training.train_prepared"
-        worker_args.extend(["--bundle", {remote_bundles!r}[number - 1]])
+        worker_args.extend(["--bundle", remote_bundles[number - 1]])
     if masking_profiles is not None and {remote_bundles is None!r}:
         worker_args.extend(["--masking-profile", masking_profiles[number - 1]])
     if collapse_guardrail_profiles is not None and {remote_bundles is None!r}:
@@ -1294,10 +1297,10 @@ for number in range(1, {workers} + 1):
         "--validation-source", {remote_validation_inputs['source']!r},
         "--training-input", {remote_validation_inputs['training']!r},
     ]
-    if {inference_sample!r} is not None:
-        completion_args.extend(["--sample", str({inference_sample!r})])
-    if {inference_device is not None!r}:
-        completion_args.extend(["--device", {inference_device!r}])
+    if inference_sample is not None:
+        completion_args.extend(["--sample", str(inference_sample)])
+    if inference_device is not None:
+        completion_args.extend(["--device", inference_device])
     if not { _DVC_ENABLED!r}:
         completion_args.append("--skip-dvc")
     completion_command = " ".join(shlex.quote(part) for part in completion_args)
@@ -3459,6 +3462,8 @@ if rc:
     raise RuntimeError(f"worker 1 failed (rc={{rc}}); log={{log_path}}")
 print("[worker] training process finished", flush=True)
 run_completion = {final_inference!r}
+inference_sample = {inference_sample!r}
+inference_device = {inference_device!r}
 completion = [
     sys.executable, "-m", "training.complete_colab_worker",
     "--source", str(out), "--run-id", {run_id!r}, "--worker", "1",
@@ -3466,10 +3471,10 @@ completion = [
         "--validation-source", {remote_validation_inputs['source']!r},
     "--training-input", {remote_validation_inputs['training']!r},
 ]
-if {inference_sample!r} is not None:
-    completion.extend(["--sample", str({inference_sample!r})])
-if {inference_device is not None!r}:
-    completion.extend(["--device", {inference_device!r}])
+if inference_sample is not None:
+    completion.extend(["--sample", str(inference_sample)])
+if inference_device is not None:
+    completion.extend(["--device", inference_device])
 if not { _DVC_ENABLED!r}:
     completion.append("--skip-dvc")
 if run_completion:
