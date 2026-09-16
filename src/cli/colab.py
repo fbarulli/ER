@@ -663,6 +663,8 @@ def run_colab_exec_capture(
                 assert process.stdout is not None
                 for line in process.stdout:
                     captured.append(line)
+                    if line.rstrip() == f"[colab] Session '{session}' not found.":
+                        continue
                     # The normal worker probe emits one JSON payload, which
                     # is decoded below.  Surface non-JSON diagnostics now so
                     # an upstream client/kernel failure is visible at once.
@@ -1283,7 +1285,7 @@ for number in range(1, {workers} + 1):
     ]
     if {inference_sample!r} is not None:
         completion_args.extend(["--sample", str({inference_sample!r})])
-    if {inference_device!r} is not None:
+    if {inference_device is not None!r}:
         completion_args.extend(["--device", {inference_device!r}])
     if not { _DVC_ENABLED!r}:
         completion_args.append("--skip-dvc")
@@ -2592,16 +2594,18 @@ def run_train(
         if dataset_csv is not None:
             bundle_request["dataset_csv"] = dataset_csv
         prepared_bundles = _prepare_local_training_bundles(**bundle_request)
-    # Checkout-native prepared bundles are consumed through the concurrent
-    # launcher even for one ANN worker.  That path resolves a Git bundle
-    # directly; the single-worker path accepts only an uploaded local bundle.
-    if workers == 1 and resume_run is None and remote_prepared_bundles is None:
+    if workers == 1 and resume_run is None:
         if worker_losses is not None:
             raise ValueError("worker_losses requires at least two concurrent workers")
+        if remote_prepared_bundles is not None and len(remote_prepared_bundles) != 1:
+            raise ValueError("a single-worker run requires exactly one checkout bundle")
         return run_single_train_and_stream(
             args,
             run_label=run_label,
             prepared_bundle=prepared_bundles[0] if prepared_bundles else None,
+            remote_checkout_bundle=(
+                remote_prepared_bundles[0] if remote_prepared_bundles else None
+            ),
             final_inference=not train_only,
             inference_sample=inference_sample,
             inference_device=inference_device,
@@ -3328,6 +3332,7 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
 def run_single_train_and_stream(
     args: list[str], *, run_label: str | None = None,
     prepared_bundle: Path | None = None, final_inference: bool = True,
+    remote_checkout_bundle: str | None = None,
     inference_sample: int | None = None,
     inference_device: str | None = None,
     copy_remote_inputs: bool = True,
@@ -3351,7 +3356,17 @@ def run_single_train_and_stream(
         }
     else:
         remote_validation_inputs = _upload_validation_inputs(run_id)
-    if prepared_bundle is not None:
+    if prepared_bundle is not None and remote_checkout_bundle is not None:
+        raise ValueError("choose either an uploaded or checkout prepared bundle")
+    if remote_checkout_bundle is not None:
+        relative = Path(remote_checkout_bundle)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("checkout bundle path must stay inside the checkout")
+        remote_bundle = str(Path(REMOTE_ROOT) / relative)
+        args = list(args)
+        args[args.index("training.train")] = "training.train_prepared"
+        args.extend(["--bundle", remote_bundle])
+    elif prepared_bundle is not None:
         remote_bundle = _upload_prepared_bundles(
             run_id=Path(remote_base).name.removeprefix("concurrent_train_"),
             bundles=[prepared_bundle],
@@ -3361,7 +3376,7 @@ def run_single_train_and_stream(
         args.extend(["--bundle", remote_bundle])
     remote_input_loop = (
         "for name in ():"
-        if prepared_bundle is not None or not copy_remote_inputs
+        if remote_checkout_bundle is not None or prepared_bundle is not None or not copy_remote_inputs
         else 'for name in (F["canonical_records"], F["gate_results"], F["labeled_pairs"]):'
     )
     script = _BOOTSTRAP + _remote_auth_env_script(include_wandb=include_wandb) + f"""
@@ -3424,7 +3439,7 @@ completion = [
 ]
 if {inference_sample!r} is not None:
     completion.extend(["--sample", str({inference_sample!r})])
-if {inference_device!r} is not None:
+if {inference_device is not None!r}:
     completion.extend(["--device", {inference_device!r}])
 if not { _DVC_ENABLED!r}:
     completion.append("--skip-dvc")
@@ -4491,9 +4506,7 @@ def main() -> None:
             )
         else:
             checkout_full_bundles = (
-                [
-                    "data/prepared/full/worker_1_baseline.pkl.gz",
-                ]
+                list(_COLAB.full_prepared_bundles)
                 if (
                     args.what == "train"
                     and args.workers == 1
@@ -4512,7 +4525,7 @@ def main() -> None:
                 loss=("mnrl" if checkout_full_bundles else args.loss),
                 train_only=args.train_only,
                 remote_dataset_csv=(
-                    "data/dataset_deduped.csv" if checkout_full_bundles else None
+                    _FINAL_INFERENCE.source_csv if checkout_full_bundles else None
                 ),
                 remote_prepared_bundles=checkout_full_bundles,
                 remote_validation_csv=(
@@ -4520,6 +4533,11 @@ def main() -> None:
                     if checkout_full_bundles else None
                 ),
                 inference_device="cuda" if GPU.upper() != "CPU" else "cpu",
+                # This lane has one Colab kernel control channel.  Keep the
+                # proven pre-sync behaviour: polling is its sole user while
+                # the detached ANN trainer runs; results are verified and
+                # downloaded authoritatively once it completes.
+                incremental_sync=False,
             )
         if local_hpo_run is not None:
             print("[hpo] publishing snapshots on local CPU ...", flush=True)

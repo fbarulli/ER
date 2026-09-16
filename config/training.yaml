@@ -73,6 +73,11 @@ colab:
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
   training_dataset_csv: "data/dataset_deduped_train_minus_3000.csv"
+  # Immutable prepared input(s) for the default one-worker ANN checkout lane.
+  # Keep their repository-relative paths here so the launcher never owns a
+  # run-specific data location.
+  full_prepared_bundles:
+    - "data/prepared/full/worker_1_baseline.pkl.gz"
   # Deterministic 128-row prefix of training_dataset_csv. It is the smallest
   # checked smoke population that survives the pair/component/triple guards.
   # Columns the pipeline never reads (url, image_url) are dropped from it.
@@ -148,7 +153,7 @@ colab:
   # Log probes only read a small remote status/log delta.  A long timeout here
   # hides a dead kernel-control request as a silent training run.
   probe_timeout_seconds: 60
-  probe_retries: 4
+  probe_retries: 1
   probe_retry_backoff_seconds: 5
   artifact_repo_id: "fbarulli/e-r-training-artifacts"
   artifact_repo_private: true
