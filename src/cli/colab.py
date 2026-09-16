@@ -1399,6 +1399,16 @@ print(json.dumps(payload), flush=True)
                 # The trainer is detached and continues writing remotely.  A
                 # transient empty/control-channel reply must not turn a log
                 # read into a training failure followed by VM teardown.
+                # A lost kernel or missing session is not transient: there
+                # can be no remote worker left to poll.  Propagate it so
+                # main's finally tears down local state and releases the
+                # session lock for the next launch.
+                detail = str(exc).lower()
+                if (
+                    "connection was lost" in detail
+                    or f"session '{SESSION}' not found".lower() in detail
+                ):
+                    raise
                 message = f"[probe] log/status unavailable; continuing worker: {exc}"
                 _write_training_log(message + "\n")
                 print(message, flush=True)
