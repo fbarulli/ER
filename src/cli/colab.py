@@ -710,9 +710,6 @@ def run_colab_exec_capture(
             report_probe_progress(output[-2000:])
         if attempt < _PROBE_RETRIES:
             delay = _PROBE_RETRY_BACKOFF_SECONDS * attempt
-            report_probe_progress(
-                f"[probe] transient remote failure ({attempt}/{_PROBE_RETRIES}); retrying in {delay}s"
-            )
             time.sleep(delay)
     raise RuntimeError(f"remote log probe failed after {_PROBE_RETRIES} attempts: {last_error}")
 
