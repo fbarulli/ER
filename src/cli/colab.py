@@ -81,13 +81,10 @@ from core.manifest import sha256_file
 from core.schemas import ResultBundleManifest, StageManifest
 
 
-# smoke sample size + train defaults: the config SSOT (config/training.yaml
-# sweep: block via lib.common.sweep_cfg / training_cfg) — were inline
-# literals (1000 / 0.25 / 2) that could silently diverge from the configs.
-# AUDIT FIX (round 2 F07, round 3): the train-frac default reads
-# sweep.train_fracs[0] — the 0.25 literal was the last one still inline.
+# Smoke sample and normal training defaults come from their runtime config
+# contracts.  Sweep fractions remain exclusive to the sweep lane.
 _SMOKE_SAMPLE = int(sweep_cfg()["smoke_sample"])
-_TRAIN_FRAC_DEFAULT = float(sweep_cfg()["train_fracs"][0])
+_TRAIN_FRAC_DEFAULT = float(training_cfg().split.train_fraction)
 _EPOCHS_DEFAULT = int(training_cfg().training.epochs)
 _TRAIN_LOSS = str(training_cfg().training.loss)
 _RERANK_MODEL = str(sweep_cfg()["rerank_model"])
