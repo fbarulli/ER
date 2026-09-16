@@ -469,6 +469,18 @@ def _colab_command(*args: str) -> list[str]:
     ]
 
 
+_colab_control_lock = threading.RLock()
+
+
+def _serialize_colab_control(function):
+    """Keep one notebook kernel control request in flight per launcher."""
+    def wrapped(*args, **kwargs):
+        with _colab_control_lock:
+            return function(*args, **kwargs)
+    return wrapped
+
+
+@_serialize_colab_control
 def colab(*args: str, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess:
     """Run a Colab CLI subcommand through the shared safe entrypoint."""
     display_cmd = ["colab", *args]
@@ -500,6 +512,7 @@ def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
                 flush=True,
             )
             time.sleep(delay)
+@_serialize_colab_control
 def run_colab_exec_stream(
     session: str,
     script: str,
@@ -628,6 +641,7 @@ def run_colab_exec_stream(
         )
 
 
+@_serialize_colab_control
 def run_colab_exec_capture(
     session: str, script: str, timeout: int, *, training_output: bool = False,
 ) -> str:
