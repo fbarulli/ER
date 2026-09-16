@@ -2774,9 +2774,8 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
         workers, sample = 2, args.sample
         dataset_csv = None
     elif args.what == "train":
-        # Full-data training consumes the committed immutable bundles below;
-        # no local prewarm/upload lane is allowed for this checkout workflow.
-        return None
+        workers, sample = args.workers, args.sample
+        dataset_csv = None
     else:
         return None
     request = {
@@ -4512,33 +4511,14 @@ def main() -> None:
                 loss=args.loss,
             )
         else:
-            checkout_full_bundles = (
-                list(_COLAB.full_prepared_bundles)
-                if (
-                    args.what == "train"
-                    and args.workers == 1
-                    and args.model is None
-                    and args.sample is None
-                    and args.resume_run is None
-                )
-                else None
-            )
             local_training_run = run_train(
                 args.train_frac, args.epochs, sample=args.sample, workers=args.workers,
                 resume_run=args.resume_run, model=args.model,
-                run_label=("ann_embedding" if checkout_full_bundles else args.run_label),
+                run_label=args.run_label,
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
-                loss=("mnrl" if checkout_full_bundles else args.loss),
+                loss=args.loss,
                 train_only=args.train_only,
-                remote_dataset_csv=(
-                    _FINAL_INFERENCE.source_csv if checkout_full_bundles else None
-                ),
-                remote_prepared_bundles=checkout_full_bundles,
-                remote_validation_csv=(
-                    f"{REMOTE_ROOT}/{_FINAL_INFERENCE.input_csv}"
-                    if checkout_full_bundles else None
-                ),
                 inference_device="cuda" if GPU.upper() != "CPU" else "cpu",
                 # This lane has one Colab kernel control channel.  Keep the
                 # proven pre-sync behaviour: polling is its sole user while

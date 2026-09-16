@@ -384,7 +384,7 @@ class ValidationUploadPrewarmTests(unittest.TestCase):
 
 
 class LauncherOrderTests(unittest.TestCase):
-    """Checkout-native full training must avoid local upload prewarms."""
+    """Full training starts its local inputs before remote setup."""
 
     def test_main_starts_the_local_build_before_the_dependency_install(self):
         order: list[str] = []
@@ -420,13 +420,9 @@ class LauncherOrderTests(unittest.TestCase):
              ):
             colab.main()
 
-        self.assertEqual(order[:2], ["session", "layout"], order)
-        prewarm.assert_not_called()
-        upload_prewarm.assert_not_called()
-        self.assertEqual(
-            run_train.call_args.kwargs["remote_validation_csv"],
-            f"{colab.REMOTE_ROOT}/{colab._FINAL_INFERENCE.input_csv}",
-        )
+        self.assertEqual(order[:4], ["prewarm", "upload_prewarm", "session", "layout"], order)
+        prewarm.assert_called_once()
+        upload_prewarm.assert_called_once()
         self.assertFalse(run_train.call_args.kwargs["incremental_sync"])
 
     def test_a_resumed_run_does_not_prewarm_its_uploads(self):
@@ -452,28 +448,6 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "start_validation_upload_prewarm") as upload:
             colab.main()
         upload.assert_not_called()
-
-
-class CheckoutSingleWorkerRoutingTests(unittest.TestCase):
-    def test_one_checkout_bundle_uses_the_single_worker_transport(self):
-        bundle = colab._COLAB.full_prepared_bundles[0]
-        with mock.patch.object(
-            colab, "run_single_train_and_stream", return_value=("run", 1)
-        ) as single, mock.patch.object(colab, "run_parallel_train_and_tail") as parallel:
-            result = colab.run_train(
-                1.0, 1, sample=None, workers=1,
-                remote_dataset_csv=colab._FINAL_INFERENCE.source_csv,
-                remote_prepared_bundles=[bundle],
-                remote_validation_csv=(
-                    f"{colab.REMOTE_ROOT}/{colab._FINAL_INFERENCE.input_csv}"
-                ),
-                incremental_sync=False,
-            )
-
-        self.assertEqual(result, ("run", 1))
-        parallel.assert_not_called()
-        self.assertEqual(single.call_args.kwargs["remote_checkout_bundle"], bundle)
-        self.assertFalse(single.call_args.kwargs["incremental_sync"])
 
 
 class _Capture:
