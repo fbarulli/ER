@@ -2637,7 +2637,9 @@ def run_train(
             remote_validation_csv=remote_validation_csv,
             # Calibration pairs are now a versioned checkout input.
             prepare_remote_labeled_pairs=False,
-            include_wandb=remote_dataset_csv is None,
+            # Checkout-native prepared bundles still use the configured W&B
+            # mirror; the remote dataset flag must not disable credentials.
+            include_wandb=True,
             incremental_sync=incremental_sync,
         )
     return run_parallel_train_and_tail(
