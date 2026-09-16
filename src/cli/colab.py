@@ -1389,12 +1389,22 @@ for number in range(1, {workers} + 1):
 payload["done"] = all(value is not None for value in payload["status"].values())
 print(json.dumps(payload), flush=True)
 """
-            payload = _parse_remote_json(
-                run_colab_exec_capture(
-                    SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS,
-                    training_output=True,
+            try:
+                payload = _parse_remote_json(
+                    run_colab_exec_capture(
+                        SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS,
+                        training_output=True,
+                    )
                 )
-            )
+            except RuntimeError as exc:
+                # The trainer is detached and continues writing remotely.  A
+                # transient empty/control-channel reply must not turn a log
+                # read into a training failure followed by VM teardown.
+                message = f"[probe] log/status unavailable; continuing worker: {exc}"
+                _write_training_log(message + "\n")
+                print(message, flush=True)
+                time.sleep(_LOG_POLL_SECONDS)
+                continue
             offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
             _mirror_resume_pointers(run_id, payload["resume"])
             for worker, live in payload["live"].items():
