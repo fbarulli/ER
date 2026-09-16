@@ -1,107 +1,121 @@
 #!/usr/bin/env python3
-"""Bootstrap pushed inference code inside a fresh Colab session."""
+"""Run only neural embedding inference in a Colab runtime."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
-import platform
 import subprocess
 import sys
 import tarfile
 
 
 REMOTE_ROOT = Path(os.environ.get("REMOTE_ROOT", "/content/EuromonitoR"))
+TEXTS = Path("/content/inference_texts.jsonl")
+TEXTS_META = Path("/content/inference_texts.json")
 CHECKPOINT_ARCHIVE = Path("/content/checkpoint-114-inference.tar.gz")
+EMBEDDINGS = Path("/content/inference_embeddings.npy")
 
 
-def run(command: list[str], *, cwd: Path | None = None, env=None) -> None:
+def run(command: list[str], *, cwd: Path | None = None) -> None:
     print(f"[remote] $ {' '.join(command)}", flush=True)
-    subprocess.run(command, cwd=cwd, env=env, check=True)
+    subprocess.run(command, cwd=cwd, check=True)
 
 
-def extract_checkpoint() -> Path:
-    if not CHECKPOINT_ARCHIVE.is_file():
-        raise FileNotFoundError(f"checkpoint upload missing: {CHECKPOINT_ARCHIVE}")
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def join_checkpoint() -> Path:
+    parts = sorted(Path("/content").glob("checkpoint.part-*"))
+    if not parts:
+        raise FileNotFoundError("checkpoint upload parts are missing")
+    with CHECKPOINT_ARCHIVE.open("wb") as output:
+        for part in parts:
+            with part.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    output.write(chunk)
     with tarfile.open(CHECKPOINT_ARCHIVE, "r:gz") as archive:
         archive.extractall(REMOTE_ROOT, filter="data")
     checkpoint = REMOTE_ROOT / "checkpoint-114"
-    if not (checkpoint / "config.json").is_file():
-        raise RuntimeError(f"invalid checkpoint archive: {checkpoint}")
+    if not (checkpoint / "model.safetensors").is_file():
+        raise RuntimeError("checkpoint model weights are missing")
     return checkpoint
+
+
+def checkout() -> None:
+    run([
+        "git", "clone", "--filter=blob:none", "--no-checkout", "--branch",
+        os.environ["REPO_BRANCH"], "--single-branch", os.environ["REPO_URL"],
+        str(REMOTE_ROOT),
+    ])
+    run(["git", "sparse-checkout", "init", "--no-cone"], cwd=REMOTE_ROOT)
+    run([
+        "git", "sparse-checkout", "set", "/src/", "/config/",
+        "/submission_inference.py", "/artifacts/wheels/",
+    ], cwd=REMOTE_ROOT)
+    run(["git", "checkout", "--detach", os.environ["REPO_COMMIT"]], cwd=REMOTE_ROOT)
 
 
 def main() -> None:
     import torch
 
-    cuda = torch.cuda.is_available()
+    checkout()
+    checkpoint = join_checkpoint()
+    metadata = json.loads(TEXTS_META.read_text(encoding="utf-8"))
+    if sha256(TEXTS) != metadata["texts_sha256"]:
+        raise RuntimeError("prepared text upload failed checksum validation")
+
     requested_gpu = os.environ.get("REQUESTED_GPU", "CPU")
-    if requested_gpu != "CPU" and not cuda:
+    if requested_gpu == "CPU":
+        print("[remote] CPU validation complete; neural inference intentionally skipped", flush=True)
+        return
+    if not torch.cuda.is_available():
         raise SystemExit(f"{requested_gpu} requested but CUDA is unavailable")
-    device = torch.cuda.get_device_name(0) if cuda else "CPU"
-    print(f"[remote] device={device}", flush=True)
+    print(f"[remote] device={torch.cuda.get_device_name(0)}", flush=True)
+    run([sys.executable, "-m", "pip", "install", "-q", "sentence-transformers"])
 
-    repo_url = os.environ["REPO_URL"]
-    branch = os.environ["REPO_BRANCH"]
-    commit = os.environ["REPO_COMMIT"]
-    if REMOTE_ROOT.exists():
-        raise RuntimeError(f"remote checkout path already exists: {REMOTE_ROOT}")
-    run(
-        ["git", "clone", "--branch", branch, "--single-branch", repo_url, str(REMOTE_ROOT)]
+    from sentence_transformers import SentenceTransformer
+    import numpy as np
+
+    with TEXTS.open("r", encoding="utf-8") as handle:
+        texts = [json.loads(line) for line in handle]
+    if len(texts) != int(metadata["text_count"]):
+        raise RuntimeError("prepared text count changed during transfer")
+    model = SentenceTransformer(str(checkpoint), device="cuda")
+    embeddings = model.encode(
+        texts,
+        batch_size=int(os.environ.get("INFERENCE_BATCH_SIZE", "512")),
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
     )
-    run(["git", "checkout", "--detach", commit], cwd=REMOTE_ROOT)
-    observed = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=REMOTE_ROOT, text=True
-    ).strip()
-    if observed != commit:
-        raise RuntimeError(f"checkout mismatch: expected {commit}, got {observed}")
-
-    checkpoint = extract_checkpoint()
-    packages = [
-        "sentence-transformers",
-        "scikit-learn",
-        "pandas",
-        "numpy",
-        "matplotlib",
-        "pydantic",
-        "pyyaml",
-    ]
-    bundled_wheel = (
-        REMOTE_ROOT / "artifacts/wheels/hnswlib-0.8.0-cp313-cp313-linux_x86_64.whl"
+    np.save(EMBEDDINGS, embeddings.astype(np.float32), allow_pickle=False)
+    result_meta = {
+        "rows": int(embeddings.shape[0]),
+        "dimensions": int(embeddings.shape[1]),
+        "sha256": sha256(EMBEDDINGS),
+    }
+    part_size = 16 * 1024 * 1024
+    parts = []
+    with EMBEDDINGS.open("rb") as source:
+        number = 0
+        while chunk := source.read(part_size):
+            part = Path(f"/content/embedding.part-{number:03d}")
+            part.write_bytes(chunk)
+            parts.append(part.name)
+            number += 1
+    result_meta["parts"] = parts
+    Path("/content/embedding_manifest.json").write_text(
+        json.dumps(result_meta, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    if (
-        sys.version_info[:2] == (3, 13)
-        and platform.machine() == "x86_64"
-        and bundled_wheel.is_file()
-    ):
-        packages.append(str(bundled_wheel))
-    else:
-        packages.append("hnswlib")
-    run([sys.executable, "-m", "pip", "install", "-q", *packages], cwd=REMOTE_ROOT)
-
-    threshold = os.environ.get("INFERENCE_THRESHOLD", "0.61")
-    output = "submission/sku_item_submission_original_dataset_calibrated_061.csv"
-    command = [
-        sys.executable,
-        "submission_inference.py",
-        "--checkpoint",
-        str(checkpoint),
-        "--threshold",
-        threshold,
-        "--output",
-        output,
-    ]
-    batch_size = os.environ.get("INFERENCE_BATCH_SIZE")
-    if batch_size:
-        command.extend(["--batch-size", batch_size])
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REMOTE_ROOT / "src")
-    run(command, cwd=REMOTE_ROOT, env=env)
-
-    result = REMOTE_ROOT / output
-    if not result.is_file() or not result.with_suffix(".json").is_file():
-        raise RuntimeError(f"inference did not write the result bundle: {result}")
-    print(f"[remote] wrote {result}", flush=True)
+    print(f"[remote] encoded {len(texts):,} texts on GPU", flush=True)
 
 
 if __name__ == "__main__":

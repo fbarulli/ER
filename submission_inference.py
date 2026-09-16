@@ -1,29 +1,41 @@
-"""Run calibrated matcher inference and build the original-dataset deliverable.
-
-The checkpoint scores the deduplicated catalog through ``RandMatcher``—the
-same retrieval and gate path used during calibration. Predictions are then
-expanded to every row in ``dataset.csv`` through ``data/sku_to_rep.csv``.
-"""
+"""Prepare matcher text locally and finalize GPU embeddings locally."""
 
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
+import tempfile
 
+import numpy as np
 import pandas as pd
 
 from core.ann_config import load_ann_config
-from core.common import F, TRAIN_ROOT, load_dataset, load_dataset_deduped
-from core.manifest import sha256_file
-from core.model_input import model_input_spec
-from training.rand_matching import RandMatcher, _assignments_with_trace
-
-
-DEFAULT_CHECKPOINT = (
-    "training_results/0916T082923217621Z/worker_1/_checkpoints/"
-    "all-MiniLM-L6-v2/r0916T082923217621Z_f0/checkpoint-114"
+from core.common import (
+    F,
+    TRAIN_ROOT,
+    canonical_records_frame,
+    load_config,
+    load_dataset,
+    load_dataset_deduped,
 )
+from core.manifest import sha256_file
+from core.model_input import build_canonical_text, build_sku_text, model_input_info, model_input_spec
+from core.structured_features import (
+    canonical_info as canonical_structured_info,
+    fuse_numpy,
+    sku_info as sku_structured_info,
+    vector as structured_vector,
+)
+from pipeline import load_canonical_map
+from training.hnsw_index import PersistentHnswIndex, normalize_embeddings
+from training.rand_matching import (
+    RandMatcher,
+    _assignments_with_trace,
+    sku_attribute_info,
+)
+
+
 DEFAULT_THRESHOLD = 0.61
 UNMATCHED_PREFIX = "UNMATCHED_"
 
@@ -33,135 +45,220 @@ def _resolve(value: str) -> Path:
     return path.resolve() if path.is_absolute() else (TRAIN_ROOT / path).resolve()
 
 
-def _expand_to_original(predictions: pd.DataFrame, *, output: Path) -> dict:
-    deduped = load_dataset_deduped()
-    expected_skus = deduped["product_id"].astype(str).reset_index(drop=True)
-    actual_skus = predictions["SKU_ID"].astype(str).reset_index(drop=True)
-    if not actual_skus.equals(expected_skus):
-        raise RuntimeError("matcher output does not preserve the deduped population")
+def _context() -> tuple[dict, list[str], dict[str, dict], pd.DataFrame, list[dict], list[dict]]:
+    config = load_config()
+    structured = config["training"]["structured_features"]
+    if model_input_spec().profile != "cleaned":
+        raise RuntimeError("inference requires training.model_input.profile=cleaned")
+    canonical = load_canonical_map()
+    item_ids = [str(value) for value in canonical]
+    records = canonical_records_frame()
+    record_map = {str(row["gtin"]): row.to_dict() for _, row in records.iterrows()}
+    if set(item_ids) - set(record_map):
+        raise RuntimeError("canonical metadata is incomplete")
 
-    by_rep = predictions[["ITEM_ID"]].reset_index().rename(columns={"index": "rep_id"})
-    rep_map = pd.read_csv(F["sku_to_rep"], dtype=str, keep_default_na=False)
-    if list(rep_map.columns) != ["product_id", "rep_id"]:
-        raise RuntimeError(
-            "sku_to_rep columns must be ['product_id', 'rep_id']; got "
-            f"{list(rep_map.columns)}"
-        )
-    rep_map["rep_id"] = pd.to_numeric(rep_map["rep_id"], errors="raise").astype(int)
+    skus = RandMatcher._normalise_skus(load_dataset_deduped())
+    gate_infos = [
+        sku_attribute_info(row.get("title", ""), row.get("attributes", row.get("attr", "")))
+        for _, row in skus.iterrows()
+    ]
+    model_infos = [
+        model_input_info(sku_structured_info(
+            row.get("title", ""), row.get("attributes", row.get("attr", ""))
+        )) if structured["enabled"] else {"volume": set(), "pack": set()}
+        for _, row in skus.iterrows()
+    ]
+    return structured, item_ids, record_map, skus, gate_infos, model_infos
 
-    raw_skus = load_dataset()["product_id"].astype(str).reset_index(drop=True)
-    mapped_skus = rep_map["product_id"].astype(str).reset_index(drop=True)
-    if not mapped_skus.equals(raw_skus):
-        raise RuntimeError("sku_to_rep does not match dataset.csv identity and order")
-    if rep_map["rep_id"].lt(0).any() or rep_map["rep_id"].ge(len(deduped)).any():
-        raise RuntimeError("sku_to_rep references a row outside the deduped dataset")
 
-    expanded = rep_map.merge(by_rep, on="rep_id", how="left", validate="many_to_one")
-    if expanded["ITEM_ID"].isna().any():
-        raise RuntimeError("one or more original SKUs have no matcher assignment")
-    deliverable = expanded.rename(
-        columns={"product_id": "sku_id", "ITEM_ID": "item_id"}
-    )[["sku_id", "item_id"]]
-    if deliverable["sku_id"].duplicated().any():
-        raise RuntimeError("the original dataset contains duplicate sku_id values")
-    if deliverable["item_id"].astype(str).str.strip().eq("").any():
-        raise RuntimeError("matcher emitted an empty item_id")
-
+def prepare_texts(output: Path) -> dict:
+    structured, item_ids, record_map, skus, _, sku_infos = _context()
+    item_infos = [
+        model_input_info(canonical_structured_info(record_map[item_id]))
+        if structured["enabled"] else {"volume": set(), "pack": set()}
+        for item_id in item_ids
+    ]
+    texts = [
+        build_canonical_text(record_map[item_id], info)
+        for item_id, info in zip(item_ids, item_infos, strict=True)
+    ]
+    texts.extend(
+        build_sku_text(row, info)
+        for (_, row), info in zip(skus.iterrows(), sku_infos, strict=True)
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
-    deliverable.to_csv(output, index=False)
-    matched = ~deliverable["item_id"].astype(str).str.startswith(UNMATCHED_PREFIX)
-    return {
-        "output": str(output),
-        "output_sha256": sha256_file(output),
-        "columns": list(deliverable.columns),
-        "deduped_rows": int(len(deduped)),
-        "raw_rows": int(len(deliverable)),
-        "unique_sku_ids": int(deliverable["sku_id"].nunique()),
-        "unique_item_ids": int(deliverable["item_id"].nunique()),
-        "matched": int(matched.sum()),
-        "unmatched": int((~matched).sum()),
-        "dataset_sha256": sha256_file(TRAIN_ROOT / "dataset.csv"),
-        "sku_to_rep_sha256": sha256_file(F["sku_to_rep"]),
+    with output.open("w", encoding="utf-8") as handle:
+        for value in texts:
+            handle.write(json.dumps(str(value), ensure_ascii=False) + "\n")
+    metadata = {
+        "profile": "cleaned",
+        "item_count": len(item_ids),
+        "sku_count": len(skus),
+        "text_count": len(texts),
+        "texts_sha256": sha256_file(output),
     }
-
-
-def run_inference(
-    checkpoint: Path,
-    *,
-    threshold: float,
-    output: Path,
-    batch_size: int | None,
-) -> dict:
-    if not checkpoint.is_dir():
-        raise FileNotFoundError(f"checkpoint directory not found: {checkpoint}")
-    if not 0.0 <= threshold <= 1.0:
-        raise ValueError("threshold must be between 0 and 1")
-
-    input_spec = model_input_spec()
-    if input_spec.profile != "cleaned":
-        raise RuntimeError(
-            "deliverable requires training.model_input.profile=cleaned; got "
-            f"{input_spec.profile!r}"
-        )
-    ann = load_ann_config()
-    effective_batch_size = int(batch_size or ann.embedding.encode_batch_size)
-    matcher = RandMatcher(
-        checkpoint,
-        batch_size=effective_batch_size,
-        top_k=int(ann.index.top_k),
-        rebuild_ann_index=True,
-    )
-    candidates = matcher.score_candidates(load_dataset_deduped())
-    predictions, trace = _assignments_with_trace(candidates, float(threshold))
-    metadata = _expand_to_original(predictions, output=output)
-
-    model_file = checkpoint / "model.safetensors"
-    metadata.update(
-        {
-            "checkpoint": str(checkpoint),
-            "checkpoint_model_sha256": (
-                sha256_file(model_file) if model_file.is_file() else None
-            ),
-            "threshold": float(threshold),
-            "threshold_source": "fixed calibrated threshold",
-            "matcher": "training.rand_matching.RandMatcher",
-            "assignment": "training.rand_matching._assignments_with_trace",
-            "model_input_profile": input_spec.profile,
-            "ann_top_k": int(ann.index.top_k),
-            "encode_batch_size": effective_batch_size,
-            "candidate_rows": int(len(candidates)),
-            "accepted_candidate_rows": int(trace["accepted"].sum()),
-        }
-    )
     output.with_suffix(".json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return metadata
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def _feature_matrix(infos: list[dict], structured: dict) -> np.ndarray:
+    return np.asarray(
+        [
+            structured_vector(
+                info,
+                volume_scale_ml=float(structured["volume_scale_ml"]),
+                pack_scale=float(structured["pack_scale"]),
+                max_set_size=int(structured["max_set_size"]),
+            )
+            for info in infos
+        ],
+        dtype=np.float32,
+    )
+
+
+def _score_candidates(
+    matcher: RandMatcher,
+    skus: pd.DataFrame,
+    gate_infos: list[dict],
+    sku_embeddings: np.ndarray,
+) -> pd.DataFrame:
+    labels, _ = matcher.ann_index.query(sku_embeddings, top_k=matcher.top_k)
+    rows = []
+    for position, (_, row) in enumerate(skus.iterrows()):
+        sku_gtin = matcher._gtin(row.get("barcode", row.get("gtin", "")))
+        candidate_indexes = matcher._candidate_indexes(labels[position].tolist(), sku_gtin)
+        for index in sorted(candidate_indexes):
+            rank, source = candidate_indexes[index]
+            rows.append(
+                matcher._candidate_row(
+                    row, gate_infos[position], sku_embeddings[position], index, rank, source
+                )
+            )
+    candidates = pd.DataFrame(rows)
+    if candidates["SKU_ID"].nunique() != len(skus):
+        raise RuntimeError("candidate retrieval dropped one or more SKU_ID values")
+    return candidates
+
+
+def _expand(predictions: pd.DataFrame, output: Path) -> dict:
+    deduped = load_dataset_deduped()
+    if predictions["SKU_ID"].astype(str).tolist() != deduped["product_id"].astype(str).tolist():
+        raise RuntimeError("matcher output does not preserve the deduped population")
+    by_rep = predictions[["ITEM_ID"]].reset_index().rename(columns={"index": "rep_id"})
+    rep_map = pd.read_csv(F["sku_to_rep"], dtype=str, keep_default_na=False)
+    rep_map["rep_id"] = pd.to_numeric(rep_map["rep_id"], errors="raise").astype(int)
+    raw_skus = load_dataset()["product_id"].astype(str).tolist()
+    if rep_map["product_id"].astype(str).tolist() != raw_skus:
+        raise RuntimeError("sku_to_rep does not match dataset.csv identity and order")
+    expanded = rep_map.merge(by_rep, on="rep_id", how="left", validate="many_to_one")
+    if expanded["ITEM_ID"].isna().any():
+        raise RuntimeError("one or more original SKUs have no assignment")
+    result = expanded.rename(columns={"product_id": "sku_id", "ITEM_ID": "item_id"})[
+        ["sku_id", "item_id"]
+    ]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    result.to_csv(output, index=False)
+    matched = ~result["item_id"].astype(str).str.startswith(UNMATCHED_PREFIX)
+    return {
+        "columns": list(result.columns),
+        "deduped_rows": len(deduped),
+        "raw_rows": len(result),
+        "unique_sku_ids": int(result["sku_id"].nunique()),
+        "matched": int(matched.sum()),
+        "unmatched": int((~matched).sum()),
+        "output_sha256": sha256_file(output),
+        "dataset_sha256": sha256_file(TRAIN_ROOT / "dataset.csv"),
+    }
+
+
+def finalize(embeddings_path: Path, output: Path) -> dict:
+    structured, item_ids, record_map, skus, gate_infos, sku_infos = _context()
+    matrix = np.load(embeddings_path, allow_pickle=False)
+    expected = len(item_ids) + len(skus)
+    if matrix.shape[0] != expected:
+        raise RuntimeError(f"embedding count mismatch: {matrix.shape[0]} != {expected}")
+    item_raw = matrix[:len(item_ids)]
+    sku_raw = matrix[len(item_ids):]
+    item_infos = [
+        model_input_info(canonical_structured_info(record_map[item_id]))
+        if structured["enabled"] else {"volume": set(), "pack": set()}
+        for item_id in item_ids
+    ]
+    weight = float(structured["embedding_weight"]) if (
+        structured["enabled"] and structured["feed_to_loss"]
+    ) else 0.0
+    item_embeddings = normalize_embeddings(
+        fuse_numpy(item_raw, _feature_matrix(item_infos, structured), weight)
+    )
+    sku_embeddings = fuse_numpy(
+        sku_raw, _feature_matrix(sku_infos, structured), weight
+    )
+
+    ann = load_ann_config()
+    with tempfile.TemporaryDirectory(prefix="submission-ann-") as temp_dir:
+        index = PersistentHnswIndex(
+            Path(temp_dir),
+            ef_construction=ann.index.ef_construction,
+            M=ann.index.M,
+            ef_search=ann.index.ef_search,
+            space=ann.index.space,
+        )
+        index.build(
+            item_embeddings,
+            item_ids,
+            checkpoint=Path("checkpoint-114"),
+            model_name=ann.embedding.model,
+            preprocessing_fingerprint="local-prepared-cleaned",
+        )
+        matcher = RandMatcher.__new__(RandMatcher)
+        matcher.checkpoint = Path("checkpoint-114")
+        matcher.top_k = int(ann.index.top_k)
+        matcher.config = load_config()
+        matcher.structured_config = structured
+        matcher.canonical = load_canonical_map()
+        matcher.item_ids = item_ids
+        matcher.item_index = {item_id: i for i, item_id in enumerate(item_ids)}
+        matcher.record_map = record_map
+        matcher.item_embeddings = item_embeddings
+        matcher.ann_index = index
+        candidates = _score_candidates(matcher, skus, gate_infos, sku_embeddings)
+    predictions, trace = _assignments_with_trace(candidates, DEFAULT_THRESHOLD)
+    metadata = _expand(predictions, output)
+    metadata.update({
+        "threshold": DEFAULT_THRESHOLD,
+        "threshold_source": "fixed calibrated threshold",
+        "model_input_profile": "cleaned",
+        "ann_top_k": int(ann.index.top_k),
+        "gpu_embeddings_sha256": sha256_file(embeddings_path),
+        "candidate_rows": len(candidates),
+        "accepted_candidate_rows": int(trace["accepted"].sum()),
+    })
+    output.with_suffix(".json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return metadata
+
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
-    parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
-    parser.add_argument("--batch-size", type=int)
-    parser.add_argument(
-        "--output",
-        default="submission/sku_item_submission_original_dataset_calibrated_061.csv",
-    )
-    return parser.parse_args(argv)
+    sub = parser.add_subparsers(dest="command", required=True)
+    prepare = sub.add_parser("prepare")
+    prepare.add_argument("--output", required=True)
+    finish = sub.add_parser("finalize")
+    finish.add_argument("--embeddings", required=True)
+    finish.add_argument("--output", required=True)
+    return parser.parse_args()
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    output = _resolve(args.output)
-    metadata = run_inference(
-        _resolve(args.checkpoint),
-        threshold=float(args.threshold),
-        output=output,
-        batch_size=args.batch_size,
-    )
-    print(json.dumps(metadata, indent=2, sort_keys=True), flush=True)
-    print(f"[submission] wrote {output}", flush=True)
+def main() -> int:
+    args = parse_args()
+    if args.command == "prepare":
+        result = prepare_texts(_resolve(args.output))
+    else:
+        result = finalize(_resolve(args.embeddings), _resolve(args.output))
+    print(json.dumps(result, indent=2, sort_keys=True), flush=True)
     return 0
 
 
