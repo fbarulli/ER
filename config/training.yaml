@@ -75,6 +75,9 @@ colab:
   training_dataset_csv: "data/dataset_deduped_train_minus_3000.csv"
   # The normal ANN lane consumes its entire prepared training set.
   train_fraction: 1.0
+  # Versioned checkout inputs for the fast standard ANN lane.
+  full_prepared_bundles:
+    - "data/prepared/full/worker_1_baseline.pkl.gz"
   # Deterministic 128-row prefix of training_dataset_csv. It is the smallest
   # checked smoke population that survives the pair/component/triple guards.
   # Columns the pipeline never reads (url, image_url) are dropped from it.

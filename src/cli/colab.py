@@ -2788,6 +2788,13 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
         workers, sample = 2, args.sample
         dataset_csv = None
     elif args.what == "train":
+        if (
+            args.workers == 1
+            and args.model is None
+            and args.sample is None
+            and args.resume_run is None
+        ):
+            return None
         workers, sample = args.workers, args.sample
         dataset_csv = None
     else:
@@ -4525,6 +4532,17 @@ def main() -> None:
                 loss=args.loss,
             )
         else:
+            checkout_full_bundles = (
+                list(_COLAB.full_prepared_bundles)
+                if (
+                    args.what == "train"
+                    and args.workers == 1
+                    and args.model is None
+                    and args.sample is None
+                    and args.resume_run is None
+                )
+                else None
+            )
             local_training_run = run_train(
                 args.train_frac, args.epochs, sample=args.sample, workers=args.workers,
                 resume_run=args.resume_run, model=args.model,
@@ -4533,6 +4551,11 @@ def main() -> None:
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
                 loss=args.loss,
                 train_only=args.train_only,
+                remote_dataset_csv=(
+                    _FINAL_INFERENCE.source_csv if checkout_full_bundles else None
+                ),
+                remote_prepared_bundles=checkout_full_bundles,
+                inference_device="cuda" if GPU.upper() != "CPU" else "cpu",
             )
         if local_hpo_run is not None:
             print("[hpo] publishing snapshots on local CPU ...", flush=True)

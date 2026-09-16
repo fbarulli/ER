@@ -384,7 +384,7 @@ class ValidationUploadPrewarmTests(unittest.TestCase):
 
 
 class LauncherOrderTests(unittest.TestCase):
-    """Full training starts its local inputs before remote setup."""
+    """Standard full training uses immutable checkout inputs."""
 
     def test_main_starts_the_local_build_before_the_dependency_install(self):
         order: list[str] = []
@@ -420,10 +420,17 @@ class LauncherOrderTests(unittest.TestCase):
              ):
             colab.main()
 
-        self.assertEqual(order[:4], ["prewarm", "upload_prewarm", "session", "layout"], order)
-        prewarm.assert_called_once()
-        upload_prewarm.assert_called_once()
-        self.assertFalse(run_train.call_args.kwargs["incremental_sync"])
+        self.assertEqual(order[:2], ["session", "layout"], order)
+        prewarm.assert_not_called()
+        upload_prewarm.assert_not_called()
+        self.assertEqual(
+            run_train.call_args.kwargs["remote_prepared_bundles"],
+            list(colab._COLAB.full_prepared_bundles),
+        )
+        self.assertEqual(
+            run_train.call_args.kwargs["remote_dataset_csv"],
+            colab._FINAL_INFERENCE.source_csv,
+        )
 
     def test_a_resumed_run_does_not_prewarm_its_uploads(self):
         """A resumed lane keeps its existing run identity and uploads serially."""
