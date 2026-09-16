@@ -15,6 +15,8 @@ now the src/training/ module chain):
   sims   — the configured zero-shot embedding lane. The current config uses
            minilm_l6 and scores against the same canonical fingerprint
            contract as training.
+  inference — rerun the established checkpoint inference command on the full
+           deduplicated catalog without training.
   smoke  — the chain check (fast verification the remote environment
            reproduces the local results contract). Runs on CPU by default and
            reads the full deduped CSV already in the cloned Colab checkout;
@@ -161,6 +163,12 @@ _LATEST_BEST_MARKER = "latest_best.json"
 _WORKER_MONITOR_SECONDS = _COLAB.worker_monitor_seconds
 _FINAL_INFERENCE = _COLAB.final_inference
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
+_SUBMISSION_CHECKPOINT = (
+    TRAINING_RESULTS
+    / "0916T082923217621Z/worker_1/_checkpoints/all-MiniLM-L6-v2"
+    / "r0916T082923217621Z_f0/checkpoint-114"
+)
+_SUBMISSION_OUTPUT = TRAIN_ROOT / "submission/sku_item_submission_original_dataset_calibrated_061.csv"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
 # config path is supplied. This workspace's home is read-only, so isolate the
 # CLI state/history in a visible, root-local folder for every launcher run.
@@ -2378,6 +2386,85 @@ else:
     run_colab_exec_stream(SESSION, script, timeout=120, log_name="runtime_profile", retry_safe=True)
 
 
+def run_full_checkpoint_inference() -> None:
+    """Replay the successful run's inference command on the full catalog."""
+    if not (_SUBMISSION_CHECKPOINT / "model.safetensors").is_file():
+        raise FileNotFoundError(
+            f"checkpoint-114 model weights are missing: {_SUBMISSION_CHECKPOINT}"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="euromonitor-colab-inference-") as temporary:
+        work = Path(temporary)
+        archive = work / "checkpoint.tar.gz"
+        excluded = {
+            "optimizer.pt", "scheduler.pt", "rng_state.pth",
+            "trainer_state.json", "training_args.bin",
+        }
+        with tarfile.open(archive, "w:gz") as handle:
+            for source in sorted(_SUBMISSION_CHECKPOINT.rglob("*")):
+                if source.is_file() and source.name not in excluded:
+                    handle.add(
+                        source,
+                        arcname=Path("checkpoint-114") / source.relative_to(_SUBMISSION_CHECKPOINT),
+                    )
+
+        parts: list[Path] = []
+        with archive.open("rb") as source:
+            number = 0
+            while chunk := source.read(16 * 1024 * 1024):
+                part = work / f"checkpoint.part-{number:03d}"
+                part.write_bytes(chunk)
+                parts.append(part)
+                number += 1
+        for part in parts:
+            print(f"[upload] checkpoint-114 {part.name}", flush=True)
+            _upload_with_retries(part, f"/content/{part.name}", timeout=600)
+
+        remote_output = "/content/full_deduped_predictions_061.csv"
+        script = _BOOTSTRAP + f"""
+import pathlib, subprocess, sys, tarfile
+
+parts = sorted(pathlib.Path("/content").glob("checkpoint.part-*"))
+if not parts:
+    raise FileNotFoundError("checkpoint-114 upload parts are missing")
+archive = pathlib.Path("/content/checkpoint-114.tar.gz")
+with archive.open("wb") as output:
+    for part in parts:
+        output.write(part.read_bytes())
+with tarfile.open(archive, "r:gz") as handle:
+    handle.extractall({REMOTE_ROOT!r}, filter="data")
+checkpoint = pathlib.Path({REMOTE_ROOT!r}) / "checkpoint-114"
+command = [
+    sys.executable, "-m", "predict_items",
+    "--model", str(checkpoint),
+    "--input", str(pathlib.Path({REMOTE_ROOT!r}) / "data/dataset_deduped.csv"),
+    "--output", {remote_output!r},
+    "--threshold", "0.61",
+    "--device", "cuda",
+    "--include-scores",
+    "--batch-size", "512",
+]
+print("[final-inference] SKU retrieval:", " ".join(command), flush=True)
+subprocess.run(command, cwd={REMOTE_ROOT!r}, check=True)
+"""
+        run_colab_exec_stream(
+            SESSION,
+            script,
+            timeout=_WORKER_TIMEOUT_SECONDS,
+            log_name="full_checkpoint_inference",
+        )
+        downloaded = work / "full_deduped_predictions_061.csv"
+        colab("download", "-s", SESSION, remote_output, str(downloaded), timeout=600)
+
+        import pandas as pd
+        from submission_inference import _expand
+
+        predictions = pd.read_csv(downloaded, dtype=str, keep_default_na=False)
+        metadata = _expand(predictions, _SUBMISSION_OUTPUT)
+        print(json.dumps(metadata, indent=2, sort_keys=True), flush=True)
+        print(f"[submission] wrote {_SUBMISSION_OUTPUT}", flush=True)
+
+
 _BOOTSTRAP = f"""
 import sys, runpy, pathlib, os
 sys.path.insert(0, "{REMOTE_ROOT}/src")
@@ -4241,7 +4328,7 @@ def main() -> None:
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", required=True,
-                    choices=["train", "dual-train", "hpo", "sims", "mixed", "smoke", "stop"],
+                    choices=["train", "dual-train", "hpo", "sims", "mixed", "smoke", "inference", "stop"],
                     help="what to run on the VM")
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
@@ -4409,6 +4496,12 @@ def main() -> None:
             f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
             flush=True,
         )
+    elif args.what == "inference":
+        print(
+            "[workers] lane=inference trainers=0 checkpoint=checkpoint-114 "
+            "rows=61529 batch_size=512 threshold=0.61",
+            flush=True,
+        )
 
     if args.what == "stop":
         stop(stop_local_owner=True)
@@ -4474,12 +4567,14 @@ def main() -> None:
             raise ValueError("--refresh-data is incompatible with local-prepared GPU training")
         if args.refresh_data:
             run_data_prep()
-        elif args.what != "smoke" and not prepared_train_runtime:
+        elif args.what not in {"smoke", "inference"} and not prepared_train_runtime:
             verify_training_inputs()
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
         # (run_train was unconditional) — hours of unintended GPU quota
         # for a lane that only needs the configured zero-shot scoring.
-        if args.what == "sims":
+        if args.what == "inference":
+            run_full_checkpoint_inference()
+        elif args.what == "sims":
             run_sims()
         elif args.what == "mixed":
             local_mixed_run = run_mixed(
