@@ -132,8 +132,8 @@ colab:
   cache_prepared_bundles: true
   hpo_mode: "sequential"
   hpo_workers: 2
-  # One baseline worker plus one worker for the configured training model.
-  train_workers: 2
+  # Full checkout lane is ANN-only; matcher training is not part of this run.
+  train_workers: 1
   # One baseline worker plus one worker for the configured smoke model.
   smoke_workers: 2
   mixed_train_workers: 1

@@ -2548,7 +2548,10 @@ def run_train(
         if dataset_csv is not None:
             bundle_request["dataset_csv"] = dataset_csv
         prepared_bundles = _prepare_local_training_bundles(**bundle_request)
-    if workers == 1 and resume_run is None:
+    # Checkout-native prepared bundles are consumed through the concurrent
+    # launcher even for one ANN worker.  That path resolves a Git bundle
+    # directly; the single-worker path accepts only an uploaded local bundle.
+    if workers == 1 and resume_run is None and remote_prepared_bundles is None:
         if worker_losses is not None:
             raise ValueError("worker_losses requires at least two concurrent workers")
         return run_single_train_and_stream(
@@ -4434,11 +4437,10 @@ def main() -> None:
             checkout_full_bundles = (
                 [
                     "data/prepared/full/worker_1_baseline.pkl.gz",
-                    "data/prepared/full/worker_2_baseline.pkl.gz",
                 ]
                 if (
                     args.what == "train"
-                    and args.workers == 2
+                    and args.workers == 1
                     and args.model is None
                     and args.sample is None
                     and args.resume_run is None
@@ -4448,10 +4450,10 @@ def main() -> None:
             local_training_run = run_train(
                 args.train_frac, args.epochs, sample=args.sample, workers=args.workers,
                 resume_run=args.resume_run, model=args.model,
-                run_label=args.run_label,
+                run_label=("ann_embedding" if checkout_full_bundles else args.run_label),
                 masking_profile=args.masking_profile,
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
-                loss=args.loss,
+                loss=("mnrl" if checkout_full_bundles else args.loss),
                 train_only=args.train_only,
                 remote_dataset_csv=(
                     "data/dataset_deduped.csv" if checkout_full_bundles else None
