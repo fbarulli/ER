@@ -3468,26 +3468,18 @@ if run_completion:
         )
 print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
 """
-    print(
-        "[run] starting one trainer as a detached remote stage; polling its durable log ...",
-        flush=True,
-    )
-    # Stream finished artifacts back while the trainer runs, so the end-of-run
-    # download is a short delta instead of the whole result set.  The stream is
-    # stopped before the authoritative download so the two never race on the
-    # same local file.
+    print("[run] streaming one trainer directly into colab_system.log ...", flush=True)
+    # The standard one-worker lane has one Colab control connection.  Stream
+    # the worker cell on that connection so its output is appended directly to
+    # the system transcript; do not launch a detached stage and immediately
+    # contend with it using training-log probes.
     syncer = _IncrementalResultSync(remote_base, run_id, workers=1) if incremental_sync else None
     if syncer is not None:
         syncer.start()
     try:
-        # A long-lived ``colab exec`` stream can stall before the kernel begins
-        # evaluating the worker cell. Run the exact same script outside the
-        # notebook kernel instead; its log, PID, and exit status are then
-        # independently visible through the short polling probes.
-        run_detached_stage(
-            "train",
-            ["/usr/bin/python3", "-c", script],
-            timeout=_WORKER_TIMEOUT_SECONDS,
+        run_colab_exec_stream(
+            SESSION, script, timeout=_WORKER_TIMEOUT_SECONDS,
+            log_name="train",
         )
     finally:
         if syncer is not None:
