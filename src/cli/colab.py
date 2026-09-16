@@ -81,10 +81,10 @@ from core.manifest import sha256_file
 from core.schemas import ResultBundleManifest, StageManifest
 
 
-# Smoke sample and normal training defaults come from their runtime config
-# contracts.  Sweep fractions remain exclusive to the sweep lane.
+# Smoke and normal training defaults come from the Colab runtime config.
+# Sweep fractions remain exclusive to the sweep lane.
 _SMOKE_SAMPLE = int(sweep_cfg()["smoke_sample"])
-_TRAIN_FRAC_DEFAULT = float(training_cfg().split.train_fraction)
+_TRAIN_FRAC_DEFAULT = float(training_cfg().colab.train_fraction)
 _EPOCHS_DEFAULT = int(training_cfg().training.epochs)
 _TRAIN_LOSS = str(training_cfg().training.loss)
 _RERANK_MODEL = str(sweep_cfg()["rerank_model"])

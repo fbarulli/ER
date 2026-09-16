@@ -73,6 +73,8 @@ colab:
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
   training_dataset_csv: "data/dataset_deduped_train_minus_3000.csv"
+  # The normal ANN lane consumes its entire prepared training set.
+  train_fraction: 1.0
   # Immutable prepared input(s) for the default one-worker ANN checkout lane.
   # Keep their repository-relative paths here so the launcher never owns a
   # run-specific data location.
