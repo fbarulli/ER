@@ -1,37 +1,54 @@
-# ANN Error Analysis: Current Run → Next Run
+# ANN Error Analysis: Previous Run → Latest Run
 
-Validation set: 3,000 SKUs. The next run should be compared against this same
-split (or a deliberately versioned replacement) so changes are attributable.
+Validation set: 3,000 SKUs. The comparison uses the same validation split so
+the change is attributable to the latest full-dataset run.
 
-Each row is the same plot from the current run beside the corresponding
-plot from the next run. Replace `training_results/0915T075044186132Z/worker_1/report` with the new ANN report
-directory after the next inference completes.
+## Pairwise and clustering quality
 
-<table>
-<tr><th>Plot</th><th>Current run</th><th>Next run</th></tr>
-<tr><td>Pairwise and clustering quality</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/ann_cluster_quality.png"></td><td><img width="100%" src="training_results/0915T075044186132Z/worker_1/report/ann_cluster_quality.png"></td></tr>
-<tr><td>Error rate by attribute</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/attribute_error_breakdown.png"></td><td><img width="100%" src="training_results/0915T075044186132Z/worker_1/report/attribute_error_breakdown.png"></td></tr>
-<tr><td>ANN candidate recall</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/candidate_recall_at_k.png"></td><td><img width="100%" src="training_results/0915T075044186132Z/worker_1/report/candidate_recall_at_k.png"></td></tr>
-<tr><td>AUC threshold tuning</td><td><img width="100%" src="training_results/0915T063500554948Z/worker_2/report/auc_threshold_tuning.png"></td><td><img width="100%" src="training_results/0915T075044186132Z/worker_1/report/auc_threshold_tuning.png"></td></tr>
-</table>
+Previous run (`0915T075044186132Z`):
 
-Baseline: adjusted Rand `0.9900`, pair recall `0.9803`, pair precision `1.0000`,
-over-merge `0%`, under-merge `1.97%`.
+![Previous ANN cluster quality](ann_error_assets/previous_ann_cluster_quality.png)
 
-Baseline attribute error rates: `pack/0` `41.9%`, `none/0` `34.2%`,
-`flavor/1` `14.6%`, and `volume/0` `8.1%`.
+Latest run (`0916T082923217621Z`):
 
-Baseline retrieval recall is `99.84% @1`, `100% @5`, and `100% @10`. This
-indicates that the primary opportunity is post-retrieval scoring and gating,
-not ANN candidate generation.
+![Latest ANN cluster quality](ann_error_assets/latest_ann_cluster_quality.png)
 
-Use this plot to verify that unit canonicalization and the missing-attribute
-confidence penalty separate true and false pairs without lowering the global
-decision threshold.
+## Error rate by attribute
 
-## Next-run acceptance criteria
+Previous run (`0915T075044186132Z`):
 
-- Improve `pack/0`, `none/0`, and `volume/0` error rates.
+![Previous attribute errors](ann_error_assets/previous_attribute_error_breakdown.png)
+
+Latest run (`0916T082923217621Z`):
+
+![Latest attribute errors](ann_error_assets/latest_attribute_error_breakdown.png)
+
+## AUC threshold tuning
+
+Previous run (`0915T075044186132Z`):
+
+![Previous threshold tuning](ann_error_assets/previous_auc_threshold_tuning.png)
+
+Latest run (`0916T082923217621Z`):
+
+![Latest threshold tuning](ann_error_assets/latest_auc_threshold_tuning.png)
+
+Previous run: adjusted Rand `0.9856`, pair recall `0.9725`, pair precision
+`0.9991`, over-merge `0.09%`, under-merge `2.75%`.
+
+Latest run: adjusted Rand `0.9993`, pair recall `0.9987`, pair precision
+`1.0000`, over-merge `0%`, under-merge `0.13%`.
+
+## ANN error GTIN strata
+
+| GTIN stratum | n | Who decides? |
+|---|---:|---|
+| `both_equal` | 2,915 | GTIN gate (score irrelevant) |
+| `different` | 13 | GTIN gate (score irrelevant) |
+| `one_missing` | 0 | — |
+| `both_missing` | 0 | — |
+
+## Acceptance criteria
+
 - Preserve `over-merge rate = 0%`.
-- Do not lower the global threshold to obtain recall.
-- Keep retrieval recall at or above the current baseline.
+- Do not lower the global decision threshold to obtain recall.
