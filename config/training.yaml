@@ -183,16 +183,16 @@ colab:
   # Saves landing inside one window leave as a single `dvc push`; a lone
   # checkpoint is still published within this window.
   dvc_publish_debounce_seconds: 20.0
-  # FINAL inference over the whole deduped catalog (61,529 rows). It is not a
-  # validation sample: the 3,000 held-out rows are used for the threshold view
-  # only, which is why this block is not called "validation_inference".
+  # Final inference uses the 3,000-row held-out sample. The full deduped
+  # catalog is the identity anchor used to assert that training plus holdout
+  # reconstructs the source population.
   final_inference:
     enabled: true
     # The identity anchor: the FULL deduped catalog. training + sample must
     # reconstruct exactly this, which is what the preflight asserts.
     source_csv: "data/dataset_deduped.csv"
-    # The file actually FED TO INFERENCE: the 3,000 held-out sample. Inference
-    # runs on the 3,000 only -- it never scores the whole catalog.
+    # The file actually fed to inference: the 3,000 held-out sample. Inference
+    # runs on this sample only; it never scores the whole catalog.
     input_csv: "data/dataset_deduped_sample_3000.csv"
     output_dir: "final_inference"
     # REQUIRED, not a preference: final inference must actually run on the GPU

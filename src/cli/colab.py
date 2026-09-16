@@ -631,12 +631,20 @@ def run_colab_exec_stream(
         )
 
 
-def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
+def run_colab_exec_capture(
+    session: str, script: str, timeout: int, *, training_output: bool = False,
+) -> str:
     """Execute a bounded remote probe while retaining stdout for parsing.
 
     Probes serve the live training log.  They must reveal control-channel
     failures promptly instead of becoming an opaque multi-minute wait.
     """
+    def report_probe_progress(message: str) -> None:
+        """Make a blocked training-log probe observable in its durable log."""
+        print(message, flush=True)
+        if training_output:
+            _write_training_log(message + "\n")
+
     last_error = ""
     for attempt in range(1, _PROBE_RETRIES + 1):
         try:
@@ -659,15 +667,14 @@ def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
                     # is decoded below.  Surface non-JSON diagnostics now so
                     # an upstream client/kernel failure is visible at once.
                     if not line.lstrip().startswith(("{", "[")):
-                        print(f"[probe-out] {line.rstrip()}", flush=True)
+                        report_probe_progress(f"[probe-out] {line.rstrip()}")
 
             def emit_heartbeat() -> None:
                 started = time.monotonic()
                 while not heartbeat_stop.wait(15):
-                    print(
+                    report_probe_progress(
                         f"[probe] awaiting remote log/status "
-                        f"({time.monotonic() - started:.0f}s; timeout={timeout}s)",
-                        flush=True,
+                        f"({time.monotonic() - started:.0f}s; timeout={timeout}s)"
                     )
 
             reader = threading.Thread(target=stream_probe_output, daemon=True)
@@ -689,23 +696,23 @@ def run_colab_exec_capture(session: str, script: str, timeout: int) -> str:
             heartbeat_stop.set()
             heartbeat.join(timeout=1)
             last_error = f"probe timeout: {exc}"
-            print(
-                f"[probe] timeout after {timeout}s on attempt {attempt}/{_PROBE_RETRIES}",
-                flush=True,
+            report_probe_progress(
+                f"[probe] timeout after {timeout}s on attempt {attempt}/{_PROBE_RETRIES}"
             )
             traceback.print_exc()
         else:
             if process.returncode == 0:
                 return output
             last_error = f"rc={process.returncode}: {output[-2000:]}"
-            print(
-                f"[probe] remote command rc={process.returncode}; stderr tail:",
-                flush=True,
+            report_probe_progress(
+                f"[probe] remote command rc={process.returncode}; stderr tail:"
             )
-            print(output[-2000:], flush=True)
+            report_probe_progress(output[-2000:])
         if attempt < _PROBE_RETRIES:
             delay = _PROBE_RETRY_BACKOFF_SECONDS * attempt
-            print(f"[probe] transient remote failure ({attempt}/{_PROBE_RETRIES}); retrying in {delay}s", flush=True)
+            report_probe_progress(
+                f"[probe] transient remote failure ({attempt}/{_PROBE_RETRIES}); retrying in {delay}s"
+            )
             time.sleep(delay)
     raise RuntimeError(f"remote log probe failed after {_PROBE_RETRIES} attempts: {last_error}")
 
@@ -1382,7 +1389,12 @@ for number in range(1, {workers} + 1):
 payload["done"] = all(value is not None for value in payload["status"].values())
 print(json.dumps(payload), flush=True)
 """
-            payload = _parse_remote_json(run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS))
+            payload = _parse_remote_json(
+                run_colab_exec_capture(
+                    SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS,
+                    training_output=True,
+                )
+            )
             offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
             _mirror_resume_pointers(run_id, payload["resume"])
             for worker, live in payload["live"].items():
@@ -3229,6 +3241,18 @@ def _upload_validation_inputs(run_id: str) -> dict[str, str]:
                 f"{run_id}; uploading serially",
                 flush=True,
             )
+            # This prewarm no longer belongs to the caller, but it still owns
+            # a thread waiting on the session gate.  Release and retire it
+            # before proceeding so it cannot linger for the full gate timeout
+            # (and so its one intended transfer is not silently abandoned).
+            prewarm.session_ready.set()
+            prewarm.thread.join(timeout=_PREWARM_RETIRE_SECONDS)
+            if prewarm.thread.is_alive():
+                print(
+                    "[upload] mismatched concurrent upload is still running; "
+                    "continuing with the serial upload",
+                    flush=True,
+                )
     return _perform_validation_upload(run_id)
 
 
@@ -4485,7 +4509,7 @@ def main() -> None:
                 ),
                 remote_prepared_bundles=checkout_full_bundles,
                 remote_validation_csv=(
-                    f"{REMOTE_ROOT}/data/dataset_deduped.csv"
+                    f"{REMOTE_ROOT}/{_FINAL_INFERENCE.input_csv}"
                     if checkout_full_bundles else None
                 ),
                 inference_device="cuda" if GPU.upper() != "CPU" else "cpu",

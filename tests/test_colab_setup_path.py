@@ -398,6 +398,7 @@ class LauncherOrderTests(unittest.TestCase):
 
         prewarm = mock.Mock(side_effect=record("prewarm"))
         upload_prewarm = mock.Mock(side_effect=record("upload_prewarm"))
+        run_train = mock.Mock(return_value=("run", 1))
         with mock.patch.object(sys, "argv", ["colab.py", "--what", "train"]), \
              mock.patch.object(colab, "start_live_log"), \
              mock.patch.object(colab, "close_live_log"), \
@@ -409,7 +410,7 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "install_deps", record("install_deps")), \
              mock.patch.object(colab, "verify_remote_models", record("models")), \
              mock.patch.object(colab, "log_gpu_profile", record("profile")), \
-             mock.patch.object(colab, "run_train", record("run_train", ("run", 1))), \
+             mock.patch.object(colab, "run_train", run_train), \
              mock.patch.object(colab, "stop", record("stop")), \
              mock.patch.object(colab, "drain_local_bundle_prewarm"), \
              mock.patch.object(colab, "drain_validation_upload_prewarm"), \
@@ -422,6 +423,10 @@ class LauncherOrderTests(unittest.TestCase):
         self.assertEqual(order[:2], ["session", "layout"], order)
         prewarm.assert_not_called()
         upload_prewarm.assert_not_called()
+        self.assertEqual(
+            run_train.call_args.kwargs["remote_validation_csv"],
+            f"{colab.REMOTE_ROOT}/{colab._FINAL_INFERENCE.input_csv}",
+        )
 
     def test_a_resumed_run_does_not_prewarm_its_uploads(self):
         """A resumed lane keeps its existing run identity and uploads serially."""
