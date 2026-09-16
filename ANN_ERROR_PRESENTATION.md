@@ -7,31 +7,31 @@ the change is attributable to the latest full-dataset run.
 
 Previous run (`0915T075044186132Z`):
 
-![Previous ANN cluster quality](ann_error_assets/previous_ann_cluster_quality.png)
+![Previous ANN cluster quality](https://raw.githubusercontent.com/fbarulli/ER/submission/ann_error_assets/previous_ann_cluster_quality.png)
 
 Latest run (`0916T082923217621Z`):
 
-![Latest ANN cluster quality](ann_error_assets/latest_ann_cluster_quality.png)
+![Latest ANN cluster quality](https://raw.githubusercontent.com/fbarulli/ER/submission/ann_error_assets/latest_ann_cluster_quality.png)
 
 ## Error rate by attribute
 
 Previous run (`0915T075044186132Z`):
 
-![Previous attribute errors](ann_error_assets/previous_attribute_error_breakdown.png)
+![Previous attribute errors](https://raw.githubusercontent.com/fbarulli/ER/submission/ann_error_assets/previous_attribute_error_breakdown.png)
 
 Latest run (`0916T082923217621Z`):
 
-![Latest attribute errors](ann_error_assets/latest_attribute_error_breakdown.png)
+![Latest attribute errors](https://raw.githubusercontent.com/fbarulli/ER/submission/ann_error_assets/latest_attribute_error_breakdown.png)
 
 ## AUC threshold tuning
 
 Previous run (`0915T075044186132Z`):
 
-![Previous threshold tuning](ann_error_assets/previous_auc_threshold_tuning.png)
+![Previous threshold tuning](https://raw.githubusercontent.com/fbarulli/ER/submission/ann_error_assets/previous_auc_threshold_tuning.png)
 
 Latest run (`0916T082923217621Z`):
 
-![Latest threshold tuning](ann_error_assets/latest_auc_threshold_tuning.png)
+![Latest threshold tuning](https://raw.githubusercontent.com/fbarulli/ER/submission/ann_error_assets/latest_auc_threshold_tuning.png)
 
 Previous run: adjusted Rand `0.9856`, pair recall `0.9725`, pair precision
 `0.9991`, over-merge `0.09%`, under-merge `2.75%`.
