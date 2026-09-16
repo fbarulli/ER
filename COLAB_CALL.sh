@@ -44,8 +44,16 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Inference needs model/tokenizer/config files, not the 173 MiB optimizer state.
+# Keeping training-only state out also stays below Colab's single-upload limit.
+CHECKPOINT_NAME="$(basename "$CHECKPOINT_DIR")"
 tar -czf "$CHECKPOINT_ARCHIVE" \
-  -C "$(dirname "$CHECKPOINT_DIR")" "$(basename "$CHECKPOINT_DIR")"
+  --exclude="$CHECKPOINT_NAME/optimizer.pt" \
+  --exclude="$CHECKPOINT_NAME/scheduler.pt" \
+  --exclude="$CHECKPOINT_NAME/rng_state.pth" \
+  --exclude="$CHECKPOINT_NAME/trainer_state.json" \
+  --exclude="$CHECKPOINT_NAME/training_args.bin" \
+  -C "$(dirname "$CHECKPOINT_DIR")" "$CHECKPOINT_NAME"
 mkdir -p "$(dirname "$LOCAL_OUTPUT")"
 
 echo "[colab] session=$SESSION gpu=$GPU branch=$REPO_BRANCH commit=$REPO_COMMIT"
