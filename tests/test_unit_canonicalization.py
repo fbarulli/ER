@@ -123,6 +123,20 @@ def test_bottle_and_can_are_first_class_disjoint_attributes() -> None:
     assert conflict_columns(bottle, can)["package_type_conflict"] == 1
 
 
+def test_pack_type_attribute_fills_missing_title_type() -> None:
+    bottle = sku_attribute_info(
+        "Moju Matcha Cold Pressed Booster 60ml",
+        "Pack Type: Bottle; Pack Material Type: Glass; Volume: 60",
+    )
+    assert bottle["package_type"] == {"bottle"}
+    assert "glass" not in bottle["package_type"]
+
+
+def test_title_package_type_wins_when_attribute_disagrees() -> None:
+    can = sku_attribute_info("Cola cans", "Pack Type: Bottle")
+    assert can["package_type"] == {"can"}
+
+
 def test_package_type_reaches_the_shared_model_text_representation() -> None:
     info = info_from_sets([355], [6], ["bottle"])
     text = append_text("Acme soda", info)

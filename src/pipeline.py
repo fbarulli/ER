@@ -47,7 +47,7 @@ from core.schemas import (
     check_gate_results_frame,
     check_verdict_map,
 )
-from ner.ner_product_attributes import extract_title_attributes
+from ner.ner_product_attributes import extract_title_attributes, parse_attribute_details
 from core.critical_attributes import (
     categorical_conflict,
     extract_critical_claims,
@@ -358,6 +358,9 @@ def extract_all(sku_name: str, attribute: str) -> dict:
     # once here so a confidence out of [0,1] or a pack_qty < 1 crashes at
     # the transform, not downstream in the gate's comparisons.
     title_attributes = extract_title_attributes(sku_name)
+    package_types = title_attributes["package_types"]
+    if not package_types:
+        package_types = parse_attribute_details(attribute).get("attribute_package_types", [])
     return ExtractedAttributes(
         flavor=flavor,
         type=ptype,
@@ -367,7 +370,7 @@ def extract_all(sku_name: str, attribute: str) -> dict:
         volume_status=volume_status,
         pack_qty=pack_qty,
         pack_confidence=pack_conf,
-        package_types=title_attributes["package_types"],
+        package_types=package_types,
         package_materials=title_attributes["package_materials"],
         flavor_set=flavor_set,
         carbonation_set=set(critical["carbonation"]),

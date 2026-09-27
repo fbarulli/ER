@@ -16,6 +16,9 @@ import re
 from collections import Counter, defaultdict, deque
 from pathlib import Path
 
+from nltk.stem import SnowballStemmer
+
+from core.audit_json import csv_to_json
 from core.common import F, TRAIN_ROOT
 from core.critical_attributes import FLAVOR_ALIASES, FLAVOR_LEXICON
 from ner.ner_product_attributes import (
@@ -61,8 +64,13 @@ PRODUCT_TYPE_PATTERNS = (
 FLAVOR_RE = re.compile(r"\b(?:" + "|".join(sorted(FLAVOR_LEXICON | FLAVOR_ALIASES.keys(), key=len, reverse=True)) + r")\b")
 ATTRIBUTE_VOLUME_RE = re.compile(r"\bvolume\s+\d+(?:[.,]\d+)?(?:\s*(?:ml|cl|l|lt|ltr|cc|oz|qt|pt|gal))?\b")
 ATTRIBUTE_PACK_RE = re.compile(r"\bcount per unit\s+\d+\b")
+ATTRIBUTE_CAFFEINE_RE = re.compile(r"\bcaffeine\s+\d+(?:\s+\d+)?(?:\s+mg)?\b")
+ATTRIBUTE_JUICE_CONTENT_RE = re.compile(r"\bjuice content\s+\d+(?:\s+\d+)?\b")
+NATURAL_CLAIM_RE = re.compile(r"\b(?:100\s+(?:percent\s+)?natural|all\s+natural|naturally\s+derived\s+natural)\b")
 TOKEN_RE = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?")
-ROUNDS = ("live_regex", "volume_pack_cleanup", "model_stopwords", "candidate_phrases")
+FIELDS = ("brand", "title", "attributes")
+ROUNDS = ("live_regex", "volume_pack_cleanup", "model_stopwords", "candidate_phrases", "unique_tokens")
+STEMMER = SnowballStemmer("english")
 # Diagnostic candidates suggested by the earlier residual n-grams. These are
 # not part of the live extractor, and this audit does not change production.
 CANDIDATE_TITLE_RE = re.compile(
@@ -81,11 +89,13 @@ def drop_nearby_repeats(text: str, *, window: int, min_words: int) -> tuple[str,
     Only phrases of at least ``min_words`` tokens qualify; the longest available
     nonoverlapping copy is removed. Earlier kept text is never changed.
     """
-    source = TOKEN_RE.findall(text)
+    matches = list(TOKEN_RE.finditer(text))
+    source = [match.group() for match in matches]
     kept: list[str] = []
     original_positions: list[int] = []
     starts: dict[tuple[str, ...], deque[int]] = defaultdict(deque)
     removed_runs = 0
+    removed_spans: list[tuple[int, int]] = []
     i = 0
     while i < len(source):
         best = 0
@@ -104,6 +114,7 @@ def drop_nearby_repeats(text: str, *, window: int, min_words: int) -> tuple[str,
                         best = matched
         if best >= min_words:
             removed_runs += 1
+            removed_spans.append((matches[i].start(), matches[i + best - 1].end()))
             i += best
             continue
         kept.append(source[i])
@@ -112,10 +123,46 @@ def drop_nearby_repeats(text: str, *, window: int, min_words: int) -> tuple[str,
             start = len(kept) - min_words
             starts[tuple(kept[start:])].append(start)
         i += 1
-    return " ".join(kept), len(source) - len(kept), removed_runs
+    if not removed_spans:
+        return text, 0, 0
+    pieces: list[str] = []
+    previous = 0
+    for start, end in removed_spans:
+        pieces.append(text[previous:start])
+        previous = end
+    pieces.append(text[previous:])
+    return " ".join(" ".join(pieces).split()), len(source) - len(kept), removed_runs
 
 
-def residual(text: str, *, field: str, round_name: str) -> tuple[str, Counter[str]]:
+def live_patterns(field: str):
+    """Yield the lexical patterns audited for a working SKU input field."""
+    if field in {"title", "brand"}:
+        for pattern in (VOLUME_PATTERN_METRIC_EXT, VOLUME_PATTERN_US_EXT, VOLUME_RE):
+            yield "volume", pattern
+        yield "weight", WEIGHT_RE
+        for pattern in PACK_COUNT_RES:
+            yield "pack", pattern
+        yield "package_type", PACKAGE_TYPE_RE
+        yield "package_format", PACKAGE_FORMAT_RE
+        yield "package_material", PACKAGE_MATERIAL_RE
+        for pattern in PRODUCT_TYPE_PATTERNS:
+            yield "product_type", pattern
+    elif field == "attributes":
+        yield "attribute_volume", ATTRIBUTE_VOLUME_RE
+        yield "attribute_pack", ATTRIBUTE_PACK_RE
+        yield "attribute_caffeine", ATTRIBUTE_CAFFEINE_RE
+        yield "attribute_juice_content", ATTRIBUTE_JUICE_CONTENT_RE
+        yield "package_type_lexical", PACKAGE_TYPE_RE
+    else:
+        raise ValueError(f"unsupported SKU input field: {field}")
+    yield "flavor", FLAVOR_RE
+    yield "natural_claim_lexical", NATURAL_CLAIM_RE
+    for pattern in CLAIM_PATTERNS:
+        yield "claim", pattern
+
+
+def residual(text: str, *, field: str, round_name: str,
+             seen_tokens: set[str] | None = None) -> tuple[str, Counter[str]]:
     spans: list[tuple[int, int]] = []
     hits: Counter[str] = Counter()
 
@@ -126,33 +173,32 @@ def residual(text: str, *, field: str, round_name: str) -> tuple[str, Counter[st
             spans.extend(match.span() for match in matches)
 
     if round_name == "live_regex":
-        if field == "title":
-            for pattern in (VOLUME_PATTERN_METRIC_EXT, VOLUME_PATTERN_US_EXT, VOLUME_RE):
-                collect("volume", pattern)
-            collect("weight", WEIGHT_RE)
-            for pattern in PACK_COUNT_RES:
-                collect("pack", pattern)
-            collect("package_type", PACKAGE_TYPE_RE)
-            collect("package_format", PACKAGE_FORMAT_RE)
-            collect("package_material", PACKAGE_MATERIAL_RE)
-            for pattern in PRODUCT_TYPE_PATTERNS:
-                collect("product_type", pattern)
-        else:
-            collect("attribute_volume", ATTRIBUTE_VOLUME_RE)
-            collect("attribute_pack", ATTRIBUTE_PACK_RE)
-        collect("flavor", FLAVOR_RE)
-        for pattern in CLAIM_PATTERNS:
-            collect("claim", pattern)
+        for name, pattern in live_patterns(field):
+            collect(name, pattern)
     elif round_name == "volume_pack_cleanup":
         collect("model_volume_pack_cleanup", _VOLUME_PACK_RE)
     elif round_name == "model_stopwords":
-        kept = [token for token in text.split() if token not in _MODEL_STOP and token not in MINIMAL_STOPWORDS and len(token) > 1]
+        stopwords = MINIMAL_STOPWORDS | (_MODEL_STOP if field == "attributes" else set())
+        kept = [token for token in text.split() if token not in stopwords and len(token) > 1]
         removed = len(text.split()) - len(kept)
         if removed:
             hits["model_stopwords"] = removed
         return " ".join(kept), hits
     elif round_name == "candidate_phrases":
-        collect("candidate_phrase", CANDIDATE_TITLE_RE if field == "title" else CANDIDATE_ATTRIBUTES_RE)
+        collect("candidate_phrase", CANDIDATE_ATTRIBUTES_RE if field == "attributes" else CANDIDATE_TITLE_RE)
+    elif round_name == "unique_tokens":
+        if seen_tokens is None:
+            raise ValueError("unique_tokens requires a per-product seen set")
+        kept = []
+        for token in text.split():
+            key = STEMMER.stem(token) if token.isalpha() else token
+            if key not in seen_tokens:
+                seen_tokens.add(key)
+                kept.append(token)
+        removed = len(text.split()) - len(kept)
+        if removed:
+            hits["duplicate_tokens"] = removed
+        return " ".join(kept), hits
     else:
         raise ValueError(round_name)
 
@@ -177,10 +223,12 @@ def residual(text: str, *, field: str, round_name: str) -> tuple[str, Counter[st
 def audit(input_path: Path, rows_path: Path | None, *, top: int,
           repeat_window: int = 0, repeat_min_words: int = 4) -> dict[str, object]:
     totals: Counter[str] = Counter()
-    grams = {name: {field: {n: Counter() for n in (2, 3, 4)} for field in ("title", "attributes")} for name in ROUNDS}
+    grams = {name: {field: {n: Counter() for n in (2, 3, 4)} for field in FIELDS} for name in ROUNDS}
+    description_grams = {n: Counter() for n in (2, 3, 4)}
     longest: dict[str, dict[str, list[tuple[int, int, dict[str, object]]]]] = {
-        name: {"title": [], "attributes": []} for name in ROUNDS
+        name: {field: [] for field in FIELDS} for name in ROUNDS
     }
+    description_longest: list[tuple[int, int, dict[str, object]]] = []
     if rows_path is not None:
         rows_path.parent.mkdir(parents=True, exist_ok=True)
     from contextlib import nullcontext
@@ -188,16 +236,19 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
     with input_path.open(newline="", encoding="utf-8") as source, destination_context as destination:
         reader = csv.DictReader(source)
         writer = csv.DictWriter(destination, fieldnames=(
-            "product_id", "title", "attributes",
-            *(f"{name}_{field}" for name in ROUNDS for field in ("title", "attributes")),
+            "product_id", *FIELDS,
+            *(f"{name}_{field}" for name in ROUNDS for field in FIELDS),
+            "unique_description",
         )) if destination else None
         if writer:
             writer.writeheader()
         for row in reader:
             totals["rows"] += 1
             output = {"product_id": row.get("product_id", ""),
-                      "title": row.get("title", ""), "attributes": row.get("attributes", "")}
-            for field, source_col in (("title", "title"), ("attributes", "attributes")):
+                      **{field: row.get(field, "") for field in FIELDS}}
+            seen_tokens: set[str] = set()
+            for field in FIELDS:
+                source_col = field
                 current = normalize_text(output[source_col])
                 totals[f"{field}_input_tokens"] += len(TOKEN_RE.findall(current))
                 if repeat_window:
@@ -209,7 +260,8 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
                         totals[f"{field}_rows_with_repeat"] += 1
                 for round_name in ROUNDS:
                     previous_count = len(TOKEN_RE.findall(current))
-                    current, hits = residual(current, field=field, round_name=round_name)
+                    current, hits = residual(current, field=field, round_name=round_name,
+                                             seen_tokens=seen_tokens)
                     output[f"{round_name}_{field}"] = current
                     totals.update({f"{round_name}_{field}_{key}": value for key, value in hits.items()})
                     if hits:
@@ -228,12 +280,27 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
                             heapq.heappush(heap, entry)
                         elif len(current) > heap[0][0]:
                             heapq.heapreplace(heap, entry)
+            description = " ".join(output[f"unique_tokens_{field}"] for field in FIELDS).strip()
+            output["unique_description"] = description
+            description_tokens = TOKEN_RE.findall(description)
+            totals["unique_description_tokens"] += len(description_tokens)
+            for n in (2, 3, 4):
+                description_grams[n].update(" ".join(description_tokens[i:i+n])
+                                            for i in range(len(description_tokens) - n + 1))
+            if description:
+                item = {"product_id": output["product_id"], "length": len(description),
+                        "description": description}
+                entry = (len(description), totals["rows"], item)
+                if len(description_longest) < top:
+                    heapq.heappush(description_longest, entry)
+                elif len(description) > description_longest[0][0]:
+                    heapq.heapreplace(description_longest, entry)
             if writer:
                 writer.writerow(output)
 
     report = {
         "input": str(input_path), "rows_csv": str(rows_path) if rows_path else None,
-        "method": "Four cumulative rounds: live extractor regexes; model volume/pack cleanup regex; model stopword lists; diagnostic candidate phrases. Rank residuals by character length and word n-grams by occurrences. Regex hit counts may overlap; removed token counts do not.",
+        "method": "Five cumulative rounds over brand/title/attributes: live lexical regexes; legacy volume/pack cleanup regex; model stopword lists; diagnostic candidate phrases; keep each remaining token once by NLTK Snowball stem across the product in brand/title/attributes order. The first original token spelling is retained. Brand matches are diagnostic and are not structured attribute claims. Rank residuals by character length and word n-grams by occurrences. Regex hit counts may overlap; removed token counts do not.",
         "repeat_rule": {"window_tokens": repeat_window, "minimum_phrase_tokens": repeat_min_words,
                         "margin_basis": "original normalized token positions between phrase starts",
                         "action": "drop later exact contiguous phrase; keep first occurrence"} if repeat_window else None,
@@ -246,6 +313,13 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
                                     for n in (2, 3, 4)} for field in grams[name]},
             } for name in ROUNDS
         },
+        "unique_descriptions": {
+            "longest": [entry[2] for entry in sorted(description_longest,
+                                                     key=lambda entry: (-entry[0], entry[2]["product_id"]))],
+            "ngrams": {str(n): [{"text": phrase, "count": count}
+                                 for phrase, count in description_grams[n].most_common(top)]
+                       for n in (2, 3, 4)},
+        },
     }
     return report
 
@@ -255,7 +329,7 @@ def print_report(report: dict[str, object]) -> None:
     print(f"rows={totals['rows']:,} residuals={report['rows_csv']}")
     for round_name in ROUNDS:
         print(f"\n{round_name}")
-        for field in ("title", "attributes"):
+        for field in FIELDS:
             print(f"  {field}: removed={totals[f'{round_name}_{field}_removed_tokens']:,} residual={totals[f'{round_name}_{field}_residual_tokens']:,}")
             final = round_name == ROUNDS[-1]
             for item in report["rounds"][round_name]["longest"][field][:5 if final else 3]:
@@ -263,6 +337,12 @@ def print_report(report: dict[str, object]) -> None:
                 print(f"    longest {item['length']:>4} {item['product_id']}: {value}")
             for n in (2, 3, 4):
                 print(f"    {n}-grams: " + ", ".join(f"{g['text']} ({g['count']:,})" for g in report["rounds"][round_name]["ngrams"][field][str(n)][:10 if final else 5]))
+    print(f"\nunique descriptions: {totals['unique_description_tokens']:,} tokens")
+    for item in report["unique_descriptions"]["longest"][:5]:
+        print(f"  longest {item['length']:>4} {item['product_id']}: {item['description']}")
+    for n in (2, 3, 4):
+        print(f"  {n}-grams: " + ", ".join(f"{g['text']} ({g['count']:,})"
+                                       for g in report["unique_descriptions"]["ngrams"][str(n)][:10]))
 
 
 def main() -> None:
@@ -270,6 +350,7 @@ def main() -> None:
     parser.add_argument("--input", type=Path, default=F["dataset_deduped"])
     parser.add_argument("--out", type=Path, default=TRAIN_ROOT / "results" / "regex_residual_audit.json")
     parser.add_argument("--rows-out", type=Path, default=TRAIN_ROOT / "results" / "regex_residual_rows.csv")
+    parser.add_argument("--rows-json-out", type=Path, help="Optional full row-level JSON; large")
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--compare-repeats", action="store_true", help="Audit both baseline and repeat-reduced text")
     parser.add_argument("--repeat-window", type=int, default=64, help="Maximum original token distance between repeated phrase starts")
@@ -283,14 +364,18 @@ def main() -> None:
         reduced = audit(args.input, args.rows_out, top=args.top,
                         repeat_window=args.repeat_window, repeat_min_words=args.repeat_min_words)
         report = {"baseline": baseline, "repeat_reduced": reduced}
+        if args.rows_json_out:
+            reduced["rows_json"] = str(args.rows_json_out)
         args.out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if args.rows_json_out:
+            csv_to_json(args.rows_out, args.rows_json_out)
         print(f"comparison={args.out} rows={baseline['counts']['rows']:,} margin={args.repeat_window} tokens minimum_repeat={args.repeat_min_words} tokens")
-        for field in ("title", "attributes"):
+        for field in FIELDS:
             counts = reduced["counts"]
             print(f"{field}: repeated_tokens_dropped={counts.get(f'{field}_repeat_removed_tokens', 0):,} repeated_runs={counts.get(f'{field}_repeat_runs', 0):,} rows={counts.get(f'{field}_rows_with_repeat', 0):,}")
         for round_name in ROUNDS:
             print(f"\n{round_name}")
-            for field in ("title", "attributes"):
+            for field in FIELDS:
                 before = baseline["counts"][f"{round_name}_{field}_residual_tokens"]
                 after = reduced["counts"][f"{round_name}_{field}_residual_tokens"]
                 print(f"  {field}: baseline={before:,} repeat_reduced={after:,} delta={after-before:+,}")
@@ -302,7 +387,11 @@ def main() -> None:
                         print(f"    {label} {n}-grams: " + ", ".join(f"{g['text']} ({g['count']:,})" for g in values))
     else:
         report = audit(args.input, args.rows_out, top=args.top)
+        if args.rows_json_out:
+            report["rows_json"] = str(args.rows_json_out)
         args.out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if args.rows_json_out:
+            csv_to_json(args.rows_out, args.rows_json_out)
         print(f"report={args.out}")
         print_report(report)
 

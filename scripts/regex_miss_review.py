@@ -13,16 +13,19 @@ import csv
 import json
 import re
 from collections import Counter, defaultdict
-from difflib import get_close_matches
 from functools import lru_cache
 from pathlib import Path
 
+from rapidfuzz import fuzz, process
+
+from core.audit_json import csv_to_json
 from core.attribute_conflicts import sku_attribute_info
 from core.common import TRAIN_ROOT
 from core.critical_attributes import FLAVOR_ALIASES, FLAVOR_LEXICON, normalized_attribute_text
 
 
 ATTRIBUTE_ITEM_RE = re.compile(r"(?:^|;)\s*([^:;]+):\s*([^;]*)")
+FLAVOR_CHOICES = tuple(sorted(FLAVOR_LEXICON))
 TITLE_SIGNALS = {
     "volume": re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:ml|millilit(?:er|re)s?|cl|lit(?:er|re)s?|l|fl\s*oz|oz)\b"),
     "pack": re.compile(r"\b(?:pack\s+(?:of\s+)?\d+|\d+\s*(?:pack|pk|ct|count))\b"),
@@ -46,7 +49,8 @@ FIELD_DIMENSIONS = {
 @lru_cache(maxsize=None)
 def flavor_suggestion(value: str) -> str:
     words = re.findall(r"[a-z]+", normalized_attribute_text(value))
-    suggestions = [match for word in words for match in get_close_matches(word, FLAVOR_LEXICON, n=1, cutoff=0.82)]
+    suggestions = [result[0] for word in words
+                   if (result := process.extractOne(word, FLAVOR_CHOICES, scorer=fuzz.ratio, score_cutoff=82))]
     return ", ".join(dict.fromkeys(suggestions))
 
 
@@ -59,8 +63,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=TRAIN_ROOT / "results" / "regex_residual_rows.csv")
     parser.add_argument("--out", type=Path, default=TRAIN_ROOT / "results" / "regex_miss_candidates.csv")
+    parser.add_argument("--detail-json", type=Path, help="Optional full row-level JSON; large")
     parser.add_argument("--summary", type=Path, default=TRAIN_ROOT / "results" / "regex_miss_summary.json")
-    parser.add_argument("--top", type=int, default=40)
     args = parser.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
@@ -138,15 +142,18 @@ def main() -> None:
         "candidate_mentions": sum(counts.values()),
         "reason_counts": dict(reason_totals),
         "method": "Title residual phrase flags when the matching live parser dimension is empty; explicit attribute fields flagged when unrecognized/empty. Fuzzy flavor names are suggestions only.",
-        "top": [
+        "groups": [
             {"source": key[0], "dimension": key[1], "reason": key[2], "candidate": key[3],
              "count": count, "example_product_ids": examples[key]}
-            for key, count in ranked[:args.top]
+            for key, count in ranked
         ],
     }
+    if args.detail_json:
+        csv_to_json(args.out, args.detail_json)
+        summary["detail_json"] = str(args.detail_json)
     args.summary.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"rows={rows_seen:,} candidates={sum(counts.values()):,} detail={args.out} summary={args.summary}")
-    for item in summary["top"][:25]:
+    for item in summary["groups"][:25]:
         print(f"{item['count']:>6,}  {item['source']:<10} {item['dimension']:<13} {item['candidate']:<45} ids={','.join(item['example_product_ids'])}")
 
 

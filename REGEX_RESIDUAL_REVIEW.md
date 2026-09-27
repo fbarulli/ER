@@ -1,45 +1,63 @@
-# Regex residual review (2026-09-27)
+# Regex review (2026-09-27)
 
-Corpus: `data/dataset_deduped.csv`, 61,529 rows. The audit removes matched
-text in four cumulative rounds: live attribute/extraction regex spans,
-volume/pack cleanup, model stopwords, and diagnostic candidate phrases.
-Titles and attribute blobs are counted separately. Match counts are lexical
-coverage, not a precision/recall score for structured parser output.
+The review uses the 61,529 rows in `data/dataset_deduped.csv` and the active
+SKU fields `brand`, `title`, and `attributes`. Lexical capture is not the same
+as a structured parser value. In particular, brand regex hits are diagnostic.
 
-| Pass | Title tokens left | Attribute tokens left |
-| --- | ---: | ---: |
-| Live regex | 307,099 | 1,541,464 |
-| Volume/pack cleanup | 306,741 | 1,520,504 |
-| Model stopwords | 240,128 | 454,630 |
-| Diagnostic candidates | 236,225 | 390,415 |
+`results/regex_attribute_captures.json` is the compact, **complete** list of
+all 291 distinct attribute capture groups, with counts and example product
+IDs. `results/regex_capture_summary.json` contains all 3,590 groups across the
+three working fields. These are not top-N previews. The row-level capture CSV
+is available for drill-down but is much larger. Full row-level JSON is opt-in
+via `--detail-json` because it is impractically large to inspect.
 
-Before each pass, a comparison run removed exact repeated phrases of at least
-four tokens when the later phrase began within 64 original token positions of
-an earlier one. It removed 651 raw title tokens across 100 rows and 634 raw
-attribute tokens across 146 rows. At the final pass, the residual changed by
-only 254 title tokens and 154 attribute tokens. Nearby exact repetition is a
-minor cause of the remaining text. Distinct variants in one title, such as the
-grapefruit and white-grape entries in product `575074082`, stay distinct.
+For product `783327667`, `results/regex_capture_783327667.json` shows exact
+title and attribute lexical matches plus raw numeric spans. The raw spans
+preserve `100%`, `12x355ML`, `Caffeine: 0-15 mg`, and `Juice Content: 0-2%`,
+which the ordinary text normalizer would otherwise render without punctuation.
+`100% Natural` is a title claim, not an attribute value; it is captured
+lexically as `100 natural` but is not a structured parser class.
 
-The row-linked candidate review compares explicit source evidence with the
-actual `sku_attribute_info` output. It generated 59,230 candidate mentions:
-33,888 declared fields whose parser dimension is empty, 14,593 unrecognized
-declared flavors, 9,799 sweetener ingredient mentions outside the current
-claim classes, and 950 residual title signals with an empty parser dimension.
-Examples include declared `Pack Type: Bottle` (20,522 rows), `Flavour:
-Blueberry` (927), and `Sweetener: Cane Sugar` (2,345). These are review leads,
-not confirmed errors: the flavor field also contains type-like values such as
-`tea`, and the sweetener claim schema deliberately has fewer classes than the
-catalog's ingredient vocabulary.
+`results/regex_miss_summary.json` likewise contains all 319 distinct candidate
+groups. Its 25,367 row-linked candidate mentions break down as follows:
 
-The scripts leave production regexes untouched. Reproduce the outputs with:
+| Review reason | Mentions | Interpretation |
+| --- | ---: | --- |
+| Declared flavor unrecognized | 14,593 | Some are type-like values (`tea`, `latte`), others are likely vocabulary gaps (`blueberry`, `banana`). |
+| Sweetener ingredient outside claim classes | 9,799 | The current claim schema has fewer classes than ingredient vocabulary (`cane sugar`, `sucralose`). |
+| Title signal, parser dimension empty | 950 | Includes `bubble` carbonation and standalone `sugar`; inspect context. |
+| Declared field, parser dimension empty | 25 | 24 `Pack Type: aerosol`, one `Pack Type: tray`. |
+
+`Pack Type: Bottle` no longer appears in the declared-field miss category:
+the extractor now uses declared package type when the title has none. The
+attribute lexical capture has 24,863 `bottle` spans; lexical counts do not
+assert structured acceptance for every span.
+
+The residual audit applies five cumulative diagnostic passes: live lexical
+regexes, legacy volume/pack cleanup, model stopwords, candidate phrases, and
+per-product stem uniqueness in `brand`, `title`, `attributes` order. The last
+pass gives `unique_description` in `results/regex_residual_rows.csv`; English
+singular/plural variants such as `electrolyte` and `electrolytes` share a key,
+while the first observed spelling remains visible. The 61,529 combined
+descriptions contain 578,200 retained tokens and no repeated stem within a
+product. The JSON audit is a ranked summary, not a full row dump. Full rows
+can be emitted as JSON with `--rows-json-out`, but this is opt-in due to size.
+
+The nearby-repeat comparison drops a later exact phrase of at least four
+tokens if it begins within 64 original token positions of an earlier copy.
+It found 651 raw title tokens and 634 raw attribute tokens in such repeats.
+This is a diagnostic comparison; no production cleaning behavior is changed
+by the audit script.
+
+Reproduce with ER's uv environment:
 
 ```sh
 PYTHONPATH=src .venv/bin/python scripts/regex_residual_audit.py
 PYTHONPATH=src .venv/bin/python scripts/regex_residual_audit.py --compare-repeats --out results/regex_repeat_comparison.json --rows-out results/regex_repeat_rows.csv
+PYTHONPATH=src .venv/bin/python scripts/regex_capture_review.py
+PYTHONPATH=src .venv/bin/python scripts/regex_capture_review.py --inspect-product-id 783327667 --inspect-out results/regex_capture_783327667.json
 PYTHONPATH=src .venv/bin/python scripts/regex_miss_review.py
 ```
 
-Outputs under `results/` are local generated files ignored by Git. The row
-level candidate CSV includes product ID, original title/attributes, candidate
-phrase, and parser value; the JSON reports aggregate counts and example IDs.
+Optional audit dependencies are listed in `requirements-audit.txt`. The files
+under `results/` are generated locally and ignored by Git.

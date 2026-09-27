@@ -241,6 +241,10 @@ def parse_attribute_details(attribute: Any) -> dict[str, Any]:
         numeric = re.search(NUMBER, items["volume"])
         if numeric:
             volume_values = [_number(numeric.group())]
+    attribute_package_types = sorted({
+        _canonical_package_type(item)
+        for item in PACKAGE_TYPE_RE.findall(items.get("pack type", ""))
+    })
     package_values = []
     for key in ("pack type", "pack material type", "sustainable packaging"):
         value = items.get(key, "")
@@ -248,6 +252,7 @@ def parse_attribute_details(attribute: Any) -> dict[str, Any]:
         package_values.extend(item.lower() for item in PACKAGE_MATERIAL_RE.findall(value))
     return {
         "attribute_volume_ml": volume_values,
+        "attribute_package_types": attribute_package_types,
         "attribute_package_details": sorted(set(package_values)),
         "attribute_raw": items,
     }

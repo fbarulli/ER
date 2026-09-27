@@ -1,0 +1,5 @@
+# Optional local audit tools. Install into ER's uv-managed .venv with:
+# uv pip install --python .venv/bin/python -r requirements-audit.txt
+spacy==3.8.16
+rapidfuzz==3.14.6
+nltk==3.10.3
