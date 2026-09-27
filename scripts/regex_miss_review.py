@@ -50,7 +50,7 @@ FIELD_DIMENSIONS = {
 def flavor_suggestion(value: str) -> str:
     words = re.findall(r"[a-z]+", normalized_attribute_text(value))
     suggestions = [result[0] for word in words
-                   if (result := process.extractOne(word, FLAVOR_CHOICES, scorer=fuzz.ratio, score_cutoff=82))]
+                   if (result := process.extractOne(word, FLAVOR_CHOICES, scorer=fuzz.ratio, score_cutoff=90))]
     return ", ".join(dict.fromkeys(suggestions))
 
 

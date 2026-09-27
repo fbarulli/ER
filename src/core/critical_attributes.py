@@ -55,6 +55,23 @@ def extract_flavor_tokens(*values: object) -> frozenset[str]:
     )
 
 
+# Explicit negative-sugar surfaces only.  A typo is accepted only in the
+# anchored phrase "no dugar"; arbitrary fuzzy matches are not trusted claims.
+# The numeric branch excludes "0 sugar added", which is a different claim.
+NO_SUGAR_RE = re.compile(
+    r"\b(?:no (?:sugars?|dugar)|zero sugars?|"
+    r"0\s*(?:g|grams?)?\s*sugars?\b(?!\s+added\b)|"
+    r"sugar free|sugarfree|sugarless|without sugar|free of sugar)\b"
+)
+NO_ADDED_SUGAR_RE = re.compile(
+    r"\b(?:(?:no|without|zero|0) added sugar|(?:zero|0) sugar added)\b"
+)
+SUGAR_CLAIM_RE = re.compile(
+    r"\b(?:with added sugar|contains sugar|sweetened with sugar|"
+    r"made with sugar(?!\s+free\b)|sweetener sugar|sugar sweetened)\b"
+)
+
+
 def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     """Extract explicit non-numeric critical claims from source text.
 
@@ -64,23 +81,9 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     """
     text = normalized_attribute_text(*values)
 
-    no_sugar = bool(
-        re.search(
-            r"\b(?:no sugar|zero sugar|sugar free|sugarfree|sugarless|"
-            r"without sugar|free of sugar)\b",
-            text,
-        )
-    )
-    no_added_sugar = bool(
-        re.search(r"\b(?:no|without) added sugar\b", text)
-    )
-    sugar = bool(
-        re.search(
-            r"\b(?:with added sugar|contains sugar|sweetened with sugar|"
-            r"sweetener sugar|sugar sweetened)\b",
-            text,
-        )
-    )
+    no_sugar = bool(NO_SUGAR_RE.search(text))
+    no_added_sugar = bool(NO_ADDED_SUGAR_RE.search(text))
+    sugar = bool(SUGAR_CLAIM_RE.search(text))
     sweetener: set[str] = set()
     if no_sugar:
         sweetener.add("no_sugar")

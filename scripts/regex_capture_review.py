@@ -15,19 +15,83 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import pandas as pd
+
 from core.audit_json import csv_to_json
+from core.attribute_conflicts import sku_attribute_info
+from core.critical_attributes import FLAVOR_ALIASES, normalized_attribute_text
+from core.model_input import build_sku_text, model_input_composition, model_input_info
+from core.structured_features import sku_info
 from core.common import F, TRAIN_ROOT
 from pipeline import normalize_text
 if __package__:
-    from .regex_residual_audit import FIELDS, live_patterns
+    from .regex_residual_audit import FIELDS, ROUNDS, live_patterns, residual
 else:
-    from regex_residual_audit import FIELDS, live_patterns
+    from regex_residual_audit import FIELDS, ROUNDS, live_patterns, residual
 
 ATTRIBUTE_ITEM_RE = re.compile(r"(?:^|;)\s*([^:;]+):\s*([^;]*)")
 NUMBER_VALUE_RE = re.compile(
     r"(?<![a-z0-9])(?:\d+\s*[x×]\s*\d+(?:[.,]\d+)?\s*(?:mg|ml|g|l)?|\d+(?:[.,]\d+)?(?:\s*[-–]\s*\d+(?:[.,]\d+)?)?\s*(?:%|mg|ml|g|l)?)(?![a-z0-9])",
     re.IGNORECASE,
 )
+SWEETENER_TYPES = frozenset({
+    "sugar", "cane sugar", "sucralose", "acesulfame potassium", "stevia",
+    "aspartame", "hfcs", "fructose", "erythritol", "cyclamate", "monk fruit",
+    "saccharin", "glucose", "sucrose", "corn syrup", "allulose", "neotame",
+    "neohesperidin dc",
+})
+SUGAR_INGREDIENT_TYPES = frozenset({
+    "sugar", "cane_sugar", "hfcs", "fructose", "glucose", "sucrose", "corn_syrup",
+})
+
+
+def sweetener_type_evidence(raw: str) -> list[dict[str, object]]:
+    """Typed declarations, distinct from the no-sugar/sugar claim classes."""
+    observations = []
+    for item in ATTRIBUTE_ITEM_RE.finditer(raw):
+        if item.group(1).strip().casefold() != "sweetener":
+            continue
+        for part in re.finditer(r"[^,]+", item.group(2)):
+            value = part.group().strip().casefold()
+            if not value:
+                continue
+            start = item.start(2) + part.start() + len(part.group()) - len(part.group().lstrip())
+            observations.append({
+                "source_column": "attributes",
+                "source_field": "sweetener",
+                "raw_span": [start, start + len(part.group().strip())],
+                "surface": part.group().strip(),
+                "canonical_value": value.replace(" ", "_") if value in SWEETENER_TYPES else None,
+                "status": "declared_not_integrated" if value in SWEETENER_TYPES else "unmapped_or_non_type",
+                "swap_eligible": False,
+            })
+    return observations
+
+
+def declared_flavor_evidence(raw: str) -> list[dict[str, object]]:
+    """Preserve every explicit flavor value, including values outside the lexicon."""
+    observations = []
+    for item in ATTRIBUTE_ITEM_RE.finditer(raw):
+        if item.group(1).strip().casefold() not in {"flavour", "flavor"}:
+            continue
+        for part in re.finditer(r"[^,/]+", item.group(2)):
+            surface = part.group().strip()
+            value = normalized_attribute_text(surface)
+            if not value:
+                continue
+            value = " ".join(FLAVOR_ALIASES.get(token, token) for token in value.split())
+            start = item.start(2) + part.start() + len(part.group()) - len(part.group().lstrip())
+            observations.append({
+                "source_column": "attributes",
+                "source_field": "flavor",
+                "raw_span": [start, start + len(surface)],
+                "surface": surface,
+                "canonical_value": value.replace(" ", "_"),
+                "status": "declared_not_integrated",
+                "swap_eligible": False,
+            })
+    return observations
+
 
 
 def attribute_number_captures(raw: str) -> list[dict[str, object]]:
@@ -44,6 +108,97 @@ def attribute_number_captures(raw: str) -> list[dict[str, object]]:
                 "end": item.start(2) + number.end(),
             })
     return result
+
+
+def semantic_profile(title: str, attributes: str, numeric_captures: list[dict[str, object]],
+                     title_captures: list[dict[str, object]]) -> dict[str, object]:
+    """Versioned evidence contract; only parser-accepted slots may be swapped.
+
+    SID assignment still uses embeddings, and training augmentation still uses
+    structured payload tokens. This review format does not change either path.
+    """
+    parsed = sku_attribute_info(title, attributes)
+    fields = ("volume", "pack", "package_type", "flavor", "carbonation", "sweetener", "pulp")
+    trusted = {
+        field: sorted(parsed["flavor_set" if field == "flavor" else field])
+        for field in fields
+    }
+    slot_by_field = {
+        "caffeine": "caffeine_mg",
+        "juice content": "juice_content_pct",
+        "volume": "volume_untyped",
+        "count per unit": "pack_count",
+    }
+    observations = []
+    for item in numeric_captures:
+        surface = str(item["matched_text"])
+        values = [float(value.replace(",", ".")) for value in re.findall(r"\d+(?:[.,]\d+)?", surface)]
+        unit_match = re.search(r"(%|mg|ml|g|l)\s*$", surface, re.IGNORECASE)
+        field_key = str(item["attribute_field"]).casefold()
+        observations.append({
+            "source_column": "attributes",
+            "source_field": field_key,
+            "raw_span": [item["start"], item["end"]],
+            "surface": surface,
+            "candidate_slot": slot_by_field.get(field_key),
+            "numbers": values,
+            "unit": unit_match.group(1).lower() if unit_match else None,
+            "status": "raw_numeric_evidence",
+            "swap_eligible": False,
+        })
+    sweetener_evidence = sweetener_type_evidence(attributes)
+    flavor_evidence = declared_flavor_evidence(attributes)
+    sweetener_types = sorted({item["canonical_value"] for item in sweetener_evidence
+                              if item["canonical_value"] is not None})
+    consistency_flags = []
+    if "no_sugar" in trusted["sweetener"] and SUGAR_INGREDIENT_TYPES.intersection(sweetener_types):
+        consistency_flags.append("no_sugar_claim_conflicts_with_sugar_ingredient")
+    return {
+        "schema_version": "er.attribute_evidence.v1",
+        "trusted_structured_values": trusted,
+        "swap_compatible_fields": [
+            field for field in fields if trusted[field]
+            and not (field == "sweetener" and consistency_flags)
+        ],
+        "candidate_typed_values": {
+            "sweetener_type": sweetener_types,
+            "declared_flavor": sorted({item["canonical_value"] for item in flavor_evidence}),
+        },
+        "consistency_flags": consistency_flags,
+        "typed_evidence": [*sweetener_evidence, *flavor_evidence],
+        "numeric_observations": observations,
+        "lexical_only_claims": [
+            {"source_column": "title", "surface": item["matched_text"],
+             "normalized_span": [item["start"], item["end"]],
+             "candidate_slot": "natural_claim", "status": "lexical_only",
+             "swap_eligible": False}
+            for item in title_captures if item["capture_type"] == "natural_claim_lexical"
+        ],
+        "note": "Only trusted_structured_values align with current model swap fields. Numeric observations and lexical-only claims are provenance, not SID codes or augmentation instructions.",
+    }
+
+
+def model_payload_review(row: dict[str, str]) -> dict[str, object]:
+    """Build the exact active SKU payload and compare it to audit-only dedup."""
+    info = model_input_info(sku_info(row["title"], row["attributes"]))
+    payload = build_sku_text(pd.Series(row), info)
+    plain = [token for token in payload.split() if "_" not in token and not token.startswith("[FIELD_")]
+    repeated = {token: count for token, count in Counter(plain).items() if count > 1}
+    seen: set[str] = set()
+    unique_fields = []
+    for field in FIELDS:
+        current = normalize_text(row[field])
+        for round_name in ROUNDS:
+            current, _ = residual(current, field=field, round_name=round_name, seen_tokens=seen)
+        unique_fields.append(current)
+    return {
+        "composition": model_input_composition().model_dump(),
+        "payload": payload,
+        "token_count": len(payload.split()),
+        "repeated_plain_tokens": dict(sorted(repeated.items())),
+        "audit_unique_description": " ".join(part for part in unique_fields if part),
+        "note": "Audit dedup is diagnostic; it does not rewrite the model payload.",
+    }
 
 
 def captures(text: str, field: str) -> list[tuple[int, int, str, str]]:
@@ -131,6 +286,11 @@ def main() -> None:
                         "raw_numeric_captures": attribute_number_captures(original),
                         "note": "Lexical and numeric spans are evidence, not necessarily accepted structured parser values. Raw numeric spans preserve units and percent signs lost during normalize_text.",
                     })
+                    inspected["semantic_profile"] = semantic_profile(
+                        row["title"], original, inspected["raw_numeric_captures"],
+                        inspected.get("title_lexical_regex_captures", []),
+                    )
+                    inspected["model_payload_review"] = model_payload_review(row)
                 for start, end, label, phrase in field_captures:
                     key = (field, label, phrase)
                     counts[key] += 1

@@ -290,6 +290,7 @@ def _cleaned_canonical_text(
 
 def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
     from core.structured_features import append_text
+    from ner.ner_product_attributes import extract_title_attributes
     from pipeline import clean_sku_text, strip_schema_words
 
     base = strip_schema_words(clean_sku_text(
@@ -300,7 +301,17 @@ def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
         row_metadata_text(row, "category", "category_path"),
         row_metadata_text(row, "category_path", "breadcrumbs_eng"),
     ))
-    return append_text(base, info, enabled=_structured_text_enabled())
+    # The legacy profile is a byte-for-byte rollback contract. The active
+    # cleaned profile now accepts declared Pack Type when the title has none,
+    # but that new evidence must not silently alter old legacy payloads.
+    legacy_info = dict(info)
+    # A title-only ablation supplies a precomputed full-row ``info`` while
+    # blanking attributes in the row; keep that supplied structured channel.
+    if row_metadata_text(row, "attributes", "attr").strip():
+        legacy_info["package_type"] = set(extract_title_attributes(
+            row_metadata_text(row, "title")
+        )["package_types"])
+    return append_text(base, legacy_info, enabled=_structured_text_enabled())
 
 
 def _legacy_canonical_text(

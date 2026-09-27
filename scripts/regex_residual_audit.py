@@ -20,7 +20,10 @@ from nltk.stem import SnowballStemmer
 
 from core.audit_json import csv_to_json
 from core.common import F, TRAIN_ROOT
-from core.critical_attributes import FLAVOR_ALIASES, FLAVOR_LEXICON
+from core.critical_attributes import (
+    FLAVOR_ALIASES, FLAVOR_LEXICON, NO_ADDED_SUGAR_RE, NO_SUGAR_RE,
+    SUGAR_CLAIM_RE,
+)
 from ner.ner_product_attributes import (
     PACK_COUNT_RES,
     PACKAGE_FORMAT_RE,
@@ -43,9 +46,9 @@ from pipeline import (
 # Keep each entire claim together so a residual cannot turn "no sugar" into
 # an apparent positive "sugar" mention.
 CLAIM_PATTERNS = (
-    re.compile(r"\b(?:no sugar|zero sugar|sugar free|sugarfree|sugarless|without sugar|free of sugar)\b"),
-    re.compile(r"\b(?:no|without) added sugar\b"),
-    re.compile(r"\b(?:with added sugar|contains sugar|sweetened with sugar|sweetener sugar|sugar sweetened)\b"),
+    NO_SUGAR_RE,
+    NO_ADDED_SUGAR_RE,
+    SUGAR_CLAIM_RE,
     re.compile(r"\bdiet\b"),
     re.compile(r"\b(?:non carbonated|uncarbonated|not carbonated|still|carbonated|sparkling|fizzy)\b"),
     re.compile(r"\b(?:no pulp|without pulp|pulp free|free of pulp|with (?:extra )?pulp|contains pulp|pulp yes)\b"),
@@ -64,6 +67,7 @@ PRODUCT_TYPE_PATTERNS = (
 FLAVOR_RE = re.compile(r"\b(?:" + "|".join(sorted(FLAVOR_LEXICON | FLAVOR_ALIASES.keys(), key=len, reverse=True)) + r")\b")
 ATTRIBUTE_VOLUME_RE = re.compile(r"\bvolume\s+\d+(?:[.,]\d+)?(?:\s*(?:ml|cl|l|lt|ltr|cc|oz|qt|pt|gal))?\b")
 ATTRIBUTE_PACK_RE = re.compile(r"\bcount per unit\s+\d+\b")
+ATTRIBUTE_PACKAGE_TYPE_RE = re.compile(r"(?<=pack type )" + PACKAGE_TYPE_RE.pattern, re.IGNORECASE)
 ATTRIBUTE_CAFFEINE_RE = re.compile(r"\bcaffeine\s+\d+(?:\s+\d+)?(?:\s+mg)?\b")
 ATTRIBUTE_JUICE_CONTENT_RE = re.compile(r"\bjuice content\s+\d+(?:\s+\d+)?\b")
 NATURAL_CLAIM_RE = re.compile(r"\b(?:100\s+(?:percent\s+)?natural|all\s+natural|naturally\s+derived\s+natural)\b")
@@ -152,7 +156,7 @@ def live_patterns(field: str):
         yield "attribute_pack", ATTRIBUTE_PACK_RE
         yield "attribute_caffeine", ATTRIBUTE_CAFFEINE_RE
         yield "attribute_juice_content", ATTRIBUTE_JUICE_CONTENT_RE
-        yield "package_type_lexical", PACKAGE_TYPE_RE
+        yield "package_type_lexical", ATTRIBUTE_PACKAGE_TYPE_RE
     else:
         raise ValueError(f"unsupported SKU input field: {field}")
     yield "flavor", FLAVOR_RE
