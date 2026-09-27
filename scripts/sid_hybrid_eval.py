@@ -51,7 +51,7 @@ from training.semantic_ids import (
     assign_sids,
     fit_rq_kmeans,
 )
-from training.sid_hybrid import hybrid_matrix
+from training.sid_hybrid import hybrid_matrix, veto_matrix
 
 sys.path.insert(0, str(TRAIN_ROOT / "scripts"))
 from sid_phase0_report import _pair_graph, _text_info  # noqa: E402
@@ -125,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sku-csv", type=str, default=None)
     parser.add_argument("--alpha", type=float, default=0.8)
     parser.add_argument("--beta", type=float, default=0.2)
+    parser.add_argument("--gammas", type=str, default="0.05,0.10,0.20",
+                        help="veto penalties swept in one run (one encode)")
     parser.add_argument("--max-pairs", type=int, default=2000)
     parser.add_argument("--conflict-pool", type=int, default=512)
     parser.add_argument("--easy-per-true", type=int, default=2)
@@ -132,6 +134,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", type=str, default=str(_SID_OUT_DIR))
     args = parser.parse_args(argv)
     recall_ks = [int(k) for k in str(args.recall_ks).split(",") if k.strip()]
+    gammas = [float(g) for g in str(args.gammas).split(",") if g.strip()]
+    if any(g < 0.0 for g in gammas):
+        return _fail(f"--gammas must be non-negative, got {args.gammas}")
 
     cfg = load_config()
     split_cfg = cfg["split"]
@@ -250,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
         overlap = np.logical_and.accumulate(eq, axis=1).mean(axis=1)
         return float(args.alpha) * _cos(pairs) + float(args.beta) * overlap
 
+    def _veto(pairs: list[tuple[int, int]], gamma: float) -> np.ndarray:
+        ai = np.asarray([p[0] for p in pairs])
+        bi = np.asarray([p[1] for p in pairs])
+        mismatch = (sku_sids[ai, 0] != canon_sids[bi, 0]).astype(np.float64)
+        return _cos(pairs) - float(gamma) * mismatch
+
     dev_pairs = dev_true + dev_conf + dev_easy
     test_pairs = test_true + test_conf + test_easy
     dev_labels = np.asarray([1] * len(dev_true) + [0] * (len(dev_conf) + len(dev_easy)))
@@ -259,6 +270,12 @@ def main(argv: list[str] | None = None) -> int:
 
     bi_m = _pair_report("bi", test_bi, test_labels, dev_bi, dev_labels)
     hy_m = _pair_report(f"hybrid(a={args.alpha},b={args.beta})", test_hy, test_labels, dev_hy, dev_labels)
+    veto_ms: list[dict] = []
+    veto_pair_mats: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+    for gamma in gammas:
+        dev_v, test_v = _veto(dev_pairs, gamma), _veto(test_pairs, gamma)
+        veto_pair_mats[gamma] = (dev_v, test_v)
+        veto_ms.append(_pair_report(f"veto(g={gamma})", test_v, test_labels, dev_v, dev_labels))
 
     # retrieval: rank ALL canonicals per test-true SKU
     t_idx = np.asarray([p[0] for p in test_true])
@@ -267,38 +284,53 @@ def main(argv: list[str] | None = None) -> int:
     hyb_mat = hybrid_matrix(cos_mat, sku_sids[t_idx], canon_sids,
                             alpha=float(args.alpha), beta=float(args.beta))
     recall: dict[str, dict[str, float]] = {}
-    for name, mat in (("bi", cos_mat), ("hybrid", hyb_mat)):
+    mats: dict[str, np.ndarray] = {"bi": cos_mat, "hybrid": hyb_mat}
+    for gamma in gammas:
+        mats[f"veto(g={gamma})"] = veto_matrix(
+            cos_mat, sku_sids[t_idx], canon_sids, gamma=gamma)
+    for name, mat in mats.items():
         ranks = np.argsort(-mat, axis=1)
         hits = (ranks == c_idx[:, None])
         positions = np.argmax(hits, axis=1) + 1
         recall[name] = {f"recall@{k}": float(np.mean(positions <= k)) for k in recall_ks}
 
-    d_pr = hy_m["pr_auc"] - bi_m["pr_auc"]
-    d_f1 = hy_m["f1"] - bi_m["f1"]
-    wins = d_pr > float(rule["min_delta_pr_auc"]) or d_f1 > float(rule["min_delta_f1"])
-    verdict = "HYBRID WINS" if wins else "NO CLEAR WIN"
+    arms = [bi_m, hy_m, *veto_ms]
+    results = []
+    for m in arms:
+        d_pr = m["pr_auc"] - bi_m["pr_auc"]
+        d_f1 = m["f1"] - bi_m["f1"]
+        wins = (m is not bi_m) and (
+            d_pr > float(rule["min_delta_pr_auc"]) or d_f1 > float(rule["min_delta_f1"]))
+        results.append({"arm": m["arm"], "d_pr_auc": d_pr, "d_f1": d_f1,
+                        "wins": bool(wins)})
+    winners = [r for r in results if r["wins"]]
+    verdict = ("VETO WINS: " + ", ".join(r["arm"] for r in winners)
+               if winners else "NO CLEAR WIN")
 
     metrics = {
         "model_key": model_key, "device": DEVICE, "alpha": float(args.alpha), "beta": float(args.beta),
+        "gammas": gammas,
         "n_dev_pairs": len(dev_pairs), "n_test_pairs": len(test_pairs),
         "n_test_true": len(test_true), "n_test_conflict": len(test_conf), "n_test_easy": len(test_easy),
-        "bi": bi_m, "hybrid": hy_m, "recall": recall,
-        "d_pr_auc": d_pr, "d_f1": d_f1,
+        "arms": arms, "recall": recall, "comparisons": results,
         "rule": {"min_delta_pr_auc": float(rule["min_delta_pr_auc"]), "min_delta_f1": float(rule["min_delta_f1"])},
         "verdict": verdict,
         "scope": "frozen-embedding A/B only; NOT a verdict on rescuing collapsed fine-tuned checkpoints",
     }
     (out_dir / "sid_hybrid_eval.json").write_text(json.dumps(metrics, indent=2) + "\n")
 
-    print(f"\nSID hybrid A/B — frozen {model_key} (alpha={args.alpha} beta={args.beta})")
+    print(f"\nSID hybrid A/B — frozen {model_key} (alpha={args.alpha} beta={args.beta} gammas={gammas})")
     print(f"pairs: dev={len(dev_pairs):,} (true={len(dev_true):,}) "
           f"test={len(test_pairs):,} (true={len(test_true):,} conf={len(test_conf):,} easy={len(test_easy):,})")
-    for m in (bi_m, hy_m):
+    for m in arms:
         print(f"{m['arm']:<22} PR-AUC {m['pr_auc']:.4f} ROC-AUC {m['roc_auc']:.4f} "
               f"F1@{m['thr_dev_youden']:.2f} {m['f1']:.4f} (P {m['precision']:.4f}/R {m['recall']:.4f})")
     for k in recall_ks:
-        print(f"recall@{k:<3} bi {recall['bi'][f'recall@{k}']:.4f}  hybrid {recall['hybrid'][f'recall@{k}']:.4f}")
-    print(f"dPR {d_pr:+.4f} (need >{rule['min_delta_pr_auc']})  dF1 {d_f1:+.4f} (need >{rule['min_delta_f1']})")
+        row = "  ".join(f"{n} {recall[n][f'recall@{k}']:.4f}" for n in mats)
+        print(f"recall@{k:<3} {row}")
+    for r in results[1:]:
+        print(f"{r['arm']:<22} dPR {r['d_pr_auc']:+.4f} (need >{rule['min_delta_pr_auc']})  "
+              f"dF1 {r['d_f1']:+.4f} (need >{rule['min_delta_f1']})  {'WIN' if r['wins'] else '---'}")
     print(f"VERDICT: {verdict}")
     return 0
 

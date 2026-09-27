@@ -22,6 +22,8 @@ from training.sid_hybrid import (
     hybrid_matrix,
     hybrid_score,
     leading_overlap_matrix,
+    veto_matrix,
+    veto_score,
 )
 
 
@@ -133,3 +135,16 @@ def test_hybrid_matrix_matches_pair_loop() -> None:
         hybrid_matrix(cos, sku, canon[:, :2])
     with pytest.raises(ValueError):
         hybrid_matrix(cos[:5], sku, canon)
+
+
+def test_veto_penalizes_only_coarse_divergence() -> None:
+    a = np.array([5, 1, 2])
+    assert veto_score(0.9, a, a, gamma=0.1) == pytest.approx(0.9)
+    assert veto_score(0.9, a, np.array([6, 1, 2]), gamma=0.1) == pytest.approx(0.8)
+    # deeper-level divergence alone never triggers the alarm
+    assert veto_score(0.9, a, np.array([5, 9, 9]), gamma=0.1) == pytest.approx(0.9)
+    mat = veto_matrix(np.array([[0.9, 0.8]]), np.array([[5, 1, 2]]),
+                      np.array([[5, 0, 0], [6, 1, 2]]), gamma=0.1)
+    assert mat[0].tolist() == pytest.approx([0.9, 0.7])
+    with pytest.raises(ValueError):
+        veto_score(0.9, a, a, gamma=-0.1)
