@@ -85,9 +85,11 @@ def contextual_nonclaim(dimension: str, phrase: str, title: str) -> str | None:
     if dimension == "carbonation":
         if re.search(r"\b(?:bubble teas?|tea bubbles?|bubble milk tea|boba|tapioca|buddha bubbles|bubble gum)\b", text):
             return "bubble_tea_or_boba_context"
+        if re.search(r"\brobby\s+[- ]?bubble\b", text):
+            return "product_name_bubble"
         if phrase.casefold() == "fizz" and re.search(r"\brocket fizz\b", text):
             return "rocket_fizz_brand"
-        if phrase.casefold() == "effervescent" and re.search(r"\beffervescent(?:\s+\w+){0,3}\s+tablets?\b", text):
+        if phrase.casefold() == "effervescent" and re.search(r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b", text):
             return "tablet_form"
     if dimension == "pulp" and re.search(r"\bpulp (?:and )?press\b|\bpulp story\b", text):
         return "pulp_press_brand"

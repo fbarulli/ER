@@ -25,7 +25,7 @@ else:
 DESCRIPTION_CUES = {
     "carbonation": (
         ("still", re.compile(r"\b(?:non[- ]?carbonated|uncarbonated|not carbonated|still water)\b", re.I)),
-        ("carbonated", re.compile(r"\b(?:(?<!non-)(?<!non )carbonated|sparkling|fizzy)\b", re.I)),
+        ("carbonated", re.compile(r"\b(?:(?<!non-)(?<!non )carbonated|sparkling|fizzy|soda(?: pop)?)\b", re.I)),
         ("tablet_form", re.compile(r"\beffervescent\s+(?:tablets?|tabs?)\b", re.I)),
         ("bubble_tea_style", re.compile(r"\b(?:bubble tea|boba)\b", re.I)),
     ),
@@ -33,13 +33,14 @@ DESCRIPTION_CUES = {
         ("no_sugar", re.compile(r"\b(?:no sugar|sugar[- ]free|zero sugar|without sugar)\b", re.I)),
         ("no_added_sugar", re.compile(r"\b(?:no added sugar|without added sugar)\b", re.I)),
         ("low_sugar", re.compile(r"\b(?:low|less|reduced)\s+(?:in\s+)?sugar\b", re.I)),
-        ("sugar_ingredient", re.compile(r"\b(?:cane sugar|contains sugar|with sugar)(?![- ]free\b)\b", re.I)),
+        ("sugar_ingredient", re.compile(r"\b(?:cane sugar|contains sugar|with sugar|real sugar|pure sugar|reduced in calories and sugar)(?![- ]free\b)\b", re.I)),
         ("no_sweeteners", re.compile(r"\b(?:no|without)\s+(?:(?:added|artificial)\s+)?sweeteners?\b", re.I)),
         ("sweetened_with", re.compile(r"\bsweetened\s+with\s+[a-z]+(?:\s+[a-z]+)?\b", re.I)),
     ),
     "pulp": (
         ("no_pulp", re.compile(r"\b(?:no pulp|without pulp|pulp[- ]free)\b", re.I)),
-        ("with_pulp", re.compile(r"\b(?:with|contains)\s+(?:fruit\s+)?pulp\b", re.I)),
+        ("with_pulp", re.compile(r"\b(?:with|contains)\s+(?:fruit\s+)?pulp\b|\bjuice\s+w\s+pulp\b", re.I)),
+        ("pulp_ingredient", re.compile(r"\bconcentrates\s+and\s+pulps?\b", re.I)),
         ("pulp_ingredient", re.compile(r"\b(?:fruit|aloe|orange)\s+pulp\b", re.I)),
         ("pulp_press_brand", re.compile(r"\bpulp\s+press\b", re.I)),
     ),

@@ -102,7 +102,9 @@ NO_ADDED_SUGAR_RE = re.compile(
 )
 SUGAR_CLAIM_RE = re.compile(
     r"\b(?:with added sugar|contains sugar|sweetened with sugar|"
-    r"made with sugar(?!\s+free\b)|sweetener sugar|sugar sweetened)\b"
+    r"made with sugar(?!\s+free\b)|sweetener sugar|sugar sweetened|"
+    r"real sugar|pure sugar|low in sugar|reduced in sugar|"
+    r"reduced in calories and sugar)\b"
 )
 
 
@@ -136,10 +138,11 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     carbonation_text = re.sub(
         r"\b(?:non carbonated|uncarbonated|not carbonated)\b", " ", text
     )
+    carbonation_text = re.sub(r"\b(?:baking|washing) soda\b", " ", carbonation_text)
     carbonation: set[str] = set()
     if non_carbonated or re.search(r"\bstill\b", text):
         carbonation.add("still")
-    if re.search(r"\b(?:carbonated|sparkling|fizzy)\b", carbonation_text):
+    if re.search(r"\b(?:carbonated|sparkling|fizzy|soda(?: pop)?)\b", carbonation_text):
         carbonation.add("carbonated")
     if re.search(r"\beffervescent\b", carbonation_text) and not re.search(
         r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b", carbonation_text
@@ -166,8 +169,8 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     )
     with_pulp = bool(
         re.search(
-            r"\b(?:with (?:(?:extra|added|real|aloe vera|fruit) )?pulp|contains pulp|pulp yes|juice and pulp|juice with pulp|juice e pulp|"
-            r"(?:extra|light) pulp|pulp of|pulp aloe vera|(?:aloe vera|aloe|orange|coconut|fruit) pulp|orange juice pulp)\b",
+            r"\b(?:with (?:(?:extra|added|real|aloe vera|fruit) )?pulp|contains pulp|pulp yes|juice and pulp|juice with pulp|juice w pulp|juice e pulp|"
+            r"(?:extra|light) pulp|pulp of|pulp aloe vera|(?:aloe vera|aloe|orange|coconut|fruit) pulp|orange juice pulp|concentrates and pulps?)\b",
             text,
         )
     )

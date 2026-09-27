@@ -60,7 +60,16 @@ def test_negative_sugar_variants_share_one_trusted_value() -> None:
         assert any("claim" in label.split("+") for _, _, label, _ in captures(phrase.lower().replace("-", " "), "title"))
     assert extract_critical_claims("0 sugar added")["sweetener"] == frozenset({"no_added_sugar"})
     assert extract_critical_claims("Made with Sugar")["sweetener"] == frozenset({"sugar"})
+    for phrase in ("Real Sugar", "pure sugar syrup", "reduced in calories and sugar"):
+        assert extract_critical_claims(phrase)["sweetener"] == frozenset({"sugar"})
     assert extract_critical_claims("Made with Sugar Free Sweeteners")["sweetener"] == frozenset({"no_sugar"})
+
+
+def test_soda_and_abbreviated_pulp_are_resolved_from_explicit_product_wording() -> None:
+    assert extract_critical_claims("Bubble Up Lemon Lime Soda")["carbonation"] == frozenset({"carbonated"})
+    assert extract_critical_claims("Ingredients include baking soda")["carbonation"] == frozenset()
+    assert extract_critical_claims("Coconut juice w/pulp")["pulp"] == frozenset({"with_pulp"})
+    assert extract_critical_claims("juice based on concentrates and pulps")["pulp"] == frozenset({"with_pulp"})
 
 
 def test_semantic_profile_does_not_promote_raw_numbers_to_swap_values() -> None:
