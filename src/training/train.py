@@ -717,6 +717,10 @@ def _main_inner(_mlf, _wandb) -> None:
     )
     hard_negative_mask_lo = float(mask_cfg["hard_negative_mask_lo"])
     hard_negative_mask_hi = float(mask_cfg["hard_negative_mask_hi"])
+    # Label-preserving agreed-surface swaps (no CLI flag: config-direct with
+    # hard indexing — a missing key crashes per owner Q27).
+    swap_agreed_frac = float(mask_cfg["swap_agreed_frac"])
+    hard_negative_swap_frac = float(mask_cfg["hard_negative_swap_frac"])
 
     import torch
 
@@ -895,20 +899,21 @@ def _main_inner(_mlf, _wandb) -> None:
     # Owner's masking augmentation, corrected for MNRL semantics: the original
     # the original masking script fed label=0.0 hard-negative pairs to MNRL — MNRL
     # IGNORES labels and would train them as POSITIVES (different products
-    # pulled together). Here masking augments POSITIVES only: for a fraction
-    # of pairs, the ANCHOR text gets config-band variable token masking
-    # (U(mask_lo, mask_hi) per masked copy — config/training.yaml masking band;
-    # AUDIT round 2 F08: this comment still said "15% random token
-    # masking") and the masked pair is appended as an EXTRA positive (same
-    # pair semantics, noised anchor). When configured, hard negatives receive
-    # the same label-preserving augmentation: the masked anchor remains paired
-    # with its different-product target and stays label 0. Masked texts are
-    # NEW payload entries (row_bc = same barcode), so folds/components are
-    # unaffected.
+    # pulled together). Here positives get TWO label-preserving views per
+    # anchor — config-band random token masks AND agreed-surface swaps (the
+    # anchor takes the counterpart's surface form where parsed values agree;
+    # disagreed fields are never touched) — appended as EXTRA positives (same
+    # pair semantics, noised anchor). Hard negatives get the same two views
+    # and stay label 0: the masked/swapped anchor remains paired with its
+    # different-product target. Masked/swapped texts are NEW payload entries
+    # (row_bc = same barcode), so folds/components are unaffected.
     mask_audit: list[dict] = []
     hard_negative_mask_audit: list[dict] = []
-    # Keep evaluation negatives immutable. Masked hard-negative copies are
-    # training-only rows so dev/holdout metrics cannot include augmentation.
+    # Augmented hard-negative copies join BOTH the eval (neg) and training
+    # (train_neg) pools with an "<source>+aug" provenance label so the diet
+    # gate (scripts/diet_manifest.py) sees the same augmented views the
+    # trainer presents. Labels are untouched: every copy stays label 0.
+    # The dynamic per-presentation path (training.py) is separate and unchanged.
     train_neg = neg
     # Keep provenance aligned with every negative row before any fold split.
     # The baseline resolved gate population is immutable; supplemental
@@ -917,12 +922,30 @@ def _main_inner(_mlf, _wandb) -> None:
     neg_sources = np.full(len(neg), "gate", dtype=object)
     train_neg_sources = neg_sources.copy()
     if args.mask_frac > 0:
-        from training.masking import augment_positives
+        from training.masking import (
+            augment_hard_negatives,
+            augment_positives,
+            augment_swapped_agreed,
+        )
 
+        n_pre_mask_pos = len(pos)
         pos, payload, row_bc, n_added, mask_audit = augment_positives(
             pos, payload, row_bc, frac=args.mask_frac, mask_prob=mask_prob, seed=SEED
         )
-        if n_added:
+        # Agreed-surface swaps sample the ORIGINAL positive prefix only
+        # (pool_size = pre-mask pos count), so swaps never compound on
+        # masked copies.
+        pos, payload, row_bc, n_swap_added, swap_audit = augment_swapped_agreed(
+            pos,
+            payload,
+            row_bc,
+            frac=swap_agreed_frac,
+            seed=SEED,
+            population="positive",
+            pool_size=n_pre_mask_pos,
+        )
+        mask_audit.extend(swap_audit)
+        if n_added + n_swap_added:
             structured_features = np.vstack(
                 [
                     structured_features,
@@ -953,10 +976,14 @@ def _main_inner(_mlf, _wandb) -> None:
         # the MIDPOINT of the config extent band (masking.mask_lo..
         # mask_hi), derived here so a band change can never leave the
         # buckets misaligned with the distribution (was inline 0.10).
+        # Swap-agreed copies carry realized_extent 0.0 by construction (no
+        # token was masked), so they are excluded from the extent halves —
+        # the full audit (masked + swapped) is what the visibility CSV keeps.
         _mid = (float(mask_cfg["mask_lo"]) + float(mask_cfg["mask_hi"])) / 2.0
-        if len(_ma):
-            _hi = _ma[_ma.realized_extent >= _mid]
-            _lo = _ma[_ma.realized_extent < _mid]
+        _ma_masked = _ma[_ma.target_mode != "swap_agreed"] if len(_ma) else _ma
+        if len(_ma_masked):
+            _hi = _ma_masked[_ma_masked.realized_extent >= _mid]
+            _lo = _ma_masked[_ma_masked.realized_extent < _mid]
             _extent_desc = (
                 f"variable {float(mask_cfg['mask_lo']):.0%}-"
                 f"{float(mask_cfg['mask_hi']):.0%}"
@@ -976,6 +1003,89 @@ def _main_inner(_mlf, _wandb) -> None:
                     f"masking (label=0, frac={mask_hard_negative_frac:.0%})",
                     flush=True,
                 )
+        if n_swap_added:
+            print(
+                f"[masking] +{n_swap_added:,} swap-agreed positives "
+                f"(frac={swap_agreed_frac:.0%}, label-preserving)",
+                flush=True,
+            )
+
+        # ── negative augmentation (bundle path; labels stay 0) ──
+        # Random-band masks (config hard-negative extent band) plus
+        # agreed-surface swaps, both sampled from the ORIGINAL negative
+        # prefix only (pool_size = pre-augmentation neg count), so swaps
+        # never compound on masked copies. New rows join BOTH neg and
+        # train_neg with an "<source>+aug" provenance label; the payload /
+        # structured tail grows with the anchor rows. Labels and the loss
+        # mapping are untouched: every copy stays label 0.
+        n_pre_mask_neg = len(neg)
+        _neg_pair_source = {
+            (int(a), int(b)): str(s)
+            for (a, b), s in zip(neg.tolist(), neg_sources.tolist())
+        }
+        neg, payload, row_bc, n_neg_added, _neg_mask_audit = augment_hard_negatives(
+            neg,
+            payload,
+            row_bc,
+            frac=mask_hard_negative_frac,
+            seed=SEED + 1,
+        )
+        neg, payload, row_bc, n_neg_swap_added, _neg_swap_audit = augment_swapped_agreed(
+            neg,
+            payload,
+            row_bc,
+            frac=hard_negative_swap_frac,
+            seed=SEED + 2,
+            population="hard_negative",
+            pool_size=n_pre_mask_neg,
+        )
+        _neg_new_audit = _neg_mask_audit + _neg_swap_audit
+        if _neg_new_audit:
+            train_neg = neg
+            _aug_sources = np.array(
+                [
+                    _neg_pair_source[
+                        (int(row["anchor_payload_idx"]), int(row["pair_payload_idx"]))
+                    ]
+                    + "+aug"
+                    for row in _neg_new_audit
+                ],
+                dtype=object,
+            )
+            neg_sources = np.concatenate([neg_sources, _aug_sources])
+            train_neg_sources = np.concatenate([train_neg_sources, _aug_sources])
+            structured_features = np.vstack(
+                [
+                    structured_features,
+                    np.asarray(
+                        [
+                            structured_features[int(row["anchor_payload_idx"])]
+                            for row in _neg_new_audit
+                        ],
+                        dtype=np.float32,
+                    ),
+                ]
+            )
+        hard_negative_mask_audit.extend(_neg_new_audit)
+        if len(structured_features) != len(payload):
+            raise RuntimeError(
+                "structured feature/payload length mismatch after negative "
+                f"augmentation: {len(structured_features)} != {len(payload)}"
+            )
+        if len(neg_sources) != len(neg) or len(train_neg_sources) != len(train_neg):
+            raise RuntimeError(
+                "negative source provenance length mismatch after augmentation: "
+                f"eval={len(neg_sources)}/{len(neg)} "
+                f"train={len(train_neg_sources)}/{len(train_neg)}"
+            )
+        if n_neg_added + n_neg_swap_added:
+            print(
+                f"[masking] +{n_neg_added:,} masked hard negatives "
+                f"(frac={mask_hard_negative_frac:.0%}) "
+                f"+{n_neg_swap_added:,} swap-agreed hard negatives "
+                f"(frac={hard_negative_swap_frac:.0%}, label=0)",
+                flush=True,
+            )
 
     # ── COMPONENT-AWARE SPLITS ──────────────────────────────────────────────
     # UNEXPECTED-BEHAVIOR FIX: pipeline positives connect TWO DIFFERENT

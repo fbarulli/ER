@@ -25,6 +25,12 @@ masking:
   hard_negative_mask_prob: null  # null: negative extent drawn from its band
   hard_negative_mask_lo: 0.10  # extent per masked presentation, not mask frequency
   hard_negative_mask_hi: 0.20
+  # Label-preserving agreed-field swaps (extra varied views, same labels).
+  swap_agreed_frac: 0.50          # positives: swapped-surface copies per pair
+  hard_negative_swap_frac: 0.50   # hard negatives: swapped-surface copies
+  # Diet contract (scripts/diet_manifest.py gates every bundle on these).
+  diet_min_neg_aug_frac: 0.30     # negatives: augmented views / presentations
+  diet_max_pos_neg_view_ratio: 1.50  # effective pos views / neg views ceiling
   track_visibility: true      # persist per-copy realized mask percentages
   track_per_epoch: true       # persist dynamic hard-negative mask percentages
 

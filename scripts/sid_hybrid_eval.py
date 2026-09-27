@@ -125,6 +125,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sku-csv", type=str, default=None)
     parser.add_argument("--alpha", type=float, default=0.8)
     parser.add_argument("--beta", type=float, default=0.2)
+    parser.add_argument("--n-clusters", type=int, default=256,
+                        help="codebook size per level (sweep coarse granularity)")
+    parser.add_argument("--tag", type=str, default=None,
+                        help="suffix for the output JSON (sweeps must not overwrite each other)")
     parser.add_argument("--gammas", type=str, default="0.05,0.10,0.20",
                         help="veto penalties swept in one run (one encode)")
     parser.add_argument("--max-pairs", type=int, default=2000)
@@ -201,7 +205,8 @@ def main(argv: list[str] | None = None) -> int:
     if not fit_idx:
         fit_idx = list(range(len(canon_gtins)))
         print("[sid] WARN: no train-split tag on canonicals — fit on full catalog", flush=True)
-    codebooks = fit_rq_kmeans(canon_emb[np.asarray(fit_idx)])
+    codebooks = fit_rq_kmeans(canon_emb[np.asarray(fit_idx)],
+                             n_clusters=int(args.n_clusters))
     canon_sids = assign_sids(canon_emb, codebooks)
     sku_sids = assign_sids(sku_emb, codebooks)
     _ = add_collision_tidbits(canon_sids)  # uniqueness guard (unused downstream)
@@ -265,6 +270,16 @@ def main(argv: list[str] | None = None) -> int:
     test_pairs = test_true + test_conf + test_easy
     dev_labels = np.asarray([1] * len(dev_true) + [0] * (len(dev_conf) + len(dev_easy)))
     test_labels = np.asarray([1] * len(test_true) + [0] * (len(test_conf) + len(test_easy)))
+
+    def _agree(pairs: list[tuple[int, int]], depth: int) -> float:
+        if not pairs:
+            return float("nan")
+        return float(np.mean(
+            [bool(np.array_equal(sku_sids[i][:depth], canon_sids[j][:depth]))
+             for i, j in pairs]))
+    agreement = {
+        f"L{d}": {"true": _agree(test_true, d + 1), "conflict": _agree(test_conf, d + 1)}
+        for d in range(int(codebooks.shape[0]))}
     dev_bi, test_bi = _cos(dev_pairs), _cos(test_pairs)
     dev_hy, test_hy = _hyb(dev_pairs), _hyb(test_pairs)
 
@@ -309,22 +324,28 @@ def main(argv: list[str] | None = None) -> int:
 
     metrics = {
         "model_key": model_key, "device": DEVICE, "alpha": float(args.alpha), "beta": float(args.beta),
+        "n_clusters": int(args.n_clusters),
         "gammas": gammas,
         "n_dev_pairs": len(dev_pairs), "n_test_pairs": len(test_pairs),
         "n_test_true": len(test_true), "n_test_conflict": len(test_conf), "n_test_easy": len(test_easy),
         "arms": arms, "recall": recall, "comparisons": results,
+        "agreement": agreement,
         "rule": {"min_delta_pr_auc": float(rule["min_delta_pr_auc"]), "min_delta_f1": float(rule["min_delta_f1"])},
         "verdict": verdict,
         "scope": "frozen-embedding A/B only; NOT a verdict on rescuing collapsed fine-tuned checkpoints",
     }
-    (out_dir / "sid_hybrid_eval.json").write_text(json.dumps(metrics, indent=2) + "\n")
+    out_name = f"sid_hybrid_eval_{args.tag}.json" if args.tag else "sid_hybrid_eval.json"
+    (out_dir / out_name).write_text(json.dumps(metrics, indent=2) + "\n")
 
-    print(f"\nSID hybrid A/B — frozen {model_key} (alpha={args.alpha} beta={args.beta} gammas={gammas})")
+    print(f"\nSID hybrid A/B — frozen {model_key} "
+          f"(k={int(args.n_clusters)} alpha={args.alpha} beta={args.beta} gammas={gammas})")
     print(f"pairs: dev={len(dev_pairs):,} (true={len(dev_true):,}) "
           f"test={len(test_pairs):,} (true={len(test_true):,} conf={len(test_conf):,} easy={len(test_easy):,})")
     for m in arms:
         print(f"{m['arm']:<22} PR-AUC {m['pr_auc']:.4f} ROC-AUC {m['roc_auc']:.4f} "
               f"F1@{m['thr_dev_youden']:.2f} {m['f1']:.4f} (P {m['precision']:.4f}/R {m['recall']:.4f})")
+    print("agree " + "  ".join(
+        f"{lv}:T{t['true']:.3f}/C{t['conflict']:.3f}" for lv, t in agreement.items()))
     for k in recall_ks:
         row = "  ".join(f"{n} {recall[n][f'recall@{k}']:.4f}" for n in mats)
         print(f"recall@{k:<3} {row}")

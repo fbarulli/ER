@@ -62,9 +62,15 @@ def generate_stratum_sweep(
     if source["SKU_ID"].eq("").any() or source["SKU_ID"].duplicated().any():
         raise ValueError("deduplicated dataset has blank or duplicate product IDs")
     canonical_ids = set(canonical_records_frame()["gtin"].astype(str))
+    # pandas>=3 keeps NaN missing through astype(str).str.strip (no more
+    # 'nan' strings), so the checksum map must treat non-strings as invalid
+    # explicitly — under pandas 2 they arrived as 'nan' and failed closed.
+    def _checksum_ok(value: object) -> bool:
+        return is_valid_gtin_checksum(value) if isinstance(value, str) else False
+
     eligible = source[
         source["true_item_id"].isin(canonical_ids)
-        & source["true_item_id"].map(is_valid_gtin_checksum)
+        & source["true_item_id"].map(_checksum_ok)
     ].copy()
     grouped = eligible.groupby("true_item_id", sort=False)
     groups = [

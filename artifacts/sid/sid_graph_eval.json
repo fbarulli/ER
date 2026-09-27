@@ -1,0 +1,44 @@
+{
+  "model_key": "minilm_l6",
+  "device": "cpu",
+  "n_clusters": 64,
+  "fixture": "/home/opc/ONE/ER/results/rand_truth/gtin_stratum_sweep.csv",
+  "n_sku": 360,
+  "n_canon": 13250,
+  "n_pos_edges_cos": 7493,
+  "n_pos_edges_sid": 7656,
+  "n_veto": 5598,
+  "n_locks": 120,
+  "arms": {
+    "top1": {
+      "n": 360,
+      "both_equal/acc": 1.0,
+      "both_equal/unmatched": 0.0,
+      "different/acc": 0.375,
+      "different/unmatched": 0.4083333333333333,
+      "one_missing/acc": 0.425,
+      "one_missing/unmatched": 0.4,
+      "overall/acc": 0.6
+    },
+    "graph-cos": {
+      "n": 360,
+      "both_equal/acc": 0.9833333333333333,
+      "both_equal/unmatched": 0.0,
+      "different/acc": 0.7333333333333333,
+      "different/unmatched": 0.041666666666666664,
+      "one_missing/acc": 0.7666666666666667,
+      "one_missing/unmatched": 0.016666666666666666,
+      "overall/acc": 0.8277777777777777
+    },
+    "graph+sid": {
+      "n": 360,
+      "both_equal/acc": 0.8166666666666667,
+      "both_equal/unmatched": 0.0,
+      "different/acc": 0.575,
+      "different/unmatched": 0.016666666666666666,
+      "one_missing/acc": 0.5,
+      "one_missing/unmatched": 0.008333333333333333,
+      "overall/acc": 0.6305555555555555
+    }
+  }
+}

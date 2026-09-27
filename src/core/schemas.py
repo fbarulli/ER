@@ -916,6 +916,17 @@ class MaskingSpec(BaseModel):
     hard_negative_mask_hi: float = Field(gt=0.0, le=1.0)
     track_visibility: bool
     track_per_epoch: bool
+    # Label-preserving agreed-field swaps (anchor takes the counterpart's
+    # surface form where parsed values agree): extra varied views per pair
+    # without touching the label. Separate fracs per population.
+    swap_agreed_frac: float = Field(ge=0.0, le=1.0)
+    hard_negative_swap_frac: float = Field(ge=0.0, le=1.0)
+    # Diet contract enforced by scripts/diet_manifest.py on every bundle
+    # BEFORE training: negatives must carry at least this fraction of
+    # augmented views (masked + swapped) relative to presentations, and the
+    # positive:negative effective-view ratio must stay under the ceiling.
+    diet_min_neg_aug_frac: float = Field(ge=0.0, le=1.0)
+    diet_max_pos_neg_view_ratio: float = Field(gt=0.0)
 
     @model_validator(mode="after")
     def _band_ordered(self) -> MaskingSpec:
@@ -950,6 +961,10 @@ class MaskingProfileSpec(BaseModel):
     hard_negative_mask_hi: float | None = Field(default=None, gt=0.0, le=1.0)
     track_visibility: bool | None = None
     track_per_epoch: bool | None = None
+    swap_agreed_frac: float | None = Field(default=None, ge=0.0, le=1.0)
+    hard_negative_swap_frac: float | None = Field(default=None, ge=0.0, le=1.0)
+    diet_min_neg_aug_frac: float | None = Field(default=None, ge=0.0, le=1.0)
+    diet_max_pos_neg_view_ratio: float | None = Field(default=None, gt=0.0)
 
 
 class UniformityRegularizationSpec(BaseModel):
@@ -2131,6 +2146,15 @@ class MaskAuditEntry(BaseModel):
     anchor_text: str
     masked_text: str
     population: str = "positive"
+    # HOW the copy was produced: "random" (uniform token masking),
+    # "targeted" (field-group drop masking), "swap_agreed" (counterpart
+    # surface-form swap on agreed fields — label-preserving by
+    # construction). Pre-targeting rows carry the default "random".
+    target_mode: str = "random"
+    # Structured field groups actually masked/swapped in this copy
+    # (e.g. ["volume"]). Empty when no structured token was touched —
+    # the coverage signal the diet manifest gates on.
+    fields_hit: list[str] = Field(default_factory=list)
 
 
 class MaskingResult(BaseModel):
