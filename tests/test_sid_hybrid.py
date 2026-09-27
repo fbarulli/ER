@@ -18,6 +18,11 @@ from training.semantic_ids import (
     save_sid_table,
     unique_ids_proportion,
 )
+from training.sid_hybrid import (
+    hybrid_matrix,
+    hybrid_score,
+    leading_overlap_matrix,
+)
 
 
 def _blobs() -> np.ndarray:
@@ -86,3 +91,45 @@ def test_save_load_roundtrip(tmp_path) -> None:
     back_gtins, back_sids = load_sid_table(table)
     assert back_gtins == gtins
     assert np.array_equal(back_sids, full)
+
+
+def test_hybrid_score_weights_cosine_and_prefix_overlap() -> None:
+    a = np.array([5, 1, 2])
+    assert hybrid_score(0.9, a, a) == pytest.approx(0.8 * 0.9 + 0.2 * 1.0)
+    assert hybrid_score(0.9, a, a, alpha=1.0, beta=0.0) == pytest.approx(0.9)
+    # beta-only arm is pure prefix overlap: identical 1.0, L0-diverged 0.0
+    assert hybrid_score(0.9, a, a, alpha=0.0, beta=1.0) == pytest.approx(1.0)
+    assert hybrid_score(0.9, a, np.array([6, 1, 2]), alpha=0.0, beta=1.0) == pytest.approx(0.0)
+    # a high-cosine L0-diverged conflict is downweighted vs a true pair
+    true = hybrid_score(0.85, a, a)
+    conflict = hybrid_score(0.93, a, np.array([6, 1, 2]))
+    assert conflict < true
+
+
+def test_hybrid_score_rejects_bad_inputs() -> None:
+    a = np.array([5, 1, 2])
+    with pytest.raises(ValueError):
+        hybrid_score(0.9, a, a, alpha=-0.1, beta=0.2)
+    with pytest.raises(ValueError):
+        hybrid_score(0.9, a, a, alpha=0.0, beta=0.0)
+    with pytest.raises(ValueError):
+        hybrid_score(1.5, a, a)
+    with pytest.raises(ValueError):
+        hybrid_score(0.9, a, np.array([5, 1]))
+
+
+def test_hybrid_matrix_matches_pair_loop() -> None:
+    rng = np.random.RandomState(3)
+    sku = rng.randint(0, 8, size=(9, 3))
+    canon = rng.randint(0, 8, size=(14, 3))
+    cos = rng.uniform(-1.0, 1.0, size=(9, 14))
+    mat = hybrid_matrix(cos, sku, canon)
+    assert mat.shape == (9, 14)
+    assert leading_overlap_matrix(sku, canon).shape == (9, 14)
+    for i in range(9):
+        for j in range(14):
+            assert mat[i, j] == pytest.approx(hybrid_score(cos[i, j], sku[i], canon[j]))
+    with pytest.raises(ValueError):
+        hybrid_matrix(cos, sku, canon[:, :2])
+    with pytest.raises(ValueError):
+        hybrid_matrix(cos[:5], sku, canon)

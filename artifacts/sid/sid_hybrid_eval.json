@@ -1,0 +1,51 @@
+{
+  "model_key": "minilm_l6",
+  "device": "cpu",
+  "alpha": 0.8,
+  "beta": 0.2,
+  "n_dev_pairs": 302,
+  "n_test_pairs": 324,
+  "n_test_true": 81,
+  "n_test_conflict": 81,
+  "n_test_easy": 162,
+  "bi": {
+    "arm": "bi",
+    "pr_auc": 0.9911464051114858,
+    "roc_auc": 0.9969008789310573,
+    "thr_dev_youden": 0.7077256285527425,
+    "precision": 0.972972972972973,
+    "recall": 0.8888888888888888,
+    "f1": 0.9290322580645162,
+    "n_test": 324
+  },
+  "hybrid": {
+    "arm": "hybrid(a=0.8,b=0.2)",
+    "pr_auc": 0.9924683872727504,
+    "roc_auc": 0.9973581263018849,
+    "thr_dev_youden": 0.566180502842194,
+    "precision": 0.9733333333333334,
+    "recall": 0.9012345679012346,
+    "f1": 0.9358974358974359,
+    "n_test": 324
+  },
+  "recall": {
+    "bi": {
+      "recall@1": 0.5802469135802469,
+      "recall@5": 0.8518518518518519,
+      "recall@20": 0.9629629629629629
+    },
+    "hybrid": {
+      "recall@1": 0.3950617283950617,
+      "recall@5": 0.691358024691358,
+      "recall@20": 0.9012345679012346
+    }
+  },
+  "d_pr_auc": 0.0013219821612646676,
+  "d_f1": 0.006865177832919733,
+  "rule": {
+    "min_delta_pr_auc": 0.005,
+    "min_delta_f1": 0.005
+  },
+  "verdict": "HYBRID WINS",
+  "scope": "frozen-embedding A/B only; NOT a verdict on rescuing collapsed fine-tuned checkpoints"
+}
