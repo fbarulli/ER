@@ -22,6 +22,7 @@ from core.attribute_conflicts import sku_attribute_info
 from core.critical_attributes import FLAVOR_ALIASES, normalized_attribute_text
 from core.model_input import build_sku_text, model_input_composition, model_input_info
 from core.structured_features import sku_info
+from core.sweetener_values import SWEETENER_TYPES, declared_sweeteners
 from core.common import F, TRAIN_ROOT
 from pipeline import normalize_text
 if __package__:
@@ -34,12 +35,6 @@ NUMBER_VALUE_RE = re.compile(
     r"(?<![a-z0-9])(?:\d+\s*[x×]\s*\d+(?:[.,]\d+)?\s*(?:mg|ml|g|l)?|\d+(?:[.,]\d+)?(?:\s*[-–]\s*\d+(?:[.,]\d+)?)?\s*(?:%|mg|ml|g|l)?)(?![a-z0-9])",
     re.IGNORECASE,
 )
-SWEETENER_TYPES = frozenset({
-    "sugar", "cane sugar", "sucralose", "acesulfame potassium", "stevia",
-    "aspartame", "hfcs", "fructose", "erythritol", "cyclamate", "monk fruit",
-    "saccharin", "glucose", "sucrose", "corn syrup", "allulose", "neotame",
-    "neohesperidin dc",
-})
 SUGAR_INGREDIENT_TYPES = frozenset({
     "sugar", "cane_sugar", "hfcs", "fructose", "glucose", "sucrose", "corn_syrup",
 })
@@ -51,7 +46,7 @@ def sweetener_type_evidence(raw: str) -> list[dict[str, object]]:
     for item in ATTRIBUTE_ITEM_RE.finditer(raw):
         if item.group(1).strip().casefold() != "sweetener":
             continue
-        for part in re.finditer(r"[^,]+", item.group(2)):
+        for part in re.finditer(r"[^,/&]+", item.group(2)):
             value = part.group().strip().casefold()
             if not value:
                 continue
@@ -61,8 +56,9 @@ def sweetener_type_evidence(raw: str) -> list[dict[str, object]]:
                 "source_field": "sweetener",
                 "raw_span": [start, start + len(part.group().strip())],
                 "surface": part.group().strip(),
-                "canonical_value": value.replace(" ", "_") if value in SWEETENER_TYPES else None,
-                "status": "declared_not_integrated" if value in SWEETENER_TYPES else "unmapped_or_non_type",
+                "canonical_value": value.replace(" ", "_") if value in SWEETENER_TYPES or value == "unsweetened" else None,
+                "assigned_field": "sweetening" if value == "unsweetened" else "sweetener_type",
+                "status": "parser_assigned" if value in SWEETENER_TYPES or value == "unsweetened" else "unmapped_or_non_type",
                 "swap_eligible": False,
             })
     return observations
@@ -71,6 +67,7 @@ def sweetener_type_evidence(raw: str) -> list[dict[str, object]]:
 def declared_flavor_evidence(raw: str) -> list[dict[str, object]]:
     """Preserve every explicit flavor value, including values outside the lexicon."""
     observations = []
+    accepted = sku_attribute_info("", raw)["flavor_set"]
     for item in ATTRIBUTE_ITEM_RE.finditer(raw):
         if item.group(1).strip().casefold() not in {"flavour", "flavor"}:
             continue
@@ -87,7 +84,7 @@ def declared_flavor_evidence(raw: str) -> list[dict[str, object]]:
                 "raw_span": [start, start + len(surface)],
                 "surface": surface,
                 "canonical_value": value.replace(" ", "_"),
-                "status": "declared_not_integrated",
+                "status": "parser_assigned" if value in accepted else "unmapped",
                 "swap_eligible": False,
             })
     return observations
@@ -118,7 +115,7 @@ def semantic_profile(title: str, attributes: str, numeric_captures: list[dict[st
     structured payload tokens. This review format does not change either path.
     """
     parsed = sku_attribute_info(title, attributes)
-    fields = ("volume", "pack", "package_type", "flavor", "carbonation", "sweetener", "pulp")
+    fields = ("volume", "pack", "package_type", "flavor", "carbonation", "sweetener", "pulp", "sweetener_type", "sweetening")
     trusted = {
         field: sorted(parsed["flavor_set" if field == "flavor" else field])
         for field in fields
@@ -148,9 +145,8 @@ def semantic_profile(title: str, attributes: str, numeric_captures: list[dict[st
         })
     sweetener_evidence = sweetener_type_evidence(attributes)
     flavor_evidence = declared_flavor_evidence(attributes)
-    sweetener_types = sorted({item["canonical_value"] for item in sweetener_evidence
-                              if item["canonical_value"] is not None})
-    consistency_flags = []
+    sweetener_types = trusted["sweetener_type"]
+    consistency_flags = sorted(declared_sweeteners(attributes)["consistency_flags"])
     if "no_sugar" in trusted["sweetener"] and SUGAR_INGREDIENT_TYPES.intersection(sweetener_types):
         consistency_flags.append("no_sugar_claim_conflicts_with_sugar_ingredient")
     return {
@@ -158,11 +154,12 @@ def semantic_profile(title: str, attributes: str, numeric_captures: list[dict[st
         "trusted_structured_values": trusted,
         "swap_compatible_fields": [
             field for field in fields if trusted[field]
-            and not (field == "sweetener" and consistency_flags)
+            and not (field in {"sweetener", "sweetener_type", "sweetening"} and consistency_flags)
         ],
         "candidate_typed_values": {
-            "sweetener_type": sweetener_types,
-            "declared_flavor": sorted({item["canonical_value"] for item in flavor_evidence}),
+            "sweetener_type": sorted(declared_sweeteners(attributes)["unmapped"]),
+            "declared_flavor": sorted({item["canonical_value"] for item in flavor_evidence
+                                       if item["status"] == "unmapped"}),
         },
         "consistency_flags": consistency_flags,
         "typed_evidence": [*sweetener_evidence, *flavor_evidence],
@@ -226,6 +223,8 @@ def main() -> None:
     parser.add_argument("--detail-json", type=Path, help="Optional full row-level JSON; large")
     parser.add_argument("--summary", type=Path, default=TRAIN_ROOT / "results" / "regex_capture_summary.json")
     parser.add_argument("--attributes-summary", type=Path, default=TRAIN_ROOT / "results" / "regex_attribute_captures.json")
+    parser.add_argument("--miss-evidence", type=Path,
+                        help="Append source-span evidence from regex_miss_evidence.py to the capture CSV")
     parser.add_argument("--inspect-product-id", help="Write a small per-product attribute capture JSON")
     parser.add_argument("--inspect-out", type=Path, help="Destination for --inspect-product-id")
     args = parser.parse_args()
@@ -238,6 +237,8 @@ def main() -> None:
     field_counts: Counter[str] = Counter()
     examples: dict[tuple[str, str, str], list[str]] = defaultdict(list)
     rows = 0
+    review_counts: Counter[tuple[str, str]] = Counter()
+    review_span_relations: Counter[str] = Counter()
     inspected: dict[str, object] | None = None
     with args.input.open(newline="", encoding="utf-8") as source, args.out.open(
         "w", newline="", encoding="utf-8"
@@ -247,7 +248,8 @@ def main() -> None:
         if not required.issubset(reader.fieldnames or []):
             raise ValueError(f"missing SKU input columns: {sorted(required - set(reader.fieldnames or []))}")
         writer = csv.DictWriter(destination, fieldnames=(
-            "product_id", "source_column", "capture_type", "matched_text", "start", "end", "original_text"
+            "product_id", "source_column", "capture_type", "matched_text", "start", "end",
+            "original_text", "span_basis", "capture_origin", "integration_status",
         ))
         writer.writeheader()
         for row in reader:
@@ -302,12 +304,42 @@ def main() -> None:
                         "product_id": product_id, "source_column": field,
                         "capture_type": label, "matched_text": phrase,
                         "start": start, "end": end, "original_text": original,
+                        "span_basis": "normalized", "capture_origin": "live_regex",
+                        "integration_status": "see_live_parser",
                     })
+
+        if args.miss_evidence:
+            with args.miss_evidence.open(newline="", encoding="utf-8") as review_source:
+                for item in csv.DictReader(review_source):
+                    start, end = int(item["raw_start"]), int(item["raw_end"])
+                    if item["original_text"][start:end] != item["surface"]:
+                        raise ValueError(f"invalid review source span: {item['product_id']}")
+                    writer.writerow({
+                        "product_id": item["product_id"],
+                        "source_column": item["source_column"],
+                        "capture_type": f"candidate_{item['capture_class']}",
+                        "matched_text": item["surface"], "start": start, "end": end,
+                        "original_text": item["original_text"],
+                        "span_basis": "original", "capture_origin": "miss_evidence",
+                        "integration_status": item["integration_status"],
+                    })
+                    review_counts[(item["capture_class"], item["integration_status"])] += 1
+                    review_span_relations[item["span_relation"]] += 1
 
     summary = {
         "input": str(args.input), "detail_csv": str(args.out), "rows_scanned": rows,
         "fields": list(FIELDS), "capture_spans_by_field": dict(field_counts),
         "method": "All lexical regex spans in the cleaned SKU fields, with overlaps merged. Brand matches are diagnostic only; span counts do not assert structured parser acceptance.",
+        "review_candidate_evidence": {
+            "input": str(args.miss_evidence) if args.miss_evidence else None,
+            "capture_spans": sum(review_counts.values()),
+            "span_relations": dict(review_span_relations),
+            "groups": [
+                {"capture_class": category, "integration_status": status, "count": count}
+                for (category, status), count in sorted(review_counts.items())
+            ],
+            "note": "These additional rows use original-text spans and are not trusted parser outputs.",
+        },
         "groups_by_field": {
             field: [
                 {"capture_type": category, "matched_text": phrase, "count": count,

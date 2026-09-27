@@ -2052,7 +2052,10 @@ def _sku_payload_metadata(index: int, row, barcode: str, text: str) -> dict:
     from core.attribute_conflicts import sku_attribute_info
 
     attributes = row_metadata_text(row, "attributes", "attr")
-    info = sku_attribute_info(row_metadata_text(row, "title"), attributes)
+    info = sku_attribute_info(
+        row_metadata_text(row, "title"), attributes,
+        row_metadata_text(row, "description_short_eng", "description"),
+    )
     return {
         "payload_idx": index,
         "point_kind": "sku",
@@ -5348,7 +5351,9 @@ def train_one_config(
                     return _attribute_cache[index]
                 if index < len(df):
                     info = sku_attribute_info(
-                        df["title"].iloc[index], df["attributes"].iloc[index]
+                        df["title"].iloc[index], df["attributes"].iloc[index],
+                        df["description_short_eng"].iloc[index]
+                        if "description_short_eng" in df else "",
                     )
                 else:
                     gtin = str(row_bc[index])

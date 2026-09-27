@@ -1089,6 +1089,7 @@ class TrainingSpec(BaseModel):
         emit_field_markers: bool
         keep_redundant_attribute_words: bool
         emit_singleton_pack_token: bool
+        parser_revision: int = 1
         fingerprint: str = Field(min_length=64, max_length=64)
 
         @classmethod
@@ -1101,6 +1102,7 @@ class TrainingSpec(BaseModel):
                 "emit_field_markers": spec.emit_field_markers,
                 "keep_redundant_attribute_words": spec.keep_redundant_attribute_words,
                 "emit_singleton_pack_token": spec.emit_singleton_pack_token,
+                "parser_revision": 2 if spec.profile == "cleaned" else 1,
             }
             return cls(
                 **payload,
@@ -1910,6 +1912,9 @@ class ExtractedAttributes(BaseModel):
     flavor_set: set[str] = Field(default_factory=set)
     carbonation_set: set[str] = Field(default_factory=set)
     sweetener_set: set[str] = Field(default_factory=set)
+    sweetener_type_set: set[str] = Field(default_factory=set)
+    sweetening_set: set[str] = Field(default_factory=set)
+    attribute_consistency_flags: set[str] = Field(default_factory=set)
     pulp_set: set[str] = Field(default_factory=set)
 
 
@@ -1943,6 +1948,9 @@ class CanonicalRecord(BaseModel):
     flavor_set: set[str] = Field(default_factory=set)
     carbonation_set: set[str] = Field(default_factory=set)
     sweetener_set: set[str] = Field(default_factory=set)
+    sweetener_type_set: set[str] = Field(default_factory=set)
+    sweetening_set: set[str] = Field(default_factory=set)
+    attribute_consistency_flags: set[str] = Field(default_factory=set)
     pulp_set: set[str] = Field(default_factory=set)
     volume_confidence: float = Field(ge=0.0, le=1.0)
     pack_confidence: float = Field(ge=0.0, le=1.0)
@@ -2487,6 +2495,9 @@ CANONICAL_RECORDS_COLUMNS: tuple[str, ...] = (
     "flavor_set",
     "carbonation_set",
     "sweetener_set",
+    "sweetener_type_set",
+    "sweetening_set",
+    "attribute_consistency_flags",
     "pulp_set",
     "volume_confidence",
     "pack_confidence",
@@ -2640,6 +2651,22 @@ def check_cross_country_pair_frame(df: pd.DataFrame) -> pd.DataFrame:
             f"{CROSS_COUNTRY_PAIR_COLUMNS}"
         )
     rows = [CrossCountryPairRow.model_validate(row) for row in df.to_dict("records")]
+    return df
+
+
+def upgrade_canonical_records_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Read the previous exact schema with absent ingredient fields as unknown.
+
+    This is a read compatibility adapter, not ingredient backfill. Rebuilding
+    canonical artifacts from source declarations is needed to populate them.
+    """
+    added = {"sweetener_type_set", "sweetening_set", "attribute_consistency_flags"}
+    previous = tuple(column for column in CANONICAL_RECORDS_COLUMNS if column not in added)
+    if tuple(df.columns) == previous:
+        df = df.copy()
+        for column in added:
+            df[column] = "[]"
+        return df.loc[:, list(CANONICAL_RECORDS_COLUMNS)]
     return df
 
 

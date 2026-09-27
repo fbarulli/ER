@@ -1167,6 +1167,7 @@ class RandMatcher:
             sku_attribute_info(
                 row_metadata_text(row, "title"),
                 row_metadata_text(row, "attributes", "attr"),
+                row_metadata_text(row, "description_short_eng", "description"),
             )
             for _, row in frame.iterrows()
         ]
@@ -1174,6 +1175,7 @@ class RandMatcher:
             model_input_info(sku_structured_info(
                 row_metadata_text(row, "title"),
                 row_metadata_text(row, "attributes", "attr"),
+                row_metadata_text(row, "description_short_eng", "description"),
             ))
             if self.structured_enabled
             else {"volume": set(), "pack": set()}

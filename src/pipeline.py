@@ -51,6 +51,7 @@ from ner.ner_product_attributes import extract_title_attributes, parse_attribute
 from core.critical_attributes import (
     categorical_conflict,
     extract_critical_claims,
+    extract_description_claims,
     volumes_compatible,
 )
 from core.tracing import (
@@ -110,7 +111,7 @@ STOPWORDS = _load_stopwords("STOPWORDS")
 
 # ── regex patterns (owner's second_extraction.py verbatim) ──────────────────
 VOLUME_PATTERN_METRIC_EXT = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(ml|milliliters?|cc|cl|centiliters?|l|lt|ltr|liters?|litres?)\b",
+    r"(\d+(?:\.\d+)?)\s*(ml|millilit(?:er|re)s?|cc|cl|centilit(?:er|re)s?|l|lt|ltr|liters?|litres?)\b",
     re.IGNORECASE,
 )
 VOLUME_PATTERN_US_EXT = re.compile(
@@ -138,7 +139,11 @@ def normalize_text(text: str) -> str:
 def extract_volume_from_title(title: str) -> dict:
     from core.unit_canonicalization import canonical_volume_ml
 
-    t = normalize_text(title)
+    # Catalog titles also use a space thousands separator: "1 000 ml".
+    # Restrict this repair to 000 groups in raw text: "24, 500ml" and
+    # "24 500ml" can be count/volume pairs and must not become 24,500ml.
+    t = normalize_text(re.sub(r"\b(\d{1,3})[ \u00a0]+(000)(?=\s*ml\b)",
+                              r"\1\2", str(title or ""), flags=re.IGNORECASE))
     m = VOLUME_PATTERN_US_EXT.search(t)
     if m:
         value = float(m.group(1))
@@ -177,10 +182,10 @@ def extract_volume_from_title(title: str) -> dict:
         if value <= 0:
             ml = 0.0
             conf = 0.0
-        elif unit == "ml" or "milliliter" in unit or unit == "cc":
+        elif unit == "ml" or "milliliter" in unit or "millilitre" in unit or unit == "cc":
             ml = canonical_volume_ml(value, unit)
             conf = 0.98 if "." in m.group(1) else 0.95
-        elif unit == "cl" or "centiliter" in unit:
+        elif unit == "cl" or "centiliter" in unit or "centilitre" in unit:
             ml = canonical_volume_ml(value, unit)
             conf = 0.95
         elif unit in ("l", "lt", "ltr") or "liter" in unit or "litre" in unit:
@@ -299,13 +304,44 @@ def parse_attribute_volume_pack(
 # volume/pack regex inline (a second declaration the config cannot steer).
 
 
-def extract_all(sku_name: str, attribute: str) -> dict:
+def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
     """Extract structured fields plus salient tokens from a single SKU row."""
+    from core.sweetener_values import declared_sweeteners, extract_sweetening_status, title_sweetener_types
+
+    sweeteners = declared_sweeteners(attribute)
+    sweeteners["sweetener_type"].update(title_sweetener_types(sku_name))
+    sweeteners["sweetener_type"].update(title_sweetener_types(description))
+    sweeteners["sweetening"].update(extract_sweetening_status(sku_name, attribute, description))
     t = normalize_text(sku_name)
     # Critical categorical evidence is parsed once for the canonical, model,
     # mining, and inference lanes.  Keep the historical scalar flavor as a
     # deterministic first value for compatibility with existing CSV readers.
     critical = extract_critical_claims(sku_name, attribute)
+    description_claims = extract_description_claims(description)
+    consistency_flags = set(sweeteners["consistency_flags"])
+    opposing_values = {
+        "carbonation": (("carbonated", "still"),),
+        "sweetener": (("sugar", "no_sugar"), ("sugar", "diet")),
+        "pulp": (("with_pulp", "no_pulp"),),
+    }
+    for dimension in ("carbonation", "sweetener", "pulp"):
+        base = set(critical[dimension])
+        described = set(description_claims[dimension])
+        if not base:
+            critical[dimension] = frozenset(described)
+        elif described:
+            inconsistent = any(
+                (left in base and right in described) or (right in base and left in described)
+                for left, right in opposing_values[dimension]
+            )
+            if inconsistent:
+                consistency_flags.add(f"description_conflict:{dimension}")
+            else:
+                critical[dimension] = frozenset(base | described)
+    if {"unsweetened", "sweetened"} <= sweeteners["sweetening"]:
+        consistency_flags.add("sweetening_status_conflict")
+    if "no_added_sugar" in critical["sweetener"] and "cane_sugar" in sweeteners["sweetener_type"]:
+        consistency_flags.add("no_added_sugar_with_cane_sugar")
     flavor_set = set(critical["flavor"])
     flavor = sorted(flavor_set)[0] if flavor_set else ""
     if re.search(r"\bcoconut\s+water\b", t):
@@ -375,6 +411,9 @@ def extract_all(sku_name: str, attribute: str) -> dict:
         flavor_set=flavor_set,
         carbonation_set=set(critical["carbonation"]),
         sweetener_set=set(critical["sweetener"]),
+        sweetener_type_set=sweeteners["sweetener_type"],
+        sweetening_set=sweeteners["sweetening"],
+        attribute_consistency_flags=consistency_flags,
         pulp_set=set(critical["pulp"]),
     ).model_dump()
 
@@ -887,10 +926,16 @@ def generate_canonical(
     rows: list[tuple[str, str]],
     global_idf: NgramIDF,
     brand_idf: NgramIDF | None,
+    *,
+    descriptions: list[str] | None = None,
 ) -> dict:  # CanonicalRecord.model_dump() — validated shape, plain dict
     titles = [sku for sku, attr in rows]
     attributes = [attr for sku, attr in rows]
-    extracted = [extract_all(sku, attr) for sku, attr in rows]
+    descriptions = descriptions or [""] * len(rows)
+    if len(descriptions) != len(rows):
+        raise ValueError("canonical descriptions must align with title/attribute rows")
+    extracted = [extract_all(sku, attr, "" if pd.isna(desc) else str(desc))
+                 for (sku, attr), desc in zip(rows, descriptions, strict=True)]
 
     brand_norm = normalize_text(spell_numeric_brand(brand))
     brand_tokens = set(brand_norm.split())
@@ -918,6 +963,9 @@ def generate_canonical(
     flavor_set = {value for x in extracted for value in x["flavor_set"]}
     carbonation_set = {value for x in extracted for value in x["carbonation_set"]}
     sweetener_set = {value for x in extracted for value in x["sweetener_set"]}
+    sweetener_type_set = {value for x in extracted for value in x["sweetener_type_set"]}
+    sweetening_set = {value for x in extracted for value in x["sweetening_set"]}
+    attribute_consistency_flags = {value for x in extracted for value in x["attribute_consistency_flags"]}
     pulp_set = {value for x in extracted for value in x["pulp_set"]}
 
     # Confidence / consistency
@@ -1084,6 +1132,9 @@ def generate_canonical(
         flavor_set=flavor_set,
         carbonation_set=carbonation_set,
         sweetener_set=sweetener_set,
+        sweetener_type_set=sweetener_type_set,
+        sweetening_set=sweetening_set,
+        attribute_consistency_flags=attribute_consistency_flags,
         pulp_set=pulp_set,
         volume_confidence=round(vol_conf, 3),
         pack_confidence=round(pack_conf, 3),
@@ -1655,10 +1706,11 @@ def run_within_brand_pipeline(
     grouped = (
         df_full.groupby("gtin")
         .agg(
-            rows=(
-                "sku_name_eng",
-                lambda x: list(zip(x, df_full.loc[x.index, "attribute"], strict=True)),
-            ),
+                rows=(
+                    "sku_name_eng",
+                    lambda x: list(zip(x, df_full.loc[x.index, "attribute"], strict=True)),
+                ),
+                descriptions=("description_short_eng", list),
             brand=("brand", lambda x: Counter(x).most_common(1)[0][0]),
             description_evidence=("description_short_eng", _source_evidence),
             breadcrumb_evidence=("breadcrumbs_eng", _source_evidence),
@@ -1691,6 +1743,7 @@ def run_within_brand_pipeline(
                 row["rows"],
                 global_idf,
                 brand_idf_map[brand_key],
+                descriptions=row["descriptions"],
             )
         record["description_evidence"] = row["description_evidence"]
         record["breadcrumb_evidence"] = row["breadcrumb_evidence"]
@@ -1823,6 +1876,9 @@ def run_within_brand_pipeline(
         "flavor_set",
         "carbonation_set",
         "sweetener_set",
+        "sweetener_type_set",
+        "sweetening_set",
+        "attribute_consistency_flags",
         "pulp_set",
     ):
         df_canon[_col] = df_canon[_col].map(lambda s: sorted(s))
@@ -2046,10 +2102,10 @@ def build_training_data(
     # The old text lane deliberately removed these tokens; that made the
     # volume/pack work useful for labels but invisible to the embedding.
     sku_structured = [
-        model_input_info(sku_structured_info(t, a))
+        model_input_info(sku_structured_info(t, a, d))
         if structured_enabled
         else {"volume": set(), "pack": set(), "package_type": set()}
-        for t, a in zip(title, attrs, strict=True)
+        for t, a, d in zip(title, attrs, df.get("description_short_eng", pd.Series([""] * len(df))), strict=True)
     ]
 
     # ── clean sku text per row (variant: full = title+attr, title_only) ──

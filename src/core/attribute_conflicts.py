@@ -149,15 +149,18 @@ def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
         "flavor_set": flavor_set,
         "carbonation": evidence("carbonation_set", "carbonation"),
         "sweetener": evidence("sweetener_set", "sweetener"),
+        "sweetener_type": _string_value_set(record.get("sweetener_type_set"), kind="sweetener_type"),
+        "sweetening": _string_value_set(record.get("sweetening_set"), kind="sweetening"),
         "pulp": evidence("pulp_set", "pulp"),
     }
 
 
-def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
+def sku_attribute_info(title: object, attributes: object, description: object = "") -> dict[str, object]:
     """Extract SKU-side attributes using the same parser as the data lane."""
     from pipeline import extract_all
 
-    extracted = extract_all(str(title), str(attributes))
+    desc = "" if description is None or (isinstance(description, float) and description != description) else str(description)
+    extracted = extract_all(str(title), str(attributes), desc)
     volume_ml = extracted.get("volume_ml")
     # Zero is the extractor's sentinel for "no volume mention".  It must
     # remain unknown here; turning it into {0.0} makes every known canonical
@@ -195,6 +198,9 @@ def sku_attribute_info(title: object, attributes: object) -> dict[str, object]:
         "flavor_set": flavor_set,
         "carbonation": set(extracted.get("carbonation_set") or set()),
         "sweetener": set(extracted.get("sweetener_set") or set()),
+        "sweetener_type": set(extracted.get("sweetener_type_set") or set()),
+        "sweetening": set(extracted.get("sweetening_set") or set()),
+        "attribute_consistency_flags": set(extracted.get("attribute_consistency_flags") or set()),
         "pulp": set(extracted.get("pulp_set") or set()),
     }
 

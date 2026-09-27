@@ -289,6 +289,7 @@ def _cleaned_canonical_text(
 
 
 def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
+    from core.critical_attributes import extract_flavor_tokens
     from core.structured_features import append_text
     from ner.ner_product_attributes import extract_title_attributes
     from pipeline import clean_sku_text, strip_schema_words
@@ -305,12 +306,18 @@ def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
     # cleaned profile now accepts declared Pack Type when the title has none,
     # but that new evidence must not silently alter old legacy payloads.
     legacy_info = dict(info)
+    legacy_info.pop("sweetener_type", None)
+    legacy_info.pop("sweetening", None)
     # A title-only ablation supplies a precomputed full-row ``info`` while
     # blanking attributes in the row; keep that supplied structured channel.
     if row_metadata_text(row, "attributes", "attr").strip():
         legacy_info["package_type"] = set(extract_title_attributes(
             row_metadata_text(row, "title")
         )["package_types"])
+        legacy_info["flavor"] = set(extract_flavor_tokens(
+            row_metadata_text(row, "title"),
+            row_metadata_text(row, "attributes", "attr"),
+        ))
     return append_text(base, legacy_info, enabled=_structured_text_enabled())
 
 
@@ -333,7 +340,9 @@ def _legacy_canonical_text(
         parts.append(canonical_evidence_text(record.get("description_evidence", "")))
         parts.append(canonical_evidence_text(record.get("breadcrumb_evidence", "")))
     base = strip_schema_words(canonical_model_text(" ".join(parts)))
-    return append_text(base, info, enabled=_structured_text_enabled())
+    legacy_info = {key: value for key, value in info.items()
+                   if key not in {"sweetener_type", "sweetening"}}
+    return append_text(base, legacy_info, enabled=_structured_text_enabled())
 
 
 def model_input_info(

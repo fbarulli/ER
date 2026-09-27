@@ -425,11 +425,13 @@ def test_title_only_payload_variant_still_blanks_attributes_and_description() ->
             blanked[column] = ""
     info = sku_info(row["title"], row["attributes"])
 
+    # New ingredient/status fields are deliberately excluded from legacy text.
+    legacy_info = {key: value for key, value in info.items()
+                   if key not in {"sweetener_type", "sweetening"}}
     expected = append_text(
         strip_schema_words(clean_sku_text(
             row["title"], "", row["brand"], "", row["category"], row["category_path"]
-        )),
-        info,
+        )), legacy_info,
     )
     assert build_sku_text(blanked, info, spec=LEGACY) == expected
 

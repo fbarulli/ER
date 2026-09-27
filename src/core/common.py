@@ -74,6 +74,7 @@ from core.schemas import (
     LayoutSpec,
     TrainingConfig,
     check_canonical_records_frame,
+    upgrade_canonical_records_frame,
 )
 from core.text import extract_volume_ml
 
@@ -517,6 +518,7 @@ def _canonical_records_frame() -> pd.DataFrame:
         dtype={"gtin": str},
         keep_default_na=False,
     )
+    records = upgrade_canonical_records_frame(records)
     check_canonical_records_frame(records)
     return records
 

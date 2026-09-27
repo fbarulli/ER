@@ -405,6 +405,9 @@ def canonical_frame(**over: object) -> pd.DataFrame:
         "flavor_set": "['orange']",
         "carbonation_set": "['sparkling']",
         "sweetener_set": "[]",
+        "sweetener_type_set": "[]",
+        "sweetening_set": "[]",
+        "attribute_consistency_flags": "[]",
         "pulp_set": "[]",
         "volume_confidence": 0.9,
         "pack_confidence": 0.9,
@@ -419,7 +422,7 @@ def canonical_frame(**over: object) -> pd.DataFrame:
 
 
 def test_check_canonical_records_frame_is_reachable():
-    assert check_canonical_records_frame(canonical_frame()).shape == (1, 22)
+    assert check_canonical_records_frame(canonical_frame()).shape == (1, len(CANONICAL_RECORDS_COLUMNS))
 
 
 @pytest.mark.parametrize(

@@ -36,6 +36,28 @@ FLAVOR_LEXICON: frozenset[str] = frozenset(
         "tropical", "vanilla", "watermelon",
     }
 )
+# Additional values observed in explicit Flavour/Flavor declarations. Keep
+# these field-bound: the same words can describe ingredients or product types
+# elsewhere in the SKU text.
+DECLARED_FLAVOR_LEXICON: frozenset[str] = frozenset({
+    "acai", "agave", "almond", "amaretto", "apricot", "aranciata",
+    "aronia", "artichoke", "avocado", "banana", "barley", "basil",
+    "beet", "bergamot", "bilberry", "birch", "blackberry",
+    "blackcurrant", "blueberry", "bubble gum", "burdock", "cabbage",
+    "cactus", "camellia", "camomile", "cannabis", "cappuccino",
+    "caramel", "cardamom", "carrot", "charcoal", "chestnut", "chilli",
+    "cinnamon", "cocoa", "creme brulee", "cucumber", "currant",
+    "dandelion", "eucalyptus", "fennel", "fig", "garlic", "ginseng",
+    "guarana", "guava", "hazelnut", "hibiscus", "honey", "irish cream",
+    "jasmine", "kiwi", "latte", "lavender", "lychee", "magnolia", "mandarin",
+    "maple", "marshmallow", "melon", "menthol", "mocha", "mulberry",
+    "nettle", "noni", "nut", "oat", "olive", "onion", "papaya",
+    "pea", "pepper", "peppermint", "plum", "prune", "pumpkin",
+    "raisin", "rosehip", "rosemary", "sea salt", "spearmint",
+    "tangerine", "tea", "thistle", "thyme", "toffee", "tomato",
+    "walnut",
+})
+DECLARED_FLAVOR_FIELD_RE = re.compile(r"(?:^|;)\s*flavou?r\s*:\s*([^;]*)", re.IGNORECASE)
 
 
 def normalized_attribute_text(*values: object) -> str:
@@ -53,6 +75,18 @@ def extract_flavor_tokens(*values: object) -> frozenset[str]:
         for token in text.split()
         if FLAVOR_ALIASES.get(token, token) in FLAVOR_LEXICON
     )
+
+
+def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
+    """Accept reviewed flavor values only when the catalog declares the field."""
+    found: set[str] = set()
+    for value in values:
+        for field in DECLARED_FLAVOR_FIELD_RE.finditer(str(value or "")):
+            for part in re.split(r"[,/;&]", field.group(1)):
+                candidate = normalized_attribute_text(part)
+                if candidate in DECLARED_FLAVOR_LEXICON:
+                    found.add(candidate)
+    return frozenset(found)
 
 
 # Explicit negative-sugar surfaces only.  A typo is accepted only in the
@@ -97,7 +131,7 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     # Remove explicit negative phrases before looking for positive
     # carbonation so "non-carbonated" cannot emit both states.
     non_carbonated = bool(
-        re.search(r"\b(?:non carbonated|uncarbonated|not carbonated)\b", text)
+        re.search(r"\b(?:non carbonated|uncarbonated|not carbonated|no bubbles?)\b", text)
     )
     carbonation_text = re.sub(
         r"\b(?:non carbonated|uncarbonated|not carbonated)\b", " ", text
@@ -106,6 +140,10 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     if non_carbonated or re.search(r"\bstill\b", text):
         carbonation.add("still")
     if re.search(r"\b(?:carbonated|sparkling|fizzy)\b", carbonation_text):
+        carbonation.add("carbonated")
+    if re.search(r"\beffervescent\b", carbonation_text) and not re.search(
+        r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b", carbonation_text
+    ):
         carbonation.add("carbonated")
 
     pulp: set[str] = set()
@@ -128,7 +166,8 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     )
     with_pulp = bool(
         re.search(
-            r"\b(?:with (?:extra )?pulp|contains pulp|pulp yes)\b",
+            r"\b(?:with (?:(?:extra|added|real|aloe vera|fruit) )?pulp|contains pulp|pulp yes|juice and pulp|juice with pulp|juice e pulp|"
+            r"(?:extra|light) pulp|pulp of|pulp aloe vera|(?:aloe vera|aloe|orange|coconut|fruit) pulp|orange juice pulp)\b",
             text,
         )
     )
@@ -138,11 +177,21 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
         pulp.add("with_pulp")
 
     return {
-        "flavor": extract_flavor_tokens(text),
+        "flavor": extract_flavor_tokens(text) | extract_declared_flavor_tokens(*values),
         "carbonation": frozenset(carbonation),
         "sweetener": frozenset(sweetener),
         "pulp": frozenset(pulp),
     }
+
+
+def extract_description_claims(description: object) -> dict[str, frozenset[str]]:
+    """Extract only explicit match-relevant claims from catalog descriptions.
+
+    Flavor is omitted: a long description can mention ingredients that are
+    not the product's declared flavor.
+    """
+    found = extract_critical_claims(str(description or ""))
+    return {key: found[key] for key in ("carbonation", "sweetener", "pulp")}
 
 
 def sweetener_conflict(left: set[str], right: set[str]) -> bool:
@@ -200,10 +249,13 @@ def categorical_conflict(
 
 __all__ = [
     "CRITICAL_ATTRIBUTE_DIMENSIONS",
+    "DECLARED_FLAVOR_LEXICON",
     "FLAVOR_ALIASES",
     "FLAVOR_LEXICON",
     "categorical_conflict",
     "extract_critical_claims",
+    "extract_description_claims",
+    "extract_declared_flavor_tokens",
     "extract_flavor_tokens",
     "normalized_attribute_text",
     "sweetener_conflict",

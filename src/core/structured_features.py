@@ -82,6 +82,8 @@ def info_from_sets(
     flavor: object = None,
     carbonation: object = None,
     sweetener: object = None,
+    sweetener_type: object = None,
+    sweetening: object = None,
     pulp: object = None,
 ) -> dict[str, set[float] | set[str]]:
     """Normalize a SKU/canonical record into the shared set representation."""
@@ -92,17 +94,20 @@ def info_from_sets(
         "flavor": _as_string_set(flavor, kind="flavor"),
         "carbonation": _as_string_set(carbonation, kind="carbonation"),
         "sweetener": _as_string_set(sweetener, kind="sweetener"),
+        "sweetener_type": _as_string_set(sweetener_type, kind="sweetener_type"),
+        "sweetening": _as_string_set(sweetening, kind="sweetening"),
         "pulp": _as_string_set(pulp, kind="pulp"),
     }
 
 
 def sku_info(
-    title: object, attributes: object
+    title: object, attributes: object, description: object = ""
 ) -> dict[str, set[float] | set[str]]:
     """Parse one source SKU using the pipeline's existing extractor."""
     from pipeline import extract_all
 
-    extracted = extract_all(str(title), str(attributes))
+    desc = "" if description is None or (isinstance(description, float) and np.isnan(description)) else str(description)
+    extracted = extract_all(str(title), str(attributes), desc)
     volume = {float(extracted.get("volume_ml") or 0.0)}
     pack_qty = extracted.get("pack_qty")
     # The pipeline's parser uses pack_qty=1 with zero confidence as its
@@ -121,6 +126,8 @@ def sku_info(
         flavor=extracted.get("flavor_set"),
         carbonation=extracted.get("carbonation_set"),
         sweetener=extracted.get("sweetener_set"),
+        sweetener_type=extracted.get("sweetener_type_set"),
+        sweetening=extracted.get("sweetening_set"),
         pulp=extracted.get("pulp_set"),
     )
 
@@ -145,6 +152,8 @@ def canonical_info(
         flavor=evidence("flavor_set", "flavor"),
         carbonation=evidence("carbonation_set", "carbonation"),
         sweetener=evidence("sweetener_set", "sweetener"),
+        sweetener_type=record.get("sweetener_type_set"),
+        sweetening=record.get("sweetening_set"),
         pulp=evidence("pulp_set", "pulp"),
     )
 
@@ -176,6 +185,8 @@ def text_tokens(info: Mapping[str, object]) -> list[str]:
             _as_string_set(info.get("sweetener"), kind="sweetener")
         ),
         "PULP": sorted(_as_string_set(info.get("pulp"), kind="pulp")),
+        "SWEETENER_TYPE": sorted(_as_string_set(info.get("sweetener_type"), kind="sweetener_type")),
+        "SWEETENING": sorted(_as_string_set(info.get("sweetening"), kind="sweetening")),
     }
     groups: list[tuple[str, list[str]]] = [
         ("VOLUME", _number_tokens("volume_ml_", volumes)),

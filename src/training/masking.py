@@ -41,6 +41,8 @@ _FIELD_PREFIXES: dict[str, tuple[str, ...]] = {
     "package_type": ("package_type_",),
     "flavor": ("flavor_",),
     "carbonation": ("carbonation_",),
+    "sweetener_type": ("sweetener_type_",),
+    "sweetening": ("sweetening_",),
     "sweetener": ("sweetener_diet_", "sweetener_"),
     "pulp": ("pulp_",),
 }

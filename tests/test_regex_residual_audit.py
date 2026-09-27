@@ -11,7 +11,9 @@ from scripts.regex_capture_review import (
     sweetener_type_evidence,
 )
 from core.critical_attributes import extract_critical_claims
+from core.attribute_conflicts import sku_attribute_info
 from scripts.regex_miss_review import flavor_suggestion
+from scripts.regex_miss_evidence import capture_class, description_support, source_span
 
 
 def test_unique_tokens_keep_first_stem_across_fields() -> None:
@@ -89,11 +91,12 @@ def test_sweetener_type_is_separate_from_claim_and_not_yet_swap_ready() -> None:
     ]
     profile = semantic_profile("Drink", attributes, [], [])
     assert profile["trusted_structured_values"]["sweetener"] == ["no_sugar"]
-    assert profile["candidate_typed_values"]["sweetener_type"] == ["cane_sugar", "stevia"]
+    assert profile["candidate_typed_values"]["sweetener_type"] == []
     assert profile["consistency_flags"] == ["no_sugar_claim_conflicts_with_sugar_ingredient"]
     assert "sweetener" not in profile["swap_compatible_fields"]
     assert all(not item["swap_eligible"] for item in profile["typed_evidence"])
-    assert sweetener_type_evidence("Sweetener: unsweetened")[0]["canonical_value"] is None
+    assert sweetener_type_evidence("Sweetener: unsweetened")[0]["canonical_value"] == "unsweetened"
+    assert profile["trusted_structured_values"]["sweetener_type"] == ["cane_sugar", "stevia"]
 
 
 def test_declared_flavor_keeps_out_of_lexicon_values_with_source_spans() -> None:
@@ -104,8 +107,49 @@ def test_declared_flavor_keeps_out_of_lexicon_values_with_source_spans() -> None
         "lime", "maple",
     ]
     profile = semantic_profile("Maple Water", attributes, [], [])
-    assert profile["candidate_typed_values"]["declared_flavor"] == ["lime", "maple"]
-    assert profile["trusted_structured_values"]["flavor"] == ["lime"]
+    assert profile["candidate_typed_values"]["declared_flavor"] == []
+    assert profile["trusted_structured_values"]["flavor"] == ["lime", "maple"]
+
+
+def test_reviewed_flavors_require_an_explicit_flavor_field() -> None:
+    parsed = sku_attribute_info(
+        "Blueberry drink",
+        "Flavour: blueberry, banana; Sweetener: caramel",
+    )
+    assert parsed["flavor_set"] == {"blueberry", "banana"}
+    assert sku_attribute_info("Blueberry drink", "")["flavor_set"] == set()
+    assert sku_attribute_info("Caramel latte", "Sweetener: caramel")["flavor_set"] == set()
+    assert sku_attribute_info("Tea latte", "Flavour: tea, latte")["flavor_set"] == {"tea", "latte"}
+    assert sku_attribute_info("Tea latte", "")["flavor_set"] == set()
+    assert semantic_profile("Drink", "Flavor: guava", [], [])["trusted_structured_values"]["flavor"] == ["guava"]
+    assert sku_attribute_info("Orange and carrot juice", "Flavour: orange, carrot")["flavor_set"] == {"orange", "carrot"}
+    assert sku_attribute_info("Honey tea", "Sweetener: honey")["flavor_set"] == set()
+    assert sku_attribute_info("Bubble Gum Drink", "Flavour: bubble gum, sea salt")["flavor_set"] == {"bubble gum", "sea salt"}
+
+
+def test_remaining_misses_keep_original_spans_and_distinct_meanings() -> None:
+    title = {"product_id": "1", "source": "title", "title": "Water 12 tube 1000 mg / l",
+             "candidate": "12 l"}
+    column, _, start, end, surface, relation = source_span(title)
+    assert (column, surface, relation) == ("title", "12 tube 1000 mg / l", "synthetic_residual_phrase")
+    assert title["title"][start:end] == surface
+    declared = {"product_id": "2", "source": "attributes", "candidate": "sweetener: cane sugar, stevia",
+                "attributes": "Volume: 500; Sweetener: cane sugar, stevia; Pack Type: Can"}
+    column, field, start, end, surface, relation = source_span(declared)
+    assert (column, field, surface, relation) == ("attributes", "Sweetener", "cane sugar, stevia", "exact_candidate")
+    assert declared["attributes"][start:end] == surface
+    assert capture_class({"reason": "ingredient_outside_claim_classes", "candidate": "sweetener: unsweetened, sugar"}) == (
+        "unsweetened_declaration", ["unsweetened", "sugar"], "separate_unsweetened_claim"
+    )
+
+
+def test_description_support_distinguishes_claim_from_product_style() -> None:
+    assert description_support("carbonation", "Bubble milk tea with boba")[0] == "context_only"
+    assert description_support("carbonation", "Carbonated water")[0] == "explicit_attribute_cue"
+    assert description_support("sweetener", "Made with cane sugar")[0] == "explicit_attribute_cue"
+    assert [item["label"] for item in description_support("sweetener", "Made with sugar-free sweeteners")[1]] == ["no_sugar"]
+    assert description_support("sweetener", "No artificial sweeteners")[0] == "explicit_attribute_cue"
+    assert description_support("pulp", "Pulp Press orange juice")[0] == "context_only"
 
 
 def test_payload_review_keeps_actual_model_text_separate_from_audit_dedup() -> None:

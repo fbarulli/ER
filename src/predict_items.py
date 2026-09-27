@@ -101,7 +101,8 @@ def main() -> None:
     sku_infos = [
         model_input_info(
             sku_structured_info(
-                row.get("title", ""), row.get("attributes", row.get("attr", ""))
+                row.get("title", ""), row.get("attributes", row.get("attr", "")),
+                row.get("description_short_eng", row.get("description", "")),
             )
         )
         if sf_enabled
