@@ -1,0 +1,45 @@
+{
+  "model_key": "minilm_l6",
+  "device": "cpu",
+  "sku_rows": 128,
+  "n_true_pairs": 42,
+  "n_conflict_pairs": 38,
+  "cosine_true_mean": 0.8006071793831889,
+  "cosine_true_std": 0.08366888380487697,
+  "cosine_conflict_mean": 0.4815304437080263,
+  "cosine_conflict_std": 0.12543163049451592,
+  "prefix_overlap_true_mean": 0.11904761904761903,
+  "prefix_overlap_conflict_mean": 0.0,
+  "agreement": {
+    "L0": {
+      "true": 0.2619047619047619,
+      "conflict": 0.0,
+      "margin": 0.2619047619047619
+    },
+    "L1": {
+      "true": 0.09523809523809523,
+      "conflict": 0.0,
+      "margin": 0.09523809523809523
+    },
+    "L2": {
+      "true": 0.0,
+      "conflict": 0.0,
+      "margin": 0.0
+    }
+  },
+  "health": {
+    "n_canonicals": 13250,
+    "n_fit_train_canonicals": 6508,
+    "n_levels": 3,
+    "n_clusters_requested": 256,
+    "n_clusters_effective": 256,
+    "codebook_usage": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "unique_ids_proportion": 1.0
+  },
+  "go_rule": "GO iff (true L0 \u2212 conflict L0) >= 0.2 and L0 usage >= 0.1",
+  "verdict": "GO"
+}
