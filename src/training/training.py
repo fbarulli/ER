@@ -622,6 +622,96 @@ def _mix_random_easy_training_negatives(
     return mixed_pairs, mixed_sources, len(unique_candidates)
 
 
+def _build_mnrl_training_triples(
+    train_pos: np.ndarray,
+    train_neg: np.ndarray,
+    *,
+    mask_audit: list[dict] | None,
+    hard_negative_mask_audit: list[dict] | None,
+) -> list[tuple[int, int, int]]:
+    """Join explicit negatives to positives without losing augmented anchors.
+
+    Masked/swapped copies have new payload indices; audit rows identify the
+    original anchor. Keep the *copy* as the MNRL anchor. Positive copies use
+    one of their source's explicit negatives, if available. Never infer a
+    positive or negative from a barcode alone: that can silently mislabel.
+    """
+    positive_by_anchor: dict[int, int] = {}
+    for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2):
+        positive_by_anchor.setdefault(int(anchor), int(positive))
+
+    original_by_copy_pair: dict[tuple[int, int], int] = {}
+    for audit in hard_negative_mask_audit or []:
+        key = (int(audit["copy_payload_idx"]), int(audit["pair_payload_idx"]))
+        original = int(audit["anchor_payload_idx"])
+        if key in original_by_copy_pair and original_by_copy_pair[key] != original:
+            raise ValueError(f"conflicting hard-negative augmentation lineage: {key}")
+        original_by_copy_pair[key] = original
+
+    negatives_by_anchor: dict[int, list[int]] = {}
+    for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
+        negatives_by_anchor.setdefault(int(anchor), []).append(int(negative))
+
+    triples: list[tuple[int, int, int]] = []
+    seen: set[tuple[int, int, int]] = set()
+    for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
+        anchor_i, negative_i = int(anchor), int(negative)
+        source_anchor = original_by_copy_pair.get(
+            (anchor_i, negative_i), anchor_i
+        )
+        positive_i = positive_by_anchor.get(source_anchor)
+        if positive_i is None or positive_i == negative_i:
+            continue
+        triple = (anchor_i, positive_i, negative_i)
+        if triple not in seen:
+            seen.add(triple)
+            triples.append(triple)
+
+    train_positive_pairs = {
+        (int(anchor), int(positive))
+        for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2)
+    }
+    for audit in mask_audit or []:
+        source_i = int(audit["anchor_payload_idx"])
+        copy_i = int(audit["copy_payload_idx"])
+        positive_i = int(audit["pair_payload_idx"])
+        if (source_i, positive_i) not in train_positive_pairs:
+            continue
+        if (copy_i, positive_i) not in train_positive_pairs:
+            continue
+        negative_i = next(
+            (
+                negative
+                for negative in negatives_by_anchor.get(source_i, [])
+                if negative != positive_i
+            ),
+            None,
+        )
+        if negative_i is None:
+            continue
+        triple = (copy_i, positive_i, negative_i)
+        if triple not in seen:
+            seen.add(triple)
+            triples.append(triple)
+    return triples
+
+
+def _mnrl_shared_positive_barcode_rows(
+    triples: list[tuple[int, int, int]], row_bc: np.ndarray
+) -> int:
+    """Count triple rows whose positive GTIN occurs in another triple.
+
+    The no-duplicate-text sampler cannot protect nonidentical payloads for
+    the same product from becoming in-batch negatives. This is an exposure
+    count, not the number actually colliding in a shuffled batch.
+    """
+    from collections import Counter
+
+    barcodes = [str(row_bc[positive]) for _, positive, _ in triples]
+    counts = Counter(barcodes)
+    return sum(counts[barcode] > 1 for barcode in barcodes)
+
+
 def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float):
     """Precision/recall/threshold at a target recall (07-series schema).
 
@@ -3913,20 +4003,12 @@ def train_one_config(
                 # every source-side hard negative to its source's positive
                 # canonical pair. The loss also continues to use the other
                 # positives in a batch as in-batch negatives.
-                positive_by_anchor: dict[int, int] = {}
-                for anchor, positive in train_all:
-                    positive_by_anchor.setdefault(int(anchor), int(positive))
-                triples: list[tuple[int, int, int]] = []
-                seen_triples: set[tuple[int, int, int]] = set()
-                for anchor, negative in tr_negs:
-                    anchor_i, negative_i = int(anchor), int(negative)
-                    positive_i = positive_by_anchor.get(anchor_i)
-                    if positive_i is None or positive_i == negative_i:
-                        continue
-                    triple = (anchor_i, positive_i, negative_i)
-                    if triple not in seen_triples:
-                        seen_triples.add(triple)
-                        triples.append(triple)
+                triples = _build_mnrl_training_triples(
+                    train_all,
+                    tr_negs,
+                    mask_audit=mask_audit,
+                    hard_negative_mask_audit=hard_negative_mask_audit,
+                )
                 if not triples:
                     rows.append(
                         {
@@ -3937,6 +4019,15 @@ def train_one_config(
                         }
                     )
                     continue
+                shared_barcode_rows = _mnrl_shared_positive_barcode_rows(
+                    triples, row_bc
+                )
+                print(
+                    f"    [mnrl-pairs] triples={len(triples):,} | "
+                    f"positive-GTIN repeat exposure={shared_barcode_rows:,} "
+                    "(different texts may still share product identity)",
+                    flush=True,
+                )
                 train_ds = Dataset.from_dict(
                     {
                         "anchor": [payload[a] for a, _, _ in triples],
@@ -4089,6 +4180,9 @@ def train_one_config(
             from sentence_transformers import (
                 SentenceTransformerTrainingArguments as STArgs,
             )
+            from sentence_transformers.sentence_transformer.training_args import (
+                BatchSamplers,
+            )
 
             class PairIdDataCollator(SentenceTransformerDataCollator):
                 """Keep telemetry and structured features out of tokenization."""
@@ -4199,6 +4293,14 @@ def train_one_config(
                 report_to=[],
                 seed=seed + fold_i,
                 use_cpu=not on_cuda,
+                # MNRL treats every other row's positive/explicit negative
+                # as an in-batch negative. Augmented views and repeated
+                # canonicals must not collide within one batch.
+                batch_sampler=(
+                    BatchSamplers.NO_DUPLICATES
+                    if loss == "mnrl"
+                    else BatchSamplers.BATCH_SAMPLER
+                ),
             )
             # discriminative LRs: bottom layers hold pretrained knowledge ->
             # smaller LR; top layers + pooling head adapt to the task -> full
