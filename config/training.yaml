@@ -96,7 +96,7 @@ colab:
   # Training workers consume immutable bundles prepared locally.  Keep all
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
-  training_dataset_csv: "data/dataset_deduped_train_minus_3000.csv"
+  training_dataset_csv: "data/dataset_deduped_train_minus_5000.csv"
   # The normal ANN lane consumes its entire prepared training set.
   train_fraction: 1.0
   # Versioned checkout inputs for the fast standard ANN lane.
@@ -222,7 +222,7 @@ colab:
     source_csv: "data/dataset_deduped.csv"
     # The file actually fed to inference: the 3,000 held-out sample. Inference
     # runs on this sample only; it never scores the whole catalog.
-    input_csv: "data/dataset_deduped_sample_3000.csv"
+    input_csv: "data/dataset_deduped_sample_5000.csv"
     output_dir: "final_inference"
     # REQUIRED, not a preference: final inference must actually run on the GPU
     # when one is present. The worker refuses to start rather than silently
@@ -588,15 +588,25 @@ training:
 # neg_oversample: random-negative bulk-draw multiplier (was inline 60 in
 # src/core/blocking.build_pairs).
 pairs:
-  proceed_sim_threshold: 0.65    # positives: proceed & sim>=0.65 (lowered
-                                 # 2026-09-28 from 0.80: +389 gate-verified
-                                 # pairs, canonical-agreement 1.0000;
+  proceed_sim_threshold: 0.50    # positives: proceed & sim>=0.50 (lowered
+                                 # 2026-09-28 0.80->0.65->0.50: +884
+                                 # gate-verified pairs, canonical-agreement
+                                 # 1.0000 in every 0.05 band down to 0.50;
                                  # negatives unchanged at 0.80)
   hardneg_sim_threshold: 0.80    # hard negatives: hard_no & sim>=0.80
   max_pos_per_group: 4           # eval-pair positives per multi-retailer group
   n_neg: 10000                   # eval negatives per build_pairs call
   neg_oversample: 60             # bulk-draw multiplier for valid negatives
   balance_train_classes: true    # next training run: train negatives match all positives
+
+# ── entity-cluster circuit breaker ──────────────────────────────────────────
+# Components are tiny by construction (max 13 over ~39k covered rows at
+# full scale): a giant means catalog corruption (shared placeholder
+# barcode, feed merge), not a big product family. The prep lane fails
+# loudly past either cap instead of training on merged entities.
+entity_clusters:
+  max_component_size: 15
+  max_giant_ratio: 0.05
 
 # ── plotting (was EDA/eda.yaml plots: — every fig.savefig reads this) ────────
 plots:

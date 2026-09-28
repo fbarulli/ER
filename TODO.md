@@ -57,10 +57,12 @@
       (train-time 0.843; bundle-only 1.686 printed, informational).
 
 ## Next
-- [ ] Rewire 5k holdout into final_inference/colab (review first; needs gate
-      provenance + component/split impact analysis).
-- [ ] Recall-loss bands below 0.65 (agreement per band, no CIs) to justify
-      the floor.
+- [x] 5k rewire event (tagged rewire-5k): pointers switched, bundle rebuilt
+      on train_minus_5000 (56,529 rows; encoder never sees inference rows),
+      breaker passed live (max 12), diet PASS (0.810), harness rebuilt
+      (203 twins/bucket, P@R95 0.355) + twin baselines reset.
+- [x] Recall-loss bands: agreement 1.0000 in every 0.05 band to 0.50;
+      floor set 0.50 (+884 pairs). Boundary-20 inspected (genuine matches).
 - [ ] Full-data twin P@R95 curve per checkpoint; revisit markers only if
       twin margin ~= 0. No embedding mixup (dynamic; label undefined).
 

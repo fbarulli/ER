@@ -9,15 +9,15 @@
     "keep_redundant_attribute_words": true,
     "emit_singleton_pack_token": false
   },
-  "n_df": 61529,
-  "n_payload": 116393,
-  "n_pos": 51146,
-  "n_neg": 30359,
-  "n_train_neg": 30359,
-  "n_labeled_pairs_bytes": 252424,
+  "n_df": 56529,
+  "n_payload": 108071,
+  "n_pos": 46783,
+  "n_neg": 28869,
+  "n_train_neg": 28869,
+  "n_labeled_pairs_bytes": 266566,
   "n_canonical_records_bytes": 10047232,
   "n_gate_results_bytes": 28153414,
-  "sha256": "7d7dc7123d728bc35d7b0e3b9ac128a6936993b5d2e7339fc2259e17e5b2b490",
+  "sha256": "01f4ba2f927e3dfdb83af14224a1d98e49e9105dee81cd1dbc89bca01e2f638e",
   "masking_config": {
     "enabled": true,
     "profile": "baseline",
@@ -49,7 +49,7 @@
     "candidate_pool_size": 10000
   },
   "ratio_to_hard": 1.0,
-  "static_view_ratio": 1.684706347376396,
-  "effective_train_ratio": 0.842353173688198,
-  "ratio_contract_note": "Static view ratio 1.685 permitted due to 1:1 dynamic easy-negative joining at step execution."
+  "static_view_ratio": 1.620527209117046,
+  "effective_train_ratio": 0.810263604558523,
+  "ratio_contract_note": "Static view ratio 1.621 permitted due to 1:1 dynamic easy-negative joining at step execution."
 }

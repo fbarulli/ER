@@ -90,11 +90,11 @@ class FinalInferenceContractTests(unittest.TestCase):
         # The settled split: inference runs on the 3,000 held-out sample only --
         # nothing infers over the full catalog -- while the full deduped catalog
         # stays as the identity anchor that training + sample must reconstruct.
-        self.assertEqual(spec.input_csv, "data/dataset_deduped_sample_3000.csv")
+        self.assertEqual(spec.input_csv, "data/dataset_deduped_sample_5000.csv")
         self.assertEqual(spec.source_csv, "data/dataset_deduped.csv")
         self.assertEqual(
             colab.training_dataset_csv,
-            "data/dataset_deduped_train_minus_3000.csv",
+            "data/dataset_deduped_train_minus_5000.csv",
         )
         # One consistent layout: every input resolves through the single root,
         # so no stray legacy data directory or results/ reference can survive.

@@ -53,7 +53,7 @@ class TrainingLifecyclePreflightTests(unittest.TestCase):
         self.assertTrue(result["reconstructs_source"])
         self.assertEqual(result["source_rows"], 5)
         self.assertIn(
-            "dataset_deduped_sample_3000.csv",
+            "dataset_deduped_sample_5000.csv",
             " ".join(result["remote_completion_argv"]),
         )
 

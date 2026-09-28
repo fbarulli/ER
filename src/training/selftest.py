@@ -1102,11 +1102,12 @@ def oracle_pinned_counts() -> None:
             f"got {dec}",
         )
         check(
-            "labeled pairs == 8,641 (919 pos / 7,722 hard-neg)",
-            # 2026-09-28: proceed_sim_threshold 0.80 -> 0.65 admits 389
-            # gate-verified pairs (canonical-agreement 1.0000, checked by
-            # scripts/check_proceed_precision.py); negatives unchanged.
-            len(lp) == 8641 and (lp.true_label == 1).sum() == 919,
+            "labeled pairs == 9,136 (1,414 pos / 7,722 hard-neg)",
+            # 2026-09-28: proceed_sim_threshold 0.80 -> 0.65 -> 0.50 admits
+            # 884 gate-verified pairs (canonical-agreement 1.0000 in every
+            # 0.05 band, checked by scripts/check_proceed_precision.py);
+            # negatives unchanged.
+            len(lp) == 9136 and (lp.true_label == 1).sum() == 1414,
             f"got {len(lp)} rows, {(lp.true_label == 1).sum()} pos",
         )
     except FileNotFoundError as e:

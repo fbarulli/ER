@@ -822,6 +822,14 @@ def _main_inner(_mlf, _wandb) -> None:
         "pair_id": [_record_ids[int(b)] for _a, b in np.asarray(pos, dtype=int)],
     })
     _clusters = _cluster_map(_truth_pairs, _donor_pool)
+    from training.masking import check_cluster_sizes as _check_clusters
+
+    _cluster_cfg = load_config()["entity_clusters"]
+    _cluster_stats = _check_clusters(
+        _clusters,
+        max_component_size=int(_cluster_cfg["max_component_size"]),
+        max_giant_ratio=float(_cluster_cfg["max_giant_ratio"]),
+    )
     entity_keys = [
         str(_clusters.get(record, f"row:{idx}")) for idx, record in enumerate(_record_ids)
     ]
@@ -829,7 +837,9 @@ def _main_inner(_mlf, _wandb) -> None:
     print(
         f"[entity-clusters] {_clustered:,}/{len(_record_ids):,} payload rows "
         f"in {len(set(_clusters.values())):,} clusters "
-        f"({_clustered / max(len(_record_ids), 1):.1%} covered)",
+        f"({_clustered / max(len(_record_ids), 1):.1%} covered; "
+        f"max_size={_cluster_stats['max_size']}, "
+        f"giant_ratio={_cluster_stats['giant_ratio']:.4f})",
         flush=True,
     )
     targeted_attribute_neg = np.asarray(

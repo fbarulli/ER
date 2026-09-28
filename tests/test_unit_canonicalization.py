@@ -84,6 +84,15 @@ def test_order_of_magnitude_title_attribute_disagreement_flags_not_flips() -> No
     assert "volume_inconsistency" not in title_only["attribute_consistency_flags"]
 
 
+def test_out_of_range_winner_is_flagged_ambiguous_not_changed() -> None:
+    """Bounds come from the canonical distribution, values never move."""
+    wild = extract_all("Giant water 25000ml tank", "Volume: 25000")
+    assert wild["volume_ml"] == 25000.0
+    assert "ambiguous_volume" in wild["attribute_consistency_flags"]
+    sane = extract_all("Sparkling water 8 fl oz, case of 12", "Volume: 250")
+    assert "ambiguous_volume" not in sane["attribute_consistency_flags"]
+
+
 def test_source_structured_pack_defaults_to_singleton_when_count_is_unknown() -> None:
     info = sku_info("Plain tea", "")
 

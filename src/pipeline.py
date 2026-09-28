@@ -398,6 +398,14 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         and max(attr_vol, title_vol) / min(attr_vol, title_vol) >= 10.0
     ):
         consistency_flags.add("volume_inconsistency")
+    # Sanity bounds (audit 2026-09-28): vendor tables swap fields and drop
+    # decimals, so an out-of-range winner is not auto-trusted blindly.
+    # Canonical distribution: p99 = 2,500ml, 27/12,621 rows above 5,000ml
+    # (bulk formats), max 25,000ml. Outside [1, 10000]ml the value is kept
+    # (no payload churn — volume_ml never changes here) but escalated to
+    # ambiguous_volume so downstream stops treating it as resolved.
+    if volume_ml > 0 and not 1.0 <= volume_ml <= 10000.0:
+        consistency_flags.add("ambiguous_volume")
 
     if attr_pack > 1 or attr_pack_conf > 0:
         pack_qty = attr_pack

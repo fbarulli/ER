@@ -1226,6 +1226,17 @@ class TrainingPlotsSpec(BaseModel):
     dpi: int = Field(ge=50, le=600)
 
 
+class EntityClustersSpec(BaseModel):
+    """Circuit breaker over entity-cluster topology (config/training.yaml
+    entity_clusters:) — components are tiny by construction (max 13 over
+    ~39k covered rows full-scale), so a giant means catalog corruption."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_component_size: int = Field(ge=2)
+    max_giant_ratio: float = Field(gt=0.0, le=1.0)
+
+
 class AuditSpec(BaseModel):
     """Audit-lane knobs (config/training.yaml audit:) — strip-audit sample
     size (was EDA/eda.yaml strip_audit_sample) + the blocking-feature
@@ -1849,6 +1860,7 @@ class TrainingConfig(BaseModel):
     training: TrainingSpec
     pairs: PairsSpec
     plots: TrainingPlotsSpec
+    entity_clusters: EntityClustersSpec
     audit: AuditSpec
     bands: BandsSpec
     mining: MiningSpec

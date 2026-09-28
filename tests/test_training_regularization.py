@@ -557,6 +557,22 @@ class BundleProvenanceTests(unittest.TestCase):
         self.assertNotIn("r4", clusters)
         self.assertTrue(clusters["r0"].startswith("CLUSTER_"))
 
+    def test_cluster_circuit_breaker_trips_on_giant(self) -> None:
+        from training.masking import check_cluster_sizes
+
+        star = {f"r{i}": "CLUSTER_000000" for i in range(20)}
+        with self.assertRaises(ValueError) as caught:
+            check_cluster_sizes(
+                star, max_component_size=15, max_giant_ratio=0.05
+            )
+        self.assertIn("CLUSTER_000000", str(caught.exception))
+        healthy = {f"s{i}": f"CLUSTER_{i:06d}" for i in range(38)}
+        healthy.update({"a": "CLUSTER_999999", "b": "CLUSTER_999999"})
+        ok = check_cluster_sizes(
+            healthy, max_component_size=15, max_giant_ratio=0.05,
+        )
+        self.assertEqual(ok["max_size"], 2)
+
     def test_cluster_ids_are_deterministic(self) -> None:
         import pandas as pd
 

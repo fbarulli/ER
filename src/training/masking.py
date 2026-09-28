@@ -418,6 +418,55 @@ def build_entity_cluster_map(
     return cluster_map
 
 
+def check_cluster_sizes(
+    cluster_map: dict,
+    *,
+    max_component_size: int,
+    max_giant_ratio: float,
+) -> dict[str, object]:
+    """Circuit breaker over entity-cluster topology (fail loud, not silent).
+
+    A single bad edge (shared placeholder barcode, feed corruption) merges
+    two large clusters under union-find with no un-merge short of a full
+    rebuild. This check runs at build time in data prep: components are
+    tiny by construction (measured max 13 over 38,952 covered rows), so a
+    giant component means catalog corruption, not a big product family.
+    Raises ValueError naming the offender; returns the stats otherwise.
+    """
+    from collections import Counter
+
+    if max_component_size < 2:
+        raise ValueError("max_component_size must be >= 2")
+    if not 0.0 < max_giant_ratio <= 1.0:
+        raise ValueError("max_giant_ratio must be in (0, 1]")
+    sizes = Counter(cluster_map.values())
+    if not sizes:
+        return {"clusters": 0, "covered": 0, "max_size": 0, "giant_ratio": 0.0}
+    biggest, biggest_size = sizes.most_common(1)[0]
+    giant_ratio = biggest_size / len(cluster_map)
+    stats: dict[str, object] = {
+        "clusters": len(sizes),
+        "covered": len(cluster_map),
+        "max_size": biggest_size,
+        "max_cluster": biggest,
+        "giant_ratio": giant_ratio,
+    }
+    if biggest_size > max_component_size:
+        raise ValueError(
+            "entity-cluster circuit breaker: component "
+            f"{biggest} has {biggest_size} rows > max {max_component_size} "
+            "(suspect shared placeholder barcode or feed corruption — "
+            "audit before merging)"
+        )
+    if giant_ratio > max_giant_ratio:
+        raise ValueError(
+            "entity-cluster circuit breaker: giant ratio "
+            f"{giant_ratio:.4f} > {max_giant_ratio:.4f} "
+            "(one component dominates the clustered rows — audit before merging)"
+        )
+    return stats
+
+
 def normalize_entity_key(value: object, fallback: str) -> str:
     """Canonical entity key for donor-disjointness checks.
 
