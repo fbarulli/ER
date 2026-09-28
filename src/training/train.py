@@ -789,16 +789,48 @@ def _main_inner(_mlf, _wandb) -> None:
     )
     # Entity keys for donor-disjointness (one per ORIGINAL payload row;
     # augmentation copies inherit via audit lineage, so this never grows).
-    # Same GTIN space on both sides: df rows carry barcodes, canonical rows
-    # carry GTINs, and zero-padding is normalized away (UPC-12 vs EAN-13
-    # length variants collide). Unmapped/empty values get unique per-row
-    # keys and never block each other.
+    # Transitive-closure clusters over ground-truth positive pairs plus
+    # shared barcodes: multi-hop duplicates (retailer-feed variants, GTIN
+    # length fragments) land in one CLUSTER_xxxxxx even when no single
+    # barcode matches. Unmapped/isolated rows get unique per-row keys and
+    # never block each other.
+    import pandas as _pd
+
+    from training.masking import (
+        build_entity_cluster_map as _cluster_map,
+    )
     from training.masking import normalize_entity_key as _entity_key
 
-    entity_keys = [
-        _entity_key(str(row_bc[idx]).strip() if idx < len(row_bc) else "", f"row:{idx}")
+    _n_df_rows = len(df)
+    _record_ids = [
+        str(df["product_id"].iloc[idx])
+        if idx < _n_df_rows and "product_id" in df.columns
+        else str(row_bc[idx]).strip()
         for idx in range(len(payload))
     ]
+    _pool_barcodes = [
+        _entity_key(str(row_bc[idx]).strip() if idx < len(row_bc) else "", "")
+        for idx in range(len(payload))
+    ]
+    _donor_pool = _pd.DataFrame({
+        "record_id": _record_ids,
+        "barcode": _pool_barcodes,
+    })
+    _truth_pairs = _pd.DataFrame({
+        "anchor_id": [_record_ids[int(a)] for a, _b in np.asarray(pos, dtype=int)],
+        "pair_id": [_record_ids[int(b)] for _a, b in np.asarray(pos, dtype=int)],
+    })
+    _clusters = _cluster_map(_truth_pairs, _donor_pool)
+    entity_keys = [
+        str(_clusters.get(record, f"row:{idx}")) for idx, record in enumerate(_record_ids)
+    ]
+    _clustered = sum(1 for record in _record_ids if record in _clusters)
+    print(
+        f"[entity-clusters] {_clustered:,}/{len(_record_ids):,} payload rows "
+        f"in {len(set(_clusters.values())):,} clusters "
+        f"({_clustered / max(len(_record_ids), 1):.1%} covered)",
+        flush=True,
+    )
     targeted_attribute_neg = np.asarray(
         data.get("targeted_attribute_neg", np.empty((0, 2), dtype=int)),
         dtype=int,

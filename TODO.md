@@ -18,15 +18,18 @@
       donor uniformity, subset distance split.
 
 ## In progress
-- [x] Diet gate + slice baseline on smoke probe5 (caps build): PASS.
-- [x] Full test-suite regression sweep: 485 passed, 7 pre-existing fails
+- [x] Diet gate + slice baseline on smoke (caps build): PASS.
+- [x] Full test-suite regression sweep: 488 passed, 7 pre-existing fails
       (verified identical on clean tree).
 - [x] Shared cross-lane donor-value counter (footprint cap binds bundle).
+- [x] Entity clusters wired (52.1% rows covered full-scale, 13,783 clusters).
+- [x] Full bundle rebuilt (worker_1+2): 51,153 pos / 30,341 neg, 2,245
+      twins, 4,413 + 2,864 value swaps. Zero-shot slice baselined.
+- [ ] Diet ratio FAIL at full scale: 1.686 > 1.500 (old bundle was 2.23 —
+      inherited, improved). Owner call: recalibrate cap or raise neg
+      static fracs. Train-time ratio ~= 0.85 after 1:1 easy negatives.
 
 ## Next
-
-## Next
-- [ ] Rebuild full prepared bundles (regex fix + new lanes stale them).
 - [ ] Rewire 5k holdout into final_inference/colab (review first).
 - [ ] Full-data twin P@R95 curve per checkpoint; revisit markers only if
       twin margin ~= 0. No embedding mixup (dynamic; label undefined).

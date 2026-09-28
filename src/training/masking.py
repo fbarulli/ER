@@ -378,6 +378,46 @@ def augment_swapped_agreed(
     return res.pos, res.payload, res.row_bc, res.n_added, res.audit_dicts()
 
 
+def build_entity_cluster_map(
+    positive_pairs_df, donor_pool_df,
+    *,
+    anchor_col: str = "anchor_id",
+    pair_col: str = "pair_id",
+    record_col: str = "record_id",
+    barcode_col: str = "barcode",
+) -> dict:
+    """Deterministic cluster-ID map via transitive closure.
+
+    Nodes are record IDs; edges come from ground-truth positive pairs plus
+    shared non-null barcodes (chained within each barcode group, so N rows
+    cost N-1 edges). Connected components become CLUSTER_xxxxxx IDs. Only
+    connected records are mapped — isolated records are absent, and the
+    caller must give them unique fallback keys (never a shared blank key).
+
+    Determinism: components are enumerated in first-seen order over
+    insertion-ordered nodes (positive-pair endpoints first, then donor
+    rows), so identical inputs always yield identical IDs.
+    """
+    import networkx as nx
+
+    graph = nx.Graph()
+    for _, row in positive_pairs_df.iterrows():
+        graph.add_edge(row[anchor_col], row[pair_col])
+    pool = donor_pool_df[
+        donor_pool_df[barcode_col].notna() & (donor_pool_df[barcode_col] != "")
+    ]
+    for _, group in pool.groupby(barcode_col, sort=True):
+        node_ids = group[record_col].tolist()
+        for index in range(len(node_ids) - 1):
+            graph.add_edge(node_ids[index], node_ids[index + 1])
+    cluster_map: dict = {}
+    for cluster_idx, component in enumerate(nx.connected_components(graph)):
+        cluster_id = f"CLUSTER_{cluster_idx:06d}"
+        for record_id in component:
+            cluster_map[record_id] = cluster_id
+    return cluster_map
+
+
 def normalize_entity_key(value: object, fallback: str) -> str:
     """Canonical entity key for donor-disjointness checks.
 

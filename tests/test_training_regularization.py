@@ -427,5 +427,91 @@ class CounterfactualTwinTests(unittest.TestCase):
         )
 
 
+class EntityClusterMapTests(unittest.TestCase):
+    """Transitive-closure entity IDs: pairs + shared barcodes, one cluster."""
+
+    def test_closure_links_pairs_and_barcode_groups(self) -> None:
+        import pandas as pd
+
+        from training.masking import build_entity_cluster_map
+
+        truth = pd.DataFrame({
+            "anchor_id": ["r0", "r2"],
+            "pair_id": ["r1", "r3"],
+        })
+        pool = pd.DataFrame({
+            "record_id": ["r0", "r1", "r2", "r3", "r4"],
+            "barcode": ["A", "A", "B", "C", ""],
+        })
+        # r0-r1 share barcode A AND a truth pair; r2-r3 share only a truth
+        # pair; r3's barcode C is a singleton; r4's barcode is empty.
+        # Extra link: r1-r2 truth pair merges everything except r4.
+        truth = pd.concat(
+            [truth, pd.DataFrame({"anchor_id": ["r1"], "pair_id": ["r2"]})],
+            ignore_index=True,
+        )
+        clusters = build_entity_cluster_map(truth, pool)
+        self.assertEqual(
+            {clusters["r0"], clusters["r1"], clusters["r2"], clusters["r3"]},
+            {clusters["r0"]},
+        )
+        self.assertNotIn("r4", clusters)
+        self.assertTrue(clusters["r0"].startswith("CLUSTER_"))
+
+    def test_cluster_ids_are_deterministic(self) -> None:
+        import pandas as pd
+
+        from training.masking import build_entity_cluster_map
+
+        truth = pd.DataFrame({
+            "anchor_id": ["b", "c"],
+            "pair_id": ["a", "d"],
+        })
+        pool = pd.DataFrame({
+            "record_id": ["a", "b", "z"],
+            "barcode": ["X", "X", "Y"],
+        })
+        first = build_entity_cluster_map(truth, pool)
+        second = build_entity_cluster_map(truth, pool)
+        self.assertEqual(first, second)
+
+    def test_same_entity_different_barcodes_refuses_donation(self) -> None:
+        # Donor pair carries other barcodes but a truth pair links it into
+        # the anchor's cluster: multi-hop duplicate, no transplant allowed.
+        import pandas as pd
+
+        from training.masking import build_entity_cluster_map
+        from training.masking import augment_value_swaps
+
+        payload = [
+            "cola coconut water volume_ml_500 flavor_coconut",
+            "cola coconut aqua volume_ml_500 flavor_coconut",
+            "cola lime water volume_ml_500 flavor_lime",
+            "cola lime aqua volume_ml_500 flavor_lime",
+        ]
+        pairs = np.asarray([[0, 1], [2, 3]], dtype=int)
+        records = ["r0", "r1", "r2", "r3"]
+        truth = pd.DataFrame({
+            "anchor_id": ["r0", "r2", "r1"],
+            "pair_id": ["r1", "r3", "r2"],
+        })
+        pool = pd.DataFrame({
+            "record_id": records,
+            "barcode": ["A", "A", "B", "B"],
+        })
+        clusters = build_entity_cluster_map(truth, pool)
+        self.assertEqual(len(set(clusters.values())), 1)
+        entity_keys = [clusters[r] for r in records]
+        out, _, _, n_added, audit = augment_value_swaps(
+            pairs, payload,
+            np.asarray(["A", "A", "B", "B"], dtype=object),
+            frac=1.0, seed=7, population="positive", symmetric=True,
+            entity_keys=entity_keys,
+        )
+        self.assertEqual(n_added, 0)
+        self.assertEqual(audit, [])
+        np.testing.assert_array_equal(out, pairs)
+
+
 if __name__ == "__main__":
     unittest.main()
