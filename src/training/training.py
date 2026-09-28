@@ -3160,11 +3160,11 @@ def _dynamic_mask_negative_transform(
                     feature_replacement = ann_structured_features.get(pair_id)
                     if feature_replacement is not None and "structured_features" in transformed:
                         transformed["structured_features"][i] = feature_replacement
-            base_population = (
-                ann_sources.get(pair_id, "ann_finetuned")
-                if ann_sources is not None
-                else "ann_finetuned"
-            )
+                base_population = (
+                    ann_sources.get(pair_id, "ann_finetuned")
+                    if ann_sources is not None
+                    else "ann_finetuned"
+                )
         if int(label) != 0:
             if base_population == "masked_positive":
                 augmentation = "static_mask"
