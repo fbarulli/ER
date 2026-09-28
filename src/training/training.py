@@ -211,6 +211,23 @@ NEGATIVE_SOURCE_DATAPOINT_POPULATIONS = tuple(
 DATAPOINT_FALLBACK_TAGS = frozenset({"hard_negative", "hard_neg", "unknown"})
 EVAL_ONLY_DATAPOINT_POPULATIONS: set[str] = set()
 
+# train.py mints static masked/value-swapped copies of hard negatives into
+# the neg and train_neg pools with an "<source>+aug" provenance label
+# (f-string concat — invisible to the static producer scan). The copy's
+# SOURCE is still the base population; the minting mode is carried by the
+# pair lineage (target_mode from hard_negative_mask_audit). Compound tags
+# are normalized to their base population wherever a registry check
+# happens, so the registry never grows a combinatorial "<base>+aug" family.
+AUG_SOURCE_SUFFIX = "+aug"
+
+
+def _base_population_tag(source: str) -> str:
+    """Strip the static-copy '+aug' suffix minted by train.py's augmentation."""
+    source = str(source)
+    if source.endswith(AUG_SOURCE_SUFFIX):
+        return source[: -len(AUG_SOURCE_SUFFIX)]
+    return source
+
 
 class UnregisteredDatapointPopulationError(RuntimeError):
     """A producer emitted a datapoint population the registry does not know.
@@ -2538,6 +2555,10 @@ def _build_pair_lineage(
             "source_anchor_payload_idx": anchor,
             "source_pair_payload_idx": target,
             "is_masked_copy": 0,
+            # static minting mode of this copy (train.py's "<source>+aug"
+            # copies): carried into the usage row's lineage block so the
+            # mode is recoverable per row without a training run.
+            "target_mode": str(audit.get("target_mode", "")),
         }
         lookup[(label, anchor, target)] = base
         lookup[(label, int(audit["copy_payload_idx"]), target)] = {
@@ -2613,7 +2634,7 @@ def _training_pair_populations(
             populations.append("gate_positive")
     for i, _pair in enumerate(train_neg):
         populations.append(
-            str(train_neg_sources[i])
+            _base_population_tag(str(train_neg_sources[i]))
             if train_neg_sources is not None and i < len(train_neg_sources)
             else "hard_negative"
         )
@@ -2956,10 +2977,13 @@ def _negative_source_accounting(
       ``UnregisteredDatapointPopulationError`` instead of silently dropping the
       tag from the census.
     """
-    sources = [str(source) for source in np.unique(tr_neg_sources)]
-    totals = {
-        source: int(np.sum(tr_neg_sources == source)) for source in sources
-    }
+    sources = sorted(
+        {_base_population_tag(source) for source in np.unique(tr_neg_sources)}
+    )
+    totals = {source: 0 for source in sources}
+    for raw_source in np.unique(tr_neg_sources):
+        base = _base_population_tag(str(raw_source))
+        totals[base] += int(np.sum(tr_neg_sources == raw_source))
     unregistered = sorted(
         source for source in sources if source not in KNOWN_DATAPOINT_POPULATIONS
     )
