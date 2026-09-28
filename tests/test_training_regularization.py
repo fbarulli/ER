@@ -497,6 +497,10 @@ class BundleProvenanceTests(unittest.TestCase):
             )
             reloaded, _ = load_prepared_bundle(path)
             self.assertEqual(reloaded.masking_config, manifest.masking_config)
+            self.assertAlmostEqual(manifest.ratio_to_hard, 1.0)
+            self.assertGreater(manifest.static_view_ratio, 0.0)
+            self.assertGreater(manifest.effective_train_ratio, 0.0)
+            self.assertIn("easy-negative joining", manifest.ratio_contract_note)
 
     def test_drifted_config_warns_on_load(self) -> None:
         import copy

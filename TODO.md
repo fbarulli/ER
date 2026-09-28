@@ -26,6 +26,11 @@
 - [x] T4: volume anomaly flag (attribute wins, text-neutral); 197 rows.
 - [x] T5: manifest ratio contracts (ratio_to_hard, static/effective views,
       note); diet gates on projected train-time ratio.
+- [x] T1: field-sliced harness 33/33/34 (234 twins/bucket, package binds;
+      2,106 rows with gate negatives; zero-shot P@R95 0.35 / 0.50 per-bucket).
+- [x] T2 end-to-end: proceed 0.80->0.65, precision gate 1.0000, labeled
+      rebuilt 8,641 (919/7,722), oracle pins reconciled, balanced pool
+      rebuilt 1,838 (pack_blocker-only — negatives bind).
 - [x] Donor overlap guard (swap_max_donor_overlap 0.95; min-overlap floor
       rejected: costs 43% yield, transfers nothing domain-specific).
 - [x] Bundle pins masking + easy config; drift warns on load.

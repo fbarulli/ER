@@ -304,5 +304,45 @@ class ProceedPrecisionTests(unittest.TestCase):
         )
 
 
+class FieldSlicePartitionTests(unittest.TestCase):
+    """33/33/34 twin partition: deterministic, smallest-bucket bound."""
+
+    def _infos(self, field, n, start):
+        return [
+            {"copy_idx": start + i, "anchor_idx": 0, "pair_idx": 1,
+             "field": field}
+            for i in range(n)
+        ]
+
+    def test_partition_takes_first_k_per_bucket(self):
+        from scripts.build_field_slice import select_field_buckets
+
+        infos = (
+            self._infos("volume", 5, 100)
+            + self._infos("flavor", 3, 200)
+            + self._infos("package_type", 4, 300)
+            + self._infos("pack", 4, 400)
+            + self._infos("carbonation", 2, 500)
+        )
+        part = select_field_buckets(infos)
+        # package bucket = package_type + pack (8) ; smallest is flavor (3)
+        self.assertEqual([r["copy_idx"] for r in part["flavor"]], [200, 201, 202])
+        self.assertEqual(
+            [r["copy_idx"] for r in part["volume"]], [100, 101, 102]
+        )
+        self.assertEqual(
+            [r["copy_idx"] for r in part["package"]], [300, 301, 302]
+        )
+        self.assertEqual(part["_per_bucket"], 3)
+        self.assertEqual(part["_excluded_unknown_field"], 2)
+
+    def test_empty_bucket_blocks_with_zero(self):
+        from scripts.build_field_slice import select_field_buckets
+
+        part = select_field_buckets(self._infos("volume", 2, 0))
+        self.assertEqual(part["_per_bucket"], 0)
+        self.assertEqual(part["volume"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

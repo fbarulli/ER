@@ -53,6 +53,14 @@ class PreparedBundleManifest(BaseModel):
     # with an empty record and skip the check.
     masking_config: dict = Field(default_factory=dict)
     easy_config: dict = Field(default_factory=dict)
+    # Ratio contracts (audit 2026-09-28): the train-time arithmetic the
+    # diet gate enforced, frozen into the header so any reader can verify
+    # the contract without rerunning the gate. Required: bundles built
+    # before contracts existed fail loudly instead of looking compliant.
+    ratio_to_hard: float = Field(ge=0.0)
+    static_view_ratio: float = Field(gt=0.0)
+    effective_train_ratio: float = Field(gt=0.0)
+    ratio_contract_note: str = Field(min_length=1)
 
 
 def _digest(path: Path) -> str:
@@ -93,6 +101,19 @@ def write_prepared_bundle(
 
     recorded_masking = masking_cfg(str(masking_profile))
     recorded_easy = dict(load_config()["training"]["random_easy_negatives"])
+    easy_ratio = float(recorded_easy["ratio_to_hard"])
+    static_views = len(pos) / max(len(train_neg), 1)
+    # Same projection the diet gate enforces (scripts/diet_manifest.
+    # project_train_time_neg_views): easy quota joins at step execution,
+    # so the effective ratio is what the loss actually sees. Restated
+    # here in three lines rather than imported — scripts/ must never
+    # become an import dependency of the training package.
+    import math
+
+    effective_views = len(train_neg) + (
+        math.ceil(len(train_neg) * easy_ratio) if easy_ratio > 0 else 0
+    )
+    effective_ratio = len(pos) / max(effective_views, 1)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     payload_data = {
@@ -124,6 +145,13 @@ def write_prepared_bundle(
         model_input=model_input_spec(),
         masking_config=recorded_masking,
         easy_config=recorded_easy,
+        ratio_to_hard=easy_ratio,
+        static_view_ratio=float(static_views),
+        effective_train_ratio=float(effective_ratio),
+        ratio_contract_note=(
+            f"Static view ratio {static_views:.3f} permitted due to "
+            f"{easy_ratio:g}:1 dynamic easy-negative joining at step execution."
+        ),
         n_df=len(df),
         n_payload=len(payload),
         n_pos=len(pos),
