@@ -25,7 +25,6 @@ masking:
   hard_negative_mask_prob: null  # null: negative extent drawn from its band
   hard_negative_mask_lo: 0.10  # extent per masked presentation, not mask frequency
   hard_negative_mask_hi: 0.20
-  hard_negative_swap_frac: 0.50   # hard negatives: swapped-surface copies
   # Static pre-training VALUE swaps (donor value transplant, coconut->lime).
   # Positives: BOTH sides rewritten from an agreeing donor pair, so a match
   # stays a match. Hard negatives: anchor side only, label 0 by identity.

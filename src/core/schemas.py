@@ -918,10 +918,6 @@ class MaskingSpec(BaseModel):
     hard_negative_mask_hi: float = Field(gt=0.0, le=1.0)
     track_visibility: bool
     track_per_epoch: bool
-    # Label-preserving agreed-field swaps (anchor takes the counterpart's
-    # surface form where parsed values agree): extra varied views per pair
-    # without touching the label. Separate fracs per population.
-    hard_negative_swap_frac: float = Field(ge=0.0, le=1.0)
     # Static pre-training VALUE swaps (training.masking.augment_value_swaps):
     # a structured value is transplanted from a real donor pair (coconut ->
     # lime). Positives are rewritten on BOTH sides from a donor pair that
@@ -986,7 +982,6 @@ class MaskingProfileSpec(BaseModel):
     hard_negative_mask_hi: float | None = Field(default=None, gt=0.0, le=1.0)
     track_visibility: bool | None = None
     track_per_epoch: bool | None = None
-    hard_negative_swap_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     swap_value_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     hard_negative_swap_value_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     counterfactual_frac: float | None = Field(default=None, ge=0.0, le=1.0)
