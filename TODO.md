@@ -25,11 +25,58 @@
 - [x] Entity clusters wired (52.1% rows covered full-scale, 13,783 clusters).
 - [x] Full bundle rebuilt (worker_1+2): 51,153 pos / 30,341 neg, 2,245
       twins, 4,413 + 2,864 value swaps. Zero-shot slice baselined.
-- [ ] Diet ratio FAIL at full scale: 1.686 > 1.500 (old bundle was 2.23 —
-      inherited, improved). Owner call: recalibrate cap or raise neg
-      static fracs. Train-time ratio ~= 0.85 after 1:1 easy negatives.
+- [x] Diet ratio at full scale: gate now projects the train-time easy
+      quota (ceil(hard * ratio), same SSOT as the trainer) — DIET PASS
+      (train-time 0.843; bundle-only 1.686 printed, informational).
 
 ## Next
 - [ ] Rewire 5k holdout into final_inference/colab (review first).
 - [ ] Full-data twin P@R95 curve per checkpoint; revisit markers only if
       twin margin ~= 0. No embedding mixup (dynamic; label undefined).
+
+## Open gaps (2026-09-28 audit — all items)
+Parser / extraction:
+- [ ] 55 unresolved regex candidates: 24x aerosol + 1x tray package ontology,
+      30 residual title signals (pulp 10, sugar 7, bubble 4, sweetener/s 6,
+      effervescent/sparkle/pack-of-6).
+- [ ] Bare "soda" unresolved by design (precision over recall); ~15 true soda
+      titles lack carbonation claims.
+- [ ] Volume unit anomalies (`0.33 ml` title vs `330 ml` attribute, attribute
+      wins silently) — blast radius unmeasured.
+- [ ] No MPN parsing; entity guard best-effort on unmapped rows (52.1%
+      cluster coverage; barcode-less duplicates need record linkage).
+- [ ] Sweetener veto excluded from gates (6 false merges vs 74 true lost).
+- [ ] Low-cardinality fields (carbonation 3 values, pulp 2, sweetening 1)
+      concentrate transplants structurally — bounded, monitored, not fixable.
+Data / augmentation:
+- [ ] Positive scarcity binds everything: 530 gate positives @sim>=0.8,
+      balanced-pair ceiling 1,060; cross-country hard positives only 299.
+- [ ] `swap_agreed` lane yields 0 structurally — remove or keep as invariant.
+- [ ] Swaps are tags-only: prose keeps old word, copies inherit anchor
+      structured vector (text/vector disagreement unmeasured).
+- [ ] Counterfactual validity assumed: decorative flavor words -> label noise;
+      no per-field flip-validity measurement.
+- [ ] Swap/twin fracs and caps hand-picked (0.20/0.10, 0.35/0.03); HPO never
+      swept them.
+- [ ] 5k holdout built but not wired (final_inference + colab still on 3k).
+- [ ] `balanced_pairs_sample_3000` never built; threshold sweeps lack artifact.
+- [ ] Bundles don't record ratio_to_hard: gate verdicts shift if it changes
+      without rebuild.
+Training / eval:
+- [ ] No checkpoint trained with twins — hypothesis unvalidated (zero-shot
+      P@R95 0.50, margin 0.009 is the baseline to beat).
+- [ ] No train-time twin monitoring (MNRL loss has no per-subset hooks;
+      offline slice curve per checkpoint not yet drawn).
+- [ ] No twin loss warmup (watch-item: spikes epochs 1-2; guards in place).
+- [ ] Pooling vs single-token flips unvalidated (markers deferred, not dead).
+- [ ] Contrastive/triplet paths consume new audits generically — untested.
+Process / repo:
+- [ ] Red baseline: 7 pre-existing failures (5 result-sync, 2 stale MNRL
+      signatures) + 1 deselected Colab test.
+- [ ] Metrics unversioned (`results/` gitignored — reports live locally only).
+- [ ] Smoke unrepresentative (`--sample 1000` = first rows, not stratified;
+      e.g. entity coverage 11.8% vs 52.1%).
+- [ ] Easy-negative replenishment samples with replacement when pool is thin
+      (silent re-weighting at small scale).
+- [ ] Dynamic masking invisible to diet (ephemeral views excluded by design).
+- [ ] 41MB new CSVs in git while DVC sits disabled (bloat policy question).
