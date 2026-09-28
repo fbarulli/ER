@@ -187,6 +187,13 @@ thread.
   counter/manifest; 49->30 unverified) — add a census counter.
 - LOW stale comment train.py:1057-1059 ("both swap modes"); stale
   fixture "swap_agreed" target_mode in tests/test_mnrl_pair_selection.py:22.
+  FIXED (agent 1, commit 051c906): comment rewritten — only swap_values
+  is excluded from the extent halves (swap_agreed lane deleted); fixture
+  renamed to "targeted" (registered mode; NOT swap_values — that mode is
+  special-cased in _build_mnrl_training_triples training.py:676-686 as
+  omit-swap-copies, which would have inverted the test's assertion).
+  Guard: tests/test_stale_mode_references.py (registered-mode set derived
+  from masking.py producers; deleted-mode pin; stale-claim pin).
 
 
 - [ ] Full-data twin P@R95 curve per checkpoint; revisit markers only if
