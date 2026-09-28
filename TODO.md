@@ -58,7 +58,20 @@ drops, phantom accounting, reuse-don't-duplicate.
 
 Main-thread sweep results (2026-09-28):
 - Dead knob: hard_negative_swap_frac read at train.py:722, zero
-  consumers; key still in config + schemas — remove.
+  consumers; key still in config + schemas — remove. FIXED (agent 1,
+  commit 54f889f): ROOT CAUSE — the agreed-surface swap lane was deleted
+  (positive-side swap_agreed, TODO "swap_agreed DELETED") but its
+  hard-negative-side sibling survived: read bound to a local with zero
+  consumers (train.py:722), key in config/training.yaml:28, field in
+  MaskingSpec (schemas.py:924) + MaskingProfileSpec slot (schemas.py:989).
+  SSOT defect: a shipped knob implying deleted behavior. Blast radius:
+  config -> masking_cfg() -> dead local only; old bundle sidecars
+  (data/prepared/full/worker_*.pkl.gz.json masking_config) record it as a
+  historical build record, left untouched (prepared_bundle.py:287 drift
+  check only warns; bundle rebuild already pending). Removed: YAML key,
+  MaskingSpec field + comment, MaskingProfileSpec override, train.py read
+  + comment. Guard: tests/test_masking_cfg_dead_knobs.py (dead-local scan
+  of every mask_cfg[...] binding + knob pin).
 - Consistency flags (volume_inconsistency / ambiguous_volume) are
   IN-MEMORY ONLY (zero hits in dataset_deduped.csv, gate_results.csv,
   canonical_records.csv) — 49->30 unverifiable from committed artifacts;
