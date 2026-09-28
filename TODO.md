@@ -19,8 +19,14 @@ status per item, verified against HEAD:
   current code reads data[3]/data[5] (hpo.py:282-283).
 - A2 rerank country out-of-bounds for canonical endpoints: FIXED —
   padding present before use (rerank.py:267-273 -> :293).
-- [ ] A3 gate slots labeled ann_finetuned without realized replacement —
-      OWNER: agent 1 track (same fold path as its MNRL work).
+- [x] A3 gate slots labeled ann_finetuned without realized replacement —
+      FIXED (agent 2, merge 7a6af8b; fix f401601 on
+      fix/ann-replacement-attribution, pushed). The one-line move applied:
+      base_population overwrite now INSIDE `if replacement is not None:`
+      (src/training/training.py:3154-3167). Guard:
+      tests/test_ann_replacement_attribution.py (2 tests: unreplaced slot
+      keeps its population; realized replacement -> ann_finetuned).
+      Suite: 532 passed + 2 skipped + 2 pre-existing failures.
 - [x] A4 _write_datapoint_usage brittle on 0-presentation populations —
       verify + fix if live; owner: agent 1 (its file).
 - [x] B6 _optuna_mlflow_cb never registered: FIXED (agent 1, commit
@@ -103,33 +109,9 @@ Queue state (updated at stand-down 2026-09-28, agent 1 session end):
 - DONE item F1: <source>+aug normalized to base population (commit
   65b270a, docs 23f9115; tests/test_aug_source_population_registration.py,
   3 tests).
-- IN PROGRESS item A3 (gate slots labeled ann_finetuned without realized
-  replacement): ROOT CAUSE + BLAST RADIUS fully analyzed, LIVE. Root
-  cause: _dynamic_mask_negative_transform overwrites base_population with
-  ann_sources.get(pair_id, "ann_finetuned") for EVERY label-0 row while
-  ann_pairs is non-empty (training.py:3154-3167 at HEAD), but ann_pairs/
-  ann_sources keys are REALIZED replacements only (miner may find fewer
-  pairs than slots; training.py:2062-2069 slices slot_ids[:len(pairs)])
-  — never-replaced gate slots get relabeled ann_finetuned. Telemetry
-  that lies: datapoint_usage_fold{i}.csv (phantom population),
-  datapoint_type_coverage_fold{i}.csv (gate/attribute_conflict/
-  random_easy undercounted -> spurious missing; ann_finetuned inflated
-  vs its presented_label role with source total 0 by construction),
-  _negative_source_accounting present/selected/backprop attribution,
-  mask_visibility.csv population labels, spurious ambiguous-attribution
-  warnings. FIX SPEC (one-line move): in
-  _dynamic_mask_negative_transform (training.py:3154-3167 at HEAD), move
-  the `base_population = (ann_sources.get(pair_id, "ann_finetuned") ...)`
-  overwrite INSIDE `if replacement is not None:` — ann_finetuned only on
-  realized text replacement (matches presented_label registry doctrine).
-  The .get default then only guards lost provenance for realized rows.
-  State: worktree ../ER-fix-ann-attribution, branch
-  fix/ann-replacement-attribution (commit 8ae215a, NOT pushed/merged)
-  contains tests/test_ann_replacement_attribution.py — test 1 FAILS as
-  expected (unreplaced slot re-attributed), test 2 pins realized-
-  replacement attribution. NEXT AGENT: `git worktree add ../ER-fix-ann2
-  fix/ann-replacement-attribution` (or cherry-pick), apply the one-line
-  move, run both tests + full suite, merge, push, TODO.
+- Item A3 (gate slots labeled ann_finetuned without realized
+  replacement): DONE+PUSHED (merge 7a6af8b on training-sid-hybrid). See
+  triage checkbox above.
 - Item A4 _write_datapoint_usage: NOT STARTED by agent 1. Partial intel
   from reading (training.py:2661-2821 at HEAD): the ladder already has
   missing/not_reached/unavailable/eval_only/unregistered statuses and the
@@ -150,10 +132,10 @@ Queue state (updated at stand-down 2026-09-28, agent 1 session end):
   populations from _build_mnrl_triple_populations, pair_id via
   PairIdDataCollator, mnrl_subset_loss_by_epoch_fold{i}.csv via
   write_visibility_log; bit-identical when warmup disabled).
-- Suite state: 530 passed + 2 skipped + 2 PRE-EXISTING failures
-  (flagged in triage note above; fail on base 4bfe3d1 too) = 10 new
-  tests added by agent 1 across 4 commits. Baseline claim "523 pass"
-  no longer matches HEAD (522 passed + 2 failed pre-existing).
+- Suite state: 532 passed + 2 skipped + 2 PRE-EXISTING failures
+  (flagged in triage note above; fail on base 4bfe3d1 too) = 12 new
+  tests by agent 1 (10) + agent 2 A3 guards (2). Baseline claim "523
+  pass" no longer matches HEAD (532 passed + 2 failed pre-existing).
 - Agent 3 (data-prep track) still running: aliases, flag census, smoke
   sampler, coverage JSON.
 - Main thread: FINDINGS B7-B10 + C/D/E triage continues.
