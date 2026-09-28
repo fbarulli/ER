@@ -84,7 +84,27 @@ Process / repo:
 - [x] 41MB new CSVs in git while DVC sits disabled (bloat policy question).
       41MB is from prepared bundles (pkl.gz) in recent commits. DVC disabled.
 
-## Answered — no action needed
+## Verdict: 3 good, 7 bad
+
+### GOOD (working as intended)
+- Diet gate fix (frac 1.00→0.80, swap_agreed 0.50→0.00) — ratio now 1.474 < 1.50
+- Volume anomaly blast radius — negligible impact (0.14% pos, 0.96% neg)
+- Counterfactual validity — twins validated, semantic conflict verified
+- MPN coverage — 52.1% acceptable, entity guard works
+- Twin fracs — counterfactual_frac=0.10 reasonable
+- Value swaps — working correctly, numeric vectors follow swapped tokens
+- All 523 tests pass
+
+### BAD (needs fixing)
+- Smoke not stratified — over-represents small brands, under-represents large categories
+- ambiguous_volume flag — overly aggressive for multi-packs (20L, 33L flagged as ambiguous)
+- Bundle rebuild — existing bundles built at frac=1.00, new config needs rebuild
+- Low-cardinality field concentration — transplants concentrate structurally
+- Counterfactual validity assumption — decorative flavor words may be label noise
+- Easy-negative replenishment — samples with replacement, silent re-weighting
+- Dynamic masking invisible to diet — ephemeral views excluded by design
+- Metrics unversioned — results/ gitignored
+- 41MB CSVs in git — DVC disabled, bloat policy unclear
 - **Who builds bundles**: `_build_local_training_bundles` in `src/cli/colab.py`
   runs `training.train` as a subprocess on the Colab VM.
 - **Twin fracs**: `counterfactual_frac: 0.10` — 10% of positives minted as twin negatives.
