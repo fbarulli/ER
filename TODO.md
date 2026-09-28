@@ -19,16 +19,14 @@ status per item, verified against HEAD:
   current code reads data[3]/data[5] (hpo.py:282-283).
 - A2 rerank country out-of-bounds for canonical endpoints: FIXED —
   padding present before use (rerank.py:267-273 -> :293).
-- A3 gate slots labeled ann_finetuned without realized replacement:
-  VERIFY against current training.py ann-refresh path.
-- A4 _write_datapoint_usage brittle on 0-presentation populations:
-  verify (the ladder now has missing/not_reached/unavailable statuses —
-  likely fixed by the newer writer; confirm).
-- B5 augment_hard_negatives no-op: FIXED — static lane calls it
-  (train.py:1110) + dynamic path exists.
+- [ ] A3 gate slots labeled ann_finetuned without realized replacement —
+      OWNER: agent 1 track (same fold path as its MNRL work).
+- [ ] A4 _write_datapoint_usage brittle on 0-presentation populations —
+      verify + fix if live; owner: agent 1 (its file).
 - B6 _optuna_mlflow_cb never registered: LIVE (def at training.py:6153,
-  zero registration sites) — register or delete.
-- B7-B10 + C/D/E sections: triage in progress.
+  zero registration sites) — register or delete. ASSIGNED: agent 1 track.
+- B7-B10 + C/D/E sections: triage in progress (main thread resumes on
+  wake).
 
 
 Phases: (1) scour entire project (agents + main thread) for
