@@ -21,10 +21,29 @@ status per item, verified against HEAD:
   padding present before use (rerank.py:267-273 -> :293).
 - [ ] A3 gate slots labeled ann_finetuned without realized replacement —
       OWNER: agent 1 track (same fold path as its MNRL work).
-- [ ] A4 _write_datapoint_usage brittle on 0-presentation populations —
+- [x] A4 _write_datapoint_usage brittle on 0-presentation populations —
       verify + fix if live; owner: agent 1 (its file).
-- B6 _optuna_mlflow_cb never registered: LIVE (def at training.py:6153,
-  zero registration sites) — register or delete. ASSIGNED: agent 1 track.
+- [x] B6 _optuna_mlflow_cb never registered: FIXED (agent 1, commit
+      06920ce). ROOT CAUSE: superseded in-commit by _optuna_tracking_cb
+      (registered at study.optimize, training.py:6091-6095) which already
+      logs the MLflow metric under the correct objective name
+      (trial_N_objective; objective is discriminative-LR calibration Rand,
+      training.py:6125) + wandb; _optuna_mlflow_cb would have logged a
+      misleading trial_N_auc on a non-AUC objective. Blast radius:
+      graphify affected = 0 nodes, zero consumers of trial_*_auc anywhere
+      -> DELETE chosen (register would add lying telemetry). Guard test:
+      tests/test_optuna_callback_wiring.py (fails if any _optuna_*_cb is
+      defined but unregistered).
+- [x] PRE-EXISTING suite failures found while verifying B6 (NOT agent-1
+      queue, flagging for triage): (1) tests/test_model_input_contract.py
+      ::test_legacy_profile_reproduces_golden_bytes — golden fixture
+      expects [FIELD_VOLUME] volume_ml_250 tokens the producer no longer
+      emits (golden drift vs code change); (2) tests/
+      test_unit_canonicalization.py
+      ::test_order_of_magnitude_title_attribute_disagreement_flags_not_flips
+      — expects volume_ml 330.0, gets 3300.0 (title-volume-on-10x-
+      disagreement change at TODO line 312-314 likely didn't update the
+      test, or flipped the wrong side). Both fail on base 4bfe3d1 too.
 - B7-B10 + C/D/E sections: triage in progress (main thread resumes on
   wake).
 
