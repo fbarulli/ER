@@ -63,8 +63,31 @@ status per item, verified against HEAD:
       — expects volume_ml 330.0, gets 3300.0 (title-volume-on-10x-
       disagreement change at TODO line 312-314 likely didn't update the
       test, or flipped the wrong side). Both fail on base 4bfe3d1 too.
-- B7-B10 + C/D/E sections: triage in progress (main thread resumes on
-  wake).
+- B7 Initial-fold ANN/attribute-conflict negatives impossible: DESIGNED
+  (document, no fix). Static TARGETED attribute-conflict negatives DO join
+  the fold from gate similarity (train.py:1291-1305; fresh bundle +466
+  targeted static); dynamic ANN + dynamic attribute-conflict mining defer
+  to the refresh callback because emb0 is empty pre-checkpoint
+  (train.py:1284 `emb0 = np.empty((0,0))`; training.py:1326 gate on
+  emb0.size). Telemetry not_reached/unavailable is the DESIGNED initial-fold
+  state, not a bug.
+- B8 Triplet lane dead-by-construction: STILL OPEN. Chain: hard_train_all
+  mined from emb0 ONCE before the fold loop (training.py:3582), emb0 empty
+  pre-checkpoint -> hard_train always empty -> build_triplets returns [] ->
+  RuntimeError "no triples built for fold" (training.py:4217). Refresh
+  populates emb0 AFTER hard_train_all is fixed. --loss triplet cannot run on
+  the initial fold. RECOMMEND: remove the triplet lane (loss factory +
+  argparse choice + build_triplets branch + counters) or gate it off; MNRL
+  + contrastive are the active losses.
+- B9 HPO lane items: NOT APPLICABLE — HPO is not used (no hpo runs).
+- B10 dead-code list: partially resolved already (hard_negative_swap_frac,
+  swap_agreed, _optuna_mlflow_cb removed). Remaining (NER island, colab dead
+  downloader cluster, hpo_persistence/fencing PG machinery, STOPWORDS,
+  brand_tokens, duplicated regexes) are LOW-priority dead code; triage
+  deferred unless it touches the active training/data path.
+- C/D/E sections: HPO-adjacent + LOW dead-code items not in the active
+  path are deferred. HIGH E item (dpi=150 -> plot_dpi()) verified below in
+  pytorch/colab optimization pass.
 
 
 Phases: (1) scour entire project (agents + main thread) for
@@ -180,7 +203,7 @@ to close before training.
       test_aug_source_population_registration.py (fold with masked hard
       negatives writes coverage rows without raising; census folds +aug
       into base; strip guard).
-- [ ] Fix diet_manifest.py's dynamic-mask projection: it is conceptually
+- [x] Fix diet_manifest.py's dynamic-mask projection: it is conceptually
       wrong, not just loss-aware — dynamic masking is IN-PLACE
       replacement (training.py:3096 rewrite, "no static negative copies
       are added" :3371), so it adds NO views for ANY loss; the +30%
@@ -188,6 +211,11 @@ to close before training.
       LOW (stricter, can flip PASS->FAIL at 0.30) and pos_neg_ratio LOW
       (more lenient, can flip FAIL->PASS at 1.50). Remove the projection
       (and the docstring claim), then re-run the gate on fresh bundles.
+      FIXED (commit 5c012d1+): `project_dynamic_mask_views` removed;
+      projected_neg_views = bundle's own view counts; easy-projection
+      remains an upper bound only. Fresh full bundle rebuilt at
+      frac=0.80 -> DIET PASS (pos_views 42,477 / neg_views 28,852 =
+      1.4722 < 1.50; neg_aug_frac 0.3060 >= 0.30).
 - [ ] Align swap-copy accounting for MNRL: 2,709 swap hard-negative
       copies are diet-counted as augmented views but 0% MNRL-train
       (by design, _build_mnrl_training_triples omits them). Either
