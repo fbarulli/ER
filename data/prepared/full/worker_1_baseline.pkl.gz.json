@@ -10,14 +10,14 @@
     "emit_singleton_pack_token": false
   },
   "n_df": 56529,
-  "n_payload": 108071,
+  "n_payload": 108046,
   "n_pos": 46783,
-  "n_neg": 28869,
-  "n_train_neg": 28869,
+  "n_neg": 28844,
+  "n_train_neg": 28844,
   "n_labeled_pairs_bytes": 266566,
   "n_canonical_records_bytes": 10047232,
   "n_gate_results_bytes": 28153414,
-  "sha256": "01f4ba2f927e3dfdb83af14224a1d98e49e9105dee81cd1dbc89bca01e2f638e",
+  "sha256": "68469ec88a6e5f558b0a909ba36fdd3c8d368feacc23bad135a112e120979790",
   "masking_config": {
     "enabled": true,
     "profile": "baseline",
@@ -49,7 +49,7 @@
     "candidate_pool_size": 10000
   },
   "ratio_to_hard": 1.0,
-  "static_view_ratio": 1.620527209117046,
-  "effective_train_ratio": 0.810263604558523,
-  "ratio_contract_note": "Static view ratio 1.621 permitted due to 1:1 dynamic easy-negative joining at step execution."
+  "static_view_ratio": 1.621931770905561,
+  "effective_train_ratio": 1.621931770905561,
+  "ratio_contract_note": "Guaranteed bundle-only view ratio 1.622; easy-negative settings (enabled, ratio=1) are a possible contrastive projection and are not guaranteed."
 }
