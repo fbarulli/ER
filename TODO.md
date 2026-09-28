@@ -12,7 +12,25 @@
   field markers as an ablation. Twin P@R95 0.500 is a floor; expect
   improvement above the zero-shot baseline.
 
-## Duck hunt (starts when current changes land)
+## FINDINGS.md triage (submission branch audit vs HEAD — 2026-09-28)
+Historical audit reports exist (origin/submission FINDINGS.md). Triage
+status per item, verified against HEAD:
+- A1 hpo._grid_folds data[2]/data[4] swap (cv+grid crash): FIXED —
+  current code reads data[3]/data[5] (hpo.py:282-283).
+- A2 rerank country out-of-bounds for canonical endpoints: FIXED —
+  padding present before use (rerank.py:267-273 -> :293).
+- A3 gate slots labeled ann_finetuned without realized replacement:
+  VERIFY against current training.py ann-refresh path.
+- A4 _write_datapoint_usage brittle on 0-presentation populations:
+  verify (the ladder now has missing/not_reached/unavailable statuses —
+  likely fixed by the newer writer; confirm).
+- B5 augment_hard_negatives no-op: FIXED — static lane calls it
+  (train.py:1110) + dynamic path exists.
+- B6 _optuna_mlflow_cb never registered: LIVE (def at training.py:6153,
+  zero registration sites) — register or delete.
+- B7-B10 + C/D/E sections: triage in progress.
+
+
 Phases: (1) scour entire project (agents + main thread) for
 redundancies / dead code / unexpected behavior; (2) root causes WRITTEN
 here, clustered; (3) fixes in worktrees per cluster (no collisions);

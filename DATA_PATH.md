@@ -67,6 +67,25 @@ From the reference manifest — every future run must publish:
   contradiction + concentration tables; flavor-policy arm recorded in
   experiments.md EXP-01).
 
+## Tracking doctrine (standing)
+
+Every sample is tracked from the beginning (S0) and accompanied step by
+step; every change to the flow ships with a test. Concretely: each stage
+hands off named artifacts (the contract above), every minted sample
+carries provenance (population + augmentation + donor lineage) that is
+registered in DATAPOINT_POPULATION_SPEC, presented per epoch, and
+per-epoch visible in the logs; every stage transition has a gate that
+fails loud. A finding anywhere on the path lands in TODO.md and is
+pushed before the next step proceeds.
+
+## Work split (3-way dataflow ownership, 2026-09-28)
+
+| segment | owner | scope |
+|---|---|---|
+| S0-S2 source -> pairs (extraction, flags, splits, gate) | agent 3 (alias normalization, in flight) | flag census persistence, sampler reproducibility, band tables |
+| S3 bundles + audits | main thread (me) | rebuild, diet gate arithmetic, flip/coverage audits, hp_pairs yield |
+| S4-S6 training loop + telemetry | agent 1 (MNRL hooks) + main thread (coverage restoration, usage rows) | train_one_config family, per-fold contract CSVs |
+
 ## Runbook — data prep + training, step by step (execution order)
 
 Preconditions: tracking fixes F1-F5 + smoke-sampler fix landed; agents 1
