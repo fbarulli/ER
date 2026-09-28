@@ -30,6 +30,8 @@ def _as_set(value: object, *, kind: str) -> set[float]:
         text = str(value).strip()
         if not text:
             return set()
+        if text in {"set()", "frozenset()"}:
+            return set()
         try:
             values = ast.literal_eval(text)
         except (SyntaxError, ValueError) as exc:
@@ -60,6 +62,8 @@ def _as_string_set(value: object, *, kind: str) -> set[str]:
     else:
         text = str(value).strip()
         if not text:
+            return set()
+        if text in {"set()", "frozenset()"}:
             return set()
         try:
             values = ast.literal_eval(text)
@@ -108,7 +112,15 @@ def sku_info(
 
     desc = "" if description is None or (isinstance(description, float) and np.isnan(description)) else str(description)
     extracted = extract_all(str(title), str(attributes), desc)
-    volume = {float(extracted.get("volume_ml") or 0.0)}
+    flags = _as_string_set(
+        extracted.get("attribute_consistency_flags"),
+        kind="attribute_consistency_flags",
+    )
+    volume = (
+        {float(extracted.get("volume_ml") or 0.0)}
+        if "ambiguous_volume" not in flags
+        else set()
+    )
     pack_qty = extracted.get("pack_qty")
     # The pipeline's parser uses pack_qty=1 with zero confidence as its
     # explicit "no pack count observed" sentinel.  The model-side structured
@@ -145,8 +157,15 @@ def canonical_info(
         value = record.get(field)
         return value if value is not None and str(value).strip() else inferred[inferred_field]
 
+    # Preserve out-of-range measurements in the canonical record for
+    # diagnostics, while leaving them out of model evidence.
+    flags = _as_string_set(
+        record.get("attribute_consistency_flags"), kind="attribute_consistency_flags"
+    )
+    volume = set() if "ambiguous_volume" in flags else record.get("volume_set")
+
     return info_from_sets(
-        record.get("volume_set"),
+        volume,
         record.get("pack_set"),
         record.get("package_type_set"),
         flavor=evidence("flavor_set", "flavor"),

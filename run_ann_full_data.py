@@ -25,8 +25,8 @@ INFERENCE_DATA = ROOT / "data/dataset_deduped_sample_5000.csv"
 MODEL_DIR = ROOT / "artifacts/models/all-MiniLM-L6-v2"
 EXPECTED_MODEL_BYTES = 91_630_836
 
-EXPECTED_TRAIN_ROWS = 58_529
-EXPECTED_INFERENCE_ROWS = 3_000
+EXPECTED_TRAIN_ROWS = 56_529
+EXPECTED_INFERENCE_ROWS = 5_000
 
 
 def data_rows(path: Path) -> int:

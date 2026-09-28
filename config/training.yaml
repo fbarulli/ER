@@ -212,7 +212,7 @@ colab:
   # Saves landing inside one window leave as a single `dvc push`; a lone
   # checkpoint is still published within this window.
   dvc_publish_debounce_seconds: 20.0
-  # Final inference uses the 3,000-row held-out sample. The full deduped
+  # Final inference uses the 5,000-row held-out sample. The full deduped
   # catalog is the identity anchor used to assert that training plus holdout
   # reconstructs the source population.
   final_inference:
@@ -220,7 +220,7 @@ colab:
     # The identity anchor: the FULL deduped catalog. training + sample must
     # reconstruct exactly this, which is what the preflight asserts.
     source_csv: "data/dataset_deduped.csv"
-    # The file actually fed to inference: the 3,000 held-out sample. Inference
+    # The file actually fed to inference: the 5,000 held-out sample. Inference
     # runs on this sample only; it never scores the whole catalog.
     input_csv: "data/dataset_deduped_sample_5000.csv"
     output_dir: "final_inference"

@@ -475,7 +475,7 @@ class CounterfactualTwinTests(unittest.TestCase):
 class BundleProvenanceTests(unittest.TestCase):
     """Bundles pin the diet-relevant config; drift warns loudly on load."""
 
-    def _write(self, path) -> None:
+    def _write(self, path, *, pos=None, train_neg=None) -> None:
         import pandas as pd
 
         from training.prepared_bundle import write_prepared_bundle
@@ -487,13 +487,24 @@ class BundleProvenanceTests(unittest.TestCase):
             structured_features=np.zeros((3, 4), dtype=np.float32),
             row_bc=np.asarray(["g1", "g1", "g1"], dtype=object),
             country=np.asarray(["US", "US", "US"], dtype=object),
-            pos=np.asarray([[0, 2]], dtype=int),
+            pos=(
+                np.asarray([[0, 2]], dtype=int)
+                if pos is None
+                else np.asarray(pos, dtype=int)
+            ),
             hp_pairs=np.empty((0, 2), dtype=int),
             emb0=np.zeros((3, 4), dtype=np.float32),
             neg=np.empty((0, 2), dtype=int),
-            train_neg=np.empty((0, 2), dtype=int),
+            train_neg=(
+                np.empty((0, 2), dtype=int)
+                if train_neg is None
+                else np.asarray(train_neg, dtype=int)
+            ),
             neg_sources=np.empty(0, dtype=object),
-            train_neg_sources=np.empty(0, dtype=object),
+            train_neg_sources=np.asarray(
+                ["gate"] * (0 if train_neg is None else len(train_neg)),
+                dtype=object,
+            ),
             mask_audit=[],
             hard_negative_mask_audit=[],
             labeled_pairs_csv=b"x",
@@ -523,7 +534,65 @@ class BundleProvenanceTests(unittest.TestCase):
             self.assertAlmostEqual(manifest.ratio_to_hard, 1.0)
             self.assertGreater(manifest.static_view_ratio, 0.0)
             self.assertGreater(manifest.effective_train_ratio, 0.0)
-            self.assertIn("easy-negative joining", manifest.ratio_contract_note)
+            self.assertIn("not guaranteed", manifest.ratio_contract_note)
+
+    def test_disabled_easy_negatives_do_not_change_effective_view_ratio(self) -> None:
+        import copy
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        from core.common import load_config
+
+        config = copy.deepcopy(load_config())
+        config["training"]["random_easy_negatives"]["enabled"] = False
+        config["training"]["random_easy_negatives"]["ratio_to_hard"] = 1.0
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "disabled-easy.pkl.gz"
+            with mock.patch("core.common.load_config", return_value=config):
+                manifest = self._write(
+                    path,
+                    pos=[[0, 2]],
+                    train_neg=[[0, 1], [1, 2]],
+                )
+
+        self.assertEqual(manifest.easy_config["enabled"], False)
+        self.assertEqual(manifest.static_view_ratio, 0.5)
+        self.assertEqual(manifest.effective_train_ratio, 0.5)
+        self.assertIn("disabled", manifest.ratio_contract_note)
+
+    def test_loader_rejects_mismatched_augmentation_features_with_valid_hash(self) -> None:
+        import gzip
+        import hashlib
+        import json
+        import pickle
+        import tempfile
+        from pathlib import Path
+
+        from training.prepared_bundle import load_prepared_bundle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad-lineage.pkl.gz"
+            self._write(path)
+            with gzip.open(path, "rb") as handle:
+                data = pickle.load(handle)
+            data["mask_audit"] = [{
+                "anchor_payload_idx": 0,
+                "copy_payload_idx": 2,
+                "target_mode": "random",
+                "fields_hit": [],
+            }]
+            data["structured_features"][-1] = np.ones(4, dtype=np.float32)
+            with gzip.open(path, "wb", compresslevel=6) as handle:
+                pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+            manifest_path = path.with_suffix(path.suffix + ".json")
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "augmentation features disagree"):
+                load_prepared_bundle(path)
 
     def test_drifted_config_warns_on_load(self) -> None:
         import copy

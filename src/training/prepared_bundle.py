@@ -55,12 +55,12 @@ class PreparedBundleManifest(BaseModel):
     easy_config: dict = Field(default_factory=dict)
     # Ratio contracts (audit 2026-09-28): the train-time arithmetic the
     # diet gate enforced, frozen into the header so any reader can verify
-    # the contract without rerunning the gate. Required: bundles built
-    # before contracts existed fail loudly instead of looking compliant.
-    ratio_to_hard: float = Field(ge=0.0)
-    static_view_ratio: float = Field(gt=0.0)
-    effective_train_ratio: float = Field(gt=0.0)
-    ratio_contract_note: str = Field(min_length=1)
+    # the contract without rerunning the gate. Legacy headers load with
+    # an explicit warning; the diet gate recomputes its own verdict.
+    ratio_to_hard: float = Field(default=0.0, ge=0.0)
+    static_view_ratio: float = Field(default=0.0, ge=0.0)
+    effective_train_ratio: float = Field(default=0.0, ge=0.0)
+    ratio_contract_note: str = Field(default="legacy ratio metadata; recompute")
 
 
 def _digest(path: Path) -> str:
@@ -69,6 +69,51 @@ def _digest(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _validate_augmented_features(payload, features, audit) -> None:
+    if len(features) != len(payload):
+        raise ValueError("prepared bundle feature/payload row counts disagree")
+    if not audit:
+        return
+    from training.masking import extend_augmented_features
+
+    first_copy = min(int(row["copy_payload_idx"]) for row in audit)
+    expected = extend_augmented_features(features[:first_copy], payload, audit)
+    if not np.array_equal(np.asarray(features), expected):
+        raise ValueError(
+            "prepared bundle augmentation features disagree with payload lineage; "
+            "re-prepare or repair the bundle before training"
+        )
+
+
+def _validate_counterfactual_audits(payload, audit) -> None:
+    """Reject stored twin negatives whose claimed field flip is compatible."""
+    twins = [row for row in audit if row.get("target_mode") == "counterfactual"]
+    if not twins:
+        return
+    from training.masking import _field_surfaces, _field_values_conflict
+
+    invalid = []
+    surfaces = {}
+    for row in twins:
+        copy_i = int(row["copy_payload_idx"])
+        pair_i = int(row["pair_payload_idx"])
+        for idx in (copy_i, pair_i):
+            if idx not in surfaces:
+                surfaces[idx] = _field_surfaces(payload[idx])
+        if not any(
+            field in surfaces[copy_i]
+            and field in surfaces[pair_i]
+            and _field_values_conflict(field, surfaces[copy_i][field], surfaces[pair_i][field])
+            for field in (row.get("fields_hit") or [])
+        ):
+            invalid.append((copy_i, pair_i))
+    if invalid:
+        raise ValueError(
+            "prepared bundle contains counterfactual twins without a verified "
+            f"semantic conflict (first pairs: {invalid[:5]}); regenerate the bundle"
+        )
 
 
 def write_prepared_bundle(
@@ -100,19 +145,18 @@ def write_prepared_bundle(
     from core.model_input import model_input_spec
 
     recorded_masking = masking_cfg(str(masking_profile))
+    _validate_augmented_features(
+        payload, structured_features, mask_audit + hard_negative_mask_audit
+    )
+    _validate_counterfactual_audits(payload, hard_negative_mask_audit)
     recorded_easy = dict(load_config()["training"]["random_easy_negatives"])
     easy_ratio = float(recorded_easy["ratio_to_hard"])
+    easy_enabled = bool(recorded_easy["enabled"])
     static_views = len(pos) / max(len(train_neg), 1)
-    # Same projection the diet gate enforces (scripts/diet_manifest.
-    # project_train_time_neg_views): easy quota joins at step execution,
-    # so the effective ratio is what the loss actually sees. Restated
-    # here in three lines rather than imported — scripts/ must never
-    # become an import dependency of the training package.
-    import math
-
-    effective_views = len(train_neg) + (
-        math.ceil(len(train_neg) * easy_ratio) if easy_ratio > 0 else 0
-    )
+    # Store the guaranteed bundle-only ratio. Easy-negative settings are
+    # recorded separately as a possible contrastive projection, since the
+    # split-local sampler may return no candidates.
+    effective_views = len(train_neg)
     effective_ratio = len(pos) / max(effective_views, 1)
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,8 +193,9 @@ def write_prepared_bundle(
         static_view_ratio=float(static_views),
         effective_train_ratio=float(effective_ratio),
         ratio_contract_note=(
-            f"Static view ratio {static_views:.3f} permitted due to "
-            f"{easy_ratio:g}:1 dynamic easy-negative joining at step execution."
+            f"Guaranteed bundle-only view ratio {static_views:.3f}; easy-negative "
+            f"settings ({'enabled' if easy_enabled else 'disabled'}, ratio={easy_ratio:g}) "
+            "are a possible contrastive projection and are not guaranteed."
         ),
         n_df=len(df),
         n_payload=len(payload),
@@ -199,6 +244,11 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
     missing = sorted(required - set(data))
     if missing:
         raise ValueError(f"prepared training bundle missing fields: {missing}")
+    _validate_augmented_features(
+        data["payload"], data["structured_features"],
+        data["mask_audit"] + data["hard_negative_mask_audit"],
+    )
+    _validate_counterfactual_audits(data["payload"], data["hard_negative_mask_audit"])
     if len(data["df"]) != manifest.n_df or len(data["payload"]) != manifest.n_payload:
         raise ValueError("prepared bundle manifest/data row counts disagree")
     if len(data["pos"]) != manifest.n_pos or len(data["neg"]) != manifest.n_neg:
@@ -250,4 +300,14 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
                 "Diet verdicts and augmentation yields may not reproduce.",
                 flush=True,
             )
+    if (
+        "dynamic easy-negative joining at step execution" in manifest.ratio_contract_note
+        or manifest.ratio_contract_note == "legacy ratio metadata; recompute"
+    ):
+        print(
+            f"[bundle-drift] WARNING: {path} carries a legacy projected easy-negative "
+            "ratio claim; it is not treated as guaranteed. The diet gate recomputes "
+            "its verdict from selected bundle pairs.",
+            flush=True,
+        )
     return manifest, data

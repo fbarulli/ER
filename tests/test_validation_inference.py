@@ -232,11 +232,11 @@ class DietProjectionTests(unittest.TestCase):
         from scripts.diet_manifest import project_train_time_neg_views
 
         self.assertEqual(
-            project_train_time_neg_views(30341, enabled=False, ratio_to_hard=1.0),
+            project_train_time_neg_views(30341, enabled=False, ratio_to_hard=1.0, loss="contrastive"),
             30341,
         )
         self.assertEqual(
-            project_train_time_neg_views(30341, enabled=True, ratio_to_hard=0.0),
+            project_train_time_neg_views(30341, enabled=True, ratio_to_hard=0.0, loss="contrastive"),
             30341,
         )
 
@@ -245,19 +245,19 @@ class DietProjectionTests(unittest.TestCase):
 
         # ceil(hard * ratio), the exact _mix_random_easy target
         self.assertEqual(
-            project_train_time_neg_views(5, enabled=True, ratio_to_hard=0.5),
+            project_train_time_neg_views(5, enabled=True, ratio_to_hard=0.5, loss="contrastive"),
             8,
         )
         self.assertEqual(
-            project_train_time_neg_views(30341, enabled=True, ratio_to_hard=1.0),
+            project_train_time_neg_views(30341, enabled=True, ratio_to_hard=1.0, loss="contrastive"),
             60682,
         )
 
-    def test_full_bundle_ratio_passes_on_projected_views(self):
+    def test_contrastive_projection_is_not_the_guaranteed_bundle_ratio(self):
         from scripts.diet_manifest import project_train_time_neg_views
 
         effective = project_train_time_neg_views(
-            30341, enabled=True, ratio_to_hard=1.0
+            30341, enabled=True, ratio_to_hard=1.0, loss="contrastive"
         )
         self.assertLessEqual(51153 / effective, 1.50)
 

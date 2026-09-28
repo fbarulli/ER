@@ -26,24 +26,13 @@ from training.prepared_bundle import load_prepared_bundle
 
 
 def project_train_time_neg_views(
-    neg_views: int, *, enabled: bool, ratio_to_hard: float
+    neg_views: int, *, enabled: bool, ratio_to_hard: float, loss: str
 ) -> int:
-    """Static projection of the train-time negative quota (data prep, not runtime).
-
-    The trainer adds split-local easy negatives per fold targeting
-    ``ceil(hard * ratio_to_hard)`` (training._mix_random_easy_training_negatives,
-    knobs from training.random_easy_negatives). Those rows are deliberately
-    absent from the bundle — easy sampling must stay inside the train split
-    for leakage safety — so a gate that only counts bundle rows understates
-    the negatives the loss actually sees. This mirrors the trainer's target
-    formula exactly, from the same config SSOT, so the gate follows trainer
-    behavior automatically. Ephemeral per-presentation dynamic masks are
-    NOT counted: they re-present the same pairs rather than adding rows.
-    """
+    """Upper projection only; actual split-local easy candidates can be absent."""
     import math
 
     base = int(neg_views)
-    if not enabled or float(ratio_to_hard) <= 0.0 or base <= 0:
+    if loss != "contrastive" or not enabled or float(ratio_to_hard) <= 0.0 or base <= 0:
         return base
     return base + int(math.ceil(base * float(ratio_to_hard)))
 
@@ -70,8 +59,22 @@ def main(argv: list[str]) -> int:
 
     pos_views = int(len(pos))
     neg_views = int(len(train_neg))
-    neg_aug_views = int(len(neg_audit))
-    neg_presentations = int(len(train_neg))
+    selected_neg = {tuple(map(int, pair)) for pair in train_neg}
+    retained_neg_audit = [
+        row for row in neg_audit
+        if (int(row["copy_payload_idx"]), int(row["pair_payload_idx"])) in selected_neg
+    ]
+    neg_aug_views = len(retained_neg_audit)
+    easy_cfg = load_config()["training"]["random_easy_negatives"]
+    training_cfg = load_config()["training"]
+    loss = str(training_cfg["loss"])
+    easy_enabled = bool(easy_cfg["enabled"])
+    easy_ratio = float(easy_cfg["ratio_to_hard"])
+    # Easy negatives are absent from the bundle and may fail to materialize;
+    # including the full quota here makes the exposure test conservative.
+    neg_presentations = project_train_time_neg_views(
+        len(train_neg), enabled=easy_enabled, ratio_to_hard=easy_ratio, loss=loss
+    )
     pos_base = pos_views - len(mask_audit)
     neg_base = int(len(neg)) - len(neg_audit)
     if pos_base < 0 or neg_base < 0:
@@ -102,7 +105,7 @@ def main(argv: list[str]) -> int:
     for mode in sorted(neg_modes):
         print(f"hard_negative  {mode:<11} {neg_modes[mode]:,}", flush=True)
     print(
-        f"presentations  train_neg     {neg_presentations:,} "
+        f"presentations  projected    {neg_presentations:,} "
         f"(pos_views={pos_views:,}, neg_views={neg_views:,})",
         flush=True,
     )
@@ -112,21 +115,12 @@ def main(argv: list[str]) -> int:
         neg_aug_views / neg_presentations if neg_presentations else float("nan")
     )
     pos_neg_ratio = pos_views / neg_views if neg_views else float("nan")
-    # Train-time quota projection (static, data-prep side): the bundle holds
-    # hard negatives only, but the trainer tops every fold up with easy
-    # negatives toward ceil(hard * ratio_to_hard). Gating the bundle-only
-    # ratio would fail bundles the trainer sees as balanced, so the ratio
-    # gate runs on the projected train-time views. Both numbers print; only
-    # the projected one gates.
-    easy_cfg = load_config()["training"]["random_easy_negatives"]
-    easy_enabled = bool(easy_cfg["enabled"])
-    easy_ratio = float(easy_cfg["ratio_to_hard"])
-    effective_neg_views = project_train_time_neg_views(
-        neg_views, enabled=easy_enabled, ratio_to_hard=easy_ratio
+    effective_ratio = pos_views / neg_views if neg_views else float("nan")
+    projected_neg_views = project_train_time_neg_views(
+        neg_views, enabled=easy_enabled, ratio_to_hard=easy_ratio, loss=loss
     )
-    effective_ratio = pos_views / effective_neg_views if effective_neg_views else float("nan")
     neg_ok = neg_presentations > 0 and neg_aug_frac >= diet_min_neg_aug_frac
-    ratio_ok = effective_neg_views > 0 and effective_ratio <= diet_max_pos_neg_view_ratio
+    ratio_ok = neg_views > 0 and effective_ratio <= diet_max_pos_neg_view_ratio
     print(
         f"[diet] neg_aug_views={neg_aug_views:,} / neg_presentations={neg_presentations:,} "
         f"= {neg_aug_frac:.4f} >= diet_min_neg_aug_frac={diet_min_neg_aug_frac:.4f} "
@@ -139,10 +133,9 @@ def main(argv: list[str]) -> int:
         flush=True,
     )
     print(
-        f"[diet] train-time pos_views={pos_views:,} / effective_neg_views={effective_neg_views:,} "
-        f"(easy quota x{easy_ratio:g}, enabled={easy_enabled}) "
-        f"= {effective_ratio:.4f} <= diet_max_pos_neg_view_ratio={diet_max_pos_neg_view_ratio:.4f} "
-        f"{'OK' if ratio_ok else 'FAIL'}",
+        f"[diet] projected_neg_views={projected_neg_views:,} "
+        f"(contrastive-only easy quota x{easy_ratio:g}, enabled={easy_enabled}, loss={loss}; "
+        "projection is not guaranteed)",
         flush=True,
     )
     if not neg_ok:
@@ -152,7 +145,7 @@ def main(argv: list[str]) -> int:
         )
     if not ratio_ok:
         failures.append(
-            f"train-time pos_neg_view_ratio {effective_ratio:.4f} > "
+            f"bundle pos_neg_view_ratio {effective_ratio:.4f} > "
             f"diet_max_pos_neg_view_ratio {diet_max_pos_neg_view_ratio:.4f} "
             f"(bundle-only {pos_neg_ratio:.4f})"
         )

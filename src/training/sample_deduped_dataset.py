@@ -145,7 +145,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--remainder-output", type=Path, default=DEFAULT_REMAINDER_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--size", type=int, default=3000)
+    parser.add_argument("--size", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=SEED)
     args = parser.parse_args()
 

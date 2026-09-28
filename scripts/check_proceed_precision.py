@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import math
 import sys
 from pathlib import Path
 
@@ -27,12 +28,49 @@ from core.common import F, load_config
 from core.critical_attributes import categorical_conflict, volumes_compatible
 
 
-def _as_set(value: object) -> set:
-    try:
-        parsed = ast.literal_eval(str(value)) if str(value).strip() else set()
-    except (SyntaxError, ValueError):
+def _as_set(value: object, column: str) -> set:
+    """Parse a canonical set, keeping blank cells as absent evidence.
+
+    Invalid syntax, scalar/dict values, and values of the wrong element type
+    must not become empty sets: that would make corrupt records pass the
+    compatibility checks as though the source simply lacked evidence.
+    """
+    if value is None or (
+        not isinstance(value, (list, tuple, set, dict)) and pd.isna(value)
+    ):
         return set()
-    return set(parsed) if isinstance(parsed, (set, list, tuple)) else set()
+    if isinstance(value, str):
+        if not value.strip():
+            return set()
+        try:
+            parsed = ast.literal_eval(value)
+        except (SyntaxError, ValueError) as exc:
+            raise ValueError(f"invalid {column} literal {value!r}") from exc
+    else:
+        parsed = value
+    if parsed is None:
+        return set()
+    if not isinstance(parsed, (set, list, tuple)):
+        raise ValueError(
+            f"{column} must contain a set/list/tuple, got {type(parsed).__name__}"
+        )
+
+    is_numeric = column in {"volume_set", "pack_set"}
+    normalized = set()
+    for item in parsed:
+        if is_numeric:
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise ValueError(f"{column} contains non-numeric value {item!r}")
+            if not math.isfinite(float(item)) or float(item) <= 0:
+                raise ValueError(f"{column} contains invalid numeric value {item!r}")
+            if column == "pack_set" and not float(item).is_integer():
+                raise ValueError(f"{column} contains fractional pack count {item!r}")
+            normalized.add(float(item))
+        else:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"{column} contains invalid categorical value {item!r}")
+            normalized.add(item)
+    return normalized
 
 
 DIMENSION_COLUMNS = (
@@ -47,7 +85,7 @@ ALL_COLUMNS = ("volume_set",) + tuple(column for _, column in DIMENSION_COLUMNS)
 
 
 def _record(frame_row) -> dict:
-    return {column: _as_set(frame_row[column]) for column in ALL_COLUMNS}
+    return {column: _as_set(frame_row[column], column) for column in ALL_COLUMNS}
 
 
 def pair_agrees(left: dict, right: dict) -> bool:
@@ -70,6 +108,8 @@ def agreement_rate(
 ) -> dict[str, object]:
     """Agreement over proceed pairs with lo <= sim < hi (canonical sets)."""
     canon = canonicals.set_index("gtin")
+    if canon.index.has_duplicates:
+        raise ValueError("canonical records contain duplicate GTINs")
     sub = gate[
         (gate["gate_decision"] == "proceed")
         & (gate["similarity"] >= lo)
@@ -121,6 +161,12 @@ def main(argv: list[str] | None = None) -> int:
         f">= {args.min_agreement:.4f}",
         flush=True,
     )
+    if report["missing_canon"]:
+        print(
+            f"PRECISION FAIL: {report['missing_canon']} candidate pairs have missing canonical endpoints",
+            flush=True,
+        )
+        return 2
     if not report["checked"]:
         print("PRECISION FAIL: no pairs checked", flush=True)
         return 2

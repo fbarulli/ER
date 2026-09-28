@@ -177,11 +177,23 @@ class IncrementalResultSyncTests(unittest.TestCase):
             self.assertEqual(syncer.synced_bytes(), 0)
 
     def test_a_listing_failure_never_propagates(self):
-        with mock.patch.object(
-            colab, "_list_remote", side_effect=RuntimeError("control channel down"),
-        ):
+        heartbeat_path = f"{self.REMOTE}/worker_1/live_status.json"
+        checkpoint_root = f"{self.REMOTE}/worker_1/_checkpoints"
+        heartbeat = self._heartbeat(10, 0.90)[heartbeat_path]
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(colab, "TRAINING_RESULTS", Path(tmp)), \
+                mock.patch.object(
+                    colab, "_read_remote_text", return_value=heartbeat,
+                ), \
+                mock.patch.object(
+                    colab, "_list_remote",
+                    side_effect=RuntimeError("control channel down"),
+                ) as listing:
             syncer = colab._IncrementalResultSync(self.REMOTE, self.RUN_ID, workers=1)
             syncer._pass()  # must not raise
+            listing.assert_called_once_with(
+                checkpoint_root, max_depth=colab._CHECKPOINT_LISTING_DEPTH,
+            )
 
     def test_stop_is_prompt_and_idempotent(self):
         remote = _FakeRemote({})

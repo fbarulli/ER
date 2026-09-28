@@ -644,17 +644,19 @@ def _build_mnrl_training_triples(
     one of their source's explicit negatives, if available. Never infer a
     positive or negative from a barcode alone: that can silently mislabel.
     """
-    positive_by_anchor: dict[int, int] = {}
+    positives_by_anchor: dict[int, set[int]] = {}
     for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2):
-        positive_by_anchor.setdefault(int(anchor), int(positive))
+        positives_by_anchor.setdefault(int(anchor), set()).add(int(positive))
 
     original_by_copy_pair: dict[tuple[int, int], int] = {}
+    mode_by_copy_pair: dict[tuple[int, int], str] = {}
     for audit in hard_negative_mask_audit or []:
         key = (int(audit["copy_payload_idx"]), int(audit["pair_payload_idx"]))
         original = int(audit["anchor_payload_idx"])
         if key in original_by_copy_pair and original_by_copy_pair[key] != original:
             raise ValueError(f"conflicting hard-negative augmentation lineage: {key}")
         original_by_copy_pair[key] = original
+        mode_by_copy_pair[key] = str(audit.get("target_mode", ""))
 
     negatives_by_anchor: dict[int, list[int]] = {}
     for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
@@ -664,10 +666,19 @@ def _build_mnrl_training_triples(
     seen: set[tuple[int, int, int]] = set()
     for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
         anchor_i, negative_i = int(anchor), int(negative)
+        if mode_by_copy_pair.get((anchor_i, negative_i)) == "counterfactual":
+            # Counterfactual twins get source-anchored triples below; treating
+            # the twin copy as an anchor would inherit an incompatible positive.
+            continue
         source_anchor = original_by_copy_pair.get(
             (anchor_i, negative_i), anchor_i
         )
-        positive_i = positive_by_anchor.get(source_anchor)
+        if mode_by_copy_pair.get((anchor_i, negative_i)) == "swap_values":
+            # A transplanted value may contradict the unchanged original
+            # positive. Until a compatible positive is constructed, omit it.
+            continue
+        positives = sorted(positives_by_anchor.get(source_anchor, ()))
+        positive_i = positives[0] if positives else None
         if positive_i is None or positive_i == negative_i:
             continue
         triple = (anchor_i, positive_i, negative_i)
@@ -686,10 +697,16 @@ def _build_mnrl_training_triples(
         # anchor copy: the copy's positive side is that counterpart copy,
         # not the original pair side. Older audits lack the key and fall
         # back to the original pair side.
+        source_positive_i = int(audit["pair_payload_idx"])
         positive_i = int(
-            audit.get("copy_pair_payload_idx") or audit["pair_payload_idx"]
+            audit.get("copy_pair_payload_idx")
+            if audit.get("copy_pair_payload_idx") is not None
+            else source_positive_i
         )
-        if (source_i, positive_i) not in train_positive_pairs:
+        # Fold membership is checked on both edges independently: the
+        # original source pair licenses the augmentation, while a symmetric
+        # swap's generated counterpart must itself survive in this fold.
+        if (source_i, source_positive_i) not in train_positive_pairs:
             continue
         if (copy_i, positive_i) not in train_positive_pairs:
             continue
@@ -697,7 +714,7 @@ def _build_mnrl_training_triples(
             (
                 negative
                 for negative in negatives_by_anchor.get(source_i, [])
-                if negative != positive_i
+                if negative not in {source_positive_i, positive_i}
             ),
             None,
         )
@@ -715,18 +732,27 @@ def _build_mnrl_training_triples(
     # i.e. "the original matches its canonical better than its one-flip
     # twin". That is the counterfactual pressure; without this branch the
     # twin lane mints evaluation rows that never see a gradient.
+    selected_negative_pairs = {
+        (int(a), int(b))
+        for a, b in np.asarray(train_neg, dtype=int).reshape(-1, 2)
+    }
     for audit in hard_negative_mask_audit or []:
         if audit.get("target_mode") != "counterfactual":
             continue
         source_i = int(audit["anchor_payload_idx"])
         copy_i = int(audit["copy_payload_idx"])
         pair_i = int(audit["pair_payload_idx"])
-        if positive_by_anchor.get(source_i) != pair_i:
+        # Twins are eligible only if the twin edge survived negative
+        # balancing/filtering and the exact counterpart survived positives.
+        if (copy_i, pair_i) not in selected_negative_pairs:
             continue
-        triple = (source_i, pair_i, copy_i)
-        if triple not in seen:
-            seen.add(triple)
-            triples.append(triple)
+        if pair_i not in positives_by_anchor.get(source_i, set()):
+            continue
+        for positive_i in sorted(positives_by_anchor.get(source_i, set())):
+            triple = (source_i, positive_i, copy_i)
+            if triple not in seen:
+                seen.add(triple)
+                triples.append(triple)
     return triples
 
 
@@ -2330,6 +2356,11 @@ def _build_payload_metadata(
         if item.get("copy_payload_idx") is not None
         and item.get("anchor_payload_idx") is not None
     }
+    for item in list(mask_audit or []) + list(hard_negative_mask_audit or []):
+        if item.get("copy_pair_payload_idx") is not None:
+            copy_sources[int(item["copy_pair_payload_idx"])] = int(
+                item["pair_payload_idx"]
+            )
     metadata: list[dict] = []
     for index, value in enumerate(row_bc):
         barcode = str(value)
@@ -2513,6 +2544,17 @@ def _build_pair_lineage(
             **base,
             "is_masked_copy": 1,
         }
+        if audit.get("copy_pair_payload_idx") is not None:
+            lookup[
+                (
+                    label,
+                    int(audit["copy_payload_idx"]),
+                    int(audit["copy_pair_payload_idx"]),
+                )
+            ] = {
+                **base,
+                "is_masked_copy": 1,
+            }
 
     rows: list[dict] = []
     for label, pairs in ((1, train_pos), (0, train_neg)):

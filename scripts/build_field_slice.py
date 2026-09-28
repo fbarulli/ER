@@ -29,9 +29,9 @@ from pathlib import Path
 import numpy as np
 
 if __package__:
-    from .minimal_flip_slice import precision_at_recall
+    from .minimal_flip_slice import _fused_vectors, precision_at_recall
 else:
-    from minimal_flip_slice import precision_at_recall
+    from minimal_flip_slice import _fused_vectors, precision_at_recall
 
 
 BUCKET_FIELDS = {
@@ -81,6 +81,7 @@ def main() -> None:
 
     _, data = load_prepared_bundle(args.bundle)
     payload = list(data["payload"])
+    structured_features = np.asarray(data["structured_features"], dtype=np.float32)
     neg = np.asarray(data["neg"], dtype=int)
     neg_sources = np.asarray(data["neg_sources"], dtype=object)
     neg_audit = list(data.get("hard_negative_mask_audit", []))
@@ -109,7 +110,7 @@ def main() -> None:
     ][: len(selected)]
 
     rows: list[dict] = []
-    need: set[str] = set()
+    need: set[int] = set()
     for info in selected:
         rows.append({
             "anchor_text_idx": info["anchor_idx"], "other_text_idx": info["pair_idx"],
@@ -120,33 +121,19 @@ def main() -> None:
             "source_anchor_idx": info["anchor_idx"],
             "label": 0, "kind": "twin", "field": info["field"],
         })
-        need.update({
-            payload[info["anchor_idx"]], payload[info["pair_idx"]],
-            payload[info["copy_idx"]],
-        })
+        need.update({info["anchor_idx"], info["pair_idx"], info["copy_idx"]})
     for i in gate_idx:
         rows.append({
             "anchor_text_idx": int(neg[i][0]), "other_text_idx": int(neg[i][1]),
             "label": 0, "kind": "gate_negative", "field": None,
         })
-        need.update({payload[int(neg[i][0])], payload[int(neg[i][1])]})
+        need.update(map(int, neg[i]))
 
     model = load_local_sentence_transformer(args.model, device=args.device)
-    texts = sorted(need)
-    vectors = {
-        text: vec
-        for text, vec in zip(
-            texts,
-            np.asarray(
-                model.encode(texts, normalize_embeddings=True, show_progress_bar=False),
-                dtype=float,
-            ),
-            strict=True,
-        )
-    }
+    vectors = _fused_vectors(model, payload, structured_features, need)
 
     def sim(left_idx: int, right_idx: int) -> float:
-        return float(np.dot(vectors[payload[left_idx]], vectors[payload[right_idx]]))
+        return float(np.dot(vectors[left_idx], vectors[right_idx]))
 
     for row in rows:
         row["score"] = sim(row["anchor_text_idx"], row["other_text_idx"])

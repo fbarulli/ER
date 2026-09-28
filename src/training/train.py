@@ -829,6 +829,7 @@ def _main_inner(_mlf, _wandb) -> None:
         _clusters,
         max_component_size=int(_cluster_cfg["max_component_size"]),
         max_giant_ratio=float(_cluster_cfg["max_giant_ratio"]),
+        population_size=len(_record_ids),
     )
     entity_keys = [
         str(_clusters.get(record, f"row:{idx}")) for idx, record in enumerate(_record_ids)
@@ -1047,31 +1048,11 @@ def _main_inner(_mlf, _wandb) -> None:
             max_donor_overlap=swap_max_donor_overlap,
         )
         mask_audit.extend(value_audit)
-        if n_added + n_swap_added + n_value_added:
-            structured_features = np.vstack(
-                [
-                    structured_features,
-                    np.asarray(
-                        [structured_features[int(row["anchor_payload_idx"])] for row in mask_audit],
-                        dtype=np.float32,
-                    ),
-                ]
-            )
-            symmetric_pair_rows = [
-                int(row["pair_payload_idx"])
-                for row in mask_audit
-                if row.get("copy_pair_payload_idx") is not None
-            ]
-            if symmetric_pair_rows:
-                structured_features = np.vstack(
-                    [
-                        structured_features,
-                        np.asarray(
-                            [structured_features[idx] for idx in symmetric_pair_rows],
-                            dtype=np.float32,
-                        ),
-                    ]
-                )
+        from training.masking import extend_augmented_features
+
+        structured_features = extend_augmented_features(
+            structured_features, payload, mask_audit
+        )
         if len(structured_features) != len(payload):
             raise RuntimeError(
                 "structured feature/payload length mismatch after masking: "
@@ -1195,17 +1176,8 @@ def _main_inner(_mlf, _wandb) -> None:
             )
             neg_sources = np.concatenate([neg_sources, _aug_sources])
             train_neg_sources = np.concatenate([train_neg_sources, _aug_sources])
-            structured_features = np.vstack(
-                [
-                    structured_features,
-                    np.asarray(
-                        [
-                            structured_features[int(row["anchor_payload_idx"])]
-                            for row in _neg_new_audit
-                        ],
-                        dtype=np.float32,
-                    ),
-                ]
+            structured_features = extend_augmented_features(
+                structured_features, payload, _neg_new_audit
             )
         hard_negative_mask_audit.extend(_neg_new_audit)
         # ── counterfactual twins (minimal-flip negatives from positives) ──
@@ -1244,17 +1216,8 @@ def _main_inner(_mlf, _wandb) -> None:
             _cf_sources = np.full(n_cf_added, "counterfactual", dtype=object)
             neg_sources = np.concatenate([neg_sources, _cf_sources])
             train_neg_sources = np.concatenate([train_neg_sources, _cf_sources])
-            structured_features = np.vstack(
-                [
-                    structured_features,
-                    np.asarray(
-                        [
-                            structured_features[int(row["anchor_payload_idx"])]
-                            for row in _cf_audit
-                        ],
-                        dtype=np.float32,
-                    ),
-                ]
+            structured_features = extend_augmented_features(
+                structured_features, payload, _cf_audit
             )
             hard_negative_mask_audit.extend(_cf_audit)
             print(

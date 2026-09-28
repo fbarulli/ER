@@ -126,6 +126,27 @@ def _string_value_set(value: object, *, kind: str) -> set[str]:
     }
 
 
+def _has_consistency_flag(record: Mapping[str, object], flag: str) -> bool:
+    """Read canonical flag sets from either Python objects or CSV strings."""
+    value = record.get("attribute_consistency_flags")
+    if value is None:
+        return False
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return flag in {str(item).strip() for item in value}
+    text = str(value).strip()
+    if not text:
+        return False
+    if text in {"set()", "frozenset()"}:
+        return False
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError(f"invalid canonical attribute flags: {value!r}") from exc
+    if not isinstance(parsed, (list, tuple, set, frozenset)):
+        raise ValueError(f"canonical attribute flags are not a sequence: {value!r}")
+    return flag in {str(item).strip() for item in parsed}
+
+
 def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
     """Return the structured attributes used by the canonical record lane."""
     inferred = extract_critical_claims(
@@ -140,7 +161,13 @@ def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
 
     flavor_set = evidence("flavor_set", "flavor")
     return {
-        "volume": _value_set(record.get("volume_set"), kind="volume"),
+        # Keep the flagged raw values in canonical records for audit, but do
+        # not promote them into evidence used to classify a pair.
+        "volume": (
+            set()
+            if _has_consistency_flag(record, "ambiguous_volume")
+            else _value_set(record.get("volume_set"), kind="volume")
+        ),
         "pack": _value_set(record.get("pack_set"), kind="pack"),
         "package_type": _string_value_set(
             record.get("package_type_set"), kind="package_type"
@@ -151,6 +178,7 @@ def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
         "sweetener": evidence("sweetener_set", "sweetener"),
         "sweetener_type": _string_value_set(record.get("sweetener_type_set"), kind="sweetener_type"),
         "sweetening": _string_value_set(record.get("sweetening_set"), kind="sweetening"),
+        "attribute_consistency_flags": record.get("attribute_consistency_flags"),
         "pulp": evidence("pulp_set", "pulp"),
     }
 
@@ -168,7 +196,9 @@ def sku_attribute_info(title: object, attributes: object, description: object = 
     try:
         volume = (
             {canonical_volume_ml(volume_ml)}
-            if volume_ml is not None and float(volume_ml) > 0
+            if volume_ml is not None
+            and float(volume_ml) > 0
+            and "ambiguous_volume" not in set(extracted.get("attribute_consistency_flags") or set())
             else set()
         )
     except (TypeError, ValueError):
@@ -220,11 +250,15 @@ def critical_attribute_evaluation(
         left_value = (
             left.get("flavor_set") or normalized_flavor_tokens(left.get("flavor"))
             if dimension == "flavor"
+            else set()
+            if dimension == "volume" and _has_consistency_flag(left, "ambiguous_volume")
             else left.get(dimension)
         )
         right_value = (
             right.get("flavor_set") or normalized_flavor_tokens(right.get("flavor"))
             if dimension == "flavor"
+            else set()
+            if dimension == "volume" and _has_consistency_flag(right, "ambiguous_volume")
             else right.get(dimension)
         )
         left_set = set(left_value or set())
@@ -296,7 +330,10 @@ def attribute_conflict_types(
     unit canonicalization tests pin that contract) unchanged.
     """
     conflicts: list[str] = []
-    if not volumes_compatible(
+    if not (
+        _has_consistency_flag(left, "ambiguous_volume")
+        or _has_consistency_flag(right, "ambiguous_volume")
+    ) and not volumes_compatible(
         left.get("volume"),
         right.get("volume"),
         volume_relative_tolerance=volume_relative_tolerance,

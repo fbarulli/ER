@@ -51,13 +51,15 @@ def precision_at_recall(
 ) -> dict[str, float | int]:
     """Precision/recall/threshold at a target recall (07-series convention).
 
-    Threshold = the LOWEST score still achieving the target recall (any
-    higher cut drops below it); ties resolved by stable sort order — the
-    same rule as training._precision_at_recall, restated here so this audit
-    script stays import-light (no torch/transformers at import time).
+    Threshold = the HIGHEST observed score achieving the target recall. Every
+    row tied at that threshold is accepted, matching threshold-based scoring.
     """
     ordered_scores = np.asarray(scores, dtype=float)
     ordered_labels = np.asarray(labels, dtype=int)
+    if len(ordered_scores) != len(ordered_labels):
+        raise ValueError(
+            f"scores/labels length mismatch: {len(ordered_scores)} != {len(ordered_labels)}"
+        )
     order = np.argsort(-ordered_scores, kind="stable")
     ranked_scores = ordered_scores[order]
     ranked_labels = ordered_labels[order]
@@ -72,8 +74,9 @@ def precision_at_recall(
     rank = int(np.searchsorted(tp_cum, int(np.ceil(target * n_pos))))
     rank = min(rank, len(ranked_scores) - 1)
     threshold = float(ranked_scores[rank])
-    tp = int(tp_cum[rank])
-    fp = int((rank + 1) - tp)
+    accepted = ranked_scores >= threshold
+    tp = int(np.sum((ranked_labels == 1) & accepted))
+    fp = int(np.sum((ranked_labels == 0) & accepted))
     return {
         "precision": float(tp / (tp + fp)) if tp + fp else float("nan"),
         "recall": float(tp / n_pos),
@@ -138,6 +141,25 @@ def _cosine(model, texts: list[str]) -> np.ndarray:
     return vectors
 
 
+def _fused_vectors(
+    model, payload: list[str], features: np.ndarray, rows: set[int]
+) -> dict[int, np.ndarray]:
+    """Encode distinct payload rows and apply the production structured fusion."""
+    from core.common import load_config
+    from core.structured_features import fuse_numpy
+
+    ordered = sorted(rows)
+    embeddings = _cosine(model, [payload[row] for row in ordered])
+    cfg = load_config()["training"]["structured_features"]
+    weight = (
+        float(cfg["embedding_weight"])
+        if bool(cfg["enabled"]) and bool(cfg["feed_to_loss"])
+        else 0.0
+    )
+    fused = fuse_numpy(embeddings, features[ordered], weight)
+    return {row: vec for row, vec in zip(ordered, fused, strict=True)}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
@@ -153,6 +175,7 @@ def main() -> None:
 
     _, data = load_prepared_bundle(args.bundle)
     payload = list(data["payload"])
+    structured_features = np.asarray(data["structured_features"], dtype=np.float32)
     pos = np.asarray(data["pos"], dtype=int)
     neg = np.asarray(data["neg"], dtype=int)
     neg_sources = np.asarray(data["neg_sources"], dtype=object)
@@ -170,37 +193,34 @@ def main() -> None:
     twin_labels: list[int] = []
     margins: list[float] = []
     field_groups: dict[str, dict[str, list]] = {}
-    need_texts: set[str] = set()
+    need_rows: set[int] = set()
     for row in twins:
-        need_texts.add(payload[int(row["anchor_payload_idx"])])
-        need_texts.add(payload[int(row["pair_payload_idx"])])
-        need_texts.add(payload[int(row["copy_payload_idx"])])
+        need_rows.update(
+            int(row[k])
+            for k in ("anchor_payload_idx", "pair_payload_idx", "copy_payload_idx")
+        )
     # Background slices share the same encode batch.
     gate_idx = [i for i, s in enumerate(neg_sources) if str(s) == "gate"][: args.gate_sample]
     for i in gate_idx:
-        need_texts.add(payload[int(neg[i][0])])
-        need_texts.add(payload[int(neg[i][1])])
+        need_rows.update(map(int, neg[i]))
     cross_idx = [
         i for i, s in enumerate(neg_sources) if str(s) == "cross_brand_conflict"
     ][: args.gate_sample]
     for i in cross_idx:
-        need_texts.add(payload[int(neg[i][0])])
-        need_texts.add(payload[int(neg[i][1])])
+        need_rows.update(map(int, neg[i]))
     pos_idx = list(range(min(args.pos_sample, len(pos))))
     for i in pos_idx:
-        need_texts.add(payload[int(pos[i][0])])
-        need_texts.add(payload[int(pos[i][1])])
+        need_rows.update(map(int, pos[i]))
 
-    texts = sorted(need_texts)
-    vectors = {text: vec for text, vec in zip(texts, _cosine(model, texts), strict=True)}
+    vectors = _fused_vectors(model, payload, structured_features, need_rows)
 
-    def sim(left: str, right: str) -> float:
+    def sim(left: int, right: int) -> float:
         return float(np.dot(vectors[left], vectors[right]))
 
     for row in twins:
-        anchor = payload[int(row["anchor_payload_idx"])]
-        other = payload[int(row["pair_payload_idx"])]
-        twin = payload[int(row["copy_payload_idx"])]
+        anchor = int(row["anchor_payload_idx"])
+        other = int(row["pair_payload_idx"])
+        twin = int(row["copy_payload_idx"])
         pos_sim = sim(anchor, other)
         twin_sim = sim(twin, other)
         twin_scores += [pos_sim, twin_sim]
@@ -230,13 +250,15 @@ def main() -> None:
             "margin_frac_positive": float((group_margins > 0).mean()),
         }
 
-    # Background slices (same encoder, same scale; texts already encoded).
-    gate_scores = [sim(payload[int(a)], payload[int(b)]) for a, b in neg[gate_idx]]
-    pos_scores = [sim(payload[int(a)], payload[int(b)]) for a, b in pos[pos_idx]]
-    cross_scores = [sim(payload[int(a)], payload[int(b)]) for a, b in neg[cross_idx]]
+    # Background slices use the same fused representation as the twin slice.
+    gate_scores = [sim(int(a), int(b)) for a, b in neg[gate_idx]]
+    pos_scores = [sim(int(a), int(b)) for a, b in pos[pos_idx]]
+    cross_scores = [sim(int(a), int(b)) for a, b in neg[cross_idx]]
+    matched_pos_scores = pos_scores[: min(len(pos_scores), len(cross_scores))]
+    matched_cross_scores = cross_scores[: len(matched_pos_scores)]
     cross_report = precision_at_recall(
-        np.array(pos_scores[: len(cross_scores)] + cross_scores),
-        np.array([1] * len(cross_scores) + [0] * len(cross_scores)),
+        np.array(matched_pos_scores + matched_cross_scores),
+        np.array([1] * len(matched_pos_scores) + [0] * len(matched_cross_scores)),
     )
 
     swap_audits = [

@@ -20,7 +20,7 @@ import random
 
 import numpy as np
 
-from core.common import training_cfg
+from core.common import load_config, training_cfg
 from core.schemas import MaskingResult
 
 # extent band SSOT — read once at import from config/training.yaml (masking:
@@ -55,6 +55,50 @@ def field_of(token: str) -> str | None:
         if lowered.startswith(prefixes):
             return field
     return None
+
+
+def extend_augmented_features(features, payload, audit):
+    """Append features in payload-index order, including symmetric copies.
+
+    Masks retain source features. Value swaps and twins update the numeric
+    field they changed, so the text and numeric loss channels agree.
+    """
+    from core.structured_features import vector
+
+    features = np.asarray(features, dtype=np.float32)
+    cfg = training_cfg().training.structured_features
+    copies = {}
+    for row in audit:
+        pairs = [(row["copy_payload_idx"], row["anchor_payload_idx"])]
+        if row.get("copy_pair_payload_idx") is not None:
+            pairs.append((row["copy_pair_payload_idx"], row["pair_payload_idx"]))
+        for destination, source in pairs:
+            destination, source = int(destination), int(source)
+            if destination in copies or not 0 <= source < len(features):
+                raise ValueError("invalid or duplicate augmentation feature lineage")
+            result = features[source].copy()
+            if row["target_mode"] in {"swap_values", "counterfactual"}:
+                for field, prefix, start in (("volume", "volume_ml_", 0), ("pack", "pack_qty_", 5)):
+                    if field not in row["fields_hit"]:
+                        continue
+                    values = {
+                        float(token[len(prefix):].replace("_", "."))
+                        for token in payload[destination].split()
+                        if token.startswith(prefix)
+                    }
+                    if not values or len(result) != 10:
+                        raise ValueError("invalid numeric augmentation feature contract")
+                    encoded = vector(
+                        {field: values}, volume_scale_ml=cfg.volume_scale_ml,
+                        pack_scale=cfg.pack_scale, max_set_size=cfg.max_set_size,
+                    )
+                    result[start:start + 5] = encoded[start:start + 5]
+            copies[destination] = result
+    if set(copies) != set(range(len(features), len(payload))):
+        raise ValueError("augmentation feature lineage does not cover the payload suffix")
+    if not copies:
+        return features
+    return np.vstack([features, *[copies[i][None, :] for i in sorted(copies)]])
 
 
 def swap_structured_field(
@@ -279,6 +323,48 @@ def _field_surfaces(text: str) -> dict[str, list[str]]:
     return surfaces
 
 
+def _field_values_conflict(field: str, left: list[str], right: list[str]) -> bool:
+    """Apply the shared attribute compatibility rules to structured tokens."""
+    prefixes = _FIELD_PREFIXES[field]
+
+    def values(tokens: list[str]) -> set[str]:
+        result = set()
+        for token in tokens:
+            prefix = next(p for p in prefixes if token.startswith(p))
+            result.add(token[len(prefix):].casefold())
+        return result
+
+    left_values = values(left)
+    right_values = values(right)
+    if not left_values or not right_values:
+        return False
+    if field == "volume":
+        from core.critical_attributes import volumes_compatible
+
+        def parse_volume(value: str) -> float:
+            return float(value.replace("_", "."))
+
+        cfg = training_cfg()
+        absolute_tolerance = float(
+            load_config()["rand_matching"]["targeted_veto_gates"][
+                "volume_absolute_tolerance_ml"
+            ]
+        )
+        return not volumes_compatible(
+            {parse_volume(value) for value in left_values},
+            {parse_volume(value) for value in right_values},
+            volume_relative_tolerance=float(cfg.gate.vol_tolerance),
+            volume_absolute_tolerance_ml=absolute_tolerance,
+        )
+    if field == "flavor":
+        from core.attribute_conflicts import flavor_overlap_metrics
+
+        return flavor_overlap_metrics(left_values, right_values)[1] == 0.0
+    from core.critical_attributes import categorical_conflict
+
+    return categorical_conflict(field, {field: left_values}, {field: right_values})
+
+
 def augment_swapped_agreed(
     pairs: np.ndarray,
     payload: list[str],
@@ -423,6 +509,7 @@ def check_cluster_sizes(
     *,
     max_component_size: int,
     max_giant_ratio: float,
+    population_size: int | None = None,
 ) -> dict[str, object]:
     """Circuit breaker over entity-cluster topology (fail loud, not silent).
 
@@ -439,11 +526,19 @@ def check_cluster_sizes(
         raise ValueError("max_component_size must be >= 2")
     if not 0.0 < max_giant_ratio <= 1.0:
         raise ValueError("max_giant_ratio must be in (0, 1]")
+    population_size = (
+        len(cluster_map) if population_size is None else int(population_size)
+    )
+    if population_size < len(cluster_map):
+        raise ValueError("population_size cannot be smaller than clustered coverage")
     sizes = Counter(cluster_map.values())
     if not sizes:
         return {"clusters": 0, "covered": 0, "max_size": 0, "giant_ratio": 0.0}
     biggest, biggest_size = sizes.most_common(1)[0]
-    giant_ratio = biggest_size / len(cluster_map)
+    # Isolated records are still part of the population at risk of being
+    # incorrectly merged. For tiny samples, the ratio has too little signal
+    # to trip a breaker (the absolute component-size cap remains active).
+    giant_ratio = biggest_size / max(population_size, 1)
     stats: dict[str, object] = {
         "clusters": len(sizes),
         "covered": len(cluster_map),
@@ -458,7 +553,8 @@ def check_cluster_sizes(
             "(suspect shared placeholder barcode or feed corruption — "
             "audit before merging)"
         )
-    if giant_ratio > max_giant_ratio:
+    min_population_for_ratio = int(1 / max_giant_ratio + 0.999999)
+    if population_size >= min_population_for_ratio and giant_ratio > max_giant_ratio:
         raise ValueError(
             "entity-cluster circuit breaker: giant ratio "
             f"{giant_ratio:.4f} > {max_giant_ratio:.4f} "
@@ -485,21 +581,29 @@ def normalize_entity_key(value: object, fallback: str) -> str:
 def _resolve_entity_keys(
     row_bc: np.ndarray,
     entity_keys: list[str] | None,
+    pairs: np.ndarray,
     pool: int,
 ) -> list[str] | None:
     """Entity keys for donor-disjointness guards, or None for barcodes.
 
-    Keys are built once at the original payload length while later swap
-    calls see payloads extended by earlier copies — but guards only ever
-    index the original pool prefix (pool_size pins every pick and donor
-    draw there), so prefix coverage is sufficient and checked here.
+    ``pool`` counts sampled pair rows, not payload rows. Validate every
+    endpoint that can be selected so a sparse/high payload index cannot
+    escape coverage checks.
     """
     if entity_keys is None:
         return None
-    if len(entity_keys) < pool:
+    selected = np.asarray(pairs)[:pool]
+    if selected.size:
+        endpoints = selected.astype(int, copy=False).reshape(-1)
+        if np.any(endpoints < 0):
+            raise ValueError("selected pair endpoints must be non-negative")
+        required = int(endpoints.max()) + 1
+    else:
+        required = 0
+    if len(entity_keys) < required:
         raise ValueError(
-            "entity keys must cover the donor pool: "
-            f"{len(entity_keys)} < {pool}"
+            "entity keys must cover selected pair endpoints: "
+            f"{len(entity_keys)} < required payload length {required}"
         )
     return list(entity_keys)
 
@@ -616,7 +720,7 @@ def augment_value_swaps(
         return res.pos, res.payload, res.row_bc, res.n_added, audit
     new_payload = list(payload)
     new_bc = [str(x) for x in row_bc]
-    _entity_list = _resolve_entity_keys(row_bc, entity_keys, pool)
+    _entity_list = _resolve_entity_keys(row_bc, entity_keys, pairs, pool)
     _barcodes = [str(x) for x in np.asarray(row_bc)]
     entities = _entity_list if _entity_list is not None else _barcodes
     from collections import Counter
@@ -814,7 +918,7 @@ def augment_counterfactual_twins(
         return res.pos, res.payload, res.row_bc, res.n_added, audit
     new_payload = list(payload)
     new_bc = [str(x) for x in row_bc]
-    _entity_list = _resolve_entity_keys(row_bc, entity_keys, pool)
+    _entity_list = _resolve_entity_keys(row_bc, entity_keys, pairs, pool)
     _barcodes = [str(x) for x in np.asarray(row_bc)]
     entities = _entity_list if _entity_list is not None else _barcodes
     from collections import Counter
@@ -865,7 +969,9 @@ def augment_counterfactual_twins(
                 field
                 for field in agreed
                 if field in donor_anchor
-                and donor_anchor[field] != anchor_fields[field]
+                and _field_values_conflict(
+                    field, donor_anchor[field], anchor_fields[field]
+                )
             )
             if not candidates:
                 continue

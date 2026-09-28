@@ -446,6 +446,30 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
 # ============================================================================
 # GATING
 # ============================================================================
+def _has_attribute_flag(obj: object, flag: str) -> bool:
+    """Read consistency flags from extracted objects or serialized canonicals."""
+    if isinstance(obj, dict):
+        value = obj.get("attribute_consistency_flags")
+    else:
+        value = getattr(obj, "attribute_consistency_flags", None)
+    if value is None:
+        return False
+    if isinstance(value, (set, frozenset, list, tuple)):
+        return flag in {str(item).strip() for item in value}
+    text = str(value).strip()
+    if not text:
+        return False
+    if text in {"set()", "frozenset()"}:
+        return False
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError(f"invalid attribute consistency flags: {value!r}") from exc
+    if not isinstance(parsed, (set, frozenset, list, tuple)):
+        raise ValueError(f"attribute consistency flags are not a sequence: {value!r}")
+    return flag in {str(item).strip() for item in parsed}
+
+
 def pack_gate(
     score: float,
     sku_a: object,
@@ -531,8 +555,16 @@ def pack_gate(
     if left_type and right_type and not (left_type & right_type):
         return False
 
-    left_volume = _set(_value(sku_a, "volume", "volume_set", "volume_ml"))
-    right_volume = _set(_value(sku_b, "volume", "volume_set", "volume_ml"))
+    left_volume = (
+        set()
+        if _has_attribute_flag(sku_a, "ambiguous_volume")
+        else _set(_value(sku_a, "volume", "volume_set", "volume_ml"))
+    )
+    right_volume = (
+        set()
+        if _has_attribute_flag(sku_b, "ambiguous_volume")
+        else _set(_value(sku_b, "volume", "volume_set", "volume_ml"))
+    )
     if (
         left_volume
         and right_volume
@@ -603,6 +635,12 @@ def three_way_gate(
         return GateResult(
             decision="hard_no",
             reason="Pack blocker: pack size, package type, or volume mismatch",
+        ).model_dump()
+    if _has_attribute_flag(attrs1, "ambiguous_volume") or _has_attribute_flag(
+        attrs2, "ambiguous_volume"
+    ):
+        return GateResult(
+            decision="fallback", reason="Ambiguous volume evidence"
         ).model_dump()
     # raw confidence check
     if (

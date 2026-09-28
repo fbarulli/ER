@@ -43,6 +43,52 @@ def test_augmented_negative_lineage_is_tied_to_its_target() -> None:
     assert triples == []
 
 
+def test_symmetric_swap_uses_generated_positive_and_excludes_source_positive_as_negative() -> None:
+    triples = _build_mnrl_training_triples(
+        # The source positive and symmetric generated pair are distinct
+        # positive edges in the training fold.
+        np.array([[1, 2], [20, 21]]),
+        # The original positive can appear in the negative list due to a
+        # different augmentation path; it must not become this copy's N.
+        np.array([[1, 2], [1, 3]]),
+        mask_audit=[
+            {
+                "anchor_payload_idx": 1,
+                "copy_payload_idx": 20,
+                "pair_payload_idx": 2,
+                "copy_pair_payload_idx": 21,
+                "target_mode": "swap_values",
+            }
+        ],
+        hard_negative_mask_audit=[],
+    )
+
+    assert triples == [(1, 2, 3), (20, 21, 3)]
+
+
+def test_symmetric_swap_requires_source_and_generated_positive_edges_in_fold() -> None:
+    audit = [{
+        "anchor_payload_idx": 1,
+        "copy_payload_idx": 20,
+        "pair_payload_idx": 2,
+        "copy_pair_payload_idx": 21,
+        "target_mode": "swap_values",
+    }]
+
+    source_edge_missing = _build_mnrl_training_triples(
+        np.array([[20, 21]]), np.array([[1, 3]]),
+        mask_audit=audit, hard_negative_mask_audit=[],
+    )
+    generated_edge_missing = _build_mnrl_training_triples(
+        np.array([[1, 2]]), np.array([[1, 3]]),
+        mask_audit=audit, hard_negative_mask_audit=[],
+    )
+
+    assert source_edge_missing == []
+    assert generated_edge_missing == [(1, 2, 3)]
+    assert (20, 21, 3) not in generated_edge_missing
+
+
 def test_semantic_false_negative_exposure_counts_repeated_positive_gtins() -> None:
     row_bc = np.array(["unused", "A", "A", "B", "A", "C", "C"])
     triples = [(1, 2, 3), (4, 2, 5), (6, 5, 3)]
