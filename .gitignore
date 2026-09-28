@@ -93,3 +93,6 @@ AGENTS.local.md
 !dataset.csv
 !data/
 !data/*.csv
+
+# graphify knowledge-graph artifacts (generated; rebuild with: graphify . )
+graphify-out/
