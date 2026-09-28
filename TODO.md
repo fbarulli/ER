@@ -28,7 +28,20 @@ status per item, verified against HEAD:
       keeps its population; realized replacement -> ann_finetuned).
       Suite: 532 passed + 2 skipped + 2 pre-existing failures.
 - [x] A4 _write_datapoint_usage brittle on 0-presentation populations —
-      verify + fix if live; owner: agent 1 (its file).
+      CONFIRMED FIXED, no change needed (agent 2, verified vs HEAD).
+      Evidence: docstring "audit A4 — this is no longer a hard failure"
+      (training.py:2699); status ladder ok/missing/eval_only/not_reached/
+      unavailable/unregistered (training.py:2786-2798); missing ->
+      WARNING print + n_missing_datapoint_populations, fold continues
+      (training.py:2827-2843). The only remaining raise is the INTENDED
+      UnregisteredDatapointPopulationError in
+      _assert_datapoint_coverage_identity (training.py:2929) — provenance
+      guard for unregistered producer tags, unrelated to 0-presentation.
+      Regression pins pre-exist and pass (23/23):
+      tests/test_datapoint_coverage.py:269-277 (non-empty registered,
+      zero presentations -> missing + no raise), :247-267 (0-pair
+      registered -> unavailable/not_reached), :233-245 (unregistered ->
+      loud).
 - [x] B6 _optuna_mlflow_cb never registered: FIXED (agent 1, commit
       06920ce). ROOT CAUSE: superseded in-commit by _optuna_tracking_cb
       (registered at study.optimize, training.py:6091-6095) which already
@@ -112,18 +125,8 @@ Queue state (updated at stand-down 2026-09-28, agent 1 session end):
 - Item A3 (gate slots labeled ann_finetuned without realized
   replacement): DONE+PUSHED (merge 7a6af8b on training-sid-hybrid). See
   triage checkbox above.
-- Item A4 _write_datapoint_usage: NOT STARTED by agent 1. Partial intel
-  from reading (training.py:2661-2821 at HEAD): the ladder already has
-  missing/not_reached/unavailable/eval_only/unregistered statuses and the
-  docstring states "audit A4 — this is no longer a hard failure"
-  (non-empty population with zero presentations -> missing + warning,
-  fold continues, n_missing_datapoint_populations returned). The old
-  RuntimeError path looks ALREADY GONE from _write_datapoint_usage
-  (remaining raise is UnregisteredDatapointPopulationError in
-  _assert_datapoint_coverage_identity — a DIFFERENT, intended guard).
-  Next agent: verify by test (0-presentation registered population ->
-  missing status + warning, no raise), confirm no fix needed or add the
-  regression pin.
+- Item A4 _write_datapoint_usage: DONE — CONFIRMED already fixed vs HEAD,
+  regression pins pre-exist (see triage checkbox above).
 - Item 7 (MNRL subset monitoring + twin warmup): NOT STARTED (full plan
   anchors remain in experiments.md / DATA_PATH contract; schema names
   MnrlMonitoringSpec + TwinLossWarmupSpec, config training.mnrl_monitoring
