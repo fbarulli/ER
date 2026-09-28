@@ -1056,9 +1056,10 @@ def _main_inner(_mlf, _wandb) -> None:
         # the MIDPOINT of the config extent band (masking.mask_lo..
         # mask_hi), derived here so a band change can never leave the
         # buckets misaligned with the distribution (was inline 0.10).
-        # values: replaced-fraction, a different quantity), so both swap
-        # modes are excluded from the extent halves — the full audit
-        # (masked + swapped) is what the visibility CSV keeps.
+        # swap_values copies carry realized_extent measuring the replaced
+        # fraction — a different quantity — so that mode alone is excluded
+        # from the extent halves; the full audit (masked + swapped) is
+        # what the visibility CSV keeps.
         _mid = (float(mask_cfg["mask_lo"]) + float(mask_cfg["mask_hi"])) / 2.0
         _ma_masked = _ma[~_ma.target_mode.isin(["swap_values"])] if len(_ma) else _ma
         if len(_ma_masked):
