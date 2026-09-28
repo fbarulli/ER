@@ -6150,14 +6150,6 @@ def run_hpo(
     print(f"wrote {out_path}", flush=True)
 
 
-def _optuna_mlflow_cb(mlf: MlflowCtx):
-    def cb(study, trial):
-        if trial.state.name == "COMPLETE" and trial.value is not None:
-            mlf.log_metrics({f"trial_{trial.number}_auc": trial.value})
-
-    return cb
-
-
 def _optuna_tracking_cb(mlf: MlflowCtx, wandb_ctx):
     """Record every completed Optuna trial in local and optional remote logs."""
     def cb(study, trial):
