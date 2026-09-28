@@ -16,7 +16,7 @@ sim_columns:
 masking:
   enabled: true
   profile: baseline
-  frac: 1.00          # fraction of positive anchors masked when enabled
+  frac: 0.80          # fraction of positive anchors masked when enabled
   mask_hard_negatives: true  # enable dynamic masking on label-0 training pairs
   hard_negative_frac: 0.30   # mask_frac_negatives: only 30% of label-0 presentations
   mask_prob: null     # null: positive extent drawn from mask_lo..mask_hi
@@ -26,7 +26,8 @@ masking:
   hard_negative_mask_lo: 0.10  # extent per masked presentation, not mask frequency
   hard_negative_mask_hi: 0.20
   # Label-preserving agreed-field swaps (extra varied views, same labels).
-  swap_agreed_frac: 0.50          # positives: swapped-surface copies per pair
+  swap_agreed_frac: 0.00          # structurally empty: same values always
+                                          # produce same token order; disable
   hard_negative_swap_frac: 0.50   # hard negatives: swapped-surface copies
   # Static pre-training VALUE swaps (donor value transplant, coconut->lime).
   # Positives: BOTH sides rewritten from an agreeing donor pair, so a match
