@@ -110,12 +110,33 @@ masking_per_epoch_fold0.csv, mask_hard_negative_visibility.csv,
 train_rows_fold0.csv. The upcoming MNRL lane produces NONE of these
 (coverage writer is contrastive-only) — that is the telemetry regression
 to close before training.
-- [ ] Register/normalize the `<source>+aug` tag (6,776 rows/fold,
+- [x] Register/normalize the `<source>+aug` tag (6,776 rows/fold,
       train.py:1122 f-string, invisible to the static producer scan) in
-      _training_pair_populations — map to the base population and put the
-      mode in the usage row's existing `augmentation` column. Without
-      this, any contrastive fold on current bundles raises
-      UnregisteredDatapointPopulationError.
+      _training_pair_populations — FIXED (agent 1, commit 65b270a). PATH
+      CHOSEN: normalize (not register). ROOT CAUSE: train.py mints static
+      masked/swap copies of hard negatives with an "<source>+aug"
+      provenance label via f-string concat — invisible to the static
+      producer scan, absent from DATAPOINT_POPULATION_SPEC; both coverage
+      checks raised on ANY contrastive fold with masked hard negatives:
+      _training_pair_populations passed compound tags through verbatim
+      (training.py:2614-2619) and _negative_source_accounting enumerated
+      the raw source array (N3 breach). Blast radius: 6,776 rows/fold,
+      every contrastive fold on current bundles (hard crash); zero other
+      consumers of +aug (diet gate counts from the audit, not tags).
+      FIX: _base_population_tag() helper (training.py:215-226) strips
+      "+aug" -> base in _training_pair_populations and folds the copies
+      into their base source in the census (N1/N2/N3 identities hold);
+      static minting mode rides the usage row's lineage block
+      (_build_pair_lineage adds target_mode from
+      hard_negative_mask_audit -> flows into every usage row). NOTE vs
+      plan: mode carried as lineage column target_mode, NOT overwriting
+      the presentation-time `augmentation` column (that column is part of
+      the presentation key and reconciliation identities; overwriting
+      would corrupt them). Registry stays honest — no combinatorial
+      <base>+aug tag family. Tests: tests/
+      test_aug_source_population_registration.py (fold with masked hard
+      negatives writes coverage rows without raising; census folds +aug
+      into base; strip guard).
 - [ ] Fix diet_manifest.py's dynamic-mask projection: it is conceptually
       wrong, not just loss-aware — dynamic masking is IN-PLACE
       replacement (training.py:3096 rewrite, "no static negative copies
