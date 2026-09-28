@@ -25,6 +25,24 @@ CRITICAL_ATTRIBUTE_DIMENSIONS: tuple[str, ...] = (
 FLAVOR_ALIASES: dict[str, str] = {
     "berries": "berry",
     "cocoanut": "coconut",
+    # 2026-09-28 low-hanging-fruit normalization (measured on the
+    # 108,046-row payload, scripts/flip_validity_audit.py companion mining:
+    # 2,300 rows / 71 pairs carried a lexicon-missed near-flavor word).
+    # Plurals -> singular:
+    "apples": "apple", "oranges": "orange", "grapes": "grape",
+    "lemons": "lemon", "pears": "pear", "limes": "lime",
+    "grapefruits": "grapefruit", "coconuts": "coconut", "tonics": "tonic",
+    "coffees": "coffee", "roses": "rose", "mints": "mint",
+    "pineapples": "pineapple", "fruits": "fruit",
+    # adjective forms
+    "fruity": "fruit", "peachy": "peach", "lemony": "lemon",
+    # foreign-language variants
+    "tonica": "tonic", "lemoni": "lemon", "tamarindo": "tamarind",
+    # truncation artifacts seen in feed titles
+    "strawberr": "strawberry", "grapefru": "grapefruit", "chery": "cherry",
+    "rhubar": "rhubarb", "fruite": "fruit",
+    # EXCLUDED deliberately: pearl~pear (different word, 28 rows measured),
+    # sucralose~sucrose-class attribute confusions (distinct values).
 }
 FLAVOR_LEXICON: frozenset[str] = frozenset(
     {
@@ -32,8 +50,8 @@ FLAVOR_LEXICON: frozenset[str] = frozenset(
         "coconut", "coffee", "cola", "cranberry", "elderflower", "fruit",
         "ginger", "grape", "grapefruit", "lemon", "lime", "mango", "mint",
         "orange", "passion", "passionfruit", "peach", "pear", "pineapple",
-        "pomegranate", "raspberry", "rhubarb", "rose", "strawberry", "tonic",
-        "tropical", "vanilla", "watermelon",
+        "pomegranate", "raspberry", "rhubarb", "rose", "strawberry",
+        "tamarind", "tonic", "tropical", "vanilla", "watermelon",
     }
 )
 # Additional values observed in explicit Flavour/Flavor declarations. Keep
