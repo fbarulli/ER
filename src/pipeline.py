@@ -381,6 +381,23 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         volume_conf = vol_title["confidence"]
         volume_raw = vol_title["raw_match"]
         volume_status = vol_title["parse_status"]
+    # Volume anomaly reconciliation (audit 2026-09-28): when title and
+    # attribute BOTH parse but disagree by an order of magnitude or more
+    # ("330cl" title read as 3300ml vs a 330ml Volume attribute; "1.000 ml"
+    # European decimal read as 1ml vs 1000ml), the attribute value wins as
+    # before — but the disagreement is now recorded instead of silent. The
+    # flag travels in attribute_consistency_flags to the canonical record,
+    # so `"volume_inconsistency" in flags` IS the boolean metadata flag for
+    # downstream model/logger tracking of text-attribute noise. Measured:
+    # 197 of 37,573 both-present rows (0.5%). Text-neutral: volume_ml itself
+    # never changes here.
+    title_vol = float(vol_title["volume_ml"] or 0.0)
+    if (
+        attr_vol > 0
+        and title_vol > 0
+        and max(attr_vol, title_vol) / min(attr_vol, title_vol) >= 10.0
+    ):
+        consistency_flags.add("volume_inconsistency")
 
     if attr_pack > 1 or attr_pack_conf > 0:
         pack_qty = attr_pack

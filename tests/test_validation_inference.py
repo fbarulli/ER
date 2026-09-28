@@ -262,5 +262,47 @@ class DietProjectionTests(unittest.TestCase):
         self.assertLessEqual(51153 / effective, 1.50)
 
 
+class ProceedPrecisionTests(unittest.TestCase):
+    """Newly admitted proceed pairs must be nearly perfectly clean."""
+
+    def _record(self, volume, **fields) -> dict:
+        record = {
+            "volume_set": set(volume),
+            "pack_set": set(), "package_type_set": set(),
+            "flavor_set": set(), "carbonation_set": set(),
+            "sweetener_set": set(), "pulp_set": set(),
+        }
+        record.update(fields)
+        return record
+
+    def test_agreement_holds_on_compatible_records(self):
+        from scripts.check_proceed_precision import pair_agrees
+
+        left = self._record([500.0], flavor_set={"lemon"})
+        right = self._record([500.0], flavor_set={"lemon"})
+        self.assertTrue(pair_agrees(left, right))
+
+    def test_volume_and_flavor_conflicts_fail(self):
+        from scripts.check_proceed_precision import pair_agrees
+
+        base = self._record([500.0], flavor_set={"lemon"})
+        self.assertFalse(
+            pair_agrees(base, self._record([250.0], flavor_set={"lemon"}))
+        )
+        self.assertFalse(
+            pair_agrees(base, self._record([500.0], flavor_set={"lime"}))
+        )
+
+    def test_absent_evidence_is_not_a_conflict(self):
+        from scripts.check_proceed_precision import pair_agrees
+
+        self.assertTrue(
+            pair_agrees(
+                self._record([500.0], flavor_set={"lemon"}),
+                self._record([500.0]),
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

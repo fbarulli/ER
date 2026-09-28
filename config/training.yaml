@@ -588,7 +588,10 @@ training:
 # neg_oversample: random-negative bulk-draw multiplier (was inline 60 in
 # src/core/blocking.build_pairs).
 pairs:
-  proceed_sim_threshold: 0.80    # positives: proceed & sim>=0.80
+  proceed_sim_threshold: 0.65    # positives: proceed & sim>=0.65 (lowered
+                                 # 2026-09-28 from 0.80: +389 gate-verified
+                                 # pairs, canonical-agreement 1.0000;
+                                 # negatives unchanged at 0.80)
   hardneg_sim_threshold: 0.80    # hard negatives: hard_no & sim>=0.80
   max_pos_per_group: 4           # eval-pair positives per multi-retailer group
   n_neg: 10000                   # eval negatives per build_pairs call

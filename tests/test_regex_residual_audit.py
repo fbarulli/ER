@@ -149,6 +149,32 @@ def test_reviewed_flavors_require_an_explicit_flavor_field() -> None:
     assert sku_attribute_info("Bubble Gum Drink", "Flavour: bubble gum, sea salt")["flavor_set"] == {"bubble gum", "sea salt"}
 
 
+def test_ontology_rejected_package_types_carry_reason_codes() -> None:
+    from scripts.regex_miss_evidence import capture_class
+    from scripts.regex_miss_review import REJECTED_PACKAGE_TYPES
+
+    assert REJECTED_PACKAGE_TYPES == {
+        "aerosol": "REASON_AEROSOL_UNSUPPORTED",
+        "tray": "REASON_TRAY_UNSUPPORTED",
+    }
+    for candidate, code in (
+        ("pack type: aerosol", "REASON_AEROSOL_UNSUPPORTED"),
+        ("Pack Type: Tray", "REASON_TRAY_UNSUPPORTED"),
+    ):
+        category, values, status = capture_class({
+            "reason": "declared_field_parser_empty", "candidate": candidate,
+        })
+        assert (category, values, status) == (
+            "rejected_package_type",
+            [candidate.split(":")[1].strip().lower()],
+            code,
+        )
+    category, _, status = capture_class({
+        "reason": "declared_field_parser_empty", "candidate": "pack type: can",
+    })
+    assert (category, status) == ("declared_package_type", "package_ontology_review")
+
+
 def test_remaining_misses_keep_original_spans_and_distinct_meanings() -> None:
     title = {"product_id": "1", "source": "title", "title": "Water 12 tube 1000 mg / l",
              "candidate": "12 l"}

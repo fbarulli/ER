@@ -18,8 +18,10 @@ from core.common import F, TRAIN_ROOT
 from core.critical_attributes import normalized_attribute_text
 if __package__:
     from .regex_capture_review import ATTRIBUTE_ITEM_RE, SWEETENER_TYPES
+    from .regex_miss_review import REJECTED_PACKAGE_TYPES
 else:
     from regex_capture_review import ATTRIBUTE_ITEM_RE, SWEETENER_TYPES
+    from regex_miss_review import REJECTED_PACKAGE_TYPES
 
 
 DESCRIPTION_CUES = {
@@ -135,6 +137,9 @@ def capture_class(row: dict[str, str]) -> tuple[str, list[str], str]:
         return "unmapped_sweetener_declaration", values, "lexicon_review"
     if row["reason"] == "declared_field_parser_empty":
         value = normalized_attribute_text(row["candidate"].partition(":")[2])
+        code = REJECTED_PACKAGE_TYPES.get(value)
+        if code:
+            return "rejected_package_type", [value.replace(" ", "_")], code
         return "declared_package_type", [value.replace(" ", "_")], "package_ontology_review"
     if row["reason"] == "regex_residual_parser_empty":
         return "title_signal", [normalized_attribute_text(row["candidate"])], "context_rule_review"

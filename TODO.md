@@ -18,6 +18,14 @@
       donor uniformity, subset distance split.
 - [x] Guarded bare-soda rule (still + dry-type guards): 3,635 fire, 451
       suppressed; 12 golden rows refreshed (all true sodas).
+- [x] T2 end-to-end: proceed 0.80->0.65, precision gate 1.0000, labeled
+      rebuilt 8,641 (919/7,722), oracle pins reconciled, balanced pool
+      rebuilt 1,838 (pack_blocker-only — negatives bind).
+- [x] T3: aerosol/tray -> rejected_by_ontology with reason codes; miss
+      queue re-run: 44 -> 19 candidates + 25 rejected.
+- [x] T4: volume anomaly flag (attribute wins, text-neutral); 197 rows.
+- [x] T5: manifest ratio contracts (ratio_to_hard, static/effective views,
+      note); diet gates on projected train-time ratio.
 - [x] Donor overlap guard (swap_max_donor_overlap 0.95; min-overlap floor
       rejected: costs 43% yield, transfers nothing domain-specific).
 - [x] Bundle pins masking + easy config; drift warns on load.

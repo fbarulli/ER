@@ -65,6 +65,25 @@ def test_pipeline_canonicalizes_title_and_attribute_units() -> None:
     assert attributes["pack_qty"] == 6
 
 
+def test_order_of_magnitude_title_attribute_disagreement_flags_not_flips() -> None:
+    """Attribute wins as before, but the disagreement is recorded.
+
+    "330cl" parses as 3300ml against a 330ml Volume attribute: volume_ml
+    stays 330 (text-neutral — no payload/model churn) while
+    "volume_inconsistency" joins the consistency flags, which IS the
+    boolean metadata flag downstream (`in` == True). Agreement within an
+    order of magnitude raises nothing.
+    """
+    clash = extract_all("orange soda Now 330cl", "Volume: 330")
+    assert clash["volume_ml"] == 330.0
+    assert "volume_inconsistency" in clash["attribute_consistency_flags"]
+    calm = extract_all("Sparkling water 8 fl oz, case of 12", "Volume: 250")
+    assert calm["volume_ml"] == 250.0
+    assert "volume_inconsistency" not in calm["attribute_consistency_flags"]
+    title_only = extract_all("Sparkling water 8 fl oz, case of 12", "")
+    assert "volume_inconsistency" not in title_only["attribute_consistency_flags"]
+
+
 def test_source_structured_pack_defaults_to_singleton_when_count_is_unknown() -> None:
     info = sku_info("Plain tea", "")
 

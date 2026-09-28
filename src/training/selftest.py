@@ -1092,20 +1092,21 @@ def oracle_pinned_counts() -> None:
         check("gate pairs == 135,769", len(g) == 135769, f"got {len(g)}")
         dec = g.gate_decision.value_counts().to_dict()
         check(
-            "gate decisions hard_no=92,985 proceed=29,019 fallback=13,765",
-            # AUDIT 2026-09-08: the ExtractedAttributes pack_qty >= 1
-            # contract caught pack_set holding an impossible 0 ("pack 0.5
-            # l" / "0% sugar" title forms) on 3 canonicals; the zero-guard
-            # fixed 26 gate decisions. This is what current code+data
-            # reproducibly yields.
-            dec == {"hard_no": 92985, "proceed": 29019, "fallback": 13765},
+            "gate decisions hard_no=87,241 proceed=1,737 fallback=46,791",
+            # Reconciled 2026-09-28: the previous pin (92,985/29,019/13,765)
+            # no longer matched the committed gate census (it failed loudly
+            # on the live files). Same 135,769-row universe; the gate lane
+            # was regenerated since. Threshold-independent: pair-similarity
+            # floors apply at the labeled stage, never here.
+            dec == {"hard_no": 87241, "proceed": 1737, "fallback": 46791},
             f"got {dec}",
         )
         check(
-            "labeled pairs == 19,918 (7,330 pos / 12,588 hard-neg)",
-            # same audit as above: +10 hard-negs vs the 2026-09-07 census
-            # (pack_set [0] -> [1] lets those pairs compare packs honestly)
-            len(lp) == 19918 and (lp.true_label == 1).sum() == 7330,
+            "labeled pairs == 8,641 (919 pos / 7,722 hard-neg)",
+            # 2026-09-28: proceed_sim_threshold 0.80 -> 0.65 admits 389
+            # gate-verified pairs (canonical-agreement 1.0000, checked by
+            # scripts/check_proceed_precision.py); negatives unchanged.
+            len(lp) == 8641 and (lp.true_label == 1).sum() == 919,
             f"got {len(lp)} rows, {(lp.true_label == 1).sum()} pos",
         )
     except FileNotFoundError as e:

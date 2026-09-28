@@ -46,6 +46,15 @@ FIELD_DIMENSIONS = {
     "sweetener": "sweetener",
     "pulp": "pulp",
 }
+# Declared package types the live ontology deliberately rejects (audit
+# 2026-09-28): aerosol/tray occur on ordinary beverage records whose other
+# packaging evidence says glass or plastic, so accepting them would
+# manufacture false conflicts. Routed to rejected_by_ontology with explicit
+# reason codes — a DECISION, not a lingering review candidate.
+REJECTED_PACKAGE_TYPES = {
+    "aerosol": "REASON_AEROSOL_UNSUPPORTED",
+    "tray": "REASON_TRAY_UNSUPPORTED",
+}
 
 
 def title_signals(title: str) -> list[tuple[str, str]]:
@@ -118,6 +127,7 @@ def main() -> None:
     contradictions = 0
     resolved_by_parser: Counter[str] = Counter()
     contextual_exclusions: Counter[str] = Counter()
+    rejected_by_ontology: Counter[str] = Counter()
     synthetic_residual_phrases = 0
     with args.input.open(newline="", encoding="utf-8") as source, args.out.open(
         "w", newline="", encoding="utf-8"
@@ -226,6 +236,13 @@ def main() -> None:
                         elif candidate:
                             emit("attributes", dimension, "unrecognized_sweetener_value", f"{field_name}: {candidate}", attribute_residual)
                 elif not info.get(dimension):
+                    if dimension == "package_type":
+                        code = REJECTED_PACKAGE_TYPES.get(
+                            normalized_attribute_text(value)
+                        )
+                        if code:
+                            rejected_by_ontology[code] += 1
+                            continue
                     reason = "declared_field_parser_empty"
                     emit("attributes", dimension, reason, f"{field_name}: {value}", attribute_residual)
 
@@ -236,6 +253,7 @@ def main() -> None:
         "products_with_candidates": len(flagged_rows),
         "resolved_residual_signals": dict(resolved_by_parser),
         "excluded_contextual_nonclaims": dict(contextual_exclusions),
+        "rejected_by_ontology": dict(rejected_by_ontology),
         "rejected_synthetic_residual_phrases": synthetic_residual_phrases,
         "assigned_sweetener_value_mentions": dict(assigned_declarations),
         "contradictory_sweetener_declaration_rows": contradictions,
