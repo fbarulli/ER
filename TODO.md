@@ -34,6 +34,24 @@
       note); diet gates on projected train-time ratio.
 - [x] T1: field-sliced harness 33/33/34 (234 twins/bucket, package binds;
       2,106 rows with gate negatives; zero-shot P@R95 0.35 / 0.50 per-bucket).
+- [x] Failure audit: all 7 pre-existing fails are test-side drift (5x mock
+      of removed colab._remote_file_size, 2x stale MNRL call signature) —
+      zero pipeline/null/shape breakage.
+- [x] Twin-triple regression test (twins as explicit MNRL negatives).
+- [x] Sampling audit: smoke --sample takes first-1000 rows (63/280
+      retailers, water-heavy vs juice-heavy full) — smoke yields are
+      directional only, never selection-grade.
+
+## Checkpoint eval contract (twin training curve)
+- After each epoch/checkpoint: `build_field_slice.py --model <ckpt>` +
+  `minimal_flip_slice.py --model <ckpt>` on the live bundle.
+- Convergence: overall P@R95 0.355 -> ~0.500 by epoch 3 (organic
+  disambiguation learned).
+- Invariance floor: per-bucket twin P@R95 must hold >= 0.500; overall up +
+  twin down = over-smoothing -> raise counterfactual_frac or guarantee
+  twin triples per batch (seeded stratified sampler, component-safe).
+- Twin margin mean must lift off ~0.008; if ~= 0 post-training, reopen
+  field markers as an ablation.
 - [x] T2 end-to-end: proceed 0.80->0.65, precision gate 1.0000, labeled
       rebuilt 8,641 (919/7,722), oracle pins reconciled, balanced pool
       rebuilt 1,838 (pack_blocker-only — negatives bind).

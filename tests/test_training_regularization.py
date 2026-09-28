@@ -303,6 +303,29 @@ class CounterfactualTwinTests(unittest.TestCase):
         self.assertEqual(n_added, 0)
         self.assertEqual(audit, [])
 
+    def test_twin_trains_as_explicit_negative_of_its_source(self) -> None:
+        # Regression: twins first shipped without this branch and were
+        # silently dropped from MNRL triples (eval/diet only, no gradient).
+        from training.training import _build_mnrl_training_triples
+
+        train_pos = np.asarray([[0, 1]], dtype=int)
+        train_neg = np.asarray([[2, 3], [4, 1]], dtype=int)
+        hard_audit = [{
+            "anchor_payload_idx": 0, "copy_payload_idx": 4,
+            "pair_payload_idx": 1, "barcode": "g1",
+            "realized_extent": 0.1, "configured_mask_lo": None,
+            "configured_mask_hi": None, "mask_prob": None,
+            "anchor_text": "a", "masked_text": "a-prime",
+            "population": "hard_negative", "target_mode": "counterfactual",
+            "fields_hit": ["flavor"], "donor_anchor_payload_idx": 2,
+            "donor_pair_payload_idx": 3, "copy_pair_payload_idx": None,
+        }]
+        triples = _build_mnrl_training_triples(
+            train_pos, train_neg, mask_audit=[],
+            hard_negative_mask_audit=hard_audit,
+        )
+        self.assertIn((0, 1, 4), triples)
+
     def test_twin_is_deterministic_for_a_seed(self) -> None:
         pairs = np.asarray([[0, 1], [2, 3]], dtype=int)
         first = augment_counterfactual_twins(
