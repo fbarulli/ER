@@ -47,7 +47,28 @@ Main-thread sweep results (2026-09-28):
 - second04: 948 candidates -> 261 bundle hp_pairs (strict volume
   equality; lever = the gate's 5% tolerance).
 
-## Tracking fixes (2026-09-28 audit — before rebuild)
+## Duck hunt protocol (rate-limited: ONE agent at a time)
+Relay model, orchestrated by the main thread:
+1. Agent finds unexpected behavior -> investigates ROOT CAUSE + BLAST
+   RADIUS (graphify graph: `graphify affected <node>`, god nodes).
+2. In a WORKTREE (`git worktree add ../ER-fix-<cluster>`): replicate the
+   error as a failing test, apply the minimal fix, run the suite.
+3. Merge back to training-sid-hybrid, push (protocol: every finding ->
+   TODO + push).
+4. Agent ends; a NEW agent runs and continues from the TODO queue.
+One agent at a time (provider rate limits); main thread orchestrates,
+triages, and integrates.
+
+Queue state:
+- UNDONE (agent-1 session died empty, zero file changes): MNRL subset
+  monitoring + twin warmup implementation, F1 +aug registration, A3/A4
+  verification+fix, B6 dead _optuna_mlflow_cb, dead
+  hard_negative_swap_frac knob, stale comment/fixture cleanup.
+- Agent 3 (data-prep track) still running: aliases, flag census, smoke
+  sampler, coverage JSON.
+- Main thread: FINDINGS B7-B10 + C/D/E triage continues.
+
+
 Source: sample-tracking audit (experiments.md, chain-of-custody table).
 Reference for the artifact contract: the last training run's
 publication_manifest (DVC 20260913T123559565190Z) — that run published
