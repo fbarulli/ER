@@ -19,7 +19,7 @@ def test_augmented_negative_keeps_its_copy_as_anchor_and_source_positive() -> No
         {"anchor_payload_idx": 1, "copy_payload_idx": 20, "pair_payload_idx": 3,
          "target_mode": "random"},
         {"anchor_payload_idx": 1, "copy_payload_idx": 21, "pair_payload_idx": 4,
-         "target_mode": "swap_agreed"},
+         "target_mode": "targeted"},
     ]
 
     triples = _build_mnrl_training_triples(
