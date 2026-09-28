@@ -16,8 +16,14 @@
       discards by kind (smoke: discarded_base=0, discarded_aug=476).
 - [x] Stress-slice script: twin P@R95 + margins, cross-brand/gate slices,
       donor uniformity, subset distance split.
-- [x] Guarded bare-soda rule (still + dry-type guards): 3,635 fire, 451
-      suppressed; 12 golden rows refreshed (all true sodas).
+- [x] Guarded bare-soda rule v2 (still-evidence + dry-type guards):
+      3,635 fire / 451 suppressed of 4,084; 12 golden rows refreshed
+      (all true sodas; syrups + still-declared rows excluded).
+- [x] Donor overlap guard (swap_max_donor_overlap 0.95; min-overlap floor
+      rejected: costs 43% yield, transfers nothing domain-specific).
+- [x] Barcode degeneracy check: no placeholder dominance (top values are
+      legit 11-digit GTINS x11-13 rows); 53,601 rows share barcodes
+      (normal multi-retailer); 34,636 empty.
 - [x] T2 end-to-end: proceed 0.80->0.65, precision gate 1.0000, labeled
       rebuilt 8,641 (919/7,722), oracle pins reconciled, balanced pool
       rebuilt 1,838 (pack_blocker-only — negatives bind).
@@ -51,17 +57,17 @@
       (train-time 0.843; bundle-only 1.686 printed, informational).
 
 ## Next
-- [ ] Rewire 5k holdout into final_inference/colab (review first).
+- [ ] Rewire 5k holdout into final_inference/colab (review first; needs gate
+      provenance + component/split impact analysis).
+- [ ] Recall-loss bands below 0.65 (agreement per band, no CIs) to justify
+      the floor.
 - [ ] Full-data twin P@R95 curve per checkpoint; revisit markers only if
       twin margin ~= 0. No embedding mixup (dynamic; label undefined).
 
 ## Open gaps (2026-09-28 audit — all items)
 Parser / extraction:
-- [ ] 55 unresolved regex candidates: 24x aerosol + 1x tray package ontology,
-      30 residual title signals (pulp 10, sugar 7, bubble 4, sweetener/s 6,
-      effervescent/sparkle/pack-of-6).
-- [ ] Bare "soda" unresolved by design (precision over recall); ~15 true soda
-      titles lack carbonation claims.
+- [x] 55 unresolved regex candidates -> 19 + 25 ontology-rejected (rerun).
+- [x] Bare "soda" resolved with guards (see Done).
 - [ ] Volume unit anomalies (`0.33 ml` title vs `330 ml` attribute, attribute
       wins silently) — blast radius unmeasured.
 - [ ] No MPN parsing; entity guard best-effort on unmapped rows (52.1%
