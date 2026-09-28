@@ -53,6 +53,11 @@ files:
   dataset_deduped: "training_data:dataset_deduped.csv"
   dataset_deduped_sample_3000: "training_data:dataset_deduped_sample_3000.csv"
   dataset_deduped_train_minus_3000: "training_data:dataset_deduped_train_minus_3000.csv"
+  # 5k holdout (2026-09-28): same stratified sampler, same seed, fresh
+  # allocation. Built alongside the 3k lane, which stays live until the
+  # final_inference/colab rewiring is reviewed.
+  dataset_deduped_sample_5000: "training_data:dataset_deduped_sample_5000.csv"
+  dataset_deduped_train_minus_5000: "training_data:dataset_deduped_train_minus_5000.csv"
   sku_to_rep: "data:sku_to_rep.csv"
   canonical_records: "training_data:canonical_records.csv"   # SHARED frozen input
   gate_results: "training_data:gate_results.csv"             # SHARED frozen input

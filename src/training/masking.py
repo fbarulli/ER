@@ -378,6 +378,419 @@ def augment_swapped_agreed(
     return res.pos, res.payload, res.row_bc, res.n_added, res.audit_dicts()
 
 
+def normalize_entity_key(value: object, fallback: str) -> str:
+    """Canonical entity key for donor-disjointness checks.
+
+    GTINs fragment across feeds (UPC-12 vs EAN-13, zero padding,
+    missing values): strip surrounding whitespace and leading zeros so
+    length-variants of one GTIN share a key. Empty/missing values get the
+    caller-supplied unique fallback (never the shared "" — one blank key
+    would refuse every barcode-less donor at once).
+    """
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    return text.lstrip("0") or "0"
+
+
+def _resolve_entity_keys(
+    row_bc: np.ndarray,
+    entity_keys: list[str] | None,
+    pool: int,
+) -> list[str] | None:
+    """Entity keys for donor-disjointness guards, or None for barcodes.
+
+    Keys are built once at the original payload length while later swap
+    calls see payloads extended by earlier copies — but guards only ever
+    index the original pool prefix (pool_size pins every pick and donor
+    draw there), so prefix coverage is sufficient and checked here.
+    """
+    if entity_keys is None:
+        return None
+    if len(entity_keys) < pool:
+        raise ValueError(
+            "entity keys must cover the donor pool: "
+            f"{len(entity_keys)} < {pool}"
+        )
+    return list(entity_keys)
+
+
+def _splice_field(text: str, field: str, donor_tokens: list[str]) -> str:
+    """Replace ``field``'s whole value group in ``text`` with donor tokens.
+
+    The group is removed wherever its tokens sit and the donor tokens are
+    inserted once, at the first removed position. Donor tokens always come
+    from another real payload row, so no value is ever invented.
+    """
+    out: list[str] = []
+    inserted = False
+    for tok in text.split():
+        if field_of(tok) == field:
+            if not inserted:
+                out.extend(donor_tokens)
+                inserted = True
+        else:
+            out.append(tok)
+    return " ".join(out)
+
+
+def augment_value_swaps(
+    pairs: np.ndarray,
+    payload: list[str],
+    row_bc: np.ndarray,
+    *,
+    frac: float,
+    seed: int = 0,
+    population: str = "positive",
+    pool_size: int | None = None,
+    symmetric: bool = False,
+    entity_keys: list[str] | None = None,
+    max_field_share: float | None = None,
+    max_value_share: float | None = None,
+) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
+    """Append copies whose structured VALUE was transplanted from a donor pair.
+
+    This is the value-swap lane (e.g. an anchor saying ``coconut`` is
+    reworded to say ``lime`` with a real ``lime`` donor row): a genuine
+    semantic change, not a surface reorder. Static and precomputed — the
+    donor is chosen here, before training, from the same pair pool, and the
+    audit names it. No invented tokens: every transplanted token already
+    exists in the corpus payload.
+
+    Label safety is structural, and differs per population:
+
+    * positives (``symmetric=True``): BOTH sides are rewritten, the anchor
+      from the donor pair's anchor and the counterpart from the donor
+      pair's counterpart, and only when the donor pair itself agrees on the
+      field. The copy pair agrees exactly where the donor pair agrees, so a
+      match stays a match — a synthetic flavor identity, self-consistent on
+      both sides. Single-sided value swaps on positives would teach a false
+      grounding (lime text = coconut product) and are refused by this flag.
+    * hard negatives (``symmetric=False``): only the anchor is rewritten.
+      The two endpoints are different products by canonical identity (same-
+      canonical rows are excluded upstream), so the pair stays label 0 no
+      matter what the text says — even when the transplant heals the very
+      conflict the gate found, which is precisely the hardest negative.
+
+    False-negative guards (both populations, applied before anything is
+    emitted):
+
+    * the donor pair must share NO entity key with the anchor pair, so a
+      duplicate record of the same entity can never donate its own values.
+      Keys are canonical-entity GTINs with zero-padding normalized away
+      (UPC-12 vs EAN-13 length variants collide); unmapped rows carry
+      unique per-row keys and never block each other;
+    * the rewritten copy must not be byte-identical to the other side of
+      the pair — an identical-text label-0 row would punish the model for
+      a distinction absent from the text.
+
+    Concentration caps (anti-dominance): ``max_field_share`` bounds any one
+    field to a share of the picks (soft — falls back to an uncapped field
+    rather than emitting nothing, so structural fields still flow when no
+    semantic field is eligible); ``max_value_share`` bounds any one
+    (field, value) transplant to a share of the picks (hard — an
+    overused donor value is skipped, so no single string becomes a
+    synthetic-generation artifact).
+
+    Pairs with no eligible donor (all donors carry the same values) emit
+    nothing. Returns the standard 5-tuple with target_mode="swap_values"
+    audits; MaskingResult validates shapes.
+    """
+    import math
+
+    if max_field_share is not None and not 0.0 < max_field_share <= 1.0:
+        raise ValueError("max_field_share must be in (0, 1]")
+    if max_value_share is not None and not 0.0 < max_value_share <= 1.0:
+        raise ValueError("max_value_share must be in (0, 1]")
+    audit: list[dict] = []
+    pool = int(pool_size) if pool_size is not None else len(pairs)
+    pool = max(0, min(pool, len(pairs)))
+    if frac <= 0 or pool == 0:
+        res = MaskingResult(
+            pos=pairs, payload=list(payload), row_bc=np.asarray(row_bc),
+            n_added=0, audit=[],
+        )
+        return res.pos, res.payload, res.row_bc, res.n_added, audit
+    rng = random.Random(seed)
+    n_pick = int(pool * min(frac, 1.0))
+    picked = rng.sample(range(pool), n_pick) if n_pick else []
+    if not picked:
+        res = MaskingResult(
+            pos=pairs, payload=list(payload), row_bc=np.asarray(row_bc),
+            n_added=0, audit=[],
+        )
+        return res.pos, res.payload, res.row_bc, res.n_added, audit
+    new_payload = list(payload)
+    new_bc = [str(x) for x in row_bc]
+    _entity_list = _resolve_entity_keys(row_bc, entity_keys, pool)
+    _barcodes = [str(x) for x in np.asarray(row_bc)]
+    entities = _entity_list if _entity_list is not None else _barcodes
+    from collections import Counter
+
+    used_fields: Counter[str] = Counter()
+    used_values: Counter[tuple[str, tuple[str, ...]]] = Counter()
+    field_cap = max(1, math.ceil(max_field_share * n_pick)) if max_field_share else None
+    value_cap = max(1, math.ceil(max_value_share * n_pick)) if max_value_share else None
+    extra = []
+    for i in picked:
+        a, b = int(pairs[i][0]), int(pairs[i][1])
+        anchor_fields = _field_surfaces(payload[a])
+        anchor_entities = {entities[a], entities[b]}
+        chosen: tuple[str, list[str], list[str] | None, int, int] | None = None
+        for _ in range(10):
+            j = rng.randrange(pool)
+            if j == i:
+                continue
+            c, d = int(pairs[j][0]), int(pairs[j][1])
+            if anchor_entities & {entities[c], entities[d]}:
+                continue
+            donor_anchor = _field_surfaces(payload[c])
+            donor_pair = _field_surfaces(payload[d])
+            candidates = sorted(
+                field
+                for field in anchor_fields
+                if field in donor_anchor
+                and donor_anchor[field] != anchor_fields[field]
+                and (not symmetric or (
+                    field in donor_pair
+                    and {t.lower() for t in donor_pair[field]}
+                    == {t.lower() for t in donor_anchor[field]}
+                ))
+            )
+            if not candidates:
+                continue
+            if field_cap is not None:
+                under = [f for f in candidates if used_fields[f] < field_cap]
+                candidates = under or candidates
+            field = rng.choice(candidates)
+            signature = (field, tuple(sorted(t.lower() for t in donor_anchor[field])))
+            if value_cap is not None and used_values[signature] >= value_cap:
+                continue
+            chosen = (field, donor_anchor[field], donor_pair.get(field), c, d)
+            break
+        if chosen is None:
+            continue
+        field, donor_a_tokens, donor_b_tokens, c, d = chosen
+        swapped_anchor = _splice_field(payload[a], field, donor_a_tokens)
+        if swapped_anchor == payload[a]:
+            continue
+        anchor_toks = len(payload[a].split())
+        extent = round(len(anchor_fields[field]) / max(anchor_toks, 1), 4)
+        # Position-based indices: a symmetric audit appends TWO rows per
+        # pair, so the pair count is not the row count. Index from the
+        # payload length actually in hand.
+        copy_idx = len(new_payload)
+        new_payload.append(swapped_anchor)
+        new_bc.append(str(row_bc[a]))
+        if symmetric:
+            assert donor_b_tokens is not None
+            swapped_pair = _splice_field(payload[b], field, donor_b_tokens)
+            if swapped_pair == payload[b] or swapped_pair == swapped_anchor:
+                new_payload.pop()
+                new_bc.pop()
+                continue
+            pair_copy_idx = len(new_payload)
+            new_payload.append(swapped_pair)
+            new_bc.append(str(row_bc[b]))
+            extra.append((copy_idx, pair_copy_idx))
+        else:
+            pair_copy_idx = None
+            if swapped_anchor == payload[b]:
+                # The transplant erased every textual difference. A
+                # byte-identical label-0 row would punish the model for a
+                # distinction absent from the text — skip it.
+                new_payload.pop()
+                new_bc.pop()
+                continue
+            extra.append((copy_idx, b))
+        used_fields[field] += 1
+        used_values[(field, tuple(sorted(t.lower() for t in donor_a_tokens)))] += 1
+        audit.append(
+            {
+                "anchor_payload_idx": a,
+                "copy_payload_idx": copy_idx,
+                "pair_payload_idx": b,
+                "barcode": str(row_bc[a]),
+                "realized_extent": extent,
+                "configured_mask_lo": None,
+                "configured_mask_hi": None,
+                "mask_prob": None,
+                "anchor_text": payload[a],
+                "masked_text": swapped_anchor,
+                "population": population,
+                "target_mode": "swap_values",
+                "fields_hit": [field],
+                "donor_anchor_payload_idx": c,
+                "donor_pair_payload_idx": d,
+                "copy_pair_payload_idx": pair_copy_idx,
+            }
+        )
+    res = MaskingResult(
+        pos=np.vstack([pairs, np.array(extra, dtype=int)]) if extra else np.asarray(pairs),
+        payload=new_payload,
+        row_bc=np.array(new_bc),
+        n_added=len(extra),
+        audit=audit,
+    )
+    return res.pos, res.payload, res.row_bc, res.n_added, res.audit_dicts()
+
+
+def augment_counterfactual_twins(
+    pairs: np.ndarray,
+    payload: list[str],
+    row_bc: np.ndarray,
+    *,
+    frac: float,
+    seed: int = 0,
+    pool_size: int | None = None,
+    entity_keys: list[str] | None = None,
+    max_field_share: float | None = None,
+    max_value_share: float | None = None,
+) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
+    """Mint minimal-flip negatives from positive pairs: (A1', A2) labeled 0.
+
+    For a sampled positive pair ``(A1, A2)`` that AGREES on a structured
+    field, the anchor side alone is rewritten with a real donor value for
+    that field (``coconut`` -> ``lime``), breaking exactly one previously-
+    agreed field and nothing else. The twin ``(A1', A2)`` is labeled 0 by
+    construction: it differs from a verified match in one load-bearing
+    attribute, so it cannot be the same product. The original ``(A1, A2)``
+    stays label 1, and both rows train together — the loss must stop
+    leaning on the 90% shared tokens (brand, size, pack) and look at the
+    one token that changed.
+
+    Only agreed fields flip: a field the pair already disagrees on is not
+    match evidence, so flipping it is not minimal. Guards are shared with
+    the value-swap lane — entity-disjoint donors, no invented tokens, the
+    twin must differ from the pair side (an identical twin is not a flip),
+    and the same field/value concentration caps. Static and precomputed:
+    donors are chosen here, before training.
+
+    The returned pair array holds the new ``(copy, pair-side)`` rows for the
+    caller to append to its NEGATIVE pool (with a ``counterfactual``
+    provenance label); the audit population is ``hard_negative`` so the
+    diet gate counts them as augmented negative views.
+    """
+    import math
+
+    if max_field_share is not None and not 0.0 < max_field_share <= 1.0:
+        raise ValueError("max_field_share must be in (0, 1]")
+    if max_value_share is not None and not 0.0 < max_value_share <= 1.0:
+        raise ValueError("max_value_share must be in (0, 1]")
+    audit: list[dict] = []
+    pool = int(pool_size) if pool_size is not None else len(pairs)
+    pool = max(0, min(pool, len(pairs)))
+    if frac <= 0 or pool == 0:
+        res = MaskingResult(
+            pos=pairs, payload=list(payload), row_bc=np.asarray(row_bc),
+            n_added=0, audit=[],
+        )
+        return res.pos, res.payload, res.row_bc, res.n_added, audit
+    rng = random.Random(seed)
+    n_pick = int(pool * min(frac, 1.0))
+    picked = rng.sample(range(pool), n_pick) if n_pick else []
+    if not picked:
+        res = MaskingResult(
+            pos=pairs, payload=list(payload), row_bc=np.asarray(row_bc),
+            n_added=0, audit=[],
+        )
+        return res.pos, res.payload, res.row_bc, res.n_added, audit
+    new_payload = list(payload)
+    new_bc = [str(x) for x in row_bc]
+    _entity_list = _resolve_entity_keys(row_bc, entity_keys, pool)
+    _barcodes = [str(x) for x in np.asarray(row_bc)]
+    entities = _entity_list if _entity_list is not None else _barcodes
+    from collections import Counter
+
+    used_fields: Counter[str] = Counter()
+    used_values: Counter[tuple[str, tuple[str, ...]]] = Counter()
+    field_cap = max(1, math.ceil(max_field_share * n_pick)) if max_field_share else None
+    value_cap = max(1, math.ceil(max_value_share * n_pick)) if max_value_share else None
+    extra = []
+    for i in picked:
+        a, b = int(pairs[i][0]), int(pairs[i][1])
+        anchor_fields = _field_surfaces(payload[a])
+        pair_fields = _field_surfaces(payload[b])
+        agreed = sorted(
+            field
+            for field in anchor_fields
+            if field in pair_fields
+            and {t.lower() for t in anchor_fields[field]}
+            == {t.lower() for t in pair_fields[field]}
+        )
+        if not agreed:
+            continue
+        anchor_entities = {entities[a], entities[b]}
+        chosen: tuple[str, list[str], int, int] | None = None
+        for _ in range(10):
+            j = rng.randrange(pool)
+            if j == i:
+                continue
+            c, d = int(pairs[j][0]), int(pairs[j][1])
+            if anchor_entities & {entities[c], entities[d]}:
+                continue
+            donor_anchor = _field_surfaces(payload[c])
+            candidates = sorted(
+                field
+                for field in agreed
+                if field in donor_anchor
+                and donor_anchor[field] != anchor_fields[field]
+            )
+            if not candidates:
+                continue
+            if field_cap is not None:
+                under = [f for f in candidates if used_fields[f] < field_cap]
+                candidates = under or candidates
+            field = rng.choice(candidates)
+            signature = (field, tuple(sorted(t.lower() for t in donor_anchor[field])))
+            if value_cap is not None and used_values[signature] >= value_cap:
+                continue
+            chosen = (field, donor_anchor[field], c, d)
+            break
+        if chosen is None:
+            continue
+        field, donor_tokens, c, d = chosen
+        flipped = _splice_field(payload[a], field, donor_tokens)
+        if flipped == payload[a] or flipped == payload[b]:
+            continue
+        anchor_toks = len(payload[a].split())
+        extent = round(len(anchor_fields[field]) / max(anchor_toks, 1), 4)
+        copy_idx = len(new_payload)
+        new_payload.append(flipped)
+        new_bc.append(str(row_bc[a]))
+        extra.append((copy_idx, b))
+        used_fields[field] += 1
+        used_values[(field, tuple(sorted(t.lower() for t in donor_tokens)))] += 1
+        audit.append(
+            {
+                "anchor_payload_idx": a,
+                "copy_payload_idx": copy_idx,
+                "pair_payload_idx": b,
+                "barcode": str(row_bc[a]),
+                "realized_extent": extent,
+                "configured_mask_lo": None,
+                "configured_mask_hi": None,
+                "mask_prob": None,
+                "anchor_text": payload[a],
+                "masked_text": flipped,
+                "population": "hard_negative",
+                "target_mode": "counterfactual",
+                "fields_hit": [field],
+                "donor_anchor_payload_idx": c,
+                "donor_pair_payload_idx": d,
+                "copy_pair_payload_idx": None,
+            }
+        )
+    res = MaskingResult(
+        pos=np.vstack([pairs, np.array(extra, dtype=int)]) if extra else np.asarray(pairs),
+        payload=new_payload,
+        row_bc=np.array(new_bc),
+        n_added=len(extra),
+        audit=audit,
+    )
+    return res.pos, res.payload, res.row_bc, res.n_added, res.audit_dicts()
+
+
 def augment_positives(
     pos: np.ndarray,
     payload: list[str],

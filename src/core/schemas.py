@@ -132,6 +132,8 @@ class DataFilesSpec(BaseModel):
     dataset_deduped: str
     dataset_deduped_sample_3000: str
     dataset_deduped_train_minus_3000: str
+    dataset_deduped_sample_5000: str
+    dataset_deduped_train_minus_5000: str
     sku_to_rep: str
     canonical_records: str
     gate_results: str
@@ -921,6 +923,25 @@ class MaskingSpec(BaseModel):
     # without touching the label. Separate fracs per population.
     swap_agreed_frac: float = Field(ge=0.0, le=1.0)
     hard_negative_swap_frac: float = Field(ge=0.0, le=1.0)
+    # Static pre-training VALUE swaps (training.masking.augment_value_swaps):
+    # a structured value is transplanted from a real donor pair (coconut ->
+    # lime). Positives are rewritten on BOTH sides from a donor pair that
+    # itself agrees, so a match stays a match; hard negatives are rewritten
+    # on the anchor side only and stay label 0 by canonical identity.
+    # Donor tokens always come from the corpus payload — never invented.
+    swap_value_frac: float = Field(ge=0.0, le=1.0)
+    hard_negative_swap_value_frac: float = Field(ge=0.0, le=1.0)
+    # Counterfactual twins (training.masking.augment_counterfactual_twins):
+    # minimal single-agreed-field flips of positive anchors, labeled 0 and
+    # appended to the negative pool with a "counterfactual" provenance tag.
+    counterfactual_frac: float = Field(ge=0.0, le=1.0)
+    # Anti-dominance caps for the swap lanes (value swaps + counterfactuals):
+    # max share of the picks any one field may take (soft — falls back to an
+    # uncapped field rather than emitting nothing) and any one (field,
+    # value) transplant may take (hard — overused donor values are skipped,
+    # so no single string becomes a synthetic-generation artifact).
+    swap_max_field_share: float = Field(gt=0.0, le=1.0)
+    swap_max_value_share: float = Field(gt=0.0, le=1.0)
     # Diet contract enforced by scripts/diet_manifest.py on every bundle
     # BEFORE training: negatives must carry at least this fraction of
     # augmented views (masked + swapped) relative to presentations, and the
@@ -963,6 +984,11 @@ class MaskingProfileSpec(BaseModel):
     track_per_epoch: bool | None = None
     swap_agreed_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     hard_negative_swap_frac: float | None = Field(default=None, ge=0.0, le=1.0)
+    swap_value_frac: float | None = Field(default=None, ge=0.0, le=1.0)
+    hard_negative_swap_value_frac: float | None = Field(default=None, ge=0.0, le=1.0)
+    counterfactual_frac: float | None = Field(default=None, ge=0.0, le=1.0)
+    swap_max_field_share: float | None = Field(default=None, gt=0.0, le=1.0)
+    swap_max_value_share: float | None = Field(default=None, gt=0.0, le=1.0)
     diet_min_neg_aug_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     diet_max_pos_neg_view_ratio: float | None = Field(default=None, gt=0.0)
 
@@ -2157,12 +2183,24 @@ class MaskAuditEntry(BaseModel):
     # HOW the copy was produced: "random" (uniform token masking),
     # "targeted" (field-group drop masking), "swap_agreed" (counterpart
     # surface-form swap on agreed fields — label-preserving by
-    # construction). Pre-targeting rows carry the default "random".
+    # construction), "swap_values" (donor value transplant: positives
+    # rewritten on both sides from an agreeing donor pair, hard negatives
+    # on the anchor side only — label-safe by match agreement and by
+    # canonical identity respectively), "counterfactual" (one agreed field
+    # flipped on a positive anchor, labeled 0 by construction).
+    # Pre-targeting rows carry the default "random".
     target_mode: str = "random"
     # Structured field groups actually masked/swapped in this copy
     # (e.g. ["volume"]). Empty when no structured token was touched —
     # the coverage signal the diet manifest gates on.
     fields_hit: list[str] = Field(default_factory=list)
+    # Value-swap lineage only (None otherwise): the donor pair's payload
+    # indices the transplanted value was copied from, and — for symmetric
+    # positive swaps, which append a counterpart copy as well as an anchor
+    # copy — the counterpart copy's payload index.
+    donor_anchor_payload_idx: int | None = Field(default=None, ge=0)
+    donor_pair_payload_idx: int | None = Field(default=None, ge=0)
+    copy_pair_payload_idx: int | None = Field(default=None, ge=0)
 
 
 class MaskingResult(BaseModel):

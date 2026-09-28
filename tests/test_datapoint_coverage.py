@@ -187,7 +187,7 @@ class ProducerTagInventoryTests(_CapturingVisibilityLog):
         self.assertEqual(
             training.NEGATIVE_SOURCE_DATAPOINT_POPULATIONS,
             ("gate", "targeted_attribute_conflict", "cross_brand_conflict",
-             "attribute_conflict", "random_easy"),
+             "counterfactual", "attribute_conflict", "random_easy"),
         )
         for name, entry in spec.items():
             self.assertTrue(entry.get("emitter"), f"{name} has no declared emitter")

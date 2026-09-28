@@ -173,5 +173,57 @@ class FinalInferenceContractTests(unittest.TestCase):
             _resolve_final_inference_device(oversized, "cpu")
 
 
+class MinimalFlipSliceTests(unittest.TestCase):
+    """Isolated stress-slice metrics: twin P@R95, margins, donor uniformity."""
+
+    def test_precision_at_recall_uses_the_lowest_achieving_threshold(self):
+        from scripts.minimal_flip_slice import precision_at_recall
+
+        rep = precision_at_recall(
+            np.array([0.9, 0.8, 0.7, 0.1]), np.array([1, 1, 0, 0]), target=1.0,
+        )
+        # recall 1.0 first achieved at rank 1 (two positives on top)
+        self.assertEqual(rep["threshold"], 0.8)
+        self.assertAlmostEqual(rep["precision"], 1.0)
+        self.assertAlmostEqual(rep["recall"], 1.0)
+        rep = precision_at_recall(
+            np.array([0.9, 0.2, 0.8, 0.1]), np.array([1, 0, 1, 0]), target=0.5,
+        )
+        # ranked: 0.9(1), 0.8(1), 0.2(0), 0.1(0); recall 0.5 at rank 0
+        self.assertEqual(rep["threshold"], 0.9)
+        self.assertAlmostEqual(rep["precision"], 1.0)
+        self.assertAlmostEqual(rep["recall"], 0.5)
+
+    def test_precision_at_recall_without_positives_is_nan(self):
+        from scripts.minimal_flip_slice import precision_at_recall
+
+        rep = precision_at_recall(np.array([0.5, 0.2]), np.array([0, 0]))
+        self.assertTrue(np.isnan(rep["precision"]))
+
+    def test_donor_uniformity_names_the_dominant_value(self):
+        from scripts.minimal_flip_slice import donor_uniformity
+
+        payload = [
+            "cola flavor_lime volume_ml_500",
+            "cola flavor_coconut volume_ml_500",
+        ]
+        audits = [
+            {"donor_anchor_payload_idx": 0, "fields_hit": ["flavor"],
+             "target_mode": "swap_values"},
+            {"donor_anchor_payload_idx": 0, "fields_hit": ["flavor"],
+             "target_mode": "swap_values"},
+            {"donor_anchor_payload_idx": 1, "fields_hit": ["flavor"],
+             "target_mode": "counterfactual"},
+        ]
+        rep = donor_uniformity(audits, payload)
+        self.assertEqual(rep["draws"], 3)
+        self.assertEqual(rep["n_donor_rows"], 2)
+        self.assertAlmostEqual(rep["max_row_share"], 2 / 3)
+        flavor = rep["by_field"]["flavor"]
+        self.assertEqual(flavor["transplants"], 3)
+        self.assertAlmostEqual(flavor["max_value_share"], 2 / 3)
+        self.assertIn("flavor_lime", flavor["max_value_preview"])
+
+
 if __name__ == "__main__":
     unittest.main()

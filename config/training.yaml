@@ -28,6 +28,22 @@ masking:
   # Label-preserving agreed-field swaps (extra varied views, same labels).
   swap_agreed_frac: 0.50          # positives: swapped-surface copies per pair
   hard_negative_swap_frac: 0.50   # hard negatives: swapped-surface copies
+  # Static pre-training VALUE swaps (donor value transplant, coconut->lime).
+  # Positives: BOTH sides rewritten from an agreeing donor pair, so a match
+  # stays a match. Hard negatives: anchor side only, label 0 by identity.
+  # Donor tokens come from the corpus payload; nothing is invented and
+  # nothing is decided during training (no dynamic/per-presentation path).
+  swap_value_frac: 0.20               # positives: symmetric value-swap copies
+  hard_negative_swap_value_frac: 0.20 # hard negatives: anchor-side value swaps
+  # Counterfactual twins: minimal single-agreed-field flips of positive
+  # anchors, labeled 0 (a one-field break of a verified match cannot be the
+  # same product). Static, pre-training; joins the negative pool.
+  counterfactual_frac: 0.10         # share of positives minted as twin 0s
+  # Anti-dominance caps for the swap lanes: no one field takes more than
+  # ~1/3 of the picks (soft fallback), no one (field, value) transplant
+  # more than ~3% (hard skip — the transplant-footprint guard).
+  swap_max_field_share: 0.35
+  swap_max_value_share: 0.03
   # Diet contract (scripts/diet_manifest.py gates every bundle on these).
   diet_min_neg_aug_frac: 0.30     # negatives: augmented views / presentations
   diet_max_pos_neg_view_ratio: 1.50  # effective pos views / neg views ceiling

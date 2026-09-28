@@ -721,6 +721,17 @@ def _main_inner(_mlf, _wandb) -> None:
     # hard indexing — a missing key crashes per owner Q27).
     swap_agreed_frac = float(mask_cfg["swap_agreed_frac"])
     hard_negative_swap_frac = float(mask_cfg["hard_negative_swap_frac"])
+    # Static pre-training value swaps (donor transplant, symmetric for
+    # positives / anchor-side for hard negatives). Same hard indexing.
+    swap_value_frac = float(mask_cfg["swap_value_frac"])
+    hard_negative_swap_value_frac = float(mask_cfg["hard_negative_swap_value_frac"])
+    # Counterfactual twins: minimal agreed-field flips of positive anchors,
+    # labeled 0 into the negative pool. Same hard indexing.
+    counterfactual_frac = float(mask_cfg["counterfactual_frac"])
+    # Anti-dominance caps for the swap lanes (soft field cap, hard value
+    # cap). Same hard indexing.
+    swap_max_field_share = float(mask_cfg["swap_max_field_share"])
+    swap_max_value_share = float(mask_cfg["swap_max_value_share"])
 
     import torch
 
@@ -776,6 +787,18 @@ def _main_inner(_mlf, _wandb) -> None:
         data["pos"],
         data["neg"],
     )
+    # Entity keys for donor-disjointness (one per ORIGINAL payload row;
+    # augmentation copies inherit via audit lineage, so this never grows).
+    # Same GTIN space on both sides: df rows carry barcodes, canonical rows
+    # carry GTINs, and zero-padding is normalized away (UPC-12 vs EAN-13
+    # length variants collide). Unmapped/empty values get unique per-row
+    # keys and never block each other.
+    from training.masking import normalize_entity_key as _entity_key
+
+    entity_keys = [
+        _entity_key(str(row_bc[idx]).strip() if idx < len(row_bc) else "", f"row:{idx}")
+        for idx in range(len(payload))
+    ]
     targeted_attribute_neg = np.asarray(
         data.get("targeted_attribute_neg", np.empty((0, 2), dtype=int)),
         dtype=int,
@@ -926,6 +949,7 @@ def _main_inner(_mlf, _wandb) -> None:
             augment_hard_negatives,
             augment_positives,
             augment_swapped_agreed,
+            augment_value_swaps,
         )
 
         n_pre_mask_pos = len(pos)
@@ -945,7 +969,25 @@ def _main_inner(_mlf, _wandb) -> None:
             pool_size=n_pre_mask_pos,
         )
         mask_audit.extend(swap_audit)
-        if n_added + n_swap_added:
+        # Static value swaps (coconut -> lime) sample the same ORIGINAL
+        # prefix. Positives are rewritten on BOTH sides from an agreeing
+        # donor pair, so a match stays a match; each such audit appends TWO
+        # payload rows (anchor copy + counterpart copy).
+        pos, payload, row_bc, n_value_added, value_audit = augment_value_swaps(
+            pos,
+            payload,
+            row_bc,
+            frac=swap_value_frac,
+            seed=SEED + 3,
+            population="positive",
+            pool_size=n_pre_mask_pos,
+            symmetric=True,
+            entity_keys=entity_keys,
+            max_field_share=swap_max_field_share,
+            max_value_share=swap_max_value_share,
+        )
+        mask_audit.extend(value_audit)
+        if n_added + n_swap_added + n_value_added:
             structured_features = np.vstack(
                 [
                     structured_features,
@@ -955,6 +997,21 @@ def _main_inner(_mlf, _wandb) -> None:
                     ),
                 ]
             )
+            symmetric_pair_rows = [
+                int(row["pair_payload_idx"])
+                for row in mask_audit
+                if row.get("copy_pair_payload_idx") is not None
+            ]
+            if symmetric_pair_rows:
+                structured_features = np.vstack(
+                    [
+                        structured_features,
+                        np.asarray(
+                            [structured_features[idx] for idx in symmetric_pair_rows],
+                            dtype=np.float32,
+                        ),
+                    ]
+                )
         if len(structured_features) != len(payload):
             raise RuntimeError(
                 "structured feature/payload length mismatch after masking: "
@@ -976,11 +1033,12 @@ def _main_inner(_mlf, _wandb) -> None:
         # the MIDPOINT of the config extent band (masking.mask_lo..
         # mask_hi), derived here so a band change can never leave the
         # buckets misaligned with the distribution (was inline 0.10).
-        # Swap-agreed copies carry realized_extent 0.0 by construction (no
-        # token was masked), so they are excluded from the extent halves —
-        # the full audit (masked + swapped) is what the visibility CSV keeps.
+        # Swap copies carry no masked extent (agreed: 0.0 by construction;
+        # values: replaced-fraction, a different quantity), so both swap
+        # modes are excluded from the extent halves — the full audit
+        # (masked + swapped) is what the visibility CSV keeps.
         _mid = (float(mask_cfg["mask_lo"]) + float(mask_cfg["mask_hi"])) / 2.0
-        _ma_masked = _ma[_ma.target_mode != "swap_agreed"] if len(_ma) else _ma
+        _ma_masked = _ma[~_ma.target_mode.isin(["swap_agreed", "swap_values"])] if len(_ma) else _ma
         if len(_ma_masked):
             _hi = _ma_masked[_ma_masked.realized_extent >= _mid]
             _lo = _ma_masked[_ma_masked.realized_extent < _mid]
@@ -1009,15 +1067,22 @@ def _main_inner(_mlf, _wandb) -> None:
                 f"(frac={swap_agreed_frac:.0%}, label-preserving)",
                 flush=True,
             )
+        if n_value_added:
+            print(
+                f"[masking] +{n_value_added:,} swap-values positives "
+                f"(frac={swap_value_frac:.0%}, symmetric donor transplant)",
+                flush=True,
+            )
 
         # ── negative augmentation (bundle path; labels stay 0) ──
         # Random-band masks (config hard-negative extent band) plus
-        # agreed-surface swaps, both sampled from the ORIGINAL negative
-        # prefix only (pool_size = pre-augmentation neg count), so swaps
-        # never compound on masked copies. New rows join BOTH neg and
-        # train_neg with an "<source>+aug" provenance label; the payload /
-        # structured tail grows with the anchor rows. Labels and the loss
-        # mapping are untouched: every copy stays label 0.
+        # agreed-surface swaps plus anchor-side value swaps, all sampled
+        # from the ORIGINAL negative prefix only (pool_size = pre-
+        # augmentation neg count), so nothing compounds on masked copies.
+        # New rows join BOTH neg and train_neg with an "<source>+aug"
+        # provenance label; the payload / structured tail grows with the
+        # anchor rows. Labels and the loss mapping are untouched: every
+        # copy stays label 0.
         n_pre_mask_neg = len(neg)
         _neg_pair_source = {
             (int(a), int(b)): str(s)
@@ -1039,7 +1104,20 @@ def _main_inner(_mlf, _wandb) -> None:
             population="hard_negative",
             pool_size=n_pre_mask_neg,
         )
-        _neg_new_audit = _neg_mask_audit + _neg_swap_audit
+        neg, payload, row_bc, n_neg_value_added, _neg_value_audit = augment_value_swaps(
+            neg,
+            payload,
+            row_bc,
+            frac=hard_negative_swap_value_frac,
+            seed=SEED + 4,
+            population="hard_negative",
+            pool_size=n_pre_mask_neg,
+            symmetric=False,
+            entity_keys=entity_keys,
+            max_field_share=swap_max_field_share,
+            max_value_share=swap_max_value_share,
+        )
+        _neg_new_audit = _neg_mask_audit + _neg_swap_audit + _neg_value_audit
         if _neg_new_audit:
             train_neg = neg
             _aug_sources = np.array(
@@ -1067,6 +1145,57 @@ def _main_inner(_mlf, _wandb) -> None:
                 ]
             )
         hard_negative_mask_audit.extend(_neg_new_audit)
+        # ── counterfactual twins (minimal-flip negatives from positives) ──
+        # Sampled from the SAME original positive prefix (pool_size =
+        # n_pre_mask_pos), so twins never compound on masked/swapped copies.
+        # Each twin breaks exactly one previously-agreed field and is labeled
+        # 0 by construction; twins join BOTH neg and train_neg with a
+        # "counterfactual" provenance label (registered in the datapoint
+        # population spec, so coverage stays exact).
+        from training.masking import augment_counterfactual_twins as _aug_cf
+
+        _cf_pos_len = len(pos)
+        _cf_full, payload, row_bc, n_cf_added, _cf_audit = _aug_cf(
+            pos,
+            payload,
+            row_bc,
+            frac=counterfactual_frac,
+            seed=SEED + 5,
+            pool_size=n_pre_mask_pos,
+            entity_keys=entity_keys,
+            max_field_share=swap_max_field_share,
+            max_value_share=swap_max_value_share,
+        )
+        _cf_new = np.asarray(_cf_full, dtype=int)[_cf_pos_len:]
+        if n_cf_added:
+            if len(_cf_new) != n_cf_added:
+                raise RuntimeError(
+                    "counterfactual twin row accounting did not close: "
+                    f"{len(_cf_new)} != {n_cf_added}"
+                )
+            neg = np.vstack([neg, _cf_new])
+            train_neg = np.vstack([train_neg, _cf_new])
+            _cf_sources = np.full(n_cf_added, "counterfactual", dtype=object)
+            neg_sources = np.concatenate([neg_sources, _cf_sources])
+            train_neg_sources = np.concatenate([train_neg_sources, _cf_sources])
+            structured_features = np.vstack(
+                [
+                    structured_features,
+                    np.asarray(
+                        [
+                            structured_features[int(row["anchor_payload_idx"])]
+                            for row in _cf_audit
+                        ],
+                        dtype=np.float32,
+                    ),
+                ]
+            )
+            hard_negative_mask_audit.extend(_cf_audit)
+            print(
+                f"[masking] +{n_cf_added:,} counterfactual twins "
+                f"(frac={counterfactual_frac:.0%}, agreed-field flip, label=0)",
+                flush=True,
+            )
         if len(structured_features) != len(payload):
             raise RuntimeError(
                 "structured feature/payload length mismatch after negative "
@@ -1078,12 +1207,14 @@ def _main_inner(_mlf, _wandb) -> None:
                 f"eval={len(neg_sources)}/{len(neg)} "
                 f"train={len(train_neg_sources)}/{len(train_neg)}"
             )
-        if n_neg_added + n_neg_swap_added:
+        if n_neg_added + n_neg_swap_added + n_neg_value_added:
             print(
                 f"[masking] +{n_neg_added:,} masked hard negatives "
                 f"(frac={mask_hard_negative_frac:.0%}) "
                 f"+{n_neg_swap_added:,} swap-agreed hard negatives "
-                f"(frac={hard_negative_swap_frac:.0%}, label=0)",
+                f"(frac={hard_negative_swap_frac:.0%}, label=0) "
+                f"+{n_neg_value_added:,} swap-values hard negatives "
+                f"(frac={hard_negative_swap_value_frac:.0%}, label=0)",
                 flush=True,
             )
 
@@ -1239,6 +1370,8 @@ def _main_inner(_mlf, _wandb) -> None:
         )
     balance_train_classes = bool(load_config()["pairs"]["balance_train_classes"])
     n_class_balance_shortfall = 0
+    n_class_balance_discarded_base = 0
+    n_class_balance_discarded_aug = 0
     if balance_train_classes:
         target = len(pos)
         if target and not len(train_neg):
@@ -1246,7 +1379,8 @@ def _main_inner(_mlf, _wandb) -> None:
                 "class balancing requested but no training negatives are available"
             )
         if target:
-            rng = np.random.default_rng(SEED + 91_003)
+            from training.training import select_balanced_negatives
+
             # WITHOUT replacement (defect fix, measured at live scale): this
             # sampler used to draw `replace=len(train_neg) < target`, padding a
             # short negative pool by DUPLICATING rows — 7,952 of 11,686 train
@@ -1257,16 +1391,30 @@ def _main_inner(_mlf, _wandb) -> None:
             # is not new data: it silently re-weights one pair. The pool is now
             # kept WHOLE when it is smaller than the positive class, and the
             # shortfall is reported as its own number instead.
-            size = min(target, len(train_neg))
-            n_class_balance_shortfall = target - int(size)
-            selected = rng.choice(len(train_neg), size=size, replace=False)
-            train_neg = train_neg[selected]
-            train_neg_sources = train_neg_sources[selected]
+            # Base-first retention (2026-09-28): augmented copies are trimmed
+            # before real base pairs, so the 1.000 ratio never costs organic
+            # data. Discards are counted by kind, not hidden.
+            neg_copy_anchors = {
+                int(row["copy_payload_idx"])
+                for row in hard_negative_mask_audit
+                if row.get("copy_payload_idx") is not None
+            }
+            train_neg, train_neg_sources, n_disc_base, n_disc_aug = (
+                select_balanced_negatives(
+                    train_neg, train_neg_sources, neg_copy_anchors,
+                    target, SEED + 91_003,
+                )
+            )
+            n_class_balance_discarded_base = int(n_disc_base)
+            n_class_balance_discarded_aug = int(n_disc_aug)
+            n_class_balance_shortfall = max(0, target - len(train_neg))
         print(
             f"[class-balance] training positives={len(pos):,} "
             f"negatives={len(train_neg):,} ratio="
             f"{len(train_neg) / max(len(pos), 1):.3f} "
             f"(without replacement; unavailable rows={n_class_balance_shortfall:,}, "
+            f"discarded_base={n_class_balance_discarded_base:,}, "
+            f"discarded_aug={n_class_balance_discarded_aug:,}, "
             "duplicated rows=0)",
             flush=True,
         )
@@ -1298,6 +1446,8 @@ def _main_inner(_mlf, _wandb) -> None:
             "balance_train_classes": balance_train_classes,
             "n_class_balance_shortfall": int(n_class_balance_shortfall),
             "n_class_balance_duplicated_rows": 0,
+            "n_class_balance_discarded_base": int(n_class_balance_discarded_base),
+            "n_class_balance_discarded_aug": int(n_class_balance_discarded_aug),
             "n_training_positive_pairs": int(len(pos)),
             "n_training_negative_pairs": int(len(train_neg)),
         }

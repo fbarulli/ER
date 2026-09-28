@@ -103,9 +103,15 @@ NO_ADDED_SUGAR_RE = re.compile(
 SUGAR_CLAIM_RE = re.compile(
     r"\b(?:with added sugar|contains sugar|sweetened with sugar|"
     r"made with sugar(?!\s+free\b)|sweetener sugar|sugar sweetened|"
-    r"real sugar|pure sugar|low in sugar|reduced in sugar|"
-    r"reduced in calories and sugar)\b"
+    r"real sugar|pure sugar)\b"
 )
+# NOTE (audit 2026-09-28): "low in sugar", "reduced in sugar" and
+# "reduced in calories and sugar" are deliberately NOT sugar claims.
+# They have dedicated sweetening states (core.sweetener_values:
+# low_sugar / reduced_sugar). Mapping a reduction to the positive
+# `sugar` class manufactures a both-states contradiction on genuinely
+# low-sugar products (e.g. "low in sugar" + a no_sugar declaration),
+# and sweetener_conflict() then flags a false positive-vs-diet clash.
 
 
 def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
@@ -142,7 +148,12 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     carbonation: set[str] = set()
     if non_carbonated or re.search(r"\bstill\b", text):
         carbonation.add("still")
-    if re.search(r"\b(?:carbonated|sparkling|fizzy|soda(?: pop)?)\b", carbonation_text):
+    # NOTE (audit 2026-09-28): only the unambiguous "soda pop" is a
+    # carbonation claim. Bare "soda" over-fires on still juices ("Sunny
+    # Delight ... soda" declares Carbonization: still) and on syrups
+    # ("Snow Cone Syrup ... soda"), and a false carbonated claim becomes a
+    # false hard_no gate label. Bare soda stays a review candidate.
+    if re.search(r"\b(?:carbonated|sparkling|fizzy|soda pop)\b", carbonation_text):
         carbonation.add("carbonated")
     if re.search(r"\beffervescent\b", carbonation_text) and not re.search(
         r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b", carbonation_text

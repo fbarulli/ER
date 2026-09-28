@@ -165,6 +165,14 @@ DATAPOINT_POPULATION_SPEC: dict[str, dict[str, object]] = {
         "role": "negative_source",
         "dynamic": False,
     },
+    # Counterfactual twins (train.py: np.full(len(cf_pairs),
+    # "counterfactual")). Minimal single-agreed-field flips of positive
+    # anchors, labeled 0 by construction and appended to the negative pool.
+    "counterfactual": {
+        "emitter": "training.train: counterfactual twin minting + training.masking.augment_counterfactual_twins",
+        "role": "negative_source",
+        "dynamic": False,
+    },
     "attribute_conflict": {
         "emitter": "training.train: np.full(len(_attr_neg), 'attribute_conflict')",
         "role": "negative_source",
@@ -674,7 +682,13 @@ def _build_mnrl_training_triples(
     for audit in mask_audit or []:
         source_i = int(audit["anchor_payload_idx"])
         copy_i = int(audit["copy_payload_idx"])
-        positive_i = int(audit["pair_payload_idx"])
+        # Symmetric value swaps append a counterpart copy alongside the
+        # anchor copy: the copy's positive side is that counterpart copy,
+        # not the original pair side. Older audits lack the key and fall
+        # back to the original pair side.
+        positive_i = int(
+            audit.get("copy_pair_payload_idx") or audit["pair_payload_idx"]
+        )
         if (source_i, positive_i) not in train_positive_pairs:
             continue
         if (copy_i, positive_i) not in train_positive_pairs:
@@ -690,6 +704,26 @@ def _build_mnrl_training_triples(
         if negative_i is None:
             continue
         triple = (copy_i, positive_i, negative_i)
+        if triple not in seen:
+            seen.add(triple)
+            triples.append(triple)
+    # Counterfactual twins never survive the main loop above: a twin row is
+    # (copy, pair-side) with label 0, and its source's positive IS the pair
+    # side, so positive_i == negative_i skips it — silently dropping every
+    # twin from training (they would linger in eval/diet only). Twins train
+    # as explicit negatives of their own source: (source, pair-side, copy),
+    # i.e. "the original matches its canonical better than its one-flip
+    # twin". That is the counterfactual pressure; without this branch the
+    # twin lane mints evaluation rows that never see a gradient.
+    for audit in hard_negative_mask_audit or []:
+        if audit.get("target_mode") != "counterfactual":
+            continue
+        source_i = int(audit["anchor_payload_idx"])
+        copy_i = int(audit["copy_payload_idx"])
+        pair_i = int(audit["pair_payload_idx"])
+        if positive_by_anchor.get(source_i) != pair_i:
+            continue
+        triple = (source_i, pair_i, copy_i)
         if triple not in seen:
             seen.add(triple)
             triples.append(triple)
@@ -710,6 +744,58 @@ def _mnrl_shared_positive_barcode_rows(
     barcodes = [str(row_bc[positive]) for _, positive, _ in triples]
     counts = Counter(barcodes)
     return sum(counts[barcode] > 1 for barcode in barcodes)
+
+
+def select_balanced_negatives(
+    train_neg: np.ndarray,
+    train_neg_sources: np.ndarray,
+    neg_copy_anchors: set[int],
+    target: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, int, int]:
+    """Subsample negatives to ``target`` rows, keeping every base row first.
+
+    Augmented copies are trimmed before real base pairs — never the reverse:
+    a neat 1.000 ratio must not cost organic data. Only when the base pool
+    alone exceeds the target is the base itself trimmed (reported, not
+    silent). Deterministic in ``seed``. Returns (selected, sources,
+    n_discarded_base, n_discarded_aug).
+    """
+    pairs = np.asarray(train_neg, dtype=int).reshape(-1, 2)
+    sources = np.asarray(train_neg_sources, dtype=object)
+    if len(pairs) != len(sources):
+        raise ValueError("negative/source lengths differ")
+    if target < 0:
+        raise ValueError("balance target must be non-negative")
+    if target >= len(pairs):
+        return pairs, sources, 0, 0
+    rng = np.random.default_rng(seed)
+    base_idx = np.array(
+        [i for i, (a, _b) in enumerate(pairs) if int(a) not in neg_copy_anchors],
+        dtype=int,
+    )
+    aug_idx = np.array(
+        [i for i, (a, _b) in enumerate(pairs) if int(a) in neg_copy_anchors],
+        dtype=int,
+    )
+    if len(base_idx) > target:
+        keep_base = rng.choice(base_idx, size=target, replace=False)
+        keep_aug: np.ndarray = np.empty(0, dtype=int)
+    else:
+        keep_base = base_idx
+        need = target - len(keep_base)
+        keep_aug = (
+            rng.choice(aug_idx, size=min(need, len(aug_idx)), replace=False)
+            if need > 0 and len(aug_idx)
+            else np.empty(0, dtype=int)
+        )
+    keep = np.concatenate([keep_base, keep_aug])
+    return (
+        pairs[keep],
+        sources[keep],
+        int(len(base_idx) - len(keep_base)),
+        int(len(aug_idx) - len(keep_aug)),
+    )
 
 
 def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float):
@@ -4022,8 +4108,24 @@ def train_one_config(
                 shared_barcode_rows = _mnrl_shared_positive_barcode_rows(
                     triples, row_bc
                 )
+                # Twin exposure (point A watch-item): counterfactual copies
+                # share 90%+ tokens with their source positive, so their
+                # denominator pressure is the sharpest in the batch. Report
+                # the share every fold; gradient spikes in epochs 1-2 point
+                # here first. Existing guards: max_grad_norm=1.0,
+                # warmup_ratio=0.05, dev-AP early stopping, and ~63
+                # in-batch natural negatives per anchor at batch 64.
+                twin_copies = {
+                    int(audit["copy_payload_idx"])
+                    for audit in hard_negative_mask_audit or []
+                    if audit.get("target_mode") == "counterfactual"
+                    and audit.get("copy_payload_idx") is not None
+                }
+                twin_triples = sum(1 for _, _, n in triples if n in twin_copies)
                 print(
                     f"    [mnrl-pairs] triples={len(triples):,} | "
+                    f"twin_negatives={twin_triples:,} "
+                    f"({twin_triples / max(len(triples), 1):.1%}) | "
                     f"positive-GTIN repeat exposure={shared_barcode_rows:,} "
                     "(different texts may still share product identity)",
                     flush=True,
