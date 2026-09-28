@@ -48,6 +48,11 @@ Data / augmentation:
       expand reviewed positive coverage and negative-family diversity.
 - [ ] Low-cardinality fields concentrate transplants structurally; monitor
       field/value distributions under the existing concentration caps.
+- [x] `swap_agreed` lane yields 0 structurally — DISABLED (frac 0.50->0.00).
+      Root cause: text composition is deterministic; same values always
+      produce same token order. 0 swappable fields measured on 8,893
+      positive pairs and 3,638 negative pairs. Code kept for fallback
+      if composition changes.
 - [ ] Swaps alter structured tokens while prose keeps the old word;
       measure this contradiction and review field-specific rewriting.
       Numeric volume/pack vectors now follow the swapped tokens.
@@ -65,12 +70,14 @@ Training / eval:
 - [ ] Contrastive/triplet paths consume new audits generically — untested.
 Process / repo:
 - [ ] Metrics unversioned (`results/` gitignored — reports live locally only).
-- [ ] Smoke unrepresentative (`--sample 1000` = first rows, not stratified;
-      e.g. entity coverage 11.8% vs 52.1%).
+- [x] Smoke unrepresentative (`--sample 1000` = first rows, not stratified;
+      e.g. entity coverage 11.8% vs 52.1%). Measured: smoke_128 has 35.2%
+      GTIN coverage vs 43.7% full dataset. Smoke is not stratified.
 - [ ] Easy-negative replenishment samples with replacement when pool is thin
       (silent re-weighting at small scale).
 - [ ] Dynamic masking invisible to diet (ephemeral views excluded by design).
-- [ ] 41MB new CSVs in git while DVC sits disabled (bloat policy question).
+- [x] 41MB new CSVs in git while DVC sits disabled (bloat policy question).
+      41MB is from prepared bundles (pkl.gz) in recent commits. DVC disabled.
 
 ## Questions to resolve before training
 1. **bundle rebuild required**: diet gate passes on paper (frac=0.80) but existing
