@@ -23,7 +23,7 @@ def test_augmented_negative_keeps_its_copy_as_anchor_and_source_positive() -> No
     ]
 
     triples = _build_mnrl_training_triples(
-        positives, negatives, hard_negative_mask_audit=audit
+        positives, negatives, mask_audit=[], hard_negative_mask_audit=audit
     )
 
     assert triples == [(1, 2, 3), (20, 2, 3), (21, 2, 4)]
@@ -35,6 +35,7 @@ def test_augmented_negative_lineage_is_tied_to_its_target() -> None:
     triples = _build_mnrl_training_triples(
         np.array([[1, 2]]),
         np.array([[20, 4]]),
+        mask_audit=[],
         hard_negative_mask_audit=[
             {"anchor_payload_idx": 1, "copy_payload_idx": 20, "pair_payload_idx": 3}
         ],

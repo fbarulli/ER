@@ -765,7 +765,9 @@ class LaneBundleRequestTests(unittest.TestCase):
         return mock.Mock(**{**base, **overrides})
 
     def test_train_lane_uses_the_committed_checkout_bundle(self):
-        self.assertIsNone(colab._lane_bundle_request(self._args("train")))
+        self.assertIsNone(colab._lane_bundle_request(self._args(
+            "train", workers=1, sample=None, model=None, resume_run=None,
+        )))
 
     def test_dual_train_lane_uses_two_workers(self):
         request = colab._lane_bundle_request(self._args("dual-train"))
