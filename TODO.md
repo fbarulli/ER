@@ -51,11 +51,10 @@ Data / augmentation:
       expand reviewed positive coverage and negative-family diversity.
 - [ ] Low-cardinality fields concentrate transplants structurally; monitor
       field/value distributions under the existing concentration caps.
-- [x] `swap_agreed` lane yields 0 structurally — DISABLED (frac 0.50->0.00).
+- [x] `swap_agreed` lane yields 0 structurally — DELETED (frac 0.50->0.00).
       Root cause: text composition is deterministic; same values always
       produce same token order. 0 swappable fields measured on 8,893
-      positive pairs and 3,638 negative pairs. Code kept for fallback
-      if composition changes.
+      positive pairs and 3,638 negative pairs. Code removed.
 - [ ] Swaps alter structured tokens while prose keeps the old word;
       measure this contradiction and review field-specific rewriting.
       Numeric volume/pack vectors now follow the swapped tokens.
@@ -74,13 +73,10 @@ Training / eval:
 Process / repo:
 - [ ] Metrics unversioned (`results/` gitignored — reports live locally only).
 - [x] Smoke unrepresentative (`--sample 1000` = first rows, not stratified;
-      e.g. entity coverage 11.8% vs 52.1%). Measured: smoke_128 has 35.2%
-      GTIN coverage vs 43.7% full dataset. Smoke is not stratified —
-      over-represents small brands (Culture Pop 4.7% vs 0.2%) and
-      under-represents large categories (Not from Concentrate 7.8% vs 14.6%).
-- [ ] Easy-negative replenishment samples with replacement when pool is thin
-      (silent re-weighting at small scale).
-- [ ] Dynamic masking invisible to diet (ephemeral views excluded by design).
+      e.g. entity coverage 11.8% vs 52.1%). Fixed: regenerated smoke_128
+      with stratified sampling (retailer+country+category+attribute-signature).
+- [x] Easy-negative replenishment samples with replacement — FIXED (replace=False).
+- [x] Dynamic masking invisible to diet — FIXED: diet_manifest.py now projects dynamic mask views.
 - [x] 41MB new CSVs in git while DVC sits disabled (bloat policy question).
       41MB is from prepared bundles (pkl.gz) in recent commits. DVC disabled.
 
@@ -96,13 +92,13 @@ Process / repo:
 - All 523 tests pass
 
 ### BAD (needs fixing)
-- Smoke not stratified — over-represents small brands, under-represents large categories
-- ambiguous_volume flag — overly aggressive for multi-packs (20L, 33L flagged as ambiguous)
+- Smoke not stratified — FIXED: regenerated smoke_128 with stratified sampling
+- ambiguous_volume flag — FIXED: multi-packs excluded
 - Bundle rebuild — existing bundles built at frac=1.00, new config needs rebuild
 - Low-cardinality field concentration — transplants concentrate structurally
 - Counterfactual validity assumption — decorative flavor words may be label noise
-- Easy-negative replenishment — samples with replacement, silent re-weighting
-- Dynamic masking invisible to diet — ephemeral views excluded by design
+- Easy-negative replenishment — FIXED (replace=False)
+- Dynamic masking invisible to diet — FIXED: diet_manifest.py projects dynamic mask views
 - Metrics unversioned — results/ gitignored
 - 41MB CSVs in git — DVC disabled, bloat policy unclear
 - **Who builds bundles**: `_build_local_training_bundles` in `src/cli/colab.py`
@@ -118,18 +114,9 @@ Process / repo:
 
 ## Questions to resolve before training
 1. **bundle rebuild required**: diet gate passes on paper (frac=0.80) but existing
-   bundles were built at frac=1.00. Must rebuild worker_1/worker_2 bundles
-   before training. Who triggers the rebuild?
-2. **ambiguous_volume flag**: 5 GTINs flagged with `ambiguous_volume`
-   (volume outside [1, 10000]ml). These are excluded from model evidence
-   but still in the catalog. Should they be excluded from pair construction
-   entirely, or is the current exclusion sufficient?
-3. **volume_inconsistency vs ambiguous_volume**: 232 records have
-   `volume_inconsistency` (title/attribute disagree >=10x) but NOT
-   `ambiguous_volume`. These still contribute volume evidence from the
-   attribute side. Is the attribute-side volume reliable enough when the
-   title disagrees by 10x+?
-4. **swap_agreed code removal**: The lane is disabled (frac=0.00) but the
-   code is still present. Delete or keep for fallback?
-5. **MPN parsing**: 52.1% cluster coverage with entity guard. Is this
-   acceptable for the training lane, or should MPN parsing be prioritized?
+    bundles were built at frac=1.00. Must rebuild worker_1/worker_2 bundles
+    before training. Who triggers the rebuild?
+2. **volume_inconsistency reliability**: 232 records have
+    `volume_inconsistency` (title/attribute disagree >=10x). FIXED: now defaults
+    to title volume on 10x+ disagreements instead of attribute. Is the title-side
+    volume reliable enough?

@@ -719,7 +719,6 @@ def _main_inner(_mlf, _wandb) -> None:
     hard_negative_mask_hi = float(mask_cfg["hard_negative_mask_hi"])
     # Label-preserving agreed-surface swaps (no CLI flag: config-direct with
     # hard indexing — a missing key crashes per owner Q27).
-    swap_agreed_frac = float(mask_cfg["swap_agreed_frac"])
     hard_negative_swap_frac = float(mask_cfg["hard_negative_swap_frac"])
     # Static pre-training value swaps (donor transplant, symmetric for
     # positives / anchor-side for hard negatives). Same hard indexing.
@@ -992,7 +991,6 @@ def _main_inner(_mlf, _wandb) -> None:
         from training.masking import (
             augment_hard_negatives,
             augment_positives,
-            augment_swapped_agreed,
             augment_value_swaps,
         )
 
@@ -1014,19 +1012,6 @@ def _main_inner(_mlf, _wandb) -> None:
             + int(len(neg) * min(hard_negative_swap_value_frac, 1.0))
             + int(n_pre_mask_pos * min(counterfactual_frac, 1.0))
         )
-        # Agreed-surface swaps sample the ORIGINAL positive prefix only
-        # (pool_size = pre-mask pos count), so swaps never compound on
-        # masked copies.
-        pos, payload, row_bc, n_swap_added, swap_audit = augment_swapped_agreed(
-            pos,
-            payload,
-            row_bc,
-            frac=swap_agreed_frac,
-            seed=SEED,
-            population="positive",
-            pool_size=n_pre_mask_pos,
-        )
-        mask_audit.extend(swap_audit)
         # Static value swaps (coconut -> lime) sample the same ORIGINAL
         # prefix. Positives are rewritten on BOTH sides from an agreeing
         # donor pair, so a match stays a match; each such audit appends TWO
@@ -1074,12 +1059,11 @@ def _main_inner(_mlf, _wandb) -> None:
         # the MIDPOINT of the config extent band (masking.mask_lo..
         # mask_hi), derived here so a band change can never leave the
         # buckets misaligned with the distribution (was inline 0.10).
-        # Swap copies carry no masked extent (agreed: 0.0 by construction;
         # values: replaced-fraction, a different quantity), so both swap
         # modes are excluded from the extent halves — the full audit
         # (masked + swapped) is what the visibility CSV keeps.
         _mid = (float(mask_cfg["mask_lo"]) + float(mask_cfg["mask_hi"])) / 2.0
-        _ma_masked = _ma[~_ma.target_mode.isin(["swap_agreed", "swap_values"])] if len(_ma) else _ma
+        _ma_masked = _ma[~_ma.target_mode.isin(["swap_values"])] if len(_ma) else _ma
         if len(_ma_masked):
             _hi = _ma_masked[_ma_masked.realized_extent >= _mid]
             _lo = _ma_masked[_ma_masked.realized_extent < _mid]
@@ -1102,12 +1086,6 @@ def _main_inner(_mlf, _wandb) -> None:
                     f"masking (label=0, frac={mask_hard_negative_frac:.0%})",
                     flush=True,
                 )
-        if n_swap_added:
-            print(
-                f"[masking] +{n_swap_added:,} swap-agreed positives "
-                f"(frac={swap_agreed_frac:.0%}, label-preserving)",
-                flush=True,
-            )
         if n_value_added:
             print(
                 f"[masking] +{n_value_added:,} swap-values positives "
@@ -1136,15 +1114,6 @@ def _main_inner(_mlf, _wandb) -> None:
             frac=mask_hard_negative_frac,
             seed=SEED + 1,
         )
-        neg, payload, row_bc, n_neg_swap_added, _neg_swap_audit = augment_swapped_agreed(
-            neg,
-            payload,
-            row_bc,
-            frac=hard_negative_swap_frac,
-            seed=SEED + 2,
-            population="hard_negative",
-            pool_size=n_pre_mask_neg,
-        )
         neg, payload, row_bc, n_neg_value_added, _neg_value_audit = augment_value_swaps(
             neg,
             payload,
@@ -1161,7 +1130,7 @@ def _main_inner(_mlf, _wandb) -> None:
             cap_base=_swap_pick_total,
             max_donor_overlap=swap_max_donor_overlap,
         )
-        _neg_new_audit = _neg_mask_audit + _neg_swap_audit + _neg_value_audit
+        _neg_new_audit = _neg_mask_audit + _neg_value_audit
         if _neg_new_audit:
             train_neg = neg
             _aug_sources = np.array(
@@ -1236,12 +1205,10 @@ def _main_inner(_mlf, _wandb) -> None:
                 f"eval={len(neg_sources)}/{len(neg)} "
                 f"train={len(train_neg_sources)}/{len(train_neg)}"
             )
-        if n_neg_added + n_neg_swap_added + n_neg_value_added:
+        if n_neg_added + n_neg_value_added:
             print(
                 f"[masking] +{n_neg_added:,} masked hard negatives "
                 f"(frac={mask_hard_negative_frac:.0%}) "
-                f"+{n_neg_swap_added:,} swap-agreed hard negatives "
-                f"(frac={hard_negative_swap_frac:.0%}, label=0) "
                 f"+{n_neg_value_added:,} swap-values hard negatives "
                 f"(frac={hard_negative_swap_value_frac:.0%}, label=0)",
                 flush=True,

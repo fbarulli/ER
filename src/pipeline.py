@@ -370,8 +370,24 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         attribute
     )
 
-    # Combine: prefer attribute if present
-    if attr_vol > 0:
+    # Combine: prefer attribute if present, but default to title when
+    # the two disagree by 10x+ (title misparses "0, 33l" as 33000ml
+    # vs attribute 330ml — the title is the correct unit here).
+    title_vol = float(vol_title["volume_ml"] or 0.0)
+    if attr_vol > 0 and title_vol > 0:
+        ratio = max(attr_vol, title_vol) / min(attr_vol, title_vol)
+        if ratio >= 10.0:
+            volume_ml = title_vol
+            volume_conf = vol_title["confidence"]
+            volume_raw = vol_title["raw_match"]
+            volume_status = vol_title["parse_status"]
+            consistency_flags.add("volume_inconsistency")
+        else:
+            volume_ml = attr_vol
+            volume_conf = attr_vol_conf
+            volume_raw = f"attribute: {attr_vol}"
+            volume_status = "attribute_volume"
+    elif attr_vol > 0:
         volume_ml = attr_vol
         volume_conf = attr_vol_conf
         volume_raw = f"attribute: {attr_vol}"
@@ -381,38 +397,23 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         volume_conf = vol_title["confidence"]
         volume_raw = vol_title["raw_match"]
         volume_status = vol_title["parse_status"]
-    # Volume anomaly reconciliation (audit 2026-09-28): when title and
-    # attribute BOTH parse but disagree by an order of magnitude or more
-    # ("330cl" title read as 3300ml vs a 330ml Volume attribute; "1.000 ml"
-    # European decimal read as 1ml vs 1000ml), the attribute value wins as
-    # before — but the disagreement is now recorded instead of silent. The
-    # flag travels in attribute_consistency_flags to the canonical record,
-    # so `"volume_inconsistency" in flags` IS the boolean metadata flag for
-    # downstream model/logger tracking of text-attribute noise. Measured:
-    # 197 of 37,573 both-present rows (0.5%). Text-neutral: volume_ml itself
-    # never changes here.
-    title_vol = float(vol_title["volume_ml"] or 0.0)
-    if (
-        attr_vol > 0
-        and title_vol > 0
-        and max(attr_vol, title_vol) / min(attr_vol, title_vol) >= 10.0
-    ):
-        consistency_flags.add("volume_inconsistency")
-    # Sanity bounds (audit 2026-09-28): vendor tables swap fields and drop
-    # decimals, so an out-of-range winner is not auto-trusted blindly.
-    # Canonical distribution: p99 = 2,500ml, 27/12,621 rows above 5,000ml
-    # (bulk formats), max 25,000ml. Outside [1, 10000]ml the value is kept
-    # (no payload churn — volume_ml never changes here) but escalated to
-    # ambiguous_volume so downstream stops treating it as resolved.
-    if volume_ml > 0 and not 1.0 <= volume_ml <= 10000.0:
-        consistency_flags.add("ambiguous_volume")
-
+    # Pack qty resolved early for ambiguous_volume check
     if attr_pack > 1 or attr_pack_conf > 0:
         pack_qty = attr_pack
         pack_conf = attr_pack_conf
     else:
         pack_qty = pack_title
         pack_conf = pack_conf_title
+    # Sanity bounds (audit 2026-09-28): vendor tables swap fields and drop
+    # decimals, so an out-of-range winner is not auto-trusted blindly.
+    # Canonical distribution: p99 = 2,500ml, 27/12,621 rows above 5,000ml
+    # (bulk formats), max 25,000ml. Outside [1, 10000]ml the value is kept
+    # (no payload churn — volume_ml never changes here) but escalated to
+    # ambiguous_volume so downstream stops treating it as resolved.
+    # Multi-packs (pack_qty > 1) are excluded: their total volume is
+    # legitimate (e.g. 10 x 20L = 20000ml), not ambiguous.
+    if volume_ml > 0 and not 1.0 <= volume_ml <= 10000.0 and not (pack_qty and pack_qty > 1):
+        consistency_flags.add("ambiguous_volume")
 
     # BOUNDARY CONTRACT (lib.schemas): the extracted-attribute dict is the
     # input to BOTH the canonical build and the gate — validate the shape

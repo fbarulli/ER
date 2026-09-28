@@ -921,7 +921,6 @@ class MaskingSpec(BaseModel):
     # Label-preserving agreed-field swaps (anchor takes the counterpart's
     # surface form where parsed values agree): extra varied views per pair
     # without touching the label. Separate fracs per population.
-    swap_agreed_frac: float = Field(ge=0.0, le=1.0)
     hard_negative_swap_frac: float = Field(ge=0.0, le=1.0)
     # Static pre-training VALUE swaps (training.masking.augment_value_swaps):
     # a structured value is transplanted from a real donor pair (coconut ->
@@ -987,7 +986,6 @@ class MaskingProfileSpec(BaseModel):
     hard_negative_mask_hi: float | None = Field(default=None, gt=0.0, le=1.0)
     track_visibility: bool | None = None
     track_per_epoch: bool | None = None
-    swap_agreed_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     hard_negative_swap_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     swap_value_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     hard_negative_swap_value_frac: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -2199,14 +2197,12 @@ class MaskAuditEntry(BaseModel):
     masked_text: str
     population: str = "positive"
     # HOW the copy was produced: "random" (uniform token masking),
-    # "targeted" (field-group drop masking), "swap_agreed" (counterpart
-    # surface-form swap on agreed fields — label-preserving by
-    # construction), "swap_values" (donor value transplant: positives
-    # rewritten on both sides from an agreeing donor pair, hard negatives
-    # on the anchor side only — label-safe by match agreement and by
-    # canonical identity respectively), "counterfactual" (one agreed field
-    # flipped on a positive anchor, labeled 0 by construction).
-    # Pre-targeting rows carry the default "random".
+    # "targeted" (field-group drop masking), "swap_values" (donor value
+    # transplant: positives rewritten on both sides from an agreeing donor
+    # pair, hard negatives on the anchor side only — label-safe by match
+    # agreement and by canonical identity respectively), "counterfactual"
+    # (one agreed field flipped on a positive anchor, labeled 0 by
+    # construction). Pre-targeting rows carry the default "random".
     target_mode: str = "random"
     # Structured field groups actually masked/swapped in this copy
     # (e.g. ["volume"]). Empty when no structured token was touched —

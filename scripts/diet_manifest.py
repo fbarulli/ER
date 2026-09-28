@@ -18,6 +18,7 @@ Exit 0 PASS, exit 2 FAIL naming the exact violated threshold.
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -37,6 +38,21 @@ def project_train_time_neg_views(
     return base + int(math.ceil(base * float(ratio_to_hard)))
 
 
+def project_dynamic_mask_views(
+    neg_views: int,
+    *,
+    mask_hard_negatives: bool,
+    hard_negative_frac: float,
+) -> int:
+    """Project dynamic per-presentation negative mask views at training time.
+
+    These are NOT in the bundle (created each epoch), so the diet gate
+    must add them to see the true training-time view count."""
+    if not mask_hard_negatives or hard_negative_frac <= 0.0 or neg_views <= 0:
+        return neg_views
+    return neg_views + int(math.ceil(neg_views * hard_negative_frac))
+
+
 def _mode(row: dict) -> str:
     """Audit target_mode with the pre-swap default ('random')."""
     return str(row.get("target_mode") or "random")
@@ -49,6 +65,8 @@ def main(argv: list[str]) -> int:
     masking = load_config()["masking"]
     diet_min_neg_aug_frac = float(masking["diet_min_neg_aug_frac"])
     diet_max_pos_neg_view_ratio = float(masking["diet_max_pos_neg_view_ratio"])
+    mask_hard_negatives = bool(masking["mask_hard_negatives"])
+    hard_negative_frac = float(masking["hard_negative_frac"])
 
     manifest, data = load_prepared_bundle(Path(argv[1]))
     pos = data["pos"]
@@ -70,10 +88,16 @@ def main(argv: list[str]) -> int:
     loss = str(training_cfg["loss"])
     easy_enabled = bool(easy_cfg["enabled"])
     easy_ratio = float(easy_cfg["ratio_to_hard"])
-    # Easy negatives are absent from the bundle and may fail to materialize;
-    # including the full quota here makes the exposure test conservative.
-    neg_presentations = project_train_time_neg_views(
-        len(train_neg), enabled=easy_enabled, ratio_to_hard=easy_ratio, loss=loss
+    # Dynamic masking creates per-presentation views at training time
+    # that are not in the bundle. Project them into the view counts
+    # so the diet gate sees the true training-time ratio.
+    projected_neg_views = project_dynamic_mask_views(
+        neg_views,
+        mask_hard_negatives=mask_hard_negatives,
+        hard_negative_frac=hard_negative_frac,
+    )
+    projected_neg_presentations = project_train_time_neg_views(
+        projected_neg_views, enabled=easy_enabled, ratio_to_hard=easy_ratio, loss=loss
     )
     pos_base = pos_views - len(mask_audit)
     neg_base = int(len(neg)) - len(neg_audit)
@@ -105,24 +129,21 @@ def main(argv: list[str]) -> int:
     for mode in sorted(neg_modes):
         print(f"hard_negative  {mode:<11} {neg_modes[mode]:,}", flush=True)
     print(
-        f"presentations  projected    {neg_presentations:,} "
-        f"(pos_views={pos_views:,}, neg_views={neg_views:,})",
+        f"presentations  projected    {projected_neg_presentations:,} "
+        f"(pos_views={pos_views:,}, neg_views={projected_neg_views:,})",
         flush=True,
     )
 
     failures: list[str] = []
     neg_aug_frac = (
-        neg_aug_views / neg_presentations if neg_presentations else float("nan")
+        neg_aug_views / projected_neg_presentations if projected_neg_presentations else float("nan")
     )
-    pos_neg_ratio = pos_views / neg_views if neg_views else float("nan")
-    effective_ratio = pos_views / neg_views if neg_views else float("nan")
-    projected_neg_views = project_train_time_neg_views(
-        neg_views, enabled=easy_enabled, ratio_to_hard=easy_ratio, loss=loss
-    )
-    neg_ok = neg_presentations > 0 and neg_aug_frac >= diet_min_neg_aug_frac
-    ratio_ok = neg_views > 0 and effective_ratio <= diet_max_pos_neg_view_ratio
+    pos_neg_ratio = pos_views / projected_neg_views if projected_neg_views else float("nan")
+    effective_ratio = pos_views / projected_neg_views if projected_neg_views else float("nan")
+    neg_ok = projected_neg_presentations > 0 and neg_aug_frac >= diet_min_neg_aug_frac
+    ratio_ok = projected_neg_views > 0 and effective_ratio <= diet_max_pos_neg_view_ratio
     print(
-        f"[diet] neg_aug_views={neg_aug_views:,} / neg_presentations={neg_presentations:,} "
+        f"[diet] neg_aug_views={neg_aug_views:,} / neg_presentations={projected_neg_presentations:,} "
         f"= {neg_aug_frac:.4f} >= diet_min_neg_aug_frac={diet_min_neg_aug_frac:.4f} "
         f"{'OK' if neg_ok else 'FAIL'}",
         flush=True,
@@ -134,8 +155,9 @@ def main(argv: list[str]) -> int:
     )
     print(
         f"[diet] projected_neg_views={projected_neg_views:,} "
-        f"(contrastive-only easy quota x{easy_ratio:g}, enabled={easy_enabled}, loss={loss}; "
-        "projection is not guaranteed)",
+        f"(easy quota x{easy_ratio:g}, enabled={easy_enabled}, loss={loss}; "
+        f"dynamic mask frac={hard_negative_frac:g}, enabled={mask_hard_negatives}; "
+        "projections are not guaranteed)",
         flush=True,
     )
     if not neg_ok:
