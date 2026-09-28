@@ -18,8 +18,12 @@
       donor uniformity, subset distance split.
 
 ## In progress
-- [ ] Diet gate + slice baseline on smoke probe4 (caps build).
-- [ ] Full test-suite regression sweep.
+- [x] Diet gate + slice baseline on smoke probe5 (caps build): PASS.
+- [x] Full test-suite regression sweep: 485 passed, 7 pre-existing fails
+      (verified identical on clean tree).
+- [x] Shared cross-lane donor-value counter (footprint cap binds bundle).
+
+## Next
 
 ## Next
 - [ ] Rebuild full prepared bundles (regex fix + new lanes stale them).

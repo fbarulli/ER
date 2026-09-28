@@ -447,6 +447,8 @@ def augment_value_swaps(
     entity_keys: list[str] | None = None,
     max_field_share: float | None = None,
     max_value_share: float | None = None,
+    shared_value_counts: Counter[tuple[str, tuple[str, ...]]] | None = None,
+    cap_base: int | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Append copies whose structured VALUE was transplanted from a donor pair.
 
@@ -528,9 +530,19 @@ def augment_value_swaps(
     from collections import Counter
 
     used_fields: Counter[str] = Counter()
-    used_values: Counter[tuple[str, tuple[str, ...]]] = Counter()
-    field_cap = max(1, math.ceil(max_field_share * n_pick)) if max_field_share else None
-    value_cap = max(1, math.ceil(max_value_share * n_pick)) if max_value_share else None
+    # Value counts may be shared across lanes (pos swaps, neg swaps, twins)
+    # so the footprint cap binds the whole bundle, not one call. The caller
+    # owns the object and passes the same one to every lane, in fixed order
+    # — deterministic. A per-call Counter otherwise.
+    used_values = (
+        shared_value_counts if shared_value_counts is not None else Counter()
+    )
+    # Caps bind the caller's pick total (cap_base) when lanes share
+    # counters, so one global budget covers the whole bundle;
+    # otherwise they bind this call's own picks.
+    _base = int(cap_base) if cap_base else n_pick
+    field_cap = max(1, math.ceil(max_field_share * _base)) if max_field_share else None
+    value_cap = max(1, math.ceil(max_value_share * _base)) if max_value_share else None
     extra = []
     for i in picked:
         a, b = int(pairs[i][0]), int(pairs[i][1])
@@ -646,6 +658,8 @@ def augment_counterfactual_twins(
     entity_keys: list[str] | None = None,
     max_field_share: float | None = None,
     max_value_share: float | None = None,
+    shared_value_counts: Counter[tuple[str, tuple[str, ...]]] | None = None,
+    cap_base: int | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Mint minimal-flip negatives from positive pairs: (A1', A2) labeled 0.
 
@@ -703,9 +717,15 @@ def augment_counterfactual_twins(
     from collections import Counter
 
     used_fields: Counter[str] = Counter()
-    used_values: Counter[tuple[str, tuple[str, ...]]] = Counter()
-    field_cap = max(1, math.ceil(max_field_share * n_pick)) if max_field_share else None
-    value_cap = max(1, math.ceil(max_value_share * n_pick)) if max_value_share else None
+    used_values = (
+        shared_value_counts if shared_value_counts is not None else Counter()
+    )
+    # Caps bind the caller's pick total (cap_base) when lanes share
+    # counters, so one global budget covers the whole bundle;
+    # otherwise they bind this call's own picks.
+    _base = int(cap_base) if cap_base else n_pick
+    field_cap = max(1, math.ceil(max_field_share * _base)) if max_field_share else None
+    value_cap = max(1, math.ceil(max_value_share * _base)) if max_value_share else None
     extra = []
     for i in picked:
         a, b = int(pairs[i][0]), int(pairs[i][1])

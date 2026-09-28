@@ -956,6 +956,20 @@ def _main_inner(_mlf, _wandb) -> None:
         pos, payload, row_bc, n_added, mask_audit = augment_positives(
             pos, payload, row_bc, frac=args.mask_frac, mask_prob=mask_prob, seed=SEED
         )
+        # One shared donor-value counter across all three swap lanes, passed
+        # in fixed call order (pos values, neg values, twins): the footprint
+        # cap binds the whole bundle, not one lane. The cap budget is the
+        # three lanes' combined picks, so shares mean the same everywhere.
+        # (len(neg) here equals the later n_pre_mask_neg: pos augmentation
+        # never touches the neg array.) Deterministic.
+        from collections import Counter as _Counter
+
+        _shared_value_counts: _Counter = _Counter()
+        _swap_pick_total = (
+            int(n_pre_mask_pos * min(swap_value_frac, 1.0))
+            + int(len(neg) * min(hard_negative_swap_value_frac, 1.0))
+            + int(n_pre_mask_pos * min(counterfactual_frac, 1.0))
+        )
         # Agreed-surface swaps sample the ORIGINAL positive prefix only
         # (pool_size = pre-mask pos count), so swaps never compound on
         # masked copies.
@@ -985,6 +999,8 @@ def _main_inner(_mlf, _wandb) -> None:
             entity_keys=entity_keys,
             max_field_share=swap_max_field_share,
             max_value_share=swap_max_value_share,
+            shared_value_counts=_shared_value_counts,
+            cap_base=_swap_pick_total,
         )
         mask_audit.extend(value_audit)
         if n_added + n_swap_added + n_value_added:
@@ -1116,6 +1132,8 @@ def _main_inner(_mlf, _wandb) -> None:
             entity_keys=entity_keys,
             max_field_share=swap_max_field_share,
             max_value_share=swap_max_value_share,
+            shared_value_counts=_shared_value_counts,
+            cap_base=_swap_pick_total,
         )
         _neg_new_audit = _neg_mask_audit + _neg_swap_audit + _neg_value_audit
         if _neg_new_audit:
@@ -1165,6 +1183,8 @@ def _main_inner(_mlf, _wandb) -> None:
             entity_keys=entity_keys,
             max_field_share=swap_max_field_share,
             max_value_share=swap_max_value_share,
+            shared_value_counts=_shared_value_counts,
+            cap_base=_swap_pick_total,
         )
         _cf_new = np.asarray(_cf_full, dtype=int)[_cf_pos_len:]
         if n_cf_added:

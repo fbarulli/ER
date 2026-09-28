@@ -387,6 +387,33 @@ class CounterfactualTwinTests(unittest.TestCase):
 
             MaskAuditEntry.model_validate(row)
 
+    def test_value_cap_binds_across_lanes_when_counters_are_shared(self) -> None:
+        # Per-call caps let three lanes triple the footprint; one shared
+        # counter with a shared budget holds the bundle-global line.
+        from collections import Counter
+
+        payload = (
+            ["cola coconut water volume_ml_500 flavor_coconut"] * 2
+            + ["cola lime water volume_ml_500 flavor_lime"] * 2
+        ) + ["cola coconut aqua volume_ml_500 flavor_coconut"] * 8
+        pairs = np.asarray(
+            [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11]], dtype=int
+        )
+        row_bc = np.asarray([f"g{i}" for i in range(12)], dtype=object)
+        shared: Counter = Counter()
+        total_lime = 0
+        for seed in (21, 22, 23):
+            audits = augment_counterfactual_twins(
+                pairs, payload, row_bc, frac=1.0, seed=seed,
+                max_value_share=0.5, shared_value_counts=shared,
+                cap_base=6,
+            )[4]
+            total_lime += sum(
+                1 for r in audits
+                if "flavor_lime" in payload[r["donor_anchor_payload_idx"]]
+            )
+        self.assertLessEqual(total_lime, 3)
+
     def test_entity_key_normalizes_gtin_length_variants(self) -> None:
         from training.masking import normalize_entity_key
 

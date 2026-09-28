@@ -482,6 +482,10 @@ def _run_provenance_case(
             [(i, 500 + i) for i in range(n_gate)], dtype=int
         ).reshape(-1, 2),
         "pos": np.arange(2 * n_pos_pairs).reshape(-1, 2),
+        # The real balance block reads the augmentation lineage to spare
+        # base rows first; the sandbox has no augmentation, so every row
+        # is base (empty lineage = the pre-augmentation behavior).
+        "hard_negative_mask_audit": [],
         "load_config": lambda: {
             "pairs": {"balance_train_classes": balance},
             "gate": {"vol_tolerance": 0.05},

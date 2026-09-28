@@ -180,6 +180,12 @@ def main() -> None:
     for i in gate_idx:
         need_texts.add(payload[int(neg[i][0])])
         need_texts.add(payload[int(neg[i][1])])
+    cross_idx = [
+        i for i, s in enumerate(neg_sources) if str(s) == "cross_brand_conflict"
+    ][: args.gate_sample]
+    for i in cross_idx:
+        need_texts.add(payload[int(neg[i][0])])
+        need_texts.add(payload[int(neg[i][1])])
     pos_idx = list(range(min(args.pos_sample, len(pos))))
     for i in pos_idx:
         need_texts.add(payload[int(pos[i][0])])
@@ -224,12 +230,9 @@ def main() -> None:
             "margin_frac_positive": float((group_margins > 0).mean()),
         }
 
-    # Background slices (same encoder, same scale).
+    # Background slices (same encoder, same scale; texts already encoded).
     gate_scores = [sim(payload[int(a)], payload[int(b)]) for a, b in neg[gate_idx]]
     pos_scores = [sim(payload[int(a)], payload[int(b)]) for a, b in pos[pos_idx]]
-    cross_idx = [
-        i for i, s in enumerate(neg_sources) if str(s) == "cross_brand_conflict"
-    ][: args.gate_sample]
     cross_scores = [sim(payload[int(a)], payload[int(b)]) for a, b in neg[cross_idx]]
     cross_report = precision_at_recall(
         np.array(pos_scores[: len(cross_scores)] + cross_scores),
