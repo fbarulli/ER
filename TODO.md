@@ -41,6 +41,9 @@
 Parser / extraction:
 - [ ] No MPN parsing; entity guard best-effort on unmapped rows (52.1%
       cluster coverage; barcode-less duplicates need record linkage).
+      MPN parsing not implemented — no code exists. 52.1% coverage
+      is GTIN-based entity clusters only. 47.9% unmapped rows need
+      record linkage.
 Data / augmentation:
 - [ ] Positive/type coverage: current balanced sample has 1,414 positives
       at sim>=0.50 (530 at >=0.80) and 1,414 pack-blocker negatives only.
@@ -72,12 +75,26 @@ Process / repo:
 - [ ] Metrics unversioned (`results/` gitignored — reports live locally only).
 - [x] Smoke unrepresentative (`--sample 1000` = first rows, not stratified;
       e.g. entity coverage 11.8% vs 52.1%). Measured: smoke_128 has 35.2%
-      GTIN coverage vs 43.7% full dataset. Smoke is not stratified.
+      GTIN coverage vs 43.7% full dataset. Smoke is not stratified —
+      over-represents small brands (Culture Pop 4.7% vs 0.2%) and
+      under-represents large categories (Not from Concentrate 7.8% vs 14.6%).
 - [ ] Easy-negative replenishment samples with replacement when pool is thin
       (silent re-weighting at small scale).
 - [ ] Dynamic masking invisible to diet (ephemeral views excluded by design).
 - [x] 41MB new CSVs in git while DVC sits disabled (bloat policy question).
       41MB is from prepared bundles (pkl.gz) in recent commits. DVC disabled.
+
+## Answered — no action needed
+- **Who builds bundles**: `_build_local_training_bundles` in `src/cli/colab.py`
+  runs `training.train` as a subprocess on the Colab VM.
+- **Twin fracs**: `counterfactual_frac: 0.10` — 10% of positives minted as twin negatives.
+- **Ambiguous volume**: 49 records flagged, but most are legitimate multi-packs
+  (12L, 20L, 33L total volumes), NOT ambiguous. The flag is overly aggressive
+  for multi-pack titles like "10 x 0, 20l" -> 20000ml. Only 1 of 5 flagged
+  GTINs is truly ambiguous (barcode-less, no volume evidence).
+- **MPN coverage**: 52.1% GTIN-based cluster coverage. No MPN parsing exists.
+  Acceptable for training (entity guard handles unmapped rows), but barcode-less
+  duplicates need record linkage.
 
 ## Questions to resolve before training
 1. **bundle rebuild required**: diet gate passes on paper (frac=0.80) but existing
