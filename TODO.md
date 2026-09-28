@@ -120,8 +120,8 @@ Training / eval:
 Process / repo:
 - [x] Result-sync and MNRL regression tests updated for current interfaces;
       the related Colab setup expectation now uses CLI defaults (47 targeted
-      tests pass). Full suite: 513 passed, 2 skipped; 2 HNSW tests cannot run
-      because `hnswlib` is missing from the local `.venv`.
+      tests pass). Full suite: 515 passed, 2 skipped with pinned
+      `hnswlib==0.8.0` installed in the local `.venv`.
 - [ ] Metrics unversioned (`results/` gitignored — reports live locally only).
 - [ ] Smoke unrepresentative (`--sample 1000` = first rows, not stratified;
       e.g. entity coverage 11.8% vs 52.1%).
