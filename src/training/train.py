@@ -717,9 +717,6 @@ def _main_inner(_mlf, _wandb) -> None:
     )
     hard_negative_mask_lo = float(mask_cfg["hard_negative_mask_lo"])
     hard_negative_mask_hi = float(mask_cfg["hard_negative_mask_hi"])
-    # Label-preserving agreed-surface swaps (no CLI flag: config-direct with
-    # hard indexing — a missing key crashes per owner Q27).
-    hard_negative_swap_frac = float(mask_cfg["hard_negative_swap_frac"])
     # Static pre-training value swaps (donor transplant, symmetric for
     # positives / anchor-side for hard negatives). Same hard indexing.
     swap_value_frac = float(mask_cfg["swap_value_frac"])
