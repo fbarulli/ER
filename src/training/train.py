@@ -725,6 +725,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # positives / anchor-side for hard negatives). Same hard indexing.
     swap_value_frac = float(mask_cfg["swap_value_frac"])
     hard_negative_swap_value_frac = float(mask_cfg["hard_negative_swap_value_frac"])
+    swap_max_donor_overlap = float(mask_cfg["swap_max_donor_overlap"])
     # Counterfactual twins: minimal agreed-field flips of positive anchors,
     # labeled 0 into the negative pool. Same hard indexing.
     counterfactual_frac = float(mask_cfg["counterfactual_frac"])
@@ -1033,6 +1034,7 @@ def _main_inner(_mlf, _wandb) -> None:
             max_value_share=swap_max_value_share,
             shared_value_counts=_shared_value_counts,
             cap_base=_swap_pick_total,
+            max_donor_overlap=swap_max_donor_overlap,
         )
         mask_audit.extend(value_audit)
         if n_added + n_swap_added + n_value_added:
@@ -1166,6 +1168,7 @@ def _main_inner(_mlf, _wandb) -> None:
             max_value_share=swap_max_value_share,
             shared_value_counts=_shared_value_counts,
             cap_base=_swap_pick_total,
+            max_donor_overlap=swap_max_donor_overlap,
         )
         _neg_new_audit = _neg_mask_audit + _neg_swap_audit + _neg_value_audit
         if _neg_new_audit:
@@ -1217,6 +1220,7 @@ def _main_inner(_mlf, _wandb) -> None:
             max_value_share=swap_max_value_share,
             shared_value_counts=_shared_value_counts,
             cap_base=_swap_pick_total,
+            max_donor_overlap=swap_max_donor_overlap,
         )
         _cf_new = np.asarray(_cf_full, dtype=int)[_cf_pos_len:]
         if n_cf_added:

@@ -489,6 +489,7 @@ def augment_value_swaps(
     max_value_share: float | None = None,
     shared_value_counts: Counter[tuple[str, tuple[str, ...]]] | None = None,
     cap_base: int | None = None,
+    max_donor_overlap: float | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Append copies whose structured VALUE was transplanted from a donor pair.
 
@@ -544,6 +545,8 @@ def augment_value_swaps(
         raise ValueError("max_field_share must be in (0, 1]")
     if max_value_share is not None and not 0.0 < max_value_share <= 1.0:
         raise ValueError("max_value_share must be in (0, 1]")
+    if max_donor_overlap is not None and not 0.0 < max_donor_overlap <= 1.0:
+        raise ValueError("max_donor_overlap must be in (0, 1]")
     audit: list[dict] = []
     pool = int(pool_size) if pool_size is not None else len(pairs)
     pool = max(0, min(pool, len(pairs)))
@@ -596,6 +599,14 @@ def augment_value_swaps(
             c, d = int(pairs[j][0]), int(pairs[j][1])
             if anchor_entities & {entities[c], entities[d]}:
                 continue
+            if max_donor_overlap is not None:
+                anchor_toks = set(payload[a].split())
+                donor_toks = set(payload[c].split())
+                union = anchor_toks | donor_toks
+                if union and len(anchor_toks & donor_toks) / len(union) >= max_donor_overlap:
+                    # Near-identical donor from an unmapped row: probable
+                    # same-entity relist the cluster map cannot see. Refuse.
+                    continue
             donor_anchor = _field_surfaces(payload[c])
             donor_pair = _field_surfaces(payload[d])
             candidates = sorted(
@@ -700,6 +711,7 @@ def augment_counterfactual_twins(
     max_value_share: float | None = None,
     shared_value_counts: Counter[tuple[str, tuple[str, ...]]] | None = None,
     cap_base: int | None = None,
+    max_donor_overlap: float | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Mint minimal-flip negatives from positive pairs: (A1', A2) labeled 0.
 
@@ -731,6 +743,8 @@ def augment_counterfactual_twins(
         raise ValueError("max_field_share must be in (0, 1]")
     if max_value_share is not None and not 0.0 < max_value_share <= 1.0:
         raise ValueError("max_value_share must be in (0, 1]")
+    if max_donor_overlap is not None and not 0.0 < max_donor_overlap <= 1.0:
+        raise ValueError("max_donor_overlap must be in (0, 1]")
     audit: list[dict] = []
     pool = int(pool_size) if pool_size is not None else len(pairs)
     pool = max(0, min(pool, len(pairs)))
@@ -789,6 +803,14 @@ def augment_counterfactual_twins(
             c, d = int(pairs[j][0]), int(pairs[j][1])
             if anchor_entities & {entities[c], entities[d]}:
                 continue
+            if max_donor_overlap is not None:
+                anchor_toks = set(payload[a].split())
+                donor_toks = set(payload[c].split())
+                union = anchor_toks | donor_toks
+                if union and len(anchor_toks & donor_toks) / len(union) >= max_donor_overlap:
+                    # Near-identical donor from an unmapped row: probable
+                    # same-entity relist the cluster map cannot see. Refuse.
+                    continue
             donor_anchor = _field_surfaces(payload[c])
             candidates = sorted(
                 field

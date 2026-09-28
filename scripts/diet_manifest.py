@@ -25,6 +25,29 @@ from core.common import load_config
 from training.prepared_bundle import load_prepared_bundle
 
 
+def project_train_time_neg_views(
+    neg_views: int, *, enabled: bool, ratio_to_hard: float
+) -> int:
+    """Static projection of the train-time negative quota (data prep, not runtime).
+
+    The trainer adds split-local easy negatives per fold targeting
+    ``ceil(hard * ratio_to_hard)`` (training._mix_random_easy_training_negatives,
+    knobs from training.random_easy_negatives). Those rows are deliberately
+    absent from the bundle — easy sampling must stay inside the train split
+    for leakage safety — so a gate that only counts bundle rows understates
+    the negatives the loss actually sees. This mirrors the trainer's target
+    formula exactly, from the same config SSOT, so the gate follows trainer
+    behavior automatically. Ephemeral per-presentation dynamic masks are
+    NOT counted: they re-present the same pairs rather than adding rows.
+    """
+    import math
+
+    base = int(neg_views)
+    if not enabled or float(ratio_to_hard) <= 0.0 or base <= 0:
+        return base
+    return base + int(math.ceil(base * float(ratio_to_hard)))
+
+
 def _mode(row: dict) -> str:
     """Audit target_mode with the pre-swap default ('random')."""
     return str(row.get("target_mode") or "random")
@@ -89,8 +112,21 @@ def main(argv: list[str]) -> int:
         neg_aug_views / neg_presentations if neg_presentations else float("nan")
     )
     pos_neg_ratio = pos_views / neg_views if neg_views else float("nan")
+    # Train-time quota projection (static, data-prep side): the bundle holds
+    # hard negatives only, but the trainer tops every fold up with easy
+    # negatives toward ceil(hard * ratio_to_hard). Gating the bundle-only
+    # ratio would fail bundles the trainer sees as balanced, so the ratio
+    # gate runs on the projected train-time views. Both numbers print; only
+    # the projected one gates.
+    easy_cfg = load_config()["training"]["random_easy_negatives"]
+    easy_enabled = bool(easy_cfg["enabled"])
+    easy_ratio = float(easy_cfg["ratio_to_hard"])
+    effective_neg_views = project_train_time_neg_views(
+        neg_views, enabled=easy_enabled, ratio_to_hard=easy_ratio
+    )
+    effective_ratio = pos_views / effective_neg_views if effective_neg_views else float("nan")
     neg_ok = neg_presentations > 0 and neg_aug_frac >= diet_min_neg_aug_frac
-    ratio_ok = neg_views > 0 and pos_neg_ratio <= diet_max_pos_neg_view_ratio
+    ratio_ok = effective_neg_views > 0 and effective_ratio <= diet_max_pos_neg_view_ratio
     print(
         f"[diet] neg_aug_views={neg_aug_views:,} / neg_presentations={neg_presentations:,} "
         f"= {neg_aug_frac:.4f} >= diet_min_neg_aug_frac={diet_min_neg_aug_frac:.4f} "
@@ -98,8 +134,14 @@ def main(argv: list[str]) -> int:
         flush=True,
     )
     print(
-        f"[diet] pos_views={pos_views:,} / neg_views={neg_views:,} "
-        f"= {pos_neg_ratio:.4f} <= diet_max_pos_neg_view_ratio={diet_max_pos_neg_view_ratio:.4f} "
+        f"[diet] bundle-only pos_views={pos_views:,} / neg_views={neg_views:,} "
+        f"= {pos_neg_ratio:.4f} (informational)",
+        flush=True,
+    )
+    print(
+        f"[diet] train-time pos_views={pos_views:,} / effective_neg_views={effective_neg_views:,} "
+        f"(easy quota x{easy_ratio:g}, enabled={easy_enabled}) "
+        f"= {effective_ratio:.4f} <= diet_max_pos_neg_view_ratio={diet_max_pos_neg_view_ratio:.4f} "
         f"{'OK' if ratio_ok else 'FAIL'}",
         flush=True,
     )
@@ -110,8 +152,9 @@ def main(argv: list[str]) -> int:
         )
     if not ratio_ok:
         failures.append(
-            f"pos_neg_view_ratio {pos_neg_ratio:.4f} > "
-            f"diet_max_pos_neg_view_ratio {diet_max_pos_neg_view_ratio:.4f}"
+            f"train-time pos_neg_view_ratio {effective_ratio:.4f} > "
+            f"diet_max_pos_neg_view_ratio {diet_max_pos_neg_view_ratio:.4f} "
+            f"(bundle-only {pos_neg_ratio:.4f})"
         )
     if failures:
         for failure in failures:

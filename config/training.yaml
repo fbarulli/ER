@@ -44,6 +44,8 @@ masking:
   # more than ~3% (hard skip — the transplant-footprint guard).
   swap_max_field_share: 0.35
   swap_max_value_share: 0.03
+  # Near-duplicate donor guard (second net behind entity clusters).
+  swap_max_donor_overlap: 0.95
   # Diet contract (scripts/diet_manifest.py gates every bundle on these).
   diet_min_neg_aug_frac: 0.30     # negatives: augmented views / presentations
   diet_max_pos_neg_view_ratio: 1.50  # effective pos views / neg views ceiling

@@ -16,6 +16,14 @@
       discards by kind (smoke: discarded_base=0, discarded_aug=476).
 - [x] Stress-slice script: twin P@R95 + margins, cross-brand/gate slices,
       donor uniformity, subset distance split.
+- [x] Guarded bare-soda rule (still + dry-type guards): 3,635 fire, 451
+      suppressed; 12 golden rows refreshed (all true sodas).
+- [x] Donor overlap guard (swap_max_donor_overlap 0.95; min-overlap floor
+      rejected: costs 43% yield, transfers nothing domain-specific).
+- [x] Bundle pins masking + easy config; drift warns on load.
+- [x] Balanced pair sample at max feasible (1,060, single pack_blocker
+      family — positives bind; per-type diversity needs twin-sourced
+      eval sets next).
 
 ## In progress
 - [x] Diet gate + slice baseline on smoke (caps build): PASS.

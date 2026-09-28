@@ -45,6 +45,14 @@ class PreparedBundleManifest(BaseModel):
     n_canonical_records_bytes: int = Field(ge=1)
     n_gate_results_bytes: int = Field(ge=1)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Diet/augmentation provenance: the resolved masking profile and the
+    # easy-negative quota the bundle was built under. config/ can drift
+    # after a build (ratio_to_hard moves the diet verdict without touching
+    # a byte), so the manifest pins what was true at build time and the
+    # loader warns loudly on drift. Optional: pre-feature bundles load
+    # with an empty record and skip the check.
+    masking_config: dict = Field(default_factory=dict)
+    easy_config: dict = Field(default_factory=dict)
 
 
 def _digest(path: Path) -> str:
@@ -80,7 +88,11 @@ def write_prepared_bundle(
 ) -> PreparedBundleManifest:
     """Write one compressed, self-contained, locally generated input bundle."""
 
+    from core.common import load_config, masking_cfg
     from core.model_input import model_input_spec
+
+    recorded_masking = masking_cfg(str(masking_profile))
+    recorded_easy = dict(load_config()["training"]["random_easy_negatives"])
 
     path.parent.mkdir(parents=True, exist_ok=True)
     payload_data = {
@@ -110,6 +122,8 @@ def write_prepared_bundle(
         payload_variant=payload_variant,
         masking_profile=masking_profile,
         model_input=model_input_spec(),
+        masking_config=recorded_masking,
+        easy_config=recorded_easy,
         n_df=len(df),
         n_payload=len(payload),
         n_pos=len(pos),
@@ -188,4 +202,24 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
             f"active={active.model_dump()}. Re-prepare the bundle; the frozen "
             "payload strings are not the text the active composition produces."
         )
+    if manifest.masking_config or manifest.easy_config:
+        from core.common import load_config, masking_cfg
+
+        drifted: list[str] = []
+        if manifest.masking_config and manifest.masking_config != masking_cfg(
+            str(manifest.masking_profile)
+        ):
+            drifted.append("masking")
+        if manifest.easy_config and manifest.easy_config != dict(
+            load_config()["training"]["random_easy_negatives"]
+        ):
+            drifted.append("random_easy_negatives")
+        if drifted:
+            print(
+                f"[bundle-drift] WARNING: {path} was built under different "
+                f"{'/'.join(drifted)} config than active "
+                f"(bundle={manifest.masking_config} {manifest.easy_config}). "
+                "Diet verdicts and augmentation yields may not reproduce.",
+                flush=True,
+            )
     return manifest, data

@@ -112,6 +112,13 @@ SUGAR_CLAIM_RE = re.compile(
 # `sugar` class manufactures a both-states contradiction on genuinely
 # low-sugar products (e.g. "low in sugar" + a no_sugar declaration),
 # and sweetener_conflict() then flags a false positive-vs-diet clash.
+# Bare "soda" sells two different things: carbonated drinks AND syrups,
+# concentrates, cordials, drink mixes, and powders (169 soda titles, nearly
+# all Liquid/Powder Concentrates) plus still-declared drinks (282 titles).
+# A bare soda is a carbonation claim only with neither signal present.
+_SODA_DRY_PRODUCT_RE = re.compile(
+    r"\b(?:syrup|concentrate|cordial|drink mix|powder)\b"
+)
 
 
 def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
@@ -148,12 +155,19 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     carbonation: set[str] = set()
     if non_carbonated or re.search(r"\bstill\b", text):
         carbonation.add("still")
-    # NOTE (audit 2026-09-28): only the unambiguous "soda pop" is a
-    # carbonation claim. Bare "soda" over-fires on still juices ("Sunny
-    # Delight ... soda" declares Carbonization: still) and on syrups
-    # ("Snow Cone Syrup ... soda"), and a false carbonated claim becomes a
-    # false hard_no gate label. Bare soda stays a review candidate.
+    # NOTE (audit 2026-09-28): only the unambiguous "soda pop" is an
+    # unconditional carbonation claim. Bare "soda" fires only for
+    # beverage-like products: syrups/concentrates/mixes (169 titles) and
+    # still-declared drinks (282 titles, e.g. Sunny Delight) are excluded.
+    # "still" in the set already covers the non-carbonated branch, since
+    # that branch always records still.
     if re.search(r"\b(?:carbonated|sparkling|fizzy|soda pop)\b", carbonation_text):
+        carbonation.add("carbonated")
+    if (
+        re.search(r"\bsoda\b", carbonation_text)
+        and "still" not in carbonation
+        and not _SODA_DRY_PRODUCT_RE.search(carbonation_text)
+    ):
         carbonation.add("carbonated")
     if re.search(r"\beffervescent\b", carbonation_text) and not re.search(
         r"\beffervescent(?:\s+\w+){0,3}\s+(?:tablets?|tabs?)\b", carbonation_text

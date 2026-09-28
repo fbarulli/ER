@@ -225,5 +225,42 @@ class MinimalFlipSliceTests(unittest.TestCase):
         self.assertIn("flavor_lime", flavor["max_value_preview"])
 
 
+class DietProjectionTests(unittest.TestCase):
+    """Train-time easy quota projected statically (data prep, not runtime)."""
+
+    def test_disabled_quota_returns_bundle_views(self):
+        from scripts.diet_manifest import project_train_time_neg_views
+
+        self.assertEqual(
+            project_train_time_neg_views(30341, enabled=False, ratio_to_hard=1.0),
+            30341,
+        )
+        self.assertEqual(
+            project_train_time_neg_views(30341, enabled=True, ratio_to_hard=0.0),
+            30341,
+        )
+
+    def test_projection_mirrors_the_trainer_target_formula(self):
+        from scripts.diet_manifest import project_train_time_neg_views
+
+        # ceil(hard * ratio), the exact _mix_random_easy target
+        self.assertEqual(
+            project_train_time_neg_views(5, enabled=True, ratio_to_hard=0.5),
+            8,
+        )
+        self.assertEqual(
+            project_train_time_neg_views(30341, enabled=True, ratio_to_hard=1.0),
+            60682,
+        )
+
+    def test_full_bundle_ratio_passes_on_projected_views(self):
+        from scripts.diet_manifest import project_train_time_neg_views
+
+        effective = project_train_time_neg_views(
+            30341, enabled=True, ratio_to_hard=1.0
+        )
+        self.assertLessEqual(51153 / effective, 1.50)
+
+
 if __name__ == "__main__":
     unittest.main()

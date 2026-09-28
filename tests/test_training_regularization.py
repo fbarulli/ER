@@ -414,6 +414,28 @@ class CounterfactualTwinTests(unittest.TestCase):
             )
         self.assertLessEqual(total_lime, 3)
 
+    def test_near_identical_donor_is_refused(self) -> None:
+        # Donor differs in exactly one token out of 40+: probable
+        # same-entity relist -> refuse at 0.95, allow uncapped.
+        filler = " ".join(f"w{i}" for i in range(38))
+        payload = [
+            f"cola {filler} volume_ml_500 flavor_coconut",
+            f"cola {filler} volume_ml_500 flavor_coconut",
+            f"cola {filler} volume_ml_500 flavor_lime",
+            f"cola {filler} volume_ml_500 flavor_lime",
+        ]
+        pairs = np.asarray([[0, 1], [2, 3]], dtype=int)
+        row_bc = np.asarray(["g0", "g1", "g2", "g3"], dtype=object)
+        refused = augment_counterfactual_twins(
+            pairs, payload, row_bc, frac=1.0, seed=7,
+            max_donor_overlap=0.95,
+        )[4]
+        allowed = augment_counterfactual_twins(
+            pairs, payload, row_bc, frac=1.0, seed=7,
+        )[4]
+        self.assertEqual(refused, [])
+        self.assertGreater(len(allowed), 0)
+
     def test_entity_key_normalizes_gtin_length_variants(self) -> None:
         from training.masking import normalize_entity_key
 
@@ -427,7 +449,80 @@ class CounterfactualTwinTests(unittest.TestCase):
         )
 
 
-class EntityClusterMapTests(unittest.TestCase):
+class BundleProvenanceTests(unittest.TestCase):
+    """Bundles pin the diet-relevant config; drift warns loudly on load."""
+
+    def _write(self, path) -> None:
+        import pandas as pd
+
+        from training.prepared_bundle import write_prepared_bundle
+
+        return write_prepared_bundle(
+            path,
+            df=pd.DataFrame({"product_id": ["p1", "p2"]}),
+            payload=["cola water", "cola aqua", "cola canon"],
+            structured_features=np.zeros((3, 4), dtype=np.float32),
+            row_bc=np.asarray(["g1", "g1", "g1"], dtype=object),
+            country=np.asarray(["US", "US", "US"], dtype=object),
+            pos=np.asarray([[0, 2]], dtype=int),
+            hp_pairs=np.empty((0, 2), dtype=int),
+            emb0=np.zeros((3, 4), dtype=np.float32),
+            neg=np.empty((0, 2), dtype=int),
+            train_neg=np.empty((0, 2), dtype=int),
+            neg_sources=np.empty(0, dtype=object),
+            train_neg_sources=np.empty(0, dtype=object),
+            mask_audit=[],
+            hard_negative_mask_audit=[],
+            labeled_pairs_csv=b"x",
+            canonical_records_csv=b"y",
+            gate_results_csv=b"z",
+            payload_variant="full",
+            masking_profile="baseline",
+        )
+
+    def test_roundtrip_records_active_diet_config(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from core.common import load_config, masking_cfg
+        from training.prepared_bundle import load_prepared_bundle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "probe.pkl.gz"
+            manifest = self._write(path)
+            self.assertEqual(manifest.masking_config, masking_cfg("baseline"))
+            self.assertEqual(
+                manifest.easy_config,
+                dict(load_config()["training"]["random_easy_negatives"]),
+            )
+            reloaded, _ = load_prepared_bundle(path)
+            self.assertEqual(reloaded.masking_config, manifest.masking_config)
+
+    def test_drifted_config_warns_on_load(self) -> None:
+        import copy
+        import io
+        import tempfile
+        from contextlib import redirect_stdout
+        from pathlib import Path
+        from unittest import mock
+
+        import core.common as core_common
+        from training.prepared_bundle import load_prepared_bundle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "probe.pkl.gz"
+            self._write(path)
+            real_config = core_common.load_config()
+            drifted = copy.deepcopy(real_config)
+            drifted["training"]["random_easy_negatives"]["ratio_to_hard"] = 9.99
+            with mock.patch.object(
+                core_common, "load_config", return_value=drifted
+            ):
+                captured = io.StringIO()
+                with redirect_stdout(captured):
+                    _, _ = load_prepared_bundle(path)
+        self.assertIn("bundle-drift", captured.getvalue())
+        self.assertIn("random_easy_negatives", captured.getvalue())
     """Transitive-closure entity IDs: pairs + shared barcodes, one cluster."""
 
     def test_closure_links_pairs_and_barcode_groups(self) -> None:

@@ -942,6 +942,11 @@ class MaskingSpec(BaseModel):
     # so no single string becomes a synthetic-generation artifact).
     swap_max_field_share: float = Field(gt=0.0, le=1.0)
     swap_max_value_share: float = Field(gt=0.0, le=1.0)
+    # Near-duplicate donor guard: refuse donors whose anchor text is at
+    # least this token-similar to the anchor (probable same-entity relist
+    # the cluster map cannot see). Measured cost at 0.95: 0/490 smoke
+    # transplants refused.
+    swap_max_donor_overlap: float = Field(gt=0.0, le=1.0)
     # Diet contract enforced by scripts/diet_manifest.py on every bundle
     # BEFORE training: negatives must carry at least this fraction of
     # augmented views (masked + swapped) relative to presentations, and the
@@ -989,6 +994,7 @@ class MaskingProfileSpec(BaseModel):
     counterfactual_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     swap_max_field_share: float | None = Field(default=None, gt=0.0, le=1.0)
     swap_max_value_share: float | None = Field(default=None, gt=0.0, le=1.0)
+    swap_max_donor_overlap: float | None = Field(default=None, gt=0.0, le=1.0)
     diet_min_neg_aug_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     diet_max_pos_neg_view_ratio: float | None = Field(default=None, gt=0.0)
 

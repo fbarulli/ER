@@ -71,11 +71,15 @@ def test_negative_sugar_variants_share_one_trusted_value() -> None:
 
 
 def test_soda_pop_and_abbreviated_pulp_are_resolved_from_explicit_product_wording() -> None:
-    # Bare "soda" is ambiguous (still juices and syrups carry the word), so
-    # only the unambiguous "soda pop" is a carbonation claim.
+    # Bare "soda" is a carbonation claim for beverage-like products only:
+    # syrups/concentrates/mixes (169 titles) and still-declared drinks
+    # (282 titles) are excluded. Only "soda pop" is unconditional.
     assert extract_critical_claims("Lemon Lime Soda Pop")["carbonation"] == frozenset({"carbonated"})
-    assert extract_critical_claims("Bubble Up Lemon Lime Soda")["carbonation"] == frozenset()
+    assert extract_critical_claims("Bubble Up Lemon Lime Soda")["carbonation"] == frozenset({"carbonated"})
     assert extract_critical_claims("Snow Cone Syrup Shaved Ice soda")["carbonation"] == frozenset()
+    assert extract_critical_claims(
+        "SUNNY DELIGHT Waikiki flavored soda", "Carbonization: still"
+    )["carbonation"] == frozenset({"still"})
     assert extract_critical_claims("Ingredients include baking soda")["carbonation"] == frozenset()
     assert extract_critical_claims("Coconut juice w/pulp")["pulp"] == frozenset({"with_pulp"})
     assert extract_critical_claims("juice based on concentrates and pulps")["pulp"] == frozenset({"with_pulp"})
