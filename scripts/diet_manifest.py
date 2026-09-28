@@ -38,21 +38,6 @@ def project_train_time_neg_views(
     return base + int(math.ceil(base * float(ratio_to_hard)))
 
 
-def project_dynamic_mask_views(
-    neg_views: int,
-    *,
-    mask_hard_negatives: bool,
-    hard_negative_frac: float,
-) -> int:
-    """Project dynamic per-presentation negative mask views at training time.
-
-    These are NOT in the bundle (created each epoch), so the diet gate
-    must add them to see the true training-time view count."""
-    if not mask_hard_negatives or hard_negative_frac <= 0.0 or neg_views <= 0:
-        return neg_views
-    return neg_views + int(math.ceil(neg_views * hard_negative_frac))
-
-
 def _mode(row: dict) -> str:
     """Audit target_mode with the pre-swap default ('random')."""
     return str(row.get("target_mode") or "random")
@@ -88,14 +73,13 @@ def main(argv: list[str]) -> int:
     loss = str(training_cfg["loss"])
     easy_enabled = bool(easy_cfg["enabled"])
     easy_ratio = float(easy_cfg["ratio_to_hard"])
-    # Dynamic masking creates per-presentation views at training time
-    # that are not in the bundle. Project them into the view counts
-    # so the diet gate sees the true training-time ratio.
-    projected_neg_views = project_dynamic_mask_views(
-        neg_views,
-        mask_hard_negatives=mask_hard_negatives,
-        hard_negative_frac=hard_negative_frac,
-    )
+    # Dynamic masking rewrites selected negative presentations IN PLACE
+    # (training.py _dynamic_mask_negative_transform — "no static negative
+    # copies are added"), so it adds NO views for ANY loss and the old
+    # +hard_negative_frac projection double-counted phantom views,
+    # biasing neg_aug_frac low and the pos/neg ratio low. Presentations
+    # are the bundle's own view counts.
+    projected_neg_views = neg_views
     projected_neg_presentations = project_train_time_neg_views(
         projected_neg_views, enabled=easy_enabled, ratio_to_hard=easy_ratio, loss=loss
     )
@@ -156,8 +140,9 @@ def main(argv: list[str]) -> int:
     print(
         f"[diet] projected_neg_views={projected_neg_views:,} "
         f"(easy quota x{easy_ratio:g}, enabled={easy_enabled}, loss={loss}; "
-        f"dynamic mask frac={hard_negative_frac:g}, enabled={mask_hard_negatives}; "
-        "projections are not guaranteed)",
+        f"dynamic mask frac={hard_negative_frac:g}, enabled={mask_hard_negatives} "
+        "(in-place replacement — adds no views); "
+        "easy-projection is an upper bound, not guaranteed)",
         flush=True,
     )
     if not neg_ok:
