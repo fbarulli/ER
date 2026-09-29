@@ -12,6 +12,14 @@ population / target_mode). Rows without a target_mode predate the swap lane
 and count as "random". Labels are never inspected: masked/swapped copies
 keep their anchor's label by construction (positives stay 1, negatives 0).
 
+MNRL accounting (loss == "mnrl"): the gate counts only the populations the
+loss actually trains. Swap hard-negative copies are omitted by
+training._mnrl_training_triples_with_populations (by design), so they are
+excluded from neg_aug_views. Masked-positive copies only train when their
+source anchor has an explicit negative in the training pool; copies without
+one are dead rows and are excluded from the positive view count (real
+survival). Non-MNRL losses train every retained view and are unchanged.
+
 Usage: diet_manifest.py BUNDLE_PATH
 Exit 0 PASS, exit 2 FAIL naming the exact violated threshold.
 """
@@ -21,6 +29,8 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
+
+import numpy as np
 
 from core.common import load_config
 from training.prepared_bundle import load_prepared_bundle
@@ -43,6 +53,63 @@ def _mode(row: dict) -> str:
     return str(row.get("target_mode") or "random")
 
 
+def _negative_anchors(train_neg: np.ndarray) -> set[int]:
+    """Anchors that carry at least one explicit negative in the training pool.
+
+    MNRL masked positives train only when their source anchor has a negative
+    in the fold; an anchor with none produces no triple (training.py
+    _mnrl_training_triples_with_populations). Bundle-level granularity, matching
+    the rest of the diet gate (the fold split happens later, at train time).
+    """
+    anchors: set[int] = set()
+    for anchor, _negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
+        anchors.add(int(anchor))
+    return anchors
+
+
+def effective_pos_views(
+    pos_views: int, mask_audit: list[dict], train_neg: np.ndarray, *, loss: str
+) -> tuple[int, int]:
+    """Positive views that actually train, and dead masked-positive copies.
+
+    For MNRL a masked-positive copy only survives to a triple when its source
+    anchor has an explicit negative in the training pool; otherwise the copy
+    is minted but never trained. Those dead rows are excluded from the
+    positive view count so the pos/neg ratio is honest. Other losses train
+    every view, so this is a no-op. Returns (surviving_views, dead_copies).
+    """
+    if loss != "mnrl":
+        return int(pos_views), 0
+    neg_anchors = _negative_anchors(train_neg)
+    dead = sum(
+        1
+        for row in mask_audit or []
+        if _mode(row) != "swap_values"
+        and int(row["anchor_payload_idx"]) not in neg_anchors
+    )
+    return int(pos_views) - dead, dead
+
+
+def effective_neg_aug_views(
+    retained_neg_audit: list[dict], *, loss: str
+) -> int:
+    """Augmented negative views MNRL actually trains.
+
+    Swap hard-negative copies (target_mode="swap_values") are minted but
+    omitted from MNRL triples by design (training.py
+    _mnrl_training_triples_with_populations). Counting them inflates
+    neg_aug_frac and makes the gate lenient for MNRL, so they are excluded
+    here. Other losses train every retained copy and are unchanged.
+    """
+    if loss != "mnrl":
+        return len(retained_neg_audit)
+    return sum(
+        1
+        for row in retained_neg_audit
+        if _mode(row) != "swap_values"
+    )
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(f"usage: {Path(argv[0]).name} BUNDLE_PATH", file=sys.stderr)
@@ -62,15 +129,22 @@ def main(argv: list[str]) -> int:
 
     pos_views = int(len(pos))
     neg_views = int(len(train_neg))
+    training_cfg = load_config()["training"]
+    loss = str(training_cfg["loss"])
     selected_neg = {tuple(map(int, pair)) for pair in train_neg}
     retained_neg_audit = [
         row for row in neg_audit
         if (int(row["copy_payload_idx"]), int(row["pair_payload_idx"])) in selected_neg
     ]
-    neg_aug_views = len(retained_neg_audit)
+    # MNRL never trains swap hard-negative copies (by design); exclude them
+    # so neg_aug_frac is honest for that loss. Other losses train them.
+    neg_aug_views = effective_neg_aug_views(retained_neg_audit, loss=loss)
+    # MNRL masked positives with no source negative never train; report real
+    # survival on the positive side too (dead copies excluded from pos_views).
+    surviving_pos_views, dead_masked_pos = effective_pos_views(
+        pos_views, mask_audit, train_neg, loss=loss
+    )
     easy_cfg = load_config()["training"]["random_easy_negatives"]
-    training_cfg = load_config()["training"]
-    loss = str(training_cfg["loss"])
     easy_enabled = bool(easy_cfg["enabled"])
     easy_ratio = float(easy_cfg["ratio_to_hard"])
     # Dynamic masking rewrites selected negative presentations IN PLACE
@@ -114,16 +188,27 @@ def main(argv: list[str]) -> int:
         print(f"hard_negative  {mode:<11} {neg_modes[mode]:,}", flush=True)
     print(
         f"presentations  projected    {projected_neg_presentations:,} "
-        f"(pos_views={pos_views:,}, neg_views={projected_neg_views:,})",
+        f"(pos_views={surviving_pos_views:,}, neg_views={projected_neg_views:,})",
         flush=True,
     )
+    if dead_masked_pos:
+        print(
+            f"[diet] MNRL survival: {dead_masked_pos:,} masked-positive copies "
+            "have no source negative in the training pool and never train "
+            "(excluded from pos_views)",
+            flush=True,
+        )
 
     failures: list[str] = []
     neg_aug_frac = (
         neg_aug_views / projected_neg_presentations if projected_neg_presentations else float("nan")
     )
-    pos_neg_ratio = pos_views / projected_neg_views if projected_neg_views else float("nan")
-    effective_ratio = pos_views / projected_neg_views if projected_neg_views else float("nan")
+    pos_neg_ratio = (
+        surviving_pos_views / projected_neg_views if projected_neg_views else float("nan")
+    )
+    effective_ratio = (
+        surviving_pos_views / projected_neg_views if projected_neg_views else float("nan")
+    )
     neg_ok = projected_neg_presentations > 0 and neg_aug_frac >= diet_min_neg_aug_frac
     ratio_ok = projected_neg_views > 0 and effective_ratio <= diet_max_pos_neg_view_ratio
     print(
@@ -133,8 +218,8 @@ def main(argv: list[str]) -> int:
         flush=True,
     )
     print(
-        f"[diet] bundle-only pos_views={pos_views:,} / neg_views={neg_views:,} "
-        f"= {pos_neg_ratio:.4f} (informational)",
+        f"[diet] bundle-only pos_views={pos_views:,} (surviving {surviving_pos_views:,}) "
+        f"/ neg_views={neg_views:,} = {pos_neg_ratio:.4f} (informational)",
         flush=True,
     )
     print(
