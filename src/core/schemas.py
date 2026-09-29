@@ -1156,10 +1156,41 @@ class TrainingSpec(BaseModel):
         ratio_to_hard: float = Field(ge=0.0)
         candidate_pool_size: int = Field(ge=1)
 
+    class MnrlMonitoringSpec(BaseModel):
+        """Train-time per-population MNRL subset-loss monitoring.
+
+        When enabled, the MNRL loss records the mean loss attributed to each
+        training population (twin / masked / base) per epoch and publishes it
+        as ``mnrl_subset_loss_by_epoch_fold{i}.csv``. Disabled by default so a
+        plain run is bit-identical to the untracked lane.
+        """
+
+        model_config = ConfigDict(extra="forbid")
+
+        enabled: bool = False
+
+    class TwinLossWarmupSpec(BaseModel):
+        """Warmup ramp for the counterfactual-twin negative loss weight.
+
+        The counterfactual twins share ~90%+ tokens with their source
+        positive, so their denominator pressure spikes in epochs 1-2. This
+        knob ramps the twin-population triples' loss weight from ``twin_weight``
+        up to 1.0 across the first ``warmup_epochs`` epochs. Disabled by
+        default: the MNRL arithmetic is then byte-for-byte the installed loss.
+        """
+
+        model_config = ConfigDict(extra="forbid")
+
+        enabled: bool = False
+        warmup_epochs: int = Field(default=2, ge=1)
+        twin_weight: float = Field(default=0.25, ge=0.0, le=1.0)
+
     base_model: str = Field(min_length=1)
     uniformity_regularization: UniformityRegularizationSpec
     late_epoch_lr_decay: LateEpochLrDecaySpec
     random_easy_negatives: RandomEasyNegativesSpec
+    mnrl_monitoring: MnrlMonitoringSpec = Field(default_factory=lambda: TrainingSpec.MnrlMonitoringSpec())
+    twin_loss_warmup: TwinLossWarmupSpec = Field(default_factory=lambda: TrainingSpec.TwinLossWarmupSpec())
     structured_features: StructuredFeaturesSpec
     model_input: ModelInputSpec
 

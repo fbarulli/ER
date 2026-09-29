@@ -647,19 +647,26 @@ def _mix_random_easy_training_negatives(
     return mixed_pairs, mixed_sources, len(unique_candidates)
 
 
-def _build_mnrl_training_triples(
+def _mnrl_training_triples_with_populations(
     train_pos: np.ndarray,
     train_neg: np.ndarray,
     *,
     mask_audit: list[dict] | None,
     hard_negative_mask_audit: list[dict] | None,
-) -> list[tuple[int, int, int]]:
+) -> list[tuple[tuple[int, int, int], str]]:
     """Join explicit negatives to positives without losing augmented anchors.
 
     Masked/swapped copies have new payload indices; audit rows identify the
     original anchor. Keep the *copy* as the MNRL anchor. Positive copies use
     one of their source's explicit negatives, if available. Never infer a
     positive or negative from a barcode alone: that can silently mislabel.
+
+    Each triple is paired with its training population so train-time
+    per-subset loss monitoring can attribute loss to the population that
+    generated the negative pressure:
+      * ``base``   — ordinary source-anchored triples (no augmentation copy)
+      * ``masked`` — triples anchored on a masked/swap hard-negative copy
+      * ``twin``   — counterfactual twin negatives trained against their source
     """
     positives_by_anchor: dict[int, set[int]] = {}
     for anchor, positive in np.asarray(train_pos, dtype=int).reshape(-1, 2):
@@ -679,7 +686,7 @@ def _build_mnrl_training_triples(
     for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
         negatives_by_anchor.setdefault(int(anchor), []).append(int(negative))
 
-    triples: list[tuple[int, int, int]] = []
+    triples: list[tuple[tuple[int, int, int], str]] = []
     seen: set[tuple[int, int, int]] = set()
     for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
         anchor_i, negative_i = int(anchor), int(negative)
@@ -701,7 +708,14 @@ def _build_mnrl_training_triples(
         triple = (anchor_i, positive_i, negative_i)
         if triple not in seen:
             seen.add(triple)
-            triples.append(triple)
+            # A hard-negative copy anchor means the triple's negative is a
+            # masked/swap augmentation; otherwise it is an organic base triple.
+            population = (
+                "masked"
+                if (anchor_i, negative_i) in original_by_copy_pair
+                else "base"
+            )
+            triples.append((triple, population))
 
     train_positive_pairs = {
         (int(anchor), int(positive))
@@ -740,7 +754,7 @@ def _build_mnrl_training_triples(
         triple = (copy_i, positive_i, negative_i)
         if triple not in seen:
             seen.add(triple)
-            triples.append(triple)
+            triples.append((triple, "masked"))
     # Counterfactual twins never survive the main loop above: a twin row is
     # (copy, pair-side) with label 0, and its source's positive IS the pair
     # side, so positive_i == negative_i skips it — silently dropping every
@@ -769,8 +783,50 @@ def _build_mnrl_training_triples(
             triple = (source_i, positive_i, copy_i)
             if triple not in seen:
                 seen.add(triple)
-                triples.append(triple)
+                triples.append((triple, "twin"))
     return triples
+
+
+def _build_mnrl_training_triples(
+    train_pos: np.ndarray,
+    train_neg: np.ndarray,
+    *,
+    mask_audit: list[dict] | None,
+    hard_negative_mask_audit: list[dict] | None,
+) -> list[tuple[int, int, int]]:
+    """Join explicit negatives to positives without losing augmented anchors."""
+    return [
+        triple
+        for triple, _population in _mnrl_training_triples_with_populations(
+            train_pos,
+            train_neg,
+            mask_audit=mask_audit,
+            hard_negative_mask_audit=hard_negative_mask_audit,
+        )
+    ]
+
+
+def _build_mnrl_triple_populations(
+    train_pos: np.ndarray,
+    train_neg: np.ndarray,
+    *,
+    mask_audit: list[dict] | None,
+    hard_negative_mask_audit: list[dict] | None,
+) -> list[str]:
+    """Per-triple training population (base/masked/twin) for MNRL monitoring.
+
+    Returned in the same order as ``_build_mnrl_training_triples`` so the
+    i-th population tag attributes the i-th triple.
+    """
+    return [
+        population
+        for _triple, population in _mnrl_training_triples_with_populations(
+            train_pos,
+            train_neg,
+            mask_audit=mask_audit,
+            hard_negative_mask_audit=hard_negative_mask_audit,
+        )
+    ]
 
 
 def _mnrl_shared_positive_barcode_rows(
@@ -894,11 +950,18 @@ def _make_loss(
     uniformity_temperature: float,
     uniformity_min_batch_size: int,
     label_smoothing: float,
+    mnrl_monitoring_enabled: bool = False,
+    twin_warmup_enabled: bool = False,
+    twin_warmup_epochs: int = 2,
+    twin_weight: float = 0.25,
 ):
     """Loss factory (SSOT knobs: training.loss / training.contrastive_margin).
 
     mnrl  — MultipleNegativesRankingLoss: (anchor, positive[, negative])
-            column dataset; in-batch negatives; ignores labels.
+            column dataset; in-batch negatives; ignores labels. Wrapped in
+            ``_tracking_mnrl_loss`` when per-population monitoring or the
+            twin-loss warmup is enabled (both disabled by default -> the
+            installed loss is returned unchanged, byte-for-byte identical).
     contrastive — OnlineContrastiveLoss: (sentence1, sentence2, label=0/1)
             pairs; PER BATCH it selects hard positives (farthest pos pairs)
             and hard negatives (closest neg pairs) and computes the margin
@@ -910,6 +973,14 @@ def _make_loss(
     from sentence_transformers.sentence_transformer import losses
 
     if loss == "mnrl":
+        if mnrl_monitoring_enabled or twin_warmup_enabled:
+            return _tracking_mnrl_loss(
+                model,
+                monitoring_enabled=mnrl_monitoring_enabled,
+                warmup_enabled=twin_warmup_enabled,
+                warmup_epochs=int(twin_warmup_epochs),
+                twin_weight=float(twin_weight),
+            )
         return losses.MultipleNegativesRankingLoss(model)
     if loss == "contrastive":
         m = float(
@@ -1282,6 +1353,227 @@ def _tracking_contrastive_loss(
             return rows
 
     return _TrackedOnlineContrastiveLoss(model, margin=margin)
+
+
+def _tracking_mnrl_loss(
+    model,
+    *,
+    monitoring_enabled: bool,
+    warmup_enabled: bool,
+    warmup_epochs: int,
+    twin_weight: float,
+):
+    """Return MultipleNegativesRankingLoss with per-population telemetry.
+
+    Reimplements the installed sentence-transformers 6.0.1
+    ``MultipleNegativesRankingLoss.compute_loss_from_embeddings`` so each
+    row's loss ``-(positive_score - log_z)`` can be attributed to a training
+    population (base/masked/twin) and, when the twin warmup is enabled, so the
+    twin rows can be down-weighted during the first ``warmup_epochs``.
+
+    When neither monitoring nor warmup is enabled ``_make_loss`` returns the
+    installed loss directly (this class is never constructed), and even if it
+    were, ``compute_loss_from_embeddings`` falls through to the installed
+    arithmetic — the bit-identical no-op guarantee.
+    """
+    from sentence_transformers.sentence_transformer import losses
+    from sentence_transformers.util import all_gather_with_grad, get_rank
+
+    class _TrackedMultipleNegativesRankingLoss(
+        losses.MultipleNegativesRankingLoss
+    ):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._monitoring_enabled = bool(monitoring_enabled)
+            self._warmup_enabled = bool(warmup_enabled)
+            self._warmup_epochs = int(warmup_epochs)
+            self._twin_weight = float(twin_weight)
+            self._current_epoch = 0
+            self._batch_pair_ids = None
+            self._triple_populations: list[str] = []
+            self._subset_totals: dict[int, dict[str, dict[str, float]]] = {}
+
+        def set_epoch(self, epoch: int) -> None:
+            self._current_epoch = int(epoch)
+
+        def set_batch_pair_ids(self, pair_ids) -> None:
+            self._batch_pair_ids = pair_ids.detach().cpu()
+
+        def set_triple_populations(self, populations) -> None:
+            self._triple_populations = list(populations)
+
+        def _twin_weight_for_epoch(self) -> float:
+            if not self._warmup_enabled:
+                return 1.0
+            if self._warmup_epochs <= 1:
+                return self._twin_weight
+            progress = min(
+                1.0, (self._current_epoch - 1) / (self._warmup_epochs - 1)
+            )
+            return self._twin_weight + (1.0 - self._twin_weight) * progress
+
+        def compute_loss_from_embeddings(self, embeddings, labels):
+            if not (self._monitoring_enabled or self._warmup_enabled):
+                return super().compute_loss_from_embeddings(embeddings, labels)
+
+            import torch
+
+            if len(embeddings) < 2:
+                raise ValueError(
+                    f"Expected at least 2 embeddings, got {len(embeddings)}"
+                )
+
+            queries = embeddings[0]
+            docs = embeddings[1:]
+            batch_size = queries.size(0)
+            offset = 0
+            if self.gather_across_devices:
+                queries = all_gather_with_grad(queries)
+                docs = [all_gather_with_grad(doc) for doc in docs]
+                offset = get_rank() * batch_size
+
+            world_batch_size = queries.size(0)
+            docs_all = torch.cat(docs, dim=0)
+            docs_pos = docs[0]
+            local_indices = torch.arange(
+                offset, offset + batch_size, device=queries.device
+            )
+            row_indices = torch.arange(batch_size, device=queries.device)
+            local_queries = queries[local_indices]
+            local_docs = docs_pos[local_indices]
+
+            sim_matrices = {}
+            sim_matrices["query_to_doc"] = self.similarity_fct(
+                local_queries, docs_all
+            )
+            if "query_to_query" in self.directions:
+                sim_matrices["query_to_query"] = self.similarity_fct(
+                    local_queries, queries
+                )
+                sim_matrices["query_to_query"][
+                    row_indices, local_indices
+                ] = -torch.inf
+            if "doc_to_query" in self.directions:
+                sim_matrices["doc_to_query"] = self.similarity_fct(
+                    queries, local_docs
+                ).T
+            if "doc_to_doc" in self.directions:
+                sim_matrices["doc_to_doc"] = self.similarity_fct(
+                    docs_all, local_docs
+                ).T
+                same_query_doc_mask = torch.eye(
+                    world_batch_size, device=queries.device
+                )[local_indices]
+                same_query_doc_mask = same_query_doc_mask.repeat(
+                    1, len(docs)
+                ).bool()
+                sim_matrices["doc_to_doc"].masked_fill_(
+                    same_query_doc_mask, -torch.inf
+                )
+
+            penalties = {}
+            if (
+                self.hardness_mode
+                in ("in_batch_negatives", "hard_negatives", "all_negatives")
+                and self.hardness_strength > 0.0
+            ):
+                penalty = (
+                    self.hardness_strength
+                    * sim_matrices["query_to_doc"].detach()
+                )
+                own_doc_mask = torch.eye(
+                    world_batch_size,
+                    device=queries.device,
+                    dtype=torch.bool,
+                )[local_indices]
+                own_doc_mask = own_doc_mask.repeat(1, len(docs))
+                if self.hardness_mode == "hard_negatives":
+                    penalty_exclusion_mask = ~own_doc_mask
+                    penalty_exclusion_mask[:, :world_batch_size] = True
+                elif self.hardness_mode == "in_batch_negatives":
+                    penalty_exclusion_mask = own_doc_mask
+                else:
+                    penalty_exclusion_mask = own_doc_mask
+                    penalty_exclusion_mask[:, world_batch_size:] = False
+                penalty[penalty_exclusion_mask] = 0.0
+                penalties["query_to_doc"] = penalty
+
+            for key in sim_matrices:
+                sim_matrices[key] = sim_matrices[key] * self.scale
+            for key, pen in penalties.items():
+                sim_matrices[key] = sim_matrices[key] + pen
+
+            positive_scores = sim_matrices["query_to_doc"][
+                row_indices, local_indices
+            ]
+            if self.partition_mode == "joint":
+                scores = torch.cat(list(sim_matrices.values()), dim=1)
+                log_z = torch.logsumexp(scores, dim=1)
+            else:
+                log_z = 0.0
+                for sim_matrix in sim_matrices.values():
+                    log_z += torch.logsumexp(sim_matrix, dim=1)
+                log_z /= len(sim_matrices)
+
+            row_losses = -(positive_scores - log_z)
+
+            batch_pair_ids = self._batch_pair_ids
+            self._batch_pair_ids = None
+            if batch_pair_ids is not None and self._monitoring_enabled:
+                populations = [
+                    self._triple_populations[int(pair_id)]
+                    if int(pair_id) < len(self._triple_populations)
+                    else "unknown"
+                    for pair_id in batch_pair_ids.tolist()
+                ]
+                row_values = row_losses.detach().cpu()
+                for population, value in zip(
+                    populations, row_values.tolist()
+                ):
+                    epoch_stats = self._subset_totals.setdefault(
+                        self._current_epoch, {}
+                    ).setdefault(
+                        str(population), {"loss_sum": 0.0, "count": 0.0}
+                    )
+                    epoch_stats["loss_sum"] += float(value)
+                    epoch_stats["count"] += 1.0
+
+            if self._warmup_enabled:
+                if batch_pair_ids is not None:
+                    weight = self._twin_weight_for_epoch()
+                    weighted = torch.zeros_like(row_losses)
+                    for i, pair_id in enumerate(batch_pair_ids.tolist()):
+                        population = (
+                            self._triple_populations[int(pair_id)]
+                            if int(pair_id) < len(self._triple_populations)
+                            else "unknown"
+                        )
+                        w = weight if population == "twin" else 1.0
+                        weighted[i] = row_losses[i] * w
+                    return weighted.mean()
+                return row_losses.mean()
+
+            return row_losses.mean()
+
+        def mnrl_subset_rows_by_epoch(self) -> list[dict]:
+            rows = []
+            for epoch in sorted(self._subset_totals):
+                for population in sorted(self._subset_totals[epoch]):
+                    stats = self._subset_totals[epoch][population]
+                    count = stats["count"]
+                    rows.append(
+                        {
+                            "epoch": epoch,
+                            "population": population,
+                            "mean_loss": (
+                                stats["loss_sum"] / count if count else 0.0
+                            ),
+                            "triple_count": int(count),
+                        }
+                    )
+            return rows
+
+    return _TrackedMultipleNegativesRankingLoss(model)
 
 
 def _runtime_telemetry() -> dict[str, float | int]:
@@ -4196,11 +4488,24 @@ def train_one_config(
                     "(different texts may still share product identity)",
                     flush=True,
                 )
+                # Per-triple population tags (base/masked/twin) parallel the
+                # triples so train-time MNRL subset monitoring can attribute
+                # loss per population. pair_id is the triple index threaded
+                # through PairIdDataCollator to the loss; both columns are
+                # stripped before tokenization and never affect the loss value.
+                triple_populations = _build_mnrl_triple_populations(
+                    train_all,
+                    tr_negs,
+                    mask_audit=mask_audit,
+                    hard_negative_mask_audit=hard_negative_mask_audit,
+                )
                 train_ds = Dataset.from_dict(
                     {
                         "anchor": [payload[a] for a, _, _ in triples],
                         "positive": [payload[b] for _, b, _ in triples],
                         "negative": [payload[c] for _, _, c in triples],
+                        "pair_id": list(range(len(triples))),
+                        "population": triple_populations,
                     }
                 )
             else:
@@ -4506,6 +4811,7 @@ def train_one_config(
                 groups, weight_decay=cfg["weight_decay"], lr=base_lr
             )
 
+            mnrl_cfg = load_config()["training"]
             loss_fn = _make_loss(
                 model,
                 loss,
@@ -4514,7 +4820,15 @@ def train_one_config(
                 uniformity_temperature=float(_UNIFORMITY_CFG["temperature"]),
                 uniformity_min_batch_size=int(_UNIFORMITY_CFG["min_batch_size"]),
                 label_smoothing=float(cfg["label_smoothing"]),
+                mnrl_monitoring_enabled=bool(
+                    mnrl_cfg.mnrl_monitoring.enabled
+                ),
+                twin_warmup_enabled=bool(mnrl_cfg.twin_loss_warmup.enabled),
+                twin_warmup_epochs=int(mnrl_cfg.twin_loss_warmup.warmup_epochs),
+                twin_weight=float(mnrl_cfg.twin_loss_warmup.twin_weight),
             )
+            if loss == "mnrl" and hasattr(loss_fn, "set_triple_populations"):
+                loss_fn.set_triple_populations(triple_populations)
             pair_lineage = _build_pair_lineage(
                 train_all,
                 tr_negs,
@@ -4725,6 +5039,34 @@ def train_one_config(
                                 "masking/dynamic_negative_mean_realized_extent": float(row["mean_realized_extent"]),
                             },
                         )
+            if (
+                loss == "mnrl"
+                and mnrl_cfg.mnrl_monitoring.enabled
+                and hasattr(loss_fn, "mnrl_subset_rows_by_epoch")
+            ):
+                mnrl_subset_rows = loss_fn.mnrl_subset_rows_by_epoch()
+                if mnrl_subset_rows:
+                    from core.common import write_visibility_log
+
+                    write_visibility_log(
+                        pd.DataFrame(mnrl_subset_rows),
+                        f"mnrl_subset_loss_by_epoch_fold{fold_i}.csv",
+                        run_tag,
+                        sample,
+                    )
+                    if wandb_ctx is not None:
+                        for row in mnrl_subset_rows:
+                            wandb_ctx.log_metrics(
+                                {
+                                    "mnrl_subset/epoch": float(row["epoch"]),
+                                    f"mnrl_subset/loss_{row['population']}": float(
+                                        row["mean_loss"]
+                                    ),
+                                    f"mnrl_subset/count_{row['population']}": float(
+                                        row["triple_count"]
+                                    ),
+                                }
+                            )
             usage_rows: list[dict] = []
             if hasattr(loss_fn, "pair_usage_rows"):
                 usage_rows = loss_fn.pair_usage_rows()
