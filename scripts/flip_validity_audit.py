@@ -218,7 +218,11 @@ def _concentration(rows: list[tuple[str, dict]], field_cap: float, value_cap: fl
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", required=True, type=Path)
-    parser.add_argument("--out", type=Path, default=Path("results/flip_validity_audit.json"))
+    # Default resolves through the core.common RESULTS SSOT (honors
+    # EUROMONITOR_RESULTS_DIR on Colab workers) — no bare "results/" literal.
+    from core.common import RESULTS
+
+    parser.add_argument("--out", type=Path, default=RESULTS / "flip_validity_audit.json")
     args = parser.parse_args(argv)
 
     from core.common import load_config

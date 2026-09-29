@@ -1,4 +1,21 @@
-# TODO (2026-09-28, branch training-sid-hybrid)
+# TODO (updated 2026-09-29, branch training-sid-hybrid)
+
+## PRIORITY ORDER (owner ruling 2026-09-29)
+Work top-down. The recent graph/linkage additions are DEAD LAST — do not
+start them until every P1/P2 item is closed and training is unblocked.
+- **P1 — FINALIZE before training (data alignment etc.)**: bundle rebuild
+  (Questions #1), MNRL telemetry port (reference-contract CSVs), swap-copy
+  diet accounting (owner decision), masked-positive minting survival,
+  coverage-analysis remainder, 4a39fdc verification remainder, flavor-twin
+  policy decision, smoke-sampler code committed.
+- **P2 — remaining open gaps** (parser/extraction, augmentation, training/
+  eval, process) below in "Open gaps".
+- **DEAD LAST — recent additions (2026-09-29)**: barcode-less record
+  linkage (KNOWN DEFECT: flavor merge), two-stage graph matching
+  architecture (GNN bi-encoder retrieval + cross-graph alignment
+  verification), graph-construction improvements Tier 1-3, and the queued
+  neighborhood-context recall measurement. See the DEAD LAST section at the
+  end of this file.
 
 ## Checkpoint eval contract (twin training curve)
 - After each epoch/checkpoint: `build_field_slice.py --model <ckpt>` +
@@ -71,14 +88,19 @@ status per item, verified against HEAD:
   (train.py:1284 `emb0 = np.empty((0,0))`; training.py:1326 gate on
   emb0.size). Telemetry not_reached/unavailable is the DESIGNED initial-fold
   state, not a bug.
-- B8 Triplet lane dead-by-construction: STILL OPEN. Chain: hard_train_all
-  mined from emb0 ONCE before the fold loop (training.py:3582), emb0 empty
-  pre-checkpoint -> hard_train always empty -> build_triplets returns [] ->
-  RuntimeError "no triples built for fold" (training.py:4217). Refresh
-  populates emb0 AFTER hard_train_all is fixed. --loss triplet cannot run on
-  the initial fold. RECOMMEND: remove the triplet lane (loss factory +
-  argparse choice + build_triplets branch + counters) or gate it off; MNRL
-  + contrastive are the active losses.
+- [x] B8 Triplet lane dead-by-construction: FIXED (2026-09-29, commit
+      3695c90, pushed). KEPT OPTIONAL (owner ruling — do not remove the
+      lane). Root cause: hard_train_all mined from emb0 ONCE before the
+      fold loop, emb0 empty pre-checkpoint -> hard_train always empty ->
+      build_triplets returned [] -> RuntimeError "no triples built for
+      fold". FIX: when build_triplets returns no examples, train_one_config
+      appends a status='skipped' fold row with a clear reason and continues,
+      mirroring the contrastive/MNRL skip paths. Lane stays functional when
+      ANN mining provides hard negatives; main path records the skip; HPO
+      still fails loudly via require_no_failed_folds (no calibration
+      evidence to tune on). Blast radius verified via graphify (rebuilt at
+      HEAD): change localized to the fold-loop dataset-build branch of
+      train_one_config; no other loss lane touched.
 - B9 HPO lane items: NOT APPLICABLE — HPO is not used (no hpo runs).
 - B10 dead-code list: partially resolved already (hard_negative_swap_frac,
   swap_agreed, _optuna_mlflow_cb removed). Remaining (NER island, colab dead
@@ -114,10 +136,16 @@ Main-thread sweep results (2026-09-28):
   MaskingSpec field + comment, MaskingProfileSpec override, train.py read
   + comment. Guard: tests/test_masking_cfg_dead_knobs.py (dead-local scan
   of every mask_cfg[...] binding + knob pin).
-- Consistency flags (volume_inconsistency / ambiguous_volume) are
-  IN-MEMORY ONLY (zero hits in dataset_deduped.csv, gate_results.csv,
-  canonical_records.csv) — 49->30 unverifiable from committed artifacts;
-  persist a flag census at rebuild.
+- [x] Consistency flags (volume_inconsistency / ambiguous_volume) were
+      IN-MEMORY ONLY — FIXED (2026-09-29, commit 9c10c71, pushed): flag
+      census persisted in the data_prep manifest (row_accounting.flags_census,
+      gtin level). Verified end-to-end on the real 71,623-row export with
+      sandboxed outputs: 13,250 canonicals -> {ambiguous_volume: 3,
+      description_conflict:carbonation: 101, description_conflict:pulp: 4,
+      description_conflict:sweetener: 73, no_added_sugar_with_cane_sugar: 30,
+      unsweetened_with_declared_sweetener: 3, volume_inconsistency: 42};
+      closure 71,623 == 13,250 + 45,260 holds. Counts now verifiable from
+      results/manifests/data_prep.json and drift-tracked.
 - second04: 948 candidates -> 261 bundle hp_pairs (strict volume
   equality; lever = the gate's 5% tolerance).
 
@@ -150,18 +178,21 @@ Queue state (updated at stand-down 2026-09-28, agent 1 session end):
   triage checkbox above.
 - Item A4 _write_datapoint_usage: DONE — CONFIRMED already fixed vs HEAD,
   regression pins pre-exist (see triage checkbox above).
-- Item 7 (MNRL subset monitoring + twin warmup): NOT STARTED (full plan
-  anchors remain in experiments.md / DATA_PATH contract; schema names
-  MnrlMonitoringSpec + TwinLossWarmupSpec, config training.mnrl_monitoring
-  + training.twin_loss_warmup, _tracking_mnrl_loss override in
-  SentenceTransformers 6.0.1 compute_loss_from_embeddings, per-triple
-  populations from _build_mnrl_triple_populations, pair_id via
-  PairIdDataCollator, mnrl_subset_loss_by_epoch_fold{i}.csv via
-  write_visibility_log; bit-identical when warmup disabled).
-- Suite state: 532 passed + 2 skipped + 2 PRE-EXISTING failures
-  (flagged in triage note above; fail on base 4bfe3d1 too) = 12 new
-  tests by agent 1 (10) + agent 2 A3 guards (2). Baseline claim "523
-  pass" no longer matches HEAD (532 passed + 2 failed pre-existing).
+- [x] Item 7 (MNRL subset monitoring + twin warmup): DONE+PUSHED (commit
+      78fa96d, EXP-03). MnrlMonitoringSpec + TwinLossWarmupSpec in the
+      training config block (config training.mnrl_monitoring +
+      training.twin_loss_warmup), _build_mnrl_triple_populations per-triple
+      tags, _tracking_mnrl_loss override attributing per-row loss to its
+      population and ramping twin weight across warmup_epochs; pair_id
+      threaded via PairIdDataCollator. Both DISABLED by default — plain run
+      is bit-identical. Guard tests: tests/test_mnrl_monitoring_warmup.py
+      (9). Suite at that commit: 548 passed + 2 skipped.
+- Suite state (2026-09-29): 561 passed + 2 skipped. Growth since the
+  532 baseline: +9 MNRL monitoring/warmup guards (78fa96d), +5 diet MNRL
+  accounting guards (ead6966), +5 record-linkage guards (uncommitted at
+  this writing). No pre-existing failures remain (the two flagged above
+  were fixed by commits 4e8db93 golden refresh + 5c012d1 title-wins test
+  update).
 - Agent 3 (data-prep track) still running: aliases, flag census, smoke
   sampler, coverage JSON.
 - Main thread: FINDINGS B7-B10 + C/D/E triage continues.
@@ -288,12 +319,12 @@ thread.
   from masking.py producers; deleted-mode pin; stale-claim pin).
 
 
-- [ ] Full-data twin P@R95 curve per checkpoint; revisit markers only if
-      twin margin ~= 0. No embedding mixup (dynamic; label undefined).
-- [ ] Train-time per-subset MNRL monitoring + twin-loss warmup — IN
-      PROGRESS (background): `_tracking_mnrl_loss` wrapper, per-triple
-      population tags, `mnrl_subset_loss_by_epoch_fold{i}.csv`, config
-      `training.mnrl_monitoring` + `training.twin_loss_warmup`.
+- [x] Full-data twin P@R95 curve per checkpoint — harness READY
+      (build_field_slice.py + minimal_flip_slice.py on the live bundle);
+      curve itself requires the first trained checkpoint (P1 blocks on
+      bundle rebuild). No embedding mixup (dynamic; label undefined).
+- [x] Train-time per-subset MNRL monitoring + twin-loss warmup — DONE
+      (commit 78fa96d, disabled by default; see Queue state item 7).
 
 ## Data gaps measured (2026-09-28, flip_validity_audit.py)
 - [x] Per-field flip validity measured (results/flip_validity_audit.json,
@@ -344,11 +375,12 @@ thread.
 
 ## Open gaps (2026-09-28 audit — remaining)
 Parser / extraction:
-- [ ] No MPN parsing; entity guard best-effort on unmapped rows (52.1%
-      cluster coverage; barcode-less duplicates need record linkage).
-      MPN parsing not implemented — no code exists. 52.1% coverage
-      is GTIN-based entity clusters only. 47.9% unmapped rows need
-      record linkage.
+- [ ] MPN parsing: NOT APPLICABLE to this dataset (full 61,529-row scan:
+      only 29 rows mention any MPN-style key, all false positives —
+      beverages carry no manufacturer part numbers). Owner ruling
+      2026-09-29: keep the triplet-style optionality mindset — the real
+      gap (barcode-less identity) moved to the DEAD LAST section below as
+      the record-linkage lane.
 Data / augmentation:
 - [ ] Positive/type coverage: current balanced sample has 1,414 positives
       at sim>=0.50 (530 at >=0.80) and 1,414 pack-blocker negatives only.
@@ -412,7 +444,7 @@ Process / repo:
 - MPN coverage — 52.1% acceptable, entity guard works
 - Twin fracs — counterfactual_frac=0.10 reasonable
 - Value swaps — working correctly, numeric vectors follow swapped tokens
-- All 523 tests pass
+- All tests pass (561 passed + 2 skipped, 2026-09-29)
 
 ### BAD (needs fixing)
 - Smoke not stratified — FIXED: regenerated smoke_128 with stratified sampling
@@ -443,3 +475,82 @@ Process / repo:
     `volume_inconsistency` (title/attribute disagree >=10x). FIXED: now defaults
     to title volume on 10x+ disagreements instead of attribute. Is the title-side
     volume reliable enough?
+
+## DEAD LAST — recent additions (2026-09-29; do NOT start until P1/P2 done)
+
+Owner ruling: the graph/linkage work below is parked. P1 finalize items and
+P2 open gaps come first; training launch outranks everything here.
+
+### Standing rules for all new code (owner, 2026-09-29)
+- SSOT config loading for EVERYTHING, paths included: no bare "results/"
+  literals or CWD-relative defaults — resolve through core.common (RESULTS
+  root, files./layouts. bindings; honors EUROMONITOR_RESULTS_DIR on Colab
+  workers). Applied: build_barcode_less_linkage.py + flip_validity_audit.py
+  defaults now RESULTS-resolved (behavior identical locally).
+- graphify blast radius before/after every change (rebuild the graph when
+  HEAD moved: it was stale at 4a39fdc once already).
+- Every new code path is EXECUTED (synthetic -> smoke sample -> real-data
+  sandboxed run) before it is called done. Evidence recorded here.
+- Limit test writing: guard tests only where behavior could silently
+  regress; no coverage theater.
+
+### 1. Barcode-less record linkage — BUILT, KNOWN DEFECT OPEN
+- Reusable rule: src/core/record_linkage.py (link_barcode_less) + thin CLI
+  scripts/build_barcode_less_linkage.py; guard tests
+  tests/test_record_linkage.py (5). Suite green (561 passed + 2 skipped).
+- Verified executed: synthetic cross-retailer/pack-variant cases,
+  smoke_128 (99 barcode-less rows, all singles), real-data sandboxed run
+  (census: 38,159 eligible rows; 3,511 multirow clusters; 12,613 rows in
+  them; 3,089 exact + 11,481 fuzzy links; 609,590 pair checks; ~4s).
+- [ ] DEFECT (root cause NOT yet fixed): flavor merging survives the
+      pack-multiplicity strip. Verified on real data 2026-09-29: bl-000583
+      Clearly Canadian 71 rows (peach/raspberry/cherry merged), bl-012115
+      Obsesso 68 rows (mocha/latte/caramel/black merged), bl-000909
+      International Delight 66 rows. Jaccard >= 0.7 on short brand-blocked
+      titles links distinct flavors sharing brand/size tokens; transitive
+      union-find then chains them. NOT FIXED by strip_pack_multiplicity
+      (flavor words are not pack tokens). Fix direction: average-linkage
+      clustering with a margin (replace raw union-find transitive closure)
+      + lower fuzzy ceiling / discriminating-token check. Numbers in
+      census are provisional until this lands.
+- [ ] Retailer alias normalization (defect, Tier-1): "Voila" vs "Voila"
+      (accent) normalize differently -> same-retailer duplicates can be
+      treated as cross-source evidence. Accent-fold + alias table.
+- [ ] Hold-out edge validation (cheap, do first when resumed): hide known
+      GTIN edges, measure linkage precision/recall against that ground
+      truth — honest estimate of barcode-less linkage quality.
+
+### 2. Graph-construction improvements (Tier 1-3, parked)
+- Tier 1 (defects): retailer alias normalization (above); GTIN-14
+  indicator-digit folding (case<->unit packaging links, zero fuzzy risk);
+  average-linkage clustering instead of raw union-find.
+- Tier 2 (recall on ~25.5k singletons): IDF-weighted token similarity
+  (NgramIDF exists in pipeline.py); unit canonicalization before matching
+  (unit_canonicalization.py exists); embedding-proposed candidates via the
+  existing ANN band (bands.eval_mining 0.35-0.90) verified by linkage rules.
+- Tier 3 (GNN-ready graph): typed+weighted edges (gtin_identity 1.0,
+  link_exact 0.9, link_fuzzy 0.7, gate_hard_no anti-edge) with per-edge
+  provenance; description_evidence / breadcrumb_evidence as node features
+  or weak edges (collected in canonical_records.csv, excluded from frozen
+  canonical text by design); image evidence last (image_url exists).
+
+### 3. Two-stage graph matching architecture (directive, DESIGN ONLY — nothing built)
+- Stage 1 retrieval: Bi-Encoder GNN over graph neighborhoods (GraphSAGE/GAT,
+  <=3 layers — component cap 15 is the over-smoothing guard) initialized
+  from existing sentence-transformer embeddings + structured features;
+  trained with a LINK-PREDICTION objective (positives = identity edges;
+  negatives = gate-verified hard-no anti-edges + in-batch MNRL pressure);
+  cold-start via GraphSAGE h_v^0 concat (isolated nodes fall back to text
+  embedding). Single encode pass + ANN = fast candidate retrieval.
+- Stage 2 verification: Graph Alignment Network over top-K candidate
+  sub-graph pairs — cross-graph node matching scores + edge-consistency
+  scores + existing structured vetoes -> calibrated score; thresholds on
+  the component-safe dev split, test read once (folds.py discipline).
+  Existing cross-encoder rerank lane is the degenerate single-node case.
+- Key measurement queued (owner approved): neighborhood-context recall
+  vs plain text bi-encoder — the GNN's win comes from the 12.6k linked
+  rows, ~25.5k singletons get nothing from edges; measure before building.
+- Implementation doctrine: optional lane, disabled by default, bit-identical
+  when off (mirror 78fa96d MnrlMonitoringSpec pattern); config SSOT — exact
+  YAML block + pydantic Spec (extra="forbid") proposed for owner review
+  BEFORE schemas.py/config change; no edits to the live training path.
