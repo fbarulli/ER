@@ -256,7 +256,14 @@ def record(
         else None
     )
     return {
-        "run_id": str(run_id or ""),
+        # Default to the resolved run identity rather than "". An unlabelled
+        # row cannot survive: TraceRow requires run_id min_length=1, and
+        # _commit DROPS rows whose run_id is empty as legacy-unlabelled. So a
+        # "" default manufactured rows that were invalid on arrival and
+        # silently discarded later — the writer/contract drift the selftest
+        # oracle exists to catch. resolve_run_id() already encodes the
+        # unattributed case as RUN_UNBOUND.
+        "run_id": str(run_id or resolve_run_id()),
         "stage": str(stage),
         "step": str(step),
         "scope": scope,

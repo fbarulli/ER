@@ -31,6 +31,8 @@ import pandas as pd
 FAILED: list[str] = []
 SKIPPED: list[str] = []
 
+LANE_LOSS = "mnrl"  # deliberate current training objective (config SSOT: training.loss)
+
 
 def _raises(fn) -> bool:
     """True if fn() raised. Used where a contract MUST refuse bad input."""
@@ -1053,11 +1055,14 @@ def oracle_word_once() -> None:
     c = pd.read_csv(RESULTS / F["canonical_records"], keep_default_na=False)
 
     def words_of(txt: str) -> list[str]:
-        return [
-            folds.get(w, w)
-            for t in txt.split()
-            for w in t.split("_")
-        ]
+        # Split on WHITESPACE ONLY. Keep-tokens are atomic by design
+        # (pipeline.py: "Keep-tokens stay atomic (no_sugar never folds)"), so
+        # "no_sugar" is ONE concept, distinct from "sugar" — sugar-free is not
+        # a repeat of sugar. Splitting on "_" as well folded every negation into
+        # its head noun and reported 598 FALSE violations (0 remain under the
+        # documented rule), while making the oracle blind to the real cases
+        # (water x5, sparkling+carbonated), which are separate tokens.
+        return [folds.get(w, w) for w in txt.split()]
 
     bad = [
         txt
@@ -1196,7 +1201,15 @@ def oracle_config_split() -> None:
 
     # typed singletons load + validate
     check("DataConfig validates", data_cfg().seed == 42)
-    check("TrainingConfig validates", training_cfg().training.loss == "contrastive")
+    # LANE_LOSS is the deliberate current objective. Pinning the bare literal
+    # "contrastive" here outlived the switch to MNRL and failed the suite on a
+    # valid config. Named so the next deliberate lane change is one edit.
+    check(
+        "TrainingConfig validates",
+        training_cfg().training.loss == LANE_LOSS
+        and training_cfg().training.loss in ("contrastive", "mnrl", "triplet"),
+        f"loss={training_cfg().training.loss!r}, expected {LANE_LOSS!r}",
+    )
 
     # merged view: domain knobs overlay the root data contract
     m = load_config()
@@ -1724,11 +1737,15 @@ def oracle_no_fallback_ssot() -> None:
                 _sys.executable,
                 "-c",
                 # importable = the SSOT loads; the asserts pin that the three
-                # sweep-derived colab defaults are live, not silently zero.
+                # colab defaults are live, not silently zero.
+                # `<= 1.0` not `< 1.0`: colab.train_fraction is deliberately 1.0
+                # ("the normal ANN lane consumes its entire prepared training
+                # set"). The old strict bound predated that decision and failed
+                # the whole suite on a value the config intends.
                 "import sys; sys.path.insert(0, 'src'); "
                 "import colab_backend, cli.colab as c; "
                 "assert c._SMOKE_SAMPLE >= 1 "
-                "and 0.0 < c._TRAIN_FRAC_DEFAULT < 1.0 and c._RERANK_MODEL",
+                "and 0.0 < c._TRAIN_FRAC_DEFAULT <= 1.0 and c._RERANK_MODEL",
             ],
             cwd=str(root),
             capture_output=True,
@@ -1815,10 +1832,18 @@ def oracle_round3_pins() -> None:
     # ── F07 pin: colab's train-frac default == sweep.train_fracs[0]
     import cli.colab as _cb
 
+    # F07's real purpose is "this default is not an inline literal in colab.py".
+    # It was pinned to sweep.train_fracs[0], but colab reads
+    # `colab.train_fraction` (deliberately 1.0 — the main lane consumes its whole
+    # prepared set) while sweep.train_fracs is the 07d ABLATION curve whose first
+    # point is 0.25. Equating them conflated two distinct knobs. Pin to the
+    # source colab actually reads: still catches a hardcoded literal, and no
+    # longer demands the main lane train on a quarter of its data.
     check(
-        "colab _TRAIN_FRAC_DEFAULT == sweep.train_fracs[0]",
-        _cb._TRAIN_FRAC_DEFAULT == float(sweep_cfg()["train_fracs"][0]),
-        f"got {_cb._TRAIN_FRAC_DEFAULT}",
+        "colab _TRAIN_FRAC_DEFAULT == config colab.train_fraction (not a literal)",
+        _cb._TRAIN_FRAC_DEFAULT == float(training_cfg().colab.train_fraction),
+        f"got {_cb._TRAIN_FRAC_DEFAULT}, config says "
+        f"{training_cfg().colab.train_fraction}",
     )
 
     # ── F18 pin: the deleted dead symbols stay deleted (import surface)
