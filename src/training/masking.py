@@ -752,6 +752,104 @@ def augment_value_swaps(
     return res.pos, res.payload, res.row_bc, res.n_added, res.audit_dicts()
 
 
+def mint_swap_counterpart_positives(
+    swap_audit: list[dict],
+    payload: list[str],
+    row_bc: np.ndarray,
+    pos: np.ndarray,
+) -> tuple[list[tuple[int, int]], list[str], list[str], list[dict]]:
+    """TIER 1(a): give every anchor-side value-swap copy a counterpart positive.
+
+    A hard-negative swap transplants one field into the ANCHOR only
+    (``symmetric=False``), so the copy stops agreeing with its own source
+    positive. Pairing it with that unchanged positive would train a false
+    match, so the MNRL triple builder omitted the row outright and the copy
+    never reached a gradient.
+
+    This replays the SAME transplant onto the source's own positive, exactly as
+    the positive lane's symmetric swap rewrites both sides, so
+    ``(copy, counterpart)`` is a genuine positive. No value is invented: the
+    donor tokens come from the recorded donor payload row, so the counterpart
+    only ever carries a value that exists elsewhere in the bundle.
+
+    Returns the new positive pairs, their payload rows/barcodes, and audit
+    entries whose ``copy_payload_idx`` is the NEW counterpart row and whose
+    ``anchor_payload_idx`` is the source positive, so
+    ``extend_augmented_features`` derives counterpart features from the right
+    row without re-claiming the already-extended swap copy.
+    """
+    positives_by_anchor: dict[int, list[int]] = {}
+    for anchor, positive in np.asarray(pos, dtype=int).reshape(-1, 2):
+        positives_by_anchor.setdefault(int(anchor), []).append(int(positive))
+
+    base = len(payload)
+    new_pairs: list[tuple[int, int]] = []
+    new_payload: list[str] = []
+    new_bc: list[str] = []
+    audit: list[dict] = []
+    for row in swap_audit or []:
+        if str(row.get("target_mode")) != "swap_values":
+            continue
+        fields = row.get("fields_hit") or []
+        donor_i = row.get("donor_anchor_payload_idx")
+        if donor_i is None or len(fields) != 1:
+            continue
+        source_i = int(row["anchor_payload_idx"])
+        copy_i = int(row["copy_payload_idx"])
+        if not (0 <= donor_i < len(payload) and copy_i < len(payload)):
+            continue
+        field = str(fields[0])
+        donor_tokens = _field_surfaces(payload[int(donor_i)]).get(field)
+        if not donor_tokens:
+            continue
+        candidates = positives_by_anchor.get(source_i) or []
+        if not candidates:
+            continue
+        positive_i = int(candidates[0])
+        if not 0 <= positive_i < len(payload):
+            continue
+        counterpart_text = _splice_field(payload[positive_i], field, donor_tokens)
+        if counterpart_text == payload[positive_i]:
+            # The source positive carries NO token for the transplanted field,
+            # so the transplant cannot contradict it — it is silent where the
+            # copy now speaks. The ORIGINAL blanket skip discarded these rows
+            # for a contradiction that does not exist, and they are 493 of the
+            # 2,709 real swap rows. Register the source positive against the
+            # COPY anchor directly: both indices already exist, so no new
+            # payload row and no feature lineage are involved.
+            new_pairs.append((copy_i, positive_i))
+            continue
+        if counterpart_text == payload[copy_i]:
+            # A counterpart equal to the swap copy would make the positive pair
+            # self-referential. Dropped rather than minted.
+            continue
+        counterpart_idx = base + len(new_payload)
+        new_payload.append(counterpart_text)
+        new_bc.append(str(row_bc[positive_i]))
+        new_pairs.append((copy_i, counterpart_idx))
+        audit.append(
+            {
+                "anchor_payload_idx": positive_i,
+                "copy_payload_idx": counterpart_idx,
+                "pair_payload_idx": copy_i,
+                "copy_pair_payload_idx": None,
+                "barcode": str(row_bc[source_i]),
+                "realized_extent": row.get("realized_extent"),
+                "configured_mask_lo": None,
+                "configured_mask_hi": None,
+                "mask_prob": None,
+                "anchor_text": payload[positive_i],
+                "masked_text": counterpart_text,
+                "population": "swap_counterpart",
+                "target_mode": "swap_values",
+                "fields_hit": [field],
+                "donor_anchor_payload_idx": int(donor_i),
+                "donor_pair_payload_idx": row.get("donor_pair_payload_idx"),
+            }
+        )
+    return new_pairs, new_payload, new_bc, audit
+
+
 def augment_counterfactual_twins(
     pairs: np.ndarray,
     payload: list[str],

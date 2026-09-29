@@ -540,14 +540,13 @@ training:
   # MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
   loss: "mnrl"
   # ── MNRL subset monitoring + twin warmup (EXP-03) ─────────────────────────
-  # Both default to DISABLED so an existing run is bit-identical. Monitoring
-  # records per-population (twin/masked/base) mean loss per epoch to
-  # mnrl_subset_loss_by_epoch_fold{i}.csv. The warmup ramps the counterfactual-
-  # twin negatives' loss weight from twin_weight up to 1.0 across the first
-  # warmup_epochs, guarding the epochs 1-2 loss spike from twin denominator
-  # pressure.
+  # Monitoring records per-population (twin/masked/base) mean loss per epoch to
+  # mnrl_subset_loss_by_epoch_fold{i}.csv. Observability only: without it no
+  # P@R95 move can be attributed to a population, so every calibration call
+  # (TIER 3) is unanswerable. The warmup changes LOSS WEIGHTING and stays
+  # DISABLED — that is a calibration decision, not an observability one.
   mnrl_monitoring:
-    enabled: false
+    enabled: true
   twin_loss_warmup:
     enabled: false
     warmup_epochs: 2

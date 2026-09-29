@@ -1147,6 +1147,37 @@ def _main_inner(_mlf, _wandb) -> None:
                 structured_features, payload, _neg_new_audit
             )
         hard_negative_mask_audit.extend(_neg_new_audit)
+        # ── TIER 1(a): counterpart positives for anchor-side value swaps ──
+        # An anchor-only transplant invalidates the source positive, so the
+        # triple builder omitted every swap copy and it never trained. Replay
+        # the same donor transplant onto the source's own positive so the pair
+        # (copy, counterpart) is genuinely positive. Feature lineage for the new
+        # counterpart rows is derived from the source positive row, so the
+        # already-extended swap copy is not re-claimed.
+        from training.masking import mint_swap_counterpart_positives as _mint_cfp
+
+        _cfp_pairs, _cfp_payload, _cfp_bc, _cfp_audit = _mint_cfp(
+            _neg_value_audit, payload, row_bc, pos
+        )
+        if _cfp_pairs:
+            payload.extend(_cfp_payload)
+            row_bc = np.concatenate(
+                [row_bc, np.array(_cfp_bc, dtype=row_bc.dtype)]
+            )
+            pos = (
+                np.vstack([pos, np.array(_cfp_pairs, dtype=pos.dtype)])
+                if len(pos)
+                else np.array(_cfp_pairs, dtype=pos.dtype)
+            )
+            structured_features = extend_augmented_features(
+                structured_features, payload, _cfp_audit
+            )
+            hard_negative_mask_audit.extend(_cfp_audit)
+            print(
+                f"[masking] +{len(_cfp_pairs):,} swap counterpart positives "
+                f"(anchor-side transplant replayed onto the source positive)",
+                flush=True,
+            )
         # ── counterfactual twins (minimal-flip negatives from positives) ──
         # Sampled from the SAME original positive prefix (pool_size =
         # n_pre_mask_pos), so twins never compound on masked/swapped copies.

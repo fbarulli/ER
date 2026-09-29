@@ -690,18 +690,24 @@ def _mnrl_training_triples_with_populations(
     seen: set[tuple[int, int, int]] = set()
     for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
         anchor_i, negative_i = int(anchor), int(negative)
-        if mode_by_copy_pair.get((anchor_i, negative_i)) == "counterfactual":
+        mode = mode_by_copy_pair.get((anchor_i, negative_i))
+        if mode == "counterfactual":
             # Counterfactual twins get source-anchored triples below; treating
             # the twin copy as an anchor would inherit an incompatible positive.
             continue
-        source_anchor = original_by_copy_pair.get(
-            (anchor_i, negative_i), anchor_i
-        )
-        if mode_by_copy_pair.get((anchor_i, negative_i)) == "swap_values":
-            # A transplanted value may contradict the unchanged original
-            # positive. Until a compatible positive is constructed, omit it.
-            continue
-        positives = sorted(positives_by_anchor.get(source_anchor, ()))
+        if mode == "swap_values":
+            # An anchor-only transplant CONTRADICTS the source's unchanged
+            # positive, so that positive is not a valid target for this row.
+            # TIER 1(a) replays the same transplant onto the source positive
+            # and registers the result against the COPY anchor, so the copy
+            # has a compatible positive of its own. With no counterpart the row
+            # is still omitted rather than trained against a false match.
+            positives = sorted(positives_by_anchor.get(anchor_i, ()))
+        else:
+            source_anchor = original_by_copy_pair.get(
+                (anchor_i, negative_i), anchor_i
+            )
+            positives = sorted(positives_by_anchor.get(source_anchor, ()))
         positive_i = positives[0] if positives else None
         if positive_i is None or positive_i == negative_i:
             continue

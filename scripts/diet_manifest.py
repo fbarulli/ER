@@ -91,22 +91,31 @@ def effective_pos_views(
 
 
 def effective_neg_aug_views(
-    retained_neg_audit: list[dict], *, loss: str
+    retained_neg_audit: list[dict], *, loss: str, pos: np.ndarray | None = None
 ) -> int:
     """Augmented negative views MNRL actually trains.
 
-    Swap hard-negative copies (target_mode="swap_values") are minted but
-    omitted from MNRL triples by design (training.py
-    _mnrl_training_triples_with_populations). Counting them inflates
-    neg_aug_frac and makes the gate lenient for MNRL, so they are excluded
-    here. Other losses train every retained copy and are unchanged.
+    A swap hard-negative copy (target_mode="swap_values") is only trained by
+    MNRL when it has a COMPATIBLE positive: the transplant rewrites the anchor,
+    so the source's unchanged positive no longer matches it and the triple
+    builder used to omit the row outright. TIER 1(a) mints that counterpart
+    (masking.mint_swap_counterpart_positives) and registers it in ``pos``
+    against the copy anchor. So a swap row counts here exactly when its copy
+    anchor owns a positive — counted per row, from the bundle itself, never
+    assumed from the population label. Swap rows with no counterpart are still
+    excluded, which is what keeps neg_aug_frac honest.
     """
     if loss != "mnrl":
         return len(retained_neg_audit)
+    positives_by_anchor: set[int] = set()
+    if pos is not None:
+        for anchor, _positive in np.asarray(pos, dtype=int).reshape(-1, 2):
+            positives_by_anchor.add(int(anchor))
     return sum(
         1
         for row in retained_neg_audit
         if _mode(row) != "swap_values"
+        or int(row["copy_payload_idx"]) in positives_by_anchor
     )
 
 
@@ -136,9 +145,11 @@ def main(argv: list[str]) -> int:
         row for row in neg_audit
         if (int(row["copy_payload_idx"]), int(row["pair_payload_idx"])) in selected_neg
     ]
-    # MNRL never trains swap hard-negative copies (by design); exclude them
-    # so neg_aug_frac is honest for that loss. Other losses train them.
-    neg_aug_views = effective_neg_aug_views(retained_neg_audit, loss=loss)
+    # MNRL trains a swap hard-negative copy only when TIER 1(a) minted it a
+    # compatible counterpart positive; count those, exclude the rest.
+    neg_aug_views = effective_neg_aug_views(
+        retained_neg_audit, loss=loss, pos=pos
+    )
     # MNRL masked positives with no source negative never train; report real
     # survival on the positive side too (dead copies excluded from pos_views).
     surviving_pos_views, dead_masked_pos = effective_pos_views(

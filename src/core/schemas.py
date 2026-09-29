@@ -1161,8 +1161,10 @@ class TrainingSpec(BaseModel):
 
         When enabled, the MNRL loss records the mean loss attributed to each
         training population (twin / masked / base) per epoch and publishes it
-        as ``mnrl_subset_loss_by_epoch_fold{i}.csv``. Disabled by default so a
-        plain run is bit-identical to the untracked lane.
+        as ``mnrl_subset_loss_by_epoch_fold{i}.csv``. Observability only — it
+        changes no loss weight. Shipped ENABLED (TODO TIER 0): no P@R95 move
+        can be attributed to a population without it, so every calibration
+        call is unanswerable while it is off.
         """
 
         model_config = ConfigDict(extra="forbid")
