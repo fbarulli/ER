@@ -52,6 +52,14 @@ def main() -> None:
     # The gate is pair-level, not row-level: every candidate pair gets a
     # decision (no pair is dropped), so pairs carry no dropped bucket.
     row_accounting = _dp_manifest_accounting(df, pairs, canon)
+    # Attribute-consistency flags (volume_inconsistency, ambiguous_volume,
+    # ...) are computed in extract_all and aggregated per gtin into the
+    # in-memory canonical frame, but were never persisted — the counts
+    # drifted between snapshots (volume_inconsistency 232 -> 197,
+    # ambiguous_volume 49 -> 69 on the 2026-09-28 rebuild) with nothing
+    # pinning them. Persist the census here so the counts are verifiable
+    # from committed data (results/manifests/data_prep.json).
+    row_accounting["flags_census"] = _flag_census(canon)
     # The stage's outputs are its two frozen artifacts plus the consolidated
     # trace. The trace used to be listed here by its OLD per-stage name
     # (results/logs/gate_visibility.csv), whose writer this directive deleted —
@@ -123,6 +131,30 @@ def _dp_manifest_accounting(df, pairs, canon) -> dict:
         # the gate census can't silently thin)
         "gate_pairs": len(pairs),
     }
+
+
+def _flag_census(canon) -> dict[str, int]:
+    """Count attribute-consistency flags per canonical record (gtin level).
+
+    ``canon`` is the in-memory canonical-records frame returned by
+    ``run_within_brand_pipeline``; its ``attribute_consistency_flags`` column
+    holds a sorted list of flags per gtin (aggregated from extract_all in
+    generate_canonical). Counting these makes the previously in-memory-only
+    flags verifiable from committed data, since the census rides the data_prep
+    manifest. Each gtin carrying a flag counts once; a gtin can carry several.
+    """
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    column = getattr(canon, "get", None)
+    if column is None or "attribute_consistency_flags" not in canon:
+        return {}
+    for flags in canon["attribute_consistency_flags"]:
+        if not isinstance(flags, (list, tuple, set)):
+            continue
+        for flag in flags:
+            counts[str(flag)] += 1
+    return dict(sorted(counts.items()))
 
 
 if __name__ == "__main__":
