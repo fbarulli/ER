@@ -4519,7 +4519,22 @@ def train_one_config(
                     max_triples=MAX_TRIPLES,
                 )
                 if not examples:
-                    raise RuntimeError("no triples built for fold")
+                    # Triplet is the ANN-mined lane: it needs hard negatives
+                    # mined from real embeddings. On the initial fold emb0 is
+                    # empty (no checkpoint yet) and when ANN mining is off the
+                    # mined pool is empty by construction, so no triples can be
+                    # built. Skip the fold with a clear status rather than
+                    # hard-crashing (mirrors the contrastive/MNRL skip path).
+                    rows.append(
+                        {
+                            "fold": fold_i,
+                            "status": "skipped",
+                            "reason": "triplet loss needs ANN-mined hard negatives; "
+                            "none were available (ANN mining off or no checkpoint "
+                            "embeddings on the initial fold)",
+                        }
+                    )
+                    continue
                 train_ds = Dataset.from_dict(
                     {
                         "anchor": [ex.texts[0] for ex in examples],
