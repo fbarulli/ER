@@ -1,0 +1,5 @@
+# Augmentation configuration
+target_support: 3
+seed: 1337
+canonicals_path: "data/canonical_records.csv"
+output_dir: "data/augmented"

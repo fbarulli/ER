@@ -438,6 +438,45 @@ Process / repo:
       hpo_persistence PG machinery — LOW priority, triage deferred unless
       they touch the active path.
 
+Dedupe (src/training/dedupe.py) — audit findings 2026-09-29:
+- The tiered dedupe is CORRECT for its purpose (exact within-retailer
+  duplicate removal): T1 retailer+barcode (valid checksum), T2
+  retailer+title+price(+barcode), T3 retailer+title. Invariant holds: 0
+  retailer+title dupes remain; SKU->rep mapping is total and covers 0..n-1.
+- **One signal left on the table — invalid-checksum barcode groups.**
+  Source dataset.csv: 71,623 rows; 41,545 missing barcode (NA); 30,078
+  with digit content of which 26,363 valid checksum and **3,715 invalid**.
+  T1 skips invalid-checksum barcodes (treated as "export noise, not
+  identity"); T2/T3 use EXACT title match. Net effect: **95 groups (220
+  rows) share the same malformed barcode string at the same retailer but
+  are not collapsed**; 125 of those rows are collapsible.
+- Metrics across those 95 groups (title similarity):
+  - avg Jaccard: mean 0.61, median 0.64 (range 0.07-1.0)
+  - avg fuzzy/Levenshtein ratio: mean 0.76, median 0.77 (range 0.30-1.0)
+  - 42 groups > 0.8 fuzzy; 52 groups > 0.6 Jaccard.
+  - Recovery by MIN-fuzzy threshold (worst pair in group must clear):
+    >=0.5 -> 84 groups / 110 rows; >=0.6 -> 73 / 96; >=0.7 -> 53 / 74;
+    >=0.8 -> 40 / 53; >=0.9 -> 31 / 37.
+- The ambiguous (0.5-0.6) groups are MOSTLY the same product confirmed by
+  the `attributes` structured field (brand, volume, flavor, carbonization,
+  pack type/material AGREE across rows; e.g. Big Red 355ml glass bottle,
+  Whole Foods lime sparkling water 6pk, IBC root beer 12oz). Edge cases
+  that could be genuinely different: Whole Foods "Nutrient Enhanced Water"
+  vs "Zero Calorie LEMONADE Nutrient Water" (different flavor). Wild price
+  variance (L&A cranberry $18/$47/$114; IBC $4.63/$60) = different
+  pack sizes/sellers on amazon, NOT a merge blocker.
+- **Recommended approach (data-driven, not fuzzy-title-only):** merge a
+  group only when the structured `attributes` signals AGREE across rows
+  (or a configurable subset does); skip on structured conflict. Fuzzy/
+  Jaccard title similarity alone is a weak disambiguator because it cannot
+  tell "same product, different pack size" from "genuinely different SKU".
+  Cross-retailer same-barcode rows (6,738 valid) are intentionally kept as
+  matching targets — do NOT collapse those.
+- OPEN: quantify structured-agreement vs. conflict across the 95 groups
+  (parse `attributes` per row) to size the safe recovery precisely, then
+  decide whether to add a weak T1.5 tier (same retailer + same invalid
+  barcode + structured agreement -> collapse).
+
 ## DEAD LAST — recent additions (2026-09-29; do NOT start until P1/P2 done)
 
 ### Standing rules for all new code (owner)

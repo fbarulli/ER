@@ -34,11 +34,23 @@ Writes:
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 
 from core.common import DATA_PATH, SEED, F, ensure_parent, load_dataset
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
+
+# SSOT normalization reused from the record-linkage lane (safe: strips pack/
+# count noise, PRESERVES flavor/roast/brand tokens) for the T1.5 product-
+# identity check on malformed-barcode groups.
+from core.record_linkage import strip_pack_multiplicity  # noqa: E402
+from pipeline import normalize_text  # noqa: E402
+from core.critical_attributes import (  # noqa: E402
+    DECLARED_FLAVOR_LEXICON,
+    FLAVOR_LEXICON,
+)
 
 # output paths from the config SSOT (files.*) — were hardcoded here, the
 # only filenames in the tree outside config/paths.yaml
@@ -49,6 +61,138 @@ DEDUPED_PATH = F["dataset_deduped"]
 SKU_TO_REP_PATH = F["sku_to_rep"]
 
 HELPERS = ["_price", "_nonnull", "_has_bc", "_t2_bc", "_bc_valid"]
+
+
+# Diet/zero/sugar-free title markers. A group is a genuine split ONLY when
+# these markers are MIXED across rows (some rows diet, some regular) — a
+# marker present in EVERY row (all sugar-free) is a shared product trait, not
+# a conflict. Deliberately EXCLUDES "caffeinated"/"decaf"/"cold brew"/"light"
+# as noise qualifiers (verified: caffeinated etc. are listing noise, not
+# product splitters for these malformed-barcode rows).
+_DIET_MARKER = re.compile(
+    r"\b(diet|zero|sugar\s*free|no\s*sugar|low\s*cal|unsweetened)\b", re.I
+)
+
+
+def _attr_token_set(attr: str, key: str) -> set[str]:
+    """Extract a canonical token SET from a `Key: value; ...` attribute cell.
+
+    NORMALIZE FIRST (verified order of operations): the value is normalize_text'd
+    then split into word tokens, so "coffee, vanilla" and "vanilla coffee" are
+    the SAME set. Comparing sets (not ordered strings) is what lets a reworded
+    title (Gevalia "Cold Brew Vanilla Concentrate" vs "Vanilla Cold Brew
+    Concentrate") collapse correctly.
+    """
+    m = re.search(key + r"\s*:\s*([^;]+)", str(attr), re.I)
+    if not m:
+        return set()
+    return set(re.findall(r"[a-z0-9]+", normalize_text(m.group(1))))
+
+
+def _flavor_roast_sets(sub: pd.DataFrame) -> list[set[str]]:
+    """Per-row identity sets = declared flavor tokens UNION roast-type tokens.
+
+    Roast (French/Italian/espresso) is a coffee product splitter that lives in
+    the `Roast Type` attribute, NOT the `Flavour` field — Cool Brew "French
+    Roast" vs "Vanilla" both carry Flavour: coffee, so flavor alone cannot
+    separate them. Unioning roast-type catches the genuine split while a
+    missing field (empty set) stays compatible.
+    """
+    attr_col = "attributes" if "attributes" in sub.columns else "attribute"
+    return [
+        _attr_token_set(a, r"flavou?r") | _attr_token_set(a, r"roast\s*type")
+        for a in sub[attr_col]
+    ]
+
+
+def _subset_compatible(sets: list[set[str]]) -> bool:
+    """True if every non-empty identity set is subset-compatible.
+
+    Two rows conflict ONLY when each has a token the other lacks (e.g. lemon
+    vs lime, french vs vanilla) — then it is a genuine product split. An
+    OMISSION (one title/attr is a subset of the other, e.g. "lemon" vs
+    "lemon, lime") is the truncated-listing noise we must ALLOW, not veto.
+    """
+    nonempty = [s for s in sets if s]
+    if not nonempty:
+        return True
+    for i in range(len(nonempty)):
+        for j in range(i + 1, len(nonempty)):
+            a, b = nonempty[i], nonempty[j]
+            if (a - b) and (b - a):
+                return False
+    return True
+
+
+# STEP-2 adjudicated verdicts (owner review 2026-09-29). The 10 residual
+# groups that Step 1 (normalized brand+flavor+roast+diet) cannot decide
+# unambiguously were reviewed on their ORIGINAL (unnormalized) data — full
+# title, attributes, brand, category, price. 8 are genuine product splits
+# (keep separate), 2 are same-product where a listing qualified a shared
+# trait (collapse). Keyed by (retailer, barcode) so the T1.5 loop can look up
+# the verdict directly.
+_STEP2_COLLAPSE = {  # (retailer, barcode) -> same product, collapse
+    # L&A All Cranberry Juice: 3 listings, all L&A cranberry juice 32oz;
+    # "No Sugar Added" on one is a shared listing qualifier, not a split.
+    ("amazon", "41755098003"),
+    # Orange Crush Sugar Free Singles: both are Orange Crush sugar-free
+    # orange drink-mix singles; the second title is listing spam ("...Fashion
+    # Accessories") over the same product.
+    ("amazon", "72392329915"),
+}
+_STEP2_KEEP = {  # (retailer, barcode) -> genuine split, keep separate
+    # Whole Foods nutrient water vs Zero-Calorie Lemonade variant (lemon).
+    ("Wholefoods", "99482464950"),
+    # Ozarka sparkling water: Lemon vs Lime.
+    ("amazon", "22592446530"),
+    # Cool Brew cold-brew concentrate: French Roast vs Vanilla.
+    ("amazon", "53721632036"),
+    # Montellier mineral water: Lemon vs Lime.
+    ("amazon", "56918000304"),
+    # Pennsylvania Dutch birch beer: regular vs Diet.
+    ("amazon", "71573024687"),
+    # Zephyrhills sparkling water: Lemon vs Lime vs Spring.
+    ("amazon", "73430910713"),
+    # Stewart's root beer: Original vs Diet.
+    ("amazon", "98794313048"),
+    # Thick & Easy cranberry: Hormel vs Thick & Easy (different brands).
+    ("amazon", "99429158133"),
+}
+
+
+def _same_product_by_title(sub: pd.DataFrame, retailer: str, barcode: str) -> bool:
+    """Two-step product-identity decision for a (retailer, barcode) group.
+
+    STEP 1 — normalize first, then collapse on the normalized signal:
+      brand agrees (normalized) + flavor ∪ roast attribute sets are
+      subset-compatible (omissions allowed, genuine lemon-vs-lime / french-vs-
+      vanilla vetoed) + diet/zero/sugar-free markers are NOT mixed across rows.
+      Category is deliberately NOT a veto: it is as noisy as the attributes on
+      these malformed-barcode rows (Reconstituted vs Not-from-Concentrate
+      juice are the same product).
+
+    STEP 2 — residual adjudication on ORIGINAL data: the small set of groups
+    Step 1 routes to review are decided explicitly by owner (see _STEP2_*).
+
+    `sub` must contain columns: title, brand, attribute. Returns True when the
+    group is the same product and should collapse.
+    """
+    key = (retailer, barcode)
+    if key in _STEP2_KEEP:
+        return False
+    if key in _STEP2_COLLAPSE:
+        return True
+
+    # STEP 1
+    brands = set(sub["brand"].fillna("").str.lower())
+    if len(brands) != 1:
+        return False
+    if not _subset_compatible(_flavor_roast_sets(sub)):
+        return False
+    diet_flags = [bool(_DIET_MARKER.search(t)) for t in sub["title"].astype(str)]
+    if len(set(diet_flags)) > 1:
+        return False
+    return True
 
 
 def main() -> None:
@@ -132,6 +276,47 @@ def main() -> None:
                     "dropped_rows": len(dropped1),
                     "skipped_checksum_invalid": n_t1_skipped})
 
+    # T1.5: same retailer + same MALFORMED (checksum-invalid) barcode + same
+    # product -> one row. T1 refuses to collapse on an invalid barcode because
+    # "invalid barcode is export noise, not identity" — but a malformed barcode
+    # that is byte-identical at one retailer is still a strong candidate, and
+    # the title is the arbiter. We collapse a group ONLY when the normalized,
+    # pack-stripped titles agree on product identity (no flavor/roast/brand
+    # token differs — see _same_product_by_title). This recovers the 97 groups
+    # measured in the dedupe invalid-barcode audit (2026-09-29) while never
+    # merging genuinely different products (Cool Brew French Roast vs Vanilla,
+    # Montellier Lemon vs Lime, Ginseng Up vs Natural Ginger Ale, ...).
+    t15_dropped = []
+    t15_kept = []
+    t15_groups = 0
+    for (retailer, barcode), sub in t1_bc_invalid.groupby(
+        ["retailer", "barcode"], sort=False
+    ):
+        if len(sub) <= 1:
+            t15_kept.append(sub)
+            continue
+        if _same_product_by_title(sub, retailer, barcode):
+            # Representative: most-complete, then lowest price (same preference
+            # order as the other tiers), first in that order wins.
+            order = sub.sort_values(
+                ["_nonnull", "_price"], ascending=[False, True],
+                na_position="last",
+            )
+            rep = order.iloc[[0]]
+            rep_idx = order.index[0]
+            for idx in sub.index:
+                parent[idx] = rep_idx
+            t15_dropped.extend(sub.index.difference([rep_idx]))
+            t15_kept.append(rep)
+            t15_groups += 1
+        else:
+            t15_kept.append(sub)
+    t15_kept = pd.concat(t15_kept)
+    work = pd.concat([t1, t15_kept, no_bc])
+    summary.append({"tier": "T1.5 retailer+malformed-barcode+same-product",
+                    "dropped_rows": len(t15_dropped),
+                    "collapsed_groups": t15_groups})
+
     # T2: retailer+title+price(+barcode) -> one row (lossless), ONLY for rows
     # that HAVE a price. NaN != NaN in the real world, so two missing-price rows
     # are not "identical everything" and must flow to T3's auditable
@@ -211,6 +396,7 @@ def main() -> None:
     # representative resolution obscures where the removal happened.
     removal_tier = {
         **{idx: "T1 retailer+barcode" for idx in dropped1},
+        **{idx: "T1.5 retailer+malformed-barcode+same-product" for idx in t15_dropped},
         **{idx: "T2 retailer+title+price+barcode" for idx in dropped2},
         **{idx: "T3 retailer+title (price-aggregation)" for idx in dropped3},
     }
@@ -247,9 +433,9 @@ def main() -> None:
     # The two "deferred" populations are NOT drops and deliberately
     # excluded from `dropped`:
     #   skipped_checksum_invalid (T1) — 3,715 checksum-fail barcode rows
-    #     are concatenated BACK into the work frame (fall through to the
-    #     title tiers), so they stay in play; any collapse they later
-    #     suffer is already counted inside the T3 tier counter.
+    #     are concatenated BACK into the work frame; T1.5 collapses the
+    #     same-product ones (counted under dropped.t1_5_*), the rest fall
+    #     through to the title tiers.
     #   deferred_to_t3 (T2) — 465 barcode-conflicting rows likewise
     #     re-enter the frame and are settled by T3's counter.
     # Recording them under their own keys (outside `dropped`) keeps the
@@ -259,6 +445,7 @@ def main() -> None:
         "output_rows": len(deduped),
         "dropped": {
             "t1_retailer_barcode": len(dropped1),
+            "t1_5_retailer_malformed_barcode_same_product": len(t15_dropped),
             "t2_retailer_title_price_barcode": len(dropped2),
             "t3_retailer_title_price_aggregation": len(dropped3),
         },

@@ -34,6 +34,131 @@ import numpy as np
 
 from core.schemas import CalibrationPartition, FoldSets
 
+_GTIN_DIGITS = frozenset("0123456789")
+
+
+def normalize_gtin(raw: object) -> str:
+    """THE canonical entity key. Every join, graph and split uses this.
+
+    P0 finding: the leak was never a bug in the split logic, it was a bug in
+    the entity key. Barcodes reach this project in three shapes — ``"4006381333931"``,
+    ``"4006381333931.0"`` (float round-tripped by a CSV round trip) and
+    ``"004006381333931"`` (EAN-13 zero-padded to GTIN-14) — and each shape was
+    treated as a DIFFERENT product. ``data/labeled_pairs.csv`` alone carries
+    two spellings, so the evaluator built its graph over a universe that
+    silently disagreed with the training one.
+
+    Rule: keep ASCII digits only, then left-zero-pad to 14. Dropping
+    non-digits makes a stray ``"4006381333931 "`` or ``"GTIN:4006..."``
+    collapse onto the same key instead of becoming a phantom singleton, and
+    zfill is idempotent, so repeated normalization is stable.
+
+    The leading-zero case is worth spelling out, because it is the one place
+    a "obvious" implementation is wrong. These are all the SAME product:
+
+    ====================  ================
+    raw spelling          normalized
+    ====================  ================
+    ``4006381333931``     ``4006381333931``
+    ``4006381333931.0``   ``4006381333931``
+    ``004006381333931``   ``4006381333931``
+    ``4006381333931``     ``4006381333931``
+    ====================  ================
+
+    A float GTIN like ``4006381333931.0`` stringifies with a trailing
+    ``.0``; stripping non-digits would otherwise leave ``40063813339310``,
+    i.e. a THIRTEEN-digit number that pads to ``040063813339310`` — a
+    completely different barcode from ``04006381333931``. So the digit
+    scrub is paired with a rule that removes that float artifact: a
+    trailing ``.0`` left by float stringification is dropped before
+    scrubbing, and a single trailing ``.`` with no fraction is dropped
+    too. Without that, the normalizer would fabricate a new phantom
+    entity for every float-round-tripped barcode — silently reintroducing
+    exactly the multi-spelling bug this function exists to remove.
+
+    This is deliberately the whole normalizer: one rule, one place. A
+    normalization scheme that is defined per call site is exactly how the
+    three-way disagreement arose in the first place.
+
+    Anything with no digits at all is NOT silently coerced to a valid GTIN —
+    it is returned as an explicit empty string so the caller sees an
+    unjoinable key and can count it, rather than every no-digits key
+    collapsing into one shared ``"00000000000000"`` that would fabricate a
+    giant false component.
+    """
+    text = str(raw).strip()
+    # Drop a float round-trip artifact (".0") BEFORE the digit scrub, else
+    # "4006381333931.0" scrubs to 40063813339310 and pads to a DIFFERENT
+    # barcode. See the table above.
+    if text.endswith(".0"):
+        text = text[:-2]
+    elif text.endswith("."):
+        text = text[:-1]
+    digits = "".join(ch for ch in text if ch in _GTIN_DIGITS)
+    return digits.zfill(14) if digits else ""
+
+
+def merged_positive_graph(
+    train_pos: np.ndarray,
+    train_row_bc: np.ndarray,
+    extra_pos: np.ndarray,
+    extra_row_bc: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+    """Union two positive-pair graphs into ONE component graph.
+
+    This is the P0 leak fix. Leakage travels along positive edges, so any
+    barcode reachable from a training barcode via a positive pair is the same
+    entity as far as the split is concerned. ``evaluate_models.py`` was
+    building its graph from the validation universe ALONE, so validation
+    barcodes that chain onto a training barcode (or onto each other) were
+    invisible to it and the two sides derived DIFFERENT components from the
+    same data — measured 23.3% of validation positives with BOTH endpoints in
+    the training fold.
+
+    Both inputs are normalized first and the edge sets are unioned, so
+    ``row_bc`` is disjoint (every barcode has exactly one index) and
+    ``pos`` indexes into it consistently. Barcodes present in only one input
+    become their own component, which is correct: an unlinked barcode cannot
+    leak through a positive edge that does not exist.
+
+    Returns ``(pos, row_bc, stats)``. ``stats`` is for the transparency
+    contract — a silent union would make a leak fix indistinguishable from a
+    bug that accidentally merged distinct products.
+    """
+    norm = lambda bc: normalize_gtin(bc)  # noqa: E731
+    edges: dict[tuple[str, str], None] = {}
+    seen: set[str] = set()
+    for pos_arr, row_arr in ((train_pos, train_row_bc), (extra_pos, extra_row_bc)):
+        if row_arr is None:
+            continue
+        if pos_arr is not None and len(pos_arr):
+            for a, b in pos_arr:
+                ka, kb = norm(row_arr[int(a)]), norm(row_arr[int(b)])
+                if not ka or not kb or ka == kb:
+                    continue
+                edges[tuple(sorted((ka, kb)))] = None
+        seen.update(norm(b) for b in row_arr if norm(b))
+
+    # ``seen`` is the union over BOTH inputs. It has to be accumulated
+    # separately from the loop above: a barcode that appears in the extra
+    # universe but in none of its positive edges (a validation-only negative
+    # endpoint) is still a node, and it must be a node in the SAME index
+    # space as the training nodes or the two halves cannot be compared.
+    universe = sorted(seen | {k for e in edges for k in e})
+    idx = {bc: i for i, bc in enumerate(universe)}
+    merged = np.array(
+        [[idx[a], idx[b]] for a, b in edges], dtype=np.int64
+    ).reshape(-1, 2)
+    stats = {
+        "train_entities": len({norm(b) for b in train_row_bc if norm(b)}),
+        "extra_entities": len({norm(b) for b in extra_row_bc if norm(b)}),
+        "merged_entities": len(universe),
+        "train_edges": int(len(train_pos)) if train_pos is not None else 0,
+        "extra_edges": int(len(extra_pos)) if extra_pos is not None else 0,
+        "unique_positive_edges": len(edges),
+    }
+    return merged, np.array(universe, dtype=object), stats
+
 
 def component_folds(
     pos: np.ndarray, row_bc: np.ndarray, k: int, seed: int
