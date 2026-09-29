@@ -28,7 +28,7 @@ from core.common import (
 )
 from core.mlflow_ctx import MlflowCtx
 from core.wandb_ctx import WandbCtx
-from training.folds import holdout_split
+from training.folds import derive_holdout
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 from training.prepared_bundle import load_prepared_bundle
 
@@ -115,14 +115,7 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
 
     if args.split != "holdout":
         raise ValueError("prepared GPU training currently supports the SSOT holdout split only")
-    train_bc, dev_bc, test_bc = holdout_split(
-        pos,
-        row_bc,
-        n_folds=int(cfg["split"]["holdout_component_folds"]),
-        seed=SEED,
-        dev_fraction=float(cfg["split"]["dev_fraction"]),
-        test_fraction=float(cfg["split"]["test_fraction"]),
-    )
+    train_bc, dev_bc, test_bc = derive_holdout(pos, row_bc, cfg["split"], seed=SEED)
     print(
         f"[prepared-bundle] loaded {args.bundle} "
         f"sha256={manifest.sha256} profile={manifest.masking_profile} "

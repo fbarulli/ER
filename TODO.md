@@ -11,6 +11,158 @@
 - **DEAD LAST — graph/linkage additions** (record linkage, GNN/RQ-VAE
   semantic IDs — SKIPPED by owner verdict, graph-construction tiers, queued
   measurement). Do not start until P1/P2 closed.
+- **P0 — VALIDATION REBUILD (owner ruling 2026-09-29, supersedes the 3k/5k
+  lanes)**: emit ONE final validation CSV from a single merged component graph.
+  Blocks any TIER 3 decision. Scoped below.
+
+## P0 — VALIDATION REBUILD (owner ruling 2026-09-29: one final validation CSV)
+
+**Owner ruling.** Do not keep the 3k/5k lanes. Add everything back to training
+and keep ONE final validation CSV. Fix the gates so they are measured on a
+population the decision did not touch.
+
+### The blocker that was found: 74.7% of current validation is contaminated
+- `row_bc` (barcodes) and `data/labeled_pairs.csv` (gtins) looked like disjoint
+  namespaces: **intersection 0/5,428**. The training-side component split was
+  structurally blind to the validation set, so neither side protected the other.
+- Root cause of the apparent disjointness is missing normalization, not two
+  identifier worlds. `norm(s) = strip non-digits, zfill(14)` gives:
+  - validation gtins that ARE `row_bc` barcodes: **5,428/5,428 (100%)**
+  - positive pairs with both sides resolvable: **1,414/1,414 (100%)**
+  - `row_bc` matching `dataset.gtin` (normalized): 14,901/14,921
+  - raw `dataset.gtin` lengths are messy (7..14 digits), which is why the
+    unnormalized join returned zero.
+- Measured contamination of the CURRENT protocol (train = barcode folds 0+1):
+  - POSITIVES: both gtins in train **23.3%** / one in train **51.4%** /
+    clean **25.3%** -> only 358/1,414 are clean.
+  - NEGATIVES: both **24.2%** / one **49.2%** / clean **26.6%**.
+  - So the test-quarter P@R95 measures memorization as well as generalization.
+
+### The fix: single merged component graph (feasible, verified)
+- Union-find over the normalized entity namespace, with edges from BOTH
+  `bundle['pos']` base positive pairs AND `labeled_pairs` positive pairs.
+- Merged graph is safe to split (no giant component):
+  - entities 14,921 -> **components 14,080**
+  - **largest component = 15 entities (0.1%)**; nothing >= 50 entities
+  - validation positives in components >= 50 entities: **0**
+- Guarantee: because validation positive pairs contribute edges, both gtins of
+  a positive always land in the SAME fold. Verified: **0 straddles in 1,414/1,414**
+  positives. A test-fold positive therefore has neither side in train -> full
+  leak 0% by construction.
+- Negatives CAN straddle folds (mined negatives are not identity links). This
+  matches current behaviour; treat it as a known, documented property, not a
+  regression. Do not assert no-straddle on negatives.
+
+### Resulting single validation CSV (folds 2+3, seed 1337)
+- **758 positives + 3,873 negatives** (vs 1,414/7,722 total today).
+- Training cost is effectively zero: training base positive pairs retained
+  (folds 0+1) = **10,682 vs 10,692 today = -10 pairs (-0.09%)**.
+- Per-field measuring power, old test quarter (~354 pos) -> new validation:
+
+  | field | valPairs | distinct | singletons | largest bucket | old test | gain |
+  |---|---|---|---|---|---|---|
+  | carbonation | 654 | 3 | 0 | 362 | ~177 | 3.7x |
+  | pack | 758 | 30 | 7 | 358 | ~142 | 5.3x |
+  | volume | 758 | 39 | 9 | 170 | ~84 | 9.0x |
+  | package_type | 267 | 7 | 3 | 166 | ~55 | 4.9x |
+  | **sweetener** | **165** | 8 | 2 | 75 | ~38 | **4.3x** |
+  | **flavor** | **390** | 34 real values | 4 | 42 | ~11 | **35x** |
+  | pulp | 2 | 1 | 0 | 2 | ~1 | n/a |
+
+- Fold balance is already adequate and needs no stratification to fix:
+  `component_folds` gives barcodes 3730/3730/3730/3730 and base positive pairs
+  5299/5453/5249/5372 against an ideal of 5343 (within +/-4%). Stratified
+  assignment is therefore OPTIONAL here, not the fix — the leak and the
+  gtin/barcode join are the real defects. Revisit only if a slice is still thin.
+
+### Gate realignment required (the "align our gates" item)
+- `build_field_slice.py` buckets by TWIN (1 bucket per field, ~34% each from
+  2,044 twins) while `labeled_pairs` slices by CANONICAL VALUE (163 flavors).
+  These are different notions of a bucket, yet the checkpoint contract compares
+  a twin-bucket P@R95 floor of 0.500 against field-value P@R95 as if equivalent.
+  **Reconcile to one definition before either number is a decision gate.**
+- **Flavor gates — CORRECTED 2026-09-29 (an earlier entry here was WRONG).**
+  An earlier note claimed "107/163 flavor values are singletons, drop per-flavor."
+  That counted FUSED PAIR COMBINATIONS (`{orange,lemon}` treated as one unit),
+  not flavor values, and manufactured fake sparsity. The truth:
+    - `flavor_set` has **34 real values**; true singletons = **4**.
+    - Per-value coverage in the 758-pair validation: ginger 83, fruit 68,
+      apple 59, coffee 45, lemon 40, aloe 30, peach 19, strawberry 19,
+      **orange 18**, tonic 18, berry 13, coconut 11.
+    - **6 of 31 values have n >= 30** -> per-flavor IS supportable for the top 6.
+  Correct policy: **gate on the top-6 flavor aggregate; treat the tail
+  (peach/orange/tonic and below) as INFORMATIONAL ONLY** — no floor. Orange at
+  n=18 is a usable coarse signal but far below sweetener's largest bucket (75),
+  so it must not carry a standalone floor.
+- **Drop pulp as a gate entirely**: 2 pairs in validation. Unmeasurable at any
+  budget that does not also break the component constraint. Root cause is
+  POPULATION SCARCITY, not split or parsing weakness — do not "fix" an extractor:
+    - `pulp_set` populated in only **302/13,250 (2.3%)** canonical records vs
+      flavor 74.2% / carbonation 81.8% / sweetener 43.9% (~30x rarer).
+    - 140/5,428 (2.6%) validation gtins; positives are the SAME product so
+      "both sides flagged" reduces to "is this a pulp product" -> only
+      **7/1,414 (0.5%)** of verified positives are pulp -> 2 in the val half.
+    - Provenance is SOURCE ATTRIBUTES, not canonical text (hence the two-way
+      disagreement: 301 flagged records whose text never says "pulp", and 25
+      texts that do but are unflagged). Unioning the attribute signal recovers
+      only 26 more gtins (+9%); 302/324 = 93% already captured. No real gap.
+  Pulp becomes a gate only if the verified positive population grows for that
+  category — better allocation cannot fix a 0.5% category.
+- Per-slice gates that ARE supportable after this rebuild: volume, pack,
+  carbonation, package_type, sweetener (aggregate per value, 8 values, largest
+  bucket 75, only 2 singletons).
+
+### The 16,345 dead masked-positive anchors — NOT validation (owner asked)
+- Confirmed they must not enter the validation CSV. Reasons in order of force:
+  1. **Distribution shift** — they are masked text (20-30% `[MASK]` tokens);
+     P@R95 on them measures dropout robustness, not clean-text matching.
+  2. **Circularity** — they are the OUTPUT of the augmentation knobs being
+     tuned (`frac`, swap fields, twin composition). TODO's own doctrine: the
+     deciding metric must be measured on a population the decision did NOT touch.
+  3. **Not independent** — they derive from the same source anchors as training.
+- Correct use: a **dedicated augmentation-invariance probe**, kept strictly
+  separate from P@R95, answering "did augmentation damage the model?". The
+  harness already exists in `build_field_slice.py` (twin buckets + the
+  twin-bucket floor >= 0.500 in the checkpoint contract); it currently reads
+  only `target_mode == "counterfactual"` and could gain a masked-anchor bucket.
+- "We don't need 8k, add them all back": there is no 8k to add back. The 3k/5k
+  files DO NOT EXIST (`training_data/` is absent), so nothing is currently
+  reserved from them. The 7,722 figure is validation NEGATIVES, not reserved
+  positives. The 16,345 dead anchors are a training-side issue the gate already
+  excludes.
+
+### Implementation checklist (NOT yet started — awaiting go-ahead)
+- [ ] **BLOCKER FIRST — single source of truth for split derivation.**
+      `folds.holdout_split` / `component_folds` is called from 7+ independent
+      sites: `train.py:1262`, `train_prepared.py:118`, `evaluate_models.py:137`,
+      `scripts/sid_phase0_report.py:179`, `scripts/sid_hybrid_eval.py:167`,
+      `scripts/sid_graph_eval.py:133`, `selftest.py`. P0 changes the component
+      GRAPH (adds validation positive edges), so `component_folds(pos,row_bc,...)`
+      cannot keep its signature. Miss one call site and that script silently
+      derives a DIFFERENT split from the others — strictly worse than today's
+      leak, because a leak is measurable but split divergence is invisible and
+      would invalidate every P@R95 comparison collected so far.
+      Consolidate to ONE entry point FIRST, then put the merged graph behind it.
+- [ ] **Good news / sequencing: NO bundle rebuild is needed for the split change.**
+      The bundle stores 19 keys and NONE is fold/partition/split/calibration —
+      the split is re-derived at runtime, never baked in. So P0 lands
+      INDEPENDENTLY of the `frac` and Tier 2 diet-floor decisions.
+      Also `labeled_pairs_csv` is already a bundle key, so emit the single
+      validation CSV per-bundle deterministically from `bundle['labeled_pairs_csv']`
+      rather than reading the loose `data/labeled_pairs.csv`.
+- [ ] Add `normalize_gtin()` (strip non-digits + zfill 14) as the single
+      canonical entity key; use it at every train/validation boundary.
+- [ ] Add extra positive-pair edges to the fold graph (validation positives)
+      behind the single entry point above.
+- [ ] Emit ONE validation CSV: `gtin1, gtin2, true_label, fold, component_id`
+      plus per-field slice flags (volume, pack, sweetener, flavor,
+      package_type, carbonation) so downstream tools cannot re-derive buckets
+      differently again.
+- [ ] Retarget `scripts/diet_manifest.py` and the checkpoint eval contract at
+      the new CSV; delete the 3k/5k path entries in `config/paths.yaml`.
+- [ ] Add a leak regression test: assert 0/1,414 positives straddle folds and
+      0% of test-fold positives have either side in train.
+- [ ] Restate the flavor reopen trigger against an aggregate/twin bucket.
 
 ## P1 — FINALIZE before training (data alignment etc.)
 - [ ] **Bundle rebuild (blocks training) — RECHECKED 2026-09-29, the gate does

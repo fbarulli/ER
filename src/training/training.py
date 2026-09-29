@@ -3517,26 +3517,6 @@ def _dynamic_mask_negative_transform(
     return transformed
 
 
-def _partition_calibration_pairs(
-    positive_pairs: np.ndarray,
-    negative_pairs: np.ndarray,
-    row_bc: np.ndarray,
-    calibration_fraction: float,
-    seed: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Reserve component-safe calibration pairs from early-stop DEV."""
-    from training.folds import partition_component_pairs
-
-    return partition_component_pairs(
-        positive_pairs,
-        negative_pairs,
-        row_bc,
-        calibration_fraction,
-        seed,
-        ensure_different_gtin=True,
-    )
-
-
 def _load_labeled_different_positive_pairs(
     *,
     eval_pos: np.ndarray,
@@ -3737,12 +3717,6 @@ def train_one_config(
     if cfg["architecture"] != "two_tower":  # schema keeps this exhaustive
         raise ValueError(f"unsupported training architecture: {cfg['architecture']}")
     calibration_config = load_config()
-    calibration_fraction = float(
-        calibration_config["split"]["calibration_dev_fraction"]
-    )
-    calibration_seed_offset = int(
-        calibration_config["split"]["calibration_seed_offset"]
-    )
 
     _train_neg_source = (
         train_neg_pairs if train_neg_pairs is not None else neg_pairs
@@ -4184,13 +4158,16 @@ def train_one_config(
                     flush=True,
                 )
             else:
+                from training.folds import derive_calibration_carve
+
                 dev_pos, calibration_pos, hard_dev, calibration_neg = (
-                    _partition_calibration_pairs(
+                    derive_calibration_carve(
                         dev_pos,
                         hard_dev,
                         row_bc,
-                        calibration_fraction,
-                        seed + fold_i + calibration_seed_offset,
+                        calibration_config["split"],
+                        seed=seed,
+                        fold_index=fold_i,
                     )
                 )
             if len(test_pos) == 0 or len(hard_test) == 0:

@@ -32,6 +32,15 @@ FAILED: list[str] = []
 SKIPPED: list[str] = []
 
 
+def _raises(fn) -> bool:
+    """True if fn() raised. Used where a contract MUST refuse bad input."""
+    try:
+        fn()
+    except Exception:
+        return True
+    return False
+
+
 def check(name: str, cond: bool, detail: str = "") -> None:
     tag = "PASS" if cond else "FAIL"
     print(f"  [{tag}] {name}" + (f" — {detail}" if detail and not cond else ""))
@@ -2481,6 +2490,12 @@ def main() -> None:
     oracle_mining()
     print("== 6. component folds ==")
     oracle_folds()
+    print("== 6b-bis. holdout split has one entry point (P0 anti-divergence) ==")
+    # Placed HERE, beside the folds oracle and NOT near the end: oracle_schemas
+    # (13) raises an unhandled pydantic ValidationError at HEAD, which aborts
+    # main() and silently skips every oracle registered after it. A guard that
+    # sits after a known crasher is a guard that never runs.
+    _check_split_single_entry_point()
     print("== 6c. stratified calibration components ==")
     oracle_calibration_stratified_components()
     from core.common import training_cfg as _training_cfg
@@ -2544,6 +2559,135 @@ def main() -> None:
     print(
         "SELFTEST PASSED — all oracles green"
         + (f" ({len(SKIPPED)} skipped)" if SKIPPED else "")
+    )
+
+
+
+
+def _check_split_single_entry_point() -> None:
+    """Anti-divergence guard for the holdout split (P0 blocker).
+
+    The split is NEVER stored in the bundle -- it is re-derived at every call
+    site -- so two call sites threading config differently produce different
+    splits with nothing in the artifacts to reveal it. `folds.derive_holdout`
+    is the one sanctioned entry point; this scan fails the build if a
+    production caller reaches around it to call `holdout_split` directly or
+    re-threads the three contract knobs by hand.
+    """
+    import re
+
+    from training.folds import derive_holdout, holdout_split
+
+    root = Path(__file__).resolve().parents[2]
+    offenders: list[str] = []
+    # Guard the PRIMITIVES, not config reads. Reading e.g. split_cfg["dev_fraction"]
+    # to build --help text is legitimate, and `training.dev_fraction` (the per-fold
+    # early-stopping carve) is a DIFFERENT knob from `split.dev_fraction` — flagging
+    # bare ["dev_fraction"] subscripts produced two false positives. The bypass
+    # that actually matters is calling the primitive and hand-threading its knobs.
+    banned = ("holdout_split", "partition_component_pairs")
+    for path in sorted(list((root / "src").rglob("*.py")) + list((root / "scripts").rglob("*.py"))):
+        if path.name in {"selftest.py", "folds.py"}:
+            continue
+        text = path.read_text()
+        for lineno, line in enumerate(text.splitlines(), 1):
+            code = line.split("#")[0]
+            for name in banned:
+                if re.search(rf"\b{name}\s*\(", code):
+                    offenders.append(
+                        f"{path.relative_to(root)}:{lineno} calls {name} "
+                        f"(use derive_holdout / derive_calibration_carve)"
+                    )
+
+    check(
+        "holdout split has exactly one entry point (no bypassing callers)",
+        not offenders,
+        "; ".join(offenders[:6]) + (f" (+{len(offenders) - 6} more)" if len(offenders) > 6 else ""),
+    )
+
+    # Behavior identity: the entry point must equal the primitive it wraps,
+    # or the refactor silently moved the contract.
+    split = {
+        "holdout_component_folds": 4,
+        "dev_fraction": 0.25,
+        "test_fraction": 0.25,
+    }
+    rng = np.random.default_rng(0)
+    row_bc = np.array([f"bc{i:05d}" for i in range(800)], dtype=object)
+    pos = rng.integers(0, len(row_bc), size=(300, 2)).astype(np.int64)
+
+    direct = holdout_split(
+        pos, row_bc, n_folds=4, seed=1337, dev_fraction=0.25, test_fraction=0.25
+    )
+    routed = derive_holdout(pos, row_bc, split, seed=1337)
+    check(
+        "derive_holdout is behavior-identical to holdout_split",
+        direct == routed,
+        f"direct={[sorted(s) for s in direct]} routed={[sorted(s) for s in routed]}",
+    )
+    check(
+        "derive_holdout rejects a mis-threaded 50/25/25 contract",
+        _raises(lambda: derive_holdout(pos, row_bc, {**split, "dev_fraction": 0.2}, seed=1337)),
+        "a dev_fraction of 0.2 under n_folds=4 must raise, not silently relabel",
+    )
+
+    # ── the calibration carve is a SECOND seed into the same machinery ──────
+    from training.folds import (
+        ALL_ROLES,
+        SPLIT_ROLES,
+        calibration_seed,
+        derive_calibration_carve,
+        partition_component_pairs,
+    )
+
+    check(
+        "split roles enumerate all four training-side populations",
+        SPLIT_ROLES
+        == ("train", "calibration_fit", "calibration_reserved", "test"),
+        f"got {SPLIT_ROLES} — DEV is carved in half, so train/dev/test is wrong",
+    )
+    check(
+        "external_eval is a fifth role, kept out of the training split",
+        ALL_ROLES[-1] == "external_eval" and "external_eval" not in SPLIT_ROLES,
+        f"got {ALL_ROLES}",
+    )
+
+    cal_cfg = {**split, "calibration_dev_fraction": 0.5, "calibration_seed_offset": 17}
+    # Reuse the proven 8-row fixture shape: the carve refuses to run unless the
+    # reservation retains BOTH gtin strata plus an internal negative, so random
+    # pairs cannot stand in here.
+    cal_cfg = {**split, "calibration_dev_fraction": 0.5, "calibration_seed_offset": 17}
+    # The proven 8-row fixture: the carve refuses to run unless the reservation
+    # keeps BOTH gtin strata plus an internal negative, so it cannot be faked
+    # with random pairs.
+    cal_bc = np.array(["A", "B", "C", "D", "A", "B", "C", "D"])
+    dev_pos = np.array([[0, 5], [1, 5], [2, 6], [3, 7]])
+    dev_neg = np.array([[0, 5], [0, 6], [2, 7]])
+    routed_cal = derive_calibration_carve(
+        dev_pos, dev_neg, cal_bc, cal_cfg, seed=1337, fold_index=0
+    )
+    direct_cal = partition_component_pairs(
+        dev_pos, dev_neg, cal_bc, 0.5, calibration_seed(1337, 0, 17), ensure_different_gtin=True
+    )
+    check(
+        "derive_calibration_carve is behavior-identical to the inlined seed math",
+        all(np.array_equal(a, b) for a, b in zip(routed_cal, direct_cal)),
+        "the +fold_index+offset arithmetic moved; it must not have changed",
+    )
+    check(
+        "calibration seed carries fold_index AND the config offset",
+        [calibration_seed(1337, f, 17) for f in range(4)] == [1354, 1355, 1356, 1357]
+        and calibration_seed(1337, 0, 0) == 1337,
+        "seed must be base+fold+offset, and collapse when offset=0",
+    )
+    check(
+        "derive_calibration_carve rejects calibration_dev_fraction > 0.5",
+        _raises(
+            lambda: derive_calibration_carve(
+                dev_pos, dev_neg, cal_bc, {**cal_cfg, "calibration_dev_fraction": 0.75}, seed=1337, fold_index=0
+            )
+        ),
+        "reserving >half of DEV leaves nothing to validate the threshold with",
     )
 
 

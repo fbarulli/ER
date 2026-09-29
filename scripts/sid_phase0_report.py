@@ -10,7 +10,7 @@ Pipeline (all SSOT, no inline knobs):
      ``core.attribute_conflicts`` (``canonical_attribute_info`` /
      ``sku_attribute_info``) — the same parse the gate mines conflicts from —
      adapted to the structured-text contract (see ``_text_info``).
-  3. Split via ``training.folds.holdout_split`` on the deduped pair graph
+  3. Split via ``training.folds.derive_holdout`` on the deduped pair graph
      (q0+q1 = train); RQ codebooks fit on TRAIN-side canonicals only.
   4. FROZEN zero-shot ``minilm_l6`` encode (the ``zero_shot_sims.py``
      pattern: ``max_seq_length`` / ``batch_size_embed`` from ``load_config``,
@@ -50,7 +50,7 @@ from core.common import (
     resolve_model,
 )
 from core.model_input import build_canonical_text, build_sku_text
-from training.folds import holdout_split
+from training.folds import derive_holdout
 from training.semantic_ids import (
     add_collision_tidbits,
     assign_sids,
@@ -176,13 +176,8 @@ def main(argv: list[str] | None = None) -> int:
         graph_pos, graph_bc = _pair_graph(sku)
         graph_source = "sample frame (full deduped unavailable)"
     try:
-        train_bc, dev_bc, test_bc = holdout_split(
-            graph_pos,
-            graph_bc,
-            n_folds=int(split_cfg["holdout_component_folds"]),
-            seed=int(SEED),
-            dev_fraction=float(split_cfg["dev_fraction"]),
-            test_fraction=float(split_cfg["test_fraction"]),
+        train_bc, dev_bc, test_bc = derive_holdout(
+            graph_pos, graph_bc, split_cfg, seed=int(SEED)
         )
     except ValueError as exc:
         return _fail(f"holdout split rejected by the split contract — {exc}")

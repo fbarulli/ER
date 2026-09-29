@@ -26,7 +26,9 @@ Leakage prevention: any information that could leak travels along those edges, a
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from itertools import combinations
+from typing import Any
 
 import numpy as np
 
@@ -134,6 +136,122 @@ def holdout_split(
             f"n_folds={n_folds} has insufficient component coverage"
         )
     return train, quarters[-2], quarters[-1]
+
+
+def derive_holdout(
+    pos: np.ndarray,
+    row_bc: np.ndarray,
+    split_cfg: Mapping[str, Any],
+    *,
+    seed: int,
+) -> tuple[set[str], set[str], set[str]]:
+    """THE single entry point for the holdout split. Every caller goes here.
+
+    This exists to kill a class of silent divergence: ``holdout_split`` was
+    invoked from 5 independent call sites (``train.py``, ``train_prepared.py``,
+    ``sid_phase0_report.py``, ``sid_hybrid_eval.py``, ``sid_graph_eval.py``),
+    each re-threading ``holdout_component_folds`` / ``dev_fraction`` /
+    ``test_fraction`` out of config by hand and passing them positionally. A
+    site that misspelled or mis-threaded one of those knobs would derive a
+    DIFFERENT split from its siblings and nothing would fail — the split is
+    never stored in the bundle (it is re-derived at every call), so divergence
+    is invisible in the artifacts. Routing every caller through one function
+    makes the contract checkable once, here.
+
+    The graph handed in is the caller's responsibility and is NOT normalized
+    here. This is the seam where the P0 merged graph will land: a caller that
+    folds validation positive edges into the same components will pass them
+    through here, so the leak fix and the refactor never have to diverge
+    again. Today every caller passes the training graph unchanged, so this is
+    behavior-identical to calling ``holdout_split`` directly.
+    """
+    return holdout_split(
+        pos,
+        row_bc,
+        n_folds=int(split_cfg["holdout_component_folds"]),
+        seed=seed,
+        dev_fraction=float(split_cfg["dev_fraction"]),
+        test_fraction=float(split_cfg["test_fraction"]),
+    )
+
+
+SPLIT_ROLES: tuple[str, ...] = (
+    "train",
+    "calibration_fit",
+    "calibration_reserved",
+    "test",
+)
+"""The four populations the training-side split actually produces.
+
+NOT two. ``config/training.yaml`` describes train/dev/test, but DEV is then
+carved in half by ``partition_component_pairs`` into a GTIN-disjoint
+calibration fit/reserved pair (``calibration_dev_fraction``). So the realized
+populations are train / calibration_fit / calibration_reserved / test.
+
+The fifth population — ``external_eval`` (the ``labeled_pairs`` set scored by
+``evaluate_models.py``) — is deliberately NOT in this tuple: it lives in a
+different identifier namespace and derives its own folds. It belongs in the
+emitted validation CSV, not in the training split contract.
+"""
+
+EXTERNAL_EVAL_ROLE = "external_eval"
+ALL_ROLES: tuple[str, ...] = SPLIT_ROLES + (EXTERNAL_EVAL_ROLE,)
+
+
+def derive_calibration_carve(
+    dev_pos: np.ndarray,
+    dev_neg: np.ndarray,
+    row_bc: np.ndarray,
+    split_cfg: Mapping[str, Any],
+    *,
+    seed: int,
+    fold_index: int,
+    ensure_different_gtin: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """THE single entry point for the calibration fit/reserved carve.
+
+    Same rationale as ``derive_holdout``: the fraction, the seed offset, and
+    the per-fold seed arithmetic were inlined at the one call site in
+    ``training.py``, where ``seed + fold_i + calibration_seed_offset`` is a
+    second, independent seed entering the fold machinery. Left inline it is a
+    silent-divergence site exactly like the config threading that
+    ``derive_holdout`` just eliminated — a fold that forgot the ``+17`` offset
+    would carve a different calibration set and nothing downstream would say
+    so, because the carve is not persisted anywhere.
+
+    The carve is PER FOLD, so the same physical pair can be calibration-fit in
+    one fold and test in another. That is why the emitted validation CSV needs
+    a ``fold_id`` beside ``role``: under ``--split cv`` a single ``role``
+    column cannot express a per-fold assignment.
+    """
+    fraction = float(split_cfg["calibration_dev_fraction"])
+    if not 0.0 < fraction <= 0.5:
+        raise ValueError(
+            "calibration_dev_fraction must be in (0, 0.5]: it is a share of DEV "
+            f"reserved for threshold fitting, and reserving more than half "
+            f"leaves calibration_reserved too small to validate the threshold "
+            f"it validates. Got {fraction}"
+        )
+    offset = int(split_cfg["calibration_seed_offset"])
+    return partition_component_pairs(
+        dev_pos,
+        dev_neg,
+        row_bc,
+        fraction,
+        calibration_seed(seed, fold_index, offset),
+        ensure_different_gtin=ensure_different_gtin,
+    )
+
+
+def calibration_seed(base_seed: int, fold_index: int, offset: int) -> int:
+    """The per-fold calibration carve seed: ``base + fold_index + offset``.
+
+    Named rather than inlined so the arithmetic that used to live at the single
+    call site in ``training.py`` is directly testable. Getting it wrong is
+    silent: a fold that dropped the ``offset`` would carve a different
+    calibration set and nothing downstream would report it.
+    """
+    return base_seed + fold_index + offset
 
 
 def partition_component_pairs(

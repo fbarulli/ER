@@ -40,7 +40,7 @@ from core.common import (
 )
 from core.common import SSOT_LOSS as _SSOT_LOSS
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_CONTRASTIVE_MARGIN
-from training.folds import component_folds, holdout_split
+from training.folds import component_folds, derive_holdout
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 
 # Colab workers should spend GPU time only on training and the score exports
@@ -1251,7 +1251,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # pairs. The split unit is the CONNECTED COMPONENT of the positive-pair
     # graph; the dev boundary must ALSO be component-aligned (a barcode-level
     # rng carve splits 7,808 of 37,445 train-side pair-uses between train/dev).
-    # holdout = ONE component-aware split, derived by folds.holdout_split:
+    # holdout = ONE component-aware split, derived by folds.derive_holdout:
     # test = the LAST component group, dev = the one before it, train = the
     # rest — no hardcoded quarter indices (05-01/05-02). The helper raises
     # unless 1/n_folds equals the configured dev/test_fraction, so a knob that
@@ -1259,14 +1259,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # split under the banner of another share; the banner below prints the
     # CONFIGURED shares.
     if args.split == "holdout":
-        train_bc, dev_bc, test_bc = holdout_split(
-            pos,
-            row_bc,
-            n_folds=int(split_cfg["holdout_component_folds"]),
-            seed=SEED,
-            dev_fraction=float(split_cfg["dev_fraction"]),
-            test_fraction=float(split_cfg["test_fraction"]),
-        )
+        train_bc, dev_bc, test_bc = derive_holdout(pos, row_bc, split_cfg, seed=SEED)
         folds_override = test_bc  # single-set: train = all others
         dev_override = dev_bc
         from core.hard_negatives import pairs_in_set

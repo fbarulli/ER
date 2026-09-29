@@ -41,7 +41,7 @@ from core.attribute_conflicts import (
 )
 from core.common import F, SEED, TRAIN_ROOT, load_config, load_local_sentence_transformer, resolve_model
 from core.model_input import build_canonical_text, build_sku_text
-from training.folds import holdout_split
+from training.folds import derive_holdout
 from training.semantic_ids import assign_sids, fit_rq_kmeans
 from training.sid_graph import INF_WEIGHT, assign_clusters_to_canonicals, greedy_constrained_clusters
 
@@ -130,10 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     full_barcodes = pd.read_csv(F["dataset_deduped"], dtype=str, usecols=["barcode"])
     graph_pos, graph_bc = _pair_graph(full_barcodes)
     split_cfg = cfg["split"]
-    train_bc, _, _ = holdout_split(
-        graph_pos, graph_bc, n_folds=int(split_cfg["holdout_component_folds"]),
-        seed=int(SEED), dev_fraction=float(split_cfg["dev_fraction"]),
-        test_fraction=float(split_cfg["test_fraction"]))
+    train_bc, _, _ = derive_holdout(graph_pos, graph_bc, split_cfg, seed=int(SEED))
     train_bc = set(train_bc)
     fit_idx = [i for i, g in enumerate(canon_gtins) if g in train_bc] or list(range(m))
     codebooks = fit_rq_kmeans(canon_emb[np.asarray(fit_idx)], n_clusters=int(args.n_clusters))

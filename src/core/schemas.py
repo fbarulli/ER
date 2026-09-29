@@ -348,7 +348,7 @@ class SplitSpec(BaseModel):
     split must CRASH, not quietly produce 60/20/20). Calibration is a
     canonical-disjoint subset of DEV, controlled by calibration_dev_fraction.
     In mode "holdout" the realized split comes from holdout_component_folds
-    through the single derivation folds.holdout_split: component_folds deals
+    through the single derivation folds.derive_holdout: component_folds deals
     whole COMPONENTS round-robin over that many groups, test is the last
     group, dev the one before it and train the rest. Each group therefore
     holds APPROXIMATELY — never exactly — 1.0 / holdout_component_folds of the
@@ -362,7 +362,9 @@ class SplitSpec(BaseModel):
     envelope must be 1.0/0.0/0.0: the lane deals cv_folds component folds
     across the full data and carves DEV out of each fold's TRAIN side with
     training.dev_fraction. The same disagreement re-raises inside
-    folds.holdout_split for holdout runs, which remains the runtime backstop.
+    folds.derive_holdout for holdout runs, which remains the runtime backstop.
+    Callers must not call ``holdout_split`` directly -- that bypasses the one
+    place the 50/25/25 contract is checked.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -401,7 +403,7 @@ class SplitSpec(BaseModel):
         TEST share: 1.0/0.0/0.0. Requiring that sentinel prevents 0.25/0.25
         from being accepted as if it described a CV lane it does not build.
 
-        ``folds.holdout_split`` keeps the same checks as the runtime backstop;
+        ``folds.derive_holdout`` keeps the same checks as the runtime backstop;
         this validator is the earlier load-time contract.
         """
         if self.mode == "cv":
