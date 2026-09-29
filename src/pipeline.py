@@ -2128,14 +2128,13 @@ def build_training_data(
     structured_enabled = bool(structured_cfg["enabled"])
     from core.model_input import (
         build_canonical_text,
-        build_sku_text,
+        build_sku_texts,
         model_input_info,
         model_input_composition,
         token_budget_report,
     )
     from core.structured_features import (
         canonical_info as canonical_structured_info,
-        sku_info as sku_structured_info,
         vector as structured_vector,
     )
 
@@ -2162,20 +2161,12 @@ def build_training_data(
     title = df["title"].fillna("")
     attrs = df["attributes"].fillna("")
 
-    # Keep the structured source of truth alongside every payload endpoint.
-    # The old text lane deliberately removed these tokens; that made the
-    # volume/pack work useful for labels but invisible to the embedding.
-    sku_structured = [
-        model_input_info(sku_structured_info(t, a, d))
-        if structured_enabled
-        else {"volume": set(), "pack": set(), "package_type": set()}
-        for t, a, d in zip(title, attrs, df.get("description_short_eng", pd.Series([""] * len(df))), strict=True)
-    ]
-
     # ── clean sku text per row (variant: full = title+attr, title_only) ──
     # schema words (type/content/material/...) die on the MODEL side only —
     # the gate's inputs are untouched (owner 2026-09-07: stage-2 strip).
     # Both variants go through core.model_input, the shared builder.
+    # The per-row composition loop is the SSOT core.model_input.build_sku_texts
+    # (was inlined here and in predict_items / rand_matching / record_linkage).
     if payload_variant == "full":
         model_frame = df
     elif payload_variant == "title_only":
@@ -2185,10 +2176,9 @@ def build_training_data(
                 model_frame[column] = ""
     else:
         raise SystemExit(f"unknown payload variant: {payload_variant}")
-    sku_texts = [
-        build_sku_text(row, info)
-        for (_, row), info in zip(model_frame.iterrows(), sku_structured, strict=True)
-    ]
+    sku_texts, sku_structured = build_sku_texts(
+        model_frame, structured_enabled=structured_enabled
+    )
 
     # ── payload: sku rows + canonical entries (in sorted-gtin order) ──
     payload = list(sku_texts)

@@ -29,6 +29,8 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 
+import pandas as pd  # frame access in build_sku_texts (consolidated loop)
+
 from core.common import load_config, row_metadata_text
 from core.schemas import TrainingSpec
 
@@ -390,6 +392,75 @@ def build_sku_text(
     if resolved.profile == "cleaned":
         return _cleaned_sku_text(row, info, spec=resolved)
     return _legacy_sku_text(row, info)
+
+
+def build_sku_text(
+    row,
+    info: Mapping[str, object],
+    *,
+    spec: TrainingSpec.ModelInputSpec | None = None,
+) -> str:
+    """Model text for one SOURCE sku row.
+
+    ``row`` is a pandas row/Series so field fallbacks go through the shared
+    ``core.common.row_metadata_text`` reader; ``info`` is the structured
+    attribute mapping the caller already built for the numeric channel.
+    """
+    resolved = _resolve(spec)
+    if resolved.profile == "cleaned":
+        return _cleaned_sku_text(row, info, spec=resolved)
+    return _legacy_sku_text(row, info)
+
+
+def build_sku_texts(
+    frame: pd.DataFrame,
+    *,
+    structured_enabled: bool,
+) -> tuple[list[str], list[dict[str, set]]]:
+    """Finalized encoder text + structured info for EVERY source row.
+
+    THE single per-row composition. This loop (sku_info -> model_input_info
+    -> build_sku_text per row) previously existed in FOUR copies
+    (pipeline.build_training_data payload, predict_items, rand_matching, and
+    the record-linkage lane) — a text-normalization fork in waiting: any
+    fix here had to be replicated four times or the lanes silently diverged.
+    One definition now; callers must not rebuild it inline.
+
+    Returns (texts, infos): ``texts`` feed the encoder (or any text-side
+    consumer such as the record-linkage similarity), ``infos`` are the
+    structured source of truth for the numeric channel, built once so the
+    text and the vector can never disagree on an attribute's treatment.
+
+    ``structured_enabled`` is the caller's resolved structured_features.enabled
+    (pipeline/rand_matching read the same config knob); when False the info
+    side degrades to empty sets exactly as the payload builder always did.
+    """
+    from core.structured_features import sku_info as sku_structured_info
+
+    title = frame["title"].fillna("") if "title" in frame else pd.Series([""] * len(frame))
+    attrs = frame["attributes"].fillna("") if "attributes" in frame else pd.Series([""] * len(frame))
+    descriptions = frame.get("description_short_eng", pd.Series([""] * len(frame)))
+    empty_info: dict[str, set] = {
+        "volume": set(),
+        "pack": set(),
+        "package_type": set(),
+    }
+    empty_info: dict[str, set] = {
+        "volume": set(),
+        "pack": set(),
+        "package_type": set(),
+    }
+    infos = [
+        model_input_info(sku_structured_info(t, a, d))
+        if structured_enabled
+        else {k: set(v) for k, v in empty_info.items()}
+        for t, a, d in zip(title, attrs, descriptions, strict=True)
+    ]
+    texts = [
+        build_sku_text(row, info)
+        for (_, row), info in zip(frame.iterrows(), infos, strict=True)
+    ]
+    return texts, infos
 
 
 def build_canonical_text(

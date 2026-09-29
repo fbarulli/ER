@@ -80,7 +80,7 @@ from core.manifest import sha256_file
 from core.schemas import GTIN_STATUSES, THRESHOLD_TIE_BREAK_CRITERIA
 from core.model_input import (
     build_canonical_text,
-    build_sku_text,
+    build_sku_texts,
     model_input_info,
     model_input_composition,
 )
@@ -88,7 +88,6 @@ from core import model_input as model_input_module
 from core.structured_features import (
     canonical_info as canonical_structured_info,
     fuse_numpy,
-    sku_info as sku_structured_info,
     vector as structured_vector,
 )
 from core.unit_canonicalization import UNIT_CANONICALIZATION_VERSION
@@ -1171,21 +1170,20 @@ class RandMatcher:
             )
             for _, row in frame.iterrows()
         ]
-        model_infos = [
-            model_input_info(sku_structured_info(
+        gate_infos = [
+            sku_attribute_info(
                 row_metadata_text(row, "title"),
                 row_metadata_text(row, "attributes", "attr"),
                 row_metadata_text(row, "description_short_eng", "description"),
-            ))
-            if self.structured_enabled
-            else {"volume": set(), "pack": set()}
+            )
             for _, row in frame.iterrows()
         ]
-        texts = [
-            build_sku_text(row, info)
-            for (_, row), info in zip(frame.iterrows(), model_infos, strict=True)
-        ]
-        return texts, gate_infos, model_infos
+        # Per-row model composition via the core.model_input SSOT
+        # build_sku_texts (was an inline duplicate of the payload loop).
+        model_texts, model_infos = build_sku_texts(
+            frame, structured_enabled=self.structured_enabled
+        )
+        return model_texts, gate_infos, model_infos
 
     _INVALID_SKU_SENTINELS = INVALID_ID_SENTINELS
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections import Counter
 
 import pandas as pd  # pd.Series annotation in attributes_keys (F17)
@@ -137,6 +138,32 @@ _TO_ML = {
     "ounce": 29.5735,
     "ounces": 29.5735,
 }
+
+
+def normalize_retailer(name: str) -> str:
+    """Canonical retailer identity key: accent-fold + casefold + punctuation
+    and whitespace collapse.
+
+    SSOT for every surface that compares retailer strings as identity
+    (blocking multi-retailer grouping, kfold_barcodes, record-linkage
+    cross-retailer rule). Measured on the 61,529-row deduped export
+    (280 distinct raw spellings reviewed): exactly three alias groups
+    collapse under this fold — Voila/Voilà (1,533 rows), publix/Publix
+    (938), El Corte Ingles/El Corte Inglés — and raw-string grouping
+    counts one barcode (8432425093657) as multi-retailer on spelling
+    alone, feeding a fake cross-source positive into eval pairs and
+    k-folds. No semantic aliases (e.g. amazon/amazon.com) exist in the
+    data; if one ever appears, add an explicit alias map to
+    config/vocabulary.json rather than special-casing in code.
+
+    Deliberately NOT pipeline.normalize_text: that strips non-ASCII
+    characters outright ("Voilà" -> "voil"), which both fails to merge the
+    alias and could collide distinct retailers on the truncated stem.
+    """
+    text = unicodedata.normalize("NFKD", str(name or "").casefold())
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
 
 
 def norm_unit(token: str) -> str:

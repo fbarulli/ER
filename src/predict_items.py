@@ -97,18 +97,10 @@ def main() -> None:
     # model_input_info applies the active composition's unobserved-attribute
     # rule (implicit pack 1.0 on both sides for 'cleaned', untouched for
     # 'legacy') so the TEXT and the NUMERIC VECTOR can never disagree.
-    status("building structured SKU inputs")
-    sku_infos = [
-        model_input_info(
-            sku_structured_info(
-                row.get("title", ""), row.get("attributes", row.get("attr", "")),
-                row.get("description_short_eng", row.get("description", "")),
-            )
-        )
-        if sf_enabled
-        else {"volume": set(), "pack": set()}
-        for _, row in skus.iterrows()
-    ]
+    # Per-row SKU composition via the core.model_input SSOT build_sku_texts
+    # (was an inline duplicate of the payload loop).
+    status("building structured SKU inputs + encoder texts")
+    sku_texts, sku_infos = build_sku_texts(skus, structured_enabled=sf_enabled)
     status("building structured canonical inputs")
     item_infos = [
         model_input_info(
@@ -118,11 +110,7 @@ def main() -> None:
         else {"volume": set(), "pack": set()}
         for item_id in item_ids
     ]
-    status("building SKU encoder texts")
-    sku_texts = [
-        build_sku_text(row, info)
-        for (_, row), info in zip(skus.iterrows(), sku_infos, strict=True)
-    ]
+    status("building canonical encoder texts")
     status("building canonical encoder texts")
     item_texts = [
         build_canonical_text(canonical_record_map.get(item_id, {}), info)

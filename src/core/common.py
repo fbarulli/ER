@@ -76,7 +76,7 @@ from core.schemas import (
     check_canonical_records_frame,
     upgrade_canonical_records_frame,
 )
-from core.text import extract_volume_ml
+from core.text import extract_volume_ml, normalize_retailer
 
 
 def metadata_text(value: object) -> str:
@@ -991,7 +991,10 @@ def kfold_barcodes(df: pd.DataFrame, k: int, seed: int | None = None) -> list[se
     """
     barcodes = df["barcode"].fillna("").astype(str)
     known = df[barcodes.str.len() > 0]
-    multi = known[known.groupby("barcode")["retailer"].transform("nunique") > 1]
+    # Retailer identity through the normalize_retailer SSOT: raw spellings
+    # alias across exports and would count one alias group as multi-retailer.
+    known = known.assign(_retailer_key=known["retailer"].map(normalize_retailer))
+    multi = known[known.groupby("barcode")["_retailer_key"].transform("nunique") > 1]
     bcs = _np.array(sorted(multi["barcode"].unique()))
     perm = _np.random.default_rng(seed if seed is not None else SEED).permutation(
         len(bcs)

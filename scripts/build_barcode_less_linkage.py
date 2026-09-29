@@ -30,7 +30,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.record_linkage import DEFAULT_JACCARD_THRESHOLD, link_barcode_less
+from core.record_linkage import (
+    DEFAULT_JACCARD_THRESHOLD,
+    corpus_idf_from_finalized,
+    finalized_texts,
+    item_uniqueness_from_finalized,
+    link_barcode_less,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -52,9 +58,20 @@ def main(argv: list[str] | None = None) -> int:
     df = pd.read_csv(args.data, dtype=str, keep_default_na=False)
     if "product_id" not in df.columns:
         parser.error("input data must contain a product_id column")
-    cluster_id, census = link_barcode_less(df, jaccard_threshold=args.jaccard)
+    # ONE finalized-text build shared by linkage + uniqueness (the per-row
+    # model composition is the expensive pass; never do it twice).
+    finalized = finalized_texts(df)
+    cluster_id, census = link_barcode_less(
+        df, jaccard_threshold=args.jaccard, finalized=finalized
+    )
+    idf, unseen = corpus_idf_from_finalized(finalized)
+    uniqueness = item_uniqueness_from_finalized(finalized, idf, unseen)
     rows = [
-        {"product_id": df.at[idx, "product_id"], "cluster_id": cid}
+        {
+            "product_id": df.at[idx, "product_id"],
+            "cluster_id": cid,
+            "uniqueness": uniqueness.get(idx, 0.0),
+        }
         for idx, cid in cluster_id.items()
     ]
     product_ids = [row["product_id"] for row in rows]

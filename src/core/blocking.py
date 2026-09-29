@@ -17,6 +17,19 @@ import pandas as pd
 
 from core.gtin import barcode_validity
 from core.manifest import count_drop
+from core.text import normalize_retailer
+
+
+def _retailer_identity(df: pd.DataFrame, col: str) -> pd.Series:
+    """Canonical retailer identity per row (normalize_retailer SSOT).
+
+    Raw retailer spellings alias across exports (Voila/Voilà, publix/
+    Publix, El Corte Ingles/Inglés) — grouping on the raw string counts
+    those as multi-retailer and feeds fake cross-source positives into
+    the ground truth. Measured on the 61,529-row export: exactly one
+    barcode group (8432425093657) is fake under raw grouping.
+    """
+    return df[col].map(normalize_retailer)
 
 
 def build_pairs(
@@ -53,8 +66,12 @@ def build_pairs(
     # checksum-fail barcode cannot certify "known different" any more than a
     # missing one can. Same population rule as _hard_negatives.py.
     bc_valid = barcode_validity(barcodes).to_numpy()
-    known = df[(barcodes.str.len() > 0).to_numpy() & bc_valid]
-    multi = known[known.groupby(barcode_col)[retailer_col].transform("nunique") > 1]
+    known = df[(barcodes.str.len() > 0).to_numpy() & bc_valid].assign(
+        _retailer_key=lambda d: _retailer_identity(df.loc[d.index], retailer_col)
+    )
+    multi = known[known.groupby(barcode_col)["_retailer_key"].transform(
+        "nunique"
+    ) > 1]
     pos_i: list[int] = []
     pos_j: list[int] = []
     title_drops = 0
@@ -135,7 +152,12 @@ def build_true_pairs(
     barcodes = df[barcode_col].fillna("").astype(str).str.strip()
     bc_valid = barcode_validity(barcodes).to_numpy()
     known = df[(barcodes.str.len() > 0).to_numpy() & bc_valid]
-    multi = known[known.groupby(barcode_col)[retailer_col].transform("nunique") > 1]
+    known = known.assign(
+        _retailer_key=_retailer_identity(df.loc[known.index], retailer_col)
+    )
+    multi = known[known.groupby(barcode_col)["_retailer_key"].transform(
+        "nunique"
+    ) > 1]
     pairs: list[tuple[int, int]] = []
     for _, g in multi.groupby(barcode_col):
         pairs.extend(combinations(g.index.tolist(), 2))

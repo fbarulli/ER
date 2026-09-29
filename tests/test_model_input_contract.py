@@ -437,7 +437,14 @@ def test_title_only_payload_variant_still_blanks_attributes_and_description() ->
 
 
 def test_both_lanes_call_the_shared_builder() -> None:
-    """Guard against the composition being re-duplicated at a call site."""
+    """Guard against the composition being re-duplicated at a call site.
+
+    The per-row loop lives in core.model_input.build_sku_texts (the SSOT);
+    call sites use it instead of rebuilding sku_info -> model_input_info ->
+    build_sku_text inline, so a lane counts as compliant when its source
+    references the plural consolidated builder and the single-row
+    canonical builder.
+    """
     import inspect
 
     import predict_items
@@ -448,7 +455,11 @@ def test_both_lanes_call_the_shared_builder() -> None:
         (rand_matching, 2),
     ):
         source = inspect.getsource(module)
-        calls = source.count("build_sku_text(") + source.count("build_canonical_text(")
+        calls = (
+            source.count("build_sku_text(")
+            + source.count("build_sku_texts(")
+            + source.count("build_canonical_text(")
+        )
         assert calls == expected, f"{module.__name__}: {calls} shared-builder calls"
 
 
