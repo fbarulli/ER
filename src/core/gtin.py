@@ -12,6 +12,8 @@ The checksum was validated by dead code (lib.cache was never imported by
 the pipeline); README claimed the validation existed. These functions are
 now the live SSOT for "this barcode may be trusted as identity".
 
+Structural validation and reviewed eligibility are distinct.
+`barcode_validity` additionally rejects reviewed GLN/formulation holds.
 Semantics: validation only decides TRUST; grouping keys stay the RAW gtin
 string (no UPC-12→13 rewriting of keys — that would drift every CSV).
 Leading-zero canonicalization happens inside the checksum only, where it
@@ -110,9 +112,12 @@ def barcode_validity(barcodes: pd.Series) -> pd.Series:
     """Boolean mask: may this barcode string be trusted as product identity?
 
     True only when the digit-extracted, length-plausible barcode passes the
-    GS1 check digit. Empty/placeholder/malformed -> False. Label surfaces
+    GS1 check digit and is not held by the reviewed identity policy. Empty/placeholder/malformed -> False. Label surfaces
     (canonical grouping, eval pairs, dedupe T1) treat False exactly like a
     missing barcode: the row survives in the corpus, but no identity is
     asserted from it.
     """
-    return normalize_and_validate_gtin(barcodes)["gtin_structurally_valid"]
+    from core.identity_policy import held_keys
+    facts = normalize_and_validate_gtin(barcodes)
+    held = facts.gtin_clean.astype("string").str.zfill(14).isin(held_keys())
+    return facts["gtin_structurally_valid"] & ~held

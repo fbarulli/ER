@@ -23,7 +23,7 @@ def file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def load_records(path: Path) -> list[dict]:
+def load_records(path: Path, *, require_training: bool = True) -> list[dict]:
     raw = json.loads(path.read_text())
     if raw.get("schema") != "er-graph-listings-v1":
         raise ValueError("expected schema er-graph-listings-v1")
@@ -54,7 +54,7 @@ def load_records(path: Path) -> list[dict]:
                 raise ValueError("numeric fields must be lists of finite nonnegative numbers")
     if len(set(ids)) != len(ids):
         raise ValueError("duplicate product_id")
-    if not any(r["split"] == "train" for r in records):
+    if require_training and not any(r["split"] == "train" for r in records):
         raise ValueError("at least one training listing is required")
     return records
 

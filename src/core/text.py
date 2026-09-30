@@ -21,6 +21,18 @@ from collections import Counter
 
 import pandas as pd  # pd.Series annotation in attributes_keys (F17)
 
+
+def unicode_casefold(value: object) -> str:
+    """Shared case/accent folding; punctuation and negation remain intact."""
+    text = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return "".join(char for char in text if not unicodedata.combining(char))
+
+
+def normalized_attribute_text(*values: object) -> str:
+    """Shared attribute token normalization without dropping negation words."""
+    text = unicode_casefold(" ".join(str(value or "") for value in values))
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text)).strip()
+
 # ---------------------------------------------------------------------------
 # Volume extraction (v2: broader units + decimal-comma + boundaries)
 # ---------------------------------------------------------------------------

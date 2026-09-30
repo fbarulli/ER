@@ -36,7 +36,8 @@ Four rules fix the class, and they are the whole module:
     or rank a representative. Completeness is scored over descriptor columns
     only.
 
-4.  A CLEAN BARCODE OUTRANKS EVERYTHING. `barcode_validity` decides whether a
+4.  AN ELIGIBLE BARCODE OUTRANKS DESCRIPTORS. Reviewed identity holds remain
+    ineligible even with valid check digits. `barcode_validity` decides whether a
     barcode may be trusted as identity at all; when both rows carry a trusted
     barcode the barcode IS the answer and no text comparison is consulted.
 
@@ -67,6 +68,7 @@ from core.critical_attributes import (
 from core.critical_attributes import categorical_conflict as _ssot_categorical_conflict
 from core.gtin import barcode_validity
 from core.record_linkage import strip_pack_multiplicity
+from core.product_dimensions import DimensionEvidence, row_dimensions, evaluate_dimensions, evaluate_columns
 from pipeline import normalize_text
 
 # ── descriptor columns ─────────────────────────────────────────────────────
@@ -165,7 +167,9 @@ class ProductIdentity:
     sugar_claim: bool = False
     barcode_trusted: bool = False
     barcode_key: str = ""
+    identity_review_reason: str = ""
     completeness: int = 0
+    dimensions: DimensionEvidence | None = None
 
     def as_mapping(self) -> dict[str, set[Any]]:
         """Shape the bundle like a `sku_info` mapping for the SSOT predicates."""
@@ -308,14 +312,14 @@ def identity_tokens_set(attributes: object) -> frozenset[str]:
 
 
 def _barcode_facts(barcode: object) -> tuple[bool, str]:
-    """(trusted, normalized key) using the checksum SSOT."""
+    """(trusted, normalized key) using structural validation and review policy."""
     import pandas as pd
 
     from core.gtin import normalize_and_validate_gtin
 
     series = pd.Series([barcode], dtype="string")
     facts = normalize_and_validate_gtin(series)
-    if not bool(facts["gtin_structurally_valid"].iloc[0]):
+    if not bool(barcode_validity(series).iloc[0]):
         return False, ""
     key = facts["gtin_clean"].iloc[0]
     return True, "" if key is None else str(key)
@@ -349,6 +353,8 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
     flavor |= alias_fold(title_tokens & flavor_vocabulary(), qualifiers=True)
     flavor |= alias_fold(title_tokens & declared, qualifiers=True)
 
+    from core.identity_policy import review_reason
+    held_reason = review_reason(get("barcode", ""))
     trusted, key = _barcode_facts(get("barcode", ""))
     haystack = " ".join(
         (title, str(attributes or ""), description, category_text)
@@ -376,7 +382,11 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
         sugar_claim=bool(SUGAR_CLAIM_RE.search(haystack)),
         barcode_trusted=trusted,
         barcode_key=key,
+        identity_review_reason=held_reason,
         completeness=completeness(row),
+        dimensions=row_dimensions(row if isinstance(row, Mapping) else {
+            name: get(name, "") for name in DESCRIPTOR_COLUMNS + tuple(NON_DESCRIPTOR_COLUMNS)
+        }),
     )
 
 
@@ -400,13 +410,10 @@ def categorical_conflict(
     gate and the conflict miner cannot drift on what "sweetener conflict"
     means.
     """
-    if not left or not right:
-        return False
-    if dimension in _SWEETENER_FAMILY:
-        return _ssot_categorical_conflict(
-            "sweetener", {"sweetener": set(left)}, {"sweetener": set(right)}
-        )
-    return not (left & right)
+    predicate_dimension = "sweetener" if dimension in _SWEETENER_FAMILY else dimension
+    return _ssot_categorical_conflict(
+        predicate_dimension, {predicate_dimension: set(left)}, {predicate_dimension: set(right)}
+    )
 
 
 def identity_conflict(
@@ -454,7 +461,44 @@ def identity_conflict(
 
 def same_product(left: ProductIdentity, right: ProductIdentity) -> bool:
     """True when no descriptor dimension proves the rows are different."""
-    return not identity_conflict(left, right)
+    return not (left.identity_review_reason or right.identity_review_reason or identity_conflict(left, right))
+
+
+def evaluate_product_identity(left: ProductIdentity, right: ProductIdentity) -> dict:
+    """One identity evaluation with established conflicts and ALL raw evidence.
+
+    Raw feed differences require review; they do not prove different products.
+    Compatible descriptors do not authorize identity edges for splitting.
+    """
+    conflicts = identity_conflict(left, right)
+    attributes = evaluate_dimensions(left.dimensions, right.dimensions) if (
+        left.dimensions is not None and right.dimensions is not None) else {}
+    columns = evaluate_columns(left.dimensions, right.dimensions) if (
+        left.dimensions is not None and right.dimensions is not None) else {}
+    unknown = sorted(set(left.dimensions.unclassified_keys if left.dimensions else ()) |
+                     set(right.dimensions.unclassified_keys if right.dimensions else ()))
+    malformed = list(left.dimensions.malformed_parts if left.dimensions else ()) + list(
+        right.dimensions.malformed_parts if right.dimensions else ())
+    from core.product_context import compare_context
+    contextual = compare_context(left.dimensions.context, right.dimensions.context) if (
+        left.dimensions and right.dimensions and left.dimensions.context and right.dimensions.context) else {}
+    resolved = []
+    if contextual.get("caffeine", {}).get("status") == "equal":
+        resolved.append("Caffeine")
+    packaging = contextual.get("inner_packaging", {})
+    if packaging.get("types", {}).get("status") == "equal" and packaging.get("materials", {}).get("status") == "equal":
+        resolved.extend(["Pack Type", "Pack Material Type"])
+    review = [k for k, v in attributes.items() if v["review"] and k not in resolved]
+    known = left.barcode_trusted and right.barcode_trusted
+    decision = ("same" if not conflicts else "different") if known else (
+        "different" if conflicts else "review" if review or unknown or malformed
+        else "compatible_unverified")
+    holds = sorted({r for r in (left.identity_review_reason, right.identity_review_reason) if r})
+    if holds:
+        decision = "review"
+    return {"decision": decision, "identity_review_reasons": holds, "context_comparison": contextual, "resolved_review_dimensions": resolved, "identity_conflicts": conflicts, "attributes": attributes,
+            "columns": columns, "review_dimensions": review, "unclassified_keys": unknown,
+            "malformed_parts": malformed}
 
 
 __all__ = [
@@ -473,6 +517,7 @@ __all__ = [
     "concept_folds",
     "flavor_vocabulary",
     "identity_conflict",
+    "evaluate_product_identity",
     "identity_tokens_set",
     "normalize_brand",
     "row_identity",

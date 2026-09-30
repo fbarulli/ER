@@ -96,3 +96,10 @@ AGENTS.local.md
 
 # graphify knowledge-graph artifacts (generated; rebuild with: graphify . )
 graphify-out/
+
+# Local discovery dashboard observations and canvas edits
+dashboard/observations/
+dashboard/diagrams/
+
+# Small reference coverage table shipped with discovery evidence
+!dashboard/evidence/identity/*.csv

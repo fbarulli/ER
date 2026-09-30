@@ -879,7 +879,8 @@ def load_dataset_deduped() -> pd.DataFrame:
     path = F["dataset_deduped"]
     if not path.exists():
         raise FileNotFoundError(f"{path} missing — run src/training/dedupe.py first")
-    return pd.read_csv(path, dtype=str)
+    from core.identity_policy import exclude_reviewed_rows
+    return exclude_reviewed_rows(pd.read_csv(path, dtype=str))
 
 
 # load_euromonitor alias REMOVED (audit 2026-09-09): zero importers —

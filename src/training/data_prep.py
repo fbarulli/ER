@@ -112,7 +112,9 @@ def _dp_manifest_accounting(df, pairs, canon) -> dict:
     bc_valid = barcode_validity(df["gtin"].fillna("").astype(str).str.strip())
     bc_valid.index = df.index
     n_missing_gtin = int((~gtin_valid).sum())
-    n_checksum = int((gtin_valid & ~bc_valid).sum())
+    from core.identity_policy import review_mask
+    reviewed = review_mask(df["gtin"])
+    n_checksum = int((gtin_valid & ~bc_valid & ~reviewed).sum())
     n_valid = int((gtin_valid & bc_valid).sum())
     # canonical records = distinct valid gtins; collapsed = valid rows
     # folded into them
@@ -124,6 +126,7 @@ def _dp_manifest_accounting(df, pairs, canon) -> dict:
         "dropped": {
             "gtin_missing_or_nan": n_missing_gtin,
             "gtin_checksum_failed": n_checksum,
+            "identity_review_quarantined": int(reviewed.sum()),
         },
         # kept-and-aggregated, NOT dropped (closure-extension key)
         "collapsed_same_gtin": collapsed,

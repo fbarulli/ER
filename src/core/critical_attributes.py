@@ -8,8 +8,9 @@ absence is kept as unknown and is never converted into agreement.
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Mapping
+
+from core.text import normalized_attribute_text
 
 
 CRITICAL_ATTRIBUTE_DIMENSIONS: tuple[str, ...] = (
@@ -76,14 +77,6 @@ DECLARED_FLAVOR_LEXICON: frozenset[str] = frozenset({
     "walnut",
 })
 DECLARED_FLAVOR_FIELD_RE = re.compile(r"(?:^|;)\s*flavou?r\s*:\s*([^;]*)", re.IGNORECASE)
-
-
-def normalized_attribute_text(*values: object) -> str:
-    """Normalize punctuation without discarding negation-bearing words."""
-    text = " ".join(str(value or "") for value in values)
-    text = unicodedata.normalize("NFKD", text.casefold())
-    text = "".join(char for char in text if not unicodedata.combining(char))
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text)).strip()
 
 
 def extract_flavor_tokens(*values: object) -> frozenset[str]:

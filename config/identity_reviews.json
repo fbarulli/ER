@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "quarantined_gtins": {
+    "851107003032": {
+      "reason": "Spiced Apple and Superberry source listings share this number; formulation identity unresolved",
+      "evidence_sku_ids": [
+        "161314167",
+        "319085346"
+      ]
+    },
+    "851107003155": {
+      "reason": "Seasonal formulation ambiguity and Vanilla Blossom title versus watermelon description",
+      "evidence_sku_ids": [
+        "318488900",
+        "441289569"
+      ]
+    },
+    "8410408010808": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160474885",
+        "160501561",
+        "160554262",
+        "160623274",
+        "160659737",
+        "160681452",
+        "160715638",
+        "160722770",
+        "160729450",
+        "160811035",
+        "160821643",
+        "160831382",
+        "160857109",
+        "256783992"
+      ]
+    },
+    "8480011000022": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160495724",
+        "160514910",
+        "160520586",
+        "160535947",
+        "160663822",
+        "160766892",
+        "160767321",
+        "160800409",
+        "160821166",
+        "160822486",
+        "160845190",
+        "170924025",
+        "170952520",
+        "221994047"
+      ]
+    },
+    "8410055000009": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160455011",
+        "160511785",
+        "160580744",
+        "160619708",
+        "160651226",
+        "160737080",
+        "160789799",
+        "160877596"
+      ]
+    },
+    "8410128000004": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160533881",
+        "160634741",
+        "160841480",
+        "411416985"
+      ]
+    },
+    "8410171000006": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160706178",
+        "160839349"
+      ]
+    },
+    "8410261000008": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160505880",
+        "160676819"
+      ]
+    },
+    "8410470000004": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160650974",
+        "246424684",
+        "246433000"
+      ]
+    },
+    "8410749000001": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160514701",
+        "160651480",
+        "160898166"
+      ]
+    },
+    "8410793000026": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "365545588",
+        "365615420"
+      ]
+    },
+    "8411630000001": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "166296729"
+      ]
+    },
+    "8411902000005": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160799452"
+      ]
+    },
+    "8412170000018": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "406550176"
+      ]
+    },
+    "8414100000013": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160595886",
+        "160599962",
+        "160673819",
+        "160792691",
+        "160822875",
+        "160855794",
+        "381213417"
+      ]
+    },
+    "8432425000006": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160539324",
+        "160571653",
+        "160607226",
+        "160607843",
+        "160639561",
+        "160711560",
+        "160732406",
+        "160781407",
+        "160800759"
+      ]
+    },
+    "8433963000008": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160482880",
+        "160487323",
+        "160574676",
+        "160576496",
+        "160622764",
+        "160633611",
+        "160720925",
+        "176764693",
+        "198825113",
+        "198876071"
+      ]
+    },
+    "8435425100004": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160509180",
+        "160519080",
+        "160668491",
+        "160674432",
+        "160756353",
+        "331842113",
+        "331951704"
+      ]
+    },
+    "8436545620007": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160755842",
+        "160761486"
+      ]
+    },
+    "8437007277005": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160843944"
+      ]
+    },
+    "8437008977003": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160705204"
+      ]
+    },
+    "8437010537004": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "160663690"
+      ]
+    },
+    "8437017153009": {
+      "reason": "Original description explicitly identifies this number as GLN; not reliable product identity",
+      "evidence_sku_ids": [
+        "166261398",
+        "209444964",
+        "365160455",
+        "422306992",
+        "422391633"
+      ]
+    }
+  },
+  "listing_context": {
+    "897369430": {
+      "gtin": "860000322935",
+      "inner_type": "can",
+      "inner_material": "metal",
+      "source": "original retailer image: dashboard/images/897369430.png; can label and metal body reviewed"
+    },
+    "282677444": {
+      "gtin": "6419806053204",
+      "inner_type": "can",
+      "inner_material": "metal",
+      "outer_type": "shrinkwrap",
+      "outer_material": "plastic",
+      "pack_count": 12,
+      "source": "original retailer image: dashboard/images/282677444.png; 12 cans inside shrinkwrap reviewed"
+    }
+  }
+}

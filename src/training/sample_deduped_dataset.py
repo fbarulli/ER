@@ -150,10 +150,13 @@ def main() -> None:
     args = parser.parse_args()
 
     source = pd.read_csv(args.input, dtype=str, keep_default_na=False)
-    sampled, allocation = _sample(source, args.size, args.seed)
-    remainder = source[~source["product_id"].isin(set(sampled["product_id"]))].copy()
+    from core.identity_policy import exclude_reviewed_rows
+    eligible = exclude_reviewed_rows(source)
+    quarantined = source.loc[~source.product_id.isin(eligible.product_id)]
+    sampled, allocation = _sample(eligible, args.size, args.seed)
+    remainder = eligible[~eligible["product_id"].isin(set(sampled["product_id"]))].copy()
     remainder = remainder.sort_values("product_id", kind="mergesort").reset_index(drop=True)
-    if len(remainder) + len(sampled) != len(source):
+    if len(remainder) + len(sampled) + len(quarantined) != len(source):
         raise AssertionError("sample/remainder row accounting did not close")
     _atomic_csv(sampled, args.output)
     _atomic_csv(remainder, args.remainder_output)
@@ -179,6 +182,8 @@ def main() -> None:
             "sha256": _sha256(args.remainder_output),
             "definition": "input rows whose product_id is not in the held-out sample",
         },
+        "identity_review_excluded_rows": len(quarantined),
+        "identity_review_excluded_product_ids": quarantined.product_id.tolist(),
         "strata": allocation,
     }
     _atomic_json(manifest, args.manifest)

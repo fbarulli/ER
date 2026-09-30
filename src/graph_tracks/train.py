@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import random
 import subprocess
+import shutil
 import time
 
 import numpy as np
@@ -128,6 +129,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     "selection_metric": "dev_pr_auc", "torch_version": str(torch.__version__)}
         best_metric, best_path, start_epoch = -1., None, 0
         if resume:
+            marker = resume.parent / "checkpoint_manifest.json"
+            if not marker.is_file() or json.loads(marker.read_text())["files"]["graph_model.pt"] != file_hash(resume):
+                raise ValueError("resume checkpoint incomplete or hash mismatch")
             restored = torch.load(resume, map_location=cfg.device, weights_only=False)
             prior = restored["manifest"]
             for key in ("track", "listings_sha256", "pairs_sha256", "text_cache_sha256"):
@@ -139,7 +143,18 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             # Resume must retain the prior selected checkpoint for collection.
             best_path = Path(restored["best_path"])
             if not best_path.is_file():
-                raise FileNotFoundError("resume requires prior best checkpoint alongside training state")
+                # A copied checkpoint tree is portable when sibling epochs remain.
+                best_path = resume.parent.parent / best_path.parent.name / "graph_model.pt"
+            if not best_path.is_file():
+                raise FileNotFoundError("resume requires prior best checkpoint in the restored tree")
+            best_marker = best_path.parent / "checkpoint_manifest.json"
+            if not best_marker.is_file() or json.loads(best_marker.read_text())["files"]["graph_model.pt"] != file_hash(best_path):
+                raise ValueError("selected resume checkpoint incomplete or hash mismatch")
+            # Collect the selected model inside this run even if no new epoch wins.
+            selected_dir = output / "_checkpoints" / cfg.track / f"{run_tag}_f0" / best_path.parent.name
+            if selected_dir.resolve() != best_path.parent.resolve():
+                shutil.copytree(best_path.parent, selected_dir, dirs_exist_ok=True)
+            best_path = selected_dir / "graph_model.pt"
             model.load_state_dict(restored["model"])
             scorer.load_state_dict(restored["scorer"])
             optimizer.load_state_dict(restored["optimizer"])
@@ -157,6 +172,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         train_labels = torch.tensor(pairs["train"][1], device=cfg.device)
         dev_pairs = torch.tensor(pairs["dev"][0], device=cfg.device)
         support_text = None if text is None else text[support_indices]
+        trained_endpoints = set(pairs["train"][0].reshape(-1).tolist())
+        support_ids = set(support_indices)
+        pd.DataFrame([{"product_id": r["product_id"], "split": r["split"],
+                       "supervised_endpoint": i in trained_endpoints,
+                       "training_graph_support": i in support_ids}
+                      for i, r in enumerate(records)]).to_csv(output / "listing_usage.csv", index=False)
         logger.info("[graph-train] track=%s listings=%d train_pairs=%d dev_pairs=%d device=%s",
                     cfg.track, len(records), len(train_pairs), len(dev_pairs), cfg.device)
         with MlflowCtx(run_tag) as mlflow, WandbCtx(run_tag) as wandb:
@@ -179,6 +200,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite loss")
                 loss.backward()
+                gradient_norms = {name: float(parameter.grad.norm()) for name, parameter in model.named_parameters()
+                                  if parameter.grad is not None}
+                if not all(np.isfinite(value) for value in gradient_norms.values()):
+                    raise RuntimeError("nonfinite gradients")
+                with (output / "gradient_metrics.jsonl").open("a") as handle:
+                    handle.write(json.dumps({"epoch": epoch, "parameter_gradient_norms": gradient_norms}) + "\n")
                 torch.nn.utils.clip_grad_norm_(list(model.parameters()) + list(scorer.parameters()), cfg.max_grad_norm)
                 optimizer.step()
                 model.eval()
@@ -228,12 +255,14 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 logger.info("[graph-train] epoch=%d loss=%.5f dev_pr_auc=%.5f dev_p_at_r95=%.5f best=%s",
                             epoch, loss.item(), metrics["dev_pr_auc"], metrics["dev_p_at_r95"], improved)
             for path in (output / "run_manifest.json", output / "graph_census.json",
-                         output / "epoch_metrics.jsonl", output / "best_checkpoint.json"):
+                         output / "epoch_metrics.jsonl", output / "best_checkpoint.json",
+                         output / "listing_usage.csv", output / "gradient_metrics.jsonl"):
                 mlflow.log_artifact(path)
             mlflow.log_artifact(best_path)
             wandb.set_summary({"best_dev_pr_auc": best_metric, "best_checkpoint": str(best_path)})
             wandb.log_artifacts([best_path.parent, output / "run_manifest.json",
-                                 output / "graph_census.json", output / "epoch_metrics.jsonl"],
+                                 output / "graph_census.json", output / "epoch_metrics.jsonl",
+                                 output / "listing_usage.csv", output / "gradient_metrics.jsonl"],
                                 f"{run_tag}-graph-results")
         write_json(output / "graph_worker_result.json", {"status": "ok", "best_checkpoint": str(best_path),
                     "best_dev_pr_auc": best_metric, "track": cfg.track})

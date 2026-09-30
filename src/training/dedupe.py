@@ -63,6 +63,7 @@ from core.common import DATA_PATH, SEED, F, ensure_parent, load_dataset
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 from core.product_identity import (
     completeness as descriptor_completeness,
+    evaluate_product_identity,
     identity_conflict,
     row_identity,
 )
@@ -146,10 +147,12 @@ def _same_product_by_title(sub: pd.DataFrame, retailer: str, barcode: str) -> bo
         return True
 
     identities = [row_identity(row) for row in sub.to_dict("records")]
-    anchor = identities[0]
-    return all(
-        not identity_conflict(anchor, other) for other in identities[1:]
-    )
+    # Compatibility is not transitive: A={lemon,lime} can overlap B={lemon}
+    # and C={lime} while B conflicts with C. Check every pair before collapse.
+    from itertools import combinations
+    return all(evaluate_product_identity(left, right)["decision"] in {
+        "same", "compatible_unverified"
+    } for left, right in combinations(identities, 2))
 
 
 
@@ -301,11 +304,13 @@ def main() -> None:
             identities = [row_identity(r) for r in sub.to_dict("records")]
             anchor = identities[0]
             for other in identities[1:]:
-                reasons = identity_conflict(anchor, other)
+                evaluation = evaluate_product_identity(anchor, other)
+                reasons = evaluation["identity_conflicts"]
+                reviews = evaluation["review_dimensions"] + evaluation["unclassified_keys"]
                 conflict_rows.append({
                     "tier": "T1.5", "retailer": retailer, "barcode": barcode,
                     "label": "proven_split" if reasons else "unresolved",
-                    "reasons": "|".join(reasons) or "-",
+                    "reasons": "|".join(reasons or [f"review:{r}" for r in reviews]) or "-",
                     "title_a": sub["title"].iat[0], "title_b": sub["title"].iat[1],
                     "brand_a": anchor.brand and " ".join(sorted(anchor.brand)) or "",
                     "brand_b": other.brand and " ".join(sorted(other.brand)) or "",

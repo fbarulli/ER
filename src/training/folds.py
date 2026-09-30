@@ -299,10 +299,16 @@ def merged_component_graph(
 
     Returns ``(pos, row_bc, stats)``.
     """
+    from core.identity_policy import review_mask
+    if review_mask(pd.Series(row_bc)).any():
+        raise ValueError("split graph contains quarantined identity groups; rebuild eligible inputs")
     census = labeled_pairs if labeled_pairs is not None else load_labeled_pairs(
         labeled_pairs_csv
     )
+    held_edges = review_mask(census["gtin1"]) | review_mask(census["gtin2"])
+    census = census.loc[~held_edges]
     extra, edge_stats = labeled_positive_edges(row_bc, census)
+    edge_stats["identity_review_pairs_excluded"] = int(held_edges.sum())
     merged = np.vstack([pos, extra]) if (extra.size and len(pos)) else (
         extra if extra.size else pos
     )

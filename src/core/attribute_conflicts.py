@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import ast
 import re
-import unicodedata
 from collections.abc import Mapping
+
+from core.text import unicode_casefold
 
 from core.unit_canonicalization import canonical_pack_count, canonical_volume_ml
 from core.critical_attributes import (
@@ -42,8 +43,7 @@ def normalized_flavor_tokens(value: object) -> frozenset[str]:
     """
     if isinstance(value, (set, frozenset, list, tuple)):
         return frozenset().union(*(normalized_flavor_tokens(item) for item in value))
-    text = unicodedata.normalize("NFKD", str(value or "").casefold())
-    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = unicode_casefold(value)
     tokens = re.findall(r"[a-z0-9]+", text)
     return frozenset(
         FLAVOR_ALIASES.get(token, token)
@@ -267,14 +267,10 @@ def critical_attribute_evaluation(
             unknown.append(dimension)
             continue
         if dimension == "volume":
-            compatible = any(
-                abs(float(a) - float(b))
-                <= max(
-                    float(volume_absolute_tolerance_ml),
-                    float(volume_relative_tolerance) * max(abs(float(a)), abs(float(b))),
-                )
-                for a in left_set
-                for b in right_set
+            compatible = volumes_compatible(
+                left_set, right_set,
+                volume_relative_tolerance=volume_relative_tolerance,
+                volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
             )
             conflict = not compatible
         elif dimension == "flavor":
@@ -329,39 +325,12 @@ def attribute_conflict_types(
     feeds training labels. The default 0.0 keeps exact-match callers (the
     unit canonicalization tests pin that contract) unchanged.
     """
-    conflicts: list[str] = []
-    if not (
-        _has_consistency_flag(left, "ambiguous_volume")
-        or _has_consistency_flag(right, "ambiguous_volume")
-    ) and not volumes_compatible(
-        left.get("volume"),
-        right.get("volume"),
-        volume_relative_tolerance=volume_relative_tolerance,
-        volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
-    ):
-        conflicts.append("volume")
-    if left["pack"] and right["pack"] and not (
-        set(left["pack"]) & set(right["pack"])
-    ):
-        conflicts.append("pack")
-    left_package_types = set(left.get("package_type") or set())
-    right_package_types = set(right.get("package_type") or set())
-    if (
-        left_package_types
-        and right_package_types
-        and not (left_package_types & right_package_types)
-    ):
-        conflicts.append("package_type")
-    evaluation = critical_attribute_evaluation(
+    return critical_attribute_evaluation(
         left,
         right,
         volume_relative_tolerance=volume_relative_tolerance,
         volume_absolute_tolerance_ml=volume_absolute_tolerance_ml,
-    )
-    for dimension in ("flavor", "carbonation", "sweetener", "pulp"):
-        if dimension in evaluation["conflicts"]:
-            conflicts.append(dimension)
-    return conflicts
+    )["conflicts"]
 
 
 def conflict_columns(

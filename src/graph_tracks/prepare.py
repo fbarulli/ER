@@ -1,0 +1,61 @@
+"""Export graph inputs from shared identity extraction and explicit listing splits.
+
+No splits are invented and no barcode/label edges enter the model. The initial
+model supports only RELATIONS/NUMERIC; its manifest declares that subset.
+"""
+from __future__ import annotations
+import argparse
+import json
+from pathlib import Path
+import pandas as pd
+from graph_tracks.data import RELATIONS, NUMERIC, file_hash, load_records
+
+
+def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
+    from core.product_identity import row_identity
+    from graph_tracks.train import load_pairs, write_json
+    frame = pd.read_csv(catalog, dtype=str, keep_default_na=False, low_memory=False)
+    from core.identity_policy import review_mask, POLICY_PATH
+    if "barcode" in frame and review_mask(frame.barcode).any():
+        raise ValueError("catalog contains quarantined identity groups; exclude reviewed GTINs before preparing splits")
+    assignment = pd.read_csv(splits, dtype=str, keep_default_na=False)
+    if 'product_id' not in frame or set(assignment.columns) != {'product_id', 'split'}:
+        raise ValueError('catalog needs product_id; split CSV needs exactly product_id,split')
+    if frame.product_id.duplicated().any() or assignment.product_id.duplicated().any():
+        raise ValueError('listing IDs and split assignments must be unique')
+    if set(frame.product_id) != set(assignment.product_id):
+        raise ValueError('split map must cover exactly the retained catalog')
+    lookup = assignment.set_index('product_id').split.to_dict()
+    records = []
+    for _, row in frame.iterrows():
+        identity = row_identity(row)
+        records.append({'product_id': row.product_id, 'split': lookup[row.product_id],
+                        'attributes': {key: sorted(getattr(identity, key)) for key in RELATIONS},
+                        'numeric': {key: sorted(getattr(identity, key)) for key in NUMERIC}})
+    output.mkdir(parents=True, exist_ok=False)
+    listing_path = output / 'listings.json'
+    write_json(listing_path, {'schema': 'er-graph-listings-v1', 'listings': records})
+    records = load_records(listing_path)
+    load_pairs(pairs, records)
+    (output / 'pairs.csv').write_bytes(pairs.read_bytes())
+    write_json(output / 'input_manifest.json', {
+        'schema': 'er-graph-inputs-v1', 'catalog_sha256': file_hash(catalog),
+        'identity_policy_sha256': file_hash(POLICY_PATH),
+        'splits_sha256': file_hash(splits), 'pairs_sha256': file_hash(pairs),
+        'listings_sha256': file_hash(listing_path), 'identity_extractor': 'core.product_identity.row_identity',
+        'relations': list(RELATIONS), 'numeric': list(NUMERIC),
+        'feature_scope': 'initial subset, not all identity dimensions',
+        'excluded_model_inputs': ['barcode', 'verified identity edges', 'raw text'],
+    })
+    return listing_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ('catalog', 'splits', 'pairs', 'output'):
+        parser.add_argument('--' + name, type=Path, required=True)
+    args = parser.parse_args()
+    prepare(args.catalog, args.splits, args.pairs, args.output)
+
+if __name__ == '__main__':
+    main()

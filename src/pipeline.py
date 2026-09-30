@@ -1354,6 +1354,8 @@ def load_canonical_map() -> dict[str, str]:
         dtype=str,
         keep_default_na=False,
     )
+    from core.identity_policy import exclude_reviewed_rows
+    df = exclude_reviewed_rows(df, column="gtin")
     blank = df.index[df["gtin"].astype(str).str.strip().eq("")]
     if len(blank):
         raise ValueError(
@@ -1817,9 +1819,13 @@ def run_within_brand_pipeline(
     from core.gtin import barcode_validity
 
     bc_valid = barcode_validity(df_full["gtin"].fillna("").astype(str).str.strip())
-    checksum_bad = gtin_valid & ~bc_valid
+    from core.identity_policy import review_mask
+    reviewed = review_mask(df_full["gtin"])
+    checksum_bad = gtin_valid & ~bc_valid & ~reviewed
     n_checksum_dropped = int(checksum_bad.sum())
     df_full = df_full[gtin_valid & bc_valid]
+    if reviewed.any():
+        print(f"[gtin-guard] excluded {int(reviewed.sum()):,} identity-review rows (GLN or unresolved formulation)", flush=True)
     if n_checksum_dropped:
         print(
             f"[gtin-guard] dropped {n_checksum_dropped:,} rows whose gtin "
@@ -1845,6 +1851,7 @@ def run_within_brand_pipeline(
         detail={
             "gtin_missing_or_nan": int((~gtin_valid).sum()),
             "gs1_checksum_failed": n_checksum_dropped,
+            "identity_review_quarantined": int(reviewed.sum()),
             "rows_retained": int(len(df_full)),
         },
         source="raw export",
@@ -2186,6 +2193,8 @@ def build_training_data(
                   every gate hard-no pair with similarity >= threshold
         stats   : dict — counts (nothing dropped silently)
     """
+    from core.identity_policy import exclude_reviewed_rows
+    df = exclude_reviewed_rows(df).reset_index(drop=True)
     print(
         f"[payload-stage] building variant={payload_variant} rows={len(df):,}",
         flush=True,

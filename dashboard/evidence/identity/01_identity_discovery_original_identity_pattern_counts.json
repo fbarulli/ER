@@ -1,0 +1,18 @@
+{
+  "original_rows": 71623,
+  "checksum_valid_rows": 26363,
+  "unique_valid_gtins": 13250,
+  "exact_brand_title_multiple_gtins": {
+    "groups": 738,
+    "listing_rows": 2171,
+    "cross_retailer_groups": 324
+  },
+  "brand_strings_differ_within_gtin": {
+    "groups": 71,
+    "listing_rows": 341
+  },
+  "brands_with_multiple_gtins": {
+    "brands": 1357,
+    "listing_rows": 25930
+  }
+}

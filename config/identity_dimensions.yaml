@@ -1,0 +1,55 @@
+# Every observed raw attribute is represented. Raw discrepancies are review
+# evidence until a field's feed reliability and semantics have been measured.
+schema_version: 1
+columns:
+  product_id: listing_identifier
+  retailer: offer_context
+  country: offer_context
+  title: descriptor_text
+  description: descriptor_text
+  category_path: descriptor_text
+  url: offer_context
+  image_url: offer_context
+  price: offer_context
+  barcode: identity_identifier
+  brand: descriptor_text
+  category: descriptor_text
+  attributes: attribute_container
+attributes:
+  Juice Content: {kind: interval, unit: percent}
+  Volume: {kind: numeric, unit: ml}
+  Carbonization: {kind: categorical, aliases: {sparkling: carbonated}}
+  Pack Material Type: {kind: categorical}
+  Flavour: {kind: categorical}
+  Pack Type: {kind: categorical}
+  Health Claims: {kind: categorical}
+  Naturally derived: {kind: categorical}
+  Caffeine: {kind: interval, unit: mg}
+  Sweetener: {kind: categorical}
+  Made From: {kind: categorical}
+  Water Type: {kind: categorical}
+  Immune Support Ingredients: {kind: categorical}
+  Sustainable Sourcing: {kind: categorical}
+  No Artificial Ingredients: {kind: categorical}
+  Juice Features: {kind: categorical}
+  Geographic Origin: {kind: categorical}
+  Contains Minerals: {kind: categorical}
+  Free From: {kind: categorical}
+  Energy Source: {kind: categorical}
+  Diets: {kind: categorical}
+  Sports Ingredients: {kind: categorical}
+  Concentrate Format: {kind: categorical}
+  RTD Coffee Style: {kind: categorical}
+  Tea Type: {kind: categorical}
+  Sustainable Packaging: {kind: categorical}
+  Environmentally Friendly: {kind: categorical}
+  Weight: {kind: numeric, unit: unspecified}
+  Botanicals And Functional Ingredients: {kind: categorical}
+  Coffee Type: {kind: categorical}
+  Sports Positioning: {kind: categorical}
+  Count per Unit: {kind: numeric, unit: count}
+  Roast Type: {kind: categorical}
+  Sports Drinks Style: {kind: categorical}
+  Nutri-Score: {kind: categorical}
+  Special Edition: {kind: categorical}
+  Giftbox: {kind: categorical}

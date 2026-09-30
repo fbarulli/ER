@@ -752,6 +752,8 @@ def _main_inner(_mlf, _wandb) -> None:
                 f"training dataset override lacks deduped columns: {missing_columns}"
             )
         print(f"[dataset] override={dataset_path} rows={len(df):,}", flush=True)
+    from core.identity_policy import exclude_reviewed_rows
+    df = exclude_reviewed_rows(df)
     if args.sample:
         df = df.head(args.sample).reset_index(drop=True)
         print(f"SAMPLE MODE: first {args.sample} rows", flush=True)
