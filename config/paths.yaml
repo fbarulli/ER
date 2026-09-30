@@ -64,6 +64,16 @@ files:
   # Frozen calibration pairs are an input to both training and inference,
   # so ship them with the rest of the versioned runtime data.
   labeled_pairs: "data:labeled_pairs.csv"
+  # THE single validation population (P0). Folds 2+3 of the merged component
+  # graph; replaces the retired dataset_deduped_sample_3000/5000 lanes, whose
+  # splits were derived from a validation-blind graph and leaked (23.3% of
+  # positives had both endpoints in train).
+  final_validation: "training_data:final_validation.csv"
+  # COMPLETE split accounting: every graph entity -> fold + component. The
+  # validation CSV above holds only the scored half, so a consumer holding the
+  # full labeled census needs this to tell "withheld, the model trained on it"
+  # from "missing".
+  validation_fold_map: "results_training:validation_fold_map.csv"
   balanced_pairs_sample_3000: "results_training:balanced_pairs_sample_3000.csv"
   embedding_similarities: "results_training:embedding_similarities.csv"
   model_evaluation_summary: "results_training:model_evaluation_summary.csv"
@@ -78,6 +88,7 @@ files:
   dedupe_summary: "results_training:dedupe_summary.csv"
   ambiguous_offer_groups: "results_training:ambiguous_offer_groups.csv"
   removals: "results_training:dedupe_removals.csv"
+  dedupe_conflicts: "results_training:dedupe_conflicts.csv"
   four_pop_scores: "results_training:four_pop_scores.csv"
   field_ablation: "results_training:field_ablation.csv"
   data_scaling: "results_training:data_scaling.csv"

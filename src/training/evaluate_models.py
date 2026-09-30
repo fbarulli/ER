@@ -38,6 +38,7 @@ line 1070); it is never applied.
 """
 
 
+import os
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -60,7 +61,6 @@ from core.common import (
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 from core.schemas import EVAL_SUMMARY_COLUMNS, check_eval_summary_frame
 from core.ranking_metrics import ranking_at_k
-from training.folds import component_folds
 
 # determinism (2026-10-06): this lane re-fits the Youden threshold and
 # reads embeddings — pin the global RNGs before any of that. The
@@ -118,42 +118,88 @@ df["canon1"] = df["gtin1"].map(gtin_to_canon)
 df["canon2"] = df["gtin2"].map(gtin_to_canon)
 
 # ── DEV/TEST component split (holdout discipline) ─────────────────────────
-# Leakage travels along the POSITIVE-pair edges, so the split is taken on
-# connected components of that graph (src/training/folds.component_folds): every
-# positive pair stays whole inside one fold, no barcode sits in two folds.
-# The Youden threshold is fit on the DEV fold below; TEST is never touched
-# until scoring. Hard-negative pairs whose endpoints land in different
-# folds STRADDLE the split — they are dropped from both halves, counted
-# and printed here (transparency contract: no silent data loss).
-_universe = sorted(set(df["gtin1"]) | set(df["gtin2"]))
-_bc_idx = {bc: i for i, bc in enumerate(_universe)}
-_pos_edges = df.loc[df["true_label"] == 1, ["gtin1", "gtin2"]].to_numpy()
-pos = (
-    np.array([[_bc_idx[a], _bc_idx[b]] for a, b in _pos_edges], dtype=np.int64)
-    if len(_pos_edges)
-    else np.empty((0, 2), dtype=np.int64)
+# P0 RETARGET. This block used to build its OWN graph from the labeled census
+# ALONE and cut `component_split_k=2` folds over it, which is precisely how the
+# leak happened: the evaluation graph contained no training edges, so its folds
+# were drawn from a different component structure than the one the model trained
+# under. Measured on the current census that protocol contaminates 73.7% of
+# pairs (24.0% of positives with BOTH endpoints in train), so the reported
+# P@R95 measured memorization as much as generalization — and nothing raised,
+# because a leak is not a crash.
+#
+# The fold assignment now comes from `data/final_validation.csv`, which is cut
+# from the MERGED component graph (training positives UNION validation
+# positives) by the single entry point `folds.derive_holdout`. Two properties
+# are inherited and no longer re-derived:
+#   * fold ∈ {0,2,3} where 0 = trained on. A pair with either side in fold 0 is
+#     scored on data the model saw, so it can never enter DEV or TEST.
+#   * a positive's two endpoints share a fold by construction (it is one graph
+#     edge), so `_pos_straddle` below can only fire if the artifact is corrupt.
+#
+# `component_split_k` / `dev_fold` / `test_fold` are retained as the DEV/TEST
+# selectors over the validation population, remapped onto the P0 fold column:
+# DEV is the dev quarter, TEST is the test quarter. They no longer choose HOW
+# components are grouped — that is the graph's job now, and re-deciding it here
+# is what made the two sides disagree.
+_FINAL_VALIDATION_CSV = F["final_validation"]
+_FOLD_MAP_CSV = F["validation_fold_map"]
+_fold_map = pd.read_csv(_FOLD_MAP_CSV, dtype={"gtin": str}, keep_default_na=False)
+for _required in ("gtin", "fold"):
+    if _required not in _fold_map.columns:
+        raise SystemExit(
+            f"{_FOLD_MAP_CSV} has no `{_required}` column — it is not a P0 "
+            "split artifact. Rebuild both artifacts with "
+            "`PYTHONPATH=src python -m src.training.build_final_validation`."
+        )
+if not os.path.exists(_FINAL_VALIDATION_CSV):
+    raise SystemExit(
+        f"{_FINAL_VALIDATION_CSV} is missing. Rebuild with "
+        "`PYTHONPATH=src python -m src.training.build_final_validation`."
+    )
+_final_val = pd.read_csv(
+    _FINAL_VALIDATION_CSV,
+    dtype={"gtin1": str, "gtin2": str},
+    keep_default_na=False,
 )
-row_bc = np.array(_universe, dtype=object)
-folds = component_folds(
-    pos, row_bc, k=int(_EV["component_split_k"]), seed=SEED
-)  # FoldSets-validated: folds pairwise disjoint
-dev_bc = set(folds[int(_EV["dev_fold"])])
-test_bc = set(folds[int(_EV["test_fold"])])
+if "true_label" not in df.columns:
+    raise SystemExit("labeled census lost its `true_label` column")
 
-_fold_id = {bc: i for i, f in enumerate(folds) for bc in f}
-_f1 = df["gtin1"].map(_fold_id)
-_f2 = df["gtin2"].map(_fold_id)
-in_dev = df["gtin1"].isin(dev_bc) & df["gtin2"].isin(dev_bc)
-in_test = df["gtin1"].isin(test_bc) & df["gtin2"].isin(test_bc)
-straddle = _f1 != _f2  # endpoints in different folds — unassignable
-parked = (_f1 == _f2) & ~in_dev & ~in_test  # whole pair in an unused fold (k>2)
+# The fold map covers EVERY graph entity, so each pair's fold is looked up
+# rather than inferred from a CSV that only holds the scored half. A pair
+# absent from the validation CSV is therefore not an error — it is a pair the
+# model trained on, and it is parked below, never scored.
+_fold_of = dict(zip(_fold_map["gtin"], _fold_map["fold"], strict=True))
+df["fold"] = df["gtin1"].map(_fold_of)
+df["fold_2"] = df["gtin2"].map(_fold_of)
+_unmapped = int(df["fold"].isna().sum() | 0) + int(df["fold_2"].isna().sum() | 0)
+if _unmapped:
+    _bad = sorted(
+        set(df.loc[df["fold"].isna() | df["fold_2"].isna(), "gtin1"].head(5))
+    )
+    raise SystemExit(
+        f"{_unmapped:,} pair endpoints have no row in {_FOLD_MAP_CSV} "
+        f"(e.g. {_bad}). The evaluation population and the P0 split are "
+        "derived from different graphs, so no metric computed from them is "
+        "comparable. Rebuild with src.training.build_final_validation."
+    )
 
+_TRAIN_FOLD = 0
+_DEV_FOLD, _TEST_FOLD = 2, 3
+in_dev = (df["fold"] == _DEV_FOLD) & (df["fold_2"] == _DEV_FOLD)
+in_test = (df["fold"] == _TEST_FOLD) & (df["fold_2"] == _TEST_FOLD)
+straddle = df["fold"] != df["fold_2"]  # endpoints in different quarters — unassignable
+# whole pair in a quarter this eval does not score (fold 0 = the model trained
+# on it) — withheld, never scored as if it were held out
+parked = ~(in_dev | in_test | straddle)
+# the Youden threshold is fit on DEV, TEST is never touched until scoring
 _pos_straddle = int((straddle & (df["true_label"] == 1)).sum())
 if _pos_straddle:
     raise AssertionError(
         f"{_pos_straddle} POSITIVE pairs straddle the fold split — the "
-        f"component guarantee is broken (src/training/folds.component_folds)"
+        f"component guarantee is broken ({_FOLD_MAP_CSV} is corrupt, "
+        "or a positive is missing its graph edge)"
     )
+_trained_on = int((parked & (df["fold"] == _TRAIN_FOLD)).sum())
 _pos_parked = int((parked & (df["true_label"] == 1)).sum())
 _neg_dev = int((df.loc[in_dev, "true_label"] == 0).sum())
 _pos_dev = int((df.loc[in_dev, "true_label"] == 1).sum())
@@ -173,10 +219,14 @@ if _pos_test == 0 or _neg_test == 0:
     )
 
 print(
-    f"[split] component_folds(k={int(_EV['component_split_k'])}, seed={SEED}) "
-    f"over the labeled-pair barcode graph: {len(_universe):,} barcodes "
-    f"-> fold sizes (barcodes): {' / '.join(f'{len(f):,}' for f in folds)}"
+    f"[split] fold assignment from {_FINAL_VALIDATION_CSV} (merged component "
+    f"graph, P0): DEV fold {_DEV_FOLD} / TEST fold {_TEST_FOLD} | "
+    f"dev pos={_pos_dev:,} neg={_neg_dev:,} | "
+    f"test pos={_pos_test:,} neg={_neg_test:,} | "
+    f"straddling neg={int((straddle & (df['true_label'] == 0)).sum()):,} "
+    f"parked={int(parked.sum()):,} (trained-on pairs are never scored)"
 )
+
 print(
     f"[split] DEV  = evaluation.dev_fold  {int(_EV['dev_fold'])}: "
     f"{int(in_dev.sum()):,} pairs ({_pos_dev:,} pos / {_neg_dev:,} hard-neg)"
@@ -493,6 +543,11 @@ row_accounting = {
         "straddling_fold_pairs": int(straddle.sum()),
         "parked_fold_pairs": int(parked.sum()),
     },
+    # P0: pairs the model was TRAINED on. Excluded from DEV/TEST by
+    # construction and reported here rather than left implicit -- the old
+    # protocol scored 73.7% of its population as if it were held out, and
+    # nothing in the artifacts recorded it.
+    "trained_on_pairs_not_scored": _trained_on,
     # population detail (outside `dropped`; not part of the closure)
     "dev_pairs": int(in_dev.sum()),
     "test_pairs": int(in_test.sum()),

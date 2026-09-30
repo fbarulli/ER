@@ -37,6 +37,23 @@ FIELDS = (
 )
 GATE = ("volume_set", "pack_set", "package_type_set", "flavor_set")
 
+# Scalar captured attributes (plain strings, NOT list literals) — the model
+# captures these per canonical and the augment fill needs their distributions.
+SCALAR_FIELDS = ("mode_type", "mode_flavor")
+
+# Additional list-valued captured attributes whose marginals the augment fill
+# needs (beyond FIELDS above). These ARE list literals -> parse_set applies.
+LIST_FILL_FIELDS = ("sweetener_type_set", "sweetening_set")
+
+# Every attribute the augment fill samples, grouped by how to parse it.
+# scalar: raw string value. list: parse_set tokens. The conditional section
+# keys each by mode_type so the fill stays coherent (soda->carbonated...).
+FILL_FIELDS = (
+    "mode_brand", "mode_type", "mode_flavor",
+    "carbonation_set", "sweetener_set", "sweetener_type_set",
+    "sweetening_set", "pulp_set", "package_material_set", "package_type_set",
+)
+
 # Inferred structural rules: a pack_count value can only co-occur with
 # package_types whose physical form matches that count.
 # Rule sources: observed co-occurrence + common-sense packaging logic.
@@ -61,14 +78,33 @@ def parse_set(raw: object) -> set[str]:
     return {str(t).strip().lower() for t in parsed if str(t).strip()}
 
 
+def scalar_values(raw: object) -> set[str]:
+    """Raw scalar cell -> {value} (mode_type / mode_flavor / mode_brand)."""
+    v = str(raw).strip()
+    return {v} if v and v != "nan" else set()
+
+
+def parse_field(field: str, raw: object) -> set[str]:
+    """Dispatch a field to its parser: scalar string vs list-literal set."""
+    if field in SCALAR_FIELDS or field == "mode_brand":
+        return scalar_values(raw)
+    return parse_set(raw)
+
+
 def load_canonicals(path: Path) -> pd.DataFrame:
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    missing = [f for f in FIELDS if f not in frame.columns]
+    required = set(FIELDS) | set(SCALAR_FIELDS) | set(LIST_FILL_FIELDS) | {
+        "mode_brand", "gtin",
+    }
+    missing = [f for f in required if f not in frame.columns]
     if missing:
         raise SystemExit(f"missing fields: {missing}")
     out = pd.DataFrame({"gtin": frame["gtin"]})
-    for field in FIELDS:
+    for field in FIELDS + LIST_FILL_FIELDS:
         out[field] = [parse_set(v) for v in frame[field]]
+    for field in SCALAR_FIELDS:
+        out[field] = [scalar_values(v) for v in frame[field]]
+    out["mode_brand"] = [scalar_values(v) for v in frame["mode_brand"]]
     return out
 
 
@@ -101,12 +137,29 @@ def main() -> int:
 
     frame = load_canonicals(args.canonicals)
     marg: dict[str, Counter] = {}
-    for f in FIELDS:
+    for f in FIELDS + LIST_FILL_FIELDS + SCALAR_FIELDS:
         cnt: Counter = Counter()
         for v in frame[f]:
-            vals = parse_set(v)
+            vals = parse_field(f, v) if f in LIST_FILL_FIELDS + SCALAR_FIELDS else parse_set(v)
             cnt.update(vals if vals else {"<none>"})
         marg[f] = cnt
+
+    # Conditional distributions for the augment fill: for every fillable
+    # attribute, the value distribution GIVEN mode_type. Coherent fills need
+    # this (soda products are carbonated, water products are still, an energy
+    # drink gets a caffeine brand, ...). mode_type is itself one of the filled
+    # fields; its own conditional is given <none> (the overall marginal).
+    conditional: dict[str, dict[str, dict[str, int]]] = {}
+    for f in FILL_FIELDS:
+        per_type: dict[str, Counter] = defaultdict(Counter)
+        for row in frame.itertuples(index=False):
+            mtypes = getattr(row, "mode_type")  # already a set from load_canonicals
+            key = next(iter(sorted(mtypes))) if mtypes else "<none>"
+            vals = getattr(row, f)  # already a parsed set
+            per_type[key].update(vals if vals else {"<none>"})
+        conditional[f] = {k: dict(c.most_common()) for k, c in per_type.items()}
+    # overall mode_type marginal (the key to seed the fill)
+    mode_type_marg = dict(marg["mode_type"].most_common())
 
     rules, observed_pairs = infer_rules(frame)
 

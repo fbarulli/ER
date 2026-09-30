@@ -8,15 +8,36 @@ is chosen deliberately: has barcode (trusted identity) > most complete >
 lowest price.
 
 Tiers (each operates on the rows surviving the previous tier):
-  T1 retailer+barcode     same product at one retailer -> 1 row (barcode is
-                          ground truth, highest confidence).
-  T2 retailer+title+price identical everything -> 1 row (lossless).
-  T3 retailer+title       varying price -> 1 deliberate representative; the
-                          group is FLAGGED as an ambiguous offer (pv) so the
-                          price-collapse is auditable, never silent.
+  T1  retailer+barcode      same product at one retailer -> 1 row (barcode is
+                           ground truth, highest confidence).
+  T1.5 retailer+malformed   same retailer + same CHECKSUM-INVALID barcode +
+      barcode               same product -> 1 row. Identity decided by the
+                           descriptor bundle (core.product_identity), never by
+                           price or URL.
+  T2  retailer+title+       identical everything -> 1 row (lossless). Price is
+      price+barcode         NOT part of the key (it is a seller attribute);
+                           same retailer+title+barcode at two prices is the
+                           same product offered twice, which is T3's
+                           price-aggregation and is flagged, not silent.
+  T3  retailer+title +      varying price -> one deliberate representative per
+      identity partition   IDENTITY PARTITION, flagged as an ambiguous offer
+                           (pv) so the price-collapse is auditable.
 
-The deduped dataset is the MATCHING-stage input (step 03+); the raw export
-stays the source of truth (load_dataset unchanged).
+The identity partition in T3 is load-bearing, not cosmetic (measured
+2026-09-30): keying the collapse on (retailer,title) ALONE merged two distinct
+checksum-valid products whenever one retailer listed the same title string
+under two barcodes. 692 groups, 1,086 product-listings deleted, and 264
+products lost their ONLY row in the corpus — present in canonical_records.csv,
+absent from the deduped output, with a representative carrying a sibling's
+barcode. T2 already detects exactly this hazard and deferred to T3; T3 then
+merged them anyway. The partition closes it: rows carrying DIFFERENT trusted
+barcodes never collapse together, and two rows with NO barcode still do
+(price aggregation, flagged).
+
+Identity is decided by `core.product_identity` (the SSOT) and by nothing else.
+Representative choice deliberately ignores `price`, `url` and `image_url`:
+price moves with the seller, and the URL columns are export noise — the
+completeness score counts DESCRIPTOR fields only.
 
 Writes:
   data/dataset_deduped.csv             deduped dataset (pipeline input)
@@ -24,6 +45,7 @@ Writes:
   results/06_dedupe_summary.csv        per-tier counts
   results/06_ambiguous_offer_groups.csv  retailer+title >1 price
   results/06_dedupe_removals.csv       one review row per removed raw SKU
+  results/training/dedupe_conflicts.csv  descriptor conflicts left unresolved
   results/manifests/dedupe.json        per-stage manifest, written LAST
                                         (SILENT_DROPS task 4 — the stage's
                                         completion marker: closure
@@ -34,23 +56,17 @@ Writes:
 
 from __future__ import annotations
 
-import re
-
 import numpy as np
 import pandas as pd
 
 from core.common import DATA_PATH, SEED, F, ensure_parent, load_dataset
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
-
-# SSOT normalization reused from the record-linkage lane (safe: strips pack/
-# count noise, PRESERVES flavor/roast/brand tokens) for the T1.5 product-
-# identity check on malformed-barcode groups.
-from core.record_linkage import strip_pack_multiplicity  # noqa: E402
-from pipeline import normalize_text  # noqa: E402
-from core.critical_attributes import (  # noqa: E402
-    DECLARED_FLAVOR_LEXICON,
-    FLAVOR_LEXICON,
+from core.product_identity import (
+    completeness as descriptor_completeness,
+    identity_conflict,
+    row_identity,
 )
+from core.progress import tracked
 
 # output paths from the config SSOT (files.*) — were hardcoded here, the
 # only filenames in the tree outside config/paths.yaml
@@ -59,78 +75,24 @@ CSV_OFFERS = F["ambiguous_offer_groups"]
 CSV_REMOVALS = F["removals"]
 DEDUPED_PATH = F["dataset_deduped"]
 SKU_TO_REP_PATH = F["sku_to_rep"]
+CSV_CONFLICTS = F["dedupe_conflicts"]
 
-HELPERS = ["_price", "_nonnull", "_has_bc", "_t2_bc", "_bc_valid"]
-
-
-# Diet/zero/sugar-free title markers. A group is a genuine split ONLY when
-# these markers are MIXED across rows (some rows diet, some regular) — a
-# marker present in EVERY row (all sugar-free) is a shared product trait, not
-# a conflict. Deliberately EXCLUDES "caffeinated"/"decaf"/"cold brew"/"light"
-# as noise qualifiers (verified: caffeinated etc. are listing noise, not
-# product splitters for these malformed-barcode rows).
-_DIET_MARKER = re.compile(
-    r"\b(diet|zero|sugar\s*free|no\s*sugar|low\s*cal|unsweetened)\b", re.I
-)
-
-
-def _attr_token_set(attr: str, key: str) -> set[str]:
-    """Extract a canonical token SET from a `Key: value; ...` attribute cell.
-
-    NORMALIZE FIRST (verified order of operations): the value is normalize_text'd
-    then split into word tokens, so "coffee, vanilla" and "vanilla coffee" are
-    the SAME set. Comparing sets (not ordered strings) is what lets a reworded
-    title (Gevalia "Cold Brew Vanilla Concentrate" vs "Vanilla Cold Brew
-    Concentrate") collapse correctly.
-    """
-    m = re.search(key + r"\s*:\s*([^;]+)", str(attr), re.I)
-    if not m:
-        return set()
-    return set(re.findall(r"[a-z0-9]+", normalize_text(m.group(1))))
-
-
-def _flavor_roast_sets(sub: pd.DataFrame) -> list[set[str]]:
-    """Per-row identity sets = declared flavor tokens UNION roast-type tokens.
-
-    Roast (French/Italian/espresso) is a coffee product splitter that lives in
-    the `Roast Type` attribute, NOT the `Flavour` field — Cool Brew "French
-    Roast" vs "Vanilla" both carry Flavour: coffee, so flavor alone cannot
-    separate them. Unioning roast-type catches the genuine split while a
-    missing field (empty set) stays compatible.
-    """
-    attr_col = "attributes" if "attributes" in sub.columns else "attribute"
-    return [
-        _attr_token_set(a, r"flavou?r") | _attr_token_set(a, r"roast\s*type")
-        for a in sub[attr_col]
-    ]
-
-
-def _subset_compatible(sets: list[set[str]]) -> bool:
-    """True if every non-empty identity set is subset-compatible.
-
-    Two rows conflict ONLY when each has a token the other lacks (e.g. lemon
-    vs lime, french vs vanilla) — then it is a genuine product split. An
-    OMISSION (one title/attr is a subset of the other, e.g. "lemon" vs
-    "lemon, lime") is the truncated-listing noise we must ALLOW, not veto.
-    """
-    nonempty = [s for s in sets if s]
-    if not nonempty:
-        return True
-    for i in range(len(nonempty)):
-        for j in range(i + 1, len(nonempty)):
-            a, b = nonempty[i], nonempty[j]
-            if (a - b) and (b - a):
-                return False
-    return True
-
+HELPERS = ["_price", "_complete", "_has_bc", "_t2_bc", "_bc_valid", "_ident"]
 
 # STEP-2 adjudicated verdicts (owner review 2026-09-29). The 10 residual
-# groups that Step 1 (normalized brand+flavor+roast+diet) cannot decide
-# unambiguously were reviewed on their ORIGINAL (unnormalized) data — full
-# title, attributes, brand, category, price. 8 are genuine product splits
-# (keep separate), 2 are same-product where a listing qualified a shared
-# trait (collapse). Keyed by (retailer, barcode) so the T1.5 loop can look up
-# the verdict directly.
+# groups that the descriptor bundle cannot decide unambiguously were reviewed
+# on their ORIGINAL (unnormalized) data — full title, attributes, brand,
+# category, price. 8 are genuine product splits (keep separate), 2 are
+# same-product where a listing qualified a shared trait (collapse). Keyed by
+# (retailer, barcode) so the T1.5 loop can look up the verdict directly.
+#
+# This table is the reason the text predicate is allowed to decide T1.5 at
+# all: measured on barcode-labeled ground truth (2026-09-30) the descriptor
+# predicate alone merges 59.0% of provably-different pairs, because a
+# missing descriptor reads as agreement. Absence of a conflict is therefore
+# NOT sufficient — a byte-identical malformed barcode at one retailer plus a
+# descriptor verdict is, and anything the verdict cannot settle is escalated
+# here rather than merged.
 _STEP2_COLLAPSE = {  # (retailer, barcode) -> same product, collapse
     # L&A All Cranberry Juice: 3 listings, all L&A cranberry juice 32oz;
     # "No Sugar Added" on one is a shared listing qualifier, not a split.
@@ -163,19 +125,19 @@ _STEP2_KEEP = {  # (retailer, barcode) -> genuine split, keep separate
 def _same_product_by_title(sub: pd.DataFrame, retailer: str, barcode: str) -> bool:
     """Two-step product-identity decision for a (retailer, barcode) group.
 
-    STEP 1 — normalize first, then collapse on the normalized signal:
-      brand agrees (normalized) + flavor ∪ roast attribute sets are
-      subset-compatible (omissions allowed, genuine lemon-vs-lime / french-vs-
-      vanilla vetoed) + diet/zero/sugar-free markers are NOT mixed across rows.
-      Category is deliberately NOT a veto: it is as noisy as the attributes on
-      these malformed-barcode rows (Reconstituted vs Not-from-Concentrate
-      juice are the same product).
+    STEP 0 — adjudicated overrides win outright (owner review, see _STEP2_*).
+    STEP 1 — the descriptor bundle decides: no dimension may PROVE the rows are
+      different products. `core.product_identity` owns that comparison, so the
+      dedupe, the gate and the vetoes cannot drift apart. Category is
+      deliberately not a veto: it is as noisy as the attribute cell on these
+      rows (Reconstituted vs Not-from-Conjugate juice are the same product).
+    STEP 2 — a group the bundle cannot settle is NOT merged. The absence of a
+      conflict is not evidence of identity (measured 59.0% false-merge rate on
+      barcode-labeled hard negatives), so the safe answer is to keep the rows
+      apart and let the link lane adjudicate.
 
-    STEP 2 — residual adjudication on ORIGINAL data: the small set of groups
-    Step 1 routes to review are decided explicitly by owner (see _STEP2_*).
-
-    `sub` must contain columns: title, brand, attribute. Returns True when the
-    group is the same product and should collapse.
+    `sub` must contain the descriptor columns. Returns True when the group is
+    the same product and should collapse.
     """
     key = (retailer, barcode)
     if key in _STEP2_KEEP:
@@ -183,20 +145,17 @@ def _same_product_by_title(sub: pd.DataFrame, retailer: str, barcode: str) -> bo
     if key in _STEP2_COLLAPSE:
         return True
 
-    # STEP 1
-    brands = set(sub["brand"].fillna("").str.lower())
-    if len(brands) != 1:
-        return False
-    if not _subset_compatible(_flavor_roast_sets(sub)):
-        return False
-    diet_flags = [bool(_DIET_MARKER.search(t)) for t in sub["title"].astype(str)]
-    if len(set(diet_flags)) > 1:
-        return False
-    return True
+    identities = [row_identity(row) for row in sub.to_dict("records")]
+    anchor = identities[0]
+    return all(
+        not identity_conflict(anchor, other) for other in identities[1:]
+    )
+
 
 
 def main() -> None:
-    for _out in (CSV_SUMMARY, CSV_OFFERS, CSV_REMOVALS, DEDUPED_PATH, SKU_TO_REP_PATH):
+    for _out in (CSV_SUMMARY, CSV_OFFERS, CSV_REMOVALS, CSV_CONFLICTS,
+                 DEDUPED_PATH, SKU_TO_REP_PATH):
         ensure_parent(_out)
     # Stage manifest (SILENT_DROPS task 4) — begin BEFORE the work: the
     # raw export is hashed now (53MB, chunked) so the record pins exactly
@@ -207,9 +166,21 @@ def main() -> None:
     n0 = len(df)
     work = df.assign(
         _price=pd.to_numeric(df["price"], errors="coerce"),
-        _nonnull=df.notna().sum(axis=1),
+        # Descriptor completeness, NOT `df.notna().sum()`: the old score
+        # counted `url` and `image_url`, so a listing survived on the strength
+        # of two export-noise columns while a complete title with no image lost
+        # (measured 2026-09-30). price is excluded too — it is a seller
+        # attribute, not a description of the product.
+        _complete=[descriptor_completeness(r) for r in df.to_dict("records")],
         _has_bc=(df["barcode"].fillna("").str.len() > 0).astype(int),
     )
+
+    # The ambiguous-offer audit is computed from the RAW frame, before any tier
+    # can consume the rows. It used to be derived from whatever survived to T3,
+    # so a group T2 collapsed first silently vanished from the audit trail.
+    pv = work.groupby(["retailer", "title"])["_price"].agg(
+        ["size", "nunique", "min", "max"]).rename(columns={"size": "count"})
+    ambiguous = pv[(pv["count"] > 1) & (pv["nunique"] > 1)]
 
     # parent[i] = original row index of the surviving representative for row i.
     # Updated per tier and resolved transitively at the end (a T1 survivor may
@@ -230,7 +201,8 @@ def main() -> None:
         27ms on the 71.6k-row corpus.
         """
         ordered = frame.sort_values(sort_cols, ascending=ascending,
-                                    na_position="last")
+                                    na_position="last",
+                                    kind="stable")
         pos = pd.Series(np.arange(len(ordered)), index=ordered.index)
         rep_pos = pos.groupby(
             [ordered[c] for c in groups], dropna=False
@@ -260,17 +232,24 @@ def main() -> None:
     # are not dropped: they fall through to T2/T3 title-based tiers.
     from core.gtin import barcode_validity
 
+    bc_stripped = work["barcode"].fillna("").astype(str).str.strip()
+    before_valid_barcodes = set(bc_stripped[barcode_validity(bc_stripped)]) - {""}
     work = work.assign(
-        _bc_valid=barcode_validity(
-            work["barcode"].fillna("").astype(str).str.strip()
-        ).to_numpy()
+        _bc_valid=barcode_validity(bc_stripped).to_numpy()
+    )
+    # The identity partition: a row's TRUSTED barcode, or "" when it has none.
+    # T1 collapses within a partition by construction; T3 reuses it so two
+    # different products sharing a title string can never collapse together.
+    work = work.assign(
+        _ident=np.where(work["_bc_valid"],
+                        work["barcode"].fillna("").astype(str).str.strip(), ""),
     )
     with_bc = work[(work["_has_bc"] == 1) & (work["_bc_valid"])]
     t1_bc_invalid = work[(work["_has_bc"] == 1) & (~work["_bc_valid"])]
     no_bc = work[work["_has_bc"] == 0]
     n_t1_skipped = len(t1_bc_invalid)
     t1, dropped1 = collapse(with_bc, ["retailer", "barcode"],
-                            ["_nonnull", "_price"], [False, True])
+                            ["_complete"], [False])
     work = pd.concat([t1, t1_bc_invalid, no_bc])
     summary.append({"tier": "T1 retailer+barcode",
                     "dropped_rows": len(dropped1),
@@ -280,27 +259,32 @@ def main() -> None:
     # product -> one row. T1 refuses to collapse on an invalid barcode because
     # "invalid barcode is export noise, not identity" — but a malformed barcode
     # that is byte-identical at one retailer is still a strong candidate, and
-    # the title is the arbiter. We collapse a group ONLY when the normalized,
-    # pack-stripped titles agree on product identity (no flavor/roast/brand
-    # token differs — see _same_product_by_title). This recovers the 97 groups
+    # the descriptor bundle is the arbiter (`_same_product_by_title`, which
+    # delegates to core.product_identity and escalates anything it cannot
+    # settle to the owner-adjudicated table). This recovers the 97 groups
     # measured in the dedupe invalid-barcode audit (2026-09-29) while never
     # merging genuinely different products (Cool Brew French Roast vs Vanilla,
     # Montellier Lemon vs Lime, Ginseng Up vs Natural Ginger Ale, ...).
     t15_dropped = []
     t15_kept = []
     t15_groups = 0
-    for (retailer, barcode), sub in t1_bc_invalid.groupby(
-        ["retailer", "barcode"], sort=False
+    t15_unresolved = 0
+    conflict_rows = []
+    for (retailer, barcode), sub in tracked(
+        list(t1_bc_invalid.groupby(["retailer", "barcode"], sort=False)),
+        desc="T1.5 malformed-barcode groups",
     ):
         if len(sub) <= 1:
             t15_kept.append(sub)
             continue
         if _same_product_by_title(sub, retailer, barcode):
-            # Representative: most-complete, then lowest price (same preference
-            # order as the other tiers), first in that order wins.
+            # Representative: most complete descriptors, then a trusted
+            # barcode, then the most informative title. NOT price — the
+            # cheapest listing is not the most truthful one.
             order = sub.sort_values(
-                ["_nonnull", "_price"], ascending=[False, True],
-                na_position="last",
+                ["_complete", "_ident", "title"],
+                ascending=[False, False, True],
+                na_position="last", kind="stable",
             )
             rep = order.iloc[[0]]
             rep_idx = order.index[0]
@@ -310,53 +294,80 @@ def main() -> None:
             t15_kept.append(rep)
             t15_groups += 1
         else:
+            # Unresolved OR a proven split: keep every row and record WHY, so
+            # the identity question is a review queue rather than a silent
+            # either/or. `label` distinguishes "descriptor proves different"
+            # from "descriptor had nothing to say".
+            identities = [row_identity(r) for r in sub.to_dict("records")]
+            anchor = identities[0]
+            for other in identities[1:]:
+                reasons = identity_conflict(anchor, other)
+                conflict_rows.append({
+                    "tier": "T1.5", "retailer": retailer, "barcode": barcode,
+                    "label": "proven_split" if reasons else "unresolved",
+                    "reasons": "|".join(reasons) or "-",
+                    "title_a": sub["title"].iat[0], "title_b": sub["title"].iat[1],
+                    "brand_a": anchor.brand and " ".join(sorted(anchor.brand)) or "",
+                    "brand_b": other.brand and " ".join(sorted(other.brand)) or "",
+                })
+                if not reasons:
+                    t15_unresolved += 1
             t15_kept.append(sub)
     t15_kept = pd.concat(t15_kept)
     work = pd.concat([t1, t15_kept, no_bc])
     summary.append({"tier": "T1.5 retailer+malformed-barcode+same-product",
                     "dropped_rows": len(t15_dropped),
-                    "collapsed_groups": t15_groups})
+                    "collapsed_groups": t15_groups,
+                    "unresolved_groups": t15_unresolved})
 
-    # T2: retailer+title+price(+barcode) -> one row (lossless), ONLY for rows
-    # that HAVE a price. NaN != NaN in the real world, so two missing-price rows
-    # are not "identical everything" and must flow to T3's auditable
-    # price-aggregation. "Lossless" is ENFORCED, not assumed: rows collapse only
-    # when their barcodes agree (same non-empty barcode, or both missing) —
-    # same title+price with DIFFERENT barcodes is a different product and
-    # flows to T3's auditable path instead of being silently merged. The group
-    # key uses NUMERIC _price so "10.0" and "10.00" are one price, matching
-    # T3's numeric aggregation.
-    with_price = work[work["_price"].notna()].copy()
-    with_price["_t2_bc"] = with_price["barcode"].fillna("").astype(str)
-    no_price = work[work["_price"].isna()]
+    # T2: retailer+title+barcode -> one row (lossless). `price` is NOT part of
+    # the key: it is a seller attribute, and two rows at one retailer with the
+    # same title and the same product barcode but different prices are the same
+    # product offered twice — that is T3's price-aggregation, and the
+    # ambiguous-offer audit (computed from the raw frame above) still records
+    # it. Rows with a MISSING price are not "identical everything" in the old
+    # sense, but price is no longer part of identity, so they no longer need
+    # their own lane.
+    #
+    # "Lossless" is still ENFORCED by the barcode-agreement guard: rows
+    # collapse only when their trusted barcodes agree (same non-empty
+    # identity, or both without one). Two DIFFERENT trusted barcodes under one
+    # title are different products and must not be merged here.
+    with_price = work.copy()
+    with_price["_t2_bc"] = with_price["_ident"]
+    no_price = work.iloc[0:0]
 
-    # Split T2 by barcode agreement WITHIN each (retailer,title,price) group:
-    # an all-same-barcode (or all-missing) group collapses losslessly; a group
-    # with >1 distinct barcode carries genuinely different products — those
-    # rows all flow to T3 (kept here via keep_idx exclusion from collapse).
-    bc_sig = with_price.groupby(["retailer", "title", "_price"], sort=False, dropna=False)["_t2_bc"].transform(
+    # Split T2 by barcode agreement WITHIN each (retailer,title) group: an
+    # all-same-identity group collapses losslessly; a group with >1 distinct
+    # trusted barcode carries genuinely different products — those rows all
+    # flow to T3 (kept here via the conflict mask).
+    bc_sig = with_price.groupby(["retailer", "title"], sort=False, dropna=False)["_t2_bc"].transform(
         lambda s: "1" if s.nunique() <= 1 else "0")
     t2_clean = with_price[bc_sig == "1"]
     t2_conflict = with_price[bc_sig == "0"]
 
-    t2, dropped2 = collapse(t2_clean, ["retailer", "title", "_price", "_t2_bc"],
-                            ["_nonnull", "_price"], [False, True])
+    t2, dropped2 = collapse(t2_clean, ["retailer", "title", "_t2_bc"],
+                            ["_complete"], [False])
     work = pd.concat([t2, t2_conflict.drop(columns=["_t2_bc"]), no_price])
-    summary.append({"tier": "T2 retailer+title+price+barcode",
+    summary.append({"tier": "T2 retailer+title+barcode",
                     "dropped_rows": len(dropped2),
                     "deferred_to_t3": len(t2_conflict)})
 
-    # T3: retailer+title with varying price -> deliberate representative + flag
-    # "count" is GROUP SIZE ("size"), not pandas' NaN-excluding count: a group
-    # with rows [10, 20, NaN] has 3 rows, and the audit CSV must say so.
-    pv = work.groupby(["retailer", "title"])["_price"].agg(
-        ["size", "nunique", "min", "max"]).rename(columns={"size": "count"})
-    ambiguous = pv[(pv["count"] > 1) & (pv["nunique"] > 1)]
-    t3, dropped3 = collapse(work, ["retailer", "title"],
-                            ["_has_bc", "_nonnull", "_price"], [False, False, True])
+    # T3: retailer+title WITHIN AN IDENTITY PARTITION -> one deliberate
+    # representative + flag. The `_ident` partition is the fix for the measured
+    # identity loss: keying on (retailer,title) alone deleted 1,086
+    # product-listings carrying a valid barcode and erased 264 products from
+    # the corpus entirely (they survived in canonical_records.csv, absent from
+    # the output, represented by a sibling's barcode). Rows sharing a title
+    # with NO trusted barcode still collapse together — that is the genuine
+    # price-aggregation case, and it is flagged rather than silent.
+    t3, dropped3 = collapse(work, ["retailer", "title", "_ident"],
+                            ["_has_bc", "_complete", "title"],
+                            [False, False, True])
     work = t3
-    summary.append({"tier": "T3 retailer+title (price-aggregation)",
+    summary.append({"tier": "T3 retailer+title+identity-partition (price-aggregation)",
                     "dropped_rows": len(dropped3)})
+
 
     # ---- outputs --------------------------------------------------------------
     # Resolve representative pointers transitively (T1/T2 survivors may be
@@ -380,16 +391,43 @@ def main() -> None:
     atomic_write_csv(sku_to_rep, SKU_TO_REP_PATH, index=False)
     print(f"wrote {SKU_TO_REP_PATH} ({len(sku_to_rep):,} rows)")
 
-    # sanity: no (retailer,title) duplicates may remain, and every raw SKU
-    # resolves to a valid representative.
-    dups = int(deduped.duplicated(subset=["retailer", "title"]).sum())
+    # sanity: no (retailer,title,identity-partition) duplicates may remain, and
+    # every raw SKU resolves to a valid representative. The partition is part
+    # of the key on PURPOSE: two genuinely different products may share a title
+    # string at one retailer, but no two rows sharing a trusted barcode can
+    # survive as duplicates. Checked on `work` because `deduped` drops the
+    # helper columns.
+    dups = int(
+        work.duplicated(subset=["retailer", "title", "_ident"]).sum()
+    )
     if dups:
-        raise AssertionError(f"sanity FAILED: {dups} retailer+title dupes remain")
+        raise AssertionError(
+            f"sanity FAILED: {dups} retailer+title+identity dupes remain"
+        )
     if sku_to_rep["rep_id"].isna().any():
         raise AssertionError("sanity FAILED: some SKUs map to no representative")
     if set(sku_to_rep["rep_id"].unique()) != set(range(len(deduped))):
         raise AssertionError("sanity FAILED: rep_id coverage is not 0..n-1")
-    print("  [PASS] no retailer+title duplicates remain; SKU->rep mapping complete")
+    print("  [PASS] no retailer+title+identity duplicates remain; "
+          "SKU->rep mapping complete")
+
+    # IDENTITY INVARIANT (2026-09-30): no product may lose its last row. Every
+    # trusted barcode present in the input must still be present in the output,
+    # or a product has been erased from the matching input. Measured 264
+    # products failing this before the T3 identity partition landed. This is
+    # now a hard gate, not a report: the failure mode it catches is silent and
+    # unrecoverable downstream, and no future tier may be allowed to reintroduce
+    # it.
+    after = set(deduped["barcode"].fillna("").astype(str).str.strip())
+    lost = before_valid_barcodes - after
+    if lost:
+        raise AssertionError(
+            f"sanity FAILED: {len(lost):,} trusted barcodes lost their last "
+            f"row (e.g. {sorted(lost)[:3]}) — a product was deleted from the "
+            f"matching input, not de-duplicated"
+        )
+    print(f"  [PASS] identity invariant: all {len(before_valid_barcodes):,} "
+          f"trusted barcodes still have a representative")
 
     # One review row for every raw SKU deliberately collapsed by a tier.
     # Capture the tier at its direct parent update, before transitive
@@ -397,8 +435,8 @@ def main() -> None:
     removal_tier = {
         **{idx: "T1 retailer+barcode" for idx in dropped1},
         **{idx: "T1.5 retailer+malformed-barcode+same-product" for idx in t15_dropped},
-        **{idx: "T2 retailer+title+price+barcode" for idx in dropped2},
-        **{idx: "T3 retailer+title (price-aggregation)" for idx in dropped3},
+        **{idx: "T2 retailer+title+barcode" for idx in dropped2},
+        **{idx: "T3 retailer+title+identity-partition (price-aggregation)" for idx in dropped3},
     }
     removals = sku_to_rep.loc[list(removal_tier)].copy()
     removals["tier"] = [removal_tier[idx] for idx in removals.index]
@@ -421,8 +459,20 @@ def main() -> None:
     ambiguous_out = ambiguous.rename(
         columns={"count": "rows", "nunique": "distinct_prices"}).reset_index()
     atomic_write_csv(ambiguous_out, CSV_OFFERS, index=False)
-    print(f"wrote {CSV_OFFERS} (display table, {len(ambiguous_out)} rows) "
+    print(f"wrote {CSV_OFFERS} (display table, {len(ambiguous_out):,} rows) "
           f"— {len(ambiguous_out):,} ambiguous-offer groups flagged")
+
+    conflicts = pd.DataFrame(
+        conflict_rows,
+        columns=["tier", "retailer", "barcode", "label", "reasons",
+                 "title_a", "title_b", "brand_a", "brand_b"],
+    )
+    atomic_write_csv(conflicts, CSV_CONFLICTS, index=False)
+    n_unresolved = int((conflicts["label"] == "unresolved").sum()) if len(conflicts) else 0
+    print(f"wrote {CSV_CONFLICTS} ({len(conflicts):,} rows) — "
+          f"{n_unresolved:,} identity questions the descriptor bundle could "
+          f"not settle, escalated instead of guessed")
+
 
     # ---- row accounting (SILENT_DROPS task 4; capture-only) ────────────────
     # The three tier counters partition the frame at each step, so the
@@ -446,21 +496,23 @@ def main() -> None:
         "dropped": {
             "t1_retailer_barcode": len(dropped1),
             "t1_5_retailer_malformed_barcode_same_product": len(t15_dropped),
-            "t2_retailer_title_price_barcode": len(dropped2),
-            "t3_retailer_title_price_aggregation": len(dropped3),
+            "t2_retailer_title_barcode": len(dropped2),
+            "t3_retailer_title_identity_partition": len(dropped3),
         },
         "skipped_checksum_invalid": n_t1_skipped,
         "deferred_to_t3": len(t2_conflict),
         "ambiguous_offer_groups": len(ambiguous_out),
+        "unresolved_identity_review_rows": len(conflicts),
     }
     manifest_path = finish_manifest(
         manifest,
-        outputs=[DEDUPED_PATH, SKU_TO_REP_PATH, CSV_SUMMARY, CSV_OFFERS, CSV_REMOVALS],
+        outputs=[DEDUPED_PATH, SKU_TO_REP_PATH, CSV_SUMMARY, CSV_OFFERS,
+                 CSV_REMOVALS, CSV_CONFLICTS],
         row_accounting=row_accounting,
         expected_outputs=[
             F["dataset_deduped"].name, F["sku_to_rep"].name,
             F["dedupe_summary"].name, F["ambiguous_offer_groups"].name,
-            F["removals"].name,
+            F["removals"].name, F["dedupe_conflicts"].name,
         ],
     )
     print(f"wrote {manifest_path} — stage manifest (closure "

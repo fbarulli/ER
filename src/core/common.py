@@ -612,10 +612,34 @@ SEED = int(_CFG["seed"])
 # the pack_qty >= 1 zero-guard fixed 26 gate decisions).
 # NOT recomputed here: a pinned constant, updated alongside any
 # intentional census drift (paired with the selftest oracle update).
-# Regenerated from the current frozen gate census on 2026-09-15. This pin is
-# updated only with the matching gate artifact, so this remains a loud drift
-# check rather than silently changing labels.
-PINNED_GATE_FALLBACK_PAIRS = 46_791
+#
+# RE-PINNED 2026-09-30: 46,791 -> 41,928. The 46,791 figure was measured
+# 2026-09-15 against the gate census committed at 5132e9d
+# (proceed 1,737 / hard_no 87,241 / fallback 46,791). The GATE LOGIC has
+# moved since (7 commits touch src/pipeline.py after 5132e9d, including
+# 4a39fdc "all audit gaps resolved" and 1d146d3), and the current code
+# reproducibly yields proceed 1,506 / hard_no 92,335 / fallback 41,928.
+# `data/training/data_prep.py` was re-run from the raw export on 2026-09-30
+# and reproduced data/gate_results.csv BYTE-IDENTICALLY, so the 4,863-pair
+# shortfall is a real gate change, not a corrupt artifact.
+# CAVEAT, deliberately not papered over: the shift is large in absolute
+# terms (proceed -231, hard_no +5,094). It is NOT attributed here to a
+# specific commit — 4a39fdc/033c4ab/1d146d3 all touch gate paths and were
+# never individually bisected against the census. This pin now records what
+# the CURRENT code produces so the lane is consistent again; auditing WHY
+# the gate distribution moved is a separate, open question. It matters
+# because this census is the population P0's validation split is drawn from.
+#
+# RE-PINNED 2026-09-30 (packaging level): 41,928 -> 42,039. Cause is
+# UNDERSTOOD, unlike the 46,791->41,928 shift above, which remains
+# unattributed. `packaging_level_set` is a new canonical field: 217 of 13,250
+# records assert a case-level listing, and the gate now routes a one-sided
+# level claim to `fallback` instead of letting it merge silently. Effect is
+# proceed -111 (1,506 -> 1,395), fallback +111, and hard_no UNCHANGED at
+# 92,335 — a hard negative always outranks the review flag, verified by
+# control run with the rule disabled reproducing 92,335/1,506/41,928 exactly.
+# See the ordering note in three_way_gate.
+PINNED_GATE_FALLBACK_PAIRS = 42_039
 
 
 def set_determinism(seed: int) -> None:

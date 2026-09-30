@@ -28,9 +28,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from itertools import combinations
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from core.schemas import CalibrationPartition, FoldSets
 
@@ -38,53 +40,51 @@ _GTIN_DIGITS = frozenset("0123456789")
 
 
 def normalize_gtin(raw: object) -> str:
-    """THE canonical entity key. Every join, graph and split uses this.
+    """THE canonical entity key for CROSS-NAMESPACE joins.
 
-    P0 finding: the leak was never a bug in the split logic, it was a bug in
-    the entity key. Barcodes reach this project in three shapes — ``"4006381333931"``,
-    ``"4006381333931.0"`` (float round-tripped by a CSV round trip) and
-    ``"004006381333931"`` (EAN-13 zero-padded to GTIN-14) — and each shape was
-    treated as a DIFFERENT product. ``data/labeled_pairs.csv`` alone carries
-    two spellings, so the evaluator built its graph over a universe that
-    silently disagreed with the training one.
+    P0 measured the old validation protocol as 73.7% contaminated, and
+    ``data/labeled_pairs.csv`` (gtins) looked like a namespace disjoint from
+    the training graph's barcodes. This function is the one place the two are
+    reconciled, used by ``merged_component_graph`` for EDGE RESOLUTION only.
 
-    Rule: keep ASCII digits only, then left-zero-pad to 14. Dropping
-    non-digits makes a stray ``"4006381333931 "`` or ``"GTIN:4006..."``
-    collapse onto the same key instead of becoming a phantom singleton, and
-    zfill is idempotent, so repeated normalization is stable.
+    Rule: drop a float ``.0`` artifact, keep ASCII digits only, then
+    left-zero-pad to 14.
 
-    The leading-zero case is worth spelling out, because it is the one place
-    a "obvious" implementation is wrong. These are all the SAME product:
+    ========  ==================  ==================
+    raw       digits              normalized
+    ========  ==================  ==================
+    ``4006381333931``    13           ``04006381333931``
+    ``04006381333931``   14           ``04006381333931``
+    ``4006381333931.0``  13 (after)   ``04006381333931``
+    ``GTIN:4006...``     13           ``04006381333931``
+    ========  ==================  ==================
 
-    ====================  ================
-    raw spelling          normalized
-    ====================  ================
-    ``4006381333931``     ``4006381333931``
-    ``4006381333931.0``   ``4006381333931``
-    ``004006381333931``   ``4006381333931``
-    ``4006381333931``     ``4006381333931``
-    ====================  ================
+    The 13/14 pair is the one that matters: a GTIN-14 is an EAN-13 with a
+    leading zero, so the same product legitimately appears at both lengths and
+    zfill(14) is what collapses them. zfill is idempotent, so repeated
+    normalization is stable.
 
-    A float GTIN like ``4006381333931.0`` stringifies with a trailing
-    ``.0``; stripping non-digits would otherwise leave ``40063813339310``,
-    i.e. a THIRTEEN-digit number that pads to ``040063813339310`` — a
-    completely different barcode from ``04006381333931``. So the digit
-    scrub is paired with a rule that removes that float artifact: a
-    trailing ``.0`` left by float stringification is dropped before
-    scrubbing, and a single trailing ``.`` with no fraction is dropped
-    too. Without that, the normalizer would fabricate a new phantom
-    entity for every float-round-tripped barcode — silently reintroducing
-    exactly the multi-spelling bug this function exists to remove.
+    The float artifact is handled BEFORE the digit scrub, and the order is not
+    cosmetic: ``"4006381333931.0"`` scrubbed naively leaves
+    ``40063813339310`` -- a THIRTEEN-digit string that pads to
+    ``040063813339310``, a completely different key. Scrub-then-strip would
+    fabricate a phantom entity for every float-round-tripped barcode, which is
+    the very bug this function exists to prevent.
 
-    This is deliberately the whole normalizer: one rule, one place. A
-    normalization scheme that is defined per call site is exactly how the
-    three-way disagreement arose in the first place.
+    Anything with no digits is returned as an explicit empty string, never
+    coerced to ``"00000000000000"`` -- collapsing every junk key into one
+    shared value would fabricate a giant false component and hand it a fold.
 
-    Anything with no digits at all is NOT silently coerced to a valid GTIN —
-    it is returned as an explicit empty string so the caller sees an
-    unjoinable key and can count it, rather than every no-digits key
-    collapsing into one shared ``"00000000000000"`` that would fabricate a
-    giant false component.
+    SCOPE, deliberately narrow. This function must NOT be applied to a
+    ``row_bc`` array that is used as the node key set of a split that
+    downstream code filters against with raw strings: it changes 8,559 of
+    14,981 barcodes, and a normalized key never equals its raw spelling, so
+    those filters would return empty with no error raised. And it buys nothing
+    on this dataset for identity purposes -- the deduped data holds 14,981 raw
+    barcodes and 14,981 distinct normalized keys, i.e. zero duplicate
+    spellings -- while retaining the ability to merge two genuinely different
+    malformed codes. Use it to join two namespaces. Do not use it to relabel
+    one.
     """
     text = str(raw).strip()
     # Drop a float round-trip artifact (".0") BEFORE the digit scrub, else
@@ -160,6 +160,160 @@ def merged_positive_graph(
     return merged, np.array(universe, dtype=object), stats
 
 
+def load_labeled_pairs(labeled_pairs_csv: str | Path | None = None) -> pd.DataFrame:
+    """Read the labeled pair census (gtin1, gtin2, true_label) ONCE, cached.
+
+    The split entry point folds these positive edges into the component graph
+    on every call, so the read is cached on (path, mtime, size): a retrain
+    that regenerates the census in place must see the new rows, and a
+    long-running HPO sweep that calls the entry point dozens of times must not
+    re-parse the file each time.
+    """
+    from core.common import F
+
+    path = Path(labeled_pairs_csv if labeled_pairs_csv is not None else F["labeled_pairs"])
+    if not path.exists():
+        raise FileNotFoundError(
+            f"labeled pair census not found at {path}. The holdout split folds "
+            "validation positive edges into the component graph; without the "
+            "census it would silently derive the LEAKY split this function "
+            "exists to prevent. Regenerate it with "
+            "`PYTHONPATH=src python -m src.training.labeled_pairs`."
+        )
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    cached = _LABELED_PAIRS_CACHE.get("key")
+    if cached == key:
+        return _LABELED_PAIRS_CACHE["frame"]
+    frame = pd.read_csv(
+        path, dtype={"gtin1": str, "gtin2": str}, keep_default_na=False
+    )
+    _LABELED_PAIRS_CACHE.update(key=key, frame=frame)
+    return frame
+
+
+_LABELED_PAIRS_CACHE: dict[str, Any] = {}
+
+
+def labeled_positive_edges(
+    row_bc: np.ndarray,
+    labeled_pairs: pd.DataFrame,
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Resolve labeled POSITIVE pairs to index edges over ``row_bc``.
+
+    These are the edges the P0 leak fix folds into the training graph. Every
+    lookup goes through :func:`normalize_gtin` on BOTH sides, which is the
+    whole point: ``labeled_pairs`` spells a GTIN as ``4006381333931`` while
+    ``row_bc`` may carry ``004006381333931`` or ``4006381333931.0``, and an
+    unnormalized join returns zero matches -- which is how the split ended up
+    structurally blind to validation in the first place.
+
+    Only ``true_label == 1`` pairs contribute edges. A negative pair is a
+    mined *similarity* relation, not an identity claim, so unioning it would
+    merge two products the census says are different -- the mirror image of
+    the leak. Negatives are still allowed to STRADDLE folds for that reason.
+
+    Both endpoints must resolve to a row in ``row_bc``. An unresolved positive
+    is a census/barcode disagreement, so it is counted and reported rather
+    than dropped in silence: a silent partial merge is indistinguishable from
+    a leak that came back.
+    """
+    first_row: dict[str, int] = {}
+    for i, bc in enumerate(row_bc):
+        key = normalize_gtin(bc)
+        if key and key not in first_row:
+            first_row[key] = i
+
+    label_col = "true_label" if "true_label" in labeled_pairs.columns else None
+    if label_col is None:
+        raise ValueError(
+            "labeled pair census has no `true_label` column; got "
+            f"{list(labeled_pairs.columns)}"
+        )
+
+    edges: list[tuple[int, int]] = []
+    unresolved = self_edge = 0
+    for g1, g2, label in zip(
+        labeled_pairs["gtin1"], labeled_pairs["gtin2"], labeled_pairs[label_col]
+    ):
+        if int(label) != 1:
+            continue
+        a = first_row.get(normalize_gtin(g1))
+        b = first_row.get(normalize_gtin(g2))
+        if a is None or b is None:
+            unresolved += 1
+        elif a == b:
+            self_edge += 1
+        else:
+            edges.append((a, b))
+
+    stats = {
+        "labeled_positives": int((labeled_pairs[label_col] == 1).sum()),
+        "edges_added": len(edges),
+        "endpoints_unresolved": unresolved,
+        "self_edges_skipped": self_edge,
+        "row_entities": len(first_row),
+    }
+    return np.array(edges, dtype=np.int64).reshape(-1, 2), stats
+
+
+def merged_component_graph(
+    pos: np.ndarray,
+    row_bc: np.ndarray,
+    *,
+    labeled_pairs_csv: str | Path | None = None,
+    labeled_pairs: pd.DataFrame | None = None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+    """THE component graph: training positives UNION validation positives.
+
+    The P0 leak is fixed here, in one function, because a caller that built
+    its own graph from the bare training pairs would derive a split that
+    leaks -- and a leak is not a crash, so nothing surfaces it. That is
+    exactly what ``evaluate_models.py`` did: it built a validation-only graph
+    and disagreed with training. Measured on the current census, the old
+    protocol contaminates 73.7% of labeled pairs (24.0% of positives had BOTH
+    endpoints in train, 49.7% had one), so the P@R95 it reported measured
+    memorization as much as generalization.
+
+    Labeled POSITIVE pairs are unioned in as edges. A validation positive with
+    one side in train and one side in test is the leak; once the pair IS an
+    edge, both endpoints land in the same component and therefore the same
+    fold, so a test-fold positive has neither side in train by construction.
+    Negatives are not identity claims and are deliberately NOT unioned.
+
+    ``row_bc`` IS RETURNED UNCHANGED, and that is load-bearing. The labeled
+    census and ``row_bc`` are two namespaces; :func:`normalize_gtin` bridges
+    them for EDGE RESOLUTION ONLY. Normalizing the returned array would be a
+    silent, total breakage: every downstream filter matches raw ``row_bc``
+    against the returned sets, and 8,559 of 14,981 barcodes are 13-digit, so
+    a normalized key (`02000000944753`) never matches its raw spelling
+    (`2000000944753`) and every pair built from it is quietly dropped --
+    with no error, only a smaller training set. Note also that normalizing the
+    graph is not merely unnecessary here, it is mildly harmful: the deduped
+    data holds 14,981 raw barcodes and 14,981 distinct normalized keys (no
+    duplicate spellings at all), so normalization changes nothing while being
+    able to collapse two genuinely different malformed codes into one
+    component. TODO.md's "0/5,428 intersection / missing normalization" root
+    cause is therefore wrong: the join resolves 8,809/8,809 pairs with OR
+    without it. The defect is the absent graph edges alone.
+
+    Returns ``(pos, row_bc, stats)``.
+    """
+    census = labeled_pairs if labeled_pairs is not None else load_labeled_pairs(
+        labeled_pairs_csv
+    )
+    extra, edge_stats = labeled_positive_edges(row_bc, census)
+    merged = np.vstack([pos, extra]) if (extra.size and len(pos)) else (
+        extra if extra.size else pos
+    )
+    stats = {
+        **edge_stats,
+        "train_positive_pairs": int(len(pos)) if pos is not None else 0,
+        "merged_positive_pairs": int(len(merged)),
+    }
+    return merged, row_bc, stats
+
+
 def component_folds(
     pos: np.ndarray, row_bc: np.ndarray, k: int, seed: int
 ) -> list[set[str]]:
@@ -219,6 +373,52 @@ def component_folds(
     return FoldSets(folds=folds).folds
 
 
+def component_ids(
+    pos: np.ndarray, row_bc: np.ndarray
+) -> dict[str, int]:
+    """Stable component id per barcode over the positive-pair graph.
+
+    Same union-find and same node set as :func:`component_folds`, but returns
+    the id instead of the fold. Needed because ``component_folds`` answers
+    "which fold" and cannot answer "are these two barcodes the same product" —
+    which is the question a leak regression test actually asks.
+
+    Ids are assigned by sorted member list, so they are deterministic for a
+    given (pos, row_bc) and stable across runs. The single largest component
+    is returned as id 0 by construction only when it sorts first; no code
+    should depend on a particular id's magnitude, only on ids being equal
+    for barcodes that are linked and different for barcodes that are not.
+    """
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for bc in row_bc:
+        if bc and bc not in parent:
+            parent[bc] = bc
+    for a, b in pos:
+        bca, bcb = str(row_bc[a]), str(row_bc[b])
+        if bca and bcb:
+            union(bca, bcb)
+
+    comps: dict[str, set[str]] = {}
+    for bc in parent:
+        comps.setdefault(find(bc), set()).add(bc)
+    ordered = sorted(comps.values(), key=lambda s: sorted(s))
+    return {bc: i for i, members in enumerate(ordered) for bc in members}
+
+
 def holdout_split(
     pos: np.ndarray,
     row_bc: np.ndarray,
@@ -269,6 +469,8 @@ def derive_holdout(
     split_cfg: Mapping[str, Any],
     *,
     seed: int,
+    labeled_pairs_csv: str | Path | None = None,
+    labeled_pairs: pd.DataFrame | None = None,
 ) -> tuple[set[str], set[str], set[str]]:
     """THE single entry point for the holdout split. Every caller goes here.
 
@@ -283,16 +485,37 @@ def derive_holdout(
     is invisible in the artifacts. Routing every caller through one function
     makes the contract checkable once, here.
 
-    The graph handed in is the caller's responsibility and is NOT normalized
-    here. This is the seam where the P0 merged graph will land: a caller that
-    folds validation positive edges into the same components will pass them
-    through here, so the leak fix and the refactor never have to diverge
-    again. Today every caller passes the training graph unchanged, so this is
-    behavior-identical to calling ``holdout_split`` directly.
+    The graph is built HERE, not by the caller, and that is the P0 blocker
+    resolved. P0 changes the component GRAPH (it unions in validation
+    positive edges), so the graph had to move behind this one door: a caller
+    that built its own graph from the bare training pairs would derive a
+    split that leaks -- and being a leak rather than a crash, nothing would
+    surface it. Leaving the choice to callers is what let
+    ``evaluate_models.py`` build a validation-only graph and disagree with
+    training in the first place.
+
+    The returned barcode sets are keys of the caller's own ``row_bc``, NOT
+    normalized ones -- callers filter payload rows against them directly (see
+    ``core.hard_negatives.pairs_in_set``), so normalizing here would silently
+    empty those filters for the 8,559 13-digit barcodes.
     """
-    return holdout_split(
+    merged_pos, graph_bc, stats = merged_component_graph(
         pos,
         row_bc,
+        labeled_pairs_csv=labeled_pairs_csv,
+        labeled_pairs=labeled_pairs,
+    )
+    print(
+        f"[split] merged component graph: {stats['merged_positive_pairs']:,} positive "
+        f"pairs ({stats['train_positive_pairs']:,} training + "
+        f"{stats['edges_added']:,} validation) over {stats['row_entities']:,} "
+        f"entities; {stats['endpoints_unresolved']:,} labeled positive "
+        f"endpoints unresolved",
+        flush=True,
+    )
+    return holdout_split(
+        merged_pos,
+        graph_bc,
         n_folds=int(split_cfg["holdout_component_folds"]),
         seed=seed,
         dev_fraction=float(split_cfg["dev_fraction"]),

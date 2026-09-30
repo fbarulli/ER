@@ -131,7 +131,89 @@ population the decision did not touch.
   positives. The 16,345 dead anchors are a training-side issue the gate already
   excludes.
 
-### Implementation checklist (NOT yet started — awaiting go-ahead)
+### Implementation checklist (LANDED 2026-09-30 — measured, not estimated)
+**All targets below were re-measured, because the census drifted (1,414 -> 1,223
+positives) and every number in this section was written against the old census.
+Re-deriving them was the first task; a stale target is a wrong target.**
+
+- [x] **BLOCKER FIRST — single source of truth for split derivation.** DONE.
+      `folds.derive_holdout` is the entry point and now builds the GRAPH
+      internally, so no caller can bypass the leak fix. `holdout_split` /
+      `partition_component_pairs` remain banned outside `folds.py`, enforced by
+      the selftest guard — which caught the first draft of the emitter for
+      calling the primitive directly, which is the guard earning its keep.
+- [x] **`normalize_gtin()` added as the single entity key — and MEASURED TO BE
+      THE WRONG FIX.** The "0/5,428 intersection / missing normalization" root
+      cause above is **incorrect**. Measured on the live data: the deduped set
+      holds 14,981 raw barcodes and 14,981 distinct normalized keys (ZERO
+      duplicate spellings), and the labeled census joins `row_bc` 8,889/8,889
+      with OR without normalization. Contamination by key space: raw 73.7%,
+      normalized 75.2% — normalizing is marginally WORSE, because it can
+      collapse two genuinely different malformed codes into one component.
+      The real and only defect is the absent graph edges. `normalize_gtin` is
+      kept for CROSS-NAMESPACE edge resolution, with a docstring that states
+      this scope and warns that applying it to a `row_bc` used as a split's node
+      key silently empties 8,559 of 14,981 downstream filters.
+- [x] **Validation positive edges folded in behind the single entry point.**
+      `folds.merged_component_graph` = training positives UNION labeled
+      positives. Negatives are never unioned (a similarity claim is not an
+      identity claim). Measured on the merged graph: 25,643 positive pairs
+      (24,420 training + 1,223 validation) over 14,981 entities, 0 labeled
+      endpoints unresolved, largest component 15, nothing >= 50.
+- [x] **Leak closed, and the leak guarantee is a hard stop, not a log line.**
+      0/1,223 positives straddle a fold; 0 test-fold positives have either side
+      in train. `build_final_validation` raises BEFORE writing if either holds.
+      Reproduced the old protocol for contrast: 73.7% contaminated, 24.0% of
+      positives with BOTH endpoints in train.
+- [x] **ONE validation CSV emitted**: `data/final_validation.csv`, 6,345 rows =
+      564 positives / 5,781 negatives (folds 2+3), 23 columns — `gtin1, gtin2,
+      gtin1_norm, gtin2_norm, true_label, fold, fold_2, component_id,
+      component_id_2, straddles_fold, endpoint_in_train` + `v1_*`/`v2_*` for
+      the six gate fields.
+- [x] **Complete split accounting emitted**:
+      `results/training/validation_fold_map.csv`, 14,981 entities -> fold +
+      component (7,508 train / 3,742 dev / 3,731 test). Required, not optional:
+      the validation CSV holds only the scored half, so without the map a
+      consumer cannot tell "withheld, the model trained on it" from "missing" —
+      and the first draft of the retargeted evaluator hard-failed on 2,544
+      perfectly good train pairs for exactly that reason.
+- [x] **`evaluate_models.py` retargeted at the artifacts.** It built its OWN
+      graph from the labeled census ALONE with `component_split_k=2` — the leak
+      site. It now reads the fold map; accounting closes 8,889/8,889; 0 scored
+      pairs touch a train fold. Trained-on pairs are now REPORTED
+      (`trained_on_pairs_not_scored`) instead of scored as held-out.
+- [x] **Leak regression tests** in `tests/test_validation_leak.py` (9 tests).
+      Includes `test_merged_graph_is_not_vacuous`, which asserts the bare graph
+      DOES straddle before asserting the merged one does not — a first draft
+      named one pair that happened to share a fold, so the test passed while
+      proving nothing.
+- [ ] **STILL OPEN — the scored halves are thin, and this is a real decision.**
+      Withholding straddling negatives is the honest choice (one side is a
+      trained-on entity), but it costs 4,741 of 5,781 negatives:
+      **DEV 315 pos / 585 neg, TEST 249 pos / 455 neg.** A Youden fit and a
+      P@R95 on 249 test positives is thin. The alternative is to assign each
+      negative by the fold of its TRAIN-side entity so all 5,781 survive
+      whole — but that changes what a negative measures and needs an owner call.
+- [ ] **STILL OPEN — slice flags are set-valued and per side; gates must not
+      compare `v1 == v2`.** Measured disagreement across the 564 positives:
+      flavor 366, package_type 173, sweetener 155, carbonation 32, pack 31,
+      volume 9. Same product, two feeds, different extracted sets. Treat each
+      side as a bag of values. Flavor has 52 real values (10 with n>=30, 8
+      singletons) after splitting the stored list-literal — the 129 "distinct"
+      in the manifest are FUSED combinations, exactly the trap noted above.
+- [ ] **STILL OPEN — `normalize_gtin` is wired but contributes nothing here.**
+      Kept (defensive, and it is the right bridge), but do not credit it with
+      fixing the leak.
+- [ ] **NOT DONE — retire the 3k/5k lanes.** The owner ruling says delete them;
+      the blast radius is wider than config. `config/paths.yaml` +
+      `src/core/schemas.py` entries, `src/training/sample_deduped_dataset.py`,
+      `src/training/sample_balanced_pairs.py`, `run_ann_full_data.py`,
+      `tests/test_validation_inference.py`, `tests/test_colab_keep_alive_boundary.py`,
+      `src/cli/colab.py` docstrings, `DATA_PATH.md`. Left in place so nothing
+      breaks; `final_validation` is added alongside rather than replacing.
+- [ ] **NOT DONE — `scripts/diet_manifest.py`** still targets the 3k/5k lanes.
+- [ ] **BLOCKED on the above — gate realignment** (twin vs canonical bucket) and
+      the flavor reopen trigger, which depend on the final population.
 - [ ] **BLOCKER FIRST — single source of truth for split derivation.**
       `folds.holdout_split` / `component_folds` is called from 7+ independent
       sites: `train.py:1262`, `train_prepared.py:118`, `evaluate_models.py:137`,
@@ -439,10 +521,12 @@ Process / repo:
       they touch the active path.
 
 Dedupe (src/training/dedupe.py) — audit findings 2026-09-29:
-- The tiered dedupe is CORRECT for its purpose (exact within-retailer
-  duplicate removal): T1 retailer+barcode (valid checksum), T2
-  retailer+title+price(+barcode), T3 retailer+title. Invariant holds: 0
-  retailer+title dupes remain; SKU->rep mapping is total and covers 0..n-1.
+- ~~The tiered dedupe is CORRECT for its purpose~~ — **this was wrong, see
+  "Identity SSOT + T3 identity partition" below.** The claim that "0
+  retailer+title dupes remain" was true only because T3 deleted 264 products
+  to achieve it. The invariant was self-fulfilling: the dupes it checked for
+  were removed by destroying the evidence. An identity invariant (no product
+  loses its last row) is now a hard gate alongside it.
 - **One signal left on the table — invalid-checksum barcode groups.**
   Source dataset.csv: 71,623 rows; 41,545 missing barcode (NA); 30,078
   with digit content of which 26,363 valid checksum and **3,715 invalid**.
@@ -476,6 +560,69 @@ Dedupe (src/training/dedupe.py) — audit findings 2026-09-29:
   (parse `attributes` per row) to size the safe recovery precisely, then
   decide whether to add a weak T1.5 tier (same retailer + same invalid
   barcode + structured agreement -> collapse).
+  **RESOLVED 2026-09-30 — shipped as T1.5, see "Identity SSOT" below.**
+
+Identity SSOT + T3 identity partition — 2026-09-30:
+- [x] T1.5 shipped (21705f9): same retailer + same checksum-invalid barcode +
+      same product -> collapse. 108 groups collapsed, 11 escalated.
+- [x] **T3 IDENTITY LOSS FIXED (data deletion, not noise).** T3 keyed its
+      collapse on (retailer, title) ALONE. T2 explicitly DEFERS rows whose
+      trusted barcodes disagree, and T3 then merged them anyway: **692 groups,
+      1,778 rows, 1,223 products** shared a title at one retailer under
+      different valid barcodes. **264 products lost their only row** — present
+      in canonical_records.csv, absent from the deduped output, represented by
+      a sibling's barcode. T2's own guard was defeated one tier later.
+      Fix: T3 groups on (retailer, title, IDENTITY) where identity = the
+      trusted (checksum-valid) barcode, or "" when absent. Rows sharing a
+      title with NO barcode still collapse (genuine price-aggregation,
+      flagged in ambiguous_offer_groups.csv).
+- [x] Verified after the fix: deduped 61,414 -> **62,963** rows; trusted
+      barcodes present 12,986 -> **13,250**; canonical products orphaned
+      **264 -> 0**; **0** trusted barcodes lost their last row (new hard
+      invariant gate); closure 71,623 == 62,963 + 8,660.
+- [x] New hard gate: the dedupe now REFUSES to finish if any trusted barcode
+      present in the input is absent from the output. This failure mode is
+      silent and unrecoverable downstream, so it must never be a report.
+- [x] `core/product_identity.py` (new SSOT): one descriptor bundle with every
+      field a SET, so a descriptor restated across title/attribute/category
+      collapses to one token and cannot move a comparison. `identity_conflict`
+      is the single arbiter shared by the dedupe and the vetoes.
+- [x] price / url / image_url removed from identity: `price` is a seller
+      attribute, not a product description. T2 no longer keys on it, and
+      representative choice uses DESCRIPTOR completeness
+      (`descriptor_completeness`) instead of `df.notna().sum()`, which used to
+      let two export-noise URL columns outrank a fully-described product.
+- [x] `results/training/dedupe_conflicts.csv` (new): the durable review queue.
+      Anything the descriptor bundle cannot settle is ESCALATED, not guessed —
+      68 proven splits + 11 unresolved across 3,504 malformed-barcode groups.
+      "The text had no opinion" is now a visible artifact.
+- [x] Fixed a silently DEAD dimension: `package_material` used the regex
+      `pack\s*material`, which compiles to `pack\s*material\s*:` and never
+      matches the real corpus key `Pack Material Type:` — it read empty across
+      all 35,571 non-null cells. Now fires on 90.6% of rows. A dimension that
+      silently returns empty is indistinguishable from "no conflicts found";
+      it is now regression-tested against the measured attribute-key census.
+- MEASURED, and deliberately NOT acted on:
+  - The text predicate alone is **not** a merge authority. On barcode-labeled
+    ground truth (20k rows, text-only view): **15.3% false-veto** on
+    same-GTIN pairs and only **60.5% true-split** on same-retailer
+    different-GTIN pairs. Absence of a conflict is not evidence of identity.
+    Barcode stays the merge key; text is a veto/review layer only.
+  - Two candidate rules were A/B'd and REJECTED as not worth the complexity:
+    "punch" as a flavor family (recovers 7 pairs) and negation-aware
+    carbonation ("without carbonic" = still; recovers 3 pairs).
+  - `package_material` was A/B'd on both sides: fires on 0 ground-truth pairs
+    (no new vetoes, no new splits). Its 8 T1.5 vetoes are genuine
+    Metal-vs-Plastic disagreements on identical titles — ambiguous, safe
+    direction (retain, don't merge), and listed in the review queue.
+  - Percent-as-volume leak: 15 rows (0.02%) where `100%` parsed as `100 ml`.
+    8 of the 15 coincidentally produce the right answer. Not fixed: the
+    extractor is shared with canonical build + gate, so a change there
+    ripples into every volume_set for 0.02% of rows.
+- [x] 17 new regression tests in `tests/test_dedupe_identity.py` pinning the
+      identity partition, the T1.5 verdict table, completeness independence
+      from price/urls, and absence-is-not-contradiction. Full suite: 586
+      passed, 2 skipped.
 
 ## DEAD LAST — recent additions (2026-09-29; do NOT start until P1/P2 done)
 

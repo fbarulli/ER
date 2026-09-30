@@ -138,6 +138,8 @@ class DataFilesSpec(BaseModel):
     canonical_records: str
     gate_results: str
     labeled_pairs: str
+    final_validation: str
+    validation_fold_map: str
     balanced_pairs_sample_3000: str
     embedding_similarities: str
     model_evaluation_summary: str
@@ -150,6 +152,10 @@ class DataFilesSpec(BaseModel):
     dedupe_summary: str
     ambiguous_offer_groups: str
     removals: str
+    # Identity questions the descriptor bundle could not settle (T1.5): the
+    # durable review queue, so "text had no opinion" is visible instead of
+    # silently collapsing to a merge.
+    dedupe_conflicts: str
     four_pop_scores: str
     field_ablation: str
     data_scaling: str
@@ -1981,6 +1987,7 @@ class ExtractedAttributes(BaseModel):
     pack_confidence: float = Field(ge=0.0, le=1.0)
     package_types: list[str] = Field(default_factory=list)
     package_materials: list[str] = Field(default_factory=list)
+    packaging_levels: set[str] = Field(default_factory=set)
     flavor_set: set[str] = Field(default_factory=set)
     carbonation_set: set[str] = Field(default_factory=set)
     sweetener_set: set[str] = Field(default_factory=set)
@@ -2017,6 +2024,7 @@ class CanonicalRecord(BaseModel):
     pack_set: set[int]
     package_type_set: set[str] = Field(default_factory=set)
     package_material_set: set[str] = Field(default_factory=set)
+    packaging_level_set: set[str] = Field(default_factory=set)
     flavor_set: set[str] = Field(default_factory=set)
     carbonation_set: set[str] = Field(default_factory=set)
     sweetener_set: set[str] = Field(default_factory=set)
@@ -2574,6 +2582,7 @@ CANONICAL_RECORDS_COLUMNS: tuple[str, ...] = (
     "pack_set",
     "package_type_set",
     "package_material_set",
+    "packaging_level_set",
     "flavor_set",
     "carbonation_set",
     "sweetener_set",

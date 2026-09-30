@@ -298,6 +298,50 @@ def parse_attribute_volume_pack(
     return vol_ml, vol_conf, pack_qty, pack_conf
 
 
+# Packaging LEVEL is an identity dimension independent of pack COUNT: a
+# 12-pack sold as a retail pack and the same 12 units sold as a shipping case
+# are distinct GS1 trade items with distinct GTINs, so a level change must
+# separate them exactly as a count change does. Count alone cannot express
+# this — "Case of 12 / 7.5 fl oz" and a 12-pack both extract to 12.
+#
+# Only a POSITIVE, packaging-context match yields "case". A bare \bcase\b
+# matches prose ("in this case", "NOT A CASE") and would manufacture false
+# splits, so the negative lookarounds are load-bearing, not defensive
+# decoration. "case of", "case:", "/ case", "master case", "case pack".
+_CASE_LEVEL = re.compile(
+    r"\b(?:master\s+case|retail\s+case|case\s+pack|case\s+of|case)\s*"
+    r"(?:of|[:/])?\s*\d*"
+    r"|\bcases?\s+of\s+\d+"
+    r"|/\s*case\b",
+    re.IGNORECASE,
+)
+# Contexts that are NOT a packaging level.
+_CASE_FALSE = re.compile(
+    r"not\s+a\s+case|in\s+this\s+case|in\s+case|any\s+case|case[-\s]?insensitive",
+    re.IGNORECASE,
+)
+
+
+def extract_packaging_level(title: str) -> set[str]:
+    """Packaging level asserted by a title, as a claim set.
+
+    Returns {"case"} for a case-level listing and an EMPTY set otherwise.
+    The empty set is deliberately NOT {"single"}: absence of a case marker
+    is absence of evidence, and the gate's conflict rules require BOTH sides
+    to be populated before declaring a mismatch. Encoding "single" here would
+    make every title that simply omits the word "case" conflict against a
+    real case listing, splitting genuine duplicates.
+    """
+    text = str(title or "")
+    if not text.strip():
+        return set()
+    # Strip an explicit merchandising negation before testing, so
+    # "(NOT A CASE) Juice Lemon" reads as no claim rather than a case claim.
+    if _CASE_FALSE.search(text):
+        return set()
+    return {"case"} if _CASE_LEVEL.search(text) else set()
+
+
 # extract_salient_tokens REMOVED (audit 2026-09-09): zero callers across
 # the repo (verified by grep). Its "salient token" job is done by the
 # NgramIDF discriminative extractor; this legacy variant duplicated a
@@ -423,6 +467,11 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
     package_types = title_attributes["package_types"]
     if not package_types:
         package_types = parse_attribute_details(attribute).get("attribute_package_types", [])
+    # Title-only, and deliberately so: the raw `attributes` field carries no
+    # packaging-level key at all (measured 2026-09-30 — `attributes` holds
+    # Volume/Pack Type/Flavour/... and zero case-quantity columns), so the
+    # title is the only place this claim exists.
+    packaging_levels = extract_packaging_level(sku_name)
     return ExtractedAttributes(
         flavor=flavor,
         type=ptype,
@@ -434,6 +483,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         pack_confidence=pack_conf,
         package_types=package_types,
         package_materials=title_attributes["package_materials"],
+        packaging_levels=packaging_levels,
         flavor_set=flavor_set,
         carbonation_set=set(critical["carbonation"]),
         sweetener_set=set(critical["sweetener"]),
@@ -678,10 +728,15 @@ def three_way_gate(
     if not pack_overlap:
         return GateResult(decision="hard_no", reason="No pack overlap").model_dump()
 
-    for field, reason in (("package_type_set", "Package type mismatch"), ("package_material_set", "Package material mismatch")):
+    for field, reason in (
+        ("package_type_set", "Package type mismatch"),
+        ("package_material_set", "Package material mismatch"),
+        ("packaging_level_set", "Packaging level mismatch"),
+    ):
         left, right = set(attrs1.get(field, set())), set(attrs2.get(field, set()))
         if left and right and not (left & right):
             return GateResult(decision="hard_no", reason=reason).model_dump()
+
 
     # Every explicit categorical conflict uses the same dimension/evidence
     # definition as targeted mining and final inference. Unknown stays
@@ -705,6 +760,33 @@ def three_way_gate(
         return GateResult(
             decision="hard_no",
             reason="Critical attribute mismatch: " + ",".join(categorical_conflicts),
+        ).model_dump()
+
+    # PACKAGING LEVEL is one-sided in practice (measured 2026-09-30: 217 of
+    # 13,250 records assert a level, and ZERO pairs have it populated on both
+    # sides), so the both-populated rule above can never fire for it. That is
+    # deliberate, not an oversight: a missing marker is absence of evidence,
+    # not an affirmative "retail" claim, so this CANNOT be a hard_no without
+    # inventing a negative from silence.
+    #
+    # PLACED AFTER the categorical conflict check on purpose (measured
+    # 2026-09-30): an earlier placement downgraded 79 genuine flavour
+    # conflicts from hard_no to fallback, because a one-sided level claim
+    # is WEAKER evidence than a two-sided attribute conflict. A definite
+    # negative must always win over a review flag.
+    #
+    # It still must not be a silent PROCEED. A case listing and a retail pack
+    # are distinct GS1 trade items carrying distinct GTINs, so merging them
+    # trains the linker to violate that. One-sided evidence is exactly what
+    # the fallback bucket is for: a human applies the rule, the model is not
+    # asked to guess. Measured impact: 109 proceed -> fallback, 0 hard_no.
+    _lvl_a, _lvl_b = set(attrs1.get("packaging_level_set", set())), set(
+        attrs2.get("packaging_level_set", set())
+    )
+    if _lvl_a and not _lvl_b or _lvl_b and not _lvl_a:
+        return GateResult(
+            decision="fallback",
+            reason="Packaging level asserted on one side only (case vs unstated) — needs review",
         ).model_dump()
 
     # consistency check
@@ -1023,6 +1105,7 @@ def generate_canonical(
         x["pack_qty"] for x in extracted if x["pack_confidence"] > 0
     }
     package_type_set = {value for x in extracted for value in x["package_types"]}
+    packaging_level_set = {value for x in extracted for value in x["packaging_levels"]}
     package_material_set = {value for x in extracted for value in x["package_materials"]}
     flavor_set = {value for x in extracted for value in x["flavor_set"]}
     carbonation_set = {value for x in extracted for value in x["carbonation_set"]}
@@ -1191,6 +1274,7 @@ def generate_canonical(
         # is deterministic (PYTHONHASHSEED-proof) without touching logic.
         volume_set=volume_set,
         pack_set=pack_set,
+        packaging_level_set=packaging_level_set,
         package_type_set=package_type_set,
         package_material_set=package_material_set,
         flavor_set=flavor_set,
@@ -1936,6 +2020,7 @@ def run_within_brand_pipeline(
         "volume_set",
         "pack_set",
         "package_type_set",
+        "packaging_level_set",
         "package_material_set",
         "flavor_set",
         "carbonation_set",
