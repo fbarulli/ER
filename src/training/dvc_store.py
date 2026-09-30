@@ -249,39 +249,33 @@ def _configure_workspace(root: Path, *, token: str, remote: str) -> None:
     makes ``.env`` authoritative: applying it only at init would silently
     ignore a rotated token for the entire lifetime of the workspace.
     """
+    from dvc.config import Config
+    from dvc.repo import Repo
+
     os.environ["DVC_SITE_CACHE_DIR"] = str(root / ".dvc-site-cache")
-    s3_remote = remote.startswith("s3://")
-    if not (root / ".dvc").is_dir():
-        _run(["dvc", "init", "--no-scm"], root)
-        _run(["dvc", "config", "cache.dir", str(root / ".dvc-cache")], root)
-        _run(["dvc", "remote", "add", "--default", "dagshub", remote], root)
-    if s3_remote:
-        # DagsHub's S3-compatible endpoint authenticates with an access-key /
-        # secret pair issued by the repo's DagsHub settings; it is NOT the
-        # DagsHub API token.  Passing one token as both halves (the previous
-        # implementation) authenticates as the literal string "token:token",
-        # which the endpoint rejects, so require the real pair explicitly and
-        # fail with a fixable message instead of an opaque 403.
+    local_remote = {}
+    remote_options = {"url": remote}
+    if remote.startswith("s3://"):
         access_key = os.environ.get("DVC_S3_ACCESS_KEY_ID")
         secret_key = os.environ.get("DVC_S3_SECRET_ACCESS_KEY")
         if not access_key or not secret_key:
-            raise RuntimeError(
-                "an s3:// DVC remote requires DVC_S3_ACCESS_KEY_ID and "
-                "DVC_S3_SECRET_ACCESS_KEY (the DagsHub repo's S3 credentials, "
-                "found under Settings -> Data -> Storage); the DVC_API_KEY "
-                "token is not a substitute. Use the https:// remote, or set "
-                "both variables."
-            )
-        # Keep credentials in config.local, never in tracked DVC metadata.
-        _run(["dvc", "remote", "modify", "dagshub", "endpointurl", _dagshub_s3_endpoint()], root)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "access_key_id", access_key], root)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "secret_access_key", secret_key], root)
+            raise RuntimeError("an s3:// DVC remote requires DVC_S3_ACCESS_KEY_ID and DVC_S3_SECRET_ACCESS_KEY; use the https:// remote with DVC_API_KEY")
+        remote_options["endpointurl"] = _dagshub_s3_endpoint()
+        local_remote = {"access_key_id": access_key, "secret_access_key": secret_key}
     else:
-        # The https:// DagsHub remote authenticates with basic auth: the repo
-        # owner as the user and the DVC API token as the password.
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "auth", "basic"], root)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "user", _remote_owner(remote)], root)
-        _run(["dvc", "remote", "modify", "dagshub", "--local", "password", token], root)
+        local_remote = {"auth": "basic", "user": _remote_owner(remote), "password": token}
+    # DVC's installed configuration implementation avoids launching Python
+    # once per init/cache/remote/auth setting. Always refresh local secrets.
+    if not (root / ".dvc").is_dir():
+        Repo.init(str(root), no_scm=True).close()
+    config = Config(str(root / ".dvc"))
+    with config.edit("repo") as values:
+        values["core"]["remote"] = "dagshub"
+        values["cache"]["dir"] = str(root / ".dvc-cache")
+        values["remote"]["dagshub"] = remote_options
+    with config.edit("local") as values:
+        values["remote"]["dagshub"] = local_remote
+    (root / ".dvc" / "config.local").chmod(0o600)
 
 
 def _configure(source: Path, token: str) -> str:
