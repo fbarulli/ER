@@ -31,7 +31,6 @@ import argparse
 import hashlib
 import json
 import os
-import unicodedata
 from decimal import Decimal
 from itertools import combinations, product
 from pathlib import Path
@@ -52,6 +51,7 @@ from core.attribute_conflicts import (
     normalized_flavor_tokens,
     sku_attribute_info,
 )
+from core.product_identity import brand_conflict, normalize_brand as product_identity_normalize_brand
 from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
 from core.common import (
     CONFIG_PATH,
@@ -249,19 +249,29 @@ def _final_threshold_by_gtin_status() -> dict[str, float]:
     return {str(status): float(value) for status, value in configured.items()}
 
 
-def _normalize_brand(value: object) -> str:
-    """Normalize a brand for equality without treating missing as a value."""
-    normalized = unicodedata.normalize("NFKC", metadata_text(value)).casefold()
-    return "".join(character for character in normalized if character.isalnum())
-
-
 def _brand_conflict(left: object, right: object) -> bool:
-    """Return true only when both brands are present and disagree."""
-    left_normalized = _normalize_brand(left)
-    right_normalized = _normalize_brand(right)
-    return bool(
-        left_normalized and right_normalized and left_normalized != right_normalized
-    )
+    """Return true only when both brands are present and disagree.
+
+    SSOT comparison (veto-asymmetry doctrine, config/vocabulary.json
+    "brand_aliases"): both sides fold through
+    ``core.product_identity.normalize_brand``, which tokenizes and ADDS the
+    alias target token next to the observed token (never swaps), then the
+    decision is the same one the dedupe SSOT uses —
+    ``core.product_identity.brand_conflict``: absent evidence never vetoes,
+    a shared token or a token-subset relation ("Kiju" vs "Kiju Organic")
+    is not a conflict, and only genuinely disjoint multi-token brands veto.
+
+    Why alias folding here: the lane's old exact-casefolded-string check
+    ("A SHOC" != "Accelerator") vetoed proven-same pairs inside the 49
+    within-GTIN brand-variant pairs the alias map was seeded from (measured
+    2026-09-29/30, scripts/seed_brand_aliases.py; seeded map dissolves 27 of
+    49 while the 22 declined/mixed-GTIN vetoes keep firing). A fold only can
+    make two token sets share a token or nest — never disjoint — so
+    counting conflicts can only DECREASE when the map is enabled.
+    """
+    left_fold = product_identity_normalize_brand(left)
+    right_fold = product_identity_normalize_brand(right)
+    return brand_conflict(left_fold, right_fold)
 
 
 def _sets_overlap_with_volume_tolerance(
@@ -314,8 +324,14 @@ def targeted_veto_gate(
     right_volume = set(candidate_info.get("volume") or set())
     left_package_type = set(sku_info.get("package_type") or set())
     right_package_type = set(candidate_info.get("package_type") or set())
-    left_brand = _normalize_brand(sku_brand)
-    right_brand = _normalize_brand(candidate_brand)
+    # Brand comparison runs through the product_identity SSOT fold (see
+    # _brand_conflict): the audit columns carry the FOLDED token sets joined
+    # for display, so a reviewer sees the family key (shoc) next to the
+    # observed spellings.
+    left_brand = " ".join(sorted(product_identity_normalize_brand(sku_brand)))
+    right_brand = " ".join(
+        sorted(product_identity_normalize_brand(candidate_brand))
+    )
     relative_tolerance = float(settings["volume_relative_tolerance"])
     absolute_tolerance_ml = float(settings["volume_absolute_tolerance_ml"])
 
@@ -344,7 +360,7 @@ def targeted_veto_gate(
             absolute_tolerance_ml=absolute_tolerance_ml,
         )
     )
-    brand_conflict = bool(left_brand and right_brand and left_brand != right_brand)
+    brand_conflict_flag = _brand_conflict(sku_brand, candidate_brand)
     package_type_conflict = bool(
         left_package_type
         and right_package_type
@@ -364,7 +380,7 @@ def targeted_veto_gate(
     common = {
         "targeted_pack_conflict": int(pack_conflict),
         "targeted_volume_conflict": int(volume_conflict),
-        "targeted_brand_conflict": int(brand_conflict),
+        "targeted_brand_conflict": int(brand_conflict_flag),
         "targeted_package_type_conflict": int(package_type_conflict),
         "targeted_missing_attributes": ",".join(missing),
         "targeted_missing_attribute_count": len(missing),
@@ -412,7 +428,7 @@ def targeted_veto_gate(
         for dimension in critical["conflicts"]
         if dimension in veto_dimensions
     ]
-    if brand_conflict and bool(settings["brand_mismatch_veto"]):
+    if brand_conflict_flag and bool(settings["brand_mismatch_veto"]):
         veto_reasons.append("brand_mismatch")
     if veto_reasons:
         return common | {
