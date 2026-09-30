@@ -51,6 +51,33 @@ def _fail(message: str) -> int:
     return 2
 
 
+def _sibling_gtin_index(canon_gtins: list[str]) -> dict[str, int]:
+    """Exact-spelling membership map (first lookup tier of `_resolve_identity`)."""
+    return {g: i for i, g in enumerate(canon_gtins)}
+
+
+def _resolve_identity(barcodes: list[str], exact: dict[str, int], canon_gtins: list[str]) -> tuple[list[int | None], int]:
+    """Row -> canonical index, exact first then sibling-equivalent; misses loud."""
+    from core.gtin import gtin_equivalent
+
+    resolved: list[int | None] = []
+    misses = 0
+    for b in barcodes:
+        if b and b in exact:
+            resolved.append(exact[b])
+            continue
+        hit = None
+        if b:
+            for j, g in enumerate(canon_gtins):
+                if gtin_equivalent(b, g):
+                    hit = j
+                    break
+        if hit is None and b:
+            misses += 1
+        resolved.append(hit)
+    return resolved, misses
+
+
 def _agree_on(info_a: dict, info_b: dict, attr: str) -> bool | None:
     """True/False when both sides carry the attribute, else None (unknown)."""
     if attr == "flavor":
@@ -96,7 +123,18 @@ def main(argv: list[str] | None = None) -> int:
                  for _, r in sku.iterrows()]
     sku_texts = [build_sku_text(row, _text_info(info)) for (_, row), info in zip(sku.iterrows(), sku_infos)]
     sku_barcodes = sku["barcode"].fillna("").astype(str).tolist()
-    sku_identity = [b if b and b in gtin_to_idx else None for b in sku_barcodes]
+    # sibling-tolerant + LOUD: exact spelling first, then the UPC-12↔EAN-13
+    # sibling via core.gtin.gtin_equivalent; a spelled barcode that hits
+    # NEITHER is counted and reported — never silently thinned out of the
+    # probe population.
+    gtin_to_idx = _sibling_gtin_index(canon_gtins)
+    identity, identity_misses = _resolve_identity(sku_barcodes, gtin_to_idx, canon_gtins)
+    print(
+        f"[identity] barcode -> canonical: resolved "
+        f"{sum(v is not None for v in identity):,}/{len(sku_barcodes):,} "
+        f"({identity_misses:,} spelled barcodes miss BOTH the exact and the "
+        "sibling-equivalent lookup)"
+    )
 
     # split identities: even hash -> test (no pair straddles the split)
     test_ids = {b for b in set(sku_barcodes) if b and (hash((int(SEED), b)) % 2 == 0)}
@@ -105,10 +143,9 @@ def main(argv: list[str] | None = None) -> int:
     order = np.arange(len(canon_gtins))
     attr_pairs: dict[str, list[tuple[int, int, int]]] = {a: [] for a in ATTRS}  # (sku_row, canon_idx, label)
     mono_pairs: list[tuple[int, int, int]] = []
-    for i, b in enumerate(sku_barcodes):
-        if not b or b not in gtin_to_idx:
+    for i, j in enumerate(identity):
+        if j is None:
             continue
-        j = gtin_to_idx[b]
         mono_pairs.append((i, j, 1))
         for a in ATTRS:
             v = _agree_on(
@@ -124,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             if v is not None:
                 attr_pairs[a].append((i, j, int(v)))
     # disagree examples: mined conflicts (cap per attribute)
-    for i in [k for k, b in enumerate(sku_barcodes) if b and b in gtin_to_idx]:
+    for i in [k for k, v in enumerate(identity) if v is not None]:
         for cand in (int(c) for c in rng.sample(list(order), min(int(args.conflict_pool), len(order)))):
             if canon_gtins[cand] == sku_barcodes[i]:
                 continue

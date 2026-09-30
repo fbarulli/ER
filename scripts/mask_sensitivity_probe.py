@@ -46,6 +46,42 @@ def _fail(message: str) -> int:
     return 2
 
 
+def _sibling_gtin_index(canon_gtins: list[str]) -> dict[str, int]:
+    """Exact-spelling membership map (first lookup tier of `_resolve_identity`)."""
+    return {g: i for i, g in enumerate(canon_gtins)}
+
+
+def _resolve_identity(
+    barcodes: list[str], exact: dict[str, int], canon_gtins: list[str]
+) -> tuple[list[int | None], int]:
+    """Row -> canonical index, exact first then sibling-equivalent; misses loud.
+
+    Try the EXACT spelling first, then the UPC-12↔EAN-13 sibling via
+    ``core.gtin.gtin_equivalent`` (zero-prefix fold + checksum). A spelled
+    barcode that hits NEITHER is counted and reported loudly — never dropped
+    in silence — so the probe's identity coverage is a visible number, not a
+    shrunk population.
+    """
+    from core.gtin import gtin_equivalent
+
+    resolved: list[int | None] = []
+    misses = 0
+    for b in barcodes:
+        if b and b in exact:
+            resolved.append(exact[b])
+            continue
+        hit = None
+        if b:
+            for j, g in enumerate(canon_gtins):
+                if gtin_equivalent(b, g):
+                    hit = j
+                    break
+        if hit is None and b:
+            misses += 1
+        resolved.append(hit)
+    return resolved, misses
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample", type=int, default=128)
@@ -73,20 +109,32 @@ def main(argv: list[str] | None = None) -> int:
     canon_infos = [canonical_attribute_info(r) for r in canon_records]
     canon_texts = [build_canonical_text(r, _text_info(i)) for r, i in zip(canon_records, canon_infos)]
     canon_gtins = [str(r["gtin"]) for r in canon_records]
-    gtin_to_idx = {g: i for i, g in enumerate(canon_gtins)}
+    gtin_to_idx = _sibling_gtin_index(canon_gtins)
 
     sku_infos = [sku_attribute_info(str(r.get("title", "")), str(r.get("attributes", "")))
                  for _, r in sku.iterrows()]
     sku_texts = [build_sku_text(row, _text_info(info)) for (_, row), info in zip(sku.iterrows(), sku_infos)]
     sku_barcodes = sku["barcode"].fillna("").astype(str).tolist()
 
-    true_rows = [i for i, b in enumerate(sku_barcodes) if b and b in gtin_to_idx][: int(args.max_pairs)]
+    # sibling-tolerant + LOUD: exact spelling first, then the UPC-12↔EAN-13
+    # sibling via core.gtin.gtin_equivalent; a spelled barcode that hits
+    # NEITHER is counted and reported — never silently thinned out of the
+    # probe population.
+    identity, identity_misses = _resolve_identity(sku_barcodes, gtin_to_idx, canon_gtins)
+    print(
+        f"[identity] barcode -> canonical: resolved "
+        f"{sum(v is not None for v in identity):,}/{len(sku_barcodes):,} "
+        f"({identity_misses:,} spelled barcodes miss BOTH the exact and the "
+        "sibling-equivalent lookup)"
+    )
+
+    true_rows = [i for i, v in enumerate(identity) if v is not None][: int(args.max_pairs)]
     if not true_rows:
         return _fail("no sample SKU barcode matches a canonical GTIN")
     order = np.arange(len(canon_gtins))
     pairs: list[tuple[int, int, str, frozenset]] = []  # (sku_row, canon_idx, class, conflict_hits)
     for sku_row in true_rows:
-        pairs.append((sku_row, gtin_to_idx[sku_barcodes[sku_row]], "true", frozenset()))
+        pairs.append((sku_row, identity[sku_row], "true", frozenset()))
         if len([p for p in pairs if p[2] == "conflict"]) >= int(args.max_pairs):
             continue
         for cand in (int(c) for c in rng.sample(list(order), min(int(args.conflict_pool), len(order)))):

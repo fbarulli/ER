@@ -227,6 +227,52 @@ def _norm(series: pd.Series) -> pd.Series:
     return series.where(series.notna(), "").map(normalize_text)
 
 
+def _brand_family_key(series: pd.Series) -> pd.Series:
+    """Brand cell -> the alias-family block key (empty for a blank cell).
+
+    Blocking keys must be IDENTICAL for alias siblings, and the folded token
+    sets are not: "A SHOC" folds to {a, shoc} while "Accelerator" folds to
+    {accelerator, shoc} — the fold gives the two sides a SHARED token but not
+    an EQUAL set, so groupby would still put them in two blocks. The block
+    key therefore collapses a brand to the alias-family canonicals its fold
+    reaches (config/vocabulary.json "brand_aliases" targets, e.g. `shoc`);
+    a brand no family reaches keeps its full folded spelling, which is the
+    pre-alias block key for every alias-free cell, so plain ("Goat Fuel" vs
+    "Goa Fuel") blocking is unchanged.
+
+    ONE SSOT call (`core.product_identity.normalize_brand`) plus a blank
+    guard, no new normalization: rows with no brand at all must still stay
+    OUT of every block (the candidates filter empties on `_nb`, and an empty
+    fold must never collapse them into one shared block), so the pre-fold
+    block key keeps its blank sentinel.
+
+    Buffered by the veto-asymmetry doctrine: `normalize_brand` only ADDS the
+    alias target token, and the family keys are the config-reviewed
+    canonicals whose allowed territory the rarity audit measured
+    (scripts/seed_brand_aliases.py). A wider block is a RECALL gain — more
+    candidate pairs — and the link rule (different retailer + IDF-weighted
+    Jaccard + average-linkage) still has to pass; blocking asserts nothing.
+
+    Imported INSIDE the closure: `core.product_identity` imports this
+    module's ``strip_pack_multiplicity`` at module level, so a module-level
+    import here would make the two modules mutually unimportable no matter
+    which module the entry import reaches first. `product_identity`'s own
+    import bar (``_barcode_facts``) is a deferral for exactly this shape.
+    """
+    from core.product_identity import brand_aliases, normalize_brand
+
+    family_tokens = frozenset(brand_aliases().values())
+
+    def _key(value: object) -> str:
+        folded = normalize_brand(value)
+        if not folded:
+            return ""
+        families = folded & family_tokens
+        return " ".join(sorted(families)) if families else " ".join(sorted(folded))
+
+    return series.where(series.notna(), "").map(_key)
+
+
 def _norm_retailer(series: pd.Series) -> pd.Series:
     """Retailer identity via the normalize_retailer SSOT (accent-fold, not
     normalize_text's accent-DELETION which splits Voilà -> 'voil')."""
@@ -272,7 +318,10 @@ def link_barcode_less(
     if finalized is None:
         finalized = finalized_texts(df)
     no_bc["_nts"] = finalized.loc[no_bc.index].map(strip_pack_multiplicity)
-    no_bc["_nb"] = _norm(no_bc[brand_col])
+    # Brand blocks run on the product_identity SSOT alias-family key (see
+    # `_brand_block_key`), so alias siblings ("A SHOC"/"Accelerator") land in
+    # ONE block and stay reachable for candidate generation.
+    no_bc["_nb"] = _brand_family_key(no_bc[brand_col])
     no_bc["_nr"] = _norm_retailer(no_bc[retailer_col])
     # A finalized text of a title-less row is just the brand string — brand
     # alone asserts NO product identity, so such rows stay singletons even

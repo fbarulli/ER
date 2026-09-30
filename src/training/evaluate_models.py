@@ -87,16 +87,26 @@ _CFG = load_config()  # pydantic-validated (TrainingConfig) before merge
 MODEL_COLUMNS = dict(_CFG["sim_columns"])
 _EV = _CFG["evaluation"]  # EvaluationSpec-validated: k, dev_fold, test_fold
 
-labeled = pd.read_csv(LABELED_PAIRS_CSV, dtype={"gtin1": str, "gtin2": str})
+labeled = pd.read_csv(LABELED_PAIRS_CSV, dtype={"gtin1": str, "gtin2": str}, keep_default_na=False)
 if not EMBED_SIM_CSV.exists():
     raise SystemExit(
         f"{EMBED_SIM_CSV.name} missing — run src/training/zero_shot_sims.py first"
     )
 emb_sim = pd.read_csv(EMBED_SIM_CSV, dtype={"gtin1": str, "gtin2": str})
-# gtin as str: a UPC-12 canonical (leading zero) read as int64 NaNs out the
-# canon map join — latent dtype bug (0 rows affected TODAY, but any
-# leading-zero GTIN would silently lose its canonical)
-canon = pd.read_csv(CANON_CSV, dtype={"gtin": str})
+# GTIN keys are read/joined as NORMALIZED STRINGS everywhere in this stage
+# (labels, sims, canonical map, fold map). Measured on the live artifacts:
+# 8,800/8,800 labeled endpoints resolve against canonical_records (0 rows
+# affected TODAY), but the join is dtype-fragile in one direction — a
+# zero-prefixed UPC-12 canonical ("012345678905") read through any
+# int64-coercing path loses its leading zero and then NaNs out of BOTH
+# canon-map joins below (synthetic repro: {'012345678958'} x str-read
+# canonical maps; int-read maps to NaN). dtype=str is this file's answer —
+# the keys stay byte-spelled and the join needs no GTIN rewriting: rewriting
+# keys here is deliberately NOT done because every other lane's key remains
+# the RAW barcode spelling (core.gtin module doctrine: "grouping keys stay
+# the RAW gtin string"), and folding spellings only in this script would
+# fork the identity namespace between stages.
+canon = pd.read_csv(CANON_CSV, dtype={"gtin": str}, keep_default_na=False)
 # AUDIT FIX (round 2 F14, round 3): inner-merge drop accounting — nothing
 # may drop silently (transparency contract). Measured on the real CSVs:
 # 19,916 -> 19,916, zero rows lost TODAY; this print keeps any drift loud,
@@ -116,6 +126,20 @@ if _n_after == 0:
 gtin_to_canon = dict(zip(canon["gtin"].astype(str), canon["canonical"].astype(str), strict=True))
 df["canon1"] = df["gtin1"].map(gtin_to_canon)
 df["canon2"] = df["gtin2"].map(gtin_to_canon)
+# Fail-loud on the silent thinning this stage exists to prevent: an
+# unmapped canonical is exactly the NaN-join defect above. 0 today —
+# stays 0 or the run stops, never "prints oddly and continues".
+_unmapped_canon = df["canon1"].isna().sum() + df["canon2"].isna().sum()
+if _unmapped_canon:
+    _bad = sorted(set(df.loc[df["canon1"].isna(), "gtin1"]) | set(df.loc[df["canon2"].isna(), "gtin2"]))[:5]
+    raise SystemExit(
+        f"[canon-map] {_unmapped_canon:,} pair endpoints have no "
+        f"canonical mapping in {CANON_CSV.name} (e.g. {_bad}) — the "
+        "dtype=str join above makes this impossible for a canonical with "
+        "a leading-zero UPC-12 spelling, so a live miss means the canon "
+        "file itself is stale; rebuild it (pipeline data-prep lane) before "
+        "scoring"
+    )
 
 # ── DEV/TEST component split (holdout discipline) ─────────────────────────
 # P0 RETARGET. This block used to build its OWN graph from the labeled census

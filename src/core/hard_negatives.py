@@ -803,9 +803,28 @@ def _brand_surface_variant(left: str, right: str) -> bool:
     ``eska``/``isklar`` — all legitimate hard negatives that a ratio guard
     would destroy. Case, accents and punctuation are already folded by
     :func:`_brand_identity`, so only word-level nesting is left to catch.
+
+    ALIAS-FAMILY GUARD SUBSET RELATION (veto-asymmetry doctrine, config the
+    map owns): both sides first fold through
+    ``core.product_identity.normalize_brand`` (ADDS the reviewed alias target
+    token, drops nothing), and the subset guard runs on the FOLDED token
+    sets. Consequence measured on the semantics, not the code: an alias
+    family member and its canonical spelling ("A SHOC" {a,shoc} vs
+    "Accelerator" {accelerator,shoc}) now SHARE the `shoc` token, so the pair
+    satisfies the subset/overlap relation and is correctly NOT mined as a
+    cross-brand negative — before the fold, both raw strings were disjoint
+    token sets and the pair could enter the cross-brand pool only by default
+    (it was not a surface variant under the raw test either, so the raw
+    subsets of one family were accepted). Folding can only ADD tokens, so it
+    can only turn disjoint sets into sharing sets: the guard's acceptance
+    set can only GROW (more donors spared) and the family verdict can never
+    merge two families the map does not fold. The wielder of a wrong fold
+    is config/vocabulary.json, which is reviewed data — not this code.
     """
-    left_tokens = set(left.split())
-    right_tokens = set(right.split())
+    from core.product_identity import normalize_brand
+
+    left_tokens = set(normalize_brand(left))
+    right_tokens = set(normalize_brand(right))
     if not left_tokens or not right_tokens:
         return False
     return left_tokens <= right_tokens or right_tokens <= left_tokens
