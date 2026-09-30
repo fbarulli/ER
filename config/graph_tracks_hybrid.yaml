@@ -1,0 +1,17 @@
+# Frozen MiniLM features plus trained attribute graph and pair fusion.
+track: hybrid
+listings: data/graph_tracks/listings.json
+pairs: data/graph_tracks/pairs.csv
+text_cache: data/graph_tracks/minilm_embeddings.npz
+output_dir: results/graph_tracks/hybrid
+hidden_dim: 64
+output_dim: 128
+epochs: 10
+learning_rate: 0.001
+weight_decay: 0.0001
+seed: 1337
+device: cpu
+graph_enabled: true
+metric_weight: 1.0
+negative_margin: 0.3
+max_grad_norm: 1.0

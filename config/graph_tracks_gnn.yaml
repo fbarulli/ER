@@ -1,0 +1,16 @@
+# Isolated experimental lane; does not change training.yaml/training_ANN.yaml.
+track: gnn_only
+listings: data/graph_tracks/listings.json
+pairs: data/graph_tracks/pairs.csv
+output_dir: results/graph_tracks/gnn_only
+hidden_dim: 64
+output_dim: 128
+epochs: 10
+learning_rate: 0.001
+weight_decay: 0.0001
+seed: 1337
+device: cpu
+graph_enabled: true
+metric_weight: 1.0
+negative_margin: 0.3
+max_grad_norm: 1.0
