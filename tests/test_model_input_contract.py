@@ -436,6 +436,69 @@ def test_title_only_payload_variant_still_blanks_attributes_and_description() ->
     assert build_sku_text(blanked, info, spec=LEGACY) == expected
 
 
+def test_build_sku_texts_resolves_the_description_column_alias() -> None:
+    """The deduped rename must not blank the description lane's evidence.
+
+    ``config/paths.yaml column_mapping`` renames the raw export's
+    ``description_short_eng`` to ``description``, but the per-row loop only
+    read the raw name — so every frame built from the deduped dataset (the
+    lane the record-linkage similarity and predict path actually run on)
+    silently composed sku_info with an empty description, losing the
+    description's carbonation/sweetener/pulp/sweetening evidence while the
+    TEXT channel (which aliases via ``row_metadata_text``) still saw it.
+
+    This pins the bounded alias at three measured decision points:
+
+    * a frame carrying ONLY the renamed column still yields non-empty
+      description evidence (the previously silent failure), and
+    * a frame carrying BOTH names prefers the RAW name, so adding a renamed
+      twin can never change a raw-lane row's output byte for byte, and
+    * a NaN under the raw name fills from the alias (fill precedence, not
+      raw-wins-at-any-cost): unobserved raw was already coerced to "" by
+      the downstream NaN guard, so this restores the alias exactly where
+      the old code produced nothing.
+
+    The description phrases are anchored to the live claim vocabularies
+    (core.critical_attributes regexes / core.sweetener_values patterns) so
+    the evidence is deterministic, not incidental.
+    """
+    from core.model_input import build_sku_texts
+
+    renamed_only = pd.DataFrame({
+        "title": ["renamed lane product 500 ml"],
+        "attributes": [""],
+        "description": ["doc says sugar free soda, still with pulp"],
+    })
+    _, infos = build_sku_texts(renamed_only, structured_enabled=True)
+    assert infos[0]["pulp"] == {"with_pulp"}
+    assert infos[0]["sweetener"] == {"no_sugar"}
+    assert infos[0]["carbonation"] == {"still"}
+    assert infos[0]["sweetening"] == set(), "no sweetening-state phrase was supplied"
+
+    both = pd.DataFrame({
+        "title": ["both names product 500 ml"],
+        "attributes": [""],
+        "description_short_eng": ["sparkling water with pulp"],
+        "description": ["doc says sugar free soda, still with pulp"],
+    })
+    _, infos = build_sku_texts(both, structured_enabled=True)
+    assert infos[0]["carbonation"] == {"carbonated"}, "raw name must win"
+    assert "no_sugar" not in infos[0]["sweetener"], (
+        "the renamed twin must be ignored while the raw name is observed"
+    )
+    assert infos[0]["pulp"] == {"with_pulp"}
+
+    raw_nan = pd.DataFrame({
+        "title": ["raw NaN falls back to the alias 500 ml"],
+        "attributes": [""],
+        "description_short_eng": [None],
+        "description": ["doc says sugar free soda, still with pulp"],
+    })
+    _, infos = build_sku_texts(raw_nan, structured_enabled=True)
+    assert infos[0]["pulp"] == {"with_pulp"}, "unobserved raw must refill from the alias"
+    assert infos[0]["sweetener"] == {"no_sugar"}
+
+
 def test_both_lanes_call_the_shared_builder() -> None:
     """Guard against the composition being re-duplicated at a call site.
 

@@ -18,10 +18,32 @@ Semantics: validation only decides TRUST; grouping keys stay the RAW gtin
 string (no UPC-12→13 rewriting of keys — that would drift every CSV).
 Leading-zero canonicalization happens inside the checksum only, where it
 is checksum-neutral (weight of a leading 0 is 0, weights anchor right).
+
+MULTI-RUN extraction (truncation fix): a raw cell may carry several digit
+runs; retail feeds measure things like "1 liter", "6 pack 4006381333931"
+or spell "1-735143004010". The old first-run extraction silently truncated
+"1-735143004010" to "1". The census promised no change — the corpus holds
+no cell where the first run is followed by a LONGER run (the 22 "7-…"
+7-digit prefices all precede the same 13-digit number, never a longer
+body) — and the printed census is byte-identical. Extraction now prefers
+the LONGEST digit run per cell (earliest wins ties), so a describer
+prefix is resolved correctly for any future cell that carries one, while
+every single-run cell (i.e. all current data) extracts byte-identically.
+
+SIBLING EQUALITY: `gtin_equivalent(a, b)` compares two spellings after
+whitespace strip, UPC-12→13 zero-prefix folding, and the GS1 checksum on
+the qualifying spelling each side lands on; True iff both resolve to
+identical checksum-valid digits at the same length (8/13/14 — a 12 never
+survives the fold, and a 12 never equals a 14 spelling because the lengths
+differ). This is sibling-tolerance equality for callers that must not
+re-pad node keys; raw-key grouping elsewhere stays untouched.
 """
 
 from __future__ import annotations
 
+import re
+
+import numpy as np
 import pandas as pd
 
 
@@ -67,12 +89,33 @@ def _canonicalize_gtin(x: str | float | None) -> str | float | None:
 def normalize_and_validate_gtin(series: pd.Series) -> pd.DataFrame:
     """Clean raw barcode strings and validate GTIN structure.
 
+    Extraction keeps the LONGEST digit run in a cell (earliest wins ties),
+    so a describer prefix ("1-735143004010") no longer truncates to "1";
+    the census of dataset.csv is unchanged by this (measured regression
+    gate, see module docstring).
+
     Returns:
         gtin_clean
         gtin_structurally_valid
     """
-    # Keep only digit sequences.
-    cleaned = series.astype(str).str.extract(r"(\d+)", expand=False)
+    # Keep the longest digit run per cell (earliest wins ties — max returns
+    # the first maximal candidate). A cell with no digits maps to "", which
+    # the filter below sends to missing. Alignment is positional: the raw
+    # series may carry an arbitrary or duplicate index. This replaces
+    # first-run-only `str.extract(r"(\d+)")`, which truncated e.g.
+    # "1-735143004010" to "1"; no current dataset.csv cell has first run
+    # != longest run (measured), so outputs are byte-identical there.
+    present_loc = series.notna().to_numpy()
+    cleaned_vals = np.full(len(series), None, dtype=object)
+
+    def _longest(raw: str) -> str:
+        candidates = re.findall(r"\d+", raw)
+        return max(candidates, key=len) if candidates else ""
+
+    if present_loc.any():
+        winners = series.loc[present_loc].astype(str).map(_longest)
+        cleaned_vals[present_loc] = winners.to_numpy()
+    cleaned = pd.Series(cleaned_vals, index=series.index, dtype="object")
 
     # Empty strings -> missing.
     cleaned = cleaned.where(cleaned.ne(""))
@@ -106,6 +149,43 @@ def normalize_and_validate_gtin(series: pd.Series) -> pd.DataFrame:
             "gtin_structurally_valid": is_valid,
         }
     )
+
+
+def _gtin_siblings_key(x: str | float | None) -> str:
+    """Internal key for `gtin_equivalent`: whitespace-strip, fold UPC-12 to
+    its zero-prefixed GTIN-13 spelling, then require the checksum of the
+    qualifying length each side lands on. Any non-digit, missing, or
+    off-length form — including a 11-digit body — returns "". The checksum
+    is checked on the FOLDED spelling: a UPC-12 is validated as its 13-digit
+    sibling, never raw (weights anchor right, so the 12 alone is a
+    different number)."""
+    if pd.isna(x):
+        return ""
+    s = str(x).strip()
+    if not s or not s.isdigit():
+        return ""
+    if len(s) == 12:
+        s = "0" + s
+    if len(s) not in {8, 13, 14}:
+        return ""
+    return s if is_valid_gtin_checksum(s) else ""
+
+
+def gtin_equivalent(a: str | float | None, b: str | float | None) -> bool:
+    """Sibling-tolerance GTIN equality: UPC-12 and its zero-prefixed EAN-13
+    spelling are the same code.
+
+    Both inputs are whitespace-stripped; a UPC-12 is folded to 13 by adding
+    the leading zero and the GS1 checksum is enforced on the QUALIFYING
+    spelling each side resolves to (folded, not raw); equal is True iff
+    both resolve to identical checksum-valid digits at the same length
+    (8/13/14 — a 12 never survives the fold). Any other spelling —
+    malformed, missing, off-length (including 11-digit) — is False by
+    construction; nothing is padded or repaired here. Grouping keys
+    elsewhere stay raw — see the module docstring.
+    """
+    ka = _gtin_siblings_key(a)
+    return ka != "" and ka == _gtin_siblings_key(b)
 
 
 def barcode_validity(barcodes: pd.Series) -> pd.Series:

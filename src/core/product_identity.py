@@ -224,6 +224,14 @@ def normalize_brand(raw: object) -> frozenset[str]:
     for token in tokens:
         target = aliases.get(token)
         if target:
+            # Conservative fold (veto-asymmetry doctrine, seeded 2026-09-30
+            # from the within-GTIN measurement via scripts/seed_brand_aliases
+            # .py): the target is ADDED, never swapped in — a fold can only
+            # make two brand token sets share a token or nest, never go
+            # disjoint, so brand-agreement evidence stops being spuriously
+            # contradicted while real cross-brand vetoes keep firing
+            # (measured: 49 within-group brand vetoes -> 22, all 27 dissolved
+            # pairs being seeded alias families on one barcode).
             folded.add(target)
     return frozenset(folded)
 

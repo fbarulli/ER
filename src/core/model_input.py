@@ -394,24 +394,6 @@ def build_sku_text(
     return _legacy_sku_text(row, info)
 
 
-def build_sku_text(
-    row,
-    info: Mapping[str, object],
-    *,
-    spec: TrainingSpec.ModelInputSpec | None = None,
-) -> str:
-    """Model text for one SOURCE sku row.
-
-    ``row`` is a pandas row/Series so field fallbacks go through the shared
-    ``core.common.row_metadata_text`` reader; ``info`` is the structured
-    attribute mapping the caller already built for the numeric channel.
-    """
-    resolved = _resolve(spec)
-    if resolved.profile == "cleaned":
-        return _cleaned_sku_text(row, info, spec=resolved)
-    return _legacy_sku_text(row, info)
-
-
 def build_sku_texts(
     frame: pd.DataFrame,
     *,
@@ -439,12 +421,29 @@ def build_sku_texts(
 
     title = frame["title"].fillna("") if "title" in frame else pd.Series([""] * len(frame))
     attrs = frame["attributes"].fillna("") if "attributes" in frame else pd.Series([""] * len(frame))
-    descriptions = frame.get("description_short_eng", pd.Series([""] * len(frame)))
-    empty_info: dict[str, set] = {
-        "volume": set(),
-        "pack": set(),
-        "package_type": set(),
-    }
+    # Description column resolved by bounded alias: the raw Euromonitor export
+    # names the column ``description_short_eng``; the deduped dataset renames
+    # it ``description`` (config/paths.yaml column_mapping). Before this
+    # resolution the renamed lane silently lost its description (sku_info saw
+    # ""), because the reader only knew the raw name. The RAW name wins when
+    # both exist so a raw-frame path can never change behavior simply because
+    # a renamed twin happened to ride along; only a NaN in the raw column is
+    # filled from the alias. The fill uses the frame's own index ( .where with
+    # a same-index series, not a positional fillna against a fresh RangeIndex
+    # series) so duplicated / non-default row indexes cannot misalign. No
+    # lane's output changes when the raw name is present and observed — the
+    # NaN cases were already coerced to "" downstream — only the previously
+    # empty rename lane regains its description.
+    if "description_short_eng" in frame:
+        raw = frame["description_short_eng"]
+        renamed = frame["description"] if "description" in frame else pd.Series(
+            [""] * len(frame), index=frame.index
+        )
+        descriptions = raw.where(raw.notna(), renamed)
+    elif "description" in frame:
+        descriptions = frame["description"]
+    else:
+        descriptions = pd.Series([""] * len(frame), index=frame.index)
     empty_info: dict[str, set] = {
         "volume": set(),
         "pack": set(),

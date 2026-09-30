@@ -99,8 +99,9 @@ NUTRITION_RE = re.compile(
 )
 
 # Flavor vocabulary + FLAVOR_RE REMOVED (audit round 2 F18, round 3): zero
-# consumers — the live flavor signal is pipeline.FLAVOR_PATTERN (its own
-# near-duplicate list, deliberately untouched). Same for DRY_MIX_HINTS and
+# consumers — the live flavor signal is the critical-claims extractor
+# (core/critical_attributes.py extract_critical_claims, which parses the
+# Flavor: key from the attributes blob). Same for DRY_MIX_HINTS and
 # SUSPECT_ROUND below.
 
 # Bare oz/ounce could mean weight (chips, protein powder) rather than fluid
@@ -271,14 +272,16 @@ def extract_volume_ml(text: str) -> tuple[int | None, bool]:
 # taxonomy was judged DOMAIN DATA, not code — a curated mapping of the
 # dataset's 24 strict categories to coarse macro buckets (the blocking
 # layer's recall-first rollup; see 04b/04c) that the owner may tune
-# without touching an import. It now lives in config/paths.yaml
-# category_macros: (validated by DataConfig at load) and is read via
-# lib.common.category_macros(). Rationale: it maps DATA values (category
-# names) to canonical forms — the same shape as column_mapping — rather
-# than being regex-adjacent normalization logic that changes only
-# alongside code. Consumers: src/training/blocking_audit.py, src/training/report_plots.py,
-# src/core/hard_negatives.py. Scoring still uses the strict category (higher
-# mutual information); only blocking rolls up to macro.
+# without touching an import. It now lives in config/vocabulary.json
+# category_macros: (required at load; SystemExit on a missing or malformed
+# mapping). Every surface reads it through the same SSOT accessor,
+# core.common.category_macros — the config yaml never held this key.
+# Rationale: it maps DATA values (category names) to canonical forms —
+# the same shape as column_mapping — rather than being regex-adjacent
+# normalization logic that changes only alongside code. Consumers:
+# src/training/blocking_audit.py, src/training/report_plots.py,
+# src/core/hard_negatives.py. Scoring still uses the strict category
+# (higher mutual information); only blocking rolls up to macro.
 
 
 def extract_pack_counts(text: str) -> set[int]:
