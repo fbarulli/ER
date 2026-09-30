@@ -110,7 +110,8 @@ colab:
   # satisfied"), so the deps stage costs what is NOT in the image.  Measured
   # on the 2026-09-15 T4 launch: 19.99 MiB downloaded, 18 distributions
   # installed, and only two top-level items needed work — `hnswlib` (source
-  # build; PyPI publishes no wheel) and `mlflow` (11.6 MB + its closure).
+  # build; PyPI publishes no wheel) and full `mlflow` (11.6 MB + its closure).
+  # Tracking now uses skinny plus the explicit SQLite backend dependencies.
   # Trim, pin, or drop entries here rather than editing src/cli/colab.py.
   runtime_packages:
     # Graph-only additions use the same satisfied-package-aware installer.
@@ -127,7 +128,9 @@ colab:
       - "pandas"
       - "numpy"
       - "hnswlib"
-      - "mlflow"
+      - "mlflow-skinny"
+      - "sqlalchemy"
+      - "alembic"
       - "wandb"
     full:
       - "sentence-transformers"
@@ -138,7 +141,9 @@ colab:
       - "pandas"
       - "numpy"
       - "hnswlib"
-      - "mlflow"
+      - "mlflow-skinny"
+      - "sqlalchemy"
+      - "alembic"
       - "optuna"
       - "psycopg[binary]"
       - "wandb"

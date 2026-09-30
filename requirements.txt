@@ -30,7 +30,9 @@ accelerate==1.14.0     # no direct import, but SentenceTransformerTrainer ->
 sentencepiece==0.2.2
 
 # ── experiment tracking / HPO (lazy-imported; both optional at runtime) ─────
-mlflow==3.15.1
+mlflow-skinny==3.15.1
+sqlalchemy==2.1.1     # MlflowCtx local SQLite tracking backend
+alembic==1.20.0       # MLflow SQLite schema migrations
 optuna==4.4.0
 # PostgreSQL driver for the shared Optuna RDBStorage control plane. The
 # binary extra supplies a reproducible wheel on Colab; no database URL or
