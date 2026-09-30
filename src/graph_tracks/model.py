@@ -11,6 +11,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from graph_tracks.data import GraphBatch, NUMERIC, RELATIONS
+from graph_tracks.pooling import pool, topology
 
 
 def mean_pool(values: torch.Tensor, indices: torch.Tensor, count: int) -> torch.Tensor:
@@ -40,8 +41,8 @@ class AttributeGNN(nn.Module):
             raise ValueError("text input is required only for the hybrid model")
         features = [batch.numeric]
         for relation in RELATIONS:
-            listing, value = batch.edges[relation]
-            features.append(mean_pool(self.tokens[relation](value), listing, len(batch.numeric)))
+            value, listing, sizes = topology(batch, relation, dtype=self.tokens[relation].weight.dtype)
+            features.append(pool(self.tokens[relation](value), listing, sizes))
         if text is not None:
             if text.shape != (len(batch.numeric), self.text_dim):
                 raise ValueError("text vector shape mismatch")
@@ -52,10 +53,11 @@ class AttributeGNN(nn.Module):
         h = self.initial(support, text)
         states = {}
         for relation in RELATIONS:
-            listing, value = support.edges[relation]
-            valid = value != 0
-            states[relation] = F.relu(self.to_attribute[relation](mean_pool(
-                h[listing[valid]], value[valid], self.tokens[relation].num_embeddings)))
+            listing, value, sizes = topology(
+                support, relation, attribute=True,
+                count=self.tokens[relation].num_embeddings, dtype=h.dtype)
+            states[relation] = F.relu(self.to_attribute[relation](pool(
+                h[listing], value, sizes)))
             # An unknown attribute is not a shared relation.
             states[relation] = states[relation] * (torch.arange(
                 len(states[relation]), device=h.device) != 0).unsqueeze(1)
@@ -65,10 +67,12 @@ class AttributeGNN(nn.Module):
                text: torch.Tensor | None = None) -> torch.Tensor:
         h = self.initial(batch, text)
         messages = []
-        for relation in RELATIONS:
-            listing, value = batch.edges[relation]
-            messages.append(mean_pool(self.to_listing[relation](states[relation][value]),
-                                      listing, len(batch.numeric)))
+        for relation in RELATIONS if self.graph_enabled else ():
+            value, listing, sizes = topology(batch, relation, dtype=h.dtype)
+            transformed = self.to_listing[relation](states[relation][value])
+            # Autocast may change the linear output dtype. Keep the original
+            # pooling arithmetic in that dtype as well.
+            messages.append(pool(transformed, listing, sizes.to(transformed.dtype)))
         message = torch.stack(messages).mean(0) if self.graph_enabled else torch.zeros_like(h)
         return F.normalize(self.output(torch.cat([h, message], dim=-1)), dim=-1)
 
