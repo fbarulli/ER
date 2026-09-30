@@ -1,0 +1,15 @@
+{
+  "schema_version": "1",
+  "run_id": "0930T221351242600Z-text-checkpoint-4",
+  "worker": 1,
+  "remote": "https://dagshub.com/fbarulli/ER.dvc",
+  "verified_download": true,
+  "pointers": [
+    {
+      "pointer": "dvc_refs/0930T221351242600Z-text-checkpoint-4/worker_1/0930T221351242600Z-text-checkpoint-4.zip.dvc",
+      "outputs": [
+        "results/model_tracks/0930T221351242600Z/text/_artifact_publications/0930T221351242600Z-text-checkpoint-4.publication/0930T221351242600Z-text-checkpoint-4.zip"
+      ]
+    }
+  ]
+}

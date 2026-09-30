@@ -1,0 +1,5 @@
+outs:
+- md5: 63076b68c34bf97b4f08683bfb0767b6
+  size: 3628278
+  hash: md5
+  path: ../../../results/model_tracks/0930T221351242600Z/text/_artifact_publications/0930T221351242600Z-text-postprocess.publication/0930T221351242600Z-text-postprocess.zip

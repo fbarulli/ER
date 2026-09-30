@@ -1,0 +1,15 @@
+{
+  "schema_version": "1",
+  "run_id": "0930T221351242600Z-gnn_only-checkpoint-1",
+  "worker": 1,
+  "remote": "https://dagshub.com/fbarulli/ER.dvc",
+  "verified_download": true,
+  "pointers": [
+    {
+      "pointer": "dvc_refs/0930T221351242600Z-gnn_only-checkpoint-1/worker_1/0930T221351242600Z-gnn_only-checkpoint-1.zip.dvc",
+      "outputs": [
+        "results/model_tracks/0930T221351242600Z/gnn_only/gnn_only__0930T221351242600Z-gnn_only/_artifact_publications/0930T221351242600Z-gnn_only-checkpoint-1.publication/0930T221351242600Z-gnn_only-checkpoint-1.zip"
+      ]
+    }
+  ]
+}

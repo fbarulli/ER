@@ -21,6 +21,17 @@ GPU performance measurements remain pending. See
 commands, verified tests, W&B/DVC behavior and architecture limits. The initial
 model is full-batch typed two-hop aggregation, not sampled GraphSAGE.
 
+Additional Colab CPU verification: `0930T221351242600Z` passed a three-epoch
+budget on 100 listings. Graph tracks completed three epochs; native text
+finished at epoch two with existing stopping behavior. Thirteen incremental
+generations and the final suite ZIP passed DVC clean-pull verification.
+All three worker logs contain training output, and each track retained reports
+and profiler traces. The suite's parallel workers took 758.7 seconds including
+publication. Recovery pointers are committed; smoke models are not deployed.
+In-process DVC configuration subsequently passed on Colab in 2.33 seconds,
+removing repeated setup command startup. Live per-track forwarding now feeds
+the dedicated training log as well as the supervisor stream.
+
 Owner direction: develop the current model, GNN-only, and GNN plus the current
 model as separate, comparable tracks. This supersedes the earlier TODO decision
 to skip GNN development. SID and RQ-VAE are outside this plan.

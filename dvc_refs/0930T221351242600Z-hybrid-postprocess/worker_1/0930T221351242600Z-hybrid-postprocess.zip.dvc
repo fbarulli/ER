@@ -1,0 +1,5 @@
+outs:
+- md5: 5f4ca78b6eef3a8f0c9f6889d5ea77e2
+  size: 232624
+  hash: md5
+  path: ../../../results/model_tracks/0930T221351242600Z/hybrid/hybrid__0930T221351242600Z-hybrid/_artifact_publications/0930T221351242600Z-hybrid-postprocess.publication/0930T221351242600Z-hybrid-postprocess.zip

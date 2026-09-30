@@ -1,0 +1,5 @@
+outs:
+- md5: 9111058d24a965c966efb71b2f84ebfc
+  size: 163233077
+  hash: md5
+  path: ../../../results/model_tracks/0930T221351242600Z/text/_artifact_publications/0930T221351242600Z-text-checkpoint-1.publication/0930T221351242600Z-text-checkpoint-1.zip

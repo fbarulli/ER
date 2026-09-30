@@ -16,8 +16,8 @@ results/*
 !results/
 results/*
 results/dvc_refs/
-# DVC publication pointers are generated run metadata; payloads remain in
-# training_results/ and the durable DVC state is owned by dvc.lock.
+# Generated refs stay ignored by default. Suite publication explicitly stages
+# verified per-run recovery pointers; payloads remain in remote DVC storage.
 /dvc_refs/
 
 # Reproducible training input: keep the raw export in Git.

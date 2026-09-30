@@ -114,7 +114,10 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False) -> Path:
             raise RuntimeError('model publication requires durable suite DVC references')
         reference_dirs = [p for p in (TRAIN_ROOT/'dvc_refs').iterdir()
                           if p.is_dir() and (p.name == run_tag or p.name.startswith(run_tag+'-'))]
-        subprocess.run(['git','add','--',str(relative),
+        subprocess.run(['git','add','--',str(relative)],cwd=TRAIN_ROOT,check=True)
+        # Legacy generated refs are ignored; explicitly stage only this
+        # verified suite's recovery metadata, never the whole refs tree.
+        subprocess.run(['git','add','-f','--',
                         *(str(p.relative_to(TRAIN_ROOT)) for p in reference_dirs)],cwd=TRAIN_ROOT,check=True)
         changed = subprocess.run(['git','diff','--cached','--quiet'],cwd=TRAIN_ROOT).returncode
         if changed == 1:

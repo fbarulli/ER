@@ -1,0 +1,5 @@
+outs:
+- md5: e732e7fce92a530818f210a48f2155b6
+  size: 1586461
+  hash: md5
+  path: ../../../results/model_tracks/0930T221351242600Z/hybrid/hybrid__0930T221351242600Z-hybrid/_artifact_publications/0930T221351242600Z-hybrid-checkpoint-1.publication/0930T221351242600Z-hybrid-checkpoint-1.zip

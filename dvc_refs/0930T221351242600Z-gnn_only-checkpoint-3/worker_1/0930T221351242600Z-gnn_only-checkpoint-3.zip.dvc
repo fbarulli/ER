@@ -1,0 +1,5 @@
+outs:
+- md5: 848e5db28ea2a1537ce8ef8a5fa1d620
+  size: 1291902
+  hash: md5
+  path: ../../../results/model_tracks/0930T221351242600Z/gnn_only/gnn_only__0930T221351242600Z-gnn_only/_artifact_publications/0930T221351242600Z-gnn_only-checkpoint-3.publication/0930T221351242600Z-gnn_only-checkpoint-3.zip

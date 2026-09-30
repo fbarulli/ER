@@ -1,0 +1,5 @@
+outs:
+- md5: cd528c8d2acd3ac2195f93196d00e5bd
+  size: 223807
+  hash: md5
+  path: ../../../results/model_tracks/0930T221351242600Z/gnn_only/gnn_only__0930T221351242600Z-gnn_only/_artifact_publications/0930T221351242600Z-gnn_only-postprocess.publication/0930T221351242600Z-gnn_only-postprocess.zip
