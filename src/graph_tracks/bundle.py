@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import zipfile
 from graph_tracks.artifacts import name
 from graph_tracks.data import file_hash
 
@@ -36,15 +35,11 @@ def bundle(source: Path, output: Path, *, include_dvc_cache=False):
         if path.is_symlink():
             raise ValueError('result bundle must not contain symbolic links')
         files.append(path)
-    hashes = {str(path.relative_to(source)): file_hash(path) for path in files}
     metadata = {'schema': 'er-graph-bundle-v1', 'track': track, 'run_tag': run['run_tag'],
-                'files': hashes, 'dvc_cache_included': include_dvc_cache, 'wandb_logs_included': False}
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in files:
-            archive.write(path, arcname=str(path.relative_to(source)))
-        archive.writestr(name(track, 'bundle_manifest.json'), json.dumps(metadata, indent=2, sort_keys=True) + '\n')
-    return output
+                'dvc_cache_included': include_dvc_cache, 'wandb_logs_included': False}
+    from core.portable_archive import write_archive
+    return write_archive(output, {str(path.relative_to(source)):path for path in files},
+                         manifest_name=name(track,'bundle_manifest.json'), metadata=metadata)
 
 
 def main():

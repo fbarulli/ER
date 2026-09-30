@@ -1006,580 +1006,12 @@ def _make_loss(
     return losses.TripletLoss(model)
 
 
-def _smoothed_contrastive_losses(
-    positive_pairs,
-    negative_pairs,
-    *,
-    margin: float,
-    label_smoothing: float,
-):
-    """Return positive/negative OnlineContrastiveLoss terms with smoothing."""
-    import torch.nn.functional as F
-
-    smoothing = float(label_smoothing)
-    if not 0.0 <= smoothing < 0.5:
-        raise ValueError("contrastive label smoothing must be in [0, 0.5)")
-    positive_hinge = F.relu(float(margin) - positive_pairs)
-    negative_hinge = F.relu(float(margin) - negative_pairs)
-    positive_loss = (
-        (1.0 - smoothing) * positive_pairs.pow(2)
-        + smoothing * positive_hinge.pow(2)
-    ).sum()
-    negative_loss = (
-        (1.0 - smoothing) * negative_hinge.pow(2)
-        + smoothing * negative_pairs.pow(2)
-    ).sum()
-    return positive_loss, negative_loss, negative_hinge
-
-
-def _tracking_contrastive_loss(
-    model,
-    *,
-    margin: float,
-    structured_feature_weight: float,
-    uniformity_weight: float,
-    uniformity_temperature: float,
-    uniformity_min_batch_size: int,
-    label_smoothing: float,
-):
-    """Return OnlineContrastiveLoss with selection/backprop telemetry.
-
-    The implementation preserves the installed loss's hard-pair selection
-    and arithmetic. It only accumulates detached counters and loss-component
-    values during gradient-enabled forwards; ProgressCallback drains them at
-    Trainer logging steps.
-    """
-    import torch
-    import torch.nn.functional as F
-    from sentence_transformers.sentence_transformer import losses
-
-    class _TrackedOnlineContrastiveLoss(losses.OnlineContrastiveLoss):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._tracking_totals: dict[str, float] = {}
-            self._tracking_batches = 0
-            self._batch_pair_ids = None
-            self._batch_structured_features = None
-            self._total_negative_pairs = 0
-            self._seen_hard_negative_ids: set[int] = set()
-            self._seen_margin_active_negative_ids: set[int] = set()
-            self._negative_present_counts: dict[int, int] = {}
-            self._negative_selected_counts: dict[int, int] = {}
-            self._negative_backprop_counts: dict[int, int] = {}
-            self._per_epoch_counts: dict[int, dict[int, dict[str, int]]] = {}
-            self._pair_lineage: list[dict] = []
-            self._current_epoch = 0
-
-        def _uniformity_penalty(self, embeddings):
-            if uniformity_weight <= 0:
-                return embeddings[0].sum() * 0.0
-            vectors = torch.cat(embeddings, dim=0)
-            if len(vectors) < uniformity_min_batch_size:
-                return vectors.sum() * 0.0
-            vectors = F.normalize(vectors, p=2, dim=1)
-            distances = torch.pdist(vectors, p=2).pow(2)
-            if not len(distances):
-                return vectors.sum() * 0.0
-            return torch.logsumexp(
-                -uniformity_temperature * distances,
-                dim=0,
-            ) - torch.log(
-                torch.as_tensor(
-                    len(distances),
-                    dtype=distances.dtype,
-                    device=distances.device,
-                )
-            )
-
-        def set_batch_pair_ids(self, pair_ids) -> None:
-            self._batch_pair_ids = pair_ids.detach().cpu()
-
-        def set_batch_structured_features(self, features) -> None:
-            self._batch_structured_features = features.detach().cpu()
-
-        def set_total_negative_pairs(self, count: int) -> None:
-            self._total_negative_pairs = int(count)
-
-        def set_pair_lineage(self, pair_lineage: list[dict]) -> None:
-            self._pair_lineage = pair_lineage
-
-        def set_epoch(self, epoch: int) -> None:
-            self._current_epoch = int(epoch)
-
-        def compute_loss_from_embeddings(self, embeddings, labels):
-            if not self._checked_labels:
-                self._checked_labels = True
-                if labels.ne(0).logical_and(labels.ne(1)).any().item():
-                    import warnings
-
-                    warnings.warn(
-                        "OnlineContrastiveLoss expects binary labels (0 or 1). "
-                        "Pairs with any other label are ignored, since they "
-                        "match neither the positive nor the negative set.",
-                        UserWarning,
-                        stacklevel=4,
-                    )
-
-            structured = self._batch_structured_features
-            self._batch_structured_features = None
-            if structured is not None and structured_feature_weight > 0:
-                from core.structured_features import fuse_torch
-
-                pair_features = structured.to(device=embeddings[0].device)
-                embeddings = [
-                    fuse_torch(
-                        embedding,
-                        pair_features[:, side, :],
-                        structured_feature_weight,
-                    )
-                    for side, embedding in enumerate(embeddings)
-                ]
-            distance_matrix = self.distance_metric(embeddings[0], embeddings[1])
-            negs = distance_matrix[labels == 0]
-            poss = distance_matrix[labels == 1]
-            batch_pair_ids = self._batch_pair_ids
-            self._batch_pair_ids = None
-
-            # This is the installed sentence-transformers selection rule.
-            negative_selection = negs < (
-                poss.max() if len(poss) > 1 else negs.mean()
-            )
-            negative_pairs = negs[
-                negative_selection
-            ]
-            positive_selection = poss > (
-                negs.min() if len(negs) > 1 else poss.mean()
-            )
-            positive_pairs = poss[
-                positive_selection
-            ]
-            # Binary label smoothing mixes a small amount of the opposite
-            # class objective into each selected pair. At smoothing=0 this
-            # is exactly the installed OnlineContrastiveLoss arithmetic.
-            smoothing = float(label_smoothing)
-            positive_loss, negative_loss, negative_hinge = (
-                _smoothed_contrastive_losses(
-                    positive_pairs,
-                    negative_pairs,
-                    margin=self.margin,
-                    label_smoothing=smoothing,
-                )
-            )
-            uniformity_loss = self._uniformity_penalty(embeddings)
-            anti_collapse_loss = uniformity_weight * uniformity_loss
-            loss_value = (
-                positive_loss
-                + negative_loss
-                + anti_collapse_loss
-            )
-
-            # Evaluator forwards are no-grad; only optimizer-facing forwards
-            # belong to the backprop attribution window.
-            if torch.is_grad_enabled():
-                if batch_pair_ids is not None:
-                    labels_cpu = labels.detach().cpu()
-                    negative_ids = batch_pair_ids[labels_cpu == 0]
-                    selected_negative_ids = negative_ids[
-                        negative_selection.detach().cpu()
-                    ]
-                    margin_active_negative_ids = selected_negative_ids[
-                        (negative_hinge > 0).detach().cpu()
-                    ]
-                    backprop_negative_ids = (
-                        selected_negative_ids
-                        if smoothing > 0
-                        else margin_active_negative_ids
-                    )
-                    for value in negative_ids.tolist():
-                        key = int(value)
-                        self._negative_present_counts[key] = (
-                            self._negative_present_counts.get(key, 0) + 1
-                        )
-                        self._per_epoch_counts.setdefault(self._current_epoch, {}).setdefault(
-                            key, {"present_count": 0, "hard_selected_count": 0, "backprop_count": 0}
-                        )["present_count"] += 1
-                    for value in selected_negative_ids.tolist():
-                        key = int(value)
-                        self._negative_selected_counts[key] = (
-                            self._negative_selected_counts.get(key, 0) + 1
-                        )
-                        self._per_epoch_counts.setdefault(self._current_epoch, {}).setdefault(
-                            key, {"present_count": 0, "hard_selected_count": 0, "backprop_count": 0}
-                        )["hard_selected_count"] += 1
-                    for value in backprop_negative_ids.tolist():
-                        key = int(value)
-                        self._negative_backprop_counts[key] = (
-                            self._negative_backprop_counts.get(key, 0) + 1
-                        )
-                        self._per_epoch_counts.setdefault(self._current_epoch, {}).setdefault(
-                            key, {"present_count": 0, "hard_selected_count": 0, "backprop_count": 0}
-                        )["backprop_count"] += 1
-                    self._seen_hard_negative_ids.update(
-                        int(value) for value in selected_negative_ids.tolist()
-                    )
-                    self._seen_margin_active_negative_ids.update(
-                        int(value) for value in margin_active_negative_ids.tolist()
-                    )
-                    source_sets = {
-                        "present": negative_ids,
-                        "selected": selected_negative_ids,
-                        "backprop": backprop_negative_ids,
-                    }
-                    for event, ids in source_sets.items():
-                        for pair_id in ids.tolist():
-                            source = str(
-                                self._pair_lineage[int(pair_id)].get(
-                                    "population", "unknown"
-                                )
-                            )
-                            metric = f"negative_source_{source}_{event}_count"
-                            self._tracking_totals[metric] = (
-                                self._tracking_totals.get(metric, 0.0) + 1.0
-                            )
-                values = {
-                    "hard_positive_count": float(len(positive_pairs)),
-                    "hard_negative_count": float(len(negative_pairs)),
-                    "margin_active_negative_count": float(
-                        (negative_hinge > 0).sum().item()
-                    ),
-                    "all_positive_count": float(len(poss)),
-                    "all_negative_count": float(len(negs)),
-                    "positive_loss": float(positive_loss.detach().item()),
-                    "negative_loss": float(negative_loss.detach().item()),
-                    "uniformity_loss": float(uniformity_loss.detach().item()),
-                    "anti_collapse_loss": float(anti_collapse_loss.detach().item()),
-                }
-                for key, value in values.items():
-                    self._tracking_totals[key] = (
-                        self._tracking_totals.get(key, 0.0) + value
-                    )
-                self._tracking_batches += 1
-
-            return loss_value
-
-        def pop_tracking_stats(self) -> dict[str, float]:
-            batches = self._tracking_batches
-            totals = self._tracking_totals
-            self._tracking_totals = {}
-            self._tracking_batches = 0
-            if not batches:
-                return {}
-            result = {
-                "hard_positive_count": totals.get("hard_positive_count", 0.0),
-                "hard_negative_count": totals.get("hard_negative_count", 0.0),
-                "margin_active_negative_count": totals.get(
-                    "margin_active_negative_count", 0.0
-                ),
-                "all_positive_count": totals.get("all_positive_count", 0.0),
-                "all_negative_count": totals.get("all_negative_count", 0.0),
-                "positive_loss": totals.get("positive_loss", 0.0),
-                "negative_loss": totals.get("negative_loss", 0.0),
-                "uniformity_loss": totals.get("uniformity_loss", 0.0),
-                "anti_collapse_loss": totals.get("anti_collapse_loss", 0.0),
-                "tracking_batches": float(batches),
-            }
-            result.update(
-                {
-                    key: value
-                    for key, value in totals.items()
-                    if key.startswith("negative_source_")
-                }
-            )
-            result["margin_active_negative_fraction"] = (
-                result["margin_active_negative_count"]
-                / result["hard_negative_count"]
-                if result["hard_negative_count"]
-                else 0.0
-            )
-            total_loss = result["positive_loss"] + result["negative_loss"]
-            result["negative_loss_fraction"] = (
-                result["negative_loss"] / total_loss if total_loss else 0.0
-            )
-            return result
-
-        def coverage_stats(self) -> dict[str, float]:
-            selected = len(self._seen_hard_negative_ids)
-            active = len(self._seen_margin_active_negative_ids)
-            total = self._total_negative_pairs
-            return {
-                "contrastive_margin": float(self.margin),
-                "label_smoothing": float(label_smoothing),
-                "negative_cosine_target": float(1.0 - self.margin),
-                "n_train_neg_total": float(total),
-                "n_train_neg_hard_selected_unique": float(selected),
-                "n_train_neg_margin_active_unique": float(active),
-                "train_neg_hard_selection_coverage": selected / total if total else 0.0,
-                "train_neg_margin_active_coverage": active / total if total else 0.0,
-                "n_train_neg_present_unique": float(len(self._negative_present_counts)),
-                "n_train_neg_backprop_unique": float(len(self._negative_backprop_counts)),
-                "train_neg_backprop_events": float(sum(self._negative_backprop_counts.values())),
-            }
-
-        def pair_usage_rows(self) -> list[dict]:
-            """Return cumulative per-pair usage and gradient attribution."""
-            ids = set(self._negative_present_counts)
-            ids.update(self._negative_selected_counts)
-            ids.update(self._negative_backprop_counts)
-            rows = []
-            for pair_id in sorted(ids):
-                lineage = (
-                    self._pair_lineage[pair_id]
-                    if pair_id < len(self._pair_lineage)
-                    else {}
-                )
-                rows.append(
-                    {
-                        "pair_id": pair_id,
-                        "present_count": self._negative_present_counts.get(pair_id, 0),
-                        "hard_selected_count": self._negative_selected_counts.get(pair_id, 0),
-                        "backprop_count": self._negative_backprop_counts.get(pair_id, 0),
-                        **lineage,
-                    }
-                )
-            return rows
-
-        def pair_usage_rows_by_epoch(self) -> list[dict]:
-            """Return per-epoch pair presentation/selection/backprop counts."""
-            rows = []
-            for epoch in sorted(self._per_epoch_counts):
-                for pair_id in sorted(self._per_epoch_counts[epoch]):
-                    lineage = (
-                        self._pair_lineage[pair_id]
-                        if pair_id < len(self._pair_lineage)
-                        else {}
-                    )
-                    rows.append(
-                        {
-                            "epoch": epoch,
-                            "pair_id": pair_id,
-                            **self._per_epoch_counts[epoch][pair_id],
-                            **lineage,
-                        }
-                    )
-            return rows
-
-    return _TrackedOnlineContrastiveLoss(model, margin=margin)
-
-
-def _tracking_mnrl_loss(
-    model,
-    *,
-    monitoring_enabled: bool,
-    warmup_enabled: bool,
-    warmup_epochs: int,
-    twin_weight: float,
-):
-    """Return MultipleNegativesRankingLoss with per-population telemetry.
-
-    Reimplements the installed sentence-transformers 6.0.1
-    ``MultipleNegativesRankingLoss.compute_loss_from_embeddings`` so each
-    row's loss ``-(positive_score - log_z)`` can be attributed to a training
-    population (base/masked/twin) and, when the twin warmup is enabled, so the
-    twin rows can be down-weighted during the first ``warmup_epochs``.
-
-    When neither monitoring nor warmup is enabled ``_make_loss`` returns the
-    installed loss directly (this class is never constructed), and even if it
-    were, ``compute_loss_from_embeddings`` falls through to the installed
-    arithmetic — the bit-identical no-op guarantee.
-    """
-    from sentence_transformers.sentence_transformer import losses
-    from sentence_transformers.util import all_gather_with_grad, get_rank
-
-    class _TrackedMultipleNegativesRankingLoss(
-        losses.MultipleNegativesRankingLoss
-    ):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._monitoring_enabled = bool(monitoring_enabled)
-            self._warmup_enabled = bool(warmup_enabled)
-            self._warmup_epochs = int(warmup_epochs)
-            self._twin_weight = float(twin_weight)
-            self._current_epoch = 0
-            self._batch_pair_ids = None
-            self._triple_populations: list[str] = []
-            self._subset_totals: dict[int, dict[str, dict[str, float]]] = {}
-
-        def set_epoch(self, epoch: int) -> None:
-            self._current_epoch = int(epoch)
-
-        def set_batch_pair_ids(self, pair_ids) -> None:
-            self._batch_pair_ids = pair_ids.detach().cpu()
-
-        def set_triple_populations(self, populations) -> None:
-            self._triple_populations = list(populations)
-
-        def _twin_weight_for_epoch(self) -> float:
-            if not self._warmup_enabled:
-                return 1.0
-            if self._warmup_epochs <= 1:
-                return self._twin_weight
-            progress = min(
-                1.0, (self._current_epoch - 1) / (self._warmup_epochs - 1)
-            )
-            return self._twin_weight + (1.0 - self._twin_weight) * progress
-
-        def compute_loss_from_embeddings(self, embeddings, labels):
-            if not (self._monitoring_enabled or self._warmup_enabled):
-                return super().compute_loss_from_embeddings(embeddings, labels)
-
-            import torch
-
-            if len(embeddings) < 2:
-                raise ValueError(
-                    f"Expected at least 2 embeddings, got {len(embeddings)}"
-                )
-
-            queries = embeddings[0]
-            docs = embeddings[1:]
-            batch_size = queries.size(0)
-            offset = 0
-            if self.gather_across_devices:
-                queries = all_gather_with_grad(queries)
-                docs = [all_gather_with_grad(doc) for doc in docs]
-                offset = get_rank() * batch_size
-
-            world_batch_size = queries.size(0)
-            docs_all = torch.cat(docs, dim=0)
-            docs_pos = docs[0]
-            local_indices = torch.arange(
-                offset, offset + batch_size, device=queries.device
-            )
-            row_indices = torch.arange(batch_size, device=queries.device)
-            local_queries = queries[local_indices]
-            local_docs = docs_pos[local_indices]
-
-            sim_matrices = {}
-            sim_matrices["query_to_doc"] = self.similarity_fct(
-                local_queries, docs_all
-            )
-            if "query_to_query" in self.directions:
-                sim_matrices["query_to_query"] = self.similarity_fct(
-                    local_queries, queries
-                )
-                sim_matrices["query_to_query"][
-                    row_indices, local_indices
-                ] = -torch.inf
-            if "doc_to_query" in self.directions:
-                sim_matrices["doc_to_query"] = self.similarity_fct(
-                    queries, local_docs
-                ).T
-            if "doc_to_doc" in self.directions:
-                sim_matrices["doc_to_doc"] = self.similarity_fct(
-                    docs_all, local_docs
-                ).T
-                same_query_doc_mask = torch.eye(
-                    world_batch_size, device=queries.device
-                )[local_indices]
-                same_query_doc_mask = same_query_doc_mask.repeat(
-                    1, len(docs)
-                ).bool()
-                sim_matrices["doc_to_doc"].masked_fill_(
-                    same_query_doc_mask, -torch.inf
-                )
-
-            penalties = {}
-            if (
-                self.hardness_mode
-                in ("in_batch_negatives", "hard_negatives", "all_negatives")
-                and self.hardness_strength > 0.0
-            ):
-                penalty = (
-                    self.hardness_strength
-                    * sim_matrices["query_to_doc"].detach()
-                )
-                own_doc_mask = torch.eye(
-                    world_batch_size,
-                    device=queries.device,
-                    dtype=torch.bool,
-                )[local_indices]
-                own_doc_mask = own_doc_mask.repeat(1, len(docs))
-                if self.hardness_mode == "hard_negatives":
-                    penalty_exclusion_mask = ~own_doc_mask
-                    penalty_exclusion_mask[:, :world_batch_size] = True
-                elif self.hardness_mode == "in_batch_negatives":
-                    penalty_exclusion_mask = own_doc_mask
-                else:
-                    penalty_exclusion_mask = own_doc_mask
-                    penalty_exclusion_mask[:, world_batch_size:] = False
-                penalty[penalty_exclusion_mask] = 0.0
-                penalties["query_to_doc"] = penalty
-
-            for key in sim_matrices:
-                sim_matrices[key] = sim_matrices[key] * self.scale
-            for key, pen in penalties.items():
-                sim_matrices[key] = sim_matrices[key] + pen
-
-            positive_scores = sim_matrices["query_to_doc"][
-                row_indices, local_indices
-            ]
-            if self.partition_mode == "joint":
-                scores = torch.cat(list(sim_matrices.values()), dim=1)
-                log_z = torch.logsumexp(scores, dim=1)
-            else:
-                log_z = 0.0
-                for sim_matrix in sim_matrices.values():
-                    log_z += torch.logsumexp(sim_matrix, dim=1)
-                log_z /= len(sim_matrices)
-
-            row_losses = -(positive_scores - log_z)
-
-            batch_pair_ids = self._batch_pair_ids
-            self._batch_pair_ids = None
-            if batch_pair_ids is not None and self._monitoring_enabled:
-                populations = [
-                    self._triple_populations[int(pair_id)]
-                    if int(pair_id) < len(self._triple_populations)
-                    else "unknown"
-                    for pair_id in batch_pair_ids.tolist()
-                ]
-                row_values = row_losses.detach().cpu()
-                for population, value in zip(
-                    populations, row_values.tolist()
-                ):
-                    epoch_stats = self._subset_totals.setdefault(
-                        self._current_epoch, {}
-                    ).setdefault(
-                        str(population), {"loss_sum": 0.0, "count": 0.0}
-                    )
-                    epoch_stats["loss_sum"] += float(value)
-                    epoch_stats["count"] += 1.0
-
-            if self._warmup_enabled:
-                if batch_pair_ids is not None:
-                    weight = self._twin_weight_for_epoch()
-                    weighted = torch.zeros_like(row_losses)
-                    for i, pair_id in enumerate(batch_pair_ids.tolist()):
-                        population = (
-                            self._triple_populations[int(pair_id)]
-                            if int(pair_id) < len(self._triple_populations)
-                            else "unknown"
-                        )
-                        w = weight if population == "twin" else 1.0
-                        weighted[i] = row_losses[i] * w
-                    return weighted.mean()
-                return row_losses.mean()
-
-            return row_losses.mean()
-
-        def mnrl_subset_rows_by_epoch(self) -> list[dict]:
-            rows = []
-            for epoch in sorted(self._subset_totals):
-                for population in sorted(self._subset_totals[epoch]):
-                    stats = self._subset_totals[epoch][population]
-                    count = stats["count"]
-                    rows.append(
-                        {
-                            "epoch": epoch,
-                            "population": population,
-                            "mean_loss": (
-                                stats["loss_sum"] / count if count else 0.0
-                            ),
-                            "triple_count": int(count),
-                        }
-                    )
-            return rows
-
-    return _TrackedMultipleNegativesRankingLoss(model)
+# Compatible imports for callers of the original orchestration module.
+from training.losses import (
+    _smoothed_contrastive_losses,
+    _tracking_contrastive_loss,
+    _tracking_mnrl_loss,
+)
 
 
 def _runtime_telemetry() -> dict[str, float | int]:
@@ -2057,6 +1489,14 @@ class DvcCheckpointCallback(TrainerCallback):
                 f"missing {', '.join(missing)}"
             )
         snapshot = self._snapshot(checkpoint)
+        if os.environ.get('ER_INCREMENTAL_DVC') == '1':
+            from model_tracks.incremental import ArtifactPublisher
+            if not hasattr(self, '_incremental_publisher'):
+                self._incremental_publisher = ArtifactPublisher(RESULTS)
+            self._incremental_publisher.submit(f'checkpoint-{state.global_step}', [snapshot])
+            import shutil
+            shutil.rmtree(snapshot)
+            return control
         from concurrent.futures import ThreadPoolExecutor
         from training.dvc_store import stage_checkpoint
 
@@ -2077,6 +1517,9 @@ class DvcCheckpointCallback(TrainerCallback):
 
     def on_train_end(self, args, state, control, **kwargs):
         """Push the complete checkpoint batch before reporting success."""
+        if hasattr(self, '_incremental_publisher'):
+            self._incremental_publisher.close()
+            return control
         import shutil
         from training.dvc_store import publish_checkpoints
 
@@ -3641,6 +3084,12 @@ def _merge_different_calibration_positives(
     return merged
 
 
+def _evaluation_negative_mask(pairs: np.ndarray, n_source: int, copy_ids: set[int]) -> np.ndarray:
+    """Calibration queries must be real SKU rows, with unaugmented endpoints."""
+    source_rows = (pairs[:, 0] >= 0) & (pairs[:, 0] < n_source)
+    return source_rows & ~np.isin(pairs, list(copy_ids)).any(axis=1)
+
+
 def train_one_config(
     cfg: dict,
     *,
@@ -3768,7 +3217,7 @@ def train_one_config(
     # train-side selection, but remove copy endpoints from evaluation pools.
     _masked_copy_ids = {
         int(row["copy_payload_idx"])
-        for row in (mask_audit or [])
+        for row in (mask_audit or []) + (hard_negative_mask_audit or [])
         if row.get("copy_payload_idx") is not None
     }
     eval_pos = (
@@ -3782,6 +3231,15 @@ def train_one_config(
             "positive copies from dev/holdout evaluation; training retains them",
             flush=True,
         )
+    if neg_pairs is not None and len(neg_pairs):
+        # Preserve _train_neg_source and its source labels above: synthetic
+        # copies train normally, but calibration needs a real source SKU.
+        eval_mask = _evaluation_negative_mask(neg_pairs, len(df), _masked_copy_ids)
+        excluded = int((~eval_mask).sum())
+        neg_pairs = neg_pairs[eval_mask]
+        _eval_neg_sources = _eval_neg_sources[eval_mask]
+        if excluded:
+            print(f"    [masking] excluded {excluded:,} synthetic negative views from evaluation; training retains them", flush=True)
     labeled_different_pos = _load_labeled_different_positive_pairs(
         eval_pos=eval_pos,
         row_bc=row_bc,
@@ -3882,39 +3340,6 @@ def train_one_config(
     # SAME fold provably shares no positive-pair chain with the query.
     _retrieval_row_component = component_index(pos, row_bc)
 
-    def _canonical_payload_rows() -> np.ndarray:
-        """Payload rows that are CANONICAL entries (the competitor universe).
-
-        EXACT, not a boundary heuristic: ``pipeline.build_training_data``
-        appends one canonical per GTIN in sorted order immediately after the
-        source rows, so the canonical block is ``[len(df), len(df) + n_gtins)``
-        and ``n_gtins`` is the canonical map's own size.  Masked-anchor copies
-        are appended AFTER that block and are therefore never candidates —
-        which the masked-copy boundary heuristic gets wrong when only
-        hard-negative augmentation (no positive augmentation) is enabled,
-        because then no copy appears as a positive's first endpoint at all.
-        The barcode set of the block is asserted to equal the canonical map,
-        so a payload-layout change fails loudly instead of silently shifting
-        the candidate universe.
-        """
-        from pipeline import load_canonical_map
-
-        canon_map = load_canonical_map()
-        end = len(df) + len(canon_map)
-        if end > len(payload):
-            raise ValueError(
-                f"canonical block [{len(df)}, {end}) exceeds the payload "
-                f"({len(payload)} entries) — the payload layout changed"
-            )
-        rows = np.arange(len(df), end, dtype=int)
-        if {str(b) for b in row_bc[rows]} != set(canon_map):
-            raise ValueError(
-                "canonical payload block does not carry the canonical map's "
-                "GTINs — refusing to build the competitor universe from rows "
-                "that are not canonicals"
-            )
-        return rows
-
     def _holdout_true_match_barcode_pairs() -> frozenset[tuple[str, str]]:
         """Known same-product relations — never a competing candidate.
 
@@ -3964,7 +3389,8 @@ def train_one_config(
                         add(left, right)
         return frozenset(pairs)
 
-    _retrieval_canonical_rows = _canonical_payload_rows()
+    from training.prepared_bundle import canonical_payload_rows
+    _retrieval_canonical_rows = canonical_payload_rows(len(df), payload, row_bc)
     _retrieval_true_match_pairs = _holdout_true_match_barcode_pairs()
     print(
         f"[retrieval-pool] canonical competitor universe={len(_retrieval_canonical_rows):,} "
@@ -4809,7 +4235,8 @@ def train_one_config(
                 groups, weight_decay=cfg["weight_decay"], lr=base_lr
             )
 
-            mnrl_cfg = load_config()["training"]
+            from core.common import training_cfg
+            mnrl_cfg = training_cfg().training
             loss_fn = _make_loss(
                 model,
                 loss,
@@ -4895,6 +4322,10 @@ def train_one_config(
                         wandb_ctx=wandb_ctx,
                     )
                 )
+            from core.training_profiler import TrainingProfiler
+            training_profile = TrainingProfiler(RESULTS / 'profiles' / run_tag / f'fold{fold_i}',str(next(model.parameters()).device.type))
+            if training_profile.enabled:
+                callbacks.append(training_profile.callback())
             trainer = ResumableSentenceTransformerTrainer(
                 model=model,
                 args=args_hf,
@@ -4938,7 +4369,10 @@ def train_one_config(
                     print(f"    [resume] fold {fold_i}: {resume_checkpoint}", flush=True)
                 else:
                     print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
-            trainer.train(resume_from_checkpoint=resume_checkpoint)
+            try:
+                trainer.train(resume_from_checkpoint=resume_checkpoint)
+            finally:
+                training_profile.close()
             progress_callback = next(
                 callback
                 for callback in callbacks

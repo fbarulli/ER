@@ -28,14 +28,18 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
         raise ValueError('split map must cover exactly the retained catalog')
     lookup = assignment.set_index('product_id').split.to_dict()
     records = []
+    from graph_tracks.report_attributes import FILENAME, identity_attributes, write_inputs
+    report_rows = []
     for _, row in frame.iterrows():
         identity = row_identity(row)
+        report_rows.append({'product_id': row.product_id, 'attributes': identity_attributes(identity)})
         records.append({'product_id': row.product_id, 'split': lookup[row.product_id],
                         'attributes': {key: sorted(getattr(identity, key)) for key in RELATIONS},
                         'numeric': {key: sorted(getattr(identity, key)) for key in NUMERIC}})
     output.mkdir(parents=True, exist_ok=False)
     listing_path = output / 'listings.json'
     write_json(listing_path, {'schema': 'er-graph-listings-v1', 'listings': records})
+    write_inputs(output, report_rows)
     records = load_records(listing_path)
     load_pairs(pairs, records)
     (output / 'pairs.csv').write_bytes(pairs.read_bytes())
@@ -45,6 +49,7 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
         'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config' / 'identity_dimensions.yaml'),
         'splits_sha256': file_hash(splits), 'pairs_sha256': file_hash(pairs),
         'listings_sha256': file_hash(listing_path), 'identity_extractor': 'core.product_identity.row_identity',
+        'report_attributes_sha256': file_hash(output / FILENAME),
         'relations': list(RELATIONS), 'numeric': list(NUMERIC),
         'feature_scope': 'initial subset, not all identity dimensions',
         'excluded_model_inputs': ['barcode', 'verified identity edges', 'raw text'],

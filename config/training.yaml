@@ -83,7 +83,7 @@ tracking:
 # local working tree or data snapshot.
 colab:
   repository: "https://github.com/fbarulli/ER.git"
-  branch: "training"
+  branch: "main"
   git_remote_name: "ER"
   remote_root: "/content/EuromonitoR"
   session: "my-highram-session"
@@ -113,6 +113,12 @@ colab:
   # build; PyPI publishes no wheel) and `mlflow` (11.6 MB + its closure).
   # Trim, pin, or drop entries here rather than editing src/cli/colab.py.
   runtime_packages:
+    # Graph-only additions use the same satisfied-package-aware installer.
+    graph:
+      - "dvc"
+      - "pydantic"
+      - "PyYAML"
+      - "matplotlib"
     prepared:
       - "sentence-transformers"
       - "datasets"
@@ -174,7 +180,8 @@ colab:
   # Log probes only read a small remote status/log delta.  A long timeout here
   # hides a dead kernel-control request as a silent training run.
   probe_timeout_seconds: 60
-  probe_retries: 1
+  # Recover transient control-channel losses without replacing a live VM.
+  probe_retries: 2
   probe_retry_backoff_seconds: 5
   artifact_repo_id: "fbarulli/e-r-training-artifacts"
   artifact_repo_private: true

@@ -105,6 +105,16 @@ def _spawn_keep_alive(endpoint: str, session_name: str, auth_provider=None, conf
     return process.pid
 
 
+def _token_config_path(upstream_path: str) -> str:
+    """Reuse existing upstream auth; retain project auth when already present."""
+    project_token = STATE_DIR / "token.json"
+    if project_token.is_file():
+        return str(project_token)
+    if Path(upstream_path).is_file():
+        return upstream_path
+    return str(project_token)
+
+
 def main() -> None:
     # The CLI's native dependencies are built for its own interpreter, so a
     # wrapper started under a different python hands over before importing.
@@ -115,11 +125,9 @@ def main() -> None:
     from colab_cli.history import HistoryLogger
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    # Upstream's OAuth token location is a module constant resolved at import
-    # time.  This workspace has a read-only home directory, so make the
-    # official flow persist and refresh its token beside the session metadata.
-    # This only redirects storage; credential acquisition remains upstream.
-    auth.TOKEN_CONFIG_PATH = str(STATE_DIR / "token.json")
+    # Preserve an existing login instead of redirecting the CLI to an empty
+    # project store. New logins still use the writable project state directory.
+    auth.TOKEN_CONFIG_PATH = _token_config_path(auth.TOKEN_CONFIG_PATH)
     common.state._history = HistoryLogger(str(HISTORY_DIR))
     # The upstream CLI currently creates ~/.config/colab-cli/colab.log even
     # with --logtostderr. The launcher owns the durable training log instead.

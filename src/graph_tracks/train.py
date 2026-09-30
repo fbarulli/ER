@@ -100,34 +100,14 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         np.random.seed(cfg.seed)
         random.seed(cfg.seed)
         torch.use_deterministic_algorithms(True)
-        input_manifest = None
-        if cfg.input_manifest:
-            input_path = resolve(cfg.input_manifest)
-            input_manifest = json.loads(input_path.read_text())
-            from core.identity_policy import POLICY_PATH
-            for key, path in (("listings_sha256", resolve(cfg.listings)),
-                              ("pairs_sha256", resolve(cfg.pairs)),
-                              ("identity_policy_sha256", POLICY_PATH),
-                              ("identity_dimensions_sha256", TRAIN_ROOT / "config" / "identity_dimensions.yaml")):
-                if input_manifest.get(key) != file_hash(path):
-                    raise ValueError(f"prepared input mismatch: {key}")
-        elif not cfg.allow_unmanifested_inputs:
-            raise ValueError("prepared input_manifest required; unmanifested inputs are synthetic-smoke only")
-        records = load_records(resolve(cfg.listings))
-        pairs = load_pairs(resolve(cfg.pairs), records)
+        from graph_tracks.preflight import load_inputs
+        input_manifest, records, pairs, vectors, text_metadata = load_inputs(cfg)
         vocabulary = fit_vocabulary(records)
         support_indices = [i for i, r in enumerate(records) if r["split"] == "train"]
         support_records = [records[i] for i in support_indices]
         batch = tensorize(records, vocabulary, cfg.device)
         support = tensorize(support_records, vocabulary, cfg.device)
-        text, text_metadata = None, None
-        if cfg.text_cache:
-            vectors, text_metadata = load_text_cache(resolve(cfg.text_cache), [r["product_id"] for r in records])
-            if input_manifest:
-                for key in ("catalog_sha256", "identity_policy_sha256", "identity_dimensions_sha256"):
-                    if text_metadata.get(key) != input_manifest.get(key):
-                        raise ValueError(f"text cache/prepared input mismatch: {key}")
-            text = torch.tensor(vectors, device=cfg.device)
+        text = None if vectors is None else torch.tensor(vectors, device=cfg.device)
         model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,
                              0 if text is None else text.shape[1], cfg.graph_enabled).to(cfg.device)
         scorer = PairScorer(text is not None).to(cfg.device)
@@ -203,6 +183,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     if target.resolve() != source:
                         shutil.copy2(source, target)
                     input_artifacts[key] = str(target.relative_to(output))
+            from graph_tracks.report_attributes import FILENAME
+            report_source = resolve(cfg.listings).parent / FILENAME
+            if report_source.is_file():
+                target = input_dir / name(cfg.track, FILENAME)
+                shutil.copy2(report_source, target)
+                input_artifacts['report_attributes'] = str(target.relative_to(output))
             manifest["input_artifacts"] = input_artifacts
         write_json(output / name(cfg.track, "run_manifest.json"), manifest)
         write_json(output / name(cfg.track, "graph_census.json"), census(records, vocabulary))
@@ -218,16 +204,18 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                       for i, r in enumerate(records)]).to_csv(output / name(cfg.track, "listing_usage.csv"), index=False)
         logger.info("[graph-train] track=%s listings=%d train_pairs=%d dev_pairs=%d device=%s",
                     cfg.track, len(records), len(train_pairs), len(dev_pairs), cfg.device)
-        with GraphWandb(cfg.wandb, cfg.track, run_tag, output) as wandb:
+        from core.training_profiler import TrainingProfiler
+        from model_tracks.incremental import ArtifactPublisher
+        with ArtifactPublisher(output) as publisher, GraphWandb(cfg.wandb, cfg.track, run_tag, output) as wandb, TrainingProfiler(output / name(cfg.track,'profile'),cfg.device) as profiler:
             wandb.log_config(manifest)
             for epoch in range(start_epoch + 1, cfg.epochs + 1):
                 started = time.monotonic()
                 model.train()
                 scorer.train()
                 optimizer.zero_grad(set_to_none=True)
-                states = model.context(support, support_text)
-                embeddings = model.encode(batch, states, text)
-                logits = scorer(embeddings, train_pairs, text)
+                states = profiler.call('graph/train_context',model.context,support,support_text)
+                embeddings = profiler.call('graph/train_encode',model.encode,batch,states,text)
+                logits = profiler.call('graph/pair_score',scorer,embeddings,train_pairs,text)
                 classification = F.binary_cross_entropy_with_logits(logits, train_labels)
                 a, b = train_pairs.unbind(1)
                 cos = (embeddings[a] * embeddings[b]).sum(-1)
@@ -236,7 +224,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 loss = classification + cfg.metric_weight * metric
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite loss")
-                loss.backward()
+                profiler.call('graph/backward',loss.backward)
                 gradient_norms = {name: float(parameter.grad.norm()) for name, parameter in model.named_parameters()
                                   if parameter.grad is not None}
                 if not all(np.isfinite(value) for value in gradient_norms.values()):
@@ -244,10 +232,10 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 with (output / name(cfg.track, "gradient_metrics.jsonl")).open("a") as handle:
                     handle.write(json.dumps({"epoch": epoch, "parameter_gradient_norms": gradient_norms}) + "\n")
                 torch.nn.utils.clip_grad_norm_(list(model.parameters()) + list(scorer.parameters()), cfg.max_grad_norm)
-                optimizer.step()
+                profiler.call('graph/optimizer',optimizer.step)
                 model.eval()
                 scorer.eval()
-                with torch.no_grad():
+                with torch.no_grad(), profiler.section('graph/dev_evaluation'):
                     embeddings = model.encode(batch, model.context(support, support_text), text)
                     dev_scores = scorer(embeddings, dev_pairs, text).sigmoid().cpu().numpy()
                 metrics = {"epoch": epoch, "train_loss": loss.item(),
@@ -272,7 +260,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                            "torch_rng": torch.get_rng_state(), "python_rng": random.getstate(),
                            "numpy_rng": np.random.get_state(),
                            "cuda_rng": torch.cuda.get_rng_state_all() if cfg.device == "cuda" else None}
-                torch.save(payload, checkpoint)
+                profiler.call('graph/checkpoint_write',torch.save,payload,checkpoint)
                 write_json(checkpoint_dir / name(cfg.track, "trainer_state.json"), {
                     "global_step": epoch, "best_metric": best_metric,
                     "best_model_checkpoint": str(best_path.parent)})
@@ -290,6 +278,10 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     best_metric=best_metric, **{k: v for k, v in metrics.items() if k != "epoch"})
                 logger.info("[graph-train] epoch=%d loss=%.5f dev_pr_auc=%.5f dev_p_at_r95=%.5f best=%s",
                             epoch, loss.item(), metrics["dev_pr_auc"], metrics["dev_p_at_r95"], improved)
+                profiler.step()
+                publisher.submit(f'checkpoint-{epoch}', [checkpoint_dir,
+                    output / name(cfg.track, 'epoch_metrics.jsonl'),
+                    output / name(cfg.track, 'best_checkpoint.json')])
             completion = None
             if cfg.postprocess:
                 from graph_tracks.report import complete
@@ -297,6 +289,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 completion_root.mkdir(parents=True)
                 completion = complete(best_path, resolve(cfg.listings), resolve(cfg.pairs), completion_root, cfg,
                     text_cache=resolve(cfg.text_cache) if cfg.text_cache else None)
+                publisher.submit('postprocess', [completion_root])
                 for row in completion["summary"]:
                     wandb.set_summary({f"{row['split']}/{key}": value for key, value in row.items()
                                        if isinstance(value, (int, float, bool))})

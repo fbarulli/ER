@@ -135,19 +135,8 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     pd.DataFrame(summary).to_csv(report_dir / name(track, 'model_evaluation_summary.csv'), index=False)
     scored = pd.DataFrame(scored_rows)
     scored.to_csv(report_dir / name(track, 'scored_pairs.csv'), index=False)
-    # Attribute availability slices are diagnostic; no automatic identity vetoes.
-    slices = []
-    for split in scores:
-        indices, labels = pairs[split]
-        for relation in ('flavor', 'sweetener', 'package_type'):
-            observed = np.asarray([bool(records[a]['attributes'].get(relation)) and
-                                   bool(records[b]['attributes'].get(relation)) for a, b in indices])
-            for present in (True, False):
-                mask = observed == present
-                if mask.any():
-                    slices.append({'split': split, 'slice': f'{relation}_both_observed={present}',
-                        **pair_metrics(labels[mask], scores[split][mask], threshold, cfg.retrieval_ks)})
-    pd.DataFrame(slices).to_csv(report_dir / name(track, 'slice_metrics.csv'), index=False)
+    from graph_tracks.report_attributes import write_reports as write_attribute_reports
+    write_attribute_reports(listings, records, pairs, scores, report_dir, track)
     # Pass immutable provenance separately rather than adding undeclared config fields.
     from types import SimpleNamespace
     retrieval_cfg = SimpleNamespace(**cfg.model_dump(), _checkpoint=str(checkpoint),

@@ -8,7 +8,7 @@ TRACKS = {'gnn_only', 'hybrid'}
 
 
 def name(track: str, stem: str) -> str:
-    if track not in TRACKS:
+    if track not in TRACKS | {'text'}:
         raise ValueError(f'unknown graph track: {track}')
     return f'{track}__{stem}'
 

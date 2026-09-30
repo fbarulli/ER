@@ -1786,13 +1786,14 @@ class RuntimePackagesSpec(BaseModel):
 
     prepared: list[str] = Field(min_length=1)
     full: list[str] = Field(min_length=1)
+    graph: list[str] = Field(default_factory=list)
     # Repository-relative wheels the launcher ships rather than letting the VM
     # build them from an sdist.  A wheel is used only when its ABI/platform tag
     # matches the VM's interpreter; otherwise the launcher falls back to the
     # index and records why.
     prebuilt_wheels: list[str]
 
-    @field_validator("prepared", "full", "prebuilt_wheels")
+    @field_validator("prepared", "full", "graph", "prebuilt_wheels")
     @classmethod
     def _clean_entries(cls, values: list[str]) -> list[str]:
         if any(not value.strip() for value in values):

@@ -37,6 +37,7 @@ class GraphConfig(BaseModel):
     pairs: str
     output_dir: str
     text_cache: str | None = None
+    text_checkpoint_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
     input_manifest: str | None = None
     allow_unmanifested_inputs: bool = False
     wandb: WandbSpec = Field(default_factory=WandbSpec)
@@ -66,6 +67,8 @@ class GraphConfig(BaseModel):
     def check_track(self):
         if (self.track == "hybrid") != bool(self.text_cache):
             raise ValueError("hybrid requires text_cache; gnn_only forbids it")
+        if self.track == 'gnn_only' and self.text_checkpoint_sha256:
+            raise ValueError('gnn_only forbids a text checkpoint reference')
         if any(k < 1 for k in self.retrieval_ks) or len(set(self.retrieval_ks)) != len(self.retrieval_ks):
             raise ValueError("retrieval_ks must contain unique positive integers")
         if not all((self.listings, self.pairs, self.output_dir)):

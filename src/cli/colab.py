@@ -532,7 +532,7 @@ def run_colab_exec_stream(
     if _live_log and log_name:
         print(f"\n===== {log_name} =====", flush=True)
 
-    def stream_output(pipe, prefix, captured):
+    def stream_output(pipe, prefix, captured, remote_output=None):
         pending = ""
 
         def emit(text: str) -> None:
@@ -548,6 +548,8 @@ def run_colab_exec_stream(
                 end = min(newline_positions)
                 unit = pending[:end].rstrip()
                 captured.append(pending[: end + 1])
+                if remote_output is not None:
+                    remote_output.append(pending[: end + 1])
                 pending = pending[end + 1:]
                 if unit:
                     context = _LiveLogSuppressed() if exclude_from_live_log else nullcontext()
@@ -563,6 +565,8 @@ def run_colab_exec_stream(
             if training_output:
                 _write_training_log(pending)
             captured.append(pending)
+            if remote_output is not None:
+                remote_output.append(pending)
             context = _LiveLogSuppressed() if exclude_from_live_log else nullcontext()
             with context:
                 print(f"{prefix} {pending.rstrip()}", flush=True)
@@ -582,6 +586,7 @@ def run_colab_exec_stream(
             bufsize=1,
         )
         captured: list[str] = []
+        remote_output: list[str] = []
         heartbeat_stop = threading.Event()
 
         def emit_heartbeat() -> None:
@@ -595,7 +600,7 @@ def run_colab_exec_stream(
 
         heartbeat = threading.Thread(target=emit_heartbeat, daemon=True)
         heartbeat.start()
-        out_thread = threading.Thread(target=stream_output, args=(process.stdout, "[out]", captured))
+        out_thread = threading.Thread(target=stream_output, args=(process.stdout, "[out]", captured, remote_output))
         err_thread = threading.Thread(target=stream_output, args=(process.stderr, "[err]", captured))
         out_thread.start()
         err_thread.start()
@@ -621,9 +626,14 @@ def run_colab_exec_stream(
         err_thread.join()
         heartbeat_stop.set()
         heartbeat.join(timeout=1)
-        if process.returncode == 0:
-            return
         output = "".join(captured)
+        # Some CLI versions report notebook execution errors with exit code 0.
+        # Preserve the fail-fast contract before provisioning the next stage.
+        # CLI destructor diagnostics are local stderr, not notebook failures.
+        clean_output = re.sub(r'\x1b\[[0-9;]*m', '', ''.join(remote_output))
+        remote_traceback = 'Traceback (most recent call last)' in clean_output
+        if process.returncode == 0 and not remote_traceback:
+            return
         transient = "connection was lost" in output.lower()
         if retry_safe and transient and attempt < attempts:
             delay = _PROBE_RETRY_BACKOFF_SECONDS * attempt
@@ -826,6 +836,8 @@ print(json.dumps(payload), flush=True)
             offset = int(payload["offset"])
             if payload["chunk"]:
                 for line in str(payload["chunk"]).splitlines():
+                    if stage == 'all_tracks' and line.startswith('[track/'):
+                        _write_training_log(line + '\n')
                     print(f"[{stage}] {line}", flush=True)
             if payload["done"]:
                 returncode = int(payload["returncode"])
@@ -2341,10 +2353,12 @@ raise SystemExit(subprocess.call(command))
     return f"[sys.executable, '-c', {program!r}]"
 
 
-def install_deps(*, minimal_runtime: bool = False) -> None:
+def install_deps(*, minimal_runtime: bool = False, graph_runtime: bool = False) -> None:
     packages = list(
         _RUNTIME_PACKAGES.prepared if minimal_runtime else _RUNTIME_PACKAGES.full
     )
+    if graph_runtime:
+        packages = list(dict.fromkeys([*packages, *_RUNTIME_PACKAGES.graph]))
     print(
         "[deps] installing "
         + ("prepared training runtime" if minimal_runtime else "full lane dependencies")
@@ -2389,13 +2403,16 @@ os.environ["PYTHONPATH"] = "{REMOTE_ROOT}/src" + os.pathsep + os.environ.get("PY
 
 def _env_value(name: str) -> str | None:
     """Read a simple KEY=VALUE entry without printing or cloning secrets."""
-    env_path = TRAIN_ROOT / ".env"
-    if not env_path.exists():
-        return None
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        key, separator, value = line.partition("=")
-        if separator and key.strip() == name:
-            return value.strip().strip('"').strip("'") or None
+    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env"):
+        if not env_path.is_file():
+            continue
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == name:
+                value = value.strip().strip('"').strip("'")
+                if value:
+                    return value
+    return os.environ.get(name) or None
     return None
 
 
@@ -2422,11 +2439,11 @@ def _optuna_env_script() -> str:
 
 
 def _remote_auth_env_script(
-    *, include_optuna: bool = False, include_wandb: bool = True,
+    *, include_optuna: bool = False, include_wandb: bool = True, force_dvc: bool = False,
 ) -> str:
     """Credential exports used by remote subprocess launch cells only."""
     wandb = _wandb_env_script() if include_wandb else ""
-    if not _DVC_ENABLED:
+    if not _DVC_ENABLED and not force_dvc:
         return wandb + (_optuna_env_script() if include_optuna else "")
     key = _env_value("DVC_API_KEY")
     if key:
@@ -4241,8 +4258,10 @@ def main() -> None:
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", required=True,
-                    choices=["train", "dual-train", "hpo", "sims", "mixed", "smoke", "stop"],
+                    choices=["train", "tracks", "dual-train", "hpo", "sims", "mixed", "smoke", "stop"],
                     help="what to run on the VM")
+    ap.add_argument('--tracks-config', type=Path, default=None,
+                    help='prepared all-track suite; uses the existing Colab lifecycle')
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
                     f"{_TRAIN_FRAC_DEFAULT:g})")
@@ -4342,6 +4361,29 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    suite_archive = None
+    suite_run_tag = None
+    if args.what == 'tracks' or args.tracks_config is not None:
+        if args.what not in {'tracks','train','smoke'}:
+            raise ValueError('--tracks-config applies to train/tracks/smoke only')
+        if args.resume_run or args.refresh_data or args.train_only:
+            raise ValueError('all-track suite requires prepared inputs and full postprocessing; resume is not wired yet')
+        from model_tracks.config import load_config as load_suite
+        from model_tracks.preflight import preflight as suite_preflight
+        from model_tracks.package import package as suite_package
+        suite_config = args.tracks_config or TRAIN_ROOT/'config/model_tracks.yaml'
+        suite = load_suite(suite_config)
+        if args.preflight_only:
+            print(json.dumps(suite_preflight(suite_config),indent=2))
+            return
+        if suite.device != ('cpu' if args.gpu.upper() == 'CPU' else 'cuda'):
+            raise ValueError('suite device and --gpu must agree')
+        if suite.dvc_enabled and not _env_value('DVC_API_KEY'):
+            raise RuntimeError('DVC_API_KEY is required before launching a publishing suite')
+        suite_run_tag = _lane_run_stamp()
+        suite_archive = suite_package(suite_config, RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.zip')
+        args.what = 'tracks'
+
     GPU = args.gpu
     if GPU.upper() != "CPU" and not args.allow_gpu:
         raise ValueError("GPU launch requires --allow-gpu")
@@ -4427,13 +4469,13 @@ def main() -> None:
     local_hpo_run: str | None = None
 
     try:
-        prepared_train_runtime = args.what in {"train", "dual-train"}
+        prepared_train_runtime = args.what in {"train", "dual-train", "tracks"}
         # The local bundle build is pure local CPU work over immutable local
         # inputs, so start it before the VM is even provisioned: it then runs
         # under the remote checkout, install, model check, and profile instead
         # of after them.  run_train joins this exact build (or rebuilds when
         # the request differs).
-        bundle_request = _lane_bundle_request(args)
+        bundle_request = None if args.what == 'tracks' else _lane_bundle_request(args)
         if bundle_request is not None:
             start_local_bundle_prewarm(**bundle_request)
         # The validation CSVs are read here and pushed to the VM, so they do
@@ -4455,7 +4497,10 @@ def main() -> None:
             # indefinitely.
             stop_keep_alive_daemon(reason=f"GPU lane ({GPU}) must never be retained")
         prepare_remote_layout(minimal_runtime=prepared_train_runtime)
-        install_deps(minimal_runtime=prepared_train_runtime)
+        if args.what == 'tracks':
+            install_deps(minimal_runtime=True, graph_runtime=True)
+        else:
+            install_deps(minimal_runtime=prepared_train_runtime)
         if args.what in {"train", "dual-train", "smoke", "mixed"}:
             required_models = [
                 args.model or str(training_cfg().training.base_model)
@@ -4479,7 +4524,10 @@ def main() -> None:
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
         # (run_train was unconditional) — hours of unintended GPU quota
         # for a lane that only needs the configured zero-shot scoring.
-        if args.what == "sims":
+        if args.what == 'tracks':
+            from model_tracks.colab import run as run_suite
+            run_suite(suite_archive, suite_run_tag)
+        elif args.what == "sims":
             run_sims()
         elif args.what == "mixed":
             local_mixed_run = run_mixed(

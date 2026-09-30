@@ -58,7 +58,7 @@ def snapshot(source: Path, track: str, *, remote=None, push=False, generation="f
     payload = project / name(track, 'payload')
     payload.mkdir()
     for path in source.iterdir():
-        if '__dvc-' in path.name or path.name == 'wandb' or path.name.endswith('__dvc_events.jsonl'):
+        if '__dvc-' in path.name or path.name in {'wandb', '_artifact_publications'} or path.name.endswith('__dvc_events.jsonl'):
             continue
         target = payload / path.name
         if path.is_dir():

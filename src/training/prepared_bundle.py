@@ -71,6 +71,33 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+def prepared_holdout(data: dict, split_cfg: dict, *, seed: int):
+    """Reuse a frozen parent split for sampled smokes; otherwise derive SSOT."""
+    from training.folds import derive_holdout, normalize_gtin
+    frozen = data.get('holdout_populations')
+    if frozen is None:
+        return derive_holdout(data['pos'], data['row_bc'], split_cfg, seed=seed)
+    if set(frozen) != {'train','dev','test'}:
+        raise ValueError('frozen holdout needs train/dev/test')
+    populations = tuple(set(frozen[split]) for split in ('train','dev','test'))
+    roles = {}
+    for role, values in enumerate(populations):
+        for value in values:
+            key = normalize_gtin(value)
+            if key in roles and roles[key]!=role:
+                raise ValueError('frozen holdout contains overlapping entities')
+            roles[key] = role
+    for value in data['row_bc']:
+        key = normalize_gtin(value)
+        if key and key not in roles:
+            raise ValueError('frozen holdout misses a payload entity')
+    for a,b in data['pos']:
+        ka,kb = normalize_gtin(data['row_bc'][a]),normalize_gtin(data['row_bc'][b])
+        if roles.get(ka)!=roles.get(kb):
+            raise ValueError('positive pair crosses frozen holdout')
+    return populations
+
+
 def _validate_augmented_features(payload, features, audit) -> None:
     if len(features) != len(payload):
         raise ValueError("prepared bundle feature/payload row counts disagree")
@@ -116,6 +143,39 @@ def _validate_counterfactual_audits(payload, audit) -> None:
         )
 
 
+def canonical_payload_rows(n_source: int, payload: list[str], row_bc: np.ndarray) -> np.ndarray:
+    """Validate the native source/canonical/augmentation layout for retrieval.
+
+    Preparation appends the complete canonical map in sorted order after
+    source rows. Augmented copies follow that block and are never candidates.
+    """
+    from pipeline import load_canonical_map
+    canon_map = load_canonical_map()
+    end = n_source + len(canon_map)
+    if end > len(payload):
+        raise ValueError(
+            f"canonical block [{n_source}, {end}) exceeds the payload "
+            f"({len(payload)} entries) — the payload layout changed"
+        )
+    rows = np.arange(n_source, end, dtype=int)
+    if {str(b) for b in row_bc[rows]} != set(canon_map):
+        raise ValueError(
+            "canonical payload block does not carry the canonical map's "
+            "GTINs — refusing to build the competitor universe from rows "
+            "that are not canonicals"
+        )
+    return rows
+
+
+def _portable_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Freeze values without pandas-version-specific string dtype metadata."""
+    result = df.astype(object)
+    result.columns = pd.Index(df.columns.to_numpy(dtype=object), dtype=object)
+    if isinstance(df.index.dtype, pd.StringDtype):
+        result.index = pd.Index(df.index.to_numpy(dtype=object), dtype=object)
+    return result
+
+
 def write_prepared_bundle(
     path: Path,
     *,
@@ -138,6 +198,7 @@ def write_prepared_bundle(
     gate_results_csv: bytes,
     payload_variant: str,
     masking_profile: str,
+    holdout_populations: dict[str, list[str]] | None = None,
 ) -> PreparedBundleManifest:
     """Write one compressed, self-contained, locally generated input bundle."""
 
@@ -160,8 +221,12 @@ def write_prepared_bundle(
     effective_ratio = len(pos) / max(effective_views, 1)
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    portable_df = _portable_dataframe(df)
     payload_data = {
-        "df": df,
+        # Colab and preparation hosts can use different pandas versions.
+        # Plain object columns avoid pickling version-specific StringDtype
+        # constructors while preserving the frozen values and row order.
+        "df": portable_df,
         "payload": payload,
         "structured_features": structured_features,
         "row_bc": row_bc,
@@ -181,6 +246,8 @@ def write_prepared_bundle(
         "payload_variant": payload_variant,
         "masking_profile": masking_profile,
     }
+    if holdout_populations is not None:
+        payload_data['holdout_populations'] = holdout_populations
     with gzip.open(path, "wb", compresslevel=6) as handle:
         pickle.dump(payload_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
     manifest = PreparedBundleManifest(

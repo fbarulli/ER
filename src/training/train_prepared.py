@@ -28,9 +28,8 @@ from core.common import (
 )
 from core.mlflow_ctx import MlflowCtx
 from core.wandb_ctx import WandbCtx
-from training.folds import derive_holdout
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
-from training.prepared_bundle import load_prepared_bundle
+from training.prepared_bundle import load_prepared_bundle, prepared_holdout
 
 
 def _parse_args() -> argparse.Namespace:
@@ -104,9 +103,13 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         "gate_results": "gate_results_csv",
     }
     for file_key, bundle_key in frozen_inputs.items():
-        destination = RESULTS / F[file_key]
+        # Each prepared worker owns its frozen-input copy. F is a process-local
+        # mapping, so downstream split/calibration readers use this copy without
+        # modifying checkout inputs shared with graph/hybrid workers.
+        destination = RESULTS / "_prepared_inputs" / Path(F[file_key]).name
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(bundle[bundle_key])
+        F[file_key] = destination
         print(
             f"[prepared-bundle] materialized {file_key}={destination} "
             f"bytes={len(bundle[bundle_key]):,}",
@@ -115,7 +118,7 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
 
     if args.split != "holdout":
         raise ValueError("prepared GPU training currently supports the SSOT holdout split only")
-    train_bc, dev_bc, test_bc = derive_holdout(pos, row_bc, cfg["split"], seed=SEED)
+    train_bc, dev_bc, test_bc = prepared_holdout(bundle, cfg["split"], seed=SEED)
     print(
         f"[prepared-bundle] loaded {args.bundle} "
         f"sha256={manifest.sha256} profile={manifest.masking_profile} "
@@ -222,7 +225,8 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
     print(json.dumps({"bundle": manifest.model_dump(), "metrics": str(out)}, indent=2))
     if len(ok) != len(rows_out):
         raise SystemExit(
-            f"prepared training failed: successful_folds={len(ok)}/{len(rows_out)}"
+            f"prepared training failed: successful_folds={len(ok)}/{len(rows_out)}\n"
+            + '\n'.join(str(row.get('traceback', row)) for row in rows_out if row.get('status') != 'ok')
         )
 
 

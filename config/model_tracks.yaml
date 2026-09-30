@@ -1,0 +1,15 @@
+# One Colab runtime, one control channel, all three prepared tracks.
+setup_dir: data/track_setup
+text_bundle: data/track_setup/text_prepared.pkl.gz
+text_model: minilm_l6
+epochs: 10
+device: cuda
+schedule: parallel
+max_parallel: 3
+gpu_parallel_backend: mps
+# Populate with measured per-worker peaks before enabling GPU overlap.
+memory_reservations_gb: {}
+gpu_headroom_gb: 2.0
+report_test: false
+publish_git: true
+profiling: true

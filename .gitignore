@@ -39,6 +39,8 @@ dataset_model_input.csv
 artifacts/models/*/
 !artifacts/models/all-MiniLM-L6-v2/
 !artifacts/models/all-MiniLM-L6-v2/**
+!artifacts/models/tracks/
+!artifacts/models/tracks/**
 training.log
 training_results/
 # Colab CLI session state and local runtime logs/cache.
@@ -96,6 +98,10 @@ AGENTS.local.md
 
 # graphify knowledge-graph artifacts (generated; rebuild with: graphify . )
 graphify-out/
+
+# Locally prepared model-track inputs and transferable worker packages.
+data/track_setup/
+data/graph_worker/
 
 # Local discovery dashboard observations and canvas edits
 dashboard/observations/

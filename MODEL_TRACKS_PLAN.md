@@ -1,7 +1,22 @@
 # ER model development: three tracks
 
-Date: 2026-09-30. Status: standalone GNN-only/hybrid lifecycle implemented;
-full-data comparison and Colab integration remain pending. See
+Date: 2026-09-30. Status: three-track Colab dispatch, prepared inputs,
+post-training reports, artifact collection and profiling are wired;
+100-listing CPU Colab verification passed for all three tracks, including
+postprocessing, existing eight-class attribute reports and profiler traces
+(run `0930T214957725080Z`, 231 seconds of parallel worker execution).
+The downloaded ZIP passed inventory and SHA verification. Smoke publication
+was disabled. Full runs publish the complete ZIP through verified DVC storage
+and commit selected inference models plus DVC references for repo clones;
+missing DVC credentials fail before launch. Losses and report persistence now
+live in shared `training/losses.py` and `training/report_rows.py` modules.
+Full suites also upload immutable checkpoint generations during training and
+completed postprocessing artifacts per track through isolated background
+publishers. Each generation retains durable DVC references; upload failures
+propagate before successful completion. The final ZIP remains a consolidated
+publication, rather than the first persistence point.
+Full-data comparison and
+GPU performance measurements remain pending. See
 [src/graph_tracks/README.md](src/graph_tracks/README.md) for current runnable
 commands, verified tests, W&B/DVC behavior and architecture limits. The initial
 model is full-batch typed two-hop aggregation, not sampled GraphSAGE.
@@ -254,8 +269,10 @@ critical-slice, or runtime regressions. No track is presumed to win.
 
 ## Colab training integration
 
-Code review: 2026-09-30. These findings describe the local checkout; no Colab
-runtime was launched or inspected as part of this planning review.
+Initial code review: 2026-09-30. The findings below record the original planning
+review. The shared `--what tracks` route now uses the existing session and
+dependency lifecycle, a pinned source overlay, isolated workers and a
+consolidated verified result archive. CPU Colab verification is in progress.
 
 ### Current lifecycle and reusable components
 
@@ -315,12 +332,12 @@ pinned remote revision, and artifact manifests must identify that revision.
 | C0 | Same graph plus checkpoint-bound frozen A0 text-vector cache | Graph layer and fusion training, hybrid inference/evaluation | Graph/fusion checkpoint, exact text-checkpoint reference, cache hashes, vectors/indexes, reports |
 | C1 | Graph plus text inputs; immutable feature/split manifests | Joint fine-tuning only after C0 is validated | Both encoder states, regenerated vectors/indexes, complete provenance |
 
-Start with one trainer per VM and run tracks sequentially against the frozen
-data. Existing `dual-train` means two text-training workers; it is not GNN/text
-fusion. Increase concurrency only after measuring host RAM and GPU memory.
-Select the GPU from a real smoke profile rather than assuming T4 or A100 is
-needed. Text-vector caching for C0 can happen locally or as a separate encoding
-job; bind the cache to the exact A0 checkpoint in either case.
+Owner direction: all three trainers run in parallel in one Colab VM, with one
+control channel and isolated subprocess outputs. CUDA uses NVIDIA MPS to allow
+overlapping GPU work; the supervisor rejects an unavailable MPS backend.
+Existing `dual-train` remains a separate text-only route. Measure combined host
+RAM and GPU memory with per-worker profiler traces before throughput tuning.
+C0 uses the locally prepared cache bound to the exact frozen A0 checkpoint.
 
 ### Colab readiness checks
 

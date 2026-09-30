@@ -28,6 +28,56 @@ unverified; no silent CPU fallback occurs when CUDA is requested.
 
 ## Shared preparation
 
+### Real ER catalog setup (no training)
+
+The setup command builds listing assignments from the same
+`training.folds.derive_holdout` entry point used by text training. It records
+the exact local text checkpoint, source hashes, exclusions and graph census.
+It creates independent GNN/hybrid configs with test reporting disabled.
+
+```bash
+PYTHONPATH=src .venv/bin/python -m graph_tracks.setup --output data/track_setup
+PYTHONPATH=src .venv/bin/python -m graph_tracks.text_cache \
+  --catalog data/track_setup/eligible_catalog.csv \
+  --checkpoint artifacts/models/all-MiniLM-L6-v2 \
+  --output data/track_setup/shared_minilm__embeddings.npz
+PYTHONPATH=src .venv/bin/python -m graph_tracks.preflight --config data/track_setup/gnn_only.yaml
+PYTHONPATH=src .venv/bin/python -m graph_tracks.preflight --config data/track_setup/hybrid.yaml
+```
+
+Entity labels select the lexically first listing per normalized entity.
+Additional listings sharing a checksum-valid, unheld barcode form positive chains. Only labeled same-split
+negatives are retained; cross-split negatives and labels without listing
+endpoints are counted in `setup_manifest.json`. These pair semantics must be
+used by a future text comparison too; the existing entity-level text report is
+not automatically comparable. Unassigned/empty-barcode listings are excluded
+and counted rather than assigned an invented split. The recorded local text
+checkpoint is a baseline reference; this does not establish its training history.
+
+Portable worker packages contain prepared inputs, optional frozen text cache,
+worker config, graph source overlay and a SHA256 inventory. They contain no
+credentials and do not start a worker or provision a VM:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m graph_tracks.worker_package \
+  --config data/track_setup/gnn_only.yaml --output results/gnn_worker_setup.zip
+PYTHONPATH=src .venv/bin/python -m graph_tracks.worker_package \
+  --config data/track_setup/hybrid.yaml --output results/hybrid_worker_setup.zip
+```
+
+Extract into the recorded ER checkout revision and follow the package README.
+The target runtime must pass its own preflight, including CUDA availability,
+before training. These packages support manual workers. The consolidated
+three-track Colab route uses the existing entry point:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m cli.colab --what tracks \
+  --tracks-config config/model_tracks.yaml
+```
+
+Set `profiling: true` in the suite YAML for isolated worker traces and operator
+summaries, included in the downloaded result archive.
+
 Use the eligible canonical catalog after the shared identity corrections and
 exclusions. Preparation rejects quarantined GTINs and scoped held listings. It does not correct a raw
 catalog or invent identities/splits. The listing split CSV must contain exactly
