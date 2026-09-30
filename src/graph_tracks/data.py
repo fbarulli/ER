@@ -37,8 +37,9 @@ def load_records(path: Path, *, require_training: bool = True) -> list[dict]:
         if not isinstance(record["product_id"], str) or not record["product_id"]:
             raise ValueError("product_id must be a nonempty string")
         ids.append(record["product_id"])
-        if record["split"] not in SPLITS:
-            raise ValueError("split must be train/dev/test")
+        allowed_splits = SPLITS if require_training else SPLITS | {"inference"}
+        if record["split"] not in allowed_splits:
+            raise ValueError("split must be train/dev/test (inference is allowed for encoding only)")
         if set(record["attributes"]) - set(RELATIONS):
             raise ValueError("unsupported attribute relation")
         if set(record["numeric"]) - set(NUMERIC):

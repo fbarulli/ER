@@ -1,6 +1,10 @@
 # ER model development: three tracks
 
-Date: 2026-09-30. Status: development plan; new tracks are not implemented.
+Date: 2026-09-30. Status: standalone GNN-only/hybrid lifecycle implemented;
+full-data comparison and Colab integration remain pending. See
+[src/graph_tracks/README.md](src/graph_tracks/README.md) for current runnable
+commands, verified tests, W&B/DVC behavior and architecture limits. The initial
+model is full-batch typed two-hop aggregation, not sampled GraphSAGE.
 
 Owner direction: develop the current model, GNN-only, and GNN plus the current
 model as separate, comparable tracks. This supersedes the earlier TODO decision

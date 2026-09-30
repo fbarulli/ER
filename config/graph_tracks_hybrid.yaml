@@ -1,9 +1,9 @@
-# Frozen MiniLM features plus trained attribute graph and pair fusion.
+# Standalone graph worker: W&B offline + local DVC by default; no MLflow.
 track: hybrid
 listings: data/graph_tracks/listings.json
 pairs: data/graph_tracks/pairs.csv
-text_cache: data/graph_tracks/minilm_embeddings.npz
-output_dir: results/graph_tracks/hybrid
+text_cache: data/graph_tracks/shared_minilm__embeddings.npz
+output_dir: results/graph_tracks
 hidden_dim: 64
 output_dim: 128
 epochs: 10
@@ -15,3 +15,23 @@ graph_enabled: true
 metric_weight: 1.0
 negative_margin: 0.3
 max_grad_norm: 1.0
+input_manifest: data/graph_tracks/input_manifest.json
+wandb:
+  project: e-r
+  mode: offline
+dvc:
+  enabled: true
+  remote: null
+  push: false
+postprocess: true
+report_test: true
+build_index: true
+inference_batch_size: 1024
+retrieval_ks:
+- 1
+- 5
+- 10
+- 50
+hnsw_m: 16
+hnsw_ef_construction: 200
+hnsw_ef_search: 100

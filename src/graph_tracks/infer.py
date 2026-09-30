@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from graph_tracks.artifacts import name, checkpoint_track
 from graph_tracks.data import file_hash, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
 from graph_tracks.train import write_json
@@ -19,12 +20,12 @@ from graph_tracks.train import write_json
 class GraphEncoder:
     def __init__(self, checkpoint: Path, device='cpu'):
         self.checkpoint = checkpoint
+        track = checkpoint_track(checkpoint)
         payload = torch.load(checkpoint, map_location=device, weights_only=False)
         if payload.get('schema') != 'er-graph-checkpoint-v1':
             raise ValueError('unsupported checkpoint schema')
-        marker = checkpoint.parent / 'checkpoint_manifest.json'
-        if not marker.is_file() or json.loads(marker.read_text())['files']['graph_model.pt'] != file_hash(checkpoint):
-            raise ValueError('checkpoint missing completion marker or hash mismatch')
+        if payload['manifest']['track'] != track:
+            raise ValueError('checkpoint filename/payload track mismatch')
         self.manifest, self.vocabulary = payload['manifest'], payload['vocabulary']
         self.device = device
         cfg = self.manifest['config']
@@ -73,12 +74,13 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         raise ValueError('hybrid requires text cache; gnn_only forbids it')
     if text_cache:
         text, metadata = load_text_cache(text_cache, ids)
-        for key in ('checkpoint_sha256', 'composition'):
-            if metadata[key] != encoder.manifest['text_metadata'][key]:
+        for key in ('checkpoint_sha256', 'composition', 'identity_policy_sha256', 'identity_dimensions_sha256'):
+            if metadata.get(key) != encoder.manifest['text_metadata'].get(key):
                 raise ValueError(f'inference text cache mismatch: {key}')
     vectors = encoder.encode(records, text, batch_size)
+    track = encoder.manifest['track']
     output.mkdir(parents=True)
-    np.savez_compressed(output / 'vectors.npz', ids=np.asarray(ids), embeddings=vectors)
+    np.savez_compressed(output / name(track, 'vectors.npz'), ids=np.asarray(ids), embeddings=vectors)
     if pairs:
         frame = pd.read_csv(pairs, dtype=str, keep_default_na=False)
         if set(frame.columns) != {'product_id1', 'product_id2'}:
@@ -93,19 +95,22 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
                 torch.as_tensor(indices, device=device),
                 None if text is None else torch.as_tensor(text, device=device)).sigmoid().cpu().numpy()
         frame['score'] = scores
-        frame.to_csv(output / 'pair_scores.csv', index=False)
+        frame.to_csv(output / name(track, 'pair_scores.csv'), index=False)
     if build_index:
         from training.hnsw_index import PersistentHnswIndex
-        index = PersistentHnswIndex(output / 'index', ef_construction=200, M=16, ef_search=100)
+        index = PersistentHnswIndex(output / name(track, 'index'), ef_construction=encoder.manifest['config'].get('hnsw_ef_construction', 200),
+                                    M=encoder.manifest['config'].get('hnsw_m', 16),
+                                    ef_search=encoder.manifest['config'].get('hnsw_ef_search', 100))
         index.build(vectors, ids, checkpoint=checkpoint, model_name=encoder.manifest['track'],
                     preprocessing_fingerprint=file_hash(listings))
-    write_json(output / 'export_manifest.json', {
+    write_json(output / name(track, 'export_manifest.json'), {
         'schema': 'er-graph-export-v1', 'checkpoint_sha256': file_hash(checkpoint),
-        'listings_sha256': file_hash(listings), 'vectors_sha256': file_hash(output / 'vectors.npz'),
+        'listings_sha256': file_hash(listings), 'vectors_sha256': file_hash(output / name(track, 'vectors.npz')),
         'text_cache_sha256': file_hash(text_cache) if text_cache else None,
         'track': encoder.manifest['track'], 'graph_context': 'training-listings-only',
         'vector_kind': 'graph-informed', 'ann_reproduces_pair_scorer': False,
-        'count': len(ids), 'dimension': vectors.shape[1], 'index_built': build_index})
+        'count': len(ids), 'dimension': vectors.shape[1], 'index_built': build_index,
+        'id_kind': 'listing_product_id'})
     return output
 
 

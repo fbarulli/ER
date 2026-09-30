@@ -38,7 +38,11 @@ def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64
     model.eval()
     vectors = model.encode(texts, batch_size=batch_size, convert_to_numpy=True,
                            normalize_embeddings=True, show_progress_bar=True)
+    from core.identity_policy import POLICY_PATH
+    from core.common import TRAIN_ROOT
     metadata = {'checkpoint_sha256': fingerprint,
+                'identity_policy_sha256': file_hash(POLICY_PATH),
+                'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config' / 'identity_dimensions.yaml'),
                 'composition': model_input_composition().model_dump(mode='json'),
                 'catalog_sha256': file_hash(catalog),
                 'text_sha256': hashlib.sha256(json.dumps(texts, ensure_ascii=False).encode()).hexdigest()}

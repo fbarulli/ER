@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import torch
 import yaml
+from graph_tracks.artifacts import name
 from graph_tracks.data import file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN
 from graph_tracks.train import load_pairs, train
@@ -31,7 +32,8 @@ def inputs(tmp_path, hybrid=False):
                   for s in ('train', 'dev', 'test') for j in (1, 2)]).to_csv(pairs, index=False)
     cfg = {'track': 'hybrid' if hybrid else 'gnn_only', 'listings': str(listings),
            'pairs': str(pairs), 'output_dir': str(tmp_path / 'run'),
-           'hidden_dim': 8, 'output_dim': 8, 'epochs': 2, 'device': 'cpu'}
+           'hidden_dim': 8, 'output_dim': 8, 'epochs': 2, 'device': 'cpu',
+           'allow_unmanifested_inputs': True, 'wandb': {'mode': 'disabled'}, 'dvc': {'enabled': False}}
     cache = None
     if hybrid:
         cache = tmp_path / 'text.npz'
@@ -97,18 +99,19 @@ def test_worker_export_and_resume(tmp_path, monkeypatch, hybrid):
     disable_tracking(monkeypatch)
     listings, pairs, cache, config = inputs(tmp_path, hybrid)
     checkpoint = train(config, run_tag='smoke')
-    run = tmp_path / 'run'
-    assert json.loads((run / 'graph_worker_result.json').read_text())['status'] == 'ok'
-    assert (run / 'gradient_metrics.jsonl').is_file()
+    track = 'hybrid' if hybrid else 'gnn_only'
+    run = tmp_path / 'run' / name(track, 'smoke')
+    assert json.loads((run / name(track, 'graph_worker_result.json')).read_text())['status'] == 'ok'
+    assert (run / name(track, 'gradient_metrics.jsonl')).is_file()
     scoring = tmp_path / 'query_pairs.csv'
     pd.read_csv(pairs)[['product_id1', 'product_id2']].to_csv(scoring, index=False)
     target = export(checkpoint, listings, tmp_path / 'export', text_cache=cache,
                     pairs=scoring, build_index=True, batch_size=2)
-    vectors = np.load(target / 'vectors.npz', allow_pickle=False)['embeddings']
+    vectors = np.load(target / name(track, 'vectors.npz'), allow_pickle=False)['embeddings']
     np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-6)
-    assert pd.read_csv(target / 'pair_scores.csv').score.between(0, 1).all()
+    assert pd.read_csv(target / name(track, 'pair_scores.csv')).score.between(0, 1).all()
     from training.hnsw_index import PersistentHnswIndex
-    index = PersistentHnswIndex(target / 'index', ef_construction=200, M=16, ef_search=100)
+    index = PersistentHnswIndex(target / name(track, 'index'), ef_construction=200, M=16, ef_search=100)
     index.load(ids=[r['product_id'] for r in population()], dim=8, checkpoint=checkpoint,
                model_name='hybrid' if hybrid else 'gnn_only', preprocessing_fingerprint=file_hash(listings))
     labels, distances = index.query(vectors[:1], top_k=3)
@@ -121,7 +124,7 @@ def test_worker_export_and_resume(tmp_path, monkeypatch, hybrid):
     relocated = tmp_path / 'relocated'
     shutil.copytree(run / '_checkpoints', relocated)
     resume = relocated / 'gnn_only' if not hybrid else relocated / 'hybrid'
-    resume = resume / 'smoke_f0' / 'checkpoint-2' / 'graph_model.pt'
+    resume = resume / 'smoke_f0' / 'checkpoint-2' / name(track, 'graph_model.pt')
     shutil.rmtree(run)
     cfg = yaml.safe_load(config.read_text())
     cfg.update(epochs=3, output_dir=str(tmp_path / 'resumed'))
@@ -158,3 +161,177 @@ def test_prepared_export_shared_identity(tmp_path):
     assert len(load_records(listings, require_training=False)) == 3
     with pytest.raises(ValueError, match='training listing'):
         load_records(listings)
+
+
+@pytest.mark.parametrize('hybrid', [False, True])
+def test_complete_offline_wandb_dvc_lifecycle(tmp_path, monkeypatch, hybrid):
+    """Exercise real W&B SDK and DVC add/push/clean-pull without external services."""
+    disable_tracking(monkeypatch)
+    monkeypatch.setenv('WANDB_MODE', 'offline')
+    monkeypatch.setenv('WANDB_SILENT', 'true')
+    monkeypatch.setenv('WANDB_CONSOLE', 'off')
+    listings, pairs, cache, config = inputs(tmp_path, hybrid)
+    cfg = yaml.safe_load(config.read_text())
+    cfg['wandb'] = {'project': 'e-r-graph-smoke', 'mode': 'offline'}
+    cfg['dvc'] = {'enabled': True, 'remote': str(tmp_path / 'local-remote'), 'push': True}
+    cfg['epochs'] = 1
+    config.write_text(yaml.safe_dump(cfg))
+    best = train(config, run_tag='offline-complete')
+    track = cfg['track']
+    run = tmp_path / 'run' / name(track, 'offline-complete')
+    result = json.loads((run / name(track, 'graph_worker_result.json')).read_text())
+    assert result['postprocess_complete'] is True
+    assert result['wandb_run_id']
+    assert list((run / 'wandb').glob('offline-run-*/run-*.wandb'))
+    completion = run / name(track, 'completion-epoch-1')
+    reports = completion / name(track, 'reports')
+    summary = pd.read_csv(reports / name(track, 'model_evaluation_summary.csv'))
+    assert set(summary.split) == {'dev', 'test'}
+    assert summary.threshold.nunique() == 1
+    assert summary.threshold_source.eq('dev_youden').all()
+    assert (reports / name(track, 'score_distribution_and_pr.png')).is_file()
+    manifest = json.loads((reports / name(track, 'report_manifest.json')).read_text())
+    assert manifest['test_used_for_selection'] is False
+    assert manifest['trained_endpoints_scored'] is False
+    from graph_tracks.dvc import restore
+    project = run / name(track, 'dvc-epoch-1')
+    restored = restore(project, tmp_path / 'restored')
+    restored_best = restored / best.relative_to(run)
+    GraphEncoder(restored_best)
+    assert restored_best.name.startswith(track + '__')
+    assert list(restored.rglob(name(track, 'model_evaluation_summary.csv')))
+
+
+def test_dev_threshold_handles_ties_and_test_does_not_fit():
+    from graph_tracks.report import dev_threshold, pair_metrics
+    labels = np.asarray([0, 1, 0, 1], dtype=float)
+    threshold = dev_threshold(labels, np.full(4, .5))
+    assert threshold == .5
+    metrics = pair_metrics(labels, np.asarray([.9, .1, .8, .2]), threshold, [1])
+    assert metrics['threshold'] == .5
+    assert metrics['f1'] == 0
+
+
+def test_track_checkpoint_name_and_integrity(tmp_path, monkeypatch):
+    disable_tracking(monkeypatch)
+    _, _, _, config = inputs(tmp_path)
+    cfg = yaml.safe_load(config.read_text())
+    cfg.update(epochs=1, postprocess=False)
+    config.write_text(yaml.safe_dump(cfg))
+    checkpoint = train(config, run_tag='integrity')
+    wrong = checkpoint.with_name(name('hybrid', 'graph_model.pt'))
+    shutil.copy2(checkpoint, wrong)
+    with pytest.raises(ValueError, match='completion marker'):
+        GraphEncoder(wrong)
+    with checkpoint.open('ab') as handle:
+        handle.write(b'tampered')
+    with pytest.raises(ValueError, match='hash mismatch'):
+        GraphEncoder(checkpoint)
+
+
+def test_dvc_no_remote_restore_and_credential_url_guard(tmp_path):
+    from graph_tracks.dvc import snapshot, restore
+    from graph_tracks.config import DvcSpec
+    from pydantic import ValidationError
+    source = tmp_path / 'run'
+    source.mkdir()
+    (source / name('gnn_only', 'example.json')).write_text('{"test": true}')
+    project = snapshot(source, 'gnn_only')
+    restored = restore(project, tmp_path / 'restored')
+    assert (restored / name('gnn_only', 'example.json')).read_text() == '{"test": true}'
+    with pytest.raises(ValidationError, match='must not contain credentials'):
+        DvcSpec(remote='https://username:password@example.com/store', push=True)
+
+
+def test_prepared_manifest_hash_drift_fails(tmp_path, monkeypatch):
+    disable_tracking(monkeypatch)
+    _, _, _, config = inputs(tmp_path)
+    cfg = yaml.safe_load(config.read_text())
+    manifest = tmp_path / 'input_manifest.json'
+    manifest.write_text(json.dumps({'listings_sha256': 'wrong'}))
+    cfg['input_manifest'] = str(manifest)
+    config.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match='prepared input mismatch'):
+        train(config, run_tag='stale-input')
+
+
+def test_same_run_resume_preserves_history_and_new_completion(tmp_path, monkeypatch):
+    disable_tracking(monkeypatch)
+    _, _, _, config = inputs(tmp_path)
+    cfg = yaml.safe_load(config.read_text())
+    cfg.update(epochs=1)
+    config.write_text(yaml.safe_dump(cfg))
+    checkpoint = train(config, run_tag='same-run')
+    cfg['epochs'] = 2
+    config.write_text(yaml.safe_dump(cfg))
+    train(config, run_tag='same-run', resume=checkpoint)
+    run = tmp_path / 'run' / name('gnn_only', 'same-run')
+    history = (run / name('gnn_only', 'epoch_metrics.jsonl')).read_text().splitlines()
+    assert [json.loads(line)['epoch'] for line in history] == [1, 2]
+    assert (run / name('gnn_only', 'completion-epoch-1')).is_dir()
+    assert (run / name('gnn_only', 'completion-epoch-2')).is_dir()
+
+
+def test_inference_only_split_does_not_enter_training(tmp_path):
+    listings, _, _, _ = inputs(tmp_path)
+    records = population()[-3:]
+    for record in records:
+        record['split'] = 'inference'
+    listings.write_text(json.dumps({'schema': 'er-graph-listings-v1', 'listings': records}))
+    assert len(load_records(listings, require_training=False)) == 3
+    with pytest.raises(ValueError, match='encoding only'):
+        load_records(listings)
+
+
+def test_portable_bundle_inputs_resume_and_secret_exclusion(tmp_path, monkeypatch):
+    import zipfile
+    from graph_tracks.bundle import bundle
+    disable_tracking(monkeypatch)
+    listings, pairs, _, config = inputs(tmp_path)
+    cfg = yaml.safe_load(config.read_text())
+    cfg.update(epochs=1, postprocess=False)
+    config.write_text(yaml.safe_dump(cfg))
+    train(config, run_tag='bundle')
+    run = tmp_path / 'run' / name('gnn_only', 'bundle')
+    secret_dir = run / name('gnn_only', 'dvc-local') / '.dvc'
+    secret_dir.mkdir(parents=True)
+    (secret_dir / 'config.local').write_text('password=do-not-export')
+    archive = bundle(run, tmp_path / name('gnn_only', 'bundle.zip'))
+    restored = tmp_path / 'restored-run'
+    with zipfile.ZipFile(archive) as saved:
+        assert not any(key.endswith('config.local') for key in saved.namelist())
+        assert all(b'do-not-export' not in saved.read(key) for key in saved.namelist())
+        saved.extractall(restored)
+    manifest = json.loads((restored / name('gnn_only', 'run_manifest.json')).read_text())
+    shutil.rmtree(run)
+    listings.unlink()
+    pairs.unlink()
+    cfg.update(epochs=2, output_dir=str(tmp_path / 'resumed-bundle'))
+    for key, relative in manifest['input_artifacts'].items():
+        cfg[key] = str(restored / relative)
+    config.write_text(yaml.safe_dump(cfg))
+    checkpoint = restored / '_checkpoints' / 'gnn_only' / 'bundle_f0' / 'checkpoint-1' / name('gnn_only', 'graph_model.pt')
+    selected = train(config, run_tag='resumed-bundle', resume=checkpoint)
+    assert selected.is_file()
+
+
+def test_prepare_rejects_scoped_hold_without_blocking_gtin_peers(tmp_path):
+    from graph_tracks.prepare import prepare
+    from core.identity_policy import review_policy
+    holds = review_policy().quarantined_listings
+    assert holds
+    product_id, hold = next(iter(holds.items()))
+    listings, pairs, _, _ = inputs(tmp_path)
+    records = load_records(listings)
+    catalog = tmp_path / 'catalog.csv'
+    splits = tmp_path / 'splits.csv'
+    rows = [{'product_id': r['product_id'], 'title': 'Example drink', 'brand': 'Example',
+             'barcode': hold.expected_gtin} for r in records]
+    assignments = [{'product_id': r['product_id'], 'split': r['split']} for r in records]
+    pd.DataFrame(rows).to_csv(catalog, index=False)
+    pd.DataFrame(assignments).to_csv(splits, index=False)
+    assert prepare(catalog, splits, pairs, tmp_path / 'good-peers').is_file()
+    rows[0]['product_id'] = product_id
+    pd.DataFrame(rows).to_csv(catalog, index=False)
+    with pytest.raises(ValueError, match='quarantined identity groups/listings'):
+        prepare(catalog, splits, pairs, tmp_path / 'blocked')

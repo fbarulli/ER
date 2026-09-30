@@ -15,9 +15,10 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
     from core.product_identity import row_identity
     from graph_tracks.train import load_pairs, write_json
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False, low_memory=False)
-    from core.identity_policy import review_mask, POLICY_PATH
-    if "barcode" in frame and review_mask(frame.barcode).any():
-        raise ValueError("catalog contains quarantined identity groups; exclude reviewed GTINs before preparing splits")
+    from core.identity_policy import reviewed_row_mask, POLICY_PATH
+    from core.common import TRAIN_ROOT
+    if reviewed_row_mask(frame).any():
+        raise ValueError("catalog contains quarantined identity groups/listings; apply reviewed exclusions before preparing splits")
     assignment = pd.read_csv(splits, dtype=str, keep_default_na=False)
     if 'product_id' not in frame or set(assignment.columns) != {'product_id', 'split'}:
         raise ValueError('catalog needs product_id; split CSV needs exactly product_id,split')
@@ -41,6 +42,7 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
     write_json(output / 'input_manifest.json', {
         'schema': 'er-graph-inputs-v1', 'catalog_sha256': file_hash(catalog),
         'identity_policy_sha256': file_hash(POLICY_PATH),
+        'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config' / 'identity_dimensions.yaml'),
         'splits_sha256': file_hash(splits), 'pairs_sha256': file_hash(pairs),
         'listings_sha256': file_hash(listing_path), 'identity_extractor': 'core.product_identity.row_identity',
         'relations': list(RELATIONS), 'numeric': list(NUMERIC),
