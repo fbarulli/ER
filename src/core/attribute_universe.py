@@ -51,20 +51,22 @@ core.gtin.barcode_validity — 26,214 valid rows; 30,182 same-GTIN pairs):
 
 SEMANTICS OF THE CENSUS (this module's own definition, pinned by
 verify_census at +/-1%): a same-GTIN pair is CREATED by `barcode_validity`
-(the annotation "gtin" above filters). For each key, a pair counts when
-BOTH rows are populated on that key; `conflict` is frozenset inequality
-for plain keys, EXCEPT delegated fields which reuse the existing
-predicates (volume via volumes_compatible, flavour via the
-critical-attributes flavor-overlap rule, sweetener via raw-ingredient
-sets as core.product_dimensions.evaluate_dimensions rules — sugar-claim
-semantics are deliberately NOT applied to raw declared ingredients, 13.9%
-vs 15.7% is cosmetic). `conflict_rate` = conflict pairs / both-populated
-pairs. NOTE: the owner's session table quoted slightly different rates for
-the plain keys under a different pair-enumeration detail (11.2% juice
-content vs 8.0% here); populations and distinct value-sets reproduce it
-EXACTLY, so the session numbers are kept INLINE as owner references and
-the executable pin is this module's own run — the live-data reproduction
-is the census script's job, never a unit test.
+(26,214 valid rows; 30,182 same-GTIN pairs). For each key, a pair counts
+when BOTH rows are populated on that key; `conflict` is frozenset
+inequality for plain keys, EXCEPT delegated fields which reuse the
+existing predicates (volume via volumes_compatible, flavour via the
+critical-attributes overlap-coefficient rule — its delegated rate is
+0.09% against the session's raw 10.6% because ANY shared declared token
+counts as agreement, sweetener via raw-ingredient sets as
+core.product_dimensions.evaluate_dimensions rules — sugar-claim semantics
+are deliberately NOT applied to raw declared ingredients, 15.7% vs the
+session's 13.9%). `conflict_rate` = conflict pairs / both-populated
+pairs. NOTE: the owner's session table quoted slightly different rates
+for the plain keys under a different pair-enumeration detail (11.2% juice
+content vs 8.0% here); populations and distinct value-sets reproduce that
+table EXACTLY, so the session numbers are kept INLINE as owner references
+and the executable pin is this module's own run — the live-data
+reproduction is the census script's job, never a unit test.
 
 The registry keys are REUSED from the SSOT surfaces wherever they exist:
   volume     src/pipeline.parse_attribute_volume_pack + core.unit_canonicalization
@@ -539,14 +541,19 @@ class AttributeUniverse:
     ) -> dict:
         """The reusable budget calculator over the measured census.
 
-        Per key: expected same-GTIN pair coverage (population x conflict-rate
-        headroom) and where the field can enter:
-          (a) masking swap-donor universe  — donor_ok
+        Per key: expected same-GTIN pair coverage
+        (population x conflict-rate headroom) and expected mint counts
+        (current x (1 + headroom_share), headroom_share = conflict rate);
+        plus where the field can enter:
+          (a) masking swap-donor universe  — masking_donor
           (b) veto dimensions              — veto_candidate (2.5-15% band)
-          (c) eval slices                  — eval_slice (min pair support)
-          (d) structured numeric/text channel — channel
-        CONSTANT keys are flagged 'no yield'. Eval support follows the config
-        SSOT evaluation.attribute_separation.min_value_support (no literal).
+          (c) eval slices                  — eval_slice (min pair support,
+              min_value_support = 20 from the config SSOT)
+          (d) structured numeric/text channel — structured_channel
+        CONSTANT keys are flagged 'no yield'. Every entry is derived
+        FROM THE MEASURED census, never a static allow-list. When
+        n_pos_target is given, mint_at_target splits it across the eligible
+        donors proportional to their expected pair coverage.
         """
         if census is None:
             census = self.census()
@@ -567,6 +574,9 @@ class AttributeUniverse:
             donor_ok = bool(
                 spec is not None
                 and spec.kind not in NON_YIELD_KINDS
+                # flavour donors stay with the identity lane's flavor family
+                # (its delegated lexicon tokens, not raw declared strings):
+                # measured delegated rate is 0.09%, nothing to transplant.
                 and spec.parser != "delegate_flavor"
                 and rows >= MIN_DONOR_ROWS
                 and distinct >= MIN_DONOR_SETS
