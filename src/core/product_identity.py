@@ -332,6 +332,9 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
     pipeline's own `sku_info` — this module never re-implements a parser, it
     only decides how parsed values are COMPARED.
     """
+    from core.identity_policy import resolve_listing_row
+    if isinstance(row, Mapping) or hasattr(row, "to_dict"):
+        row = resolve_listing_row(dict(row) if isinstance(row, Mapping) else row.to_dict())
     get = (lambda k, d="": row.get(k, d)) if isinstance(row, Mapping) else (
         lambda k, d="": getattr(row, k, d)
     )
@@ -353,8 +356,8 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
     flavor |= alias_fold(title_tokens & flavor_vocabulary(), qualifiers=True)
     flavor |= alias_fold(title_tokens & declared, qualifiers=True)
 
-    from core.identity_policy import review_reason
-    held_reason = review_reason(get("barcode", ""))
+    from core.identity_policy import review_reason, listing_review_reason
+    held_reason = review_reason(get("barcode", "")) or listing_review_reason(get("product_id", ""), get("barcode", ""))
     trusted, key = _barcode_facts(get("barcode", ""))
     haystack = " ".join(
         (title, str(attributes or ""), description, category_text)
@@ -380,7 +383,7 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
         ),
         diet_claim=bool(DIET_CLAIM_RE.search(haystack)),
         sugar_claim=bool(SUGAR_CLAIM_RE.search(haystack)),
-        barcode_trusted=trusted,
+        barcode_trusted=trusted and not held_reason,
         barcode_key=key,
         identity_review_reason=held_reason,
         completeness=completeness(row),

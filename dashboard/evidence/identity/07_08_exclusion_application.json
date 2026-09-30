@@ -1,0 +1,557 @@
+{
+  "applied": true,
+  "policy_sha256": "26decae50bbf504382041341e738519ebf3f8c44e6d1f5443307e2701418ad2a",
+  "artifacts": [
+    {
+      "artifact": "canonical_records",
+      "path": "data/canonical_records.csv",
+      "before_rows": 13227,
+      "excluded_rows": 2,
+      "after_rows": 13225,
+      "before_sha256": "00b8815c077c2f67071304a43b3df2ae01706f511d8c8530e4becf5759325002",
+      "removed_rows": [
+        {
+          "gtin": "11982760",
+          "canonical": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "mode_brand": "L\u00f6fbergs",
+          "mode_flavor": "coffee",
+          "mode_type": "",
+          "salient_ngrams": "['boxed_organic', 'drinks_caffeine_boost_flavour', 'light']",
+          "dropped_redundant_ngrams": "['boxed_organic_coffee_drinks', 'boxed_organic_coffee', 'organic_coffee_drinks', 'still']",
+          "volume_set": "[230.0, 330.0]",
+          "pack_set": "[12, 24]",
+          "package_type_set": "['can']",
+          "package_material_set": "[]",
+          "packaging_level_set": "[]",
+          "flavor_set": "['coffee', 'ginger', 'lemon']",
+          "carbonation_set": "['still']",
+          "sweetener_set": "[]",
+          "sweetener_type_set": "[]",
+          "sweetening_set": "[]",
+          "attribute_consistency_flags": "[]",
+          "pulp_set": "[]",
+          "volume_confidence": "0.9",
+          "pack_confidence": "0.9",
+          "volume_consistency": "0.75",
+          "pack_consistency": "0.75",
+          "n_titles": "4",
+          "description_evidence": "['24 pcs lemon and ginger tasting treenijuomaa. contain 3100mg bcaa per can. suitable for use before training, during it or after.', 'Caffeine Boost on dark and powerful coffee drink added with caffeine. in a box 12 drink!', 'Protein Boost is mild milk coffee drink added protein. in a box 12 drink.']",
+          "breadcrumb_evidence": "['[\"\" beverages\"\"]', '[\"\" large packages\"\"]', '[\"\" organic\"\"]']"
+        },
+        {
+          "gtin": "735143004010",
+          "canonical": "cortas rose water still orange pure_natural_floral_essence",
+          "mode_brand": "Cortas",
+          "mode_flavor": "rose",
+          "mode_type": "water",
+          "salient_ngrams": "['pure_natural_floral_essence']",
+          "dropped_redundant_ngrams": "['water_pure_natural_floral', 'natural_floral_essence_culinary', 'floral_essence_culinary_beauty', 'essence_culinary_beauty_use', 'still']",
+          "volume_set": "[296.0, 300.0, 500.0]",
+          "pack_set": "[1, 2]",
+          "package_type_set": "['bottle']",
+          "package_material_set": "[]",
+          "packaging_level_set": "[]",
+          "flavor_set": "['orange', 'rose']",
+          "carbonation_set": "['still']",
+          "sweetener_set": "[]",
+          "sweetener_type_set": "[]",
+          "sweetening_set": "[]",
+          "attribute_consistency_flags": "[]",
+          "pulp_set": "[]",
+          "volume_confidence": "0.9",
+          "pack_confidence": "0.9",
+          "volume_consistency": "0.455",
+          "pack_consistency": "0.778",
+          "n_titles": "12",
+          "description_evidence": "['## Product information \\n# Technical Details \\n##### General Information \\nPackage Dimensions \\u200e15 x 4 x 4 cm; 300 g \\nItem model number \\u200e735143004010 \\nUnits \\u200e500.0 millilitre \\nStorage Instructions \\u200e Store', '## Product information \\n# Technical Details \\n##### General Information \\nProduct Dimensions \\u200e5 x 5 x 20 cm; 300 g \\nItem model number \\u200e735143004010 \\nUnits \\u200e500.0 millilitre \\nStorage Instructions \\u200e Store', '## Product information \\n# Technical Details \\n##### General Information \\nProduct Dimensions \\u200e5.61 x 5.61 x 21.92 cm; 300 g \\nItem model number \\u200e735143004010 \\nUnits \\u200e500.0 millilitre \\nStorage Instruction', '* * *\\n## Important information \\n[ingredients_start]\\nIngredients \\npure rose flower water. Product of Lebanon. \\n[ingredients_end]\\n\\nLegal Disclaimer \\nStatements regarding dietary supplements have not bee', 'Rose water water is very used in mediterranean deserts such as baklava, knafeh and maamoul. this scented water is also added in small quantities to regular drinking water and coffee, giving everyday d']",
+          "breadcrumb_evidence": "['[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Drinking Water\"\"]', '[\"\" Grocery\"\",\"\" Drinks\"\",\"\" Water\"\",\"\" Flavoured Water\"\"]', '[\"\" Grocery\"\",\"\" International Foods\"\",\"\" Middle Eastern Food\"\",\"\" Honey & Pantry\"\"]']"
+        }
+      ],
+      "after_sha256": "3362d9c393d99db98e647d7a4e38f7f3267a5d73b423a7defceaca12e04d7df9"
+    },
+    {
+      "artifact": "gate_results",
+      "path": "data/gate_results.csv",
+      "before_rows": 135431,
+      "excluded_rows": 37,
+      "after_rows": 135394,
+      "before_sha256": "442caff46de1cb6984c9642da5ce95180cf89378038b74f576007a8b3195861a",
+      "removed_rows": [
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005096",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs cappuccino still sugar vanilla ice",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw volume confidence",
+          "similarity": "0.2727272727272727"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005126",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still sugar ginger latte chai",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005133",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs chocolate still no_added_sugar coffee latte choco",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.4"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005140",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still sugar vanilla gluten_free_drink",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.4444444444444444"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005171",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still sugar latte macchiato light",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005188",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still sugar espresso",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.4444444444444444"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005201",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still sugar ice_espresso_milk",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005218",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs caramel still sugar coffee latte ice_salted",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.4"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005348",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still double_espresso_fairtrade_organic 15_25_volume_230 sugar",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005355",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs caramel still sugar coffee salted",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.4"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005485",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still ice_caffeine_boost volume_225 sugar",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050005492",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still protein_boost sugar",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050006260",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs lemon water carbonated caffeinated_pet",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.3333333333333333"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050006277",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs strawberry water carbonated sugar natural_flavour",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.18181818181818182"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050006963",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs beet water carbonated rhubarb natural_beetroot_functionally",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.18181818181818182"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050006970",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs lime water carbonated mint func_natural_spinach",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.18181818181818182"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050006987",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs ginger water carbonated lemon mineral_magnesium_zinc_selenium",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.4444444444444444"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050105482",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still drinks_caffeine_boost_roast organic_volume_230_juice",
+          "gate_decision": "proceed",
+          "gate_reason": "Known critical attributes compatible",
+          "similarity": "0.5714285714285714"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050106106",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs pomegranate water carbonated raspberry type_spring_blister",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.18181818181818182"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050106267",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs lemon water carbonated still caffeinated_naturally",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.4444444444444444"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050106922",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs coffee still ingredients_licorice_volume_roast light",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.7142857142857143"
+        },
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050106960",
+          "canon1": "l fbergs coffee still ginger lemon boxed_organic drinks_caffeine_boost_flavour light",
+          "canon2": "l fbergs beet energy lemon rhubarb beets_volume_material_type",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.3"
+        },
+        {
+          "gtin1": "302683211866",
+          "gtin2": "735143004010",
+          "canon1": "cortas rose water still juice",
+          "canon2": "cortas rose water still orange pure_natural_floral_essence",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.6666666666666666"
+        },
+        {
+          "gtin1": "3142794192299",
+          "gtin2": "735143004010",
+          "canon1": "cortas rose water still premium_type",
+          "canon2": "cortas rose water still orange pure_natural_floral_essence",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.8"
+        },
+        {
+          "gtin1": "352937490134",
+          "gtin2": "735143004010",
+          "canon1": "cortas rose water still geographic_origin_lebanon_material",
+          "canon2": "cortas rose water still orange pure_natural_floral_essence",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.8"
+        },
+        {
+          "gtin1": "649456079835",
+          "gtin2": "735143004010",
+          "canon1": "cortas rose water carbonated premium_juice",
+          "canon2": "cortas rose water still orange pure_natural_floral_essence",
+          "gate_decision": "hard_no",
+          "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "664697917685",
+          "gtin2": "735143004010",
+          "canon1": "cortas rose water no_sugar sugar 15_volume_296_flavour",
+          "canon2": "cortas rose water still orange pure_natural_floral_essence",
+          "gate_decision": "proceed",
+          "gate_reason": "Known critical attributes compatible",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "683615451377",
+          "gtin2": "735143004010",
+          "canon1": "cortas rose water still 10floz_type_juice_content",
+          "canon2": "cortas rose water still orange pure_natural_floral_essence",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.8"
+        },
+        {
+          "gtin1": "683615451414",
+          "gtin2": "735143004010",
+          "canon1": "cortas orange water still blossom_carbonization",
+          "canon2": "cortas rose water still orange pure_natural_floral_essence",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.8"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "735143004119",
+          "canon1": "cortas rose water still orange pure_natural_floral_essence",
+          "canon2": "cortas orange water carbonated still content_volume_296_carbonization",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.6666666666666666"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "735143004300",
+          "canon1": "cortas rose water still orange pure_natural_floral_essence",
+          "canon2": "cortas rose water still flower",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.6666666666666666"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "735143004355",
+          "canon1": "cortas rose water still orange pure_natural_floral_essence",
+          "canon2": "cortas orange water still volume_503",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.8"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "735143004645",
+          "canon1": "cortas rose water still orange pure_natural_floral_essence",
+          "canon2": "cortas water still perfection_10_fl._carbonization",
+          "gate_decision": "proceed",
+          "gate_reason": "Known critical attributes compatible",
+          "similarity": "0.6"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "735143004669",
+          "canon1": "cortas rose water still orange pure_natural_floral_essence",
+          "canon2": "cortas thyme water still perfection_10_fl._artificial",
+          "gate_decision": "hard_no",
+          "gate_reason": "Critical attribute mismatch: flavor",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "735143004676",
+          "canon1": "cortas rose water still orange pure_natural_floral_essence",
+          "canon2": "cortas rosemary water still perfection_10_fl._geographic",
+          "gate_decision": "hard_no",
+          "gate_reason": "Critical attribute mismatch: flavor",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "741587333432",
+          "canon1": "cortas rose water still orange pure_natural_floral_essence",
+          "canon2": "cortas mint water still 296_juice_content_flavour",
+          "gate_decision": "hard_no",
+          "gate_reason": "Critical attribute mismatch: flavor",
+          "similarity": "0.5"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "741587333487",
+          "canon1": "cortas rose water still orange pure_natural_floral_essence",
+          "canon2": "cortas orange water still blossom",
+          "gate_decision": "fallback",
+          "gate_reason": "Low raw pack confidence",
+          "similarity": "0.6666666666666666"
+        }
+      ],
+      "after_sha256": "67cd1b690afc7549d06e0efc3efe7cba614fbf7758b7edcd50a592418fbe9219"
+    },
+    {
+      "artifact": "labeled_pairs",
+      "path": "data/labeled_pairs.csv",
+      "before_rows": 8804,
+      "excluded_rows": 4,
+      "after_rows": 8800,
+      "before_sha256": "5dfa4aaa562c827307281e1955d9d2ba09bb277bc0b31900a2930cd1c106b628",
+      "removed_rows": [
+        {
+          "gtin1": "11982760",
+          "gtin2": "7310050105482",
+          "true_label": "1"
+        },
+        {
+          "gtin1": "664697917685",
+          "gtin2": "735143004010",
+          "true_label": "1"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "735143004645",
+          "true_label": "1"
+        },
+        {
+          "gtin1": "352937490134",
+          "gtin2": "735143004010",
+          "true_label": "0"
+        }
+      ],
+      "after_sha256": "5c68ff370a9d4e4d77fdbf637140f89bc6b32e2971e5ee6a068b96fa146ce7ae"
+    },
+    {
+      "artifact": "final_validation",
+      "path": "data/final_validation.csv",
+      "before_rows": 6322,
+      "excluded_rows": 3,
+      "after_rows": 6319,
+      "before_sha256": "7a00b10cd774440089e5c354d48cb938664e71e51eeca35ef8c8db6deccca630",
+      "removed_rows": [
+        {
+          "gtin1": "664697917685",
+          "gtin2": "735143004010",
+          "gtin1_norm": "00664697917685",
+          "gtin2_norm": "00735143004010",
+          "true_label": "1",
+          "fold": "3",
+          "fold_2": "3",
+          "component_id": "6332",
+          "component_id_2": "6332",
+          "straddles_fold": "False",
+          "endpoint_in_train": "False",
+          "v1_volume": "[296.0]",
+          "v2_volume": "[296.0, 300.0, 500.0]",
+          "v1_pack": "[2]",
+          "v2_pack": "[1, 2]",
+          "v1_package_type": "['bottle']",
+          "v2_package_type": "['bottle']",
+          "v1_sweetener": "['no_sugar', 'sugar']",
+          "v2_sweetener": "[]",
+          "v1_flavor": "['rose']",
+          "v2_flavor": "['orange', 'rose']",
+          "v1_carbonation": "[]",
+          "v2_carbonation": "['still']"
+        },
+        {
+          "gtin1": "735143004010",
+          "gtin2": "735143004645",
+          "gtin1_norm": "00735143004010",
+          "gtin2_norm": "00735143004645",
+          "true_label": "1",
+          "fold": "3",
+          "fold_2": "3",
+          "component_id": "6332",
+          "component_id_2": "6332",
+          "straddles_fold": "False",
+          "endpoint_in_train": "False",
+          "v1_volume": "[296.0, 300.0, 500.0]",
+          "v2_volume": "[300.0]",
+          "v1_pack": "[1, 2]",
+          "v2_pack": "[1]",
+          "v1_package_type": "['bottle']",
+          "v2_package_type": "[]",
+          "v1_sweetener": "[]",
+          "v2_sweetener": "[]",
+          "v1_flavor": "['orange', 'rose']",
+          "v2_flavor": "[]",
+          "v1_carbonation": "['still']",
+          "v2_carbonation": "['still']"
+        },
+        {
+          "gtin1": "352937490134",
+          "gtin2": "735143004010",
+          "gtin1_norm": "00352937490134",
+          "gtin2_norm": "00735143004010",
+          "true_label": "0",
+          "fold": "3",
+          "fold_2": "3",
+          "component_id": "1281",
+          "component_id_2": "6332",
+          "straddles_fold": "False",
+          "endpoint_in_train": "False",
+          "v1_volume": "[296.0]",
+          "v2_volume": "[296.0, 300.0, 500.0]",
+          "v1_pack": "[16]",
+          "v2_pack": "[1, 2]",
+          "v1_package_type": "['bottle']",
+          "v2_package_type": "['bottle']",
+          "v1_sweetener": "[]",
+          "v2_sweetener": "[]",
+          "v1_flavor": "['rose']",
+          "v2_flavor": "['orange', 'rose']",
+          "v1_carbonation": "['still']",
+          "v2_carbonation": "['still']"
+        }
+      ],
+      "after_sha256": "e3348a5ec1bd2b71086b6eb5a96abd49ebef2045401bf12afe21d2c7803ce215"
+    },
+    {
+      "artifact": "validation_fold_map",
+      "path": "results/training/validation_fold_map.csv",
+      "before_rows": 14958,
+      "excluded_rows": 2,
+      "after_rows": 14956,
+      "before_sha256": "76df47a0d1049980b4073d22ff5a7c8b3de2e8e9f442fb8717f4b3f4749d127b",
+      "removed_rows": [
+        {
+          "gtin": "11982760",
+          "fold": "0",
+          "component_id": "77"
+        },
+        {
+          "gtin": "735143004010",
+          "fold": "3",
+          "component_id": "6332"
+        }
+      ],
+      "after_sha256": "59dc14361ff167965914960d7dc3a877f41a1da27d6e5594454c581ec3d11dea"
+    }
+  ],
+  "source_export_modified": false,
+  "deduped_catalog_modified": false
+}

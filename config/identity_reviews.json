@@ -217,6 +217,93 @@
         "422306992",
         "422391633"
       ]
+    },
+    "11982760": {
+      "reason": "Mat Smart number reused for Maxim BCAA and Loefbergs Protein/Caffeine products; source product identity unreliable",
+      "evidence_sku_ids": [
+        "117435982",
+        "140354705",
+        "142547188",
+        "143441192"
+      ]
+    },
+    "735143004010": {
+      "reason": "Cortas item model number repeated across rose/orange-blossom flavors, volumes and pack variants",
+      "evidence_sku_ids": [
+        "934205292",
+        "936055182",
+        "937665038",
+        "939560864"
+      ]
+    },
+    "3274490970212": {
+      "reason": "Naturalia20442990 title, description and fraise URL say strawberry; Carrefour339334884 title, mint ingredients and menthe URL say mint; Biocoop959300328 says mint. True assignment unresolved.",
+      "evidence_sku_ids": [
+        "20442990",
+        "339334884",
+        "959300328"
+      ]
+    },
+    "5601607074866": {
+      "reason": "Carethy653623196 blueberry and653993349 mango-passion have distinct product paths and flavor-named image paths; titles and raw flavors disagree under one number.",
+      "evidence_sku_ids": [
+        "653623196",
+        "653993349"
+      ]
+    },
+    "5999076228973": {
+      "reason": "El Corte185319729 apple/pear title and URL with explicit EAN5999076228973; Carethy658173610 raspberry/lime title with number in query. Different flavor/pack assertions; no verified correction.",
+      "evidence_sku_ids": [
+        "185319729",
+        "658173610"
+      ]
+    },
+    "8006290804948": {
+      "reason": "Carrefour424981349 andIper448919674 title/URL say agrumi/citrus; Coop468042285 title/URL/image filename say mela-mandorla/apple-almond. Source flavor variant assignment unresolved.",
+      "evidence_sku_ids": [
+        "424981349",
+        "448919674",
+        "468042285"
+      ]
+    },
+    "8414192311974": {
+      "reason": "Carethy690199361 BerryRush,691629885 coffee protein shake, andDecathlon896646718 strawberry Fruit&Fiber syrup have different type/flavor titles and distinct URLs; Decathlon description confirms syrup.",
+      "evidence_sku_ids": [
+        "690199361",
+        "691629885",
+        "896646718"
+      ]
+    },
+    "8437018830145": {
+      "reason": "Auchan561072864 lemon/lime250ml title and URL versusElCorte758133718 orange/mango1.5L title,description and URL: distinct flavor and container.",
+      "evidence_sku_ids": [
+        "561072864",
+        "758133718"
+      ]
+    },
+    "857161008457": {
+      "reason": "Target318562504 andHyVee363370407 WildberryGinger with green-tea ingredient description; Amazon1000887803 Superberry title and oolong/raspberry ingredients. This is a formulation contradiction despite shared berry words.",
+      "evidence_sku_ids": [
+        "318562504",
+        "363370407",
+        "906317612",
+        "1000887803"
+      ]
+    },
+    "5404017402744": {
+      "reason": "Unresolved source identity: Carrefour373484076 citron-vert URL means lime; Farmaline488935554 title/URL says lemon; Amazon1035247595 guarana enum names functional ingredient. Twelve-bottle versus single-bottle sellable scope also differs. No direct correcting source anchor.",
+      "evidence_sku_ids": [
+        "373484076",
+        "488935554",
+        "1035247595"
+      ]
+    },
+    "7350089431268": {
+      "reason": "Unresolved source identity: Hemkop983459721 title combines strawb Cherry Sunset, Coop988395862 says Strawberry Sunset; raw cherry/strawberry differ. No complete ingredients or label in snapshot to establish compound flavor versus mistaken title.",
+      "evidence_sku_ids": [
+        "983459721",
+        "988395862"
+      ]
     }
   },
   "listing_context": {
@@ -234,6 +321,106 @@
       "outer_material": "plastic",
       "pack_count": 12,
       "source": "original retailer image: dashboard/images/282677444.png; 12 cans inside shrinkwrap reviewed"
+    }
+  },
+  "listing_identity": {
+    "142547188": {
+      "source_gtin": "11982760",
+      "target_gtin": "7310050105482",
+      "reference_product_id": "140880643",
+      "expected_url": "https://www.matsmart.fi/laatikollinen-luomu-kahvijuomia-caffeine-boost-12-x-230ml",
+      "reason": "Reviewed exact retailer product URL, title, description and 12x230ml pack match reference listing"
+    },
+    "143441192": {
+      "source_gtin": "11982760",
+      "target_gtin": "7310050105482",
+      "reference_product_id": "140880643",
+      "expected_url": "https://www.matsmart.fi/laatikollinen-luomu-kahvijuomia-caffeine-boost-12-x-230ml",
+      "reason": "Reviewed exact retailer product URL, title, description and 12x230ml pack match reference listing"
+    }
+  },
+  "quarantined_listings": {
+    "512665846": {
+      "expected_gtin": "8713300049748",
+      "reason": "Mixed source fields: Passionfruit Heaven title/flavor and 200 ml volume conflict with Orange Pulp Free URL and consistent 1 L same-GTIN peer. Product identity remains unverified.",
+      "evidence_sku_ids": [
+        "512665846",
+        "519464460",
+        "70182030"
+      ]
+    },
+    "512465527": {
+      "expected_gtin": "8713300049779",
+      "reason": "Mixed source fields: Strawberry Hill title/flavor conflict with Mango Dream URL and explicit Mango Dream description. Same-GTIN peers consistently identify Mango Dream; the suspect listing cannot assert either flavor identity.",
+      "evidence_sku_ids": [
+        "512465527",
+        "133045484",
+        "519335533",
+        "133029943",
+        "519578723"
+      ]
+    },
+    "477584544": {
+      "expected_gtin": "20868784000326",
+      "reason": "Gold variant conflicts with White Grapefruit same-GTIN peers; candidate identifier in URL fails checksum. Correct identifier unverified.",
+      "evidence_sku_ids": [
+        "477584544"
+      ]
+    },
+    "959752789": {
+      "expected_gtin": "810013080315",
+      "reason": "Strawberry Hibiscus title and flavor contradict Black Cherry Lime description; product identity unverified.",
+      "evidence_sku_ids": [
+        "959752789"
+      ]
+    },
+    "946857301": {
+      "expected_gtin": "810013080315",
+      "reason": "Outer case of 3 x 8 cans (24 units) differs from eight-can same-GTIN peers. Outer sellable-unit identifier unverified; must not produce exact-SKU positives with eight-packs.",
+      "evidence_sku_ids": [
+        "946857301"
+      ]
+    }
+  },
+  "listing_fields": {
+    "55971544": {
+      "expected_gtin": "7310860007396",
+      "fields": {
+        "attributes": "Caffeine: 15-25 mg; Volume: 1000; Made From: grapefruit; Flavour: grapefruit; Juice Content: 100%; Carbonization: still; Juice Features: from concentrate, pasteurized, with pulp; Pack Type: Liquid Carton",
+        "title": "Juice red grapefruit 1l good morning"
+      },
+      "reason": "Original red-grapefruit description and grapefrukt/Blodgrape product naming identify grapefruit; grape is a translation error."
+    },
+    "176248436": {
+      "expected_gtin": "7310860007396",
+      "fields": {
+        "attributes": "Pack Material Type: Plastic; Juice Content: 100%; Juice Features: from concentrate, pasteurized, with pulp; Pack Type: Liquid Carton; Volume: 1000; Carbonization: still; Made From: grapefruit; Flavour: grapefruit",
+        "title": "Juice red grapefruit"
+      },
+      "reason": "Original red-grapefruit description and grapefrukt/Blodgrape product naming identify grapefruit; grape is a translation error."
+    },
+    "59163840": {
+      "expected_gtin": "7310860007396",
+      "fields": {
+        "attributes": "Juice Features: from concentrate, pasteurized, with pulp; Pack Material Type: Paper / Carton; Volume: 1000; Pack Type: Liquid Carton; Made From: grapefruit; Juice Content: 100%; Caffeine: 15-25 mg",
+        "title": "good morning Blodgrapejuice"
+      },
+      "reason": "Original red-grapefruit description and grapefrukt/Blodgrape product naming identify grapefruit; grape is a translation error."
+    },
+    "520739801": {
+      "expected_gtin": "8719214811167",
+      "fields": {
+        "attributes": "Sweetener: sucralose, acesulfame potassium; Volume: 650; Pack Type: Bottle; Juice Content: 2-5%; Immune Support Ingredients: vitamin c, antioxidants; Pack Material Type: Plastic; Flavour: orange, raspberry; Health Claims: no sugar"
+      },
+      "reason": "Original title, sinaasappel-framboos URL and description agree on orange-raspberry; lemon flavor is unsupported."
+    },
+    "730520510": {
+      "expected_gtin": "7314720722344",
+      "fields": {
+        "title": "Lemonadkoncentrat 2 dl Kiviks mustery",
+        "attributes": "Juice Features: from concentrate; Made From: lemon; Volume: 1000; Sweetener: sugar; Flavour: lemon; Caffeine: 15-25 mg; Pack Material Type: Paper / Carton; Health Claims: hydrating; Carbonization: still; Juice Content: 10-15%"
+      },
+      "reason": "Kiviks is the brand; original lemon description matches same-GTIN peer. Kiwi ingredient/flavor is brand translation leakage."
     }
   }
 }

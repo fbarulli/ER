@@ -97,3 +97,32 @@ unknown; no replacement barcodes have been invented.
 
 Discovery can continue with open findings. The open Cool Best mixed-flavor
 source cases in finding 06 have not been adjudicated by this resolution.
+
+## 07–08 — repair old collapses and reattach reviewed duplicates
+
+The original Mat Smart number `11982760` mixed Maxim BCAA and Löfbergs
+Protein/Caffeine Boost. The Cortas number `735143004010` mixed flavors, unit
+volumes and packs; UK Amazon descriptions repeated it as an item model number.
+Both claims are now held. The source export remains unchanged.
+
+Mat Smart source listings 142547188 and 143441192 match source reference
+140880643 on exact product URL, retailer, brand, title, description, dimensions
+and 12 × 230 ml pack. The reviewed policy reattaches those two listings to
+7310050105482, with representative 140880643. This link requires original
+listing ID, source barcode and exact URL; it is not a broad substitution of
+11982760, nor a mapping from a 12-pack to a single drink.
+
+A targeted catalog repair restores original listings previously merged on all
+25 held identifiers, while preserving existing unrelated representatives.
+The catalog grows from 62,963 to 63,053 records. All 71,623 original source IDs
+still resolve to valid representative positions; 123 catalog rows remain held
+and 62,930 remain eligible. Two reviewed duplicate aliases share their correct
+representative. The 12 Cortas suspect source listings remain inspectable,
+without invented replacement GTINs. Separately numbered 500 ml rose and orange
+blossom references remain separate sellable identities.
+
+Future dedupe applies reviewed links first and puts held records into distinct
+listing partitions so they cannot be merged merely on their bad identifier or
+same title. Reproduce the targeted repair with
+`PYTHONPATH=src .venv/bin/python scripts/repair_reviewed_catalog.py --apply`.
+Findings 07 and 08 show the before/after comparisons.

@@ -165,7 +165,8 @@ def main() -> None:
     # what this stage read. Seed = the SSOT seed (lib.common.SEED); the
     # tiered collapse below is deterministic, no RNG is consumed.
     manifest = begin_manifest("dedupe", inputs=[DATA_PATH], seed=SEED)
-    df = load_dataset()
+    from core.identity_policy import apply_identity_links, reviewed_row_mask
+    df = apply_identity_links(load_dataset())
     n0 = len(df)
     work = df.assign(
         _price=pd.to_numeric(df["price"], errors="coerce"),
@@ -238,7 +239,7 @@ def main() -> None:
     bc_stripped = work["barcode"].fillna("").astype(str).str.strip()
     before_valid_barcodes = set(bc_stripped[barcode_validity(bc_stripped)]) - {""}
     work = work.assign(
-        _bc_valid=barcode_validity(bc_stripped).to_numpy()
+        _bc_valid=(barcode_validity(bc_stripped) & ~reviewed_row_mask(work)).to_numpy()
     )
     # The identity partition: a row's TRUSTED barcode, or "" when it has none.
     # T1 collapses within a partition by construction; T3 reuses it so two
@@ -247,6 +248,8 @@ def main() -> None:
         _ident=np.where(work["_bc_valid"],
                         work["barcode"].fillna("").astype(str).str.strip(), ""),
     )
+    held = reviewed_row_mask(work)
+    work.loc[held, "_ident"] = "review:" + work.loc[held, "product_id"].astype(str)
     with_bc = work[(work["_has_bc"] == 1) & (work["_bc_valid"])]
     t1_bc_invalid = work[(work["_has_bc"] == 1) & (~work["_bc_valid"])]
     no_bc = work[work["_has_bc"] == 0]

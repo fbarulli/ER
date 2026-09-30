@@ -1804,6 +1804,8 @@ def run_within_brand_pipeline(
     # share gtin=NaN and used to collapse into ONE canonical record with an
     # arbitrary mode-brand — poisoning canonical_records.csv AND the global
     # IDF every other GTIN was scored against. Drop them explicitly.
+    from core.identity_policy import apply_identity_links
+    df_full = apply_identity_links(df_full)
     n_before = len(df_full)
     gtin_valid = (
         df_full["gtin"].notna()
@@ -1819,8 +1821,9 @@ def run_within_brand_pipeline(
     from core.gtin import barcode_validity
 
     bc_valid = barcode_validity(df_full["gtin"].fillna("").astype(str).str.strip())
-    from core.identity_policy import review_mask
-    reviewed = review_mask(df_full["gtin"])
+    from core.identity_policy import reviewed_row_mask
+    reviewed = reviewed_row_mask(df_full)
+    bc_valid &= ~reviewed
     checksum_bad = gtin_valid & ~bc_valid & ~reviewed
     n_checksum_dropped = int(checksum_bad.sum())
     df_full = df_full[gtin_valid & bc_valid]

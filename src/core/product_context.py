@@ -1,8 +1,8 @@
 """Evidence with measurement basis and packaging scope; unknown is explicit.
 
 Title volume/count reuse pipeline extractors. Caffeine conversion requires an
-explicit linked denominator. Reviewed image evidence is scoped to one listing
-and its GTIN. Raw source attributes are never rewritten.
+explicit linked denominator. Reviewed evidence is scoped to one listing and
+its GTIN. Source container and prepared-drink quantities remain distinct.
 """
 from functools import lru_cache
 import re
@@ -34,6 +34,7 @@ def resolve_context(row: Mapping, attributes: Mapping) -> dict:
     inner = sorted({m[0].casefold().rstrip('s') for m in _CONTAINER.finditer(title)})
     context = {
         'unit_volume': {'value': unit_ml, 'unit': 'ml', 'source': 'title', 'evidence': volume.get('raw_match', '')},
+        'prepared_volume': {'value': None, 'unit': 'ml', 'source': 'unknown', 'evidence': ''},
         'pack_count': {'value': count, 'source': 'title', 'evidence': title if count else ''},
         'inner_packaging': {'types': inner, 'materials': [], 'source': 'title' if inner else 'unknown'},
         'outer_packaging': {'types': [], 'materials': [], 'source': 'unknown'},
@@ -70,12 +71,20 @@ def resolve_context(row: Mapping, attributes: Mapping) -> dict:
         import pandas as pd
         actual = normalize_and_validate_gtin(pd.Series([row.get('barcode', '')])).gtin_clean.iat[0]
         if pd.notna(actual) and str(actual).zfill(14) == reviewed.gtin.zfill(14):
-            context['inner_packaging'] = {'types': [reviewed.inner_type] if reviewed.inner_type else [],
-                'materials': [reviewed.inner_material] if reviewed.inner_material else [], 'source': reviewed.source}
-            context['outer_packaging'] = {'types': [reviewed.outer_type] if reviewed.outer_type else [],
-                'materials': [reviewed.outer_material] if reviewed.outer_material else [], 'source': reviewed.source}
+            if reviewed.inner_type or reviewed.inner_material:
+                context['inner_packaging'] = {'types': [reviewed.inner_type] if reviewed.inner_type else [],
+                    'materials': [reviewed.inner_material] if reviewed.inner_material else [], 'source': reviewed.source}
+            if reviewed.outer_type or reviewed.outer_material:
+                context['outer_packaging'] = {'types': [reviewed.outer_type] if reviewed.outer_type else [],
+                    'materials': [reviewed.outer_material] if reviewed.outer_material else [], 'source': reviewed.source}
             if reviewed.pack_count:
                 context['pack_count'] = {'value': reviewed.pack_count, 'source': reviewed.source, 'evidence': reviewed.source}
+            if reviewed.unit_volume_ml is not None:
+                context['unit_volume'] = {'value': reviewed.unit_volume_ml, 'unit': 'ml',
+                    'source': reviewed.source, 'evidence': reviewed.source}
+            if reviewed.prepared_volume_ml is not None:
+                context['prepared_volume'] = {'value': reviewed.prepared_volume_ml, 'unit': 'ml',
+                    'source': reviewed.source, 'evidence': reviewed.source}
     return context
 
 
