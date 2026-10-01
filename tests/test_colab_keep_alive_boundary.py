@@ -43,9 +43,9 @@ class TrainingLifecyclePreflightTests(unittest.TestCase):
             with mock.patch.object(
                 colab, "_validation_input_path", side_effect=by_config_path.__getitem__
             ), mock.patch.object(colab, "_expand_worker_profiles", return_value=["baseline"]), \
-                 mock.patch.object(colab, "_EXPECTED_TRAINING_ROWS", 3), \
-                 mock.patch.object(colab, "_EXPECTED_INFERENCE_ROWS", 2), \
-                 mock.patch.object(colab, "_EXPECTED_SOURCE_ROWS", 5):
+                 mock.patch.object(colab, "_legacy_validation_sources", return_value={
+                     "source": paths["source"], "training": paths["training"],
+                     "sample": paths["inference"]}):
                 result = colab.training_lifecycle_preflight(
                     workers=1, model="minilm_l6", masking_profile="baseline"
                 )
@@ -53,7 +53,7 @@ class TrainingLifecyclePreflightTests(unittest.TestCase):
         self.assertTrue(result["reconstructs_source"])
         self.assertEqual(result["source_rows"], 5)
         self.assertIn(
-            "dataset_deduped_sample_5000.csv",
+            "component_holdout.csv",
             " ".join(result["remote_completion_argv"]),
         )
 
@@ -95,6 +95,8 @@ class RetentionIsCpuOnlyTests(unittest.TestCase):
             mock.patch.object(sys, "argv", ["colab.py", *argv]),
             mock.patch.object(colab, "start_live_log"),
             mock.patch.object(colab, "close_live_log"),
+            mock.patch.object(colab, "_legacy_validation_sources"),
+            mock.patch.object(colab, "_validate_legacy_bundle_partitions"),
             mock.patch.object(colab, "check_colab_cli"),
             mock.patch.object(colab, "acquire_colab_launch_lock", return_value=None),
             mock.patch.object(colab, "release_colab_launch_lock"),

@@ -322,6 +322,23 @@ def link_barcode_less(
     # `_brand_block_key`), so alias siblings ("A SHOC"/"Accelerator") land in
     # ONE block and stay reachable for candidate generation.
     no_bc["_nb"] = _brand_family_key(no_bc[brand_col])
+    # The MATCH RULE needs the folded brand too (veto-asymmetry consumes the
+    # same family key): the finalized text carries each spelling's own RAW
+    # [brand][title] surface, so an alias pair whose block key is identical
+    # still compares as "a shoc ..." vs "accelerator ..." — the fold ADDS the
+    # shared family token but never equalizes the spellings, and the
+    # exact-title link inside the family block could never fire. The rule's
+    # comparison text therefore reads the brand through the SAME family key
+    # the block used ("shoc"), and only inside that one block can the family
+    # spellings differ — alias-free brands keep their byte-identical
+    # normalized surface (the block key is the full folded spelling), so
+    # cross-retailer exact titles and flavors-separate verdicts are
+    # unchanged. Blocking asserted nothing; the rule still verifies.
+    match_frame = no_bc.copy()
+    match_frame[brand_col] = no_bc["_nb"]
+    no_bc["_nts"] = finalized_texts(match_frame).loc[no_bc.index].map(
+        strip_pack_multiplicity
+    )
     no_bc["_nr"] = _norm_retailer(no_bc[retailer_col])
     # A finalized text of a title-less row is just the brand string — brand
     # alone asserts NO product identity, so such rows stay singletons even

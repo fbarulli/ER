@@ -169,8 +169,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             random.setstate(restored["python_rng"])
             np.random.set_state(restored["numpy_rng"])
             best_metric, start_epoch = restored["best_metric"], restored["epoch"]
-            if cfg.epochs <= start_epoch:
-                raise ValueError("resume epochs must exceed completed epochs")
+            if cfg.epochs < start_epoch:
+                raise ValueError("resume epochs cannot precede completed epochs")
         if cfg.include_inputs:
             input_dir = output / name(cfg.track, "inputs")
             input_dir.mkdir(exist_ok=True)
@@ -286,6 +286,11 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             if cfg.postprocess:
                 from graph_tracks.report import complete
                 completion_root = output / name(cfg.track, f"completion-epoch-{cfg.epochs}")
+                if resume and completion_root.exists():
+                    # Preserve a partially written report; regenerate from the
+                    # verified selected checkpoint in a fresh directory.
+                    completion_root.rename(completion_root.with_name(
+                        completion_root.name + f".interrupted-{time.time_ns()}"))
                 completion_root.mkdir(parents=True)
                 completion = complete(best_path, resolve(cfg.listings), resolve(cfg.pairs), completion_root, cfg,
                     text_cache=resolve(cfg.text_cache) if cfg.text_cache else None)

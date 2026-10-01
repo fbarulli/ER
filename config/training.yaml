@@ -49,6 +49,17 @@ masking:
   track_visibility: true      # persist per-copy realized mask percentages
   track_per_epoch: true       # persist dynamic hard-negative mask percentages
 
+# ── prepared-bundle drift switch (TIER 1(e)) ─────────────────────────────────
+# FALSE (today): load_prepared_bundle WARNS on a bundle built under a
+# different masking/easy config (e.g. one recording the deleted
+# once-agreed-surface swap sidecar knobs) so the
+# pre-rebuild audit findings stay reproducible. TRUE: it HARD-FAILS with a
+# ValueError and the bundle must be re-prepared. Flip TRUE immediately after
+# the bundle rebuild lands. The env form wins when set:
+#   export PREPARED_BUNDLE_DRIFT_STRICT=1
+# env unset + key absent => FALSE.
+prepared_bundle_drift_strict: true
+
 masking_profiles:
   baseline: {}
   matched_positive_negative:
@@ -93,15 +104,14 @@ colab:
   # Training workers consume immutable bundles prepared locally.  Keep all
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
-  training_dataset_csv: "data/dataset_deduped_train_minus_5000.csv"
+  training_dataset_csv: "data/dataset_deduped.csv"
   # The normal ANN lane consumes its entire prepared training set.
   train_fraction: 1.0
   # Versioned checkout inputs for the fast standard ANN lane.
   full_prepared_bundles:
     - "data/prepared/full/worker_1_baseline.pkl.gz"
-  # Deterministic 128-row prefix of training_dataset_csv. It is the smallest
-  # checked smoke population that survives the pair/component/triple guards.
-  # Columns the pipeline never reads (url, image_url) are dropped from it.
+  # Retained legacy schema binding; plain smoke is rejected before provisioning.
+  # Use an explicit sampled model_tracks suite with frozen parent splits.
   smoke_dataset_csv: "data/dataset_deduped_smoke_128.csv"
   smoke_inference_sample: 5
   # Distributions the launcher asserts on the VM, per lane.  The Colab image
@@ -221,17 +231,13 @@ colab:
   # Saves landing inside one window leave as a single `dvc push`; a lone
   # checkpoint is still published within this window.
   dvc_publish_debounce_seconds: 20.0
-  # Final inference uses the 5,000-row held-out sample. The full deduped
-  # catalog is the identity anchor used to assert that training plus holdout
-  # reconstructs the source population.
+  # Legacy completion uses listing partitions materialized locally from the
+  # validated model_tracks setup. Text training applies its shared component
+  # holdout internally to the full catalog; inference scores dev/test listings.
   final_inference:
     enabled: true
-    # The identity anchor: the FULL deduped catalog. training + sample must
-    # reconstruct exactly this, which is what the preflight asserts.
-    source_csv: "data/dataset_deduped.csv"
-    # The file actually fed to inference: the 5,000 held-out sample. Inference
-    # runs on this sample only; it never scores the whole catalog.
-    input_csv: "data/dataset_deduped_sample_5000.csv"
+    source_csv: "results/prepared_training/component_validation/eligible_catalog.csv"
+    input_csv: "results/prepared_training/component_validation/component_holdout.csv"
     output_dir: "final_inference"
     # REQUIRED, not a preference: final inference must actually run on the GPU
     # when one is present. The worker refuses to start rather than silently

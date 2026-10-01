@@ -133,6 +133,13 @@ class PrebuiltWheelTests(unittest.TestCase):
 class BundleCacheTests(unittest.TestCase):
     """A byte-identical bundle request must not be rebuilt."""
 
+    def setUp(self):
+        # Cache tests isolate file caching from the independently tested split gate.
+        for helper in ('_legacy_validation_sources', '_validate_legacy_bundle_partitions'):
+            patcher = mock.patch.object(colab, helper)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def _fixture(self, temporary: str):
         root = Path(temporary)
         dataset = root / "dataset.csv"
@@ -156,6 +163,7 @@ class BundleCacheTests(unittest.TestCase):
             with mock.patch.object(colab, "RESULTS", root / "results"), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -167,6 +175,7 @@ class BundleCacheTests(unittest.TestCase):
             with mock.patch.object(colab, "RESULTS", root / "results"), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -185,6 +194,7 @@ class BundleCacheTests(unittest.TestCase):
             with mock.patch.object(colab, "RESULTS", root / "results"), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -196,6 +206,7 @@ class BundleCacheTests(unittest.TestCase):
             with mock.patch.object(colab, "RESULTS", root / "results"), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -216,6 +227,7 @@ class BundleCacheTests(unittest.TestCase):
             with mock.patch.object(colab, "RESULTS", root / "results"), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -227,6 +239,7 @@ class BundleCacheTests(unittest.TestCase):
             with mock.patch.object(colab, "RESULTS", root / "results"), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -244,6 +257,7 @@ class BundleCacheTests(unittest.TestCase):
                  mock.patch.object(colab, "_CACHE_PREPARED_BUNDLES", False), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -255,6 +269,7 @@ class BundleCacheTests(unittest.TestCase):
                  mock.patch.object(colab, "_CACHE_PREPARED_BUNDLES", False), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -270,6 +285,7 @@ class BundleCacheTests(unittest.TestCase):
             with mock.patch.object(colab, "RESULTS", root / "results"), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build), \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -281,6 +297,7 @@ class BundleCacheTests(unittest.TestCase):
             with mock.patch.object(colab, "RESULTS", root / "results"), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      side_effect=lambda path, *a, **k: (
@@ -321,7 +338,8 @@ class ValidationUploadPrewarmTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             dataset = Path(temporary) / "dataset.csv"
             dataset.write_text("product_id\n1\n")
-            with mock.patch.object(colab, "_perform_validation_upload", spy), \
+            with mock.patch.object(colab, "_legacy_validation_sources", return_value={key: dataset for key in ("source", "training", "sample")}), \
+                 mock.patch.object(colab, "_perform_validation_upload", spy), \
                  mock.patch.object(
                      colab, "_validation_input_path", return_value=dataset
                  ), \
@@ -386,6 +404,12 @@ class ValidationUploadPrewarmTests(unittest.TestCase):
 class LauncherOrderTests(unittest.TestCase):
     """Standard full training uses immutable checkout inputs."""
 
+    def setUp(self):
+        for helper in ('_legacy_validation_sources', '_validate_legacy_bundle_partitions'):
+            patcher = mock.patch.object(colab, helper)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_main_starts_the_local_build_before_the_dependency_install(self):
         order: list[str] = []
 
@@ -429,7 +453,7 @@ class LauncherOrderTests(unittest.TestCase):
         )
         self.assertEqual(
             run_train.call_args.kwargs["remote_dataset_csv"],
-            colab._FINAL_INFERENCE.source_csv,
+            colab._COLAB.training_dataset_csv,
         )
 
     def test_a_resumed_run_does_not_prewarm_its_uploads(self):
@@ -578,6 +602,12 @@ class BundlePrewarmTests(unittest.TestCase):
     def tearDown(self) -> None:
         colab.drain_local_bundle_prewarm()
 
+    def setUp(self):
+        for helper in ('_legacy_validation_sources', '_validate_legacy_bundle_partitions'):
+            patcher = mock.patch.object(colab, helper)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_build_runs_while_the_remote_deps_stage_is_still_going(self):
         entered = threading.Event()
         release = threading.Event()
@@ -677,6 +707,7 @@ class BundlePrewarmTests(unittest.TestCase):
                      colab, "_validation_input_path", return_value=dataset
                  ), \
                  mock.patch.object(colab.subprocess, "run") as build, \
+                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
                      "training.prepared_bundle.load_prepared_bundle",
                      return_value=(manifest, None),
@@ -803,6 +834,9 @@ class UploadReuseTests(unittest.TestCase):
         def resolve(value: str) -> Path:
             return paths[{"s": "source", "i": "sample"}.get(value, "training")]
 
+        patcher = mock.patch.object(colab, '_legacy_validation_sources', return_value=paths)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         return root, paths, validation, resolve
 
     def test_disabled_validation_still_maps_every_key_without_contacting_the_vm(self):

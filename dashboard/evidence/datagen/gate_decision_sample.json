@@ -1,0 +1,328 @@
+{
+ "proceed": [
+  {
+   "gtin1": "100141457524",
+   "gtin2": "796762808045",
+   "gate_decision": "proceed",
+   "gate_reason": "Known critical attributes compatible",
+   "similarity": "1.0",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100141457524",
+    "sku_name_eng": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pack) Packaging May Vary - Pack of 2",
+    "description_short_eng": "\"\" \n* pack of four 9.5 oz. glass bottles \n* Only 200 calories per bottle \n* Great for in the morning or on the go \n* Discover Vanilla Frappuccino coffee drink, a creamy blend of coffee and milk, mixed ",
+    "attribute": "Coffee Type: arabica; Carbonization: still; Juice Content: 0-2%; Flavour: vanilla, coffee; Volume: 281; RTD Coffee Style: milk, mocha, frappuccino"
+   },
+   "right": {
+    "retailer": "amazon",
+    "gtin": "796762808045",
+    "sku_name_eng": "Starbucks Frappuccino Vanilla 4- 9.5 Fl Oz Bottles (2 Pack = 8 bottles)",
+    "description_short_eng": "Starbucks Frappuccino Vanilla\n4- 9.5 Fl Oz Bottles (2 Pack - 8 bottles total)\nGood Source of Protein and Calcium\n200 Calories per bottle",
+    "attribute": "Pack Type: Jar; Volume: 281; Contains Minerals: calcium; Health Claims: good source of calcium, high protein, good source of minerals; Pack Material Type: Glass; Carbonization: still; Juice Content: 0-2%; Flavour: vanilla; RTD Coffee Style: frappuccino"
+   }
+  },
+  {
+   "gtin1": "100141564826",
+   "gtin2": "100142347862",
+   "gate_decision": "proceed",
+   "gate_reason": "Known critical attributes compatible",
+   "similarity": "1.0",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100141564826",
+    "sku_name_eng": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pack) Packaging May Vary",
+    "description_short_eng": "\"\" \n* pack of four 9.5 oz. glass bottles \n* Only 200 calories per bottle \n* Great for in the morning or on the go \n* Discover Vanilla Frappuccino coffee drink, a creamy blend of coffee and milk, mixed ",
+    "attribute": "Carbonization: still; Volume: 281; Juice Content: 0-2%; Coffee Type: arabica; Flavour: vanilla, coffee; RTD Coffee Style: milk, frappuccino"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100142347862",
+    "sku_name_eng": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pack) Packaging May Vary",
+    "description_short_eng": "\"\" \n* pack of four 9.5 oz. glass bottles \n* Only 200 calories per bottle \n* Great for in the morning or on the go \n* Discover Vanilla Frappuccino coffee drink, a creamy blend of coffee and milk, mixed ",
+    "attribute": "Volume: 281; Juice Content: 0-2%; RTD Coffee Style: milk, frappuccino; Flavour: vanilla, coffee; Carbonization: still; Coffee Type: arabica"
+   }
+  },
+  {
+   "gtin1": "100141564826",
+   "gtin2": "100142790682",
+   "gate_decision": "proceed",
+   "gate_reason": "Known critical attributes compatible",
+   "similarity": "1.0",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100141564826",
+    "sku_name_eng": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pack) Packaging May Vary",
+    "description_short_eng": "\"\" \n* pack of four 9.5 oz. glass bottles \n* Only 200 calories per bottle \n* Great for in the morning or on the go \n* Discover Vanilla Frappuccino coffee drink, a creamy blend of coffee and milk, mixed ",
+    "attribute": "Carbonization: still; Volume: 281; Juice Content: 0-2%; Coffee Type: arabica; Flavour: vanilla, coffee; RTD Coffee Style: milk, frappuccino"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100142790682",
+    "sku_name_eng": "2X - Starbucks Frappuccino Vanilla Coffee Drink - 4pk / 9.5 fl oz Glass Bottles",
+    "description_short_eng": "\"\" \n* * Enjoy your favorite chilled coffee drink on the go \n* The perfect late afternoon pick-me-up, this cold coffee treat is great straight from the bottle or enjoyed over ice \n* Inspired by a classi",
+    "attribute": "RTD Coffee Style: milk, frappuccino; Volume: 281; Caffeine: 15-25 mg; Juice Content: 0-2%; Flavour: vanilla, coffee; Pack Material Type: Paper / Carton; Carbonization: still"
+   }
+  },
+  {
+   "gtin1": "100141564826",
+   "gtin2": "100142961532",
+   "gate_decision": "proceed",
+   "gate_reason": "Known critical attributes compatible",
+   "similarity": "0.8333333333333334",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100141564826",
+    "sku_name_eng": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pack) Packaging May Vary",
+    "description_short_eng": "\"\" \n* pack of four 9.5 oz. glass bottles \n* Only 200 calories per bottle \n* Great for in the morning or on the go \n* Discover Vanilla Frappuccino coffee drink, a creamy blend of coffee and milk, mixed ",
+    "attribute": "Carbonization: still; Volume: 281; Juice Content: 0-2%; Coffee Type: arabica; Flavour: vanilla, coffee; RTD Coffee Style: milk, frappuccino"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100142961532",
+    "sku_name_eng": "Starbucks Frappuccino Vanilla Iced Coffee Multipack Bottles 4 pk / 9.5 fl oz",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 4.0 About servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 200 \n* % Daily value* \n* Total Fat3.5g Total Fat \n* Saturated Fat2g Saturated Fat \n*",
+    "attribute": "Pack Type: Bottle; Flavour: vanilla, coffee; Carbonization: still; Volume: 281; RTD Coffee Style: milk, frappuccino; Juice Content: 0-2%; Sweetener: sugar; Caffeine: 15-25 mg"
+   }
+  },
+  {
+   "gtin1": "100141564826",
+   "gtin2": "915953021616",
+   "gate_decision": "proceed",
+   "gate_reason": "Known critical attributes compatible",
+   "similarity": "1.0",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100141564826",
+    "sku_name_eng": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pack) Packaging May Vary",
+    "description_short_eng": "\"\" \n* pack of four 9.5 oz. glass bottles \n* Only 200 calories per bottle \n* Great for in the morning or on the go \n* Discover Vanilla Frappuccino coffee drink, a creamy blend of coffee and milk, mixed ",
+    "attribute": "Carbonization: still; Volume: 281; Juice Content: 0-2%; Coffee Type: arabica; Flavour: vanilla, coffee; RTD Coffee Style: milk, frappuccino"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "915953021616",
+    "sku_name_eng": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pack) ( Package May Vary)",
+    "description_short_eng": "\"\" \n* Pack Of Four 9.5 Oz. Glass Bottles \n* Only 200 Calories Per Bottle \n* Great For In The Morning Or On The Go \n* Discover Vanilla Frappuccino Coffee Drink, A Creamy Blend Of Coffee And Milk, Mixed ",
+    "attribute": "Volume: 281; Flavour: coffee, vanilla; Coffee Type: arabica; RTD Coffee Style: milk, frappuccino; Carbonization: still; Juice Content: 0-2%"
+   }
+  }
+ ],
+ "hard_no": [
+  {
+   "gtin1": "100140705596",
+   "gtin2": "100140706722",
+   "gate_decision": "hard_no",
+   "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+   "similarity": "0.5714285714285714",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100140705596",
+    "sku_name_eng": "KR White Grape Flavored Sparkling Bottled Water 1 liter - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Carbonization: sparkling; Water Type: flavoured; Caffeine: 0-15 mg; Flavour: grape; Volume: 1000; Pack Type: Liquid Carton; Juice Content: 0-2%; Contains Minerals: calcium, iron"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100140706722",
+    "sku_name_eng": "KR Strawberry Lemonade Flavored Seltzer Water Cans 12 pk / 12 fl oz - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 12.0 servings per container \n* Serving size 1 can (354mL) \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Sodium10mg Sodium \n* Total Carbohydr",
+    "attribute": "Water Type: seltzer; Juice Content: 0-2%; Volume: 355; Flavour: strawberry, lemon; Caffeine: 15-25 mg; Carbonization: carbonated; Pack Type: Carton/Box"
+   }
+  },
+  {
+   "gtin1": "100140705596",
+   "gtin2": "100140707828",
+   "gate_decision": "hard_no",
+   "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+   "similarity": "0.6666666666666666",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100140705596",
+    "sku_name_eng": "KR White Grape Flavored Sparkling Bottled Water 1 liter - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Carbonization: sparkling; Water Type: flavoured; Caffeine: 0-15 mg; Flavour: grape; Volume: 1000; Pack Type: Liquid Carton; Juice Content: 0-2%; Contains Minerals: calcium, iron"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100140707828",
+    "sku_name_eng": "KR Pink Grapefruit Flavored Seltzer Water Cans 12 pk / 12 fl oz - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 12.0 servings per container \n* Serving size 1 can (354mL) \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Sodium10mg Sodium \n* Total Carbohydr",
+    "attribute": "Volume: 355; Water Type: seltzer; Flavour: grapefruit; Pack Type: Carton/Box; Carbonization: carbonated; Juice Content: 0-2%; Caffeine: 15-25 mg"
+   }
+  },
+  {
+   "gtin1": "100140705596",
+   "gtin2": "100140709075",
+   "gate_decision": "hard_no",
+   "gate_reason": "Critical attribute mismatch: flavor",
+   "similarity": "0.6666666666666666",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100140705596",
+    "sku_name_eng": "KR White Grape Flavored Sparkling Bottled Water 1 liter - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Carbonization: sparkling; Water Type: flavoured; Caffeine: 0-15 mg; Flavour: grape; Volume: 1000; Pack Type: Liquid Carton; Juice Content: 0-2%; Contains Minerals: calcium, iron"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100140709075",
+    "sku_name_eng": "KR Key Lime Flavored Sparkling Bottled Water 1 liter - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Contains Minerals: calcium, iron; Water Type: flavoured; Caffeine: 0-15 mg; Carbonization: sparkling; Pack Type: Liquid Carton; Flavour: lime; Volume: 1000; Juice Content: 0-2%"
+   }
+  },
+  {
+   "gtin1": "100140705596",
+   "gtin2": "100140792213",
+   "gate_decision": "hard_no",
+   "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+   "similarity": "0.5714285714285714",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100140705596",
+    "sku_name_eng": "KR White Grape Flavored Sparkling Bottled Water 1 liter - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Carbonization: sparkling; Water Type: flavoured; Caffeine: 0-15 mg; Flavour: grape; Volume: 1000; Pack Type: Liquid Carton; Juice Content: 0-2%; Contains Minerals: calcium, iron"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100140792213",
+    "sku_name_eng": "KR Mandarin Orange Flavored Seltzer Water Cans 12 pk / 12 fl oz",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* servings per container \n* Serving size 1 can (354mL) \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Sodium10mg Sodium \n* Total Carbohydrate0g",
+    "attribute": "Pack Type: Carton/Box; Volume: 355; Water Type: flavoured, seltzer; Caffeine: 15-25 mg; Flavour: mandarin, orange; Juice Content: 0-2%; Carbonization: carbonated"
+   }
+  },
+  {
+   "gtin1": "100140705596",
+   "gtin2": "100141649301",
+   "gate_decision": "hard_no",
+   "gate_reason": "Pack blocker: pack size, package type, or volume mismatch",
+   "similarity": "0.25",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100140705596",
+    "sku_name_eng": "KR White Grape Flavored Sparkling Bottled Water 1 liter - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Carbonization: sparkling; Water Type: flavoured; Caffeine: 0-15 mg; Flavour: grape; Volume: 1000; Pack Type: Liquid Carton; Juice Content: 0-2%; Contains Minerals: calcium, iron"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100141649301",
+    "sku_name_eng": "KR 100% Orange Juice From Concentrate Original 16 fl oz Packaging May Vary",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 2.0 servings per container \n* Serving size 1 container (473 mL) \n* Amount per serving \n* Calories 120 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fa",
+    "attribute": "Flavour: orange; Made From: orange; Immune Support Ingredients: vitamin c; Juice Features: from concentrate; Juice Content: 100%; Contains Minerals: calcium, iron; Volume: 473; Carbonization: still; Pack Type: Bottle"
+   }
+  }
+ ],
+ "fallback": [
+  {
+   "gtin1": "100140705596",
+   "gtin2": "100140791131",
+   "gate_decision": "fallback",
+   "gate_reason": "Low raw pack confidence",
+   "similarity": "0.6666666666666666",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100140705596",
+    "sku_name_eng": "KR White Grape Flavored Sparkling Bottled Water 1 liter - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Carbonization: sparkling; Water Type: flavoured; Caffeine: 0-15 mg; Flavour: grape; Volume: 1000; Pack Type: Liquid Carton; Juice Content: 0-2%; Contains Minerals: calcium, iron"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100140791131",
+    "sku_name_eng": "KR Key Lime Flavored Sparkling Bottled Water 1 liter",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Contains Minerals: calcium, iron; Volume: 1000; Flavour: lime; Water Type: flavoured; Carbonization: sparkling; Pack Type: Liquid Carton; Juice Content: 0-2%; Caffeine: 0-15 mg"
+   },
+   "fallback_reason": "Low raw pack confidence"
+  },
+  {
+   "gtin1": "100140709075",
+   "gtin2": "100140791131",
+   "gate_decision": "fallback",
+   "gate_reason": "Low raw pack confidence",
+   "similarity": "1.0",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100140709075",
+    "sku_name_eng": "KR Key Lime Flavored Sparkling Bottled Water 1 liter - Pack of 2",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Contains Minerals: calcium, iron; Water Type: flavoured; Caffeine: 0-15 mg; Carbonization: sparkling; Pack Type: Liquid Carton; Flavour: lime; Volume: 1000; Juice Content: 0-2%"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100140791131",
+    "sku_name_eng": "KR Key Lime Flavored Sparkling Bottled Water 1 liter",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Contains Minerals: calcium, iron; Volume: 1000; Flavour: lime; Water Type: flavoured; Carbonization: sparkling; Pack Type: Liquid Carton; Juice Content: 0-2%; Caffeine: 0-15 mg"
+   },
+   "fallback_reason": "Low raw pack confidence"
+  },
+  {
+   "gtin1": "100140791131",
+   "gtin2": "100141843976",
+   "gate_decision": "fallback",
+   "gate_reason": "Low raw pack confidence",
+   "similarity": "0.5714285714285714",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100140791131",
+    "sku_name_eng": "KR Key Lime Flavored Sparkling Bottled Water 1 liter",
+    "description_short_eng": "\"\" \n* Nutrition Facts \n* 3.0 servings per container \n* Serving size 1 Bottle \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated Fat \n* Trans Fat",
+    "attribute": "Contains Minerals: calcium, iron; Volume: 1000; Flavour: lime; Water Type: flavoured; Carbonization: sparkling; Pack Type: Liquid Carton; Juice Content: 0-2%; Caffeine: 0-15 mg"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100141843976",
+    "sku_name_eng": "Pack of 2 - KR Pineapple Coconut Flavored Sparkling Bottled Water 1 liter",
+    "description_short_eng": "\"\" \n* * Nutrition Facts \n* 3.0 Exact servings per container \n* Serving size 12 fl oz (360mL) \n* Amount per serving \n* Calories 0 \n* % Daily value* \n* Total Fat0g Total Fat \n* Saturated Fat0g Saturated ",
+    "attribute": "Volume: 1000; Caffeine: 0-15 mg; Contains Minerals: calcium, iron; Water Type: flavoured; Health Claims: high protein; Juice Content: 100%; Carbonization: sparkling; Flavour: pineapple, coconut"
+   },
+   "fallback_reason": "Low raw pack confidence"
+  },
+  {
+   "gtin1": "100141403330",
+   "gtin2": "100141561399",
+   "gate_decision": "fallback",
+   "gate_reason": "Low raw pack confidence",
+   "similarity": "0.5",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100141403330",
+    "sku_name_eng": "G Zero Fruit Punch Zero Sugar Sports Drink, 28 fl oz- Pack of 3",
+    "description_short_eng": "\"\"G Zero Fruit Punch Zero Sugar Sports Drink, 28 fl oz- Pack of 3\"\" ; Brand Gatorade",
+    "attribute": "Carbonization: still; Volume: 828; Pack Type: Bottle; Health Claims: no sugar; Juice Content: 0-2%"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100141561399",
+    "sku_name_eng": "Gatorade - Sports Drinks G Zero Thirst Quencher, Grape, 28 Oz Packaging May Vary",
+    "description_short_eng": "\"\" \n* * Includes 1 (28oz) bottle of Gatorade Zero Thirst Quencher, Grape flavor \n* Gatorade Zero has no sugar while maintaining the same proven hydration and fueling benefits of Gatorade Thirst Quenche",
+    "attribute": "Sports Positioning: post-workout; Carbonization: still; Volume: 828; Sports Ingredients: electrolytes; Flavour: grape; Pack Type: Bottle; Juice Content: 0-2%; Health Claims: no sugar, hydrating"
+   },
+   "fallback_reason": "Low raw pack confidence"
+  },
+  {
+   "gtin1": "100141411847",
+   "gtin2": "100141561399",
+   "gate_decision": "fallback",
+   "gate_reason": "Low raw pack confidence",
+   "similarity": "0.42857142857142855",
+   "left": {
+    "retailer": "Walmart",
+    "gtin": "100141411847",
+    "sku_name_eng": "G Zero Lemon Lime Zero Sugar Sports Drink, 28 fl oz- Pack of 2",
+    "description_short_eng": "\"\"G Zero Lemon Lime Zero Sugar Sports Drink, 28 fl oz- Pack of 2\"\" ; Brand Gatorade",
+    "attribute": "Flavour: lemon, lime; Volume: 828; Carbonization: still; Pack Type: Bottle; Health Claims: no sugar; Juice Content: 0-2%"
+   },
+   "right": {
+    "retailer": "Walmart",
+    "gtin": "100141561399",
+    "sku_name_eng": "Gatorade - Sports Drinks G Zero Thirst Quencher, Grape, 28 Oz Packaging May Vary",
+    "description_short_eng": "\"\" \n* * Includes 1 (28oz) bottle of Gatorade Zero Thirst Quencher, Grape flavor \n* Gatorade Zero has no sugar while maintaining the same proven hydration and fueling benefits of Gatorade Thirst Quenche",
+    "attribute": "Sports Positioning: post-workout; Carbonization: still; Volume: 828; Sports Ingredients: electrolytes; Flavour: grape; Pack Type: Bottle; Juice Content: 0-2%; Health Claims: no sugar, hydrating"
+   },
+   "fallback_reason": "Low raw pack confidence"
+  }
+ ]
+}

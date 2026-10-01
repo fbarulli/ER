@@ -1,4 +1,4 @@
-"""GPU-only trainer for a bundle prepared on the local machine.
+"""Trainer for a bundle prepared on the local machine.
 
 This entrypoint deliberately has no dataset, pair-building, masking,
 country-padding, or calibration-input generation path. Those inputs are
@@ -49,6 +49,9 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--masking-profile", default=None)
     ap.add_argument("--collapse-guardrail-profile", default=None)
     ap.add_argument("--sample", type=int, default=None)
+    ap.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    ap.add_argument("--report-test", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--resume", action="store_true", help="restore native trainer checkpoints in this run")
     ap.add_argument("--mask-effect", action=argparse.BooleanOptionalAction, default=False)
     ap.add_argument("--no-plot", action="store_true")
     ap.add_argument("--run-tag", default=os.environ.get("EUROMONITOR_RUN_ID", "prepared"))
@@ -173,7 +176,8 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         band=tuple(float(x) for x in args.band.split("-")),
         data=data,
         seed=SEED,
-        on_cuda=__import__("torch").cuda.is_available(),
+        on_cuda=(args.device == "cuda" or
+                 (args.device == "auto" and __import__("torch").cuda.is_available())),
         folds_override=test_bc,
         dev_fraction=float(cfg["training"]["dev_fraction"]),
         dev_override=dev_bc,
@@ -197,7 +201,9 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         train_frac=args.train_frac if args.train_frac < 1.0 else None,
         run_tag=args.run_tag,
         sample=bool(args.sample),
-        resume=False,
+        resume=bool(getattr(args, "resume", False)),
+        selection_mode=not args.report_test,
+        skip_test_eval=not args.report_test,
         wandb_ctx=wandb_ctx,
     )
     out = RESULTS / f"train_{Path(str(model_id)).name}_holdout_{manifest.payload_variant}_fold_metrics.csv"

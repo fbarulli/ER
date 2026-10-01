@@ -4,7 +4,10 @@ import json
 import logging
 import os
 import sys
+from functools import lru_cache
 from pathlib import Path
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / 'src'))
@@ -18,8 +21,11 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse
 from catalog import lookup
 from fastapi.staticfiles import StaticFiles
+from core.common import DATA_PATH, load_dataset
 
 app.title = 'ER discovery'
+from training_reports import router as training_reports_router
+app.include_router(training_reports_router)
 app.mount('/images', StaticFiles(directory=ROOT / 'images'), name='identity-images')
 # Preserve the upstream overview and put the discovery at the entrance.
 overview = next(route for route in app.routes if getattr(route, 'path', None) == '/')
@@ -51,7 +57,7 @@ def discovery():
     originals = ''.join(f'<li><a href="/catalog?gtin={gtin}">{escape(title)} · {gtin}</a></li>' for gtin,title in cases)
     n_held = len(review_policy().quarantined_gtins)
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER discovery</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}h1{{font-size:1.5rem}}li{{margin:.5rem 0}}iframe{{width:100%;height:1100px;border:1px solid #ddd}}.status{{padding:8px;background:#dff4e8;display:inline-block}}.metrics{{display:flex;gap:1rem;flex-wrap:wrap}}.metric{{border:1px solid #ddd;padding:1rem}}.metric strong{{display:block;font-size:1.5rem}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ccc;padding:.5rem;text-align:left}}details{{margin:1rem 0}}input{{padding:.5rem}}summary{{cursor:pointer}}</style></head><body><h1>ER · Identity findings and fixes</h1><p class="status">{n_held} reviewed identifiers blocked from labels and splits · source data retained</p><h2>Original audit</h2><div class="metrics"><div class="metric"><strong>{counts['pairs_with_at_least_one_disjoint_dimension']:,} / {counts['sampled_cross_retailer_same_gtin_pairs']:,}</strong>pairs with raw disagreements</div><div class="metric"><strong>{counts['affected_gtins']:,}</strong>affected GTINs</div><div class="metric"><strong>{audit['observed_dimensions']}</strong>dimensions checked</div><div class="metric"><strong>71,623</strong>original listings</div></div><p>Audit snapshot · capped at 20 cross-retailer pairs per GTIN · raw disagreements, not confirmed identity errors.</p>
-<p>Session tracks · <a href="/datagen"><strong>Datagen track</strong></a> (identity fixes, GTIN integrity, attribute-universe census, datagen budget) · <a href="/graphs"><strong>Graphs track</strong></a> (GNN-only / hybrid semantic-ID lane)</p><h2>Findings · comparisons · results</h2><ul>{links}</ul><iframe title="Finding 01 — comparison and fix" src="/results/identity/01_identity_discovery_findings.html" sandbox="allow-same-origin allow-popups"></iframe><h2>Original listing evidence</h2><form action="/catalog"><label for="gtin">GTIN</label> <input id="gtin" name="gtin" placeholder="868784000346" required> <button>Compare listings</button></form><ul>{originals}</ul><details><summary>All 37 dimensions · coverage and raw disagreements</summary><table><tr><th>Dimension</th><th>Coverage</th><th>Pairs with both observed</th><th>Disjoint pairs</th></tr>{dimensions}</table></details><p><a href="/experiments">Experiment dashboard</a> · <a href="/canvas">Maps</a></p></body></html>'''
+<p>Session tracks · <a href="/training"><strong>Training reports</strong></a> · <a href="/datagen"><strong>Datagen track</strong></a> (identity fixes, GTIN integrity, attribute-universe census, datagen budget) · <a href="/gate"><strong>Gate decisions</strong></a> (original-column sample of 5 per decision bucket) · <a href="/graphs"><strong>Graphs track</strong></a> (GNN-only / hybrid semantic-ID lane)</p><h2>Findings · comparisons · results</h2><ul>{links}</ul><iframe title="Finding 01 — comparison and fix" src="/results/identity/01_identity_discovery_findings.html" sandbox="allow-same-origin allow-popups"></iframe><h2>Original listing evidence</h2><form action="/catalog"><label for="gtin">GTIN</label> <input id="gtin" name="gtin" placeholder="868784000346" required> <button>Compare listings</button></form><ul>{originals}</ul><details><summary>All 37 dimensions · coverage and raw disagreements</summary><table><tr><th>Dimension</th><th>Coverage</th><th>Pairs with both observed</th><th>Disjoint pairs</th></tr>{dimensions}</table></details><p><a href="/experiments">Experiment dashboard</a> · <a href="/canvas">Maps</a></p></body></html>'''
 
 
 @app.get('/findings/02', response_class=HTMLResponse)
@@ -149,7 +155,170 @@ def datagen_track():
 </ul>
 </details>
 {budget_html}
-<p><a href="/">← home</a> · <a href="/graphs">graphs track</a></p>
+<p><a href="/">← home</a> · <a href="/gate"><strong>Gate decisions</strong></a> (original-column sample of 5 per decision bucket) · <a href="/graphs">graphs track</a></p>
+</body></html>'''
+
+
+# ── gate-decisions evidence ──────────────────────────────────────────────────
+# The stage-1 gate artifacts (data/gate_results.csv: gtin1, gtin2, canon1,
+# canon2, gate_decision, gate_reason, similarity — the deciding clause is the
+# gate_reason column) record each candidate pair in canonical form only. This
+# page joins those pairs back to the RAW export via core.common.load_dataset
+# (SSOT column mapping) and shows the ORIGINAL columns, as exported — the raw
+# 13-column feed, not the cleaned/canonical view. Raw frame cached once by
+# file modification time, mirroring dashboard/catalog.py.
+
+_gate_dir = ROOT / 'evidence' / 'datagen'
+_gate_results_path = ROOT.parent / 'data' / 'gate_results.csv'
+_GATE_BUCKETS = ('proceed', 'hard_no', 'fallback')
+# (canonical column after load_dataset, original export header shown)
+_GATE_ORIGINAL_COLUMNS = (
+    ('retailer', 'retailer'), ('barcode', 'gtin'), ('title', 'sku_name_eng'),
+    ('description', 'description_short_eng'), ('attributes', 'attribute'),
+)
+
+@lru_cache(maxsize=1)
+def _gate_raw(mtime_ns: int):
+    frame = load_dataset()
+    listings = frame.barcode.value_counts()
+    resolvable = frame[frame.barcode.notna() & frame.barcode.ne('')]
+    first = resolvable.drop_duplicates('barcode', keep='first').set_index('barcode')
+    return first, listings
+
+@lru_cache(maxsize=1)
+def _gate_results_frame(mtime_ns: int):
+    return pd.read_csv(_gate_results_path, dtype=str, keep_default_na=False, low_memory=False)
+
+def _gate_route_gloss(clause: str) -> str:
+    if 'Pack blocker' in clause:
+        return 'a pack size / package-type / volume conflict — blocked before anything else could run; never a merge, never a review'
+    if 'Ambiguous volume' in clause:
+        return 'volume evidence contradicts itself, so the gate cannot trust even the raw numbers — deferred to review'
+    if 'Critical attribute mismatch' in clause:
+        return f'a retailer-defining attribute ({clause.split(": ", 1)[-1]}) conflicts between the two listings — blocked'
+    if 'material mismatch' in clause:
+        return 'both sides name a package material and they disagree — blocked'
+    if 'asserted on one side only' in clause:
+        return 'one-sided packaging assertion (case vs unstated): a missing marker is absence of evidence, not a negative — a human applies the rule, the model is not asked to guess'
+    if 'Overlapping but low consistency' in clause or 'Overlap but low consistency' in clause:
+        return 'volume/pack overlaps exist but the consistency scores fall under the fallback threshold — overlap alone is too weak to proceed'
+    if 'Low raw pack confidence' in clause:
+        return 'raw pack evidence on at least one side scores under the veto threshold — deferred, neither confirmed nor denied'
+    if 'Low raw volume confidence' in clause:
+        return 'raw volume evidence on at least one side scores under the veto threshold — deferred, neither confirmed nor denied'
+    return 'deferred — the clause text above is the route the pair took'
+
+def _gate_side(gt: str, raw, listings) -> dict:
+    row = raw.loc[gt]
+    return {orig: (gt if c == 'barcode' else str(row[c]) if pd.notna(row[c]) else '') for c, orig in _GATE_ORIGINAL_COLUMNS} | {
+        '_listings': f'first of {int(listings.loc[gt]):,} exported listing(s) for this barcode'}
+
+
+def _gate_mismatch_html(left_attrs: str, right_attrs: str) -> str:
+    """Per-dimension mismatch table for one candidate pair, computed from the
+    ORIGINAL attribute cells through the same SSOT the census uses
+    (core.attribute_universe.parse). Mismatch = both sides populated, parsed
+    sets differ (or the pair's conflict predicate fires for delegated dims);
+    single-sided rows are shown as missing-evidence, never as conflict."""
+    from core.attribute_universe import AttributeUniverse
+    uni = AttributeUniverse(pd.DataFrame({'barcode': ['0', '0'],
+                                            'attributes': [str(left_attrs or ''), str(right_attrs or '')]}))
+    lparse, rparse = uni.parse(left_attrs), uni.parse(right_attrs)
+    predicates = uni._conflict_predicates()
+    mism, onesided = [], []
+    for key in sorted(set(lparse) | set(rparse)):
+        lv, rv = lparse.get(key), rparse.get(key)
+        def fmt(v):
+            if v is None:
+                return '—'
+            if isinstance(v, frozenset):
+                return ', '.join(sorted(v)) if v else 'empty'
+            return ', '.join(str(s) for s in getattr(v, '__members__', ())) if False else str(v)
+        if lv is None and rv is not None:
+            onesided.append(f'<tr><td>{escape(key)}</td><td>—</td><td>{escape(fmt(rv))}</td></tr>')
+        elif rv is None and lv is not None:
+            onesided.append(f'<tr><td>{escape(key)}</td><td>{escape(fmt(lv))}</td><td>—</td></tr>')
+        elif lv is not None and rv is not None:
+            pred = predicates.get(key, lambda a, b: a != b)
+            if pred(lv, rv):
+                mism.append(f'<tr><td>{escape(key)}</td><td>{escape(fmt(lv))}</td><td>{escape(fmt(rv))}</td></tr>')
+    if not mism and not onesided:
+        return '<p class="muted">All registered dimensions agree or are unknown on both sides.</p>'
+    mismatch_table = (f'<table><tr><th>Dimension · VALUES DIFFER</th><th>Left</th><th>Right</th></tr>'
+                      + ''.join(mism) + '</table>') if mism else ''
+    onesided_table = (f'<details><summary>Single-sided evidence ({len(onesided)} dims — populated on one side only)</summary>'
+                      f'<table><tr><th>Dimension</th><th>Left</th><th>Right</th></tr>{"".join(onesided)}</table></details>') if onesided else ''
+    return (f'<p><strong>Mismatching dimensions · {len(mism)} differ</strong></p>{mismatch_table}'
+            + (f'<p class="muted">{len(mism)} dimension(s) genuinely disagree</p>' if mism else '') + onesided_table)
+def _gate_sample(g, raw, listings, decision: str, size: int = 5):
+    bucket = g[g.gate_decision == decision]
+    picked, skipped = [], 0
+    for row in bucket.itertuples(index=False):
+        if len(picked) >= size:
+            break
+        if row.gtin1 in raw.index and row.gtin2 in raw.index:
+            picked.append(row)
+        else:
+            skipped += 1
+    return picked, skipped, len(bucket)
+
+def _gate_pair_html(rank: int, row, raw, listings) -> str:
+    try:
+        sim = f'{float(row.similarity):.3f}'
+    except Exception:
+        sim = escape(row.similarity)
+    model = _gate_side(row.gtin1, raw, listings)
+    other = _gate_side(row.gtin2, raw, listings)
+    rows = (
+        f'<tr><th>left · {escape(model["retailer"])}</th>' + ''.join(f'<td>{escape(model[orig])}</td>' for _c, orig in _GATE_ORIGINAL_COLUMNS) + '</tr>'
+        f'<tr><th>right · {escape(other["retailer"])}</th>' + ''.join(f'<td>{escape(other[orig])}</td>' for _c, orig in _GATE_ORIGINAL_COLUMNS) + '</tr>'
+    )
+    listing_notes = f'{escape(model["_listings"])} · {escape(other["_listings"])}'
+    clause = escape(row.gate_reason)
+    label = 'fallback_reason' if row.gate_decision == 'fallback' else 'gate_reason (deciding clause)'
+    route = '' if row.gate_decision in ('hard_no', 'proceed') else f'{escape(_gate_route_gloss(str(row.gate_reason)))} — '
+    verdict = f'<p><strong>{escape(row.gate_decision)}</strong> · <code>{escape(label)}</code>: {clause} · {route}similarity {escape(sim)}</p>'
+    mism = _gate_mismatch_html(model['attribute'], other['attribute'])
+    return (f'<details><summary>#{rank} · {escape(row.gate_decision)} · similarity {escape(sim)} · {clause}</summary>'
+            f'{verdict}<p class="muted">{listing_notes}</p>{mism}'
+            f'<table><tr><th>Side</th>' + ''.join(f'<th>{escape(orig)}</th>' for _c, orig in _GATE_ORIGINAL_COLUMNS) + '</tr>'
+            f'{rows}</table></details>')
+
+@app.get('/gate', response_class=HTMLResponse)
+def gate_decisions():
+    g = _gate_results_frame(_gate_results_path.stat().st_mtime_ns)
+    raw, listings = _gate_raw(DATA_PATH.stat().st_mtime_ns)
+    counts = g.gate_decision.value_counts()
+    buckets_html, snapshot = [], {}
+    for decision in _GATE_BUCKETS:
+        picked, skipped, total = _gate_sample(g, raw, listings, decision)
+        snapshot[decision] = [
+            {'gtin1': r.gtin1, 'gtin2': r.gtin2, 'gate_decision': r.gate_decision,
+             'gate_reason': r.gate_reason, 'similarity': r.similarity,
+             'left': {orig: (r.gtin1 if c == 'barcode' else str(raw.loc[r.gtin1][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
+             'right': {orig: (r.gtin2 if c == 'barcode' else str(raw.loc[r.gtin2][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
+             **({'fallback_reason': r.gate_reason} if decision == 'fallback' else {})}
+            for r in picked]
+        pairs_html = ''.join(_gate_pair_html(rank, row, raw, listings) for rank, row in enumerate(picked, 1))
+        buckets_html.append(
+            f'<section><h2>{escape(decision)} · {counts.get(decision, 0):,} pairs</h2>'
+            f'<p class="muted">Original columns, as exported · no cleaning · deterministic sample: first {len(picked)} pairs in candidate order '
+            f'(both endpoints resolve to raw export rows)'
+            + (f' · {skipped:,} endpoint-unresolvable pair(s) skipped before the sample' if skipped else '') + '</p>' + pairs_html + '</section>')
+    try:
+        _gate_dir.mkdir(parents=True, exist_ok=True)
+        (_gate_dir / 'gate_decision_sample.json').write_text(json.dumps(snapshot, indent=1))
+        snapshot_note = f'deterministic copy written at render: dashboard/evidence/datagen/gate_decision_sample.json'
+    except Exception as error:
+        snapshot_note = f'snapshot not written ({escape(error)})'
+    counts_row = ''.join(f'<div class="metric"><strong>{counts.get(d, 0):,}</strong>{escape(d)} pairs</div>' for d in _GATE_BUCKETS)
+    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER gate decisions</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}table{{border-collapse:collapse;width:100%;font-size:.9rem}}td,th{{border:1px solid #ccc;padding:.4rem;text-align:left;overflow-wrap:anywhere}}details{{margin:1rem 0}}summary{{cursor:pointer}}section{{border-top:1px solid #ccc;padding:1rem 0}}.muted{{color:#666}}.metric{{border:1px solid #ddd;padding:1rem;width:11rem}}.metrics{{display:flex;gap:1rem;flex-wrap:wrap}}code{{background:#f6f6f6;padding:.1rem .3rem}}</style></head><body>
+<h1>ER · Gate decisions — original-column evidence</h1>
+<p><strong>Original columns, as exported · no cleaning.</strong> Every candidate pair below is joined back to the raw 13-column feed (dataset.csv via <code>core.common.load_dataset</code>, SSOT column mapping) — not the cleaned/canonical view. The deciding clause is the <code>gate_reason</code> column of data/gate_results.csv.</p>
+<div class="metrics">{counts_row}</div>
+<p class="muted">{escape(snapshot_note)}</p>
+{''.join(buckets_html)}
+<p><a href="/">← home</a> · <a href="/datagen">datagen track</a></p>
 </body></html>'''
 
 

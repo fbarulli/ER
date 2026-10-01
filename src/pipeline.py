@@ -348,6 +348,89 @@ def extract_packaging_level(title: str) -> set[str]:
 # volume/pack regex inline (a second declaration the config cannot steer).
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# STRUCTURED EVIDENCE SECTION — attribute-cell capture (measured high-yield
+# rows, results/attribute_universe_census.json): pack material type 51,703
+# rows / 5 value-sets / 9.64% same-GTIN conflict (inside the VETO BAND
+# 2.5%-15%, census-verified); juice content 63,117 rows / 27 numeric bands;
+# carbonization 56,125 rows (prose claims already flow through
+# extract_critical_claims — this section mirrors the value vocabulary);
+# water type 18,850 / naturally derived 28,637 / made from 19,338 (no set
+# field exists — captured for the census→wiring parity check only, never a
+# model-visible field). The veto LIST itself stays config-owned
+# (training.yaml rand_matching.targeted_veto_gates.veto_dimensions) — this
+# capture is evidence, config-owned wiring decides consumption.
+# ═══════════════════════════════════════════════════════════════════════════
+ATTRIBUTE_UNIVERSE_CAPTURE_KEYS: tuple[str, ...] = (
+    "pack material type",
+    "juice content",
+    "carbonization",
+    "naturally derived",
+    "water type",
+    "made from",
+)
+
+# Ordered percent/mg band canon, byte-identical to
+# core.attribute_universe._canonical_band (the census lane's own normalizer:
+# "0-2 %" -> "0-2%", "200 + mg" -> "200+mg", off-vocabulary text unchanged).
+# Reproduced here as a static device because pipeline is a hot per-row path
+# that must not load the census module for every cell; the mirrored behaviour
+# is pinned bidirectionally in tests/test_universe_capture_wiring.py (any
+# drift on either side fails loudly there, not silently here).
+_BAND_RANGE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*[-]\s*(\d+(?:\.\d+)?)\s*(%|mg)$")
+_BAND_PLUS_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*\+\s*(%|mg)$")
+_BAND_EXACT_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(%|mg)$")
+
+
+def _canonical_band(token: str) -> str:
+    """Normalise one ordered band token to its canonical band text."""
+    plain = str(token or "").strip().lower().replace("\u2013", "-").replace(" ", "")
+    match = _BAND_RANGE_RE.match(plain)
+    if match:
+        return f"{match.group(1)}-{match.group(2)}{match.group(3)}"
+    match = _BAND_PLUS_RE.match(plain)
+    if match:
+        return f"{match.group(1)}+{match.group(2)}"
+    match = _BAND_EXACT_RE.match(plain)
+    if match:
+        return f"{match.group(1)}{match.group(2)}"
+    return str(token or "").strip().lower()
+
+
+def capture_universe_attributes(attribute: object) -> dict[str, frozenset[str]]:
+    """Parse the raw attribute cell into the capture keys, census-named.
+
+    Same split discipline the census lane declares (split on ';', key before
+    ':', comma-joined values lowered and stripped; keys normalized through
+    core.text.normalized_attribute_text so the parity contract
+    tests/test_universe_capture_wiring.py can diff this output against
+    AttributeUniverse.parse cell-by-cell). Juice-content values go through
+    the band canon; every other key keeps its raw lower tokens. Fail-safe
+    input shape: unparseable parts contribute nothing — an empty cell or a
+    foreign key is deterministic absence, never an invention.
+    """
+    from core.text import normalized_attribute_text
+
+    captured: dict[str, set[str]] = {key: set() for key in ATTRIBUTE_UNIVERSE_CAPTURE_KEYS}
+    for part in str(attribute or "").split(";"):
+        if ":" not in part:
+            continue
+        raw_key, raw_value = part.split(":", 1)
+        key = normalized_attribute_text(raw_key)
+        if key not in captured:
+            continue
+        tokens = tuple(
+            token.strip().lower() for token in raw_value.split(",") if token.strip()
+        )
+        if not tokens:
+            continue
+        if key == "juice content":
+            captured[key].update(_canonical_band(token) for token in tokens)
+        else:
+            captured[key].update(tokens)
+    return {key: frozenset(values) for key, values in captured.items()}
+
+
 def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
     """Extract structured fields plus salient tokens from a single SKU row."""
     from core.sweetener_values import declared_sweeteners, extract_sweetening_status, title_sweetener_types
@@ -472,7 +555,29 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
     # Volume/Pack Type/Flavour/... and zero case-quantity columns), so the
     # title is the only place this claim exists.
     packaging_levels = extract_packaging_level(sku_name)
-    return ExtractedAttributes(
+    # Structured evidence section (census script): pack material type is the
+    # measured 9.64% within-GTIN conflict band, so the attribute cell is now
+    # an ELIGIBLE material source: the title NER scrape keeps its exact
+    # convention (list order and values byte-unchanged) and the
+    # attribute-only values are appended, sorted, after it. Title-scraped
+    # values win duplicates by construction; a set union in
+    # generate_canonical package_material_set is what the gate and the
+    # structured channel actually read, so no material evidence is lost —
+    # only where the model VISIBLY can see it: "paper / carton" is
+    # byte-identical to the census value kept here (raw lower tokens, same
+    # semantics the census measured). Juice content bands live in the
+    # evidence section (numeric 27-band vocabulary, attribute_universe SSOT
+    # canon); the remaining three high-yield keys have no set field —
+    # captured for census→wiring parity, deliberately not wired.
+    universe_evidence = capture_universe_attributes(attribute)
+    title_materials = title_attributes["package_materials"]
+    material_seen = {value.casefold() for value in title_materials}
+    package_materials = list(title_materials) + sorted(
+        value
+        for value in universe_evidence["pack material type"]
+        if value.casefold() not in material_seen
+    )
+    result = ExtractedAttributes(
         flavor=flavor,
         type=ptype,
         volume_ml=volume_ml,
@@ -482,7 +587,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         pack_qty=pack_qty,
         pack_confidence=pack_conf,
         package_types=package_types,
-        package_materials=title_attributes["package_materials"],
+        package_materials=package_materials,
         packaging_levels=packaging_levels,
         flavor_set=flavor_set,
         carbonation_set=set(critical["carbonation"]),
@@ -492,6 +597,15 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         attribute_consistency_flags=consistency_flags,
         pulp_set=set(critical["pulp"]),
     ).model_dump()
+    # The extract dict is a plain dict after the boundary validation, so the
+    # evidence section rides ADDITIVELY beside the model dump: old consumers
+    # iterate the named fields, the model channel reads the two wired keys,
+    # the census parity test reads the whole section. Sorted lists, never
+    # sets — byte-determinism (PYTHONHASHSEED) is the contract here too.
+    result["attribute_universe_evidence"] = {
+        key: sorted(values) for key, values in universe_evidence.items() if values
+    }
+    return result
 
 
 # ============================================================================

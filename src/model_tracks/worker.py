@@ -12,7 +12,7 @@ from model_tracks.config import load_config
 from model_tracks.parallel import wait_for_start
 
 
-def run(config: Path, track: str, run_tag: str):
+def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
     from core.common import TRAIN_ROOT
     cfg = load_config(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
@@ -23,7 +23,11 @@ def run(config: Path, track: str, run_tag: str):
         manifest, _ = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
         command = [sys.executable, '-m', 'training.train_prepared', '--bundle', cfg.text_bundle,
                    '--model', cfg.text_model, '--epochs', str(cfg.epochs),
-                   '--payload', manifest.payload_variant, '--run-tag', run_tag]
+                   '--payload', manifest.payload_variant, '--run-tag', run_tag,
+                   '--device', cfg.device,
+                   '--report-test' if cfg.report_test else '--no-report-test']
+        if resume and any((output / '_checkpoints').rglob('trainer_state.json')):
+            command.append('--resume')
         setup_manifest = json.loads((setup / 'setup_manifest.json').read_text())
         if setup_manifest.get('smoke'):
             command.extend(['--sample', str(setup_manifest['source_listing_count'])])
@@ -39,6 +43,16 @@ def run(config: Path, track: str, run_tag: str):
         worker_config.write_text(yaml.safe_dump(settings, sort_keys=False))
         command = [sys.executable, '-m', 'graph_tracks.train', '--config', str(worker_config),
                    '--run-tag', run_tag]
+        if resume:
+            from model_tracks.resume import graph_checkpoint
+            checkpoint = graph_checkpoint(output, track, run_tag)
+            if checkpoint:
+                command.extend(['--resume', str(checkpoint)])
+            elif any(output.glob(f'{track}__run_manifest.json')):
+                # A failure before the first checkpoint has no optimizer state.
+                # Preserve its manifest as evidence and restart that track.
+                previous = output / f'{track}__run_manifest.json'
+                previous.replace(output / f'{track}__run_manifest.interrupted.json')
     wait_for_start(Path(os.environ['ER_TRACK_BARRIER']), track)
     subprocess.run(command, cwd=TRAIN_ROOT, env=os.environ.copy(), check=True)
     if track == 'text':
@@ -48,8 +62,8 @@ def run(config: Path, track: str, run_tag: str):
         with ArtifactPublisher(output) as publisher:
             publisher.submit('postprocess', [p for p in output.iterdir()
                 if p.name.startswith('text__') or p.name == 'profiles'])
-    (output / 'track_complete.json').write_text(json.dumps({'track': track, 'status':'ok',
-                                                           'postprocess_complete': True}) + '\n')
+    from model_tracks.resume import record_completion
+    record_completion(output, track)
 
 
 def main():
@@ -57,8 +71,9 @@ def main():
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--track', choices=['text', 'gnn_only', 'hybrid'], required=True)
     parser.add_argument('--run-tag', required=True)
+    parser.add_argument('--resume', action='store_true')
     args = parser.parse_args()
-    run(args.config, args.track, args.run_tag)
+    run(args.config, args.track, args.run_tag, resume=args.resume)
 
 
 if __name__ == '__main__':

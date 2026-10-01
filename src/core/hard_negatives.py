@@ -805,29 +805,41 @@ def _brand_surface_variant(left: str, right: str) -> bool:
     :func:`_brand_identity`, so only word-level nesting is left to catch.
 
     ALIAS-FAMILY GUARD SUBSET RELATION (veto-asymmetry doctrine, config the
-    map owns): both sides first fold through
     ``core.product_identity.normalize_brand`` (ADDS the reviewed alias target
     token, drops nothing), and the subset guard runs on the FOLDED token
-    sets. Consequence measured on the semantics, not the code: an alias
-    family member and its canonical spelling ("A SHOC" {a,shoc} vs
-    "Accelerator" {accelerator,shoc}) now SHARE the `shoc` token, so the pair
-    satisfies the subset/overlap relation and is correctly NOT mined as a
-    cross-brand negative — before the fold, both raw strings were disjoint
-    token sets and the pair could enter the cross-brand pool only by default
-    (it was not a surface variant under the raw test either, so the raw
-    subsets of one family were accepted). Folding can only ADD tokens, so it
-    can only turn disjoint sets into sharing sets: the guard's acceptance
-    set can only GROW (more donors spared) and the family verdict can never
-    merge two families the map does not fold. The wielder of a wrong fold
-    is config/vocabulary.json, which is reviewed data — not this code.
+    sets — with the FAMILY CANONICAL as the acceptance owner. The folded
+    relation is subset OR shared-family-token: an alias family member and its
+    canonical spelling ("A SHOC" {a,shoc} vs "Accelerator" {accelerator,shoc})
+    SHARE the folded `shoc` token, so the pair is one brand twice and is
+    correctly NOT mined as a cross-brand negative — before the fold, both raw
+    strings were disjoint token sets and the pair entered the cross-brand
+    donor pool like any two real brands. The shared token is gated STRICTLY on
+    the map's own family targets (config/vocabulary.json "brand_aliases"
+    values), for the same measured reason the SUBSET test is word-level only:
+    two genuinely different brands share words too ("thick it" vs "thick
+    easy" share `thick`), and those must stay mineable — acceptance grows ONLY
+    where the map folds, never on free coincidence tokens. Folding can only
+    ADD tokens, so it can only turn disjoint sets into sharing sets: the
+    guard's acceptance set can only GROW (more donors spared) and the family
+    verdict can never merge two families the map does not fold. The wielder of
+    a wrong fold is config/vocabulary.json, which is reviewed data — not this
+    code.
+
+    Case, accents and punctuation are folded by :func:`_brand_identity` and
+    :func:`normalize_brand`; only word-level nesting/family-sharing is left
+    to catch.
     """
-    from core.product_identity import normalize_brand
+    from core.product_identity import brand_aliases, normalize_brand
 
     left_tokens = set(normalize_brand(left))
     right_tokens = set(normalize_brand(right))
     if not left_tokens or not right_tokens:
         return False
-    return left_tokens <= right_tokens or right_tokens <= left_tokens
+    if left_tokens <= right_tokens or right_tokens <= left_tokens:
+        return True
+    family_tokens = frozenset(brand_aliases().values())
+    shared = left_tokens & right_tokens
+    return bool(shared & family_tokens)
 
 
 def _canonical_similarity(left: object, right: object) -> float:

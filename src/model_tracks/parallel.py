@@ -36,10 +36,13 @@ def wait_for_start(root: Path, track: str, timeout: float = 600):
 
 
 def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
-                 *, timeout: float = 14400, barrier_timeout: float = 600):
-    if set(commands) != {'text', 'gnn_only', 'hybrid'}:
-        raise ValueError('one suite must run all three tracks')
-    barrier = root / 'barrier'
+                 *, timeout: float = 14400, barrier_timeout: float = 600,
+                 resume: bool = False):
+    if not commands or set(commands) - {'text', 'gnn_only', 'hybrid'}:
+        raise ValueError('suite workers must be known unfinished tracks')
+    # Each attempt has a fresh barrier; a restored start file cannot release
+    # a resumed worker before its companions have loaded.
+    barrier = root / ('barrier' if not resume else f'barrier_resume_{time.time_ns()}')
     barrier.mkdir(parents=True, exist_ok=False)
     processes, handles = {}, []
     from model_tracks.live_logs import WorkerLogs
@@ -52,7 +55,7 @@ def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
     try:
         # Spawn every worker before waiting for any worker to finish.
         for track, command in commands.items():
-            log = (root / f'{track}__worker.log').open('w')
+            log = (root / f'{track}__worker.log').open('a' if resume else 'w')
             handles.append(log)
             worker_env = {**env, 'ER_TRACK_BARRIER': str(barrier.resolve()),
                           'ER_TRACK_NAME': track,
@@ -74,7 +77,7 @@ def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
             if time.monotonic() - started > barrier_timeout:
                 raise TimeoutError('workers did not reach the shared start barrier')
             time.sleep(.1)
-        (barrier / 'start').write_text('all three workers ready\n')
+        (barrier / 'start').write_text('all requested workers ready\n')
         while True:
             logs.drain()
             codes = {track: process.poll() for track, process in processes.items()}

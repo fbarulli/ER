@@ -16,7 +16,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     from training.hnsw_index import PersistentHnswIndex
     checkpoint, _ = resolve_best_checkpoint(output)
     reports = output / 'text__reports'
-    reports.mkdir()
+    reports.mkdir(exist_ok=True)
     listings = setup / 'prepared/listings.json'
     records = load_records(listings)
     pairs = load_pairs(setup / 'prepared/pairs.csv', records)
@@ -48,6 +48,8 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
                            'prediction':int(score >= threshold)})
     pd.DataFrame(summary).to_csv(reports / 'text__model_evaluation_summary.csv', index=False)
     pd.DataFrame(scored).to_csv(reports / 'text__scored_pairs.csv', index=False)
+    from graph_tracks.report import _plots
+    _plots(pd.DataFrame(scored), reports, 'text', threshold)
     from graph_tracks.report_attributes import write_reports as write_attribute_reports
     write_attribute_reports(listings, records, pairs, scores, reports, 'text')
     retrieval = retrieval_report(records, vectors, pairs, reports, 'text', cfg)

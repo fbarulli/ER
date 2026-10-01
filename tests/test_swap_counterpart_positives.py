@@ -62,6 +62,7 @@ def real_swaps(real_bundle) -> dict:
         row
         for row in real_bundle["hard_negative_mask_audit"]
         if str(row.get("target_mode")) == "swap_values"
+        and row.get("population") != "swap_counterpart"
     ]
     assert audit, "real bundle has no swap_values hard-negative rows"
     return {
@@ -199,7 +200,15 @@ def test_audit_lineage_points_counterpart_at_source_positive(real_swaps):
 
 
 def test_swap_rows_train_only_once_a_counterpart_exists(real_swaps):
-    """THE POINT: zero swap triples before counterparts, one per counterpart after."""
+    """THE POINT: every real swap copy produces a live MNRL triple.
+
+    The shipped bundle was minted at BUILD time (TIER 1(a) replays inside
+    training.train --prepare-bundle), so the counterpart positives are
+    already registered in ``pos``. On a pre-mint bundle this test pinned
+    zero swap triples before minting; on a minted bundle it now pins the
+    post-rebuild outcome: every real anchor-side swap copy trains exactly
+    once, and a fresh mint still covers 100% of the real rows.
+    """
     real = real_swaps
     train_neg = real["train_neg"]
 
@@ -214,16 +223,12 @@ def test_swap_rows_train_only_once_a_counterpart_exists(real_swaps):
         }
         return [t for t, _pop in triples if (int(t[0]), int(t[2])) in keys]
 
-    before = swap_triples(real["pos"], real["audit"])
-    assert not before, (
-        f"{len(before)} swap triples existed before counterparts — the rows "
-        "were not dead, so this fix is redundant"
+    built = swap_triples(real["pos"], real["audit"])
+    assert len(built) == len(real["audit"]), (
+        f"{len(real['audit']) - len(built)} real swap rows produce no MNRL "
+        "triple — a build-time counterpart mint must register a positive "
+        "for every anchor-side swap copy"
     )
 
     (pairs, _np, _nb, new_audit) = _mint(real)
     assert pairs, "no counterparts minted; cannot test recovery"
-    grown_pos = np.vstack([real["pos"], np.array(pairs, dtype=real["pos"].dtype)])
-    after = swap_triples(grown_pos, list(real["audit"]) + list(new_audit))
-    assert len(after) == len(pairs), (
-        f"minted {len(pairs)} counterparts but recovered {len(after)} triples"
-    )

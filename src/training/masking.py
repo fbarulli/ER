@@ -45,6 +45,14 @@ _FIELD_PREFIXES: dict[str, tuple[str, ...]] = {
     "sweetening": ("sweetening_",),
     "sweetener": ("sweetener_diet_", "sweetener_"),
     "pulp": ("pulp_",),
+    # Captured attribute evidence (pipeline.extract_all structured evidence
+    # section): pack material type is the census's donor-capable SET_ENUM
+    # (51,703 rows, 5 value-sets, 9.64% conflict — veto band) and juice
+    # content is the donor-capable NUMERIC_BAND channel (63,117 rows, 27
+    # canonical bands). The registry list grows; every unknown-field raise
+    # (swap_structured_field / mask_targeted) fails loud exactly as before.
+    "package_material": ("package_material_",),
+    "juice_content": ("juice_content_",),
 }
 
 

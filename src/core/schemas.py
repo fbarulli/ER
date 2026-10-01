@@ -130,17 +130,12 @@ class DataFilesSpec(BaseModel):
 
     dataset: str
     dataset_deduped: str
-    dataset_deduped_sample_3000: str
-    dataset_deduped_train_minus_3000: str
-    dataset_deduped_sample_5000: str
-    dataset_deduped_train_minus_5000: str
     sku_to_rep: str
     canonical_records: str
     gate_results: str
     labeled_pairs: str
     final_validation: str
     validation_fold_map: str
-    balanced_pairs_sample_3000: str
     embedding_similarities: str
     model_evaluation_summary: str
     attribute_separation_summary: str
@@ -1906,6 +1901,11 @@ class TrainingConfig(BaseModel):
     tracking: TrackingSpec
     colab: ColabSpec
     rand_matching: RandMatchingSpec
+    # TIER 1(e) bundle-drift switch (see config/training.yaml): when TRUE,
+    # training.prepared_bundle hard-fails a bundle built under drifted
+    # masking config instead of warning. Env PREPARED_BUNDLE_DRIFT_STRICT
+    # wins over this key.
+    prepared_bundle_drift_strict: bool = False
     # The NER lane's legacy settings live under the training SSOT too. Their
     # shape is intentionally open while the older standalone scripts are
     # retired; core.common owns parsing/path expansion for every consumer.

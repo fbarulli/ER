@@ -10,7 +10,7 @@ from model_tracks.preflight import preflight
 
 
 def package(config: Path, output: Path):
-    from core.common import TRAIN_ROOT
+    from core.common import F, TRAIN_ROOT
     cfg = load_config(config)
     checks = preflight(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
@@ -37,6 +37,16 @@ def package(config: Path, output: Path):
     # so the prepared-input producer and remote consumer use the same code.
     for directory in ('src/graph_tracks','src/model_tracks','src/training','src/core'):
         files.update({str(p.relative_to(TRAIN_ROOT)):p for p in (TRAIN_ROOT/directory).glob('*.py')})
+    # Preflight on the remote host must see the same mutable input generation
+    # and pipeline implementation as the local prepared-input producer.
+    files['src/pipeline.py'] = TRAIN_ROOT / 'src/pipeline.py'
+    files['scripts/diet_manifest.py'] = TRAIN_ROOT / 'scripts/diet_manifest.py'
+    for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
+        source = Path(F[key]).resolve()
+        files[source.relative_to(TRAIN_ROOT).as_posix()] = source
+    for name in ('paths.yaml', 'training.yaml', 'identity_dimensions.yaml',
+                 'identity_reviews.json', 'vocabulary.json'):
+        files[f'config/{name}'] = TRAIN_ROOT / 'config' / name
     revision = subprocess.run(['git','rev-parse','HEAD'],cwd=TRAIN_ROOT,capture_output=True,text=True,check=True).stdout.strip()
     return write_archive(output,files,inline=inline,manifest_name='model_tracks_package.json',
                          metadata={'schema':'er-model-tracks-package-v1','revision':revision,'preflight':checks})
@@ -44,3 +54,49 @@ def package(config: Path, output: Path):
 
 def verify(path: Path):
     return verify_archive(path,'model_tracks_package.json')
+
+
+def recovery_package(output: Path, destination: Path, run_tag: str, *, input_package: dict | None = None) -> Path:
+    """Capture stopped workers' portable state without credentials or caches."""
+    manifest = json.loads((output / 'suite_manifest.json').read_text())
+    if manifest.get('run_tag') != run_tag:
+        raise ValueError('recovery suite run mismatch')
+    excluded = {'wandb', 'mlruns', 'mps_pipe', 'mps_log', '.git', '.dvc'}
+    files = {}
+    for path in output.rglob('*'):
+        relative = path.relative_to(output)
+        if (not path.is_file() or path.is_symlink()
+                or not path.resolve().is_relative_to(output.resolve())
+                or any(part in excluded or part.endswith(('.publication', '__payload'))
+                       for part in relative.parts)
+                or path.name in {'.env', 'config.local'}):
+            continue
+        files[relative.as_posix()] = path
+    return write_archive(destination, files, manifest_name='suite_recovery_manifest.json',
+                         metadata={'schema': 'er-suite-recovery-v1', 'run_tag': run_tag,
+                                   'input_package': input_package})
+
+
+def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
+    """Verify before restoring an interrupted suite into a fresh output directory."""
+    import zipfile
+    metadata = verify_archive(archive, 'suite_recovery_manifest.json')
+    if metadata.get('schema') != 'er-suite-recovery-v1' or metadata.get('run_tag') != run_tag:
+        raise ValueError('recovery suite run mismatch')
+    with zipfile.ZipFile(archive) as source:
+        declared = set(metadata['files']) | {'suite_recovery_manifest.json'}
+        if set(source.namelist()) != declared:
+            raise ValueError('unlisted recovery archive members')
+        manifest = json.loads(source.read('suite_manifest.json'))
+        if manifest.get('run_tag') != run_tag:
+            raise ValueError('recovery suite manifest mismatch')
+        if output.exists():
+            raise FileExistsError(output)
+        output.mkdir(parents=True)
+        for member in metadata['files']:
+            target = output / member
+            if not target.resolve().is_relative_to(output.resolve()):
+                raise ValueError('unsafe recovery archive member')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read(member))
+    return output

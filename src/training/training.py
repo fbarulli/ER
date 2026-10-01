@@ -3145,6 +3145,8 @@ def train_one_config(
     # hyperparameters can never be fitted on it. Skipped rows carry
     # test_eval="skipped_selection_mode" — loud, never a silent NaN.
     selection_mode: bool = False,
+    # Explicit callers can withhold test evaluation independently of HPO settings.
+    skip_test_eval: bool = False,
     wandb_ctx=None,
 ) -> list[dict]:
     """Train cfg across the group-aware folds. Returns fold metric rows
@@ -3682,7 +3684,7 @@ def train_one_config(
                     "step": 0,
                 },
             ).parent
-            if resume:
+            if resume and not any(checkpoint_dir.glob("checkpoint-*/trainer_state.json")):
                 from training.dvc_store import restore_checkpoint
 
                 restore_checkpoint(RESULTS, checkpoint_dir)
@@ -4365,6 +4367,22 @@ def train_one_config(
                             f"missing {', '.join(missing)}. Start a new run once "
                             "to create resumable checkpoints."
                         )
+                    from core.model_input import model_input_composition
+                    checkpoint_manifest = json.loads((latest / "checkpoint_manifest.json").read_text())
+                    if checkpoint_manifest.get("model_input") != model_input_composition().model_dump():
+                        raise ValueError("resume checkpoint model input composition mismatch")
+                    # Trainer state contains absolute paths from the original
+                    # VM. Rebase only to the selected sibling in this restored
+                    # checkpoint tree, never to another run's checkpoint.
+                    state_path = latest / "trainer_state.json"
+                    restored_state = json.loads(state_path.read_text())
+                    selected = restored_state.get("best_model_checkpoint")
+                    if selected:
+                        local_selected = checkpoint_dir / Path(selected).name
+                        if not local_selected.is_dir():
+                            raise FileNotFoundError(f"resume selected checkpoint missing: {local_selected}")
+                        restored_state["best_model_checkpoint"] = str(local_selected.resolve())
+                        state_path.write_text(json.dumps(restored_state, indent=2) + "\n")
                     resume_checkpoint = str(latest)
                     print(f"    [resume] fold {fold_i}: {resume_checkpoint}", flush=True)
                 else:
@@ -4752,7 +4770,7 @@ def train_one_config(
                     negative_pairs=len(calibration_neg),
                 )
                 print(
-                    f"  [calibration] fold {fold_i}: REQUIRED calibration "
+                    f"  [calibration] fold {fold_i}: {'sample' if sample else 'REQUIRED'} calibration "
                     f"unavailable; {calibration_metrics['calibration_reason']}",
                     flush=True,
                 )
@@ -4800,7 +4818,7 @@ def train_one_config(
             # the main train lane, so no per-config test metric can ever
             # exist to select on. Recorded LOUDLY (explicit field + print),
             # never as a silent NaN.
-            if selection_mode and HPO_SKIP_TEST_EVAL:
+            if skip_test_eval or (selection_mode and HPO_SKIP_TEST_EVAL):
                 print(
                     f"  [hpo] fold {fold_i}: test-side eval SKIPPED "
                     f"(selection mode — test read exactly once)",
@@ -4816,7 +4834,7 @@ def train_one_config(
                         "fold": fold_i,
                         "status": (
                             "ok"
-                            if calibration_metrics.get("calibration_status") == "available"
+                            if sample or calibration_metrics.get("calibration_status") == "available"
                             else "calibration_unavailable"
                         ),
                         "test_eval": "skipped_selection_mode",

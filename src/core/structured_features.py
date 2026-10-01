@@ -89,8 +89,19 @@ def info_from_sets(
     sweetener_type: object = None,
     sweetening: object = None,
     pulp: object = None,
+    package_material: object = None,
+    juice_content: object = None,
 ) -> dict[str, set[float] | set[str]]:
-    """Normalize a SKU/canonical record into the shared set representation."""
+    """Normalize a SKU/canonical record into the shared set representation.
+
+    ``package_material`` and ``juice_content`` are the captured attribute
+    evidence channels (pipeline.extract_all's structured evidence section):
+    material rides the EXISTING package_materials/package_material_set
+    convention (both payload sides), juice content rides the source row's
+    attribute cell (the canonical record stores no such column, so its side
+    reads an empty set from absent records — the same omit-when-unobserved
+    treatment every categorical field gets).
+    """
     return {
         "volume": _as_set(volume, kind="volume"),
         "pack": _as_set(pack, kind="pack"),
@@ -101,6 +112,8 @@ def info_from_sets(
         "sweetener_type": _as_string_set(sweetener_type, kind="sweetener_type"),
         "sweetening": _as_string_set(sweetening, kind="sweetening"),
         "pulp": _as_string_set(pulp, kind="pulp"),
+        "package_material": _as_string_set(package_material, kind="package_material"),
+        "juice_content": _as_string_set(juice_content, kind="juice_content"),
     }
 
 
@@ -131,6 +144,7 @@ def sku_info(
         if pack_qty is not None and float(extracted.get("pack_confidence") or 0.0) > 0.0
         else {1.0}
     )
+    evidence = extracted.get("attribute_universe_evidence") or {}
     return info_from_sets(
         volume,
         pack,
@@ -141,6 +155,8 @@ def sku_info(
         sweetener_type=extracted.get("sweetener_type_set"),
         sweetening=extracted.get("sweetening_set"),
         pulp=extracted.get("pulp_set"),
+        package_material=extracted.get("package_materials"),
+        juice_content=evidence.get("juice content"),
     )
 
 
@@ -174,6 +190,13 @@ def canonical_info(
         sweetener_type=record.get("sweetener_type_set"),
         sweetening=record.get("sweetening_set"),
         pulp=evidence("pulp_set", "pulp"),
+        # package_material_set is already a canonical column (line 1109 of the
+        # canonical builder unions it); juice evidence has no canonical
+        # column, so records without it stay as empty sets (omit when
+        # unobserved — the symmetry contract shared by package_type/flavor/…
+        # above).
+        package_material=record.get("package_material_set"),
+        juice_content=record.get("juice_content_bands"),
     )
 
 
@@ -189,12 +212,24 @@ def text_tokens(info: Mapping[str, object]) -> list[str]:
     stable ``[FIELD_*]`` markers make field boundaries explicit.  The encoder
     still receives one ordinary string and the numeric feature vector keeps
     its existing dimensionality.
+
+    The captured evidence groups (``PACK_MATERIAL`` / ``JUICE_CONTENT_BAND``
+    — pipeline.extract_all's structured evidence section) sit AFTER every
+    legacy group, in that legacy order, so the byte contract of the existing
+    token stream is a PREFIX of the new one: an info map without the two new
+    keys renders byte-identically to the pre-capture composition (pinned in
+    tests/test_universe_capture_wiring.py), and a populated key only appends
+    its block.
     """
     volumes = sorted(_as_set(info.get("volume"), kind="volume"))
     packs = sorted(_as_set(info.get("pack"), kind="pack"))
     package_types = sorted(
         _as_string_set(info.get("package_type"), kind="package_type")
     )
+    package_materials = sorted(
+        _as_string_set(info.get("package_material"), kind="package_material")
+    )
+    juice_bands = sorted(_as_string_set(info.get("juice_content"), kind="juice_content"))
     categorical = {
         "FLAVOR": sorted(_as_string_set(info.get("flavor"), kind="flavor")),
         "CARBONATION": sorted(
@@ -218,6 +253,24 @@ def text_tokens(info: Mapping[str, object]) -> list[str]:
             (name, [f"{name.casefold()}_{value.replace(' ', '_')}" for value in values])
             for name, values in categorical.items()
         ],
+        # Captured evidence appends LAST so every existing group's byte
+        # stream and relative order are unchanged (value values keep the
+        # published space->underscore convention; a census value such as
+        # "paper / carton" renders as the token package_material_paper_/_carton).
+        (
+            "PACK_MATERIAL",
+            [
+                f"package_material_{value.replace(' ', '_')}"
+                for value in package_materials
+            ],
+        ),
+        (
+            "JUICE_CONTENT_BAND",
+            [
+                f"juice_content_{value.replace(' ', '_')}"
+                for value in juice_bands
+            ],
+        ),
     ]
     tokens: list[str] = []
     for field, values in groups:

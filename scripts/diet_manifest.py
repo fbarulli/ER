@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-from core.common import load_config
+from core.common import load_config, masking_cfg
 from training.prepared_bundle import load_prepared_bundle
 
 
@@ -123,13 +123,13 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(f"usage: {Path(argv[0]).name} BUNDLE_PATH", file=sys.stderr)
         return 2
-    masking = load_config()["masking"]
+    manifest, data = load_prepared_bundle(Path(argv[1]))
+    masking = masking_cfg(manifest.masking_profile)
     diet_min_neg_aug_frac = float(masking["diet_min_neg_aug_frac"])
     diet_max_pos_neg_view_ratio = float(masking["diet_max_pos_neg_view_ratio"])
     mask_hard_negatives = bool(masking["mask_hard_negatives"])
     hard_negative_frac = float(masking["hard_negative_frac"])
 
-    manifest, data = load_prepared_bundle(Path(argv[1]))
     pos = data["pos"]
     neg = data["neg"]
     train_neg = data["train_neg"]

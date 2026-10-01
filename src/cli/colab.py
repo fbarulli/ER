@@ -178,63 +178,94 @@ _original_stderr = None
 _SUPPRESS_LIVE_LOG = False
 
 
-# The lane's fixed split, asserted rather than derived: training consumes the
-# deduped catalog with the held-out IDs removed, and inference scores precisely
-# that held-out population.
-_EXPECTED_TRAINING_ROWS = 58_529
-_EXPECTED_INFERENCE_ROWS = 3_000
-_EXPECTED_SOURCE_ROWS = _EXPECTED_TRAINING_ROWS + _EXPECTED_INFERENCE_ROWS
+def _legacy_validation_sources() -> dict[str, Path]:
+    """Materialize listing partitions from the validated shared component split.
+
+    Training consumes the full prepared catalog and applies prepared_holdout;
+    these listing CSVs are solely the final-inference provenance populations.
+    """
+    import pandas as pd
+    from model_tracks.config import load_config as load_suite
+    from model_tracks.preflight import preflight as suite_preflight
+    from graph_tracks.data import file_hash
+    config = TRAIN_ROOT / 'config/model_tracks.yaml'
+    suite_preflight(config)
+    suite = load_suite(config)
+    setup = (TRAIN_ROOT / suite.setup_dir).resolve()
+    catalog_path = setup / 'eligible_catalog.csv'
+    input_manifest = json.loads((setup / 'prepared/input_manifest.json').read_text())
+    if file_hash(catalog_path) != input_manifest['catalog_sha256']:
+        raise ValueError('eligible catalog differs from prepared graph inputs')
+    catalog = pd.read_csv(catalog_path, dtype=str, keep_default_na=False)
+    splits = pd.read_csv(setup / 'listing_splits.csv', dtype=str, keep_default_na=False)
+    if catalog.product_id.duplicated().any() or splits.product_id.duplicated().any():
+        raise ValueError('component listing IDs must be unique')
+    if set(catalog.product_id) != set(splits.product_id):
+        raise ValueError('component split must cover the eligible catalog exactly')
+    if not set(splits.split) <= {'train', 'dev', 'test'}:
+        raise ValueError('unknown component split role')
+    roles = splits.set_index('product_id').split
+    assignments = catalog.product_id.map(roles)
+    training = catalog.loc[assignments.eq('train')]
+    holdout = catalog.loc[assignments.isin(['dev', 'test'])]
+    from training.folds import normalize_gtin
+    train_entities = set(training.barcode.map(normalize_gtin))
+    held_entities = set(holdout.barcode.map(normalize_gtin))
+    if train_entities & held_entities:
+        raise ValueError('component train entities overlap inference holdout')
+    if training.empty or holdout.empty:
+        raise ValueError('component train and inference populations must be nonempty')
+    from core.identity_policy import reviewed_row_mask
+    if reviewed_row_mask(catalog).any():
+        raise ValueError('component inference catalog contains reviewed exclusions')
+    folder = TRAIN_ROOT / 'results/prepared_training/component_validation'
+    folder.mkdir(parents=True, exist_ok=True)
+    sources = {'source': folder / 'eligible_catalog.csv',
+               'training': folder / 'component_train.csv',
+               'sample': folder / 'component_holdout.csv'}
+    for key, frame in [('source', catalog), ('training', training), ('sample', holdout)]:
+        # Atomic replacement keeps the prewarm uploader from reading a partial CSV.
+        target = sources[key]
+        temporary = target.with_name(target.name + '.' + uuid.uuid4().hex + '.tmp')
+        frame.to_csv(temporary, index=False)
+        temporary.replace(target)
+    return sources
+
+
+def _validate_legacy_bundle_partitions(bundles: list[Path]) -> None:
+    """Reject cached or sampled bundles using a different component holdout."""
+    import pandas as pd
+    from model_tracks.config import load_config as load_suite
+    from training.prepared_bundle import load_prepared_bundle, prepared_holdout
+    from training.folds import normalize_gtin
+    from core.common import SEED
+    suite = load_suite(TRAIN_ROOT / 'config/model_tracks.yaml')
+    setup = TRAIN_ROOT / suite.setup_dir
+    catalog = pd.read_csv(setup / 'eligible_catalog.csv', dtype=str, keep_default_na=False)
+    assignments = pd.read_csv(setup / 'listing_splits.csv', dtype=str).set_index('product_id').split
+    for path in bundles:
+        _, data = load_prepared_bundle(path)
+        populations = prepared_holdout(data, dict(training_cfg().split), seed=SEED)
+        roles = {normalize_gtin(value): role for role, values in
+                 zip(('train', 'dev', 'test'), populations) for value in values}
+        for row in catalog.itertuples(index=False):
+            if roles.get(normalize_gtin(row.barcode)) != assignments[row.product_id]:
+                raise ValueError(
+                    'legacy prepared bundle differs from the shared component split; '
+                    'use --tracks-config results/model_tracks/smoke_20261001_128/suite.yaml '
+                    'for a sampled CPU smoke, or rebuild full bundles from the current catalog')
 
 
 def training_lifecycle_preflight(
     *, workers: int, model: str | None, masking_profile: str,
     train_only: bool = False,
 ) -> dict[str, object]:
-    """Validate the local train/holdout contract without contacting Colab."""
+    """Validate prepared component partitions without contacting Colab."""
     import pandas as pd
-
+    sources = _legacy_validation_sources()
+    frames = {key: pd.read_csv(path, dtype=str, keep_default_na=False)
+              for key, path in sources.items()}
     training_path = _validation_input_path(_COLAB.training_dataset_csv)
-    sample_path = _validation_input_path(_FINAL_INFERENCE.input_csv)
-    source_path = _validation_input_path(_FINAL_INFERENCE.source_csv)
-    frames = {
-        "source": pd.read_csv(source_path, usecols=["product_id"], dtype=str),
-        "training": pd.read_csv(training_path, usecols=["product_id"], dtype=str),
-        "inference": pd.read_csv(sample_path, usecols=["product_id"], dtype=str),
-    }
-    ids = {key: set(frame["product_id"]) for key, frame in frames.items()}
-    for name, frame in frames.items():
-        duplicate_count = int(frame["product_id"].duplicated().sum())
-        if duplicate_count:
-            raise RuntimeError(
-                f"{name} input contains {duplicate_count:,} duplicate product ID row(s)"
-            )
-    overlap = ids["training"] & ids["inference"]
-    if overlap:
-        raise RuntimeError(
-            f"training/inference overlap contains {len(overlap):,} product IDs"
-        )
-    reconstructed = ids["training"] | ids["inference"]
-    if reconstructed != ids["source"]:
-        missing = len(ids["source"] - reconstructed)
-        extra = len(reconstructed - ids["source"])
-        raise RuntimeError(
-            "training remainder plus inference sample does not reconstruct source: "
-            f"missing={missing:,} extra={extra:,}"
-        )
-    if (
-        len(frames["training"]) != _EXPECTED_TRAINING_ROWS
-        or len(frames["inference"]) != _EXPECTED_INFERENCE_ROWS
-        or len(frames["source"]) != _EXPECTED_SOURCE_ROWS
-    ):
-        raise RuntimeError(
-            "unexpected split sizes: "
-            f"training={len(frames['training']):,} "
-            f"(expected {_EXPECTED_TRAINING_ROWS:,}), "
-            f"inference={len(frames['inference']):,} "
-            f"(expected {_EXPECTED_INFERENCE_ROWS:,}), "
-            f"source={len(frames['source']):,} "
-            f"(expected {_EXPECTED_SOURCE_ROWS:,})"
-        )
     profiles = _expand_worker_profiles(masking_profile, workers, "masking")
     model_key = model or str(training_cfg().training.base_model)
     return {
@@ -242,12 +273,14 @@ def training_lifecycle_preflight(
         "workers": workers,
         "model": model_key,
         "masking_profiles": profiles,
+        "split_protocol": "training.folds.derive_holdout",
         "training_dataset": str(training_path),
-        "training_rows": len(frames["training"]),
-        "inference_dataset": str(sample_path),
-        "inference_rows": len(frames["inference"]),
-        "source_dataset": str(source_path),
-        "source_rows": len(frames["source"]),
+        "training_rows": len(frames['training']),
+        "training_provenance_dataset": str(sources['training']),
+        "inference_dataset": str(sources['sample']),
+        "inference_rows": len(frames['sample']),
+        "source_dataset": str(sources['source']),
+        "source_rows": len(frames['source']),
         "product_id_overlap": 0,
         "reconstructs_source": True,
         "train_only": train_only,
@@ -259,8 +292,9 @@ def training_lifecycle_preflight(
         "remote_completion_argv": (
             None if train_only else [
                 "<remote-python>", "-m", "training.complete_colab_worker",
-                "--validation-input", "<uploaded-dataset_deduped_sample_5000.csv>",
-                "--training-input", "<uploaded-dataset_deduped_train_minus_5000.csv>",
+                "--validation-input", "<uploaded-component_holdout.csv>",
+                "--training-input", "<uploaded-component_train.csv>",
+                "--validation-source", "<uploaded-eligible_catalog.csv>",
             ]
         ),
         "successful_worker_order": (
@@ -2883,6 +2917,15 @@ def _bundle_cache_dir(
     return RESULTS / "prepared_training" / _BUNDLE_CACHE_DIRNAME / key
 
 
+def _run_diet_gate(bundle: Path) -> int:
+    """The bundle diet gate (scripts/diet_manifest.py), exit 0 pass / 2 fail."""
+    if str(TRAIN_ROOT) not in sys.path:
+        sys.path.insert(0, str(TRAIN_ROOT))
+    from scripts.diet_manifest import main as diet_manifest_main
+
+    return diet_manifest_main([sys.argv[0], str(bundle)])
+
+
 def _bundle_manifest(bundle: Path):
     from training.prepared_bundle import load_prepared_bundle
 
@@ -2909,6 +2952,13 @@ def _cached_bundles(cache_dir: Path, *, profiles: list[str]) -> list[Path] | Non
             print(
                 f"[local-prepare] cached bundle {bundle} is not reusable "
                 f"({exc!r}); rebuilding",
+                flush=True,
+            )
+            return None
+        if _run_diet_gate(bundle) != 0:
+            print(
+                f"[local-prepare] cached bundle {bundle} fails the diet "
+                "gate; rebuilding",
                 flush=True,
             )
             return None
@@ -2949,6 +2999,11 @@ def _build_local_training_bundles(
     source file, every config file, and the requested model/profile/payload —
     are byte-identical to one already built.
     """
+    if sample is not None:
+        raise ValueError(
+            'legacy sampled preparation does not preserve the shared component split; '
+            'use --what tracks --tracks-config '
+            'results/model_tracks/smoke_20261001_128/suite.yaml --gpu CPU')
     model_key = model or str(training_cfg().training.base_model)
     training_dataset = _validation_input_path(
         dataset_csv or _COLAB.training_dataset_csv
@@ -2968,6 +3023,8 @@ def _build_local_training_bundles(
                 f"sha256={manifest.sha256} bundle={bundle}",
                 flush=True,
             )
+        _legacy_validation_sources()
+        _validate_legacy_bundle_partitions(cached)
         return cached
     stamp = datetime.now(timezone.utc).strftime("%m%dT%H%M%S%fZ")
     root = RESULTS / "prepared_training" / stamp
@@ -3012,6 +3069,12 @@ def _build_local_training_bundles(
         from training.prepared_bundle import load_prepared_bundle
 
         manifest, _ = load_prepared_bundle(bundle)
+        if _run_diet_gate(bundle) != 0:
+            raise SystemExit(
+                f"[local-prepare] bundle {bundle} FAILED the diet gate; the "
+                "rebuild refuses to ship training inputs that violate "
+                "config/training.yaml's diet contract"
+            )
         print(
             f"[local-prepare] validated worker={number} "
             f"rows={manifest.n_df:,} payload={manifest.n_payload:,} "
@@ -3022,6 +3085,8 @@ def _build_local_training_bundles(
         bundles.append(bundle)
     if cache_dir is not None:
         _populate_bundle_cache(cache_dir, bundles)
+    _legacy_validation_sources()
+    _validate_legacy_bundle_partitions(bundles)
     return bundles
 
 
@@ -3317,17 +3382,13 @@ def _upload_validation_inputs(run_id: str) -> dict[str, str]:
 
 
 def _perform_validation_upload(run_id: str) -> dict[str, str]:
-    """Transfer the immutable source, training complement, and SKU holdout.
+    """Transfer the validated component source, training listings, and holdout.
 
     The worker itself.  It deliberately does NOT consult the prewarm: it is
     what the prewarm thread runs, so looking the prewarm up here would make
     that thread join itself.
     """
-    sources = {
-        "source": _validation_input_path(_FINAL_INFERENCE.source_csv),
-        "training": _validation_input_path(_COLAB.training_dataset_csv),
-        "sample": _validation_input_path(_FINAL_INFERENCE.input_csv),
-    }
+    sources = _legacy_validation_sources()
     remote_dir = f"{REMOTE_ROOT}/prepared_training/{run_id}/validation"
     remotes: dict[str, str] = {}
     remote_by_source: dict[str, str] = {}
@@ -4366,8 +4427,8 @@ def main() -> None:
     if args.what == 'tracks' or args.tracks_config is not None:
         if args.what not in {'tracks','train','smoke'}:
             raise ValueError('--tracks-config applies to train/tracks/smoke only')
-        if args.resume_run or args.refresh_data or args.train_only:
-            raise ValueError('all-track suite requires prepared inputs and full postprocessing; resume is not wired yet')
+        if args.refresh_data or args.train_only:
+            raise ValueError('all-track suite requires prepared inputs and full postprocessing')
         from model_tracks.config import load_config as load_suite
         from model_tracks.preflight import preflight as suite_preflight
         from model_tracks.package import package as suite_package
@@ -4380,9 +4441,29 @@ def main() -> None:
             raise ValueError('suite device and --gpu must agree')
         if suite.dvc_enabled and not _env_value('DVC_API_KEY'):
             raise RuntimeError('DVC_API_KEY is required before launching a publishing suite')
-        suite_run_tag = _lane_run_stamp()
-        suite_archive = suite_package(suite_config, RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.zip')
+        suite_run_tag = args.resume_run or _lane_run_stamp()
+        suite_archive = RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.zip'
+        if args.resume_run:
+            if not suite_archive.is_file():
+                raise FileNotFoundError(f'resume requires the original prepared input package: {suite_archive}')
+            from model_tracks.package import verify as verify_suite_package
+            verify_suite_package(suite_archive)
+        else:
+            suite_archive = suite_package(suite_config, suite_archive)
         args.what = 'tracks'
+
+    if args.what == 'smoke' and suite_archive is None:
+        raise ValueError(
+            'legacy smoke does not preserve the shared component holdout; '
+            'use --what tracks --tracks-config '
+            'results/model_tracks/smoke_20261001_128/suite.yaml --gpu CPU')
+    if args.what == 'train' and suite_archive is None:
+        if args.sample is not None:
+            raise ValueError('sampled training requires --tracks-config with frozen parent splits')
+        _legacy_validation_sources()
+        if (args.workers == 1 and args.model is None and args.resume_run is None):
+            _validate_legacy_bundle_partitions([
+                TRAIN_ROOT / path for path in _COLAB.full_prepared_bundles])
 
     GPU = args.gpu
     if GPU.upper() != "CPU" and not args.allow_gpu:
@@ -4526,7 +4607,7 @@ def main() -> None:
         # for a lane that only needs the configured zero-shot scoring.
         if args.what == 'tracks':
             from model_tracks.colab import run as run_suite
-            run_suite(suite_archive, suite_run_tag)
+            run_suite(suite_archive, suite_run_tag, resume=bool(args.resume_run))
         elif args.what == "sims":
             run_sims()
         elif args.what == "mixed":
@@ -4607,7 +4688,7 @@ def main() -> None:
                 loss=args.loss,
                 train_only=args.train_only,
                 remote_dataset_csv=(
-                    _FINAL_INFERENCE.source_csv if checkout_full_bundles else None
+                    _COLAB.training_dataset_csv if checkout_full_bundles else None
                 ),
                 remote_prepared_bundles=checkout_full_bundles,
                 inference_device="cuda" if GPU.upper() != "CPU" else "cpu",

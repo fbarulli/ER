@@ -51,13 +51,6 @@ files:
   # explicit rather than silently falling back when artifacts/data is absent.
   dataset: "repo:dataset.csv"
   dataset_deduped: "training_data:dataset_deduped.csv"
-  dataset_deduped_sample_3000: "training_data:dataset_deduped_sample_3000.csv"
-  dataset_deduped_train_minus_3000: "training_data:dataset_deduped_train_minus_3000.csv"
-  # 5k holdout (2026-09-28): same stratified sampler, same seed, fresh
-  # allocation. Built alongside the 3k lane, which stays live until the
-  # final_inference/colab rewiring is reviewed.
-  dataset_deduped_sample_5000: "training_data:dataset_deduped_sample_5000.csv"
-  dataset_deduped_train_minus_5000: "training_data:dataset_deduped_train_minus_5000.csv"
   sku_to_rep: "data:sku_to_rep.csv"
   canonical_records: "training_data:canonical_records.csv"   # SHARED frozen input
   gate_results: "training_data:gate_results.csv"             # SHARED frozen input
@@ -74,7 +67,6 @@ files:
   # full labeled census needs this to tell "withheld, the model trained on it"
   # from "missing".
   validation_fold_map: "results_training:validation_fold_map.csv"
-  balanced_pairs_sample_3000: "results_training:balanced_pairs_sample_3000.csv"
   embedding_similarities: "results_training:embedding_similarities.csv"
   model_evaluation_summary: "results_training:model_evaluation_summary.csv"
   attribute_separation_summary: "results_training:attribute_separation_summary.csv"

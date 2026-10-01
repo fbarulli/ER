@@ -1113,41 +1113,50 @@ def oracle_pinned_counts() -> None:
         g = pd.read_csv(RESULTS / F["gate_results"], keep_default_na=False)
         c = pd.read_csv(RESULTS / F["canonical_records"], keep_default_na=False)
         lp = pd.read_csv(RESULTS / F["labeled_pairs"])
-        check("canonicals == 13,250", len(c) == 13250, f"got {len(c)}")
-        check("gate pairs == 135,769", len(g) == 135769, f"got {len(g)}")
+        # RE-PINNED 2026-10-01: 13,250 -> 13,216 canonicals (-34). Source:
+        # results/manifests/data_prep.json (2026-09-30 run): 71,623 rows in
+        # == 13,216 kept + 12,995 collapsed + 45,412 dropped (missing/NaN
+        # 41,545 / checksum 3,715 / identity-review 152). The 13,250
+        # generation predates the latest dedupe rebuild
+        # (dataset_deduped.csv SHA 73a94016, 63,079 rows).
+        check("canonicals == 13,216", len(c) == 13216, f"got {len(c)}")
+        # RE-PINNED 2026-10-01: 135,769 -> 135,246 gate pairs (-523) and
+        # decisions 92,335/1,395/42,039 -> 92,259/1,239/41,748. Source: the
+        # 2026-09-30 wave-1/2 rebuild (dedupe chain byte-reproduced:
+        # dataset_deduped.csv SHA 73a94016, 63,079 rows; gate run
+        # run-c60abb62a6cb in results/logs/training_trace.csv — universe
+        # -523, hard_no -76 (Package-material-mismatch 3 -> 253 NEW via the
+        # attribute-side material capture, flavor 922 -> 821), proceed
+        # -156, fallback -291: Low raw pack 33,833 -> 33,564, Low raw
+        # volume 8,028 -> 8,016, packaging-level one-sided 113 -> 105,
+        # ambiguous-volume 37 -> 36, low-consistency 28 -> 27). Full
+        # ledger lives on PINNED_GATE_FALLBACK_PAIRS (lib/common.py) —
+        # update BOTH together, never one alone.
+        check("gate pairs == 135,246", len(g) == 135246, f"got {len(g)}")
         dec = g.gate_decision.value_counts().to_dict()
         check(
-            "gate decisions hard_no=92,335 proceed=1,395 fallback=42,039",
-            # RE-PINNED 2026-09-30, paired with PINNED_GATE_FALLBACK_PAIRS in
-            # lib/common.py (update BOTH together, never one alone). Prior
-            # pin (87,241/1,737/46,791) was measured 2026-09-15; then
-            # 92,335/1,506/41,928. Now 92,335/1,395/42,039 because the new
-            # `packaging_level_set` field routes 111 one-sided case-level
-            # claims to `fallback` (a case listing and a retail pack are
-            # distinct trade items with distinct GTINs). hard_no is
-            # deliberately UNCHANGED — a flavour conflict still outranks the
-            # packaging-level review flag; verified by a control run with the
-            # rule disabled reproducing 92,335/1,506/41,928 exactly.
-            # Same 135,769 pairs. Threshold-independent: pair-similarity
-            # floors apply at the labeled stage, never here.
-            dec == {"hard_no": 92335, "proceed": 1395, "fallback": 42039},
+            "gate decisions hard_no=92,259 proceed=1,239 fallback=41,748",
+            # Threshold-independent: pair-similarity floors apply at the
+            # labeled stage, never here.
+            dec == {"hard_no": 92259, "proceed": 1239, "fallback": 41748},
             f"got {dec}",
         )
         check(
-            "labeled pairs == 8,809 (1,143 pos / 7,666 hard-neg)",
-            # RE-PINNED 2026-09-30, forced by the packaging-level change
-            # above (fallback 41,928 -> 42,039). The labeled set is a
-            # FUNCTION of the census, and only the proceed side moved:
-            # positives 1,223 -> 1,143 (-80, the sampled subset of the 111
-            # de-merged pairs), negatives UNCHANGED at 7,666 because
-            # hard_no stayed at 92,335. Every P0 target measured against
-            # 1,223 positives must be re-derived, not scaled.
+            "labeled pairs == 8,736 (1,023 pos / 7,713 hard-neg)",
+            # RE-PINNED 2026-10-01, forced by the census move above. The
+            # labeled set is a FUNCTION of the census at the SSOT
+            # thresholds (pos sim>=0.50 / neg sim>=0.80): proceed 1,395 ->
+            # 1,239 (-156) leaves 1,023 at/above the floor (was 1,143:
+            # -120), hard_no 92,335 -> 92,259 (-76) leaves 7,713 (was
+            # 7,666: +47 — the material-mismatch hard_nos land mostly
+            # ABOVE the floor). Measured from the regenerated
+            # data/labeled_pairs.csv manifest; not scaled.
             # (History: 2026-09-28 proceed_sim_threshold 0.80 -> 0.65 -> 0.50
             # admitted 884 gate-verified pairs, canonical-agreement 1.0000 in
             # every 0.05 band per scripts/check_proceed_precision.py.)
-            len(lp) == 8809
-            and (lp.true_label == 1).sum() == 1143
-            and (lp.true_label == 0).sum() == 7666,
+            len(lp) == 8736
+            and (lp.true_label == 1).sum() == 1023
+            and (lp.true_label == 0).sum() == 7713,
             f"got {len(lp)} rows, {(lp.true_label == 1).sum()} pos, "
             f"{(lp.true_label == 0).sum()} neg",
         )
@@ -2472,34 +2481,43 @@ def oracle_manifest() -> None:
     # does the bulk of the collapsing (247 rows); price leaving the T2 key moved
     # that work to T2 (6,338), and T2 now defers barcode-conflicting rows that
     # T3 used to absorb silently.
+    # Re-pinned 2026-10-01: the T1 barcode-tier retune moved the per-tier
+    # drops (T1 1,943 -> 1,850, T1.5 132 -> 96, T2 6,338 -> 6,348, T3
+    # 247 -> 250); output 62,963 -> 63,079 (+116), dropped 8,660 -> 8,544
+    # (-116). Same manifest (results/manifests/dedupe.json), same input
+    # rows (71,623); closure re-measured PASS on the new numbers.
     expected_dropped = {
-        "t1_retailer_barcode": 1943,
-        "t1_5_retailer_malformed_barcode_same_product": 132,
-        "t2_retailer_title_barcode": 6338,
-        "t3_retailer_title_identity_partition": 247,
+        "t1_retailer_barcode": 1850,
+        "t1_5_retailer_malformed_barcode_same_product": 96,
+        "t2_retailer_title_barcode": 6348,
+        "t3_retailer_title_identity_partition": 250,
     }
     check(
-        "dedupe census pinned: input 71,623 / output 62,963 / "
-        "dropped 8,660 (T1 1,943 / T1.5 132 / T2 6,338 / T3 247)",
+        "dedupe census pinned: input 71,623 / output 63,079 / "
+        "dropped 8,544 (T1 1,850 / T1.5 96 / T2 6,348 / T3 250)",
         # what current code + committed export reproducibly yields; a
         # silent upstream export change that shifts row counts fails
         # here (same discipline as oracle_pinned_counts)
         ra.get("input_rows") == 71623
-        and ra.get("output_rows") == 62963
+        and ra.get("output_rows") == 63079
         and dropped == expected_dropped
-        and sum(dropped.values()) == 8660,
+        and sum(dropped.values()) == 8544,
         f"got {ra}",
     )
+    # Re-pinned 2026-10-01 alongside the census above: skipped
+    # checksum-invalid 3,715 -> 3,867 (+152), deferred_to_t3 2,799 ->
+    # 2,806 (+7), unresolved 79 -> 207 (+128); ambiguous groups
+    # unchanged at 3,816.
     check(
-        "dedupe deferred keys pinned: skipped_checksum_invalid 3,715 / "
-        "deferred_to_t3 2,799 / ambiguous groups 3,816 / unresolved 79",
+        "dedupe deferred keys pinned: skipped_checksum_invalid 3,867 / "
+        "deferred_to_t3 2,806 / ambiguous groups 3,816 / unresolved 207",
         # deferred populations are recorded OUTSIDE dropped (they
         # re-enter later tiers; see dedupe.py's accounting note) —
         # pin them so the audit trail can't silently thin out
-        ra.get("skipped_checksum_invalid") == 3715
-        and ra.get("deferred_to_t3") == 2799
+        ra.get("skipped_checksum_invalid") == 3867
+        and ra.get("deferred_to_t3") == 2806
         and ra.get("ambiguous_offer_groups") == 3816
-        and ra.get("unresolved_identity_review_rows") == 79,
+        and ra.get("unresolved_identity_review_rows") == 207,
         f"got {ra}",
     )
     try:

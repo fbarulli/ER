@@ -24,8 +24,7 @@ def sha(path):
 
 def run(apply=False):
     names = ['canonical_records', 'gate_results', 'labeled_pairs', 'final_validation',
-             'validation_fold_map', 'dataset_deduped_sample_3000', 'dataset_deduped_train_minus_3000',
-             'dataset_deduped_sample_5000', 'dataset_deduped_train_minus_5000']
+             'validation_fold_map']
     records = []
     for name in names:
         path = F.get(name)

@@ -24,6 +24,17 @@ Counts describe a capped sample (20 pairs per GTIN). Disjoint metadata is a
 review signal, not an established identity difference. No training is run by
 this dashboard.
 
+Training reports are available at `/training`. The run selector discovers
+downloaded suite ZIPs and local run directories directly under
+`results/model_tracks/`, `results/graph_tracks/`, and `training_results/`.
+It displays saved PNG plots and model evaluation, retrieval, and fold metric
+CSV summaries (the first 20 data rows). Click a plot to open its original image.
+Suite metadata shows the device, epochs, test-reporting setting, and whether a
+suite result artifact is present. Smoke scores verify the workflow and should
+not be treated as model quality benchmarks. Input bundles are excluded from
+the selector. Incomplete runs can be inspected as reports arrive; unreadable
+archives or metrics show a message while other report artifacts remain usable.
+
 Finding 02 records the Clear Mind bottle versus four-can-pack example.
 Finding 03 records a reproducible full-original-dataset audit of missing
 measurement/packaging context:

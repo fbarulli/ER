@@ -178,7 +178,8 @@ def _plots(scored, output, track, threshold):
             p, r, _ = precision_recall_curve(group.true_label, group.score)
             axes[1].plot(r, p, label=split)
     axes[0].axvline(threshold, color='red', linestyle='--', label='dev threshold')
-    axes[0].set(xlabel='pair match probability', ylabel='pairs', title=track)
+    axes[0].set(xlabel='cosine similarity' if track == 'text' else 'pair match probability',
+                ylabel='pairs', title=track)
     axes[1].set(xlabel='recall', ylabel='precision', title='Precision–recall')
     for axis in axes:
         axis.legend()

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import os
 import pickle
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,25 @@ def _digest(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+_PREPARED_BUNDLE_DRIFT_STRICT_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def prepared_bundle_drift_strict() -> bool:
+    """The prepared_bundle_drift_strict switch (default FALSE).
+
+    Env PREPARED_BUNDLE_DRIFT_STRICT wins when set; otherwise the
+    prepared_bundle_drift_strict key in config/training.yaml. TRUE hard-fails
+    load_prepared_bundle on a bundle built under deleted/drifted masking
+    knobs instead of warning; keep FALSE until the bundle rebuild lands.
+    """
+    raw = os.environ.get("PREPARED_BUNDLE_DRIFT_STRICT")
+    if raw is not None:
+        return raw.strip().lower() in _PREPARED_BUNDLE_DRIFT_STRICT_TRUTHY
+    from core.common import load_config
+
+    return bool(load_config().get("prepared_bundle_drift_strict", False))
 
 
 def prepared_holdout(data: dict, split_cfg: dict, *, seed: int):
@@ -360,13 +380,19 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
         ):
             drifted.append("random_easy_negatives")
         if drifted:
-            print(
-                f"[bundle-drift] WARNING: {path} was built under different "
-                f"{'/'.join(drifted)} config than active "
-                f"(bundle={manifest.masking_config} {manifest.easy_config}). "
-                "Diet verdicts and augmentation yields may not reproduce.",
-                flush=True,
+            detail = (
+                f"{path} was built under different {'/'.join(drifted)} "
+                f"config than active (bundle={manifest.masking_config} "
+                f"{manifest.easy_config}). Diet verdicts and augmentation "
+                "yields may not reproduce."
             )
+            if prepared_bundle_drift_strict():
+                raise ValueError(
+                    f"[bundle-drift] STRICT: {detail} Re-prepare the bundle; "
+                    "unset PREPARED_BUNDLE_DRIFT_STRICT only to keep "
+                    "pre-rebuild audit findings reproducible."
+                )
+            print(f"[bundle-drift] WARNING: {detail}", flush=True)
     if (
         "dynamic easy-negative joining at step execution" in manifest.ratio_contract_note
         or manifest.ratio_contract_note == "legacy ratio metadata; recompute"

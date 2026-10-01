@@ -87,19 +87,13 @@ class FinalInferenceContractTests(unittest.TestCase):
             "the old config key must not survive the rename",
         )
         spec = colab.final_inference
-        # The settled split: inference runs on the 3,000 held-out sample only --
-        # nothing infers over the full catalog -- while the full deduped catalog
-        # stays as the identity anchor that training + sample must reconstruct.
-        self.assertEqual(spec.input_csv, "data/dataset_deduped_sample_5000.csv")
-        self.assertEqual(spec.source_csv, "data/dataset_deduped.csv")
-        self.assertEqual(
-            colab.training_dataset_csv,
-            "data/dataset_deduped_train_minus_5000.csv",
-        )
-        # One consistent layout: every input resolves through the single root,
-        # so no stray legacy data directory or results/ reference can survive.
-        for binding in (spec.input_csv, spec.source_csv, colab.training_dataset_csv):
-            self.assertTrue(binding.startswith("data/"), binding)
+        # Legacy completion consumes the validated shared component listings.
+        self.assertEqual(spec.input_csv,
+                         "results/prepared_training/component_validation/component_holdout.csv")
+        self.assertEqual(spec.source_csv,
+                         "results/prepared_training/component_validation/eligible_catalog.csv")
+        self.assertEqual(colab.training_dataset_csv, "data/dataset_deduped.csv")
+
         self.assertEqual(spec.output_dir, "final_inference")
 
     def test_final_inference_batch_is_sized_for_inference_not_finetuning(self):

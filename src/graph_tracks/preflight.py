@@ -39,6 +39,10 @@ def load_inputs(cfg):
     vectors, metadata = None, None
     if cfg.text_cache:
         vectors, metadata = load_text_cache(resolve(cfg.text_cache), [r['product_id'] for r in records])
+        if manifest is not None:
+            from core.model_input import model_input_composition
+            if metadata.get('composition') != model_input_composition().model_dump(mode='json'):
+                raise ValueError('text cache composition differs from active model input')
         if cfg.text_checkpoint_sha256 and metadata.get('checkpoint_sha256') != cfg.text_checkpoint_sha256:
             raise ValueError('text cache checkpoint mismatch')
         for key in ('catalog_sha256', 'identity_policy_sha256', 'identity_dimensions_sha256'):

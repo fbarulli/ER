@@ -639,7 +639,35 @@ SEED = int(_CFG["seed"])
 # 92,335 — a hard negative always outranks the review flag, verified by
 # control run with the rule disabled reproducing 92,335/1,506/41,928 exactly.
 # See the ordering note in three_way_gate.
-PINNED_GATE_FALLBACK_PAIRS = 42_039
+#
+#
+# RE-PINNED 2026-10-01 (wave-1/2 evidence wiring): 42,039 -> 41,748
+# (-291). Measured, per-clause, from the gate lane's OWN trace
+# (results/logs/training_trace.csv run-abbcd6e6ee2c = the pinned
+# 135,769/42,039 generation; run-c60abb62a6cb = the current census):
+#   universe 135,769 -> 135,246 (-523 candidates) — the dedupe chain
+#     rebuilt dataset_deduped.csv (SHA 73a94016, 63,079 rows; re-run
+#     byte-identical, 207 conflicts, closure + identity invariants PASS)
+#   Low raw pack confidence   33,833 -> 33,564 (-269)
+#   Low raw volume confidence  8,028 -> 8,016 (-12)
+#   Packaging level one-sided    113 ->   105 (-8)
+#   Ambiguous volume evidence     37 ->    36 (-1)
+#   Overlap but low consistency   28 ->    27 (-1)
+#   fallback total           42,039 -> 41,748 (-291)
+# Cascades (measured, same two trace runs): proceed 1,395 -> 1,239
+# (-156; the wave-1/2 evidence captures — pack material from the
+# attribute cells, juice-content bands, carbonization/prose,
+# description-alias — now resolve pairs the old census left for review)
+# and hard_no 92,335 -> 92,259 (-76): Package-material-mismatch 3 -> 253
+# (+250 NEW, the attribute-side material capture) and flavor mismatch
+# 922 -> 821 (-101), vs Pack blocker 91,410 -> 91,185 (-225, riding the
+# -523 candidate universe). CLOSURE: -523 universe = -291 fallback -156
+# proceed -76 hard_no exactly. NOT a thinning artifact: the same
+# census reproduces the labeled closure below, and labeled_pairs.py's
+# assert fired FIRST (excluded 41,748 vs pin 42,039) before this pin
+# moved. ALWAYS update this pin with src/training/selftest.py's
+# oracle_pinned_counts (same universe).
+PINNED_GATE_FALLBACK_PAIRS = 41_748
 
 
 def set_determinism(seed: int) -> None:
