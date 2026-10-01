@@ -38,35 +38,28 @@ from __future__ import annotations
 
 import re
 
-from pipeline import normalize_text
+from core.text import normalize_text
 
-__all__ = ["PATH_SCHEMA_WORDS", "is_evidentiary", "url_text"]
+__all__ = ["PATH_SCHEMA_WORDS", "UNITS", "is_evidentiary", "url_text"]
 
-# Retailer URL scaffolding: path segments that describe the STOREFRONT's URL
-# scheme, never the product. Kept as a declared set (not an inline literal at
-# each call site) so a new retailer's scheme can be added in one place.
-PATH_SCHEMA_WORDS: frozenset[str] = frozenset(
-    {
-        # generic path segments
-        "ip", "shop", "stores", "store", "product", "products", "item", "items",
-        "details", "detail", "pd", "dp", "gp", "aw", "node", "index", "main",
-        "content", "dam", "catalog", "catalogue", "search", "browse", "en", "us",
-        "www", "com", "net", "org", "co", "p", "sp", "cl", "sk", "itm",
-        # retailer schemes keyed by identifier rather than name: amazon's
-        # /dp/<ASIN> (179/2000 sampled urls), coop's /product/<EAN>, meijer's
-        # /shopping/product, wegmans' /shop/categories. These carry NO product
-        # text and must read as empty, not as their scaffolding.
-        "dp", "asin", "shopping", "categories", "basket", "cart", "checkout",
-        "account", "list", "lists", "wishlist", "compare", "deals", "offers",
-        # image/media path segments
-        "media", "image", "images", "img", "small", "large", "original", "seo",
-        "cache", "resize", "scale", "width", "height", "quality", "format",
-        "fit", "crop", "thumb", "thumbnail", "master", "is", "irs", "col",
-        "files", "file", "upload", "uploads", "static", "assets", "sr",
-        # file extensions that survive the extension strip
-        "html", "htm", "php", "aspx", "jsp", "svg", "webp", "gif",
-    }
-)
+def _spec():
+    """The config-owned vocabulary + thresholds (config/paths.yaml url_evidence).
+
+    Previously two module-level frozensets, PATH_SCHEMA_WORDS and _UNITS, held
+    this vocabulary in code while config/paths.yaml held a copy of the same 85
+    words — two sources of truth for one list, which is the duplication the
+    SSOT rule exists to prevent. The config is now the ONLY copy; these two
+    names are derived views of it, kept as module attributes because callers
+    (and the regression tests) refer to them by name.
+    """
+    from core.common import data_cfg
+
+    return data_cfg().url_evidence
+
+
+# Derived, not authored: config/paths.yaml `url_evidence` is the single source.
+PATH_SCHEMA_WORDS: frozenset[str] = frozenset(_spec().path_schema_words)
+UNITS: frozenset[str] = frozenset(_spec().units)
 
 _EXTENSION = re.compile(r"\.(jpe?g|png|gif|webp|svg|html?|php|aspx|jsp)$", re.I)
 _SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
@@ -82,37 +75,112 @@ _SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
 _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{6,}", re.I
 )
-# A digit-run of any length is an article/size id, never a product token; a
-# long bare alphanumeric run is a content hash.
+# A digit-run of any length is an article/size id, never a product token.
 _DIGIT_RUN = re.compile(r"\b\d+\b")
-_BARE_HASH = re.compile(r"^[a-z0-9]{8,}$")
 # A bare "NNNx" is an image-dimension spec from a media path
 # (.../small_image/220x/…). Real pack notation carries its unit — "12x355ml"
 # — so it survives the digit-run and dimension rules intact.
 _IMAGE_DIM = re.compile(r"^\d+x$")
 _VOWELS = frozenset("aeiou")
-# Short letter+digit runs are retailer media codes (peapod's "c/K6/K6RMM.jpg"),
-# never product tokens. Units are the exception and are named, not guessed.
-_UNITS = frozenset({"ml", "l", "g", "kg", "mg", "oz", "fl", "cl", "dl"})
-_SHORT_CODE = re.compile(r"^(?:[a-z]{1,3}\d+|\d+[a-z]{1,3})$")
+
+
+def _short_code_pattern(letters: int) -> re.Pattern:
+    """Retailer media codes: a short run of letters welded to digits ("k6rmm",
+    "ab12"). Built from the configured letter budget instead of a literal, so
+    the threshold is tunable without touching code. Unit-bearing tokens are
+    exempt from this rule (see _has_unit_suffix) because "250ml" is a size,
+    not a media code."""
+    return re.compile(rf"^(?:[a-z]{{1,{letters}}}\d+|\d+[a-z]{{1,{letters}}})$")
 
 
 def _is_noise(token: str) -> bool:
-    if len(token) < 2:
+    """True when ``token`` is storefront scaffolding rather than product text.
+
+    Every threshold here comes from config (url_evidence in paths.yaml); this
+    function holds the ORDER of the rules, not their values.
+
+    The two rules that were wrong before this became config-driven, both found
+    by diffing what the normalizer kept against what the raw slugs actually
+    contain:
+
+      * bare_hash — the old rule dropped any 8+ char alphanumeric run, with no
+        requirement that it look random. "sparkling" (9 letters) and
+        "strawberry" (10) matched and were deleted: 70 and 48 occurrences in
+        8,000 sampled sku_url slugs. Now a run is only a hash if it also
+        carries a digit, which keeps "9df78eab" dead and "sparkling" alive.
+
+      * short_code — the old rule dropped any letter+digit token, so "250ml"
+        and "2l" died (34 and 9 occurrences). Those are the size tokens the
+        pack gate reads. Now a unit-bearing token is exempt, because the unit
+        is evidence and the digits are quantity.
+    """
+    spec = _spec()
+    if len(token) < spec.min_token_length:
         # a bare path letter (peapod's ".../c/K6/…") is storefront scaffolding
         return True
-    if token in PATH_SCHEMA_WORDS or token in _UNITS:
-        return False if token in _UNITS else True
+    # Units are PRESERVED. They are checked before the scaffolding set because
+    # the two are validated disjoint, so the order cannot matter in principle —
+    # but units winning is the deliberate semantic, not an accident of order.
+    if token in UNITS:
+        return False
+    if token in PATH_SCHEMA_WORDS:
+        return True
     if _DIGIT_RUN.fullmatch(token) or _IMAGE_DIM.match(token):
         return True
-    if len(token) >= 5 and not (set(token) & _VOWELS):
-        # no vowel in a 5+ char token: a random code (k6rmm, 9df78eab…), not a
+    # UNIT CHECK FIRST. Order matters and the first attempt got it wrong:
+    # "250ml" is 5 characters and contains no vowel, so the no-vowel rule ate
+    # it before the unit exemption could run — the very token this whole fix
+    # exists to preserve. A size token is evidence; noise rules never apply.
+    if _has_unit_suffix(token, spec):
+        return False
+    if len(token) >= spec.no_vowel_min_length and not (set(token) & _VOWELS):
+        # no vowel in a long token: a random code (k6rmm, 9df78eab…), not a
         # product word. Real words (sparkling, lemon) always have one.
         return True
-    if _SHORT_CODE.match(token):
+    if _short_code_pattern(spec.short_code_letters).match(token):
         return True
-    if _BARE_HASH.match(token):
+    if len(token) >= spec.bare_hash_min_length and (
+        sum(ch.isdigit() for ch in token) >= spec.bare_hash_min_digits
+    ):
+        # long AND carries digits: a content hash. Long and all letters was the
+        # old bug — "sparkling" is 9 letters and is a product word.
         return True
+    return False
+
+
+def _has_unit_suffix(token: str, spec) -> bool:
+    """True when ``token`` is a SIZE token: a declared unit, with a quantity.
+
+    Recognises the three shapes that actually appear in listing slugs:
+
+        "ml" / "oz"      bare unit (kept — the unit itself is the evidence)
+        "250ml", "2l"    quantity + unit
+        "12x355ml"       pack notation, count x size
+
+    The count separator is "x" (normalize_text has already folded the
+    multiply sign \u00d7 to "x"), and each half may itself be a size token, so
+    "12x8x355ml" reduces correctly.
+
+    This is what the media-code rule must NOT eat. "250ml" and "2l" were being
+    deleted as retailer codes — 34 and 9 occurrences in 8,000 sampled sku_url
+    slugs — and those are precisely the size tokens the pack gate reads, so
+    losing them silently removed pack evidence rather than noise.
+    """
+    for unit in sorted(UNITS, key=len, reverse=True):
+        if not token.endswith(unit):
+            continue
+        head = token[: -len(unit)]
+        if not head:
+            # the unit itself: kept by the UNITS check in _is_noise
+            return True
+        if head.isdigit():
+            return True
+        # pack notation: every "x"-separated part must itself be a size token
+        parts = head.split("x")
+        if len(parts) > 1 and all(
+            part.isdigit() or _has_unit_suffix(part, spec) for part in parts
+        ):
+            return True
     return False
 
 

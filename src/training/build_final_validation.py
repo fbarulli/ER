@@ -127,10 +127,15 @@ SLICE_FIELDS: tuple[tuple[str, str], ...] = (
 # assigns a whole fold to the 986 dev/test straddlers and returns the 3,742
 # train-flavored ones to the training side where a mined-negative consumer
 # can pick them up, instead of parking them as labelled-never-used rows.
-# The decision: policy "train_side" (B) wins on all three criteria set out
-# in the task's decision criteria and becomes the DEFAULT
-# (config/training.yaml split.negative_fold_policy); "withhold_straddle"
-# stays reachable through the same key.
+# The decision at the original run: policy "train_side" (B) won on all three
+# criteria and became the pin (config/training.yaml split.negative_fold_policy).
+# RE-DECIDED at the 2026-10-01 regeneration: the regenerated merged graph
+# (24,361 mined positives / 983 labeled positives over 14,946 entities) moved
+# the dev-half evidence — the split assert measured A scoring MORE thin-heavy
+# negatives than B (65.71% vs 63.80% cells below min_test_negatives=5), so the
+# pinned A no longer holds; the config moved to "withhold_straddle" (A)
+# together with this block, per the rule that an artifact may not ship under
+# a policy its evidence rejects.
 # ════════════════════════════════════════════════════════════════════════════
 
 # Policy names. Both stay load-valid; config/training.yaml pins the winner.
@@ -576,8 +581,15 @@ def write_manifest(
         # BYTE-STABILITY ATTRIBUTION (required by the pinned-update
         # convention: the old numbers stay recorded). Measured on
         # data/final_validation.csv, 565 positives, set_bag vs scalar:
-        #   volume 13 -> 13, pack 48 -> 48, package_type 153 -> 153,
-        #   sweetener 127 -> 127, flavor 363 -> 363, carbonation 38 -> 38.
+        #   2026-09-29 regen: volume 13 -> 13, pack 48 -> 48,
+        #     package_type 153 -> 153, sweetener 127 -> 127,
+        #     flavor 363 -> 363, carbonation 38 -> 38.
+        #   2026-10-01 regen (volume-unification closure + re-capture):
+        #     volume 13 -> 6, pack 48 -> 47, package_type 153 -> 105,
+        #     sweetener 127 -> 86, flavor 363 -> 254, carbonation 38 -> 47;
+        #     scalar and set_bag identical at every count (the flag still
+        #     changes semantics only where order/spacing-only spellings
+        #     differ — none exist in the emitted canon).
         # EVERY count is byte-identical on today's artifact -- the flag
         # changes semantics only where order/spacing-only spellings
         # differ (none exist in the emitted canon), and every OTHER

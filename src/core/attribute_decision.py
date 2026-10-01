@@ -554,7 +554,7 @@ class AttributeDecisionEngine:
             _census_state_for_field,
             _universe_value,
         )
-        from core.attribute_universe import attribute_registry
+        from core.attribute_universe import NON_YIELD_KINDS, attribute_registry
 
         specs = dict(registry) if registry is not None else attribute_registry()
         domain_by_key = {
@@ -566,6 +566,23 @@ class AttributeDecisionEngine:
         decisions: dict[str, DimensionDecision] = {}
         for key in sorted(specs):
             spec = specs[key]
+            # NON_YIELD_KINDS (currently CONSTANT) are keys whose every
+            # populated row carries the SAME value — measured on the raw
+            # export, `giftbox` and `special edition` appear only as the
+            # literal pairs "Giftbox: giftbox" / "Special Edition: special
+            # edition" (21 and 216 of 71,623 rows). A constant cannot
+            # disagree with itself, so every pair it lands on is a forced
+            # MATCH or a forced INCONCLUSIVE that carries no information.
+            #
+            # The registry declared this itself ("100% constant — no yield")
+            # and attribute_conflicts ledgers these as evidence_class
+            # "no_yield", but this loop was unconditional: it re-derived a
+            # verdict for them anyway. The exclusion existed as a constant
+            # consulted only by the census/budget helper, never by the
+            # decision loop. Skipped here so the declared class is honoured
+            # where verdicts are actually produced.
+            if spec.kind in NON_YIELD_KINDS:
+                continue
             left_value = _universe_value(left, key, spec)
             right_value = _universe_value(right, key, spec)
             populated = bool(left_value) and bool(right_value)
@@ -701,6 +718,17 @@ class AttributeDecisionEngine:
             attribute_names = alias_names("attributes")
             description_names = alias_names("description")
             title_names = alias_names("title")
+            # url is CAPTURED per title (config column_evidence capture=true):
+            # the listing slug carries real product words ("sparkling" 70x,
+            # "strawberry" 48x in 8,000 sampled sku_url slugs — see the
+            # url_evidence block's defect ledger). Reading it here keeps the
+            # stage honest: SAME claims device, one more captured column,
+            # nothing bespoke. image_url stays OUT (media slug, not shelf
+            # text) — read via alias_names('image_url') only if a later
+            # ruling extends this.
+            from core.url_evidence import url_text
+
+            url_names = alias_names("url")
             for source_row in _iter_source_rows(row):
                 for source in attribute_names:
                     cell = str(source_row.get(source) or "")
@@ -714,10 +742,22 @@ class AttributeDecisionEngine:
                     str(source_row.get(name) or "")
                     for name in description_names
                 ).strip()
+                url_blob = " ".join(
+                    url_text(source_row.get(name) or "")
+                    for name in url_names
+                ).strip()
                 claims = extract_critical_claims(
                     " ".join(
-                        str(source_row.get(name) or "") for name in title_names
-                    ).strip(),
+                        text
+                        for text in (
+                            " ".join(
+                                str(source_row.get(name) or "")
+                                for name in title_names
+                            ).strip(),
+                            url_blob,
+                        )
+                        if text
+                    ),
                     cell_text,
                     " ".join(
                         str(source_row.get(name) or "") for name in attribute_names

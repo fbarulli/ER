@@ -408,7 +408,16 @@ def test_the_shipped_artifact_loads_through_the_upgrade() -> None:
     raw = pd.read_csv(path)
     upgraded = upgrade_canonical_records_frame(raw)
     assert list(upgraded.columns) == list(CANONICAL_RECORDS_COLUMNS)
-    assert set(upgraded["source_rows"]) == {"[]"}
+    # RE-PINNED when the 13-column capture landed: source_rows now carry the
+    # per-title original evidence (title/attributes/url/...), so the "every
+    # cell is pre-capture []" expectation was stale. The contract that MUST
+    # hold: the upgrade never blanks a populated capture (stage 7 would go
+    # inert again) and pre-capture "[]" stays "[]".
+    populated = upgraded["source_rows"] != "[]"
+    assert populated.any(), "capture regressed: source_rows came back empty"
+    assert (upgraded["source_rows"] == raw["source_rows"]).all(), (
+        "upgrade must be lossless on source_rows"
+    )
 
 
 # ── (f) stage 7 actually fires off the capture ──────────────────────────────

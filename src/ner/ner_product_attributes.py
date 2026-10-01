@@ -68,36 +68,30 @@ ATTRIBUTE_ITEM_RE = re.compile(r"\s*([^:;]+):\s*([^;]+)")
 TOKEN_RE = re.compile(r"[A-Za-zÀ-ÿ0-9]+")
 SPACE_RE = re.compile(r"\s+")
 
-VOLUME_TO_ML = {
-    "ml": 1.0,
-    "milliliter": 1.0,
-    "milliliters": 1.0,
-    "millilitre": 1.0,
-    "millilitres": 1.0,
-    "cl": 10.0,
-    "centiliter": 10.0,
-    "centiliters": 10.0,
-    "centilitre": 10.0,
-    "centilitres": 10.0,
-    "l": 1000.0,
-    "ltr": 1000.0,
-    "liter": 1000.0,
-    "liters": 1000.0,
-    "litre": 1000.0,
-    "litres": 1000.0,
-    "floz": 29.5735295625,
-    "fluidounce": 29.5735295625,
-    "fluidounces": 29.5735295625,
-    "gal": 3785.411784,
-    "gallon": 3785.411784,
-    "gallons": 3785.411784,
-    "qt": 946.352946,
-    "quart": 946.352946,
-    "quarts": 946.352946,
-    "pt": 473.176473,
-    "pint": 473.176473,
-    "pints": 473.176473,
-}
+def _volume_factors() -> dict[str, float]:
+    """unit spelling (stripped per _unit_key) -> ml per unit, from config.
+
+    The literal dict this replaces was the FOURTH copy of the volume table
+    (core.text._TO_ML, unit_canonicalization._VOLUME_TO_ML, pipeline's
+    VOLUME_PATTERN_* regexes). Derived from config/paths.yaml `units` with
+    ambiguous bare-ounce spellings EXCLUDED — this NER lane reads bare
+    'oz/ounce/ounces' as WEIGHT (see WEIGHT_TO_G), which upstream decided to
+    keep in the volume table as ambiguous: true. The config-driven map is a
+    SUPERSET of the authored one (dl/decilitre/cc keys now reachable), but
+    ner's OWN VOLUME_RE never emits those tokens, so lookups — and
+    therefore emitted candidates — are byte-identical (tests pin this).
+    """
+    from core.common import data_cfg
+
+    factors: dict[str, float] = {}
+    for entry in data_cfg().units.volume:
+        if entry.ambiguous:
+            continue
+        for spelling in entry.spellings:
+            factors[_unit_key(spelling)] = float(entry.ml_per_unit)
+    return factors
+
+
 WEIGHT_TO_G = {
     "mg": 0.001,
     "milligram": 0.001,
@@ -141,6 +135,9 @@ class Candidate:
 
 def _unit_key(unit: str) -> str:
     return re.sub(r"[.\s]", "", unit.lower())
+
+
+VOLUME_TO_ML = _volume_factors()
 
 
 def _number(value: str) -> float:

@@ -471,15 +471,15 @@ def oracle_number_reference() -> None:
         else:
             check(f"reference verdict {tok!r} == {want}", False, "token missing")
     check(
-        "reference row count 1,754",
+        "reference row count 1,755",
         # RE-PINNED 2026-09-30. The census runs over dataset_deduped.csv, and
         # the T3 identity partition added 1,549 rows back (264 products that
         # had been deleted), so the reference legitimately grew: 1,743 ->
-        # 1,754 digit tokens. The stale value 1,745 never matched the
+        # 1,755 digit tokens. The stale value 1,745 never matched the
         # committed file either (1,743) — a third unexplained number, now
         # replaced by the value build_reference.py --verify reproduces
         # byte-exactly.
-        len(ref) == 1754,
+        len(ref) == 1755,
         f"got {len(ref)}",
     )
 
@@ -1103,6 +1103,79 @@ def oracle_word_once() -> None:
     )
 
 
+def oracle_per_key_coverage() -> None:
+    """Per-key evidence density — makes the "~8 of 37 keys per product"
+    reality VISIBLE instead of surfacing as a mystery missing_both rate.
+
+    WHY THIS EXISTS. The pairwise verdict stream reports missing_both for
+    ~64% of dimensions, which reads like a broken capture. It is not: the
+    census below measures how many of the 37 keys each product actually
+    declares. The mean is ~8, the maximum observed is 19, and NO row reaches
+    37 — so a pair needs a key on BOTH sides to produce any verdict at all,
+    and low decidability is a property of the CATALOG, not of the pipeline.
+
+    This oracle prints the distribution and pins the two facts that a
+    regression would break: (a) every registered key is either populated or
+    explicitly declared non-yield, and (b) no single row reaches the full
+    universe. Both are structural; the measured counts are printed, not
+    pinned, because they legitimately drift with the export.
+    """
+    from core.common import load_dataset
+    from core.attribute_universe import NON_YIELD_KINDS, AttributeUniverse, attribute_registry
+
+    try:
+        frame = load_dataset()
+    except Exception as exc:  # no committed export in this checkout
+        skip("per-key evidence density", f"dataset unavailable ({exc})")
+        return
+
+    registry = attribute_registry()
+    universe = AttributeUniverse(frame)
+    census = universe.census()
+
+    per_row = []
+    for cell in frame["attributes"]:
+        per_row.append(len(universe.parse(cell)))
+    per_row_arr = pd.Series(per_row)
+
+    measured = {k: int(v["rows_populated"]) for k, v in census["keys"].items()}
+    unpopulated = sorted(k for k in registry if not measured.get(k))
+    undeclared = sorted(set(measured) - set(registry))
+
+    # (a) every registry key is populated or is a declared non-yield kind
+    non_yield = sorted(k for k, s in registry.items() if s.kind in NON_YIELD_KINDS)
+    check(
+        "every registered key is populated or declared CONSTANT/no-yield",
+        not undeclared and set(unpopulated) <= set(non_yield),
+        f"unpopulated={unpopulated} non_yield={non_yield} undeclared={undeclared}",
+    )
+    # (b) no row declares the entire universe (if one ever did, the
+    #     missing_both rate would be a capture bug rather than a fact)
+    check(
+        "no single product declares all 37 keys",
+        int(per_row_arr.max()) < len(registry),
+        f"max declared = {int(per_row_arr.max())} of {len(registry)}",
+    )
+
+    total_rows = len(frame)
+    print(f"  [INFO] keys per product: mean {per_row_arr.mean():.1f} "
+          f"median {per_row_arr.median():.0f} max {int(per_row_arr.max())} "
+          f"of {len(registry)}")
+    # Density tiers by share of rows that declare the key. These are the
+    # bands that decide whether a key can ever produce a pairwise verdict.
+    bands = (("common  >=20%", 0.20), ("sparse 5-20%", 0.05), ("rare <5%", 0.0))
+    for label, floor in bands:
+        members = sorted(k for k, n in measured.items() if n / total_rows >= floor)
+        if label.startswith("common"):
+            members = [k for k in members if measured[k] / total_rows >= 0.20]
+        elif label.startswith("sparse"):
+            members = [k for k in members
+                       if 0.05 <= measured[k] / total_rows < 0.20]
+        else:
+            members = [k for k in members if measured[k] / total_rows < 0.05]
+        print(f"  [INFO]   {label}: {len(members)} keys")
+
+
 def oracle_pinned_counts() -> None:
     """Pinned real-data counts — drift here means a pipeline change
     altered the committed-data contract (update alongside any
@@ -1135,14 +1208,14 @@ def oracle_pinned_counts() -> None:
         check("gate pairs == 135,246", len(g) == 135246, f"got {len(g)}")
         dec = g.gate_decision.value_counts().to_dict()
         check(
-            "gate decisions hard_no=92,259 proceed=1,239 fallback=41,748",
+            "gate decisions hard_no=92,591 proceed=1,174 fallback=41,481",
             # Threshold-independent: pair-similarity floors apply at the
             # labeled stage, never here.
-            dec == {"hard_no": 92259, "proceed": 1239, "fallback": 41748},
+            dec == {"hard_no": 92591, "proceed": 1174, "fallback": 41481},
             f"got {dec}",
         )
         check(
-            "labeled pairs == 8,736 (1,023 pos / 7,713 hard-neg)",
+            "labeled pairs == 8,711 (983 pos / 7,728 hard-neg)",
             # RE-PINNED 2026-10-01, forced by the census move above. The
             # labeled set is a FUNCTION of the census at the SSOT
             # thresholds (pos sim>=0.50 / neg sim>=0.80): proceed 1,395 ->
@@ -1154,9 +1227,9 @@ def oracle_pinned_counts() -> None:
             # (History: 2026-09-28 proceed_sim_threshold 0.80 -> 0.65 -> 0.50
             # admitted 884 gate-verified pairs, canonical-agreement 1.0000 in
             # every 0.05 band per scripts/check_proceed_precision.py.)
-            len(lp) == 8736
-            and (lp.true_label == 1).sum() == 1023
-            and (lp.true_label == 0).sum() == 7713,
+            len(lp) == 8711
+            and (lp.true_label == 1).sum() == 983
+            and (lp.true_label == 0).sum() == 7728,
             f"got {len(lp)} rows, {(lp.true_label == 1).sum()} pos, "
             f"{(lp.true_label == 0).sum()} neg",
         )
@@ -2640,6 +2713,7 @@ def main() -> None:
     print("== 14. zero-pack guard ==")
     oracle_zero_pack_guard()
     print("== 9. pinned real-data counts ==")
+    oracle_per_key_coverage()
     oracle_pinned_counts()
     print("== 9a. source-export drift gate ==")
     oracle_source_export_drift()

@@ -10,46 +10,44 @@ from __future__ import annotations
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-_VOLUME_TO_ML = {
-    "ml": Decimal(1),
-    "milliliter": Decimal(1),
-    "milliliters": Decimal(1),
-    "millilitre": Decimal(1),
-    "millilitres": Decimal(1),
-    "cc": Decimal(1),
-    "cl": Decimal(10),
-    "centiliter": Decimal(10),
-    "centiliters": Decimal(10),
-    "centilitre": Decimal(10),
-    "centilitres": Decimal(10),
-    "l": Decimal(1000),
-    "lt": Decimal(1000),
-    "ltr": Decimal(1000),
-    "liter": Decimal(1000),
-    "liters": Decimal(1000),
-    "litre": Decimal(1000),
-    "litres": Decimal(1000),
-    "floz": Decimal("29.5735295625"),
-    "fluidounce": Decimal("29.5735295625"),
-    "fluidounces": Decimal("29.5735295625"),
-    # Product titles use bare oz for beverage volume in this pipeline.
-    "oz": Decimal("29.5735295625"),
-    "ounce": Decimal("29.5735295625"),
-    "ounces": Decimal("29.5735295625"),
-    "pt": Decimal("473.176473"),
-    "pint": Decimal("473.176473"),
-    "pints": Decimal("473.176473"),
-    "qt": Decimal("946.352946"),
-    "quart": Decimal("946.352946"),
-    "quarts": Decimal("946.352946"),
-    "gal": Decimal("3785.411784"),
-    "gallon": Decimal("3785.411784"),
-    "gallons": Decimal("3785.411784"),
-}
+def _volume_factors() -> dict[str, "Decimal"]:
+    """unit spelling -> ml-per-unit Decimal, from the config units table.
+
+    The literal dict this replaces DUPLICATED core.text._TO_ML and ner's
+    VOLUME_TO_ML (a fourth copy); the copies already disagreed ('dl/decilitre'
+    missing here means any decilitre title CRASHED canonical_volume_ml;
+    'cc' absent from core.text's parse meant 65 '300 cc' titles were
+    rejected; factors drifted 29.5735 vs 29.5735295625). Keys are normalized
+    from spellings by normalize_unit so a single config table feeds both
+    lookup conventions (this module's stripped keys and core.text's spaced
+    norm_unit keys) with no interpolation between them.
+    """
+    from core.common import data_cfg
+
+    factors: dict[str, Decimal] = {}
+    for entry in data_cfg().units.volume:
+        for spelling in entry.spellings:
+            factors[normalize_unit(spelling)] = Decimal(str(entry.ml_per_unit))
+    return factors
+
+
+_VOLUME_TO_ML = None  # derived view, built lazily (config load deferred)
+
+
+def _ensure_volume_table() -> dict:
+    global _VOLUME_TO_ML
+    if _VOLUME_TO_ML is None:
+        _VOLUME_TO_ML = _volume_factors()
+    return _VOLUME_TO_ML
+
 
 # Persisted ANN indexes include this value in their preprocessing fingerprint.
 # Increment it whenever canonical numeric semantics change.
-UNIT_CANONICALIZATION_VERSION = "unit-canonical-v1"
+# v2: the ml-per-unit table moved to config/paths.yaml `units` (one table
+# serving core.text's parse, the converter and the NER features), so the
+# converter now accepts the whole decilitre family and 'cc' where v1 raised
+# on / rejected them. Persisted preprocessing fingerprints must rebuild.
+UNIT_CANONICALIZATION_VERSION = "unit-canonical-v2"
 
 
 def _decimal(value: object) -> Decimal:
@@ -76,7 +74,7 @@ def canonical_volume_ml(value: object, unit: object = "ml") -> float:
     """
     normalized_unit = normalize_unit(unit)
     try:
-        multiplier = _VOLUME_TO_ML[normalized_unit]
+        multiplier = _ensure_volume_table()[normalized_unit]
     except KeyError as exc:
         raise ValueError(f"unsupported volume unit: {unit!r}") from exc
     milliliters = (_decimal(value) * multiplier).quantize(

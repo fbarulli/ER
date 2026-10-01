@@ -390,3 +390,49 @@ def test_unrescued_conflict_reports_no_provenance(monkeypatch):
 
     assert conflicted.result is ComparisonResult.CONFLICT
     assert conflicted.fallback_from == ""
+
+
+# ── stage 7 reads the CAPTURED url column's slug evidence ─────────────────────
+def test_stage7_reparse_reads_captured_url_slug():
+    """The captured url column must feed the stage-7 reparse.
+
+    Config column_evidence captures url per title because the listing slug
+    carries product words the tty claims need. Before this wiring reparse()
+    read ttitles/description/attribute cells only, so a slug-carried claim
+    ("... diet-cola-no-added-sugar ...") could never clarify an INCONCLUSIVE
+    sweetener. Same claims device, one more captured column, nothing bespoke.
+    """
+    from core.attribute_decision import AttributeDecisionEngine, ComparisonResult
+    from core.attribute_universe import attribute_registry
+
+    engine = AttributeDecisionEngine(volume_relative_tolerance=0.05, volume_absolute_tolerance_ml=5.0)
+    specs = attribute_registry()
+
+    left_raw = {
+        "title": "cola can",
+        "sku_url": "https://shop.example.com/p/diet-cola-no-added-sugar-12x355ml",
+    }
+    right_raw = {
+        "title": "cola can",
+        "sku_url": "https://shop.example.com/p/diet-cola-no-added-sugar-0-33l",
+    }
+
+    impl = engine._fallback_reparse
+    verdict = impl("sweetener", {}, {}, left_raw, right_raw, specs)
+    assert verdict is not None and verdict[0] == (
+        ComparisonResult.MATCH if hasattr(ComparisonResult, "MATCH") else verdict[0]
+    ), "URL slug claims must clarify the pair like the title does"
+    assert verdict[1] == "original_columns", "provenance stays original_columns"
+
+
+def test_stage7_ignores_media_slugs_but_kept_slug_semantics_only_when_present():
+    """Control: when the pair has no slug evidence, stage 7 must not invent."""
+    from core.attribute_decision import AttributeDecisionEngine, ComparisonResult
+    from core.attribute_universe import attribute_registry
+
+    engine = AttributeDecisionEngine(volume_relative_tolerance=0.05, volume_absolute_tolerance_ml=5.0)
+    specs = attribute_registry()
+    one = {"title": "cola can"}  # no url at all
+    two = {"title": "can of cola"}
+    verdict = engine._fallback_reparse("sweetener", {}, {}, one, two, specs)
+    assert verdict is None, "no URL claim = reparse must return None (not a guess)"

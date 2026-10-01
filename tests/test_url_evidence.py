@@ -122,8 +122,42 @@ def test_query_string_and_fragment_are_dropped() -> None:
 
 
 def test_deterministic() -> None:
+    # "250ml" is KEPT. This line used to assert the opposite
+    # ("red bull energy drink pack"): the media-code rule deleted any
+    # letter+digit token, which ate the size token — 34 occurrences of
+    # "250ml" and 9 of "2l" in 8,000 sampled sku_url slugs. Size evidence
+    # deleted as if it were a retailer media code.
     url = "https://example.com/p/red-bull-energy-drink-250ml-24-pack"
-    assert url_text(url) == url_text(url) == "red bull energy drink pack"
+    assert url_text(url) == url_text(url) == "red bull energy drink 250ml pack"
+
+
+def test_size_tokens_survive() -> None:
+    """The pack gate reads size; the URL reader must not delete it."""
+    for url, expected in (
+        ("https://x.com/p/cola-250ml", "cola 250ml"),
+        ("https://x.com/p/cola-2l", "cola 2l"),
+        ("https://x.com/p/juice-12x355ml", "juice 12x355ml"),
+        ("https://x.com/p/juice-355ml", "juice 355ml"),
+        # pack notation with a nested size: 12 x (8 x 355ml)
+        ("https://x.com/p/juice-12x8x355ml", "juice 12x8x355ml"),
+    ):
+        assert url_text(url) == expected, f"{url} lost its size token"
+
+
+def test_long_real_words_are_not_hashes() -> None:
+    """The bare-hash rule needs a DIGIT, not just length.
+
+    It dropped any 8+ char alphanumeric run, which matched ordinary product
+    words: "sparkling" (70x) and "strawberry" (48x) across 8,000 sampled
+    sku_url slugs. Length alone does not make a token random.
+    """
+    for word in ("sparkling", "strawberry", "packaging", "blueberry"):
+        assert word in url_text(f"https://x.com/p/cola-{word}-330ml").split(), (
+            f"{word} was deleted as a hash"
+        )
+    # ...while real hashes and media codes still die
+    for junk in ("9df78eab33525d08", "d6bc7f7c", "k6rmm", "220x"):
+        assert junk not in url_text(f"https://x.com/media/cache/{junk}/cola").split()
 
 
 def test_never_raises_on_junk() -> None:

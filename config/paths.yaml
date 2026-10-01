@@ -328,6 +328,191 @@ canonical_optional_columns:
   universe_evidence: "{}"
   source_rows: "[]"
 
+# ── unit taxonomy (core.text, core.unit_canonicalization, ner features) ─────
+# THE one table for volume units and pack bounds; three module-local literals
+# held copies of it before and three of them already disagreed:
+#   * core.text._TO_ML (float, 37 spellings) parsed '2 dl' but
+#     src/core/unit_canonicalization._VOLUME_TO_ML had NO dl/decilitre family,
+#     so the whole-ml converter raised ValueError: unsupported volume unit
+#     'dl' on real rows ("27 pcs juice pot Trip orange drink 2 dl").
+#   * the converter accepted 'cc', but the parse regex never matched it — the
+#     "300 cc" notation in 65 real titles ("Exotic orange juice 300 cc") lost
+#     its volume instead of 300.
+#   * same unit, different factors (29.5735 in the parse table vs
+#     29.5735295625 in the converter — gal/qt differed by the same rounding),
+#     i.e. identical titles bucketed differently depending on which module
+#     converted them.
+# patterns/regex fragments stay algorithm-side: this table owns SPELLINGS the
+# modules key by; core.text builds its alternation and candidates from these.
+units:
+  bucket_ml: 5      # nearest 5 ml absorbs 355 vs 355.0 vs 354 noise
+  pack_min: 2       # sane multipack range (excludes "1 count"/"365 days")
+  pack_max: 100
+  # Glued-digit plausibility ceiling (code-artifact fix): a volume match whose
+  # digits are stuck to a preceding letter (alphanumeric product code) and
+  # whose canonical ml exceeds this ceiling is SKIPPED and scanning continues.
+  # Evidence: 'L & A Juice BG14980 L ... 6x32OZ' parsed '14980 l' = 14,980,000
+  # ml; the catalog's measured single-title max is 25,000 ml (bulk formats).
+  # Un-glued big numbers ('makes 128 gal' dilution yield) are legitimate and
+  # unaffected, as are glued-but-plausible sizes ('chinotto1 l', 'burst850ml').
+  glued_code_max_ml: 25000
+  volume:
+    # pattern: verbatim alternation fragment, in the EXISTING regex order (a
+    # fragment may list variants: 'ltr|lt|l'). spellings: the norm_unit keys
+    # those captures feed the tables with — keep in lockstep; an irregular
+    # write falls out via the pattern's own guards and the module asserts
+    # every spelling has exactly one pattern in these fields.
+    - {pattern: 'milli\s?lit(?:er|re)s?', spellings: [milliliter, milliliters, millilitre, millilitres], ml_per_unit: 1, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'ml', spellings: [ml], ml_per_unit: 1, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'centi\s?lit(?:er|re)s?', spellings: [centiliter, centiliters, centilitre, centilitres], ml_per_unit: 10, family: metric_volume, confidence: 0.95}
+    - {pattern: 'cl', spellings: [cl], ml_per_unit: 10, family: metric_volume, confidence: 0.95}
+    - {pattern: 'deci\s?lit(?:er|re)s?', spellings: [deciliter, deciliters, decilitre, decilitres], ml_per_unit: 100, family: metric_volume, confidence: 0.95}
+    - {pattern: 'dl', spellings: [dl], ml_per_unit: 100, family: metric_volume, confidence: 0.95}
+    - {pattern: 'lit(?:er|re)s?', spellings: [liter, liters, litre, litres], ml_per_unit: 1000, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'ltr|lt|l', spellings: [ltr, lt, l], ml_per_unit: 1000, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'fluid\s?ounces?', spellings: [fluid ounce, fluid ounces], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.85}
+    - {pattern: 'fl\.?\s?-?\s?oz\.?', spellings: [fl oz, floz], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.85}
+    - {pattern: 'floz', spellings: [floz], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.85}
+    - {pattern: 'cc', spellings: [cc], ml_per_unit: 1, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'gallons?', spellings: [gallon, gallons], ml_per_unit: 3785.411784, family: us_volume, confidence: 0.95}
+    - {pattern: 'gal', spellings: [gal], ml_per_unit: 3785.411784, family: us_volume, confidence: 0.95}
+    - {pattern: 'quarts?', spellings: [quart, quarts], ml_per_unit: 946.352946, family: us_volume, confidence: 0.95}
+    - {pattern: 'qt', spellings: [qt], ml_per_unit: 946.352946, family: us_volume, confidence: 0.95}
+    - {pattern: 'pints?', spellings: [pint, pints], ml_per_unit: 473.176473, family: us_volume, confidence: 0.95}
+    - {pattern: 'pt', spellings: [pt], ml_per_unit: 473.176473, family: us_volume, confidence: 0.95}
+    - {pattern: 'ounces?', spellings: [ounce, ounces], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.75, ambiguous: true}
+    - {pattern: 'oz', spellings: [oz], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.75, ambiguous: true}
+
+# ── listing-URL product text (core.url_evidence) ───────────────────────────
+# url/image_url are captured per title (column_evidence above). This block is
+# the READER for them: the vocabulary and thresholds deciding which slug tokens
+# are product text.
+#
+# MEASURED DEFECTS THIS BLOCK FIXES (hardcoded literals in the module before):
+#   * a bare 8+ char token was dropped as a hash, which ate the real product
+#     words "sparkling" (70x in 8,000 sampled sku_url slugs) and
+#     "strawberry" (48x). Hence bare_hash_min_digits: a hash must also carry a
+#     digit, so "9df78eab" dies and "sparkling" lives.
+#   * a letter+digit token was dropped as a media code, which ate "250ml"
+#     (34x) and "2l" (9x) — the size evidence the pack gate depends on.
+#     Hence `units`: a token whose letter part is a declared unit is never a
+#     media code.
+url_evidence:
+  # Storefront path scaffolding: describes the retailer's URL scheme, never the
+  # product. Includes identifier-keyed schemes carrying no product text at all
+  # — amazon /dp/<ASIN> (179/2000 sampled urls), coop /product/<EAN>, meijer
+  # /shopping/product, wegmans /shop/categories. Those must read as "" rather
+  # than as their own scaffolding.
+  path_schema_words:
+  - "account"
+  - "asin"
+  - "aspx"
+  - "assets"
+  - "aw"
+  - "basket"
+  - "browse"
+  - "cache"
+  - "cart"
+  - "catalog"
+  - "catalogue"
+  - "categories"
+  - "checkout"
+  - "co"
+  - "col"
+  - "com"
+  - "compare"
+  - "content"
+  - "crop"
+  - "dam"
+  - "deals"
+  - "detail"
+  - "details"
+  - "dp"
+  - "en"
+  - "file"
+  - "files"
+  - "fit"
+  - "format"
+  - "gif"
+  - "gp"
+  - "height"
+  - "htm"
+  - "html"
+  - "image"
+  - "images"
+  - "img"
+  - "index"
+  - "ip"
+  - "irs"
+  - "is"
+  - "item"
+  - "items"
+  - "itm"
+  - "jsp"
+  - "large"
+  - "list"
+  - "lists"
+  - "main"
+  - "master"
+  - "media"
+  - "net"
+  - "node"
+  - "offers"
+  - "org"
+  - "original"
+  - "p"
+  - "pd"
+  - "php"
+  - "product"
+  - "products"
+  - "quality"
+  - "resize"
+  - "scale"
+  - "search"
+  - "seo"
+  - "shop"
+  - "shopping"
+  - "sk"
+  - "small"
+  - "sp"
+  - "sr"
+  - "static"
+  - "store"
+  - "stores"
+  - "svg"
+  - "thumb"
+  - "thumbnail"
+  - "upload"
+  - "uploads"
+  - "us"
+  - "webp"
+  - "width"
+  - "wishlist"
+  - "www"
+  # Units are PRESERVED, never dropped. Disjoint from path_schema_words by
+  # validation (schemas.UrlEvidenceSpec), so "cl" cannot be both again.
+  units:
+  - "cl"
+  - "dl"
+  - "fl"
+  - "g"
+  - "kg"
+  - "l"
+  - "mg"
+  - "ml"
+  - "oz"
+  # A token shorter than this is storefront filler (peapod ".../c/K6/...").
+  min_token_length: 2
+  # A token this long with no vowel is a content hash ("k6rmm", "9df78eab").
+  no_vowel_min_length: 5
+  # An alphanumeric run this long is a hash ONLY when it also carries a digit —
+  # the fix for "sparkling"/"strawberry" being eaten.
+  bare_hash_min_length: 8
+  bare_hash_min_digits: 1
+  # A short letter+digit run is a media code ("k6rmm", "ab12") unless its letter
+  # part is a declared unit, which keeps "250ml" and "2l" intact.
+  short_code_letters: 3
+
 # ── seed (whole tree uses this one value) ───────────────────────────────────
 seed: 42
 

@@ -83,6 +83,7 @@ import hashlib
 import itertools
 import json
 import math
+import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -294,6 +295,157 @@ class ColumnEvidenceSpec(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class VolumeUnitSpec(BaseModel):
+    """One volume unit: its regex fragment, spellings, factor, family, trust.
+
+    Why config: three module-local tables previously held the SAME taxonomy
+    and three of them already disagreed — core.text._TO_ML parsed '2 dl'
+    while unit_canonicalization._VOLUME_TO_ML lacked the whole decilitre
+    family and crashed on it; cc was convertible but invisible to the parse
+    regex (65 'Exotic ... 300 cc' titles lost their volume); and factors
+    drifted (29.5735 vs 29.5735295625 for fl-oz spellings; gal/qt/pt same).
+    The regexes themselves stay code (algorithm, not config) — this table
+    owns their SPELLINGS, factors,family and attribution thresholds.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pattern: str = Field(description="verbatim alternation fragment, ordered")
+    spellings: list[str] = Field(min_length=1)
+    ml_per_unit: float = Field(gt=0)
+    family: Literal["metric_volume", "us_volume"]
+    confidence: float = Field(ge=0, le=1)
+    # Confidence for a WRITTEN decimal ("87.5 ml") where the old pipeline
+    # raised it 0.95 -> 0.98; None = no decimal bonus (cl, us units).
+    decimal_confidence: float | None = Field(default=None, ge=0, le=1)
+    # Bare ounce is weight-or-fluid; mapped by norm_unit so the parse flags.
+    ambiguous: bool = False
+
+    @field_validator("spellings")
+    @classmethod
+    def _spellings_are_normalized_keys(cls, spellings: list[str]) -> list[str]:
+        bad = sorted({s for s in spellings if not s or s.strip() != s})
+        if bad:
+            raise ValueError(f"unit spellings must be trimmed keys, got {bad}")
+        return spellings
+
+
+class UnitsSpec(BaseModel):
+    """VOLUME (and related extraction bounds) unit taxonomy — config SSOT."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    volume: list[VolumeUnitSpec] = Field(min_length=1)
+    # Pair-agreement bucket (bucket_ml): the nearest-N-ml rounding used by
+    # core.text.bucket_ml so '330ml' and '0,33 l' collapse in volume_verified.
+    bucket_ml: int = Field(default=5, ge=1)
+    pack_min: int = Field(default=2, ge=2)
+    pack_max: int = Field(default=100, ge=2)
+    # Plausibility ceiling for a volume match whose digits are GLUED to a
+    # preceding letter (a product/alphanumeric code contaminating the match,
+    # e.g. 'L & A Juice BG14980 L ... 6x32OZ' parsed as '14980 l' = 14,980 L
+    # — beyond the measured 25,000 ml bulk ceiling of the whole catalog).
+    # Candidates past this ceiling are skipped and scanning continues. NOT
+    # applied to un-glued matches: dilution-yield text ('makes 128 gal')
+    # legitimately exceeds it on BOTH the old and new path and must stay.
+    glued_code_max_ml: int = Field(default=25000, ge=1)
+
+    @model_validator(mode="after")
+    def _table_is_consistent(cls, v: "UnitsSpec") -> "UnitsSpec":
+        if v.pack_min >= v.pack_max:
+            raise ValueError(
+                f"units.pack_min ({v.pack_min}) must be < pack_max ({v.pack_max})"
+            )
+        # Two invariants the consumers rely on. (1) A spelling is ONE vec of
+        # (factor, family, confidence) — two entries may not claim the same
+        # post-norm_unit key with different numbers ("fl oz" vs "floz" remain
+        # distinct norm_unit keys, but BOTH collapse to 'floz' when
+        # unit_canonicalization strips all non-letters, so stripped keys must
+        # agree on the number at minimum).
+        def stripped(s: str) -> str:
+            return re.sub(r"[^a-z]", "", s.lower())
+
+        def _differs(a: "VolumeUnitSpec", b: "VolumeUnitSpec") -> bool:
+            keys = ("ml_per_unit", "family", "confidence", "decimal_confidence", "ambiguous")
+            return any(getattr(a, k) != getattr(b, k) for k in keys)
+
+        spelled: dict[str, VolumeUnitSpec] = {}
+        stripped_claims: dict[str, "VolumeUnitSpec"] = {}
+        for entry in v.volume:
+            for spelling in entry.spellings:
+                if spelling.lower() in spelled and _differs(spelled[spelling.lower()], entry):
+                    raise ValueError(
+                        f"units.volume: spelling {spelling!r} claimed by two "
+                        "entries with different specs"
+                    )
+                spelled[spelling.lower()] = entry
+                s = stripped(spelling)
+                if s in stripped_claims and _differs(stripped_claims[s], entry):
+                    raise ValueError(
+                        f"units.volume: spelling {spelling!r} and its stripped "
+                        f"form {s!r} collide with another entry's claims"
+                    )
+                stripped_claims[s] = entry
+        return v
+
+
+class UrlEvidenceSpec(BaseModel):
+    """Vocabulary + thresholds for reading product text out of a listing URL.
+
+    WHY THIS IS CONFIG. core.url_evidence used to hardcode its scaffolding
+    word-set, its unit-set and every numeric threshold. Two real defects came
+    straight out of that: a bare 8+ char token was dropped as a hash, which
+    ate the real product words "sparkling" (70 occurrences in8,000 sampled
+    sku_url slugs) and "strawberry" (48); and a letter+digit token was dropped
+    as a media code, which ate "250ml" (34) and "2l" (9) — i.e. it was
+    discarding exactly the size evidence the pack gate needs.
+
+    The VOCABULARIES belong here because they are retailer knowledge that
+    changes per storefront. The THRESHOLDS belong here because they are
+    tuning decisions whose effect should be measurable, not buried in a
+    regex literal. The patterns themselves stay in code — a regex is
+    algorithm, not configuration.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Retailer URL scaffolding: path segments describing the STOREFRONT's url
+    # scheme, never the product ("ip", "shop", "media", "dp", "asin", ...).
+    path_schema_words: list[str] = Field(min_length=1)
+    # Unit tokens that must SURVIVE normalization ("ml", "l", "oz", ...).
+    # These win outright over path_schema_words; the validator forbids an
+    # overlap so "cl" cannot silently be both scaffolding and a unit again.
+    units: list[str] = Field(min_length=1)
+    # A token shorter than this is storefront filler (peapod's ".../c/K6/...").
+    min_token_length: int = Field(default=2, ge=1)
+    # A token this long with no vowel is a content hash, not a word. Length
+    # alone is NOT enough — see bare_hash_min_digits.
+    no_vowel_min_length: int = Field(default=5, ge=2)
+    # An alphanumeric run of at least this length is a hash ONLY when it also
+    # carries a digit. A pure-letter run this long ("sparkling", 9) is a real
+    # product word and must be kept.
+    bare_hash_min_length: int = Field(default=8, ge=4)
+    bare_hash_min_digits: int = Field(default=1, ge=0)
+    # A short letter+digit run is a media code ("k6rmm", "ab12") unless its
+    # letter part is a declared unit, which keeps "250ml" and "2l" intact.
+    short_code_letters: int = Field(default=3, ge=1)
+
+    @model_validator(mode="after")
+    def _vocabularies_are_disjoint(cls, v: "UrlEvidenceSpec") -> "UrlEvidenceSpec":
+        overlap = sorted({w.lower() for w in v.path_schema_words} & {u.lower() for u in v.units})
+        if overlap:
+            raise ValueError(
+                "url_evidence.path_schema_words and url_evidence.units overlap on "
+                f"{overlap}; a token cannot be both storefront scaffolding and a "
+                "unit — units are preserved, so remove it from path_schema_words"
+            )
+        for name, words in (("path_schema_words", v.path_schema_words), ("units", v.units)):
+            bad = sorted({w for w in words if not w or not w.strip()})
+            if bad:
+                raise ValueError(f"url_evidence.{name} has empty entries: {bad}")
+        return v
+
+
 class DataConfig(BaseModel):
     """config/paths.yaml — the SHARED data contract (paths, file names, column
     mapping, seed, category-macro taxonomy, model registry, owned layouts).
@@ -317,6 +469,12 @@ class DataConfig(BaseModel):
     # canonical_records columns a record may lack, and their unknown-value
     # literal. Read by upgrade_canonical_records_frame.
     canonical_optional_columns: dict[str, str] = Field(min_length=1)
+    # THE unit taxonomy (see VolumeUnitSpec): one table that core.text's parse,
+    # unit_canonicalization's converter and the pipeline's attribution read.
+    units: UnitsSpec
+    # Vocabulary + thresholds for reading product text out of url/image_url
+    # (see UrlEvidenceSpec).
+    url_evidence: UrlEvidenceSpec
     seed: int
     models: dict[str, str] = Field(min_length=1)
     embedding_model_keys: list[str] = Field(min_length=1)

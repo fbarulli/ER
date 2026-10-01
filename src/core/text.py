@@ -18,6 +18,7 @@ import math
 import re
 import unicodedata
 from collections import Counter
+from functools import lru_cache
 
 import pandas as pd  # pd.Series annotation in attributes_keys (F17)
 
@@ -28,48 +29,34 @@ def unicode_casefold(value: object) -> str:
     return "".join(char for char in text if not unicodedata.combining(char))
 
 
+def normalize_text(text: str) -> str:
+    """Lowercase a string to ``[a-z0-9. ]``, collapsing runs of space.
+
+    LIVES HERE now: it used to live in pipeline.normalize_text, which meant
+    every ``core`` module needing it imported the top-level pipeline module
+    (and the pipeline import pulled the whole ML stack into tests that only
+    wanted the cleaner). core.url_evidence must not import pipeline for the
+    same reason: core <-> pipeline has to stay one-directional
+    (pipeline imports core). One definition, three import paths.
+    """
+    if text is None:
+        return ""
+    if isinstance(text, float) and text != text:  # NaN without pandas  # noqa: PLR0124
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    text = text.lower().strip()
+    text = text.replace("\u00d7", "x")
+    text = re.sub(r"[^a-z0-9.\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def normalized_attribute_text(*values: object) -> str:
     """Shared attribute token normalization without dropping negation words."""
     text = unicode_casefold(" ".join(str(value or "") for value in values))
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text)).strip()
 
 # ---------------------------------------------------------------------------
-# Volume extraction (v2: broader units + decimal-comma + boundaries)
-# ---------------------------------------------------------------------------
-_UNIT_ALTERNATION = r"""
-    (?:
-        milli\s?lit(?:er|re)s?    |  ml
-      | centi\s?lit(?:er|re)s?    |  cl
-      | deci\s?lit(?:er|re)s?     |  dl
-      | lit(?:er|re)s?            |  ltr | lt | l
-      | fluid\s?ounces?           |  fl\.?\s?-?\s?oz\.?  | floz
-      | gallons?                  |  gal
-      | quarts?                   |  qt
-      | pints?                    |  pt
-      | ounces?                   |  oz
-    )
-"""
-
-# Number part: a single-digit integer may carry a comma-decimal with optional
-# whitespace ("0, 33l" = 0.33 L, "1, 5l" = 1.5 L — EU notation with a space);
-# multi-digit integers may NOT ("case of 24, 500ml" is a count-list, not
-# 24.5 ml). A DOT decimal never takes a space ("pH 9.0 bottle 600 ml" must
-# stay 600, not "9. 600"). The (?<![0-9.])(?![0-9]) pair pins the single-digit
-# branch to a REAL single digit, so "24, 500ml" is never read as "4, 500".
-# A leading-dot decimal (".14 oz" = 0.14 oz, ".5 l" = 0.5 L) is a THIRD branch
-# so the multi-digit branch never eats the digits after the dot and inflates
-# the value 10x/100x (".14" must not read as 14).
-_NUMBER_PART = (
-    r"((?<![0-9.])\d(?![0-9])(?:,\s*\d+|\.\d+)?"
-    r"|(?<![0-9.])\d{2,}(?:[.,]\d+)?"
-    r"|(?<![0-9])\.\d+)"
-)
-
-VOLUME_RE = re.compile(
-    _NUMBER_PART + r"\s*(?<![a-zA-Z])" + _UNIT_ALTERNATION + r"(?![a-zA-Z])",
-    re.IGNORECASE | re.VERBOSE,
-)
-
 # Pack-count phrases: "6-pack", "12 Pack", "12pcs", "10 Packets", "48 pk",
 # "pack of 6", "( Pack of4)". Groups: (1) count-before-pack,
 # (2) packet/bottle form, (3) pack-of form.
@@ -97,6 +84,85 @@ NUTRITION_RE = re.compile(
     r"per\s*(?:100|1)\s*(?:ml|g|gram|grams)|kcal\s*per|per\s*serving",
     re.IGNORECASE,
 )
+# Number part: a single-digit integer may carry a comma-decimal with optional
+# whitespace ("0, 33l" = 0.33 L, "1, 5l" = 1.5 L — EU notation with a space);
+# multi-digit integers may NOT ("case of 24, 500ml" is a count-list, not
+# 24.5 ml). A DOT decimal never takes a space ("pH 9.0 bottle 600 ml" must
+# stay 600, not "9. 600"). The (?<![0-9.])(?![0-9]) pair pins the single-digit
+# branch to a REAL single digit, so "24, 500ml" is never read as "4, 500".
+# A leading-dot decimal (".14 oz" = 0.14 oz, ".5 l" = 0.5 L) is a THIRD branch
+# so the multi-digit branch never eats the digits after the dot and inflates
+# the value 10x/100x (".14" must not read as 14).
+_NUMBER_PART = (
+    r"((?<![0-9.])\d(?![0-9])(?:,\s*\d+|\.\d+)?"
+    r"|(?<![0-9.])\d{2,}(?:[.,]\d+)?"
+    r"|(?<![0-9])\.\d+)"
+)
+
+def _unit_spec() -> "UnitsSpec":
+    """The config-owned unit taxonomy (config/paths.yaml `units`).
+
+    Previously core.text._TO_ML, AMBIGUOUS_UNITS, BUCKET, MIN_PACK/MAX_PACK
+    and the unit alternation were module literals while the converter and the
+    NER features held THIRD and FOURTH copies of the same table. Evidence
+    forced the move: 'dl' parsed here but the converter had NO decilitre
+    family and crashed on it (ValueError: unsupported volume unit 'dl'); 'cc'
+    was invisible to VOLUME_RE (65 'Exotic ... 300 cc' titles lost their
+    volume); and factors drifted between the two tables (29.5735 vs
+    29.5735295625 for the same fl-oz spelling; gal/qt/pt alike). The tables
+    below are DERIVED views of one source, resolved through module
+    __getattr__ by the SAME names as before, so every existing reader keeps
+    working (same lazy pattern as core.url_evidence's _spec()).
+    """
+    from core.common import data_cfg
+
+    return data_cfg().units
+
+
+@lru_cache(maxsize=1)
+def _volume_views() -> tuple:
+    """(to_ml, ambiguous, bucket, pack_min, pack_max, volume_re) from config."""
+    spec = _unit_spec()
+    to_ml: dict[str, float] = {}
+    ambiguous: set[str] = set()
+    for entry in spec.volume:
+        for spelling in entry.spellings:
+            to_ml[spelling.lower()] = entry.ml_per_unit
+        if entry.ambiguous:
+            ambiguous.update(entry.spellings)
+    alternation = r"(?:" + r"  |  ".join(e.pattern for e in spec.volume) + r")"
+    volume_re = re.compile(
+        _NUMBER_PART + r"\s*(?<![a-zA-Z])" + alternation + r"(?![a-zA-Z])",
+        re.IGNORECASE | re.VERBOSE,
+    )
+    return (to_ml, frozenset(ambiguous), spec.bucket_ml, spec.pack_min,
+            spec.pack_max, volume_re, spec.glued_code_max_ml)
+
+
+_LAZY_UNIT_ATTRS = {
+    "VOLUME_RE": 5, "_TO_ML": 0, "AMBIGUOUS_UNITS": 1,
+    "BUCKET": 2, "MIN_PACK": 3, "MAX_PACK": 4,
+}
+
+
+def _views():
+    """In-module read of the derived unit views (avoids eager config import)."""
+    return _volume_views()
+
+
+def __getattr__(name: str):
+    """Fallback for config-derived unit views consumed before binding (kept for
+    importers that reference the names through the module object).
+
+    core.text VOLUME_RE/_TO_ML/AMBIGUOUS_UNITS/BUCKET/MIN_PACK/MAX_PACK live
+    in config/paths.yaml `units` now; this module only materializes them.
+    """
+    if name in _LAZY_UNIT_ATTRS:
+        return _volume_views()[_LAZY_UNIT_ATTRS[name]]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+
 
 # Flavor vocabulary + FLAVOR_RE REMOVED (audit round 2 F18, round 3): zero
 # consumers — the live flavor signal is the critical-claims extractor
@@ -104,53 +170,6 @@ NUTRITION_RE = re.compile(
 # Flavor: key from the attributes blob). Same for DRY_MIX_HINTS and
 # SUSPECT_ROUND below.
 
-# Bare oz/ounce could mean weight (chips, protein powder) rather than fluid
-# volume. Flag rather than silently trusting it.
-AMBIGUOUS_UNITS = {"oz", "ounce", "ounces"}
-
-BUCKET = 5  # nearest 5 ml absorbs 355 vs 355.0 vs 354 noise
-MIN_PACK, MAX_PACK = 2, 100  # sane multipack range (excludes "1 count"/"365 days")
-
-_TO_ML = {
-    "ml": 1.0,
-    "millilitre": 1.0,
-    "milliliter": 1.0,
-    "millilitres": 1.0,
-    "milliliters": 1.0,
-    "cl": 10.0,
-    "centilitre": 10.0,
-    "centiliter": 10.0,
-    "centilitres": 10.0,
-    "centiliters": 10.0,
-    "dl": 100.0,
-    "decilitre": 100.0,
-    "deciliter": 100.0,
-    "decilitres": 100.0,
-    "deciliters": 100.0,
-    "l": 1000.0,
-    "ltr": 1000.0,
-    "lt": 1000.0,
-    "litre": 1000.0,
-    "liter": 1000.0,
-    "litres": 1000.0,
-    "liters": 1000.0,
-    "gal": 3785.41,
-    "gallon": 3785.41,
-    "gallons": 3785.41,
-    "qt": 946.353,
-    "quart": 946.353,
-    "quarts": 946.353,
-    "pt": 473.176,
-    "pint": 473.176,
-    "pints": 473.176,
-    "fl oz": 29.5735,
-    "floz": 29.5735,
-    "fluid ounce": 29.5735,
-    "fluid ounces": 29.5735,
-    "oz": 29.5735,
-    "ounce": 29.5735,
-    "ounces": 29.5735,
-}
 
 
 def normalize_retailer(name: str) -> str:
@@ -180,7 +199,7 @@ def normalize_retailer(name: str) -> str:
 
 
 def norm_unit(token: str) -> str:
-    """Normalize a unit token to a _TO_ML key (tolerates spacing/punct)."""
+    """Normalize a unit token to a config-units key (tolerates spacing/punct)."""
     t = re.sub(r"[.\-\s]", " ", token.lower()).strip()
     t = re.sub(r"\s+", " ", t)
     if t == "floz":
@@ -189,77 +208,130 @@ def norm_unit(token: str) -> str:
 
 
 def bucket_ml(ml: float) -> int:
-    """Round ml to the nearest BUCKET (half-up), never 0 for a real detection.
+    """Round ml to the nearest config bucket (half-up), never 0.
 
     Uses floor(ml / BUCKET + 0.5) instead of round(), whose banker's rounding
     (round-half-to-even) maps an exact x.5 bucket boundary inconsistently and
     can split two representations of the same volume into different buckets.
     """
-    bucketed = math.floor(ml / BUCKET + 0.5) * BUCKET
+    bucket = _views()[2]
+    bucketed = math.floor(ml / bucket + 0.5) * bucket
     if bucketed == 0 and ml > 0:
         return math.floor(ml + 0.5)
     return bucketed
 
 
 def extract_volume_measurement(text: str) -> tuple[float | None, str | None, bool]:
-    """Return (value_in_unit, unit_token, is_ambiguous_unit).
-
-    The raw (value, unit) pair BEFORE canonical ml conversion — the columns a
-    measurement validator needs. value_in_unit is the amount as written (350
-    for "350 L"), unit_token the normalized unit ('l', 'ml', 'fl oz', 'oz',
-    ...) or None when nothing is extracted. Same pipeline as extract_volume_ml
-    (pack-count and nutrition phrases stripped first, symmetric word
-    boundaries, EU decimal-comma, thousands-separator fix), so the two
-    functions can never disagree on WHAT was found.
-    """
+    """(value_in_unit, unit_token, is_ambiguous_unit) — extract_volume_match
+    without the raw substring. The parse is ONE function; only the conversion
+    differs per path (bucket_ml vs whole-ml canonical_volume_ml)."""
     if not isinstance(text, str):
         return None, None, False
-    cleaned = PACK_RE.sub("", text)
-    cleaned = NUTRITION_RE.sub("", cleaned)
-    match = VOLUME_RE.search(cleaned)
+    value, unit, ambiguous, _raw = extract_volume_match(text)
+    return value, unit, ambiguous
+
+
+_SPACE_THOUSANDS_RE = re.compile(r"\b(\d{1,3})[ \u00a0]+(000)(?=\s*ml\b)", re.IGNORECASE)
+
+
+def _VOLUME_SEARCH(text: str):
+    """The single volume probe shared by every conversion path.
+
+    Applies the space thousands repair ("1 000 ml" -> "1000ml") before the
+    pack/nutrition strip; restricting it to 000 groups is deliberate, because
+    "24, 500ml" and "24 500ml" are count/volume pairs and must not become
+    24,500ml.
+
+    Candidates are scanned in order and an implausible CODE ARTIFACT skips to
+    the next match rather than claiming its volume: digits glued to a
+    preceding letter (alphanumeric product code, e.g. 'BG14980 L' = product
+    code + brand initial read as 14,980 litres) AND canonical ml above
+    config glued_code_max_ml (the measured 25,000 ml bulk ceiling). Glued
+    but plausible sizes ('chinotto1 l', 'burst850ml') and unglued bulk
+    yields ('makes 128 gal') are untouched.
+    """
+    cleaned = _SPACE_THOUSANDS_RE.sub(r"\1\2", text)
+    cleaned = NUTRITION_RE.sub("", PACK_RE.sub("", cleaned))
+    spec = _volume_views()
+    to_ml, glued_max = spec[0], spec[6]
+    for match in _volume_views()[5].finditer(cleaned):
+        raw_value = match.group(1)
+        unit = norm_unit(match.group(0)[len(raw_value):].strip())
+        factor = to_ml.get(unit)
+        if factor is None:
+            continue
+        glued = match.start() > 0 and cleaned[match.start() - 1].isalpha() and cleaned[match.start() - 1].casefold() != "x"
+        try:
+            ml = float(raw_value.replace(",", ".").replace(" ", "")) * factor
+        except ValueError:
+            continue
+        if glued and ml > glued_max:
+            continue
+        return match
+    return None
+
+
+
+def extract_volume_match(text: str) -> tuple:
+    """Return (value_in_unit, unit_token, is_ambiguous_unit, raw_match) — the
+    ONE parse; every volume conversion path reads it and only the conversion
+    differs (bucket_ml vs whole-ml canonical_volume_ml)."""
+    if not isinstance(text, str):
+        return None, None, False, ""
+    match = _VOLUME_SEARCH(text)
     if not match:
-        return None, None, False
+        return None, None, False, ""
     raw_value = match.group(1)
-    unit = norm_unit(match.group(0)[len(raw_value) :].strip())
-    if unit not in _TO_ML:
-        return None, None, False
-    # European thousands separator: "1.000 ml" means 1000ml, not 1.0ml.
-    # A '.' followed by EXACTLY 3 digits with no further digits, where the
-    # decimal-interpretation would be implausibly small (< 20 ml).
+    unit = norm_unit(match.group(0)[len(raw_value):].strip())
+    to_ml, ambiguous_units = _volume_views()[0], _volume_views()[1]
+    if unit not in to_ml:
+        return None, None, False, ""
+    # European thousands separator: "1.000 ml" = 1000ml (fixes implausible
+    # sub-20ml decimals only, keeping "500.0 ml" alone).
     if "." in raw_value:
         before, after = raw_value.split(".", 1)
-        # "before" must be non-empty: a leading-dot decimal (".500") is a
-        # 0.500-style value, not a thousands-separated integer.
-        if (
-            before
-            and len(after) == 3
-            and after.isdigit()
-            and float(raw_value.replace(",", ".")) * _TO_ML[unit] < 20
-        ):
-            raw_value = before + after  # "1.000" -> "1000"
-    # EU-decimal-with-space vs count-list: "0, 33l" = 0.33 L (plausible), but
-    # "1, 100cl" / "1 + 4, 200ml" / "33 x 4, 132 cl" are count-lists whose
-    # decimal reading is an implausible volume. Reuse the plausibility idea
-    # from the thousands rule: a leading count (>=1) with a sub-100ml decimal
-    # reading means the number AFTER the comma is the real volume.
+        if (before and len(after) == 3 and after.isdigit()
+                and float(raw_value.replace(",", ".")) * to_ml[unit] < 20):
+            raw_value = before + after
+    # EU-decimal-with-space vs count-list: "0, 33l" = 0.33 L; "24, 500ml" is a
+    # count/volume pair, not 24.5 ml. Same plausibility rule as above.
     if "," in raw_value and " " in raw_value:
         head, tail = raw_value.split(",", 1)
-        dec_ml = float((head + "." + tail).replace(" ", "")) * _TO_ML[unit]
+        dec_ml = float((head + "." + tail).replace(" ", "")) * to_ml[unit]
         if float(head) >= 1 and dec_ml < 100:
             raw_value = tail.strip()
-    # Spaces inside the number ("0, 33" = 0.33) are EU-decimal formatting.
     value = float(raw_value.replace(",", ".").replace(" ", ""))
-    ambiguous = unit in AMBIGUOUS_UNITS
-    return value, unit, ambiguous
+    return value, unit, unit in ambiguous_units, match.group(0)
+
+
+def _volume_spelling_index() -> dict:
+    """post-norm_unit spelling -> the config entry declaring it.
+
+    ONE index for one table: the parse capture keys both _TO_ML (float) and
+    this attribution index off the very same spellings, so a config edit
+    cannot update one half and strand the other.
+    """
+    index = {}
+    for entry in _unit_spec().volume:
+        for spelling in entry.spellings:
+            index.setdefault(spelling.lower(), []).append(entry)
+    return index
+
+
+def _volume_entry(unit: str):
+    """The config VolumeUnitSpec for a post-norm_unit spelling; None when the
+    taxonomy does not declare it — callers treat that as no_evidence."""
+    matches = _volume_spelling_index().get(unit.lower(), ())
+    return matches[0] if matches else None
 
 
 def extract_volume_ml(text: str) -> tuple[int | None, bool]:
     """Return (canonical_ml, is_ambiguous_unit) — the ml projection of
-    extract_volume_measurement (kept for all existing callers/tests)."""
+    extract_volume measurement (kept for all existing callers/tests)."""
     value, unit, ambiguous = extract_volume_measurement(text)
     if value is None or unit is None:
         return None, False
-    return bucket_ml(value * _TO_ML[unit]), ambiguous
+    return bucket_ml(value * _volume_views()[0][unit]), ambiguous
 
 
 # _LITER_UNITS, CATEGORY_MEASUREMENT_TYPE, DEFAULT_MEASUREMENT_TYPE and
@@ -293,7 +365,7 @@ def extract_pack_counts(text: str) -> set[int]:
         for g in m.groups():
             if g:
                 n = int(g)
-                if MIN_PACK <= n <= MAX_PACK:
+                if pack_min <= n <= pack_max:
                     counts.add(n)
     return counts
 

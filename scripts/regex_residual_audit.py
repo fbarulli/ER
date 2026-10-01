@@ -34,12 +34,12 @@ from ner.ner_product_attributes import (
 )
 from pipeline import (
     MINIMAL_STOPWORDS,
-    VOLUME_PATTERN_METRIC_EXT,
-    VOLUME_PATTERN_US_EXT,
     _VOLUME_PACK_RE,
     _MODEL_STOP,
     normalize_text,
 )
+from core.text import VOLUME_RE
+
 
 
 # These are the phrase branches in core.critical_attributes.extract_critical_claims.
@@ -141,7 +141,7 @@ def drop_nearby_repeats(text: str, *, window: int, min_words: int) -> tuple[str,
 def live_patterns(field: str):
     """Yield the lexical patterns audited for a working SKU input field."""
     if field in {"title", "brand"}:
-        for pattern in (VOLUME_PATTERN_METRIC_EXT, VOLUME_PATTERN_US_EXT, VOLUME_RE):
+        for pattern in (VOLUME_RE,):
             yield "volume", pattern
         yield "weight", WEIGHT_RE
         for pattern in PACK_COUNT_RES:

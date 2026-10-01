@@ -111,104 +111,60 @@ def _load_concept_folds() -> dict[str, str]:
 
 STOPWORDS = _load_stopwords("STOPWORDS")
 
-# ── regex patterns (owner's second_extraction.py verbatim) ──────────────────
-VOLUME_PATTERN_METRIC_EXT = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(ml|millilit(?:er|re)s?|cc|cl|centilit(?:er|re)s?|l|lt|ltr|liters?|litres?)\b",
-    re.IGNORECASE,
-)
-VOLUME_PATTERN_US_EXT = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(fl\.?\s*oz|fluid\s+ounces?|oz\.?|ounces?|qt|quarts?|pt|pints?|gal|gallons?)\b",
-    re.IGNORECASE,
-)
-
-
-def normalize_text(text: str) -> str:
-    # NaN-guard (bug fix): missing titles arrive as float NaN; str(NaN) is
-    # the string "nan", which leaked into 6 canonicals as a "nan_volume_946"
-    # token. Coerce missing input to ""; other non-strings stringify.
-    if text is None:
-        return ""
-    if isinstance(text, float) and text != text:  # NaN without pandas  # noqa: PLR0124
-        return ""
-    if not isinstance(text, str):
-        text = str(text)
-    text = text.lower().strip()
-    text = text.replace("×", "x")
-    text = re.sub(r"[^a-z0-9.\s]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+# normalize_text now LIVES in core.text (see its docstring for why it moved).
+# Re-exported here, unaltered, because ten modules import it from this path
+# (core.product_identity, core.record_linkage, core.model_input, the training
+# lane, tests). One definition, two import paths, no cycle.
+from core.text import normalize_text  # noqa: E402,F401
 
 
 def extract_volume_from_title(title: str) -> dict:
+    """Adapter over core.text's single volume PARSE; attribution from config.
+
+    WHY THIS EXISTS. This function used to carry its own two regexes
+    (VOLUME_PATTERN_US_EXT / VOLUME_PATTERN_METRIC_EXT) plus its own
+    "1 000 ml" repair — a second full parse of the same text core.text's
+    VOLUME_RE already performed, so the two paths could silently disagree.
+    Both patterns are gone; every field below derives from ONE parse
+    (core.text.extract_volume_match) plus the SAME config unit table the
+    converter (core.unit_canonicalization.canonical_volume_ml) reads:
+      * conversion = whole-ml half-up, round 2 kept for stored identity —
+        the shipped canonical volume_set stores values like 1893.0, not
+        bucketed 5ml grid values, so identity is 1ml, not bucket;
+      * confidence = config units.volume entry for the captured spelling,
+        raised by decimal_confidence only when the value was written WITH a
+        decimal separator (was inline if/elif literals only in this module);
+      * parse_status = the entry's family name verbatim.
+    The parse itself no longer duplicates; the conversion stays local on
+    purpose (bucketed identity would lose the .5 of '87.5 Millilitre' the
+    observed-notation contract requires) and is unit-tested in
+    tests/test_sweetener_assignment.py against both spellings.
+    """
+    from core.text import extract_volume_match, _volume_entry
     from core.unit_canonicalization import canonical_volume_ml
 
-    # Catalog titles also use a space thousands separator: "1 000 ml".
-    # Restrict this repair to 000 groups in raw text: "24, 500ml" and
-    # "24 500ml" can be count/volume pairs and must not become 24,500ml.
-    t = normalize_text(re.sub(r"\b(\d{1,3})[ \u00a0]+(000)(?=\s*ml\b)",
-                              r"\1\2", str(title or ""), flags=re.IGNORECASE))
-    m = VOLUME_PATTERN_US_EXT.search(t)
-    if m:
-        value = float(m.group(1))
-        unit = m.group(2).lower()
-        raw = m.group(0)
-        if value <= 0:
-            ml = 0.0
-            conf = 0.0
-        elif "oz" in unit or "ounce" in unit:
-            ml = canonical_volume_ml(value, unit)
-            conf = 0.85 if ("fl" in unit or "fluid" in unit) else 0.75
-        elif "qt" in unit or "quart" in unit:
-            ml = canonical_volume_ml(value, unit)
-            conf = 0.95
-        elif "pt" in unit or "pint" in unit:
-            ml = canonical_volume_ml(value, unit)
-            conf = 0.95
-        elif "gal" in unit or "gallon" in unit:
-            ml = canonical_volume_ml(value, unit)
-            conf = 0.95
-        else:
-            ml = 0.0
-            conf = 0.0
-        if ml > 0:
-            return {
-                "volume_ml": round(ml, 2),
-                "confidence": conf,
-                "raw_match": raw,
-                "parse_status": "us_volume",
-            }
-    m = VOLUME_PATTERN_METRIC_EXT.search(t)
-    if m:
-        value = float(m.group(1))
-        unit = m.group(2).lower()
-        raw = m.group(0)
-        if value <= 0:
-            ml = 0.0
-            conf = 0.0
-        elif unit == "ml" or "milliliter" in unit or "millilitre" in unit or unit == "cc":
-            ml = canonical_volume_ml(value, unit)
-            conf = 0.98 if "." in m.group(1) else 0.95
-        elif unit == "cl" or "centiliter" in unit or "centilitre" in unit:
-            ml = canonical_volume_ml(value, unit)
-            conf = 0.95
-        elif unit in ("l", "lt", "ltr") or "liter" in unit or "litre" in unit:
-            ml = canonical_volume_ml(value, unit)
-            conf = 0.98 if "." in m.group(1) else 0.95
-        else:
-            ml = 0.0
-            conf = 0.0
-        if ml > 0:
-            return {
-                "volume_ml": ml,
-                "confidence": conf,
-                "raw_match": raw,
-                "parse_status": "metric_volume",
-            }
-    return {
-        "volume_ml": 0.0,
-        "confidence": 0.0,
-        "raw_match": "",
-        "parse_status": "no_volume_mention",
-    }
+    # normalize FIRST (the old path's behavior — "23.7-ounce" only reads
+    # because normalize_text turns the hyphen into a separating space).
+    value, unit, _ambiguous, raw = extract_volume_match(normalize_text(str(title or "")))
+    if value is None or unit is None:
+        return {"volume_ml": 0.0, "confidence": 0.0, "raw_match": "",
+                "parse_status": "no_volume_mention"}
+    entry = _volume_entry(unit)
+    if entry is None:
+        return {"volume_ml": 0.0, "confidence": 0.0, "raw_match": "",
+                "parse_status": "no_volume_mention"}
+    ml = canonical_volume_ml(value, unit)
+    if ml <= 0:
+        return {"volume_ml": 0.0, "confidence": 0.0, "raw_match": "",
+                "parse_status": "no_volume_mention"}
+    # "0.98 if the value was written as a decimal" — read the numeric prefix,
+    # not the whole match, so a '.' inside a unit cannot trip it.
+    has_decimal = bool(re.match(r"\s*\d+(?:[.,]\d)", raw))
+    confidence = entry.confidence
+    if has_decimal and entry.decimal_confidence is not None:
+        confidence = entry.decimal_confidence
+    return {"volume_ml": ml, "confidence": confidence, "raw_match": raw,
+            "parse_status": entry.family}
 
 
 def extract_pack_from_title(title: str) -> tuple:

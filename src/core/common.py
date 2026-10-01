@@ -688,7 +688,7 @@ def __getattr__(name: str):
 # assert fired FIRST (excluded 41,748 vs pin 42,039) before this pin
 # moved. ALWAYS update this pin with src/training/selftest.py's
 # oracle_pinned_counts (same universe).
-PINNED_GATE_FALLBACK_PAIRS = 41_748
+PINNED_GATE_FALLBACK_PAIRS = 41_481
 
 
 def set_determinism(seed: int) -> None:
@@ -904,7 +904,16 @@ def load_dataset() -> pd.DataFrame:
     """
     df = pd.read_csv(DATA_PATH, dtype=str)
     _validate_source_export(df, DATA_PATH)
-    return df.rename(columns=COLUMN_MAPPING)
+    # Imported HERE, not as a module global: COLUMN_MAPPING is reachable as
+    # a module attribute only through the lazy __getattr__ below (which
+    # fires for attribute access, NOT for a bare global name lookup inside a
+    # function). Referencing the bare name here raised NameError, so
+    # load_dataset() was dead for every caller — src/training/build_reference,
+    # dedupe, zero_shot_sims and the selftest oracle. The lazy re-export is
+    # kept for `from core.common import COLUMN_MAPPING` consumers.
+    from core.columns import COLUMN_MAPPING as _column_mapping
+
+    return df.rename(columns=_column_mapping)
 
 
 def load_raw_export() -> pd.DataFrame:

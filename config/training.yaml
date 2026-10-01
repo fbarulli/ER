@@ -309,7 +309,14 @@ split:
   # improves (DEV 67.6% -> 64.9%, TEST 70.2% -> 67.2%), and no trained-on
   # endpoint enters the scored half under either policy (leak check
   # unchanged). B is implemented as the default; A stays reachable here.
-  negative_fold_policy: "train_side"
+  # RE-DECIDED at the 2026-10-01 regeneration (canonical/gate/labeled rerun
+  # after the volume-unification closure): on the regenerated dev half the
+  # pinned A no longer holds — build_final_validation's split assert measured
+  # A scoring MORE thin-heavy negatives than B (65.71% vs 63.80% of cells
+  # below min_test_negatives=5; 4,823 negatives withheld under B vs 3,872
+  # under A). Evidence rejects the pinned policy, so the config moves to B;
+  # no artifact may ship under a policy its evidence rejects.
+  negative_fold_policy: "withhold_straddle"
 
 # ── zero-shot evaluation protocol (src/training/evaluate_models.py) ────────────────
 # HOLDOUT DISCIPLINE for the zero-shot lane (self-fit leak closed 2026-09-14):
