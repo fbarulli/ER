@@ -68,11 +68,14 @@ from core.schemas import (
     upgrade_canonical_records_frame,
 )
 
-# The owner ruled URL/IMAGE/PRICE non-identity/commercial in 2026-10-01: a URL
-# is a locator, an image is a rendering, a price is a transaction-time fact.
-# Listed here only as the SPOT CHECK that the config's exclusion ruling still
-# says what the owner ruled — the excluded SET itself is read from config.
-OWNER_RULED_OUT = ("url", "image_url", "price")
+# All 13 mapped columns are captured (owner ruling 2026-10-01, reversed on
+# evidence). URL and image_url were previously ruled OUT as "listing
+# identifiers with no product semantics" — a reason never checked against a
+# value. Reading dataset.csv shows walmart's
+# /ip/Concord-Foods-Smoothie-Banana-Drink-Mixes-2-oz-Shelf-Stable carries the
+# product name verbatim, so they are captured. This list is the SPOT CHECK
+# that the reversal is actually declared, not merely implied.
+WAS_WRONGLY_EXCLUDED = ("url", "image_url", "price", "product_id", "barcode")
 EXCLUDED = frozenset(EXCLUDED_SOURCE_ROW_FIELDS)
 
 
@@ -189,9 +192,32 @@ def test_every_column_states_a_reason_either_way() -> None:
         assert spec.reason.strip(), f"{name} has no stated reason"
 
 
-def test_the_config_says_what_the_owner_ruled() -> None:
-    for column in OWNER_RULED_OUT:
-        assert column in EXCLUDED, f"{column} must stay excluded"
+def test_every_mapped_column_is_captured() -> None:
+    """The reversal is total: all 13 columns reach source_rows."""
+    assert set(SOURCE_ROW_FIELD_NAMES) == set(CANONICAL_COLUMNS)
+    assert not EXCLUDED
+
+
+def test_the_previously_excluded_columns_state_why_they_were_restored() -> None:
+    from core.common import data_cfg
+
+    ruled = data_cfg().column_evidence
+    for column in WAS_WRONGLY_EXCLUDED:
+        assert ruled[column].capture is True, f"{column} must be captured"
+        assert ruled[column].reason.strip(), f"{column} needs a stated basis"
+
+
+def test_price_is_captured_but_not_claimed_as_attribute_evidence() -> None:
+    """Honesty check: capture must not be read as "this is evidence".
+
+    price is a bare decimal; it corroborates no attribute claim. It is
+    captured for completeness of the row and its config reason says so, so
+    nobody later mistakes presence in the record for evidentiary weight.
+    """
+    from core.common import data_cfg
+
+    reason = data_cfg().column_evidence["price"].reason.lower()
+    assert "not read as attribute evidence" in reason
 
 
 def test_excluded_columns_are_absent_from_the_capture() -> None:
@@ -236,7 +262,7 @@ def _raw_row(**overrides: object) -> dict:
     return row
 
 
-def test_capture_preserves_every_source_title_and_drops_excluded() -> None:
+def test_capture_preserves_every_source_title_and_every_column() -> None:
     frame = pd.DataFrame(
         [
             _raw_row(sku_name_eng="Cola 330ml", attribute="type cola"),
@@ -249,9 +275,21 @@ def test_capture_preserves_every_source_title_and_drops_excluded() -> None:
         "Cola 330ml",
         "Cola Zero 330ml",
     }
-    blob = pipeline_source_rows(frame)
-    for excluded in (*EXCLUDED, "http://x/1", "1.20"):
-        assert excluded not in blob, f"{excluded} leaked into the capture"
+    for entry in capture:
+        assert set(entry) == set(SOURCE_ROW_FIELD_NAMES)
+
+
+def test_capture_keys_are_canonical_never_raw() -> None:
+    """A raw key would be unreadable downstream; the mapping owns the rename."""
+    capture = json.loads(pipeline_source_rows(pd.DataFrame([_raw_row()])))[0]
+    assert capture["title"] == "Cola 330ml"
+    assert capture["attributes"] == "type sparkling water"
+    assert capture["url"] == "http://x/1"
+    assert capture["price"] == "1.20"
+    # the raw names that differ from canonical must not appear as keys
+    for raw_only in ("sku_name_eng", "attribute", "gtin", "sku_id", "sku_url",
+                     "sku_last_price", "breadcrumbs_eng", "description_short_eng"):
+        assert raw_only not in capture
 
 
 def pipeline_source_rows(frame: pd.DataFrame) -> str:
@@ -319,7 +357,7 @@ def test_frame_validator_accepts_a_well_formed_capture() -> None:
         "   ",
         "not json",
         '{"title": "x"}',
-        '[{"title": "x", "price": "1.20"}]',
+        '[{"title": "x", "not_a_column": "y"}]',
         "[null]",
         '["string entry"]',
     ],

@@ -237,7 +237,7 @@ column_evidence:
   attributes:
     column: attributes
     capture: true
-    reason: stage-7 census SSOT parse (parse_universe_cell) source
+    reason: the declared attribute cell; 71,623/71,623 rows populated, the densest evidence
   description:
     column: description
     capture: true
@@ -264,24 +264,35 @@ column_evidence:
     reason: identity CONFOUNDER — same trade item across markets
   barcode:
     column: barcode
-    capture: false
-    reason: identity, not description; carried as gtin and decided before stage 7
+    capture: true
+    reason: identity evidence — an equal GTIN is the same product, decisive before parsing
   product_id:
     column: product_id
-    capture: false
-    reason: retailer listing key; the GTIN supersedes it for identity
+    capture: true
+    reason: retailer listing key; corroborates identity within one retailer
   url:
     column: url
-    capture: false
-    reason: listing locator; differs per retailer for the same trade item
+    capture: true
+    reason: >-
+      the PATH SLUG carries product tokens: measured
+      "walmart.com/ip/Concord-Foods-Smoothie-Banana-Drink-Mixes-2-oz-Shelf-Stable"
+      and "riteaid.com/shop/sierra-mist-soda-lemon-lime-12-12-fl-oz-355-ml-cans".
+      An earlier ruling excluded this as a mere locator without ever reading a
+      value; it is evidence, so it is captured and its slug is read as text.
   image_url:
     column: image_url
-    capture: false
-    reason: rendering of a listing, not a property of the product
+    capture: true
+    reason: >-
+      PARTIALLY evidentiary: walmartimages.com/seo/Concord-Foods-Smoothie-Banana-Drink-Mix-2-oz
+      carries product tokens while hashed paths (riteaid .../9df78eab.../0) do not.
+      Captured; the reader gains nothing from a hash and must not pretend to.
   price:
     column: price
-    capture: false
-    reason: commercial data varying by retailer, stock and time
+    capture: true
+    reason: >-
+      commercial column, captured for completeness of the row. Its value is a
+      bare decimal and carries no direct attribute token; it is NOT read as
+      attribute evidence, and capture must not be mistaken for that.
 
 # Extra names a column is known by, beyond the raw and canonical names
 # column_mapping already declares. Every read path that accepts "either name"
