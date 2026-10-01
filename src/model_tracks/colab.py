@@ -8,6 +8,34 @@ from graph_tracks.data import file_hash
 from model_tracks.package import verify
 
 
+def _collect_failure_logs(backend, remote_output: str, run_tag: str):
+    """Collect diagnostics even when preflight never produced a suite manifest."""
+    from core.common import RESULTS
+    names = ['suite_events.jsonl']
+    for track in ('text', 'gnn_only', 'hybrid'):
+        names.extend([f'{track}__worker.log', f'{track}/worker_events.jsonl'])
+    script = f'''import hashlib, json, pathlib
+root=pathlib.Path({remote_output!r})
+print(json.dumps({{name: hashlib.sha256((root/name).read_bytes()).hexdigest()
+                  for name in {names!r} if (root/name).is_file()}}))
+'''
+    inventory = json.loads(backend.run_colab_exec_capture(backend.SESSION, script, timeout=120))
+    folder = RESULTS / 'model_tracks' / f'{run_tag}__logs'
+    for name, digest in inventory.items():
+        if name not in names:
+            raise ValueError('unexpected failure diagnostic path')
+        destination = folder / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        partial = destination.with_suffix(destination.suffix + '.partial')
+        backend._download_one_remote_file(remote_output + '/' + name, partial)
+        if file_hash(partial) != digest:
+            raise ValueError(f'failure log changed during collection: {name}; partial retained')
+        partial.replace(destination)
+        print(f'Failure log verified: {destination}', flush=True)
+    if not inventory:
+        print('No remote suite log files were available for collection', flush=True)
+
+
 def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Path | None = None):
     from cli import colab as backend
     from core.common import RESULTS
@@ -151,6 +179,10 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
             print(f'Interrupted suite recovery saved: {recovery_local}', flush=True)
         except BaseException as recovery_error:
             print(f'Interrupted suite recovery unavailable: {recovery_error}', flush=True)
+        try:
+            _collect_failure_logs(backend, remote_output, run_tag)
+        except Exception as log_error:
+            print(f'Failure diagnostic collection unavailable: {log_error}; inspect local Colab stage log', flush=True)
         raise
     expected = backend._read_remote_text(remote_output+'.sha256').strip()
     local = RESULTS/'model_tracks'/f'{run_tag}.zip'
@@ -164,6 +196,26 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
     if file_hash(local)!=expected:
         raise ValueError('all-track result download mismatch')
     manifest=verify_archive(local,'suite_bundle_manifest.json')
+    # Final publication/collection events occur after the result ZIP snapshot.
+    # Retain this separate log with its own remotely computed digest.
+    events_remote = remote_output + '.events.jsonl'
+    events_local = local.with_suffix('.events.jsonl')
+    try:
+        events_digest = backend.run_colab_exec_capture(backend.SESSION,
+            f'import hashlib, pathlib\np=pathlib.Path({events_remote!r})\n'
+            'print(hashlib.sha256(p.read_bytes()).hexdigest())\n', timeout=120).strip()
+        partial_events = events_local.with_suffix('.jsonl.partial')
+        backend._download_one_remote_file(events_remote, partial_events)
+        if file_hash(partial_events) != events_digest:
+            raise ValueError('suite final event log download mismatch')
+        for line in partial_events.read_text().splitlines():
+            event = json.loads(line)
+            if event.get('run_tag') != run_tag or event.get('track') != 'suite':
+                raise ValueError('suite final event log identity mismatch')
+        partial_events.replace(events_local)
+        print(f'Suite final event log verified: {events_local}', flush=True)
+    except Exception as error:
+        print(f'Suite final event log unavailable: {error}; archived worker logs remain available', flush=True)
     with zipfile.ZipFile(local) as archive:
         for track in ('text','gnn_only','hybrid'):
             marker=json.loads(archive.read(f'{track}/track_complete.json'))

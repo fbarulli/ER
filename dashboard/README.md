@@ -35,6 +35,26 @@ not be treated as model quality benchmarks. Input bundles are excluded from
 the selector. Incomplete runs can be inspected as reports arrive; unreadable
 archives or metrics show a message while other report artifacts remain usable.
 
+Each run also exposes durable training logs: `suite_events.jsonl`, each track's
+`worker_events.jsonl`, raw `<track>__worker.log` output, and saved epoch events.
+Runs containing logs can be selected before plots exist. Structured event rows
+record UTC timestamps, attempts, run/track identifiers, phases, outcomes, and
+available stage details. Failed stages retain their error details in the logs.
+The dashboard preserves the original JSONL and raw text, escapes HTML, and
+previews at most 65,536 bytes per log with an explicit truncation notice.
+Use **Download full log** for the complete byte-for-byte file; downloads stream
+without the preview limit. `/training/log?run=...&artifact=...` opens a text
+preview; add `&download=true` to download the original file.
+
+For downloaded ZIPs, an adjacent `<run>.events.jsonl` appears as
+`__collected__/suite_events.jsonl`. This final supervisor snapshot can include
+archive/publication events recorded after the ZIP was written. The archived
+`suite_events.jsonl` remains separately available. Refresh local runs to see
+newly saved events. Older runs without event logs explicitly show that no saved
+training logs are available; the dashboard does not reconstruct missing events.
+Traversal, symlink files/directories, and unrelated artifacts are rejected by
+the log route.
+
 Finding 02 records the Clear Mind bottle versus four-can-pack example.
 Finding 03 records a reproducible full-original-dataset audit of missing
 measurement/packaging context:

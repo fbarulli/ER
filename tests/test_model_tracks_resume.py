@@ -42,6 +42,14 @@ def test_graph_resume_selects_latest_epoch_in_its_own_run(tmp_path):
     assert graph_checkpoint(tmp_path, 'gnn_only', 'run-gnn_only') is None
 
 
+def test_graph_resume_finds_trainer_nested_worker_output(tmp_path):
+    root = tmp_path / 'hybrid__run-hybrid/_checkpoints/hybrid/run-hybrid_f0/checkpoint-3'
+    root.mkdir(parents=True)
+    checkpoint = root / 'hybrid__graph_model.pt'
+    checkpoint.write_bytes(b'checkpoint')
+    assert graph_checkpoint(tmp_path, 'hybrid', 'run-hybrid') == checkpoint
+
+
 def test_identity_ignores_generated_reports_and_portable_suite_paths(tmp_path, monkeypatch):
     import core.common
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)

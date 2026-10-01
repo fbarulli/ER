@@ -101,18 +101,39 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         random.seed(cfg.seed)
         torch.use_deterministic_algorithms(True)
         from graph_tracks.preflight import load_inputs
+        logger.info("[graph-phase] input_validation start listings=%s pairs=%s manifest=%s text_cache=%s output=%s",
+                    resolve(cfg.listings), resolve(cfg.pairs), cfg.input_manifest, cfg.text_cache, output)
         input_manifest, records, pairs, vectors, text_metadata = load_inputs(cfg)
+        logger.info("[graph-phase] input_validation complete split_pairs=%s text_shape=%s",
+                    {split: {'positive': int(labels.sum()), 'negative': int((labels == 0).sum())}
+                     for split, (_, labels) in pairs.items()}, None if vectors is None else vectors.shape)
+        logger.info("[graph-phase] features start graph_enabled=%s hidden_dim=%d output_dim=%d",
+                    cfg.graph_enabled, cfg.hidden_dim, cfg.output_dim)
         vocabulary = fit_vocabulary(records)
         support_indices = [i for i, r in enumerate(records) if r["split"] == "train"]
         support_records = [records[i] for i in support_indices]
-        batch = tensorize(records, vocabulary, cfg.device)
+        dev_indices = [i for i, record in enumerate(records) if record['split'] == 'dev']
+        dev_records = [records[i] for i in dev_indices]
         support = tensorize(support_records, vocabulary, cfg.device)
+        dev_batch = tensorize(dev_records, vocabulary, cfg.device)
+        # Query encoding is independent per listing against training-only context.
+        # Encode only supervised/evaluated populations, rather than every holdout.
+        train_local = {global_id: local_id for local_id, global_id in enumerate(support_indices)}
+        dev_local = {global_id: local_id for local_id, global_id in enumerate(dev_indices)}
+        train_pair_indices = np.asarray([[train_local[int(a)], train_local[int(b)]]
+                                        for a, b in pairs['train'][0]], dtype=np.int64)
+        dev_pair_indices = np.asarray([[dev_local[int(a)], dev_local[int(b)]]
+                                      for a, b in pairs['dev'][0]], dtype=np.int64)
         text = None if vectors is None else torch.tensor(vectors, device=cfg.device)
         model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,
                              0 if text is None else text.shape[1], cfg.graph_enabled).to(cfg.device)
         scorer = PairScorer(text is not None).to(cfg.device)
         optimizer = torch.optim.AdamW(list(model.parameters()) + list(scorer.parameters()),
                                       lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
+        logger.info("[graph-phase] features complete listings=%d training_support=%d text_dim=%d parameters=%d",
+                    len(records), len(support_records), model.text_dim,
+                    sum(parameter.numel() for parameter in model.parameters()) +
+                    sum(parameter.numel() for parameter in scorer.parameters()))
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=TRAIN_ROOT,
                                   capture_output=True, text=True, check=True).stdout.strip()
         manifest = {"schema": "er-graph-run-v1", "track": cfg.track, "run_tag": run_tag,
@@ -127,6 +148,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     "implementation_sha256": {p.name: file_hash(p) for p in sorted(Path(__file__).parent.glob("*.py"))},
                     "resume_checkpoint_sha256": file_hash(resume) if resume else None}
         best_metric, best_path, start_epoch = -1., None, 0
+        logger.info("[graph-resume] mode=%s checkpoint=%s target_epochs=%d",
+                    'resume' if resume else 'fresh', resume, cfg.epochs)
         if resume:
             current_manifest_path = output / name(cfg.track, "run_manifest.json")
             if current_manifest_path.exists():
@@ -171,6 +194,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             best_metric, start_epoch = restored["best_metric"], restored["epoch"]
             if cfg.epochs < start_epoch:
                 raise ValueError("resume epochs cannot precede completed epochs")
+        logger.info("[graph-resume] restored_completed_epochs=%d next_epoch=%d best_dev_pr_auc=%s selected=%s",
+                    start_epoch, start_epoch + 1, best_metric if best_path else None, best_path)
         if cfg.include_inputs:
             input_dir = output / name(cfg.track, "inputs")
             input_dir.mkdir(exist_ok=True)
@@ -192,10 +217,13 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             manifest["input_artifacts"] = input_artifacts
         write_json(output / name(cfg.track, "run_manifest.json"), manifest)
         write_json(output / name(cfg.track, "graph_census.json"), census(records, vocabulary))
-        train_pairs = torch.tensor(pairs["train"][0], device=cfg.device)
+        train_pairs = torch.tensor(train_pair_indices, device=cfg.device)
         train_labels = torch.tensor(pairs["train"][1], device=cfg.device)
-        dev_pairs = torch.tensor(pairs["dev"][0], device=cfg.device)
+        dev_pairs = torch.tensor(dev_pair_indices, device=cfg.device)
         support_text = None if text is None else text[support_indices]
+        dev_text = None if text is None else text[dev_indices]
+        logger.info("[graph-performance] encode_population train=%d dev=%d full=%d reason=independent_queries_against_training_only_context",
+                    len(support_records), len(dev_records), len(records))
         trained_endpoints = set(pairs["train"][0].reshape(-1).tolist())
         support_ids = set(support_indices)
         pd.DataFrame([{"product_id": r["product_id"], "split": r["split"],
@@ -209,13 +237,15 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         with ArtifactPublisher(output) as publisher, GraphWandb(cfg.wandb, cfg.track, run_tag, output) as wandb, TrainingProfiler(output / name(cfg.track,'profile'),cfg.device) as profiler:
             wandb.log_config(manifest)
             for epoch in range(start_epoch + 1, cfg.epochs + 1):
+                logger.info("[graph-phase] training start epoch=%d/%d train_pairs=%d learning_rate=%s",
+                            epoch, cfg.epochs, len(train_pairs), optimizer.param_groups[0]['lr'])
                 started = time.monotonic()
                 model.train()
                 scorer.train()
                 optimizer.zero_grad(set_to_none=True)
                 states = profiler.call('graph/train_context',model.context,support,support_text)
-                embeddings = profiler.call('graph/train_encode',model.encode,batch,states,text)
-                logits = profiler.call('graph/pair_score',scorer,embeddings,train_pairs,text)
+                embeddings = profiler.call('graph/train_encode',model.encode,support,states,support_text)
+                logits = profiler.call('graph/pair_score',scorer,embeddings,train_pairs,support_text)
                 classification = F.binary_cross_entropy_with_logits(logits, train_labels)
                 a, b = train_pairs.unbind(1)
                 cos = (embeddings[a] * embeddings[b]).sum(-1)
@@ -225,19 +255,27 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite loss")
                 profiler.call('graph/backward',loss.backward)
-                gradient_norms = {name: float(parameter.grad.norm()) for name, parameter in model.named_parameters()
-                                  if parameter.grad is not None}
+                gradient_parameters = [(parameter_name, parameter) for parameter_name, parameter in model.named_parameters()
+                                       if parameter.grad is not None]
+                gradient_parameters.extend((f'scorer.{parameter_name}', parameter)
+                                           for parameter_name, parameter in scorer.named_parameters()
+                                           if parameter.grad is not None)
+                # One host transfer instead of synchronizing CUDA once per parameter.
+                norm_values = torch.stack([parameter.grad.norm() for _, parameter in gradient_parameters]).detach().cpu().tolist()
+                gradient_norms = dict(zip((parameter_name for parameter_name, _ in gradient_parameters), norm_values))
                 if not all(np.isfinite(value) for value in gradient_norms.values()):
                     raise RuntimeError("nonfinite gradients")
                 with (output / name(cfg.track, "gradient_metrics.jsonl")).open("a") as handle:
                     handle.write(json.dumps({"epoch": epoch, "parameter_gradient_norms": gradient_norms}) + "\n")
                 torch.nn.utils.clip_grad_norm_(list(model.parameters()) + list(scorer.parameters()), cfg.max_grad_norm)
                 profiler.call('graph/optimizer',optimizer.step)
+                logger.info("[graph-phase] dev_evaluation start epoch=%d/%d dev_pairs=%d",
+                            epoch, cfg.epochs, len(dev_pairs))
                 model.eval()
                 scorer.eval()
                 with torch.no_grad(), profiler.section('graph/dev_evaluation'):
-                    embeddings = model.encode(batch, model.context(support, support_text), text)
-                    dev_scores = scorer(embeddings, dev_pairs, text).sigmoid().cpu().numpy()
+                    embeddings = model.encode(dev_batch, model.context(support, support_text), dev_text)
+                    dev_scores = scorer(embeddings, dev_pairs, dev_text).sigmoid().cpu().numpy()
                 metrics = {"epoch": epoch, "train_loss": loss.item(),
                            "train_classification_loss": classification.item(),
                            "train_metric_loss": metric.item(), **quality(pairs["dev"][1], dev_scores),
@@ -245,6 +283,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 if cfg.device == "cuda":
                     metrics["gpu_allocated_gb"] = torch.cuda.memory_allocated() / 1024**3
                     metrics["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 1024**3
+                previous_best = best_metric
                 improved = metrics["dev_pr_auc"] > best_metric
                 checkpoint_dir = output / "_checkpoints" / cfg.track / f"{run_tag}_f0" / f"checkpoint-{epoch}"
                 checkpoint_dir.mkdir(parents=True)
@@ -260,6 +299,10 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                            "torch_rng": torch.get_rng_state(), "python_rng": random.getstate(),
                            "numpy_rng": np.random.get_state(),
                            "cuda_rng": torch.cuda.get_rng_state_all() if cfg.device == "cuda" else None}
+                logger.info("[graph-checkpoint] write start epoch=%d path=%s selected=%s reason=%s dev_pr_auc=%.6f previous_best=%.6f",
+                            epoch, checkpoint, improved,
+                            'strictly higher dev_pr_auc' if improved else 'dev_pr_auc did not strictly improve',
+                            metrics['dev_pr_auc'], previous_best)
                 profiler.call('graph/checkpoint_write',torch.save,payload,checkpoint)
                 write_json(checkpoint_dir / name(cfg.track, "trainer_state.json"), {
                     "global_step": epoch, "best_metric": best_metric,
@@ -276,14 +319,24 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     step=epoch, max_steps=cfg.epochs, epoch=epoch, wandb_run_id=wandb.run_id,
                     wandb_url=wandb.run_url, best_checkpoint_step=int(best_path.parent.name.split("-")[-1]),
                     best_metric=best_metric, **{k: v for k, v in metrics.items() if k != "epoch"})
-                logger.info("[graph-train] epoch=%d loss=%.5f dev_pr_auc=%.5f dev_p_at_r95=%.5f best=%s",
-                            epoch, loss.item(), metrics["dev_pr_auc"], metrics["dev_p_at_r95"], improved)
+                logger.info("[graph-train] epoch=%d/%d loss=%.6f classification_loss=%.6f metric_loss=%.6f dev_pr_auc=%.6f dev_p_at_r95=%.6f seconds=%.3f best=%s selected_checkpoint=%s",
+                            epoch, cfg.epochs, loss.item(), classification.item(), metric.item(),
+                            metrics['dev_pr_auc'], metrics['dev_p_at_r95'], metrics['epoch_seconds'], improved, best_path)
+                logger.info("[graph-checkpoint] write complete manifest=%s epoch_metrics=%s",
+                            checkpoint_dir / name(cfg.track, 'checkpoint_manifest.json'),
+                            output / name(cfg.track, 'epoch_metrics.jsonl'))
                 profiler.step()
                 publisher.submit(f'checkpoint-{epoch}', [checkpoint_dir,
                     output / name(cfg.track, 'epoch_metrics.jsonl'),
                     output / name(cfg.track, 'best_checkpoint.json')])
+            logger.info("[graph-selection] training complete completed_epochs=%d selected_checkpoint=%s best_dev_pr_auc=%.6f criterion=max_dev_pr_auc",
+                        cfg.epochs, best_path, best_metric)
             completion = None
             if cfg.postprocess:
+                logger.info("[graph-phase] postprocess start selected=%s build_index=%s inference_batch_size=%d report_test=%s",
+                            best_path, cfg.build_index, cfg.inference_batch_size, cfg.report_test)
+                if not cfg.report_test:
+                    logger.info("[graph-evaluation] test skipped reason=report_test_false; dev threshold remains the selection/calibration source")
                 from graph_tracks.report import complete
                 completion_root = output / name(cfg.track, f"completion-epoch-{cfg.epochs}")
                 if resume and completion_root.exists():
@@ -294,10 +347,17 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 completion_root.mkdir(parents=True)
                 completion = complete(best_path, resolve(cfg.listings), resolve(cfg.pairs), completion_root, cfg,
                     text_cache=resolve(cfg.text_cache) if cfg.text_cache else None)
+                logger.info("[graph-phase] postprocess complete inference=%s reports=%s report=%s artifacts=%s",
+                            completion['inference'], completion['reports'], completion['report'],
+                            [str(path) for path in sorted(completion_root.rglob('*')) if path.is_file()])
+                for row in completion['summary']:
+                    logger.info("[graph-evaluation] summary=%s", json.dumps(row, sort_keys=True))
                 publisher.submit('postprocess', [completion_root])
                 for row in completion["summary"]:
                     wandb.set_summary({f"{row['split']}/{key}": value for key, value in row.items()
                                        if isinstance(value, (int, float, bool))})
+            if not cfg.postprocess:
+                logger.info("[graph-phase] postprocess skipped reason=postprocess_false")
             wandb.set_summary({"best_dev_pr_auc": best_metric, "best_checkpoint": best_path.name,
                                "track": cfg.track, "postprocess_complete": bool(completion)})
             artifacts = [output / name(cfg.track, stem) for stem in

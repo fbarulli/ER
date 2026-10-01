@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import traceback
+import shlex
 import yaml
 
 from model_tracks.config import load_config
@@ -13,6 +15,20 @@ from model_tracks.parallel import wait_for_start
 
 
 def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
+    from model_tracks.telemetry import WorkerEvents
+    output = Path(os.environ['EUROMONITOR_RESULTS_DIR'])
+    output.mkdir(parents=True, exist_ok=True)
+    events = WorkerEvents(output, track, run_tag)
+    events.emit('input_validation', 'started', config=str(config), resume_requested=resume)
+    try:
+        _run(config, track, run_tag, resume=resume, events=events)
+    except BaseException as exc:
+        events.emit('failure', 'failed', error_type=type(exc).__name__,
+                    error=str(exc), failed_phase=events.last_phase, traceback=traceback.format_exc())
+        raise
+
+
+def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     from core.common import TRAIN_ROOT
     cfg = load_config(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
@@ -21,6 +37,9 @@ def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
     if track == 'text':
         from training.prepared_bundle import load_prepared_bundle
         manifest, _ = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
+        events.emit('input_validation', 'validated', device=cfg.device,
+                    report_test=cfg.report_test, bundle=str(cfg.text_bundle),
+                    payload=manifest.payload_variant)
         command = [sys.executable, '-m', 'training.train_prepared', '--bundle', cfg.text_bundle,
                    '--model', cfg.text_model, '--epochs', str(cfg.epochs),
                    '--payload', manifest.payload_variant, '--run-tag', run_tag,
@@ -41,6 +60,9 @@ def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
             settings['dvc'] = {**settings.get('dvc', {}), 'enabled': False}
         worker_config = output / 'worker.yaml'
         worker_config.write_text(yaml.safe_dump(settings, sort_keys=False))
+        events.emit('input_validation', 'configured', device=cfg.device,
+                    report_test=cfg.report_test, worker_config=str(worker_config),
+                    validation_owner='graph trainer load_inputs before training')
         command = [sys.executable, '-m', 'graph_tracks.train', '--config', str(worker_config),
                    '--run-tag', run_tag]
         if resume:
@@ -48,22 +70,45 @@ def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
             checkpoint = graph_checkpoint(output, track, run_tag)
             if checkpoint:
                 command.extend(['--resume', str(checkpoint)])
-            elif any(output.glob(f'{track}__run_manifest.json')):
+            else:
                 # A failure before the first checkpoint has no optimizer state.
                 # Preserve its manifest as evidence and restart that track.
-                previous = output / f'{track}__run_manifest.json'
-                previous.replace(output / f'{track}__run_manifest.interrupted.json')
+                for folder in (output, output / f'{track}__{run_tag}'):
+                    previous = folder / f'{track}__run_manifest.json'
+                    if previous.exists():
+                        previous.replace(previous.with_name(f'{track}__run_manifest.interrupted.json'))
+    events.emit('command', 'prepared', command=shlex.join(command),
+                resume_requested=resume, checkpoint_resume='--resume' in command,
+                checkpoint=(command[command.index('--resume') + 1]
+                            if track != 'text' and '--resume' in command else None),
+                sample=(int(command[command.index('--sample') + 1]) if '--sample' in command else None))
+    events.emit('barrier', 'waiting', barrier=os.environ['ER_TRACK_BARRIER'])
     wait_for_start(Path(os.environ['ER_TRACK_BARRIER']), track)
+    events.emit('barrier', 'released')
+    events.emit('training', 'started', includes_graph_postprocess=track != 'text')
     subprocess.run(command, cwd=TRAIN_ROOT, env=os.environ.copy(), check=True)
+    events.emit('training', 'completed', includes_graph_postprocess=track != 'text')
     if track == 'text':
         from model_tracks.text_report import complete
+        events.emit('postprocess', 'started', report_test=cfg.report_test)
         complete(output, setup, device=cfg.device, report_test=cfg.report_test)
+        events.emit('postprocess', 'completed')
         from model_tracks.incremental import ArtifactPublisher
         with ArtifactPublisher(output) as publisher:
-            publisher.submit('postprocess', [p for p in output.iterdir()
-                if p.name.startswith('text__') or p.name == 'profiles'])
+            if publisher.enabled:
+                events.emit('publication', 'started', publication_owner='ArtifactPublisher')
+                publisher.submit('postprocess', [p for p in output.iterdir()
+                    if p.name.startswith('text__') or p.name == 'profiles'])
+                events.emit('publication', 'submitted')
+            else:
+                events.emit('publication', 'skipped', reason='incremental publication disabled')
+        if publisher.enabled:
+            events.emit('publication', 'context_closed',
+                        detail='publisher context finished; remote receipts are in publication metadata')
     from model_tracks.resume import record_completion
     record_completion(output, track)
+    events.emit('completion', 'verified', inventory='track_inventory.json',
+                marker='track_complete.json')
 
 
 def main():

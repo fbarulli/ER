@@ -102,12 +102,18 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     pairs = load_pairs(pair_path, records)
     encoder = GraphEncoder(checkpoint, cfg.device)
     track = encoder.manifest['track']
+    def progress(phase, **details):
+        print(f'[postprocess/{track}] ' + json.dumps({'phase': phase, **details}, default=str), flush=True)
     if file_hash(listings) != encoder.manifest['listings_sha256'] or file_hash(pair_path) != encoder.manifest['pairs_sha256']:
         raise ValueError('post-training report must use checkpoint-bound listing/pair inputs')
+    progress('inputs_validated', listings=len(records), checkpoint=str(checkpoint),
+             pairs={split: len(values[0]) for split, values in pairs.items()})
+    progress('vector_export_started', build_index=cfg.build_index, batch_size=cfg.inference_batch_size)
     inference = export(checkpoint, listings, output / name(track, 'inference'), text_cache=text_cache,
                        build_index=cfg.build_index, device=cfg.device, batch_size=cfg.inference_batch_size)
     cache = np.load(inference / name(track, 'vectors.npz'), allow_pickle=False)
     vectors = cache['embeddings']
+    progress('vector_export_complete', shape=list(vectors.shape), output=str(inference))
     text = None if text_cache is None else load_text_cache(text_cache, [r['product_id'] for r in records])[0]
     scores = {}
     with torch.no_grad():
@@ -115,12 +121,15 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         text_tensor = None if text is None else torch.as_tensor(text, device=cfg.device)
         for split in ('dev', 'test'):
             if split == 'test' and not cfg.report_test:
+                progress('evaluation_skipped', split=split, reason='report_test disabled')
                 continue
             indices = pairs[split][0]
             if len(indices):
                 scores[split] = encoder.scorer(embeddings, torch.as_tensor(indices, device=cfg.device),
                                                text_tensor).sigmoid().cpu().numpy()
+                progress('pair_scoring_complete', split=split, pairs=len(indices))
     threshold = dev_threshold(pairs['dev'][1], scores['dev'])
+    progress('threshold_selected', source='dev_youden', threshold=float(threshold), test_used=False)
     summary, scored_rows = [], []
     for split, values in scores.items():
         indices, labels = pairs[split]
@@ -137,11 +146,14 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     scored.to_csv(report_dir / name(track, 'scored_pairs.csv'), index=False)
     from graph_tracks.report_attributes import write_reports as write_attribute_reports
     write_attribute_reports(listings, records, pairs, scores, report_dir, track)
+    progress('attribute_reports_complete', output=str(report_dir))
     # Pass immutable provenance separately rather than adding undeclared config fields.
     from types import SimpleNamespace
     retrieval_cfg = SimpleNamespace(**cfg.model_dump(), _checkpoint=str(checkpoint),
                                     _listings_sha256=file_hash(listings))
+    progress('retrieval_started', ks=list(cfg.retrieval_ks), protocol='within-split, self excluded')
     retrieval = retrieval_report(records, vectors, pairs, report_dir, track, retrieval_cfg)
+    progress('retrieval_complete', summary=retrieval)
     write_json(report_dir / name(track, 'report_manifest.json'), {
         'track': track, 'checkpoint_sha256': file_hash(checkpoint),
         'listings_sha256': file_hash(listings), 'pairs_sha256': file_hash(pair_path),
@@ -152,6 +164,7 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         'unlabeled_pairs_are_negatives': False, 'identity_conflict_policy_applied': False,
         'metrics_scope': 'model-only', 'test_reported': 'test' in scores})
     _plots(scored, report_dir, track, threshold)
+    progress('plots_complete', plots=[str(path) for path in sorted(report_dir.glob('*.png'))])
     report = output / name(track, 'training_report.md')
     lines = [f'# {track} model report', '', f'Selected checkpoint: `{checkpoint.name}`.',
              f'Dev-fit Youden threshold: {threshold:.6f}. Test labels were not used for selection.', '',
@@ -163,6 +176,7 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
              'Reported scores are model-only, without the shared identity conflict policy.',
              'Dev metrics are calibration/selection diagnostics; test is the held-out quality report.']
     report.write_text('\n'.join(lines) + '\n')
+    progress('reports_complete', report=str(report), metrics=summary)
     return {'inference': inference, 'reports': report_dir, 'report': report,
             'summary': summary, 'retrieval': retrieval}
 

@@ -1,12 +1,31 @@
 import importlib.util
 import json
 import stat
+import asyncio
+from types import SimpleNamespace
 from pathlib import Path
 import zipfile
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
+
+
+class RouteClient:
+    """Call route handlers directly; sandbox blocks TestClient's thread portal."""
+    def __init__(self, module):
+        self.module = module
+
+    def get(self, route, params=None):
+        handlers = {'/training': self.module.training, '/training/plot': self.module.plot,
+                    '/training/log': self.module.log}
+        try:
+            response = handlers[route](**(params or {}))
+        except HTTPException as error:
+            return SimpleNamespace(status_code=error.status_code, text=error.detail)
+        if isinstance(response, str):
+            return SimpleNamespace(status_code=200, text=response)
+        return SimpleNamespace(status_code=response.status_code, content=response.body,
+                               text=response.body.decode(errors='replace'), headers=response.headers)
 
 
 @pytest.fixture
@@ -23,9 +42,7 @@ def dashboard(tmp_path, monkeypatch):
         archive.writestr('text/text__reports/text__score_distribution_and_pr.png', b'png-test')
         archive.writestr('text/text__reports/text__model_evaluation_summary.csv', 'split,pr_auc\ndev,0.7\n')
         archive.writestr('text/checkpoint/model.safetensors', b'private-checkpoint')
-    app = FastAPI()
-    app.include_router(module.router)
-    return TestClient(app), root
+    return RouteClient(module), root
 
 
 def test_downloaded_suite_plots_and_metrics_render(dashboard):
@@ -119,3 +136,100 @@ def test_empty_and_metrics_only_runs(dashboard):
     (root / 'metrics-only' / 'retrieval_summary.csv').unlink()
     (root / 'metrics-only').rmdir()
     assert 'No downloaded training reports yet' in client.get('/training').text
+
+
+def download_bytes(response):
+    # Consume the original sync iterator directly instead of using ASGI's
+    # thread pool; downloads remain byte-for-byte and unbounded in production.
+    async def collect():
+        return b''.join([chunk async for chunk in response.body_iterator])
+    return asyncio.run(collect())
+
+
+def test_structured_events_and_raw_logs_preview_from_zip(dashboard):
+    client, root = dashboard
+    with zipfile.ZipFile(root / 'logged.zip', 'w') as archive:
+        archive.writestr('suite_events.jsonl', '{"event":"suite_started","tracks":3}\n')
+        archive.writestr('text/worker_events.jsonl', '{"event":"epoch_completed","epoch":1}\n')
+        archive.writestr('hybrid__worker.log', '<script>unsafe HTML</script>\nworker finished\n')
+    key = 'results/model_tracks/logged.zip'
+    page = client.get('/training', {'run': key})
+    assert page.status_code == 200
+    assert 'suite_started' in page.text and 'epoch_completed' in page.text
+    assert '&lt;script&gt;unsafe HTML&lt;/script&gt;' in page.text
+    assert 'Download full log' in page.text
+    response = client.get('/training/log', {'run': key, 'artifact': 'text/worker_events.jsonl'})
+    assert response.content == b'{"event":"epoch_completed","epoch":1}\n'
+
+
+def test_local_logs_only_run_and_bounded_preview(dashboard):
+    client, root = dashboard
+    module = client.module
+    folder = root / 'logged-local'
+    folder.mkdir()
+    payload = b'initial event\n' + b'x' * (module.LOG_PREVIEW_BYTES + 100)
+    (folder / 'gnn_only__worker.log').write_bytes(payload)
+    key = 'results/model_tracks/logged-local'
+    page = client.get('/training', {'run': key})
+    assert page.status_code == 200 and 'Preview truncated' in page.text
+    preview = client.get('/training/log', {'run': key, 'artifact': 'gnn_only__worker.log'})
+    assert '65,536 bytes' in preview.text and 'Download the full log' in preview.text
+    assert len(preview.content) < len(payload)
+    response = module.log(key, 'gnn_only__worker.log', download=True)
+    assert "filename*=UTF-8''gnn_only__worker.log" in response.headers['content-disposition']
+    # Read through the route's safe bounded helper; streaming iterator is
+    # verified separately without any thread-portal scheduling.
+    assert module.read(folder, 'gnn_only__worker.log') == payload
+
+
+def test_log_route_rejects_traversal_symlinks_and_unrelated_artifacts(dashboard):
+    client, root = dashboard
+    key = 'results/model_tracks/smoke.zip'
+    for artifact in ('../secret.log', '/secret.log', 'text/checkpoint/model.safetensors'):
+        assert client.get('/training/log', {'run': key, 'artifact': artifact}).status_code == 404
+    folder = root / 'logs'
+    folder.mkdir()
+    (folder / 'suite_events.jsonl').write_text('{}\n')
+    (folder / 'real.log').write_text('inside')
+    (folder / 'linked.log').symlink_to(folder / 'real.log')
+    outside = root.parent / 'outside'
+    outside.mkdir()
+    (outside / 'secret.log').write_text('private')
+    (folder / 'linked-folder').symlink_to(outside, target_is_directory=True)
+    key = 'results/model_tracks/logs'
+    for artifact in ('linked.log', 'linked-folder/secret.log'):
+        assert client.get('/training/log', {'run': key, 'artifact': artifact}).status_code == 404
+
+
+def test_zip_logs_truncated_and_download_stream_is_complete(dashboard, monkeypatch):
+    client, root = dashboard
+    module = client.module
+    payload = b'event\n' * 14000
+    with zipfile.ZipFile(root / 'large.zip', 'w') as archive:
+        archive.writestr('text__worker.log', payload)
+    key = 'results/model_tracks/large.zip'
+    assert 'Preview truncated' in client.get('/training/log', {'run': key, 'artifact': 'text__worker.log'}).text
+    # Replace Starlette's threadpool bridge only for consumption in this
+    # sandbox test. The download generator itself is production code.
+    async def iterate(iterator):
+        for item in iterator:
+            yield item
+    monkeypatch.setattr('starlette.responses.iterate_in_threadpool', iterate)
+    response = module.log(key, 'text__worker.log', download=True)
+    assert download_bytes(response) == payload
+
+
+def test_collected_sibling_events_visible_without_modifying_archive(dashboard):
+    client, root = dashboard
+    sidecar = root / 'smoke.events.jsonl'
+    sidecar.write_text('{"phase":"publication","status":"complete"}\n')
+    key = 'results/model_tracks/smoke.zip'
+    page = client.get('/training', {'run': key})
+    assert '__collected__/suite_events.jsonl' in page.text
+    assert 'publication' in page.text
+    log = client.get('/training/log', {'run': key, 'artifact': '__collected__/suite_events.jsonl'})
+    assert log.content == sidecar.read_bytes()
+    sidecar.unlink()
+    sidecar.symlink_to(root / 'external-events.jsonl')
+    (root / 'external-events.jsonl').write_text('secret')
+    assert client.get('/training/log', {'run': key, 'artifact': '__collected__/suite_events.jsonl'}).status_code == 404

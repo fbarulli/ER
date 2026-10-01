@@ -33,6 +33,9 @@ def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     command = commands[0]
     assert command[command.index('--device') + 1] == 'cpu'
     assert ('--report-test' if report_test else '--no-report-test') in command
+    events = [json.loads(line) for line in (tmp_path / 'out/worker_events.jsonl').read_text().splitlines()]
+    publication = [row['status'] for row in events if row['phase'] == 'publication']
+    assert publication == ['skipped']
 
 
 @pytest.mark.parametrize('has_embeddings', [False, True])

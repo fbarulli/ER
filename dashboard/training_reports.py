@@ -1,7 +1,8 @@
 """Read training report plots from local run folders and downloaded suites."""
 from html import escape
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 import csv
 import io
 import json
@@ -9,12 +10,37 @@ import stat
 import zipfile
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 router = APIRouter()
 PROJECT = Path(__file__).resolve().parents[1]
 REPORT_ERRORS = (OSError, ValueError, zipfile.BadZipFile, RuntimeError, EOFError)
 METRIC_SUFFIXES = ('model_evaluation_summary.csv', 'retrieval_summary.csv', 'fold_metrics.csv')
+LOG_PREVIEW_BYTES = 64 * 1024
+COLLECTED_EVENTS = '__collected__/suite_events.jsonl'
+
+
+def collected_events(path):
+    if path.is_dir():
+        return None
+    sibling = path.with_suffix('.events.jsonl')
+    return sibling if sibling.is_file() and not sibling.is_symlink() else None
+
+
+def is_log(member):
+    relative = PurePosixPath(member)
+    return (relative.name.endswith(('.log', '.jsonl')) or relative.name in
+            {'live_status.json', 'trainer_state.json', 'checkpoint_manifest.json', 'best_checkpoint.json'}) and not any(
+                part in {'wandb', 'mlruns', '.git', '.dvc'} for part in relative.parts)
+
+
+def local_target(path, member):
+    target = path / member
+    if (not safe_member(member) or any(parent.is_symlink() for parent in
+        [target, *target.parents] if parent.is_relative_to(path))
+            or not target.resolve().is_relative_to(path.resolve()) or not target.is_file()):
+        raise HTTPException(404, 'Report artifact not found')
+    return target
 
 
 def safe_member(member):
@@ -33,7 +59,7 @@ def runs():
                 continue
             if path.is_dir() or (path.suffix == '.zip' and '__inputs' not in path.name):
                 key = path.relative_to(PROJECT).as_posix()
-                if path.is_dir() and not any(member.endswith(('.png',) + METRIC_SUFFIXES)
+                if path.is_dir() and not any(member.endswith(('.png',) + METRIC_SUFFIXES) or is_log(member)
                                              for member in entries(path)):
                     continue
                 found[key] = path
@@ -43,28 +69,75 @@ def runs():
 def entries(path):
     if path.is_dir():
         return [p.relative_to(path).as_posix() for p in path.rglob('*')
-                if p.is_file() and p.resolve().is_relative_to(path.resolve())
+                if p.is_file() and not p.is_symlink() and p.resolve().is_relative_to(path.resolve())
+                and not any(parent.is_symlink() for parent in p.parents if parent.is_relative_to(path))
                 and safe_member(p.relative_to(path).as_posix())]
     with zipfile.ZipFile(path) as archive:
-        return [info.filename for info in archive.infolist() if safe_member(info.filename)
+        members = [info.filename for info in archive.infolist() if safe_member(info.filename)
                 and not info.is_dir() and not stat.S_ISLNK(info.external_attr >> 16)]
+    if collected_events(path) is not None and COLLECTED_EVENTS not in members:
+        members.append(COLLECTED_EVENTS)
+    return members
 
 
-def read(path, member):
+@contextmanager
+def open_artifact(path, member):
     if not safe_member(member):
         raise HTTPException(404, 'Report artifact not found')
+    if member == COLLECTED_EVENTS and (sibling := collected_events(path)) is not None:
+        with local_target(sibling.parent, sibling.name).open('rb') as handle:
+            yield handle
+        return
     if path.is_dir():
-        target = (path / member).resolve()
-        if not target.is_relative_to(path.resolve()) or not target.is_file():
-            raise HTTPException(404, 'Report artifact not found')
-        return target.read_bytes()
+        with local_target(path, member).open('rb') as handle:
+            yield handle
+        return
     with zipfile.ZipFile(path) as archive:
         try:
             if stat.S_ISLNK(archive.getinfo(member).external_attr >> 16):
                 raise HTTPException(404, 'Report artifact not found')
-            return archive.read(member)
+            with archive.open(member) as handle:
+                yield handle
         except KeyError as error:
             raise HTTPException(404, 'Report artifact not found') from error
+
+
+def read(path, member, limit=None):
+    with open_artifact(path, member) as handle:
+        return handle.read() if limit is None else handle.read(limit)
+
+
+def log_preview(path, member):
+    content = read(path, member, LOG_PREVIEW_BYTES + 1)
+    truncated = len(content) > LOG_PREVIEW_BYTES
+    text = content[:LOG_PREVIEW_BYTES].decode('utf-8', errors='replace')
+    if truncated:
+        text += f'\n\n[Preview truncated after {LOG_PREVIEW_BYTES:,} bytes. Download the full log.]'
+    return text
+
+
+@router.get('/training/log')
+def log(run: str, artifact: str, download: bool = False):
+    path = runs().get(run)
+    if path is None or not is_log(artifact):
+        raise HTTPException(404, 'Training log not found')
+    try:
+        if artifact not in entries(path):
+            raise HTTPException(404, 'Training log not found')
+        if not download:
+            return Response(log_preview(path, artifact), media_type='text/plain')
+        # Open once to validate before returning the response. Stream all bytes
+        # on download instead of buffering an unbounded log in memory.
+        with open_artifact(path, artifact):
+            pass
+        def chunks():
+            with open_artifact(path, artifact) as handle:
+                while chunk := handle.read(64 * 1024):
+                    yield chunk
+        return StreamingResponse(chunks(), media_type='text/plain', headers={
+            'Content-Disposition': "attachment; filename*=UTF-8''" + quote(PurePosixPath(artifact).name, safe='')})
+    except REPORT_ERRORS as error:
+        raise HTTPException(404, 'Training log unavailable') from error
 
 
 def table(data):
@@ -135,4 +208,20 @@ def training(run: str | None = None):
         body += '</div>'
         if not plots:
             body += '<p>This run has no saved plots.</p>'
+        logs = sorted(member for member in members if is_log(member))
+        body += '<h2>Training logs</h2><p>Durable structured events and raw worker output. Refresh to see newly saved events in local runs.</p>'
+        for member in logs:
+            query = {'run': selected, 'artifact': member}
+            preview_url = '/training/log?' + urlencode(query)
+            download_url = '/training/log?' + urlencode({**query, 'download': 'true'})
+            try:
+                preview = log_preview(path, member)
+            except REPORT_ERRORS:
+                preview = 'Log could not be read.'
+            body += (f'<details><summary>{escape(member)}</summary><p>'
+                     f'<a href="{escape(preview_url, quote=True)}">Open preview</a> · '
+                     f'<a href="{escape(download_url, quote=True)}">Download full log</a></p>'
+                     f'<pre style="overflow:auto;max-height:30rem;white-space:pre-wrap">{escape(preview)}</pre></details>')
+        if not logs:
+            body += '<p>No saved training logs in this run.</p>'
     return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER training reports</title><style>body{font-family:system-ui;margin:2rem;color:#222}select{max-width:75vw}.plots{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr));gap:1rem}figure{margin:0;border:1px solid #ddd;padding:1rem}img{width:100%;height:auto}figcaption{overflow-wrap:anywhere;margin-bottom:.5rem}.scroll{overflow:auto}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:.5rem}details{margin:1rem 0}</style></head><body><p><a href="/">Home</a> · <a href="/graphs">Graph tracks</a></p>' + body + '</body></html>'

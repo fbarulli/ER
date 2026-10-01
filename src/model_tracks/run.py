@@ -21,25 +21,47 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError('suite supervisor is already running') from exc
-        return _run(config, output, run_tag, resume=resume)
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
+            raise ValueError('invalid run tag')
+        if output.exists() and not resume:
+            raise FileExistsError(output)
+        if resume and not output.is_dir():
+            raise FileNotFoundError('resume output directory does not exist')
+        output.mkdir(parents=True, exist_ok=resume)
+        from model_tracks.telemetry import WorkerEvents
+        events = WorkerEvents(output, 'suite', run_tag, filename='suite_events.jsonl')
+        events.emit('suite', 'starting', resume=resume, config=str(config), output=str(output))
+        try:
+            archive = _run(config, output, run_tag, resume=resume, events=events)
+            events.emit('suite', 'complete', archive=str(archive))
+            return archive
+        except BaseException as exc:
+            import traceback
+            events.emit('suite', 'failed', error_type=type(exc).__name__, error=str(exc),
+                        failed_phase=events.last_phase, traceback=traceback.format_exc())
+            raise
+        finally:
+            # Archive contents precede collection/publication. Preserve their
+            # final outcomes beside the archive without rewriting its digest.
+            import shutil
+            shutil.copyfile(events.path, output.with_suffix('.events.jsonl'))
 
 
-def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Path:
+def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, events=None) -> Path:
     if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
         raise ValueError('invalid run tag')
-    if output.exists() and not resume:
-        raise FileExistsError(output)
-    if resume and not output.is_dir():
-        raise FileNotFoundError('resume output directory does not exist')
     cfg = load_config(config)
     if cfg.dvc_enabled and not os.environ.get('DVC_API_KEY'):
         raise RuntimeError('DVC_API_KEY is required before training a publishing suite')
+    events.emit('preflight', 'starting')
     inputs = preflight(config)
+    events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
+                epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
     from model_tracks.resume import TRACKS, suite_identity, validate_suite, completed_track
     identity = suite_identity(cfg, inputs, run_tag)
     if resume:
         validate_suite(output, identity)
-    output.mkdir(parents=True, exist_ok=resume)
+        events.emit('resume', 'verified', provenance='frozen inputs, config and implementation')
     from core.common import TRAIN_ROOT
     from graph_tracks.data import file_hash
     import torch
@@ -62,10 +84,14 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> P
         'hybrid_text_checkpoint':'frozen prepared baseline; no dependency on concurrent text worker'
     }, indent=2) + '\n')
     skipped = [track for track in TRACKS if resume and completed_track(output / track, track)]
+    for track in skipped:
+        events.emit('worker_selection', 'skipped', worker_track=track,
+                    reason='completed artifacts verified against SHA256 inventory')
     commands = {track: [sys.executable, '-m', 'model_tracks.worker', '--config', str(config.resolve()),
                         '--track', track, '--run-tag', f'{run_tag}-{track}'] + (['--resume'] if resume else [])
                 for track in TRACKS if track not in skipped}
     env = {**os.environ, 'PYTHONPATH':str(TRAIN_ROOT/'src'),
+           'ER_SUITE_ATTEMPT': events.attempt,
            'ER_INCREMENTAL_DVC':'1' if cfg.dvc_enabled else '0',
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
     if not commands:
@@ -82,15 +108,22 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> P
         if marker != {'track':track, 'status':'ok', 'postprocess_complete':True}:
             raise ValueError(f'incomplete track: {track}')
     (output/'suite_result.json').write_text(json.dumps({'status':'ok', **result}, indent=2)+'\n')
+    events.emit('collection', 'starting', tracks=list(TRACKS), skipped_verified_tracks=skipped)
     archive_path = output.with_suffix('.zip')
     if archive_path.exists():
         from core.portable_archive import verify_archive
         if not resume or verify_archive(archive_path, 'suite_bundle_manifest.json').get('run_tag') != run_tag:
             raise ValueError('existing archive belongs to a different suite')
         archive_path.with_suffix('.sha256').write_text(file_hash(archive_path) + '\n')
+        events.emit('collection', 'verified', archive=str(archive_path), sha256=file_hash(archive_path),
+                    reused=True)
         if cfg.dvc_enabled:
             from model_tracks.publish import persist_results
+            events.emit('publication', 'starting', archive=str(archive_path))
             persist_results(archive_path, run_tag)
+            events.emit('publication', 'complete')
+        else:
+            events.emit('publication', 'skipped', reason='publication disabled in suite config')
         return archive_path
     files = {p.relative_to(output).as_posix(): p for p in output.rglob('*')
              if p.is_file() and not p.is_symlink() and not any(part in
@@ -103,9 +136,15 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> P
     from core.portable_archive import write_archive
     write_archive(archive_path,files,manifest_name='suite_bundle_manifest.json',metadata={'run_tag':run_tag})
     archive_path.with_suffix('.sha256').write_text(file_hash(archive_path)+'\n')
+    events.emit('collection', 'complete', archive=str(archive_path), sha256=file_hash(archive_path),
+                bytes=archive_path.stat().st_size)
     if cfg.dvc_enabled:
         from model_tracks.publish import persist_results
+        events.emit('publication', 'starting', archive=str(archive_path))
         persist_results(archive_path, run_tag)
+        events.emit('publication', 'complete')
+    else:
+        events.emit('publication', 'skipped', reason='publication disabled in suite config')
     return archive_path
 
 

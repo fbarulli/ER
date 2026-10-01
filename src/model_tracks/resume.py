@@ -59,7 +59,7 @@ def artifact_files(output: Path):
     excluded = {'wandb', 'mlruns', 'profiles', '_artifact_publications', '.dvc', '.git'}
     return [path for path in output.rglob('*') if path.is_file() and not path.is_symlink()
             and not excluded.intersection(path.relative_to(output).parts)
-            and path.name not in {'track_complete.json', 'track_inventory.json', 'worker.yaml'}
+            and path.name not in {'track_complete.json', 'track_inventory.json', 'worker.yaml', 'worker_events.jsonl'}
             and not path.name.endswith('.log')]
 
 
@@ -99,6 +99,10 @@ def completed_track(output: Path, track: str) -> bool:
 
 
 def graph_checkpoint(output: Path, track: str, run_tag: str) -> Path | None:
-    root = output / '_checkpoints' / track / f'{run_tag}_f0'
-    paths = list(root.glob(f'checkpoint-*/{track}__graph_model.pt'))
+    # Graph trainers isolate their own run inside the worker output root.
+    # Retain flat-root compatibility for previously materialized trees.
+    roots = [output, output / f'{track}__{run_tag}']
+    paths = [path for folder in roots
+             for path in (folder / '_checkpoints' / track / f'{run_tag}_f0').glob(
+                 f'checkpoint-*/{track}__graph_model.pt')]
     return max(paths, key=lambda path: int(path.parent.name.split('-')[-1]), default=None)

@@ -384,6 +384,7 @@ def _tracking_mnrl_loss(
     """
     from sentence_transformers.sentence_transformer import losses
     from sentence_transformers.util import all_gather_with_grad
+    import torch
 
     class _TrackedMultipleNegativesRankingLoss(
         losses.MultipleNegativesRankingLoss
@@ -398,15 +399,53 @@ def _tracking_mnrl_loss(
             self._batch_pair_ids = None
             self._triple_populations: list[str] = []
             self._subset_totals: dict[int, dict[str, dict[str, float]]] = {}
+            self._population_names = ['unknown']
+            self._population_lookup = torch.empty(0, dtype=torch.long)
+            self._population_device_lookup = {}
+            self._pending_subset = None
 
         def set_epoch(self, epoch: int) -> None:
+            if int(epoch) != self._current_epoch:
+                self._flush_subset_totals()
             self._current_epoch = int(epoch)
 
         def set_batch_pair_ids(self, pair_ids) -> None:
-            self._batch_pair_ids = pair_ids.detach().cpu()
+            self._batch_pair_ids = pair_ids.detach()
 
         def set_triple_populations(self, populations) -> None:
+            self._flush_subset_totals()
             self._triple_populations = list(populations)
+            self._population_names = sorted(set(map(str, populations)) | {'unknown'})
+            codes = {name: index for index, name in enumerate(self._population_names)}
+            self._population_lookup = torch.tensor([codes[str(name)] for name in populations], dtype=torch.long)
+            self._population_device_lookup = {}
+
+        def _batch_population_codes(self, pair_ids, device):
+            pair_ids = pair_ids.to(device=device, dtype=torch.long)
+            lookup = self._population_device_lookup.get(device)
+            if lookup is None:
+                lookup = self._population_lookup.to(device)
+                self._population_device_lookup[device] = lookup
+            unknown = self._population_names.index('unknown')
+            if not len(self._triple_populations):
+                return torch.full_like(pair_ids, unknown)
+            valid = pair_ids < len(self._triple_populations)
+            safe_ids = torch.where(valid, pair_ids, 0)
+            return torch.where(valid, lookup[safe_ids], unknown)
+
+        def _flush_subset_totals(self):
+            if self._pending_subset is None:
+                return
+            # One small host transfer per epoch/report, never one per batch.
+            sums, counts = self._pending_subset.cpu().tolist()
+            for population, total, count in zip(self._population_names, sums, counts):
+                if not count:
+                    continue
+                stats = self._subset_totals.setdefault(self._current_epoch, {}).setdefault(
+                    population, {'loss_sum': 0.0, 'count': 0.0})
+                stats['loss_sum'] += total
+                stats['count'] += count
+            self._pending_subset = None
 
         def _twin_weight_for_epoch(self) -> float:
             if not self._warmup_enabled:
@@ -525,43 +564,31 @@ def _tracking_mnrl_loss(
 
             batch_pair_ids = self._batch_pair_ids
             self._batch_pair_ids = None
+            population_codes = (self._batch_population_codes(batch_pair_ids, row_losses.device)
+                                if batch_pair_ids is not None else None)
             if batch_pair_ids is not None and self._monitoring_enabled:
-                populations = [
-                    self._triple_populations[int(pair_id)]
-                    if int(pair_id) < len(self._triple_populations)
-                    else "unknown"
-                    for pair_id in batch_pair_ids.tolist()
-                ]
-                row_values = row_losses.detach().cpu()
-                for population, value in zip(
-                    populations, row_values.tolist()
-                ):
-                    epoch_stats = self._subset_totals.setdefault(
-                        self._current_epoch, {}
-                    ).setdefault(
-                        str(population), {"loss_sum": 0.0, "count": 0.0}
-                    )
-                    epoch_stats["loss_sum"] += float(value)
-                    epoch_stats["count"] += 1.0
+                if self._pending_subset is None:
+                    self._pending_subset = torch.zeros((2, len(self._population_names)),
+                                                       dtype=torch.float64, device=row_losses.device)
+                values = row_losses.detach().to(dtype=torch.float64)
+                self._pending_subset[0].scatter_add_(0, population_codes, values)
+                self._pending_subset[1].scatter_add_(0, population_codes, torch.ones_like(values))
 
             if self._warmup_enabled:
                 if batch_pair_ids is not None:
                     weight = self._twin_weight_for_epoch()
-                    weighted = torch.zeros_like(row_losses)
-                    for i, pair_id in enumerate(batch_pair_ids.tolist()):
-                        population = (
-                            self._triple_populations[int(pair_id)]
-                            if int(pair_id) < len(self._triple_populations)
-                            else "unknown"
-                        )
-                        w = weight if population == "twin" else 1.0
-                        weighted[i] = row_losses[i] * w
-                    return weighted.mean()
+                    twin_code = (self._population_names.index('twin')
+                                 if 'twin' in self._population_names else -1)
+                    weights = torch.where(population_codes == twin_code,
+                                          row_losses.new_full(row_losses.shape, weight),
+                                          torch.ones_like(row_losses))
+                    return (row_losses * weights).mean()
                 return row_losses.mean()
 
             return row_losses.mean()
 
         def mnrl_subset_rows_by_epoch(self) -> list[dict]:
+            self._flush_subset_totals()
             rows = []
             for epoch in sorted(self._subset_totals):
                 for population in sorted(self._subset_totals[epoch]):
@@ -580,5 +607,3 @@ def _tracking_mnrl_loss(
             return rows
 
     return _TrackedMultipleNegativesRankingLoss(model)
-
-
