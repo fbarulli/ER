@@ -42,6 +42,7 @@ from collections import Counter, defaultdict
 
 import pandas as pd
 
+from core.columns import alias_names
 from core.gtin import barcode_validity
 from core.text import normalize_retailer
 from pipeline import normalize_text
@@ -146,7 +147,10 @@ def finalized_texts(
     frame = df
     if not include_attributes:
         frame = df.copy()
-        for column in ("attributes", "attr", "description", "description_short_eng"):
+        for column in (
+            *alias_names("attributes"),
+            *alias_names("description"),
+        ):
             if column in frame.columns:
                 frame[column] = ""
     texts, _infos = build_sku_texts(frame, structured_enabled=enabled)

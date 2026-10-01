@@ -31,6 +31,7 @@ from collections.abc import Mapping, Sequence
 
 import pandas as pd  # frame access in build_sku_texts (consolidated loop)
 
+from core.columns import alias_names
 from core.common import load_config, row_metadata_text
 from core.schemas import TrainingSpec
 
@@ -251,7 +252,7 @@ def _cleaned_sku_text(
     tokens += _normalized_tokens(row_metadata_text(row, "brand"), drop_schema_words=False)
     tokens += _normalized_tokens(row_metadata_text(row, "title"), drop_schema_words=False)
     tokens += _normalized_tokens(
-        row_metadata_text(row, "attributes", "attr"), drop_schema_words=True
+        row_metadata_text(row, *alias_names("attributes")), drop_schema_words=True
     )
     symmetric = model_input_info(info, spec=spec)
     return _reduce_redundancy(
@@ -298,11 +299,11 @@ def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
 
     base = strip_schema_words(clean_sku_text(
         row_metadata_text(row, "title"),
-        row_metadata_text(row, "attributes", "attr"),
+        row_metadata_text(row, *alias_names("attributes")),
         row_metadata_text(row, "brand"),
-        row_metadata_text(row, "description", "description_short_eng"),
-        row_metadata_text(row, "category", "category_path"),
-        row_metadata_text(row, "category_path", "breadcrumbs_eng"),
+        row_metadata_text(row, *alias_names("description")),
+        row_metadata_text(row, *alias_names("category")),
+        row_metadata_text(row, *alias_names("category_path")),
     ))
     # The legacy profile is a byte-for-byte rollback contract. The active
     # cleaned profile now accepts declared Pack Type when the title has none,
@@ -312,13 +313,13 @@ def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
     legacy_info.pop("sweetening", None)
     # A title-only ablation supplies a precomputed full-row ``info`` while
     # blanking attributes in the row; keep that supplied structured channel.
-    if row_metadata_text(row, "attributes", "attr").strip():
+    if row_metadata_text(row, *alias_names("attributes")).strip():
         legacy_info["package_type"] = set(extract_title_attributes(
             row_metadata_text(row, "title")
         )["package_types"])
         legacy_info["flavor"] = set(extract_flavor_tokens(
             row_metadata_text(row, "title"),
-            row_metadata_text(row, "attributes", "attr"),
+            row_metadata_text(row, *alias_names("attributes")),
         ))
     return append_text(base, legacy_info, enabled=_structured_text_enabled())
 

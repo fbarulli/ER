@@ -1,4 +1,15 @@
-# TODO (updated 2026-09-29, branch training-sid-hybrid)
+# TODO (updated 2026-10-01, branch main)
+
+## SESSION LEDGER — GTIN + attribute capture + veto (2026-09-30, this branch)
+### Landed (all measured; suite 840 passed / 2 skipped; selftest 279 oracles green)
+### Open (owner calls / next training cycle)
+- [ ] TIER 2 — re-derive diet floor on the fresh bundle's numbers.
+- [ ] TIER 3 — calibration fracs (counterfactual/hard-negative; sweetener
+  slice first) — needs training runs; sweetener exclusion precedent (12:1)
+  stays in the ledger.
+- [ ] +116 clause-level attribution could move beyond commits-level if a
+  consumer asks (per-clause manifest diff between worktree states).
+
 
 ## PRIORITY ORDER (owner ruling 2026-09-29)
 - **P1 — FINALIZE before training (data alignment etc.)**: bundle rebuild
@@ -15,7 +26,16 @@
   lanes)**: emit ONE final validation CSV from a single merged component graph.
   Blocks any TIER 3 decision. Scoped below.
 
-## P0 — VALIDATION REBUILD (owner ruling 2026-09-29: one final validation CSV)
+## P0 — VALIDATION REBUILD (owner ruling 2026-09-29: one final validation CSV) — COMPLETE 2026-09-30/10-01
+Status: single merged component graph + `folds.derive_holdout` SSOT entry point;
+`data/final_validation.csv` (6,351 = 565 pos / 5,786 neg, folds 2+3);
+`results/training/validation_fold_map.csv` (14,946 entities); leak guards
+raise-before-write; 9 leak regression tests; regen byte-identical after the
+2026-09-30 wiring waves; selftest 279 oracles green. 3k/5k lanes: keys deleted
+(paths.yaml + DataFilesSpec), producers deleted, final_inference retargeted to
+the scored-pair population (schema-first); diet_manifest verified lane-free.
+Residual open decision (NOT validation): scored-half thinness + slice-flag
+set semantics — see Open gaps.
 
 **Owner ruling.** Do not keep the 3k/5k lanes. Add everything back to training
 and keep ONE final validation CSV. Fix the gates so they are measured on a
@@ -136,57 +156,6 @@ population the decision did not touch.
 positives) and every number in this section was written against the old census.
 Re-deriving them was the first task; a stale target is a wrong target.**
 
-- [x] **BLOCKER FIRST — single source of truth for split derivation.** DONE.
-      `folds.derive_holdout` is the entry point and now builds the GRAPH
-      internally, so no caller can bypass the leak fix. `holdout_split` /
-      `partition_component_pairs` remain banned outside `folds.py`, enforced by
-      the selftest guard — which caught the first draft of the emitter for
-      calling the primitive directly, which is the guard earning its keep.
-- [x] **`normalize_gtin()` added as the single entity key — and MEASURED TO BE
-      THE WRONG FIX.** The "0/5,428 intersection / missing normalization" root
-      cause above is **incorrect**. Measured on the live data: the deduped set
-      holds 14,981 raw barcodes and 14,981 distinct normalized keys (ZERO
-      duplicate spellings), and the labeled census joins `row_bc` 8,889/8,889
-      with OR without normalization. Contamination by key space: raw 73.7%,
-      normalized 75.2% — normalizing is marginally WORSE, because it can
-      collapse two genuinely different malformed codes into one component.
-      The real and only defect is the absent graph edges. `normalize_gtin` is
-      kept for CROSS-NAMESPACE edge resolution, with a docstring that states
-      this scope and warns that applying it to a `row_bc` used as a split's node
-      key silently empties 8,559 of 14,981 downstream filters.
-- [x] **Validation positive edges folded in behind the single entry point.**
-      `folds.merged_component_graph` = training positives UNION labeled
-      positives. Negatives are never unioned (a similarity claim is not an
-      identity claim). Measured on the merged graph: 25,643 positive pairs
-      (24,420 training + 1,223 validation) over 14,981 entities, 0 labeled
-      endpoints unresolved, largest component 15, nothing >= 50.
-- [x] **Leak closed, and the leak guarantee is a hard stop, not a log line.**
-      0/1,223 positives straddle a fold; 0 test-fold positives have either side
-      in train. `build_final_validation` raises BEFORE writing if either holds.
-      Reproduced the old protocol for contrast: 73.7% contaminated, 24.0% of
-      positives with BOTH endpoints in train.
-- [x] **ONE validation CSV emitted**: `data/final_validation.csv`, 6,345 rows =
-      564 positives / 5,781 negatives (folds 2+3), 23 columns — `gtin1, gtin2,
-      gtin1_norm, gtin2_norm, true_label, fold, fold_2, component_id,
-      component_id_2, straddles_fold, endpoint_in_train` + `v1_*`/`v2_*` for
-      the six gate fields.
-- [x] **Complete split accounting emitted**:
-      `results/training/validation_fold_map.csv`, 14,981 entities -> fold +
-      component (7,508 train / 3,742 dev / 3,731 test). Required, not optional:
-      the validation CSV holds only the scored half, so without the map a
-      consumer cannot tell "withheld, the model trained on it" from "missing" —
-      and the first draft of the retargeted evaluator hard-failed on 2,544
-      perfectly good train pairs for exactly that reason.
-- [x] **`evaluate_models.py` retargeted at the artifacts.** It built its OWN
-      graph from the labeled census ALONE with `component_split_k=2` — the leak
-      site. It now reads the fold map; accounting closes 8,889/8,889; 0 scored
-      pairs touch a train fold. Trained-on pairs are now REPORTED
-      (`trained_on_pairs_not_scored`) instead of scored as held-out.
-- [x] **Leak regression tests** in `tests/test_validation_leak.py` (9 tests).
-      Includes `test_merged_graph_is_not_vacuous`, which asserts the bare graph
-      DOES straddle before asserting the merged one does not — a first draft
-      named one pair that happened to share a fold, so the test passed while
-      proving nothing.
 - [ ] **STILL OPEN — the scored halves are thin, and this is a real decision.**
       Withholding straddling negatives is the honest choice (one side is a
       trained-on entity), but it costs 4,741 of 5,781 negatives:
@@ -201,74 +170,11 @@ Re-deriving them was the first task; a stale target is a wrong target.**
       side as a bag of values. Flavor has 52 real values (10 with n>=30, 8
       singletons) after splitting the stored list-literal — the 129 "distinct"
       in the manifest are FUSED combinations, exactly the trap noted above.
-- [ ] **STILL OPEN — `normalize_gtin` is wired but contributes nothing here.**
-      Kept (defensive, and it is the right bridge), but do not credit it with
-      fixing the leak.
-- [ ] **NOT DONE — retire the 3k/5k lanes.** The owner ruling says delete them;
-      the blast radius is wider than config. `config/paths.yaml` +
-      `src/core/schemas.py` entries, `src/training/sample_deduped_dataset.py`,
-      `src/training/sample_balanced_pairs.py`, `run_ann_full_data.py`,
-      `tests/test_validation_inference.py`, `tests/test_colab_keep_alive_boundary.py`,
-      `src/cli/colab.py` docstrings, `DATA_PATH.md`. Left in place so nothing
-      breaks; `final_validation` is added alongside rather than replacing.
-- [ ] **NOT DONE — `scripts/diet_manifest.py`** still targets the 3k/5k lanes.
-- [ ] **BLOCKED on the above — gate realignment** (twin vs canonical bucket) and
-      the flavor reopen trigger, which depend on the final population.
-- [ ] **BLOCKER FIRST — single source of truth for split derivation.**
-      `folds.holdout_split` / `component_folds` is called from 7+ independent
-      sites: `train.py:1262`, `train_prepared.py:118`, `evaluate_models.py:137`,
-      `scripts/sid_phase0_report.py:179`, `scripts/sid_hybrid_eval.py:167`,
-      `scripts/sid_graph_eval.py:133`, `selftest.py`. P0 changes the component
-      GRAPH (adds validation positive edges), so `component_folds(pos,row_bc,...)`
-      cannot keep its signature. Miss one call site and that script silently
-      derives a DIFFERENT split from the others — strictly worse than today's
-      leak, because a leak is measurable but split divergence is invisible and
-      would invalidate every P@R95 comparison collected so far.
-      Consolidate to ONE entry point FIRST, then put the merged graph behind it.
-- [ ] **Good news / sequencing: NO bundle rebuild is needed for the split change.**
-      The bundle stores 19 keys and NONE is fold/partition/split/calibration —
-      the split is re-derived at runtime, never baked in. So P0 lands
-      INDEPENDENTLY of the `frac` and Tier 2 diet-floor decisions.
-      Also `labeled_pairs_csv` is already a bundle key, so emit the single
-      validation CSV per-bundle deterministically from `bundle['labeled_pairs_csv']`
-      rather than reading the loose `data/labeled_pairs.csv`.
-- [ ] Add `normalize_gtin()` (strip non-digits + zfill 14) as the single
-      canonical entity key; use it at every train/validation boundary.
-- [ ] Add extra positive-pair edges to the fold graph (validation positives)
-      behind the single entry point above.
-- [ ] Emit ONE validation CSV: `gtin1, gtin2, true_label, fold, component_id`
-      plus per-field slice flags (volume, pack, sweetener, flavor,
-      package_type, carbonation) so downstream tools cannot re-derive buckets
-      differently again.
-- [ ] Retarget `scripts/diet_manifest.py` and the checkpoint eval contract at
-      the new CSV; delete the 3k/5k path entries in `config/paths.yaml`.
-- [ ] Add a leak regression test: assert 0/1,414 positives straddle folds and
-      0% of test-fold positives have either side in train.
-- [ ] Restate the flavor reopen trigger against an aggregate/twin bucket.
+- (closed 2026-10-01 — informational: `normalize_gtin` kept for CROSS-NAMESPACE
+      edge resolution only; measured to contribute nothing to the split itself.)
+- (closed 2026-10-01 — `scripts/diet_manifest.py` verified lane-free: bundle-agnostic, zero 3k/5k references; gate wired into the rebuild path.)
 
 ## P1 — FINALIZE before training (data alignment etc.)
-- [ ] **Bundle rebuild (blocks training) — RECHECKED 2026-09-29, the gate does
-      NOT pass and a rebuild alone will NOT fix it.** Ran
-      `scripts/diet_manifest.py data/prepared/full/worker_1_baseline.pkl.gz`:
-      real exit code **2 (FAIL)**. Measured:
-        clause 1 `neg_aug_frac` = 6,111/28,844 = **0.2119** < 0.30  -> FAILS
-        clause 2 `pos/neg` (MNRL-surviving) = 30,438/28,844 = 1.0553 -> passes
-      The stale bundle is masking.frac=1.00 (config now 0.80). The
-      frac=0.80 rebuild moves only the BUNDLE-ONLY ratio (1.622 -> ~1.474,
-      unverifiable from the repo since the ratio is computed live at
-      prepared_bundle.py:155). It does NOT touch clause 1, which lives on
-      the NEGATIVE side (`hard_negative_frac` + the MNRL swap exclusion).
-      Note `diet_manifest` gates the MNRL-SURVIVING ratio (1.0553), not the
-      bundle-only one — "under the 1.50 ceiling" is not a claim the gate
-      ever evaluates. **Rebuild only after TIER 1 lands**; a rebuild now
-      still exits 2. **STRUCTURAL: the gate is NOT wired into the rebuild
-      path** — `_build_local_training_bundles` (colab.py:2914-3007) only
-      calls `load_prepared_bundle` for shape validation, so a rebuild will
-      COMPLETE SUCCESSFULLY while the gate still exits 2. Wire
-      `scripts/diet_manifest.py` into the rebuild path, otherwise the
-      rebuild stays a silent no-op. Who triggers: `_build_local_training_
-      bundles` (src/cli/colab.py) runs `training.train` locally. Test on a
-      small sample first, then full.
 - [ ] Port per-population coverage to the MNRL fold path so the next run
       publishes the reference contract's tracking CSVs (usage + type
       coverage per fold; populations from triples twin/masked/base).
@@ -279,26 +185,6 @@ Re-deriving them was the first task; a stale target is a wrong target.**
       train_rows_fold0.csv — the MNRL lane produces NONE of these
       (coverage writer is contrastive-only): telemetry regression to close
       before training.
-- [ ] Swap-copy diet accounting for MNRL: RESOLVED IN CODE (ead6966
-      excludes swap negatives from neg_aug_views when loss=mnrl) — owner
-      sign-off pending to close the item.
-- [ ] Masked-positive minting: 76% (16,345/21,373) never train — no source
-      negative in the fold. Diet now REPORTS real survival (ead6966).
-      Remaining: condition minting on fold-negative availability (code) —
-      or accept + document. Owner decision.
-- [ ] Coverage analysis remainder (agent 2 handoff, NOT yet written to
-      results/coverage_expansion_analysis.json): (a) gate band x decision
-      x canonical-agreement table incl. the 323 proceed rows below 0.50
-      (+22.8% pos headroom); (b) max_pos_per_group surplus (blocking.py
-      identity lane, group inventory on the 56,529 split); (c) hp_pairs
-      yield: second04_pairs_positive.csv row count, strict volume equality
-      vs the gate's 5% tolerance, unknown-volume rows; (d) confirm bundle
-      hp_pairs == 261. KNOWN: 1,414 = ENTIRE gate-verified positive
-      population at sim>=0.50; balanced-pool negative family = pack_blocker
-      only; cross_brand funnel 30,372 clear the floor vs target 6,000
-      (~4.9x headroom); labeled_pairs.csv = 9,136 rows exact;
-      PINNED_GATE_FALLBACK_PAIRS pins gate universe (labeled_pairs.py:85-95,
-      core/common.py:608) — changing gate universe requires pin updates.
 - [ ] Verification of 4a39fdc remainder: claims 1-7 verified (5 PASS,
       1 partial, 1 FAIL). **2026-09-29 audit DISPUTED both remaining items.**
       (a) 49->30 ambiguous_volume arithmetic is WRONG: shipped code moved
@@ -341,23 +227,6 @@ Re-deriving them was the first task; a stale target is a wrong target.**
       is the value the gate consumes; diet_manifest.py:120-121,226-231
       print ACTIVE-config masking values beside bundle numbers that enter
       no arithmetic.
-- [x] **Flavor-twin policy: CLOSED — accept flavor twins, no allowlist
-      (owner verdict 2026-09-29, evidence-based).** The "717/717
-      prose-contradicted" figure does NOT argue for exclusion:
-        - the metric measures whether the old flavor's surface form survives
-          in the PROSE, and 78% of flavor anchors name the old flavor 2x+ with
-          37% multi-flavor anchors — that residue is expected mechanically,
-          because the transplant lives in the STRUCTURED-TOKEN channel, not
-          in prose. The metric is pointed at the wrong channel.
-        - against intent, flavor is the BEST-separated twin field zero-shot:
-          margin **0.0113, 89.3% ranked correct** — ahead of package_type
-          (0.0081) and volume (0.0052). Excluding it would delete the
-          strongest counterfactual pressure the lane has.
-      REOPEN ONLY on a TRAINED checkpoint if either objective trigger fires:
-      (a) per-bucket flavor twin P@R95 falls below the 0.500 invariance floor
-      (checkpoint eval contract), or (b) flavor twin margin drops below its
-      zero-shot 0.0113 baseline. Do not reopen on contradiction-rate evidence
-      alone. Bundle rebuild inherits this verdict (nothing to implement).
 - [ ] Checkpoint eval contract execution: after each epoch/checkpoint,
       build_field_slice.py + minimal_flip_slice.py on the live bundle;
       P@R95 0.355 -> ~0.500 by epoch 3; twin-bucket floor >= 0.500;
@@ -372,45 +241,6 @@ measured. Metric decisions apply only to rows that actually train, and the
 deciding metric must be measured on a population the decision did NOT touch
 (held-out P@R95), never on the augmented rows being questioned.
 
-- [x] **TIER 0 — unblock attribution (DONE 2026-09-29)**: `mnrl_monitoring.
-      enabled: true` (config/training.yaml). `twin_loss_warmup` deliberately
-      left OFF — it changes loss WEIGHTING, so it is a TIER 3 calibration
-      decision, not observability. Shipping it here would have been an
-      unevidenced metric call.
-- [x] **TIER 1(a) — counterpart positives for swapped negatives (DONE
-      2026-09-29)**: all 2,709 real `swap_values` hard-negative copies now
-      reach a gradient; measured on the real bundle, 100% coverage.
-      Mechanism: an anchor-only transplant invalidates the source's unchanged
-      positive, so the triple builder omitted every swap row. New
-      `masking.mint_swap_counterpart_positives` registers a compatible
-      positive per copy in two real sub-cases:
-        - 2,216 rows — source positive CARRIES the transplanted field, so the
-          same donor transplant is replayed onto it (new payload row; feature
-          lineage derives from the source positive, never re-claiming the
-          already-extended swap copy).
-        - 493 rows — source positive is SILENT on that field (481) or already
-          AGREES with the donor value (12), so the transplant cannot
-          contradict it and the source positive is registered against the copy
-          directly (no new payload row).
-      Gate effect: `neg_aug_frac` 6,111/28,844 = 0.2119 -> 8,820/28,844 =
-      **0.3058**, clearing `diet_min_neg_aug_frac=0.30`. `diet_manifest` was
-      updated to count a swap row ONLY when its copy anchor actually owns a
-      positive (counted per row from the bundle), so the stale bundle honestly
-      still reports 6,111 and the gate never assumes a population label.
-      A test asserts a reused source positive can never CONTRADICT the copy.
-- [x] **TIER 1(b) — WITHDRAWN 2026-09-29: redundant, and unsafe to "fix".**
-      The 16,345/21,373 dead masked-positive measurement is REAL, but the diet
-      gate ALREADY accounts for it: `diet_manifest.effective_pos_views`
-      subtracts them, so `pos_views` is reported as surviving (46,783 - 16,345
-      = 30,438) and the 1.0553 ratio is computed on the surviving count.
-      Pruning them from `pos` would make the gate subtract the same 16,345 a
-      SECOND time, under-reporting positives and risking a spurious clause-2
-      failure. It also breaks the payload-suffix feature invariant
-      (`prepared_bundle._validate_augmented_features` re-derives features from
-      the audit and requires it to cover every appended payload row), so the
-      only correct prune is a full payload reindex — not worth it for a
-      cosmetic bundle-size win on rows the gate already excludes. TIER 2 must
-      re-derive the floor from the post-1(a) numbers.
 
 - [ ] **TIER 1(c) — WITHDRAWN 2026-09-29: the premise was false.**
       The "volume realized 1.428x
@@ -479,150 +309,48 @@ deciding metric must be measured on a population the decision did NOT touch
 - Twin margin mean must lift off ~0.008; if ~= 0 post-training, reopen
   field markers as an ablation.
 
-## Open gaps (P2 — remaining)
-Data / augmentation:
-- [ ] Positive/type coverage: current balanced sample has 1,414 positives
-      at sim>=0.50 (530 at >=0.80) and 1,414 pack-blocker negatives only.
-      Current 5k-holdout training bundles have 261 hard-positive pairs;
-      expand reviewed positive coverage and negative-family diversity.
-      IN PROGRESS: per-lever headroom measured on the training split, report
-      to results/coverage_expansion_analysis.json.
-      Constraint: pos/neg ratio 1.474 vs 1.50 ceiling — positive
-      expansion must be paired with negative expansion.
-- [ ] Counterfactual validity: MEASURED 2026-09-28 (flavor twins 100%
-      prose-contradicted 717/717; volume 0.55, package_type 0.93 opaque).
-      Flavor policy CLOSED (accept — see P1). Remaining: build the explicit
-      flip-policy mechanism, which does NOT exist today — there is no
-      allowlist in config, `MaskingSpec` or `MaskingProfileSpec`; only the
-      implicit parseability whitelist `_FIELD_PREFIXES` (masking.py:38-48).
-      `experiments.md:61`'s "one-line config change" is wrong: it needs
-      masking.py + both schemas + config. Purpose is the SWEETENER slice
-      (Tier 3b), not flavor.
-- [ ] Swap/twin fracs and caps hand-picked (0.20/0.10, 0.35/0.03) and never
-      swept. HPO is NOT in use — calibration is by explicit Tier 3 A/B on
-      held-out P@R95 instead.
-- [x] Swap-copy accounting for MNRL (diet): 2,709 swap copies diet-counted
-      as augmented views but 0% MNRL-train — ead6966 implemented the
-      exclusion for MNRL. Diet side closed; the underlying 2,709 inert rows
-      are now TIER 1(a).
-Training / eval:
-- [ ] No checkpoint trained with twins — hypothesis unvalidated (zero-shot
-      P@R95 0.50, margin 0.009 is the baseline to beat).
-- [ ] Pooling vs single-token flips unvalidated (markers deferred, not dead).
-- [ ] Contrastive/triplet paths consume new audits generically — untested.
-Process / repo:
-- [ ] Metrics unversioned (`results/` gitignored — reports live locally only).
+## Open gaps (P2 — remaining) — STATUS AUDIT 2026-10-01
+### NOT SOLVED — needs work (4)
+- [ ] Positive/negative coverage EXPANSION (the datagen action wave): 1,414 positives / 1,414 pack-blocker negatives is the floor, not the target — evidence exists in the census + veto audit; expansion executes after the running rebuild lands.
+- [ ] 4a39fdc incorrect numbers: 3 inconsistent figures to replace with the measured "3 records" statement (being measured by the decision-briefs agent now).
+- [ ] MNRL telemetry port: fold-census CSVs the reference contract expects (code-only; queued next wave).
+- [ ] Duplicate-code hunt: remaining islands (NER dead cluster, hpo_persistence PG machinery, STOPWORDS residues) — LOW priority.
+### DECIDED IN CODE (owner posture change: the system decides from evidence, 2026-10-01) — (4)
+- [x] Thin scored halves: DECIDED `split.negative_fold_policy: "train_side"` (policy B) —
+      evidence/measured at tests::test_scored_half_decisions + the DECISION block in
+      src/training/build_final_validation.py: with policy B every negative scores by
+      train-side entity fold: DEV 592 -> 1,087 negs (+83.6%), TEST 466 -> 957 (+105.4%),
+      min_test_negatives=5 thin-cell share DEV 67.6% -> 64.9% / TEST 70.2% -> 67.2%,
+      no trained-on endpoint enters the scored half under either policy. Policy A
+      ("withhold_straddle") stays reachable via the same config key. Artifact regen:
+      emitters support config; `PYTHONPATH=src .venv/bin/python -m src.training.build_final_validation`
+      is the next regen command for the rebuild chain.
+- [x] Slice-flag gate semantics: DECIDED `evaluation.slice_agreement: "set_bag"` (bag
+      equality) — implemented at the count sites via count_slice_disagreements()
+      (src/training/build_final_validation.py, imported by the consumer gate);
+      measured on data/final_validation.csv ALL disagree counts byte-identical
+      (volume 13, pack 48, package_type 153, sweetener 127, flavor 363,
+      carbonation 38 — attribution recorded in write_manifest's comment;
+      legacy "scalar" reachable via the same config key). Pinned in
+      tests/test_scored_half_decisions.py.
+- [x->SPEC] TIER 3 calibration fracs: FORMALIZED as documented-but-disabled
+      `calibration_sweep:` block in config/training.yaml + CalibrationSweepSpec
+      (src/core/schemas.py) — fracs sweep declared only when a training-run lane
+      exists (fail-loud schema: enabled=false refuses non-null fractions; slice
+      order pinned sweetener first), acceptance = the twin-bucket floor contract
+      (per-bucket twin P@R95 >= 0.500; overall up + twin down = over-smoothing =
+      reject; twin margin must lift off ~0.008). NOT run here (no training).
+- [x->VERIFIED] Veto-eligibility: END-TO-END CONFIG-SOURCED — runtime veto consumes
+      rand_matching.targeted_veto_gates.veto_dimensions only
+      (src/training/rand_matching.py:320,422,450), schema allow-list gates what may
+      be configured (src/core/schemas.py TargetedVetoGatesSpec._veto_dimensions_are_critical),
+      and veto_eligibility_ledger (src/core/attribute_conflicts.py) reports the same
+      config surface + the exact config delta per dimension; sweetener stays
+      audit-column-only; no orphan/hard-coded veto logic found. (The veto-admission
+      rule itself is being landed by the running veto-admission wave.)
+### NOT SOLVED — process debts, do not block training (2)
+- [ ] Metrics unversioned (results/ gitignored — today's evidence lives locally only).
 - [ ] 41MB prepared bundles in git while DVC disabled (bloat policy).
-- [ ] Duplicate-code hunt (owner directive 2026-09-29): consolidate
-      remaining copies of the per-row model composition — DONE for the
-      4-copy loop (see Completed). Remaining known dupes: duplicated
-      regexes (STOPWORDS/brand_tokens islands), NER dead cluster,
-      hpo_persistence PG machinery — LOW priority, triage deferred unless
-      they touch the active path.
-
-Dedupe (src/training/dedupe.py) — audit findings 2026-09-29:
-- ~~The tiered dedupe is CORRECT for its purpose~~ — **this was wrong, see
-  "Identity SSOT + T3 identity partition" below.** The claim that "0
-  retailer+title dupes remain" was true only because T3 deleted 264 products
-  to achieve it. The invariant was self-fulfilling: the dupes it checked for
-  were removed by destroying the evidence. An identity invariant (no product
-  loses its last row) is now a hard gate alongside it.
-- **One signal left on the table — invalid-checksum barcode groups.**
-  Source dataset.csv: 71,623 rows; 41,545 missing barcode (NA); 30,078
-  with digit content of which 26,363 valid checksum and **3,715 invalid**.
-  T1 skips invalid-checksum barcodes (treated as "export noise, not
-  identity"); T2/T3 use EXACT title match. Net effect: **95 groups (220
-  rows) share the same malformed barcode string at the same retailer but
-  are not collapsed**; 125 of those rows are collapsible.
-- Metrics across those 95 groups (title similarity):
-  - avg Jaccard: mean 0.61, median 0.64 (range 0.07-1.0)
-  - avg fuzzy/Levenshtein ratio: mean 0.76, median 0.77 (range 0.30-1.0)
-  - 42 groups > 0.8 fuzzy; 52 groups > 0.6 Jaccard.
-  - Recovery by MIN-fuzzy threshold (worst pair in group must clear):
-    >=0.5 -> 84 groups / 110 rows; >=0.6 -> 73 / 96; >=0.7 -> 53 / 74;
-    >=0.8 -> 40 / 53; >=0.9 -> 31 / 37.
-- The ambiguous (0.5-0.6) groups are MOSTLY the same product confirmed by
-  the `attributes` structured field (brand, volume, flavor, carbonization,
-  pack type/material AGREE across rows; e.g. Big Red 355ml glass bottle,
-  Whole Foods lime sparkling water 6pk, IBC root beer 12oz). Edge cases
-  that could be genuinely different: Whole Foods "Nutrient Enhanced Water"
-  vs "Zero Calorie LEMONADE Nutrient Water" (different flavor). Wild price
-  variance (L&A cranberry $18/$47/$114; IBC $4.63/$60) = different
-  pack sizes/sellers on amazon, NOT a merge blocker.
-- **Recommended approach (data-driven, not fuzzy-title-only):** merge a
-  group only when the structured `attributes` signals AGREE across rows
-  (or a configurable subset does); skip on structured conflict. Fuzzy/
-  Jaccard title similarity alone is a weak disambiguator because it cannot
-  tell "same product, different pack size" from "genuinely different SKU".
-  Cross-retailer same-barcode rows (6,738 valid) are intentionally kept as
-  matching targets — do NOT collapse those.
-- OPEN: quantify structured-agreement vs. conflict across the 95 groups
-  (parse `attributes` per row) to size the safe recovery precisely, then
-  decide whether to add a weak T1.5 tier (same retailer + same invalid
-  barcode + structured agreement -> collapse).
-  **RESOLVED 2026-09-30 — shipped as T1.5, see "Identity SSOT" below.**
-
-Identity SSOT + T3 identity partition — 2026-09-30:
-- [x] T1.5 shipped (21705f9): same retailer + same checksum-invalid barcode +
-      same product -> collapse. 108 groups collapsed, 11 escalated.
-- [x] **T3 IDENTITY LOSS FIXED (data deletion, not noise).** T3 keyed its
-      collapse on (retailer, title) ALONE. T2 explicitly DEFERS rows whose
-      trusted barcodes disagree, and T3 then merged them anyway: **692 groups,
-      1,778 rows, 1,223 products** shared a title at one retailer under
-      different valid barcodes. **264 products lost their only row** — present
-      in canonical_records.csv, absent from the deduped output, represented by
-      a sibling's barcode. T2's own guard was defeated one tier later.
-      Fix: T3 groups on (retailer, title, IDENTITY) where identity = the
-      trusted (checksum-valid) barcode, or "" when absent. Rows sharing a
-      title with NO barcode still collapse (genuine price-aggregation,
-      flagged in ambiguous_offer_groups.csv).
-- [x] Verified after the fix: deduped 61,414 -> **62,963** rows; trusted
-      barcodes present 12,986 -> **13,250**; canonical products orphaned
-      **264 -> 0**; **0** trusted barcodes lost their last row (new hard
-      invariant gate); closure 71,623 == 62,963 + 8,660.
-- [x] New hard gate: the dedupe now REFUSES to finish if any trusted barcode
-      present in the input is absent from the output. This failure mode is
-      silent and unrecoverable downstream, so it must never be a report.
-- [x] `core/product_identity.py` (new SSOT): one descriptor bundle with every
-      field a SET, so a descriptor restated across title/attribute/category
-      collapses to one token and cannot move a comparison. `identity_conflict`
-      is the single arbiter shared by the dedupe and the vetoes.
-- [x] price / url / image_url removed from identity: `price` is a seller
-      attribute, not a product description. T2 no longer keys on it, and
-      representative choice uses DESCRIPTOR completeness
-      (`descriptor_completeness`) instead of `df.notna().sum()`, which used to
-      let two export-noise URL columns outrank a fully-described product.
-- [x] `results/training/dedupe_conflicts.csv` (new): the durable review queue.
-      Anything the descriptor bundle cannot settle is ESCALATED, not guessed —
-      68 proven splits + 11 unresolved across 3,504 malformed-barcode groups.
-      "The text had no opinion" is now a visible artifact.
-- [x] Fixed a silently DEAD dimension: `package_material` used the regex
-      `pack\s*material`, which compiles to `pack\s*material\s*:` and never
-      matches the real corpus key `Pack Material Type:` — it read empty across
-      all 35,571 non-null cells. Now fires on 90.6% of rows. A dimension that
-      silently returns empty is indistinguishable from "no conflicts found";
-      it is now regression-tested against the measured attribute-key census.
-- MEASURED, and deliberately NOT acted on:
-  - The text predicate alone is **not** a merge authority. On barcode-labeled
-    ground truth (20k rows, text-only view): **15.3% false-veto** on
-    same-GTIN pairs and only **60.5% true-split** on same-retailer
-    different-GTIN pairs. Absence of a conflict is not evidence of identity.
-    Barcode stays the merge key; text is a veto/review layer only.
-  - Two candidate rules were A/B'd and REJECTED as not worth the complexity:
-    "punch" as a flavor family (recovers 7 pairs) and negation-aware
-    carbonation ("without carbonic" = still; recovers 3 pairs).
-  - `package_material` was A/B'd on both sides: fires on 0 ground-truth pairs
-    (no new vetoes, no new splits). Its 8 T1.5 vetoes are genuine
-    Metal-vs-Plastic disagreements on identical titles — ambiguous, safe
-    direction (retain, don't merge), and listed in the review queue.
-  - Percent-as-volume leak: 15 rows (0.02%) where `100%` parsed as `100 ml`.
-    8 of the 15 coincidentally produce the right answer. Not fixed: the
-    extractor is shared with canonical build + gate, so a change there
-    ripples into every volume_set for 0.02% of rows.
-- [x] 17 new regression tests in `tests/test_dedupe_identity.py` pinning the
-      identity partition, the T1.5 verdict table, completeness independence
-      from price/urls, and absence-is-not-contradiction. Full suite: 586
-      passed, 2 skipped.
 
 ## DEAD LAST — recent additions (2026-09-29; do NOT start until P1/P2 done)
 
@@ -680,14 +408,6 @@ Identity SSOT + T3 identity partition — 2026-09-30:
   matches concentrate on generic listings). NOT gated on it yet.
 
 ### Consolidation + duplicate hunt (owner directive 2026-09-29)
-- [x] Consolidated the per-row model composition loop (sku_info ->
-      model_input_info -> build_sku_text) into ONE source:
-      core.model_input.build_sku_texts(frame, structured_enabled=...) ->
-      (texts, infos). Refactored call sites: pipeline.build_training_data
-      (byte-identical payload; golden-byte contract tests pass),
-      predict_items, rand_matching, record_linkage. Guard test updated
-      (test_both_lanes_call_the_shared_builder counts the consolidated
-      builder).
 - [ ] Hunt remaining duplicate code (grep for parallel loops, second
       normalizations, re-implemented helpers). Known suspects: duplicated
       regexes (TODO B10), brand/fold helpers (core.attribute_conflicts
@@ -719,3 +439,49 @@ id (deterministic, auditable).
 - Diet gate: frac 1.00->0.80, swap_agreed deleted; bundle rebuild pending
 - Smoke 128 stratified regeneration; easy-negative replace=False;
   dynamic-mask diet projection removed
+- 2026-10-01 - [x] GTIN integrity: longest-digit-run extraction (0 cells changed on this corpus — census regression byte-identical; the "3,715 invalid" now closes exactly as 3,646×11 + 50×10 + 22×7); `gtin_equivalent()` sibling equality (UP...
+- 2026-10-01 - [x] model_input dead-def consolidation + description alias (`description_short_eng` OR `description`): deduped lane regains description evidence — 52,856/63,079 rows (was 0); +330 carbonation / +545 sweetener / +67 pulp fille...
+- 2026-10-01 - [x] brand_aliases seeded in vocabulary.json (8 entries, 6 families: shoc chain, hi/hiball, fitaid/lifeaid, olvi/kevytolo, biotech, dg/ting) + 27 false-veto dissolutions, 22 declined groups filed; alias-aware fold wired at ran...
+- 2026-10-01 - [x] AttributeUniverse (src/core/attribute_universe.py): all 37 raw keys registered (FieldSpec kinds/parser/conflict), census (rows/distinct sets/same-GTIN conflict rates; verify_census self-check), datagen_budget() (donor/vet...
+- 2026-10-01 - [x] Capture wiring (additive, byte-prefix contract): pack material title∪attributes (canonical material sets 774 → 7,433 populated), juice content bands (27 canonical bands), [FIELD_PACK_MATERIAL] / [FIELD_JUICE_CONTENT_BAND]...
+- 2026-10-01 - [x] Merge re-run + attribution: 71,623 → 63,079 (+116 vs last refresh — ATTRIBUTED to commits 0452692..2d3ac4b (GLN quarantine/collapse repairs), NOT to wave-1 fixes (verified byte-identical dedupe at HEAD-clean via worktree...
+- 2026-10-01 - [x] labeled_pairs + gate pins: fallback 42,039 → 41,748 (−291 pairs now resolvable on evidence; proceed 1,239); pins updated together (common.py + selftest.py) with attribution cascade (proceed 1,737→1,506→1,395→1,239 narrati...
+- 2026-10-01 - [x] Diet gate wired INTO the rebuild path (`_run_diet_gate`, colab.py:2886/3031): rebuild refuses to ship on gate failure; cached gate-failing bundles are never reused. Fresh worker_1: neg_aug_frac 0.3136 OK, ratio 1.1664 OK...
+- 2026-10-01 - [x] TIER 1(e) drift hardened: `prepared_bundle_drift_strict` (default now TRUE post-rebuild; env override honored); stale bundle hard-fails, fresh loads; audit reproducibility kept via env=0.
+- 2026-10-01 - [x] `pack_material` ADDED to veto_dimensions (owner go 2026-09-30). Evidence: hard_no 92,259 / both-populated 67,899 / disjoint 32,641 (48%). Identity-safe by construction (canonical-level union; verified byte-identical train...
+- 2026-10-01 - [x] 3k/5k lane retirement: paths.yaml + DataFilesSpec keys deleted; run_ann_full_data.py + sample_deduped_dataset.py deleted; STOPPED live consumers: sample_balanced_pairs.py (miner/gate test pins), colab.py training_csv (own...
+- 2026-10-01 - [x] Dashboard: /gate route (original-columns samples, per-dimension mismatch evidence w/ deciding-clause gloss, full strings in details), /datagen (session ledger + census auto-render) and /graphs track pages; all six routes...
+- 2026-10-01 - [x] BLOCKER FIRST — single source of truth for split derivation. DONE. `folds.derive_holdout` is the entry point and now builds the GRAPH internally, so no caller can bypass the leak fix. `holdout_split` / `partition_componen...
+- 2026-10-01 - [x] `normalize_gtin()` added as the single entity key — and MEASURED TO BE THE WRONG FIX. The "0/5,428 intersection / missing normalization" root cause above is incorrect. Measured on the live data: the deduped set holds 14,9...
+- 2026-10-01 - [x] Validation positive edges folded in behind the single entry point. `folds.merged_component_graph` = training positives UNION labeled positives. Negatives are never unioned (a similarity claim is not an identity claim). Me...
+- 2026-10-01 - [x] Leak closed, and the leak guarantee is a hard stop, not a log line. 0/1,223 positives straddle a fold; 0 test-fold positives have either side in train. `build_final_validation` raises BEFORE writing if either holds. Repro...
+- 2026-10-01 - [x] ONE validation CSV emitted: `data/final_validation.csv`, 6,345 rows = 564 positives / 5,781 negatives (folds 2+3), 23 columns — `gtin1, gtin2, gtin1_norm, gtin2_norm, true_label, fold, fold_2, component_id, component_id_2...
+- 2026-10-01 - [x] Complete split accounting emitted: `results/training/validation_fold_map.csv`, 14,981 entities -> fold + component (7,508 train / 3,742 dev / 3,731 test). Required, not optional: the validation CSV holds only the scored h...
+- 2026-10-01 - [x] `evaluate_models.py` retargeted at the artifacts. It built its OWN graph from the labeled census ALONE with `component_split_k=2` — the leak site. It now reads the fold map; accounting closes 8,889/8,889; 0 scored pairs t...
+- 2026-10-01 - [x] Leak regression tests in `tests/test_validation_leak.py` (9 tests). Includes `test_merged_graph_is_not_vacuous`, which asserts the bare graph DOES straddle before asserting the merged one does not — a first draft named on...
+- 2026-10-01 - [x] RETIRED — the 3k/5k lanes (2026-09-30). paths.yaml + DataFilesSpec keys deleted; `run_ann_full_data.py`, `sample_deduped_dataset.py`, and its lane test deleted. Deliberately left in place (live consumers, evidence filed):...
+- 2026-10-01 - [x] DONE (earlier this P0) — single SSOT split entry point. `folds.derive_holdout` builds the graph internally; `holdout_split`/`partition_component_pairs` banned outside `folds.py` and enforced by the selftest guard.
+- 2026-10-01 - [x] DONE — `normalize_gtin()` scope fixed wrong: kept as CROSS-NAMESPACE bridge only (see the measured reversal at the top of this P0 — zfill on `row_bc` silently empties 8,559/14,981 filters; the real fix was the merged edge...
+- 2026-10-01 - [x] DONE — validation positive edges folded in behind the SSOT (24,420 training + 1,223 validation over 14,981 entities; 0 straddles).
+- 2026-10-01 - [x] DONE — ONE validation CSV emitted (`data/final_validation.csv`, folds 2+3, slice flags for volume/pack/package_type/sweetener/flavor/ carbonation; pulp excluded 2.3% population).
+- 2026-10-01 - [x] DONE — leak regression tests (9 tests; straddle + both-sides-in-train hard stops inside `build_final_validation`).
+- 2026-10-01 - [x] DONE — flavor reopen trigger restated on aggregate/twin buckets (top-6 aggregate gate; tail informational-only; policy CLOSED 2026-09-29).
+- 2026-10-01 - [x] Bundle rebuild — LANDED 2026-09-30 with the gate wired in. The 0.2119 clause-1 FAIL was the STALE bundle (frac=1.00, pre-TIER-1(a) mint). Fresh worker_1 (built on data/dataset_deduped.csv, since the retired train_minus_50...
+- 2026-10-01 - [x] Swap-copy diet accounting for MNRL: RESOLVED IN CODE (ead6966 excludes swap negatives from neg_aug_views when loss=mnrl) — fresh bundle diet numbers confirm the accounting (neg_aug 0.3136 on the mint-inclusive denominator...
+- 2026-10-01 - [x] Masked-positive minting survival — stale figure refreshed on the fresh bundle: DEAD masked positives 16,345 → 14,832 @ frac 0.80 (quantized census high 9,660 / low 9,828). Diet REPORTS real survival. Remaining owner decis...
+- 2026-10-01 - [x] Coverage analysis remainder — SUPERSEDED by results/attribute_ universe_census.json + the AttributeUniverse datagen_budget() class (measured per-key headroom, donor/veto/eval/channel classes). The agent-2 handoff items (a...
+- 2026-10-01 - [x] Flavor-twin policy: CLOSED — accept flavor twins, no allowlist (owner verdict 2026-09-29, evidence-based). The "717/717 prose-contradicted" figure does NOT argue for exclusion: - the metric measures whether the old flavor...
+- 2026-10-01 - [x] TIER 0 — unblock attribution (DONE 2026-09-29): `mnrl_monitoring. enabled: true` (config/training.yaml). `twin_loss_warmup` deliberately left OFF — it changes loss WEIGHTING, so it is a TIER 3 calibration decision, not ob...
+- 2026-10-01 - [x] TIER 1(a) — counterpart positives for swapped negatives (DONE 2026-09-29): all 2,709 real `swap_values` hard-negative copies now reach a gradient; measured on the real bundle, 100% coverage. Mechanism: an anchor-only tran...
+- 2026-10-01 - [x] TIER 1(b) — WITHDRAWN 2026-09-29: redundant, and unsafe to "fix". The 16,345/21,373 dead masked-positive measurement is REAL, but the diet gate ALREADY accounts for it: `diet_manifest.effective_pos_views` subtracts them,...
+- 2026-10-01 - [x] Swap-copy accounting for MNRL (diet): 2,709 swap copies diet-counted as augmented views but 0% MNRL-train — ead6966 implemented the exclusion for MNRL. Diet side closed; the underlying 2,709 inert rows are now TIER 1(a)....
+- 2026-10-01 - [x] T1.5 shipped (21705f9): same retailer + same checksum-invalid barcode + same product -> collapse. 108 groups collapsed, 11 escalated.
+- 2026-10-01 - [x] T3 IDENTITY LOSS FIXED (data deletion, not noise). T3 keyed its collapse on (retailer, title) ALONE. T2 explicitly DEFERS rows whose trusted barcodes disagree, and T3 then merged them anyway: 692 groups, 1,778 rows, 1,223...
+- 2026-10-01 - [x] Verified after the fix: deduped 61,414 -> 62,963 rows; trusted barcodes present 12,986 -> 13,250; canonical products orphaned 264 -> 0; 0 trusted barcodes lost their last row (new hard invariant gate); closure 71,623 == 6...
+- 2026-10-01 - [x] New hard gate: the dedupe now REFUSES to finish if any trusted barcode present in the input is absent from the output. This failure mode is silent and unrecoverable downstream, so it must never be a report.
+- 2026-10-01 - [x] `core/product_identity.py` (new SSOT): one descriptor bundle with every field a SET, so a descriptor restated across title/attribute/category collapses to one token and cannot move a comparison. `identity_conflict` is the...
+- 2026-10-01 - [x] price / url / image_url removed from identity: `price` is a seller attribute, not a product description. T2 no longer keys on it, and representative choice uses DESCRIPTOR completeness (`descriptor_completeness`) instead...
+- 2026-10-01 - [x] `results/training/dedupe_conflicts.csv` (new): the durable review queue. Anything the descriptor bundle cannot settle is ESCALATED, not guessed — 68 proven splits + 11 unresolved across 3,504 malformed-barcode groups. "Th...
+- 2026-10-01 - [x] Fixed a silently DEAD dimension: `package_material` used the regex `pack\s*material`, which compiles to `pack\s*material\s*:` and never matches the real corpus key `Pack Material Type:` — it read empty across all 35,571 n...
+- 2026-10-01 - [x] 17 new regression tests in `tests/test_dedupe_identity.py` pinning the identity partition, the T1.5 verdict table, completeness independence from price/urls, and absence-is-not-contradiction. Full suite: 586 passed, 2 ski...
+- 2026-10-01 - [x] Consolidated the per-row model composition loop (sku_info -> model_input_info -> build_sku_text) into ONE source: core.model_input.build_sku_texts(frame, structured_enabled=...) -> (texts, infos). Refactored call sites: p...

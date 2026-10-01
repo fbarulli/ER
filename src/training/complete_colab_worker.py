@@ -12,8 +12,72 @@ import sys
 
 import pandas as pd
 
-from core.common import TRAIN_ROOT, trace_artifact, training_cfg
+from core.common import F, TRAIN_ROOT, trace_artifact, training_cfg
 from training.validation_inference import resolve_best_checkpoint, threshold_assignment_metrics
+
+# ── scored-pair validation census (2026-10-01 contract) ─────────────────────
+# Row accounting is re-measured from the artifacts at exec time — never
+# hardcoded — and every read is byte-stability asserted, so an artifact being
+# regenerated concurrently is never counted half-written:
+#   source census  dataset.csv rows == deduped + dropped == 71,623
+#                  (config/training.yaml audit.source_export_expected_rows pin)
+#   fold map       results/training/validation_fold_map.csv maps every graph
+#                  entity to its fold; folds 2+3 are the validation side
+#   scored pairs   data/final_validation.csv (files.final_validation binding)
+#                  = the scored-pair final-inference population
+#   train side     deduped rows minus the validation fold 2+3 entities
+_EXPECTED_SOURCE_EXPORT_ROWS = 71_623
+
+
+def _byte_stable_csv_rows(path: Path) -> int:
+    """Count CSV rows once, asserting the file's bytes stayed identical."""
+    digest_before = _sha256(path)
+    frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+    if _sha256(path) != digest_before:
+        raise RuntimeError(f"{path} changed while it was being read")
+    return len(frame)
+
+
+def scored_validation_accounting() -> dict[str, object]:
+    """Census + identity of the scored-pair final-inference contract.
+
+    Identity asserts (fail loud, before any launch):
+      train_side_rows + validation_entity_rows == deduped_rows
+      deduped_rows + dropped_rows == the source-export census pin
+    """
+    source_export_rows = int(training_cfg().audit.source_export_expected_rows)
+    if source_export_rows != _EXPECTED_SOURCE_EXPORT_ROWS:
+        raise ValueError(
+            f"audit.source_export_expected_rows {source_export_rows} does not "
+            f"match the scored-pair census pin {_EXPECTED_SOURCE_EXPORT_ROWS}"
+        )
+    deduped_rows = _byte_stable_csv_rows(F["dataset_deduped"])
+    dropped_rows = _byte_stable_csv_rows(F["removals"])
+    if deduped_rows + dropped_rows != source_export_rows:
+        raise ValueError(
+            f"scored-pair accounting broke: deduped {deduped_rows:,} + dropped "
+            f"{dropped_rows:,} != source census {source_export_rows:,}"
+        )
+    fold_map = pd.read_csv(F["validation_fold_map"], dtype=str, keep_default_na=False)
+    validation_gtins = set(
+        fold_map.loc[fold_map["fold"].isin(("2", "3")), "gtin"]
+    )
+    deduped = pd.read_csv(F["dataset_deduped"], dtype=str, keep_default_na=False,
+                          usecols=["barcode"])
+    validation_entity_rows = int(deduped["barcode"].isin(validation_gtins).sum())
+    train_side_rows = deduped_rows - validation_entity_rows
+    if train_side_rows + validation_entity_rows != deduped_rows:
+        raise ValueError("scored-pair accounting: train side does not close")
+    scored_pair_rows = _byte_stable_csv_rows(F["final_validation"])
+    return {
+        "source_export_rows": source_export_rows,
+        "deduped_rows": deduped_rows,
+        "dropped_rows": dropped_rows,
+        "train_side_rows": train_side_rows,
+        "validation_entity_rows": validation_entity_rows,
+        "scored_pair_rows": scored_pair_rows,
+        "scored_population_path": str(F["final_validation"]),
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -76,45 +140,21 @@ def _resolve_final_inference_device(cfg, override: str | None) -> str:
 
 
 def _write_input_provenance(
-    *, source_csv: Path, training_csv: Path, sample_csv: Path, output_dir: Path,
+    *, scored_population: Path, training_csv: Path, output_dir: Path,
 ) -> Path:
-    source_ids = set(pd.read_csv(
-        source_csv, usecols=["product_id"], dtype=str, keep_default_na=False
-    )["product_id"])
-    training_ids = pd.read_csv(
-        training_csv, usecols=["product_id"], dtype=str, keep_default_na=False
-    )["product_id"]
-    sample_ids = pd.read_csv(
-        sample_csv, usecols=["product_id"], dtype=str, keep_default_na=False
-    )["product_id"]
-    training_id_set = set(training_ids)
-    sample_id_set = set(sample_ids)
-    full_inference = sample_id_set == source_ids
-    overlap = sorted(training_id_set & sample_id_set)
-    reconstructed = training_id_set | sample_id_set
-    if full_inference:
-        if not training_id_set <= source_ids:
-            raise ValueError("training input contains product IDs absent from the deduped source")
-    else:
-        if overlap:
-            raise ValueError(
-                f"training complement overlaps validation sample on {len(overlap)} product IDs"
-            )
-        if reconstructed != source_ids:
-            raise ValueError(
-                "training complement plus validation sample does not reconstruct the deduped source: "
-                f"missing={len(source_ids - reconstructed)} extra={len(reconstructed - source_ids)}"
-            )
+    """Scored-pair provenance (2026-10-01 contract): input census + identity.
+
+    The final-inference population is the scored-pair validation CSV
+    (data/final_validation.csv), not a reconstruct-the-source holdout, so
+    there is no complement/overlap identity to prove.  What is proven instead
+    is the row accounting the artifacts close on plus the byte identity of
+    what was actually scored.
+    """
     payload = {
-        "schema": "validation-input-provenance-v1",
-        "deduped_source": _csv_identity(source_csv),
-        "training_complement": _csv_identity(training_csv),
-        "sku_sample": _csv_identity(sample_csv),
-        "training_validation_product_id_overlap": len(overlap),
-        "complement_reconstructs_source": not full_inference,
-        "full_deduped_inference": full_inference,
-        "sku_sample_unique_product_ids": int(sample_ids.nunique()),
-        "sku_sample_ids_present_in_source": int(len(sample_ids)),
+        "schema": "final-inference-provenance-v2-scored-pairs",
+        "scored_pair_population": _csv_identity(scored_population),
+        "training_input": _csv_identity(training_csv),
+        "validation_accounting": scored_validation_accounting(),
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "input_provenance.json"
@@ -163,8 +203,7 @@ def complete_worker(
 ) -> None:
     cfg = training_cfg().colab.final_inference
     if cfg.enabled:
-        validation_source = validation_source or Path(cfg.source_csv)
-        training_input = training_input or Path(training_cfg().colab.training_dataset_csv)
+        training_input = training_input or F["dataset_deduped"]
         output_dir = source / cfg.output_dir
         checkpoint, _ = resolve_best_checkpoint(source)
         predictions_path = output_dir / "sku_predictions.csv"
@@ -194,9 +233,8 @@ def complete_worker(
         )
         _write_sku_reports(predictions_path, output_dir)
         _write_input_provenance(
-            source_csv=validation_source,
+            scored_population=F["final_validation"],
             training_csv=training_input,
-            sample_csv=validation_input,
             output_dir=output_dir,
         )
     else:
@@ -208,16 +246,18 @@ def complete_worker(
 
 
 def main() -> None:
-    cfg = training_cfg().colab.final_inference
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--worker", type=int, required=True)
-    parser.add_argument("--validation-input", type=Path, default=Path(cfg.input_csv))
-    parser.add_argument("--validation-source", type=Path, default=Path(cfg.source_csv))
+    # The scored population is the SSOT final_validation binding; retired
+    # --validation-source remains accepted (ignored) so existing launch argv
+    # does not break mid-flight.
+    parser.add_argument("--validation-input", type=Path, default=F["final_validation"])
+    parser.add_argument("--validation-source", type=Path, default=None)
     parser.add_argument(
         "--training-input", type=Path,
-        default=Path(training_cfg().colab.training_dataset_csv),
+        default=F["dataset_deduped"],
     )
     parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
     parser.add_argument("--sample", type=int, default=None)

@@ -40,12 +40,19 @@ open on purpose: ``build_field_slice.py`` buckets by TWIN while
 ``labeled_pairs`` slices by CANONICAL VALUE, and reconciling those is the
 separate open "align our gates" decision. Freezing the values stops downstream
 re-deriving buckets from scratch; it does not pre-empt which aggregation wins.
-For a positive the two sides are the same product, so ``v1_* == v2_*``.
+For a positive the two sides are the same product, so the two extractions
+describe ONE product — measured NOT equal as raw strings (they are sets
+extracted by two different text feeds; 363/565 flavors disagree raw). The
+set-valued agreement semantics (bag equality, evaluation.slice_agreement =
+"set_bag") is decided and recorded in write_manifest's slice-coverage block
+below; the raw-string comparison stays reachable as "scalar" for
+byte-stability audits.
 """
 from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -70,6 +77,188 @@ SLICE_FIELDS: tuple[tuple[str, str], ...] = (
     ("flavor", "flavor_set"),
     ("carbonation", "carbonation_set"),
 )
+
+# ════════════════════════════════════════════════════════════════════════════
+# DECISION: SCORED-HALF NEGATIVE FOLD ASSIGNMENT (owner-posture change; this
+# file is the decision's owner surface because the scored half IT is what it
+# emits, and its docstring above already carried the pair-level fold
+# semantics). Decided 2026-10-01 from evidence computed by
+# :func:`negative_policy_evidence` on data/final_validation.csv
+# (5,786 negatives / 565 positives), recorded here with the exact numbers
+# that forced it — the postulate series is not reproduced from memory, the
+# code below always re-measures and refuses the default if it stops winning.
+#
+#   Criterion                       Policy A            Policy B
+#                                   withhold_straddle   train_side
+#   ─────────────────────────────   ─────────────────   ─────────────────
+#   scored DEV negatives (fold 2)        592                 1,087
+#   scored TEST negatives (fold 3)       466                   957
+#   withheld/populations stranded    4,728 (consumed        3,742 whole
+#   (4,728 = 3,742 train-endpoint       by nothing)          negatives
+#   + 986 dev/test straddlers)                               returned to
+#                                                            the train
+#                                                            fold
+#   thin slice cells (< robust_validation.min_test_negatives = 5)
+#     populated cells DEV                253                   336
+#     thin cells DEV                     171 (67.6%)           218 (64.9%)
+#     populated cells TEST               238                   332
+#     thin cells TEST                    167 (70.2%)           223 (67.2%)
+#     thin-tab population DEV            86+27+41+5+150+0      111+38+42+0+195+0
+#   qualitative "what a negative measures"
+#     scored without a trained-on        yes (both        yes (identical:
+#     side (generalization-negative)     policies" or           both scored
+#                                         no in the two        folds exclude
+#                                         the train side)     the train side)
+#   dev/test straddles                  unassignable       986 assigned whole
+#
+# A withheld population is scored from 592/466 to 1,087/957 (+105.4% TEST,
+# +83.6% DEV); the thin cell SHARE falls on both scored folds; the flavor
+# tail stays thin under BOTH policies (it is real scarcity in the census,
+# not an assignment artifact: A test flavor thin-cells 70, B 121 in absolute
+# terms but the same population share) — so policy choice does not hide the
+# flavor floor problem, it only doubles the measurable population per fold.
+# WHAT A NEGATIVE MEASURES (the delta the file's docstring already claimed):
+# forked between two honest descriptions — the scalar v1==v2 gate the docstring
+# states ("For a positive the two sides are the same product") and the
+# disagreement the slice-coverage block measures. Policy B as written by the
+# decision criteria below: a scored negative under EITHER policy still
+# measures generalization to unseen products (scoring folds per the shared
+# rule CANNOT include a trained-on endpoint), and policy B additionally
+# assigns a whole fold to the 986 dev/test straddlers and returns the 3,742
+# train-flavored ones to the training side where a mined-negative consumer
+# can pick them up, instead of parking them as labelled-never-used rows.
+# The decision: policy "train_side" (B) wins on all three criteria set out
+# in the task's decision criteria and becomes the DEFAULT
+# (config/training.yaml split.negative_fold_policy); "withhold_straddle"
+# stays reachable through the same key.
+# ════════════════════════════════════════════════════════════════════════════
+
+# Policy names. Both stay load-valid; config/training.yaml pins the winner.
+NEGATIVE_FOLD_POLICY_WITHHOLD = "withhold_straddle"
+NEGATIVE_FOLD_POLICY_TRAIN_SIDE = "train_side"
+
+
+def negative_pair_fold(
+    policy: str, fold_a: int, fold_b: int, n_folds: int
+) -> int:
+    """THE scored half's negative fold-assignment rule (single source).
+
+    Positives NEVER route through this: their two endpoints share a fold by
+    graph construction (the leak guarantee below), and re-deriving the pair
+    fold here would silently fork the split. This rule is for MINED
+    NEGATIVES only — similarity links whose endpoints legitimately sit in
+    different folds ("folds.derive_holdout" assigns entities, not pairs).
+
+    ``withhold_straddle`` (A): the pair's fold stays the raw ``fold_a`` on
+    both columns, preserving the legacy semantics — a consumer scores a
+    negative only where ``fold == fold_2`` equals its fold, so a mismatched
+    pair scores nowhere and is reported by ``straddles_fold``/
+    ``endpoint_in_train`` instead.
+
+    ``train_side`` (B): the pair gets one whole fold — the train-side
+    endpoint's fold when either endpoint is a train fold (OUT of the scored
+    half, back in the training population), else the fold of ``fold_a`` as
+    the deterministic boundary tiebreak for the two unseen endpoints (the
+    dev/test straddle that A could never score).
+    """
+    if policy == NEGATIVE_FOLD_POLICY_WITHHOLD:
+        return fold_a
+    if policy == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
+        if fold_a < n_folds - 2 or fold_b < n_folds - 2:
+            return min(fold_a, fold_b)
+        return fold_a
+    raise ValueError(
+        f"unknown negative_fold_policy {policy!r}; expected one of "
+        f"({NEGATIVE_FOLD_POLICY_WITHHOLD!r}, {NEGATIVE_FOLD_POLICY_TRAIN_SIDE!r})"
+    )
+
+
+def negative_policy_evidence(
+    frame: pd.DataFrame, min_test_negatives: int, n_folds: int = 4
+) -> dict[str, dict[str, object]]:
+    """Decide-with-numbers: the criteria the policy decision is pinned on.
+
+    Runs BOTH policies over one frame carrying ``fold``/``fold_2``/
+    ``true_label``/``v1_*``/``v2_*`` columns and reports, per policy: scored
+    DEV/TEST negatives, scored DEV/TEST positives, withheld negatives, and
+    thin slice cells (populated (field, value) cells among scored negatives
+    with fewer than ``min_test_negatives`` members — the same thinness
+    contract ``robust_validation`` reuses). Percentages are computed, the
+    winner is the caller's to record — this function does not choose.
+
+    Raises SystemExit when a policy's population is INCONSISTENT with the
+    frame it claims to measure (e.g. positives straddling under B): a
+    criterion computed on a broken population cannot back a decision.
+    """
+    criteria: dict[str, dict[str, object]] = {}
+    for policy in (NEGATIVE_FOLD_POLICY_WITHHOLD, NEGATIVE_FOLD_POLICY_TRAIN_SIDE):
+        pos = frame[frame.true_label == 1]
+        neg = frame[frame.true_label == 0]
+        # A positive's pair-fold is its shared endpoint fold under BOTH
+        # policies (the leak guarantee asserts fold == fold_2 for positives,
+        # so a single column carries it).
+        dev, test = n_folds - 2, n_folds - 1
+        in_dev_pos = pos["fold"].astype(int) == dev
+        in_test_pos = pos["fold"].astype(int) == test
+        f1 = neg["fold"].astype(int)
+        f2 = neg["fold_2"].astype(int)
+        if policy == NEGATIVE_FOLD_POLICY_WITHHOLD:
+            # A: legacy — a negative scores only where BOTH endpoint folds
+            # equal the scored fold; a mismatched pair scores nowhere.
+            in_dev_neg = (f1 == dev) & (f2 == dev)
+            in_test_neg = (f1 == test) & (f2 == test)
+        else:
+            assigned = neg.apply(
+                lambda row: negative_pair_fold(
+                    policy, int(row["fold"]), int(row["fold_2"]), n_folds=n_folds
+                ),
+                axis=1,
+            )
+            in_dev_neg = assigned == dev
+            in_test_neg = assigned == test
+        scored = {
+            "dev": in_dev_neg, "test": in_test_neg,
+        }
+        # thin-cell criterion requires the frozen slice columns; a frame
+        # without them (synthetic fold-contract tests) records UNavailable —
+        # explicit, never silently claimed as "not thin".
+        has_slices = all(f"v1_{name}" in frame.columns for name, _ in SLICE_FIELDS)
+        thin: dict[str, dict[str, int]] | None = (
+            {} if has_slices else None
+        )
+        populated: dict[str, dict[str, int]] | None = (
+            {} if has_slices else None
+        )
+        for half, mask in scored.items() if has_slices else ():
+            rows = neg.loc[mask]
+            for field, _col in SLICE_FIELDS:
+                bag = Counter(rows[f"v1_{field}"][rows[f"v1_{field}"] != ""])
+                extra = rows[f"v2_{field}"][
+                    (rows[f"v2_{field}"] != "") & (rows[f"v2_{field}"] != rows[f"v1_{field}"])
+                ]
+                bag.update(extra)
+                populated.setdefault(half, {})[field] = len(bag)
+                thin.setdefault(half, {})[field] = sum(
+                    1 for count in bag.values() if count < min_test_negatives
+                )
+        criteria[policy] = {
+            "scored_dev_negatives": int(in_dev_neg.sum()),
+            "scored_test_negatives": int(in_test_neg.sum()),
+            "scored_dev_positives": int(in_dev_pos.sum()),
+            "scored_test_positives": int(in_test_pos.sum()),
+            "negatives_withheld_from_scored_half": int(
+                len(neg) - (in_dev_neg.sum() + in_test_neg.sum())
+            ),
+            "populated_cells": populated,
+            "thin_cells": thin,
+        }
+        pos_straddle = int((pos["fold"] != pos["fold_2"]).sum())
+        if pos_straddle:
+            raise SystemExit(
+                f"{pos_straddle} positives straddle a fold — the policy "
+                "evidence population is corrupt (run the leak guards first)"
+            )
+    return criteria
 
 
 def _canonical_values() -> dict[str, dict[str, str]]:
@@ -164,6 +353,12 @@ def build(
         if fold_of[k1] < n_folds - 2 and fold_of[k2] < n_folds - 2:
             continue  # both sides in train -> not validation
         f1, f2 = fold_of[k1], fold_of[k2]
+        label = int(label)
+        # SCORED-HALF POLICY: applied AFTER the evidence pass (below), on the
+        # assembled frame's NEGATIVE rows only — a positive keeps its shared
+        # endpoint fold (leak guarantee). Evidence must measure the RAW
+        # endpoint folds, not post-policy columns; applying the policy here
+        # would make policy A's evidence read the already-B-shaped frame.
         c1 = canon.get(normalize_gtin(k1), {})
         c2 = canon.get(normalize_gtin(k2), {})
         row: dict[str, object] = {
@@ -203,6 +398,68 @@ def build(
         )
 
     stats["pairs_endpoint_unresolvable"] = unresolvable
+    # ── the DECISION re-measured at every emit (fail-loud default guard) ──
+    # config/training.yaml pins "train_side" as the winner of the decision
+    # block above. If a future census change makes the pinned evidence stop
+    # holding (policy B no longer beats A on scored half counts or the
+    # thinness share), refusing to emit here forces the decision to be
+    # REMADE, never silently invalidated while the stale default keeps
+    # switching the artifact's negative assignment.
+    policy_name = str(split.negative_fold_policy)
+    min_test_negatives = int(
+        training_cfg().evaluation.robust_validation.min_test_negatives
+    )
+    evidence = negative_policy_evidence(out, min_test_negatives, n_folds)
+    if policy_name == NEGATIVE_FOLD_POLICY_TRAIN_SIDE:
+        was, now = evidence[NEGATIVE_FOLD_POLICY_WITHHOLD], evidence[policy_name]
+        if not (
+            now["scored_test_negatives"] > was["scored_test_negatives"]
+            and now["scored_dev_negatives"] > was["scored_dev_negatives"]
+        ):
+            raise SystemExit(
+                "the pinned scored-half decision no longer holds: policy "
+                f"{policy_name!r} does not score MORE negatives per fold than "
+                f"{NEGATIVE_FOLD_POLICY_WITHHOLD!r} (evidence={evidence}). "
+                "Re-decide, update the config and the DECISION block together "
+                "— do not emit an artifact under a policy its evidence rejects."
+            )
+        for half in ("dev", "test"):
+            thin = now["thin_cells"][half]
+            if thin is None:
+                continue
+            thin_b = sum(now["thin_cells"][half].values())
+            cells_b = sum(now["populated_cells"][half].values())
+            thin_a = sum(was["thin_cells"][half].values())
+            cells_a = sum(was["populated_cells"][half].values())
+            share_b = thin_b / cells_b if cells_b else float("nan")
+            share_a = thin_a / cells_a if cells_a else float("nan")
+            if not share_b <= share_a:
+                raise SystemExit(
+                    "the pinned scored-half decision no longer holds: policy "
+                    f"{policy_name!r} scores MORE thin-heavy negatives (% "
+                    f"cells below min_test_negatives={min_test_negatives}: "
+                    f"{share_b:.4f}) than {NEGATIVE_FOLD_POLICY_WITHHOLD!r} "
+                    f"({share_a:.4f}) on the {half} half (evidence={evidence}). "
+                    "Re-decide, update the config and the DECISION block "
+                    "together — do not emit an artifact under a policy its "
+                    "evidence rejects."
+                )
+    stats["negative_fold_policy"] = policy_name
+    stats["negative_policy_evidence"] = evidence
+    # ── apply the configured policy on the ASSEMBLED frame's negatives ──
+    # Under A the columns already hold the raw endpoint folds (no change).
+    # Under B BOTH columns carry the pair's whole assigned fold while
+    # `straddles_fold`/`endpoint_in_train` keep reporting the RAW endpoint
+    # truth — a scored-half consumer scores negatives by fold alone and
+    # keeps the leak guarantee's positives untouched.
+    if policy_name != NEGATIVE_FOLD_POLICY_WITHHOLD:
+        neg_mask = (out["true_label"] == 0).to_numpy()
+        assigned = [
+            negative_pair_fold(policy_name, int(f1), int(f2), n_folds)
+            for f1, f2 in zip(out.loc[neg_mask, "fold"], out.loc[neg_mask, "fold_2"])
+        ]
+        out.loc[neg_mask, "fold"] = assigned
+        out.loc[neg_mask, "fold_2"] = assigned
     # The fold map is the split's COMPLETE accounting, and it is not optional.
     # The validation CSV holds only the scored half (folds 2+3), so a consumer
     # holding the full labeled census cannot tell a pair that was correctly
@@ -227,6 +484,56 @@ def build(
         fold_map_path=Path(F["validation_fold_map"]),
     )
     return out
+
+
+def parse_field_bag(raw: object) -> Counter:
+    """Slice column -> multiset of extracted values (the set-valued side).
+
+    The emitted slice columns carry a canonical list literal ("[lime, lime]",
+    "[479.0, 518.0]" — bare tokens, never quoted) or a bare single token.
+    Comparing the raw STRINGS was the old scalar semantics; this tokenizer is
+    what bag identity needs. Fail-loud, not graceful: an unbalanced bracket
+    value raises (a silently unreadable slice would downgrade to raw-string
+    equality without anyone knowing).
+    """
+    text = str(raw).strip()
+    if text.startswith("[") != text.endswith("]"):
+        raise ValueError(f"unbalanced slice list {raw!r}")
+    if text.startswith("[") and text.endswith("]"):
+        content = text[1:-1]
+        tokens = [
+            token.strip().strip("'\"")
+            for token in content.split(",")
+            if token.strip().strip("'\"")
+        ]
+        return Counter(tokens)
+    token = text or None
+    return Counter([token]) if token else Counter()
+
+
+def _evaluation_slice_agreement() -> str:
+    """The set-semantics switch (evaluation.slice_agreement, fail-loud load)."""
+    return str(training_cfg().evaluation.slice_agreement)
+
+
+def count_slice_disagreements(a: pd.Series, b: pd.Series, semantics: str) -> int:
+    """THE slice-flag comparison (both semantics implemented, config-chosen).
+
+    ``scalar``: legacy raw string v1 == v2 per pair (the old behaviour,
+    reachable for byte-stability audits). ``set_bag``: BAG equality after
+    parse_field_bag — order/spacing-only spelling differences agree;
+    contents differences never do.
+    """
+    if semantics == "scalar":
+        return int((a != b).sum())
+    if semantics == "set_bag":
+        return int(
+            sum(parse_field_bag(x) != parse_field_bag(y) for x, y in zip(a, b))
+        )
+    raise ValueError(
+        f"unknown slice_agreement {semantics!r}; expected one of "
+        "('scalar', 'set_bag')"
+    )
 
 
 def write_manifest(
@@ -255,12 +562,41 @@ def write_manifest(
                               "unpopulated": 0, "disagree": 0}
             continue
         counts = a[a != ""].value_counts()
+        # ── DECISION: SLICE-FLAG SET SEMANTICS (owner-posture change
+        # 2026-10-01; decided with numbers, not conceded to a gate). The v1_*/
+        # v2_* columns are SET-valued extractions per side ("Different
+        # extracted sets", per the module docstring), so the pair-level
+        # agreement the `disagree` counter measures is BAG equality under
+        # evaluation.slice_agreement="set_bag" (the new default, config
+        # /training.yaml), where endpoints formatted "[a, b]" differ from
+        # "[b, a]" in spelling but not in contents. Comparisons under
+        # "scalar" are the legacy raw-string v1 == v2 and stay reachable for
+        # byte-stability audits.
+        #
+        # BYTE-STABILITY ATTRIBUTION (required by the pinned-update
+        # convention: the old numbers stay recorded). Measured on
+        # data/final_validation.csv, 565 positives, set_bag vs scalar:
+        #   volume 13 -> 13, pack 48 -> 48, package_type 153 -> 153,
+        #   sweetener 127 -> 127, flavor 363 -> 363, carbonation 38 -> 38.
+        # EVERY count is byte-identical on today's artifact -- the flag
+        # changes semantics only where order/spacing-only spellings
+        # differ (none exist in the emitted canon), and every OTHER
+        # manifest slice-coverage number (positives / distinct /
+        # largest_bucket / unpopulated) never enters this comparison and
+        # remains computed from the side-A column alone, byte-identical.
+        # A future regen under a canon with purely order-differing spellings
+        # would make a disagrees count DROP: the old scalar number must
+        # then stay recorded in THIS comment before the new one replaces it
+        # (pinned-update convention).
+        disagreement = count_slice_disagreements(
+            a, b, _evaluation_slice_agreement()
+        )
         coverage[name] = {
             "positives": int(len(pos)),
             "distinct": int(counts.size),
             "largest_bucket": int(counts.iloc[0]) if counts.size else 0,
             "unpopulated": int((a == "").sum()),
-            "disagree": int((a != b).sum()),
+            "disagree": disagreement,
         }
 
     manifest = {
@@ -284,6 +620,11 @@ def write_manifest(
             "endpoints_unresolved": int(stats["endpoints_unresolved"]),
         },
         "slice_fields": [name for name, _ in SLICE_FIELDS],
+        "slice_agreement": _evaluation_slice_agreement(),
+        "negative_fold_policy": str(
+            training_cfg().split.negative_fold_policy
+        ),
+        "negative_policy_evidence": stats.get("negative_policy_evidence", {}),
         "slice_coverage": coverage,
     }
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -353,11 +353,10 @@ def _field_values_conflict(field: str, left: list[str], right: list[str]) -> boo
             return float(value.replace("_", "."))
 
         cfg = training_cfg()
-        absolute_tolerance = float(
-            load_config()["rand_matching"]["targeted_veto_gates"][
-                "volume_absolute_tolerance_ml"
-            ]
-        )
+        # Read from the gate block (the SSOT both cuts now share) rather than
+        # re-deriving the absolute cut from the veto lane's own block: two
+        # declarations of one tolerance is how the two lanes drifted apart.
+        absolute_tolerance = float(cfg.gate.vol_abs_tolerance)
         return not volumes_compatible(
             {parse_volume(value) for value in left_values},
             {parse_volume(value) for value in right_values},

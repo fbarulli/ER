@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 
 import pandas as pd
+
+from core.columns import raw_of
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
@@ -151,7 +153,13 @@ def apply_identity_links(frame: pd.DataFrame) -> pd.DataFrame:
             actual = normalize_and_validate_gtin(result.loc[candidates, barcode_column]).gtin_clean.astype("string").str.zfill(14)
             indices = actual.index[actual.eq(fix.expected_gtin.zfill(14))]
             for field, value in fix.fields.items():
-                destination = field if field in result else {"title": "sku_name_eng", "attributes": "attribute"}[field]
+                # raw_of resolves the destination through column_mapping
+                # instead of re-declaring {"title": "sku_name_eng", …} here.
+                destination = (
+                    field
+                    if field in result
+                    else raw_of(field) or field
+                )
                 if destination in result:
                     result.loc[indices, destination] = value
     return result

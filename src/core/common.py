@@ -91,12 +91,20 @@ def metadata_text(value: object) -> str:
     return str(value)
 
 
-def row_metadata_text(row, primary: str, alias: str | None = None) -> str:
-    """Read a source field while retaining missing metadata as unknown."""
-    if primary in row.index:
-        return metadata_text(row[primary])
-    if alias is not None and alias in row.index:
-        return metadata_text(row[alias])
+def row_metadata_text(row, primary: str, *aliases: str) -> str:
+    """Read a source field by any of its names, retaining missing as unknown.
+
+    VARIADIC, and that is the point: the set of names a column answers to is
+    declared once (config/paths.yaml column_mapping / column_aliases, read via
+    core.columns.alias_names). This used to accept exactly one alias, so a
+    caller could not hand it the real set — and the callers that hardcoded
+    ("attributes", "attr") or ("barcode", "gtin") inline were re-declaring
+    column_mapping. First name present wins, in the order given, so
+    canonical-first ordering resolves the raw/canonical preference in config.
+    """
+    for name in (primary, *aliases):
+        if name in row.index:
+            return metadata_text(row[name])
     return ""
 
 # require_keys REMOVED (audit 2026-09-09): zero consumers — the pydantic
@@ -599,8 +607,21 @@ def trace_artifact(key: str, path: Path, producer: str = "") -> None:
 
 
 # ── column mapping + seed (SSOT, read once) ──────────────────────────────────
-COLUMN_MAPPING = dict(_CFG["column_mapping"])
+# COLUMN_MAPPING moved to core.columns, which derives BOTH vocabularies (raw
+# and canonical) and the per-title evidence-capture field list from
+# config/paths.yaml. It stays bound here for its many existing importers; the
+# declaration itself lives in core.columns so that "where is a column named"
+# has exactly one answer. Imported lazily through a module __getattr__ so the
+# two modules can reference each other without an import cycle.
 SEED = int(_CFG["seed"])
+
+
+def __getattr__(name: str):
+    if name == "COLUMN_MAPPING":
+        from core.columns import COLUMN_MAPPING as mapping
+
+        return mapping
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ── pinned census counts (2026-09-12; mirrors src/training/selftest.py's
 # oracle_pinned_counts hard pin) ─────────────────────────────────────────────

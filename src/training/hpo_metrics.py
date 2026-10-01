@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from core.columns import alias_names
 from core.attribute_conflicts import sku_attribute_info
 from core.common import canonical_records_frame, row_metadata_text
 from core.graph_diagnostics import candidate_graph_diagnostics
@@ -496,7 +497,7 @@ def _candidate_frame(
         if target < 0 or target >= len(row_bc):
             raise ValueError(f"proxy canonical row {target} is outside row_bc")
         sku_row = df.iloc[source]
-        sku_id = row_metadata_text(sku_row, "product_id", "SKU_ID")
+        sku_id = row_metadata_text(sku_row, *alias_names("product_id"))
         candidate_gtin = str(row_bc[target]).strip()
         if not sku_id:
             raise ValueError(f"empty SKU identity in proxy source row {source}")
@@ -509,7 +510,7 @@ def _candidate_frame(
             )
         sku_info = sku_attribute_info(
             row_metadata_text(sku_row, "title"),
-            row_metadata_text(sku_row, "attributes", "attr"),
+            row_metadata_text(sku_row, *alias_names("attributes")),
         )
         if pair_index < n_pos:
             existing = truth.get(sku_id)
@@ -582,7 +583,7 @@ def _candidate_frame(
     ]
     statuses = [
         gtin_status(
-            row_metadata_text(df.iloc[truth_sources[sku_id]], "barcode", "gtin"),
+            row_metadata_text(df.iloc[truth_sources[sku_id]], *alias_names("barcode")),
             item_id,
         )
         for sku_id, item_id in truth.items()

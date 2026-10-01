@@ -486,9 +486,12 @@ def _run_provenance_case(
         # base rows first; the sandbox has no augmentation, so every row
         # is base (empty lineage = the pre-augmentation behavior).
         "hard_negative_mask_audit": [],
+        # BOTH volume cuts: the attr miner reads both (vol_abs_tolerance was
+        # added 2026-10-01 — without it the miner falls back to a stricter
+        # relative-only rule than the gate and can mine a true match).
         "load_config": lambda: {
             "pairs": {"balance_train_classes": balance},
-            "gate": {"vol_tolerance": 0.05},
+            "gate": {"vol_tolerance": 0.05, "vol_abs_tolerance": 5.0},
         },
         "mining_enabled": True,
         "print": lambda *a, **k: None,

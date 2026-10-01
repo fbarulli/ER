@@ -231,13 +231,14 @@ colab:
   # Saves landing inside one window leave as a single `dvc push`; a lone
   # checkpoint is still published within this window.
   dvc_publish_debounce_seconds: 20.0
-  # Legacy completion uses listing partitions materialized locally from the
-  # validated model_tracks setup. Text training applies its shared component
-  # holdout internally to the full catalog; inference scores dev/test listings.
+  # SCORED-PAIR contract (2026-10-01): the scored population is NOT a yaml
+  # path literal here. It is the SSOT files.final_validation binding
+  # (data/final_validation.csv — the scored-pair rows of merged-graph folds
+  # 2+3), resolved by consumers via core.common; the row-count identity the
+  # preflight closes on (deduped + dropped == 71,623) is derived at exec time
+  # from the artifacts, with a byte-stability assert.
   final_inference:
     enabled: true
-    source_csv: "results/prepared_training/component_validation/eligible_catalog.csv"
-    input_csv: "results/prepared_training/component_validation/component_holdout.csv"
     output_dir: "final_inference"
     # REQUIRED, not a preference: final inference must actually run on the GPU
     # when one is present. The worker refuses to start rather than silently
@@ -260,10 +261,17 @@ colab:
 # data_pipe.three_way_gate (vol_tolerance=0.05 / raw_conf_threshold=0.85 /
 # consistency_fallback_threshold=0.3). Same values, now config-owned:
 #   vol_tolerance               ± relative volume overlap (250ml ≈ 500ml)
+#   vol_abs_tolerance           ± absolute volume overlap in ml; applied
+#                               WHICHER of the two is wider. Declared here so
+#                               the gate, census, miners and masking lanes all
+#                               read one SSOT (previously they defaulted to 0.0
+#                               and disagreed with the veto lane at small
+#                               volumes, where the relative cut is stricter).
 #   raw_conf_threshold          min volume/pack parse confidence to gate at all
 #   consistency_fallback_threshold  below this consistency -> fallback, not hard_no
 gate:
   vol_tolerance: 0.05
+  vol_abs_tolerance: 5.0
   raw_conf_threshold: 0.85
   consistency_fallback_threshold: 0.3
 
@@ -290,6 +298,18 @@ split:
   test_fraction: 0.25   # holdout q3 component quarter; CV must declare 0.0
   fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
   cv_folds: 5           # cv mode only
+  # DECIDED 2026-10-01 (was TODO "STILL OPEN — the scored halves are thin").
+  # Policy A ("withhold_straddle") parked every negative with mismatched
+  # endpoint folds: 4,728 of 5,786 withheld and consumed by nothing, DEV 592
+  # / TEST 466 scored. Policy B ("train_side") assigns every negative ONE
+  # whole fold — the fold of its train-side endpoint when one endpoint is a
+  # train fold, else the fold of gtin1 — so DEV 1,087 (+495, +83.6%) and
+  # TEST 957 (+491, +105.4%) score, the withheld 3,742 return to the train
+  # fold instead of being orphaned, the min_test_negatives=5 thin-cell share
+  # improves (DEV 67.6% -> 64.9%, TEST 70.2% -> 67.2%), and no trained-on
+  # endpoint enters the scored half under either policy (leak check
+  # unchanged). B is implemented as the default; A stays reachable here.
+  negative_fold_policy: "train_side"
 
 # ── zero-shot evaluation protocol (src/training/evaluate_models.py) ────────────────
 # HOLDOUT DISCIPLINE for the zero-shot lane (self-fit leak closed 2026-09-14):
@@ -313,6 +333,17 @@ evaluation:
   component_split_k: 2   # component folds over the labeled-pair barcode graph
   dev_fold: 0             # fold index used as DEV  (threshold-fit half)
   test_fold: 1            # fold index used as TEST (reported half)
+  # DECIDED 2026-10-01 (was TODO "slice-flag gate semantics"). The slice
+  # columns are SET-VALUED (v1_* = v2_* are sets of extracted values, per
+  # side per positive pair), so agreement is BAG equality, not scalar v1==v2.
+  # Measured on data/final_validation.csv (565 positives) with this flag on:
+  # EVERY disagree count is byte-identical to the scalar comparison (volume
+  # 13, pack 48, package_type 153, sweetener 127, flavor 363, carbonation
+  # 38), so no manifest number drifts today -- the flag changes semantics
+  # only where order/spacing-only spellings differ, and synthetic spellings
+  # are pinned in tests/test_scored_half_decisions.py. Legacy "scalar" stays
+  # reachable for byte-stability audits.
+  slice_agreement: "set_bag"
   retrieval_ks: [1, 5, 10]  # persisted Precision@K / Recall@K cutoffs
   robust_validation:
     enabled: true
@@ -435,7 +466,23 @@ rand_matching:
     # is usually a parsing artefact rather than a different product, so it is
     # kept in the audit columns and left out of the veto. Add it back here to
     # restore the old behaviour -- the measurement above is the argument.
-    veto_dimensions: [volume, pack, package_type, flavor, carbonation, pulp]
+    #
+    # pack_material (owner ruling, 2026-10-01). Measured full-corpus, original
+    # 13-column feed, session numbers (attribute_universe census semantics):
+    #   hard_no pairs with material evidence     92,259
+    #   material both-populated on those pairs   67,899
+    #   genuinely disjoint (mismatch class)      32,641   (48% of both-populated)
+    # Identity-safe BY CONSTRUCTION: the material union is aggregated at
+    # canonical level (package_material_set unions every member row), and both
+    # sides of a verified true match share the same canonical -> the same set.
+    # A row-level SKU set is always a subset of its canonical's union, so a
+    # same-canonical pair can never hold two disjoint material sets: a set-
+    # intersection veto structurally CANNOT lose a true match (pinned by
+    # tests/test_pack_material_veto.py). Deliberately EXCLUDED dimensions,
+    # with their same-GTIN noise rates (informational only -- feed noise, not
+    # identity): water type 14.9%, made from 21.2%, caffeine 3.2% same-GTIN
+    # noise.
+    veto_dimensions: [volume, pack, package_type, flavor, carbonation, pulp, pack_material]
     pack_mismatch_veto: true
     volume_mismatch_veto: true
     package_type_mismatch_veto: true
@@ -745,6 +792,31 @@ sweep:
   smoke_sample: 128                   # chain-check sample size (--sample)
   sweep_sample: 2000                  # step-2 smoke sweep size
   rerank_model: "rerank_minilm_l6"  # local registry key; DVC-shipped bundle
+
+# ── TIER 3 calibration sweep (documented but DISABLED) ──────────────────────
+# DECIDED 2026-10-01: the delta-counterfactual/hard-negative fracs get swept
+# on held-out P@R95 ONLY, once a training-run lane exists (this environment
+# cannot start training). The spec lives in
+# src/core/schemas.CalibrationSweepSpec — its docstring holds the reasoning,
+# sweeping fractions are null while disabled, and activating the block means
+# flipping enabled=true AND declaring the fractions (the schema refuses the
+# half-activated state). Sweetener runs FIRST: measured margin 0.0017,
+# 62.4% ranked correct, 35.8% flip-SUPPORTED, n=109 (flavor second:
+# 0.0113/89.3%); both margins come from scripts/minimal_flip_slice.py,
+# which is NOT yet self-reviewed — that review is a precondition pinned in
+# the spec. Acceptance is the twin-bucket floor contract already defined in
+# TODO's checkpoint-eval section: per-bucket twin P@R95 >= 0.500 floor,
+# overall up + twin down = over-smoothing = arm REJECTED; twin margin must
+# lift off ~0.008. No training run was started here.
+calibration_sweep:
+  enabled: false
+  counterfactual_fracs: null   # activate with e.g. [0.05, 0.10, 0.20, 0.30]
+  hard_negative_fracs: null    # activate with e.g. [0.20, 0.30, 0.33, 0.50]
+  eval_model: "minilm_l6"      # registry key the sweep scores under
+  # Sweetener first is pinned in the schema's validator (order is
+  # measured-weakness, not rearrangeable config); the tail fields are
+  # flavor, package_type, pack, volume, carbonation.
+  slice_order: [sweetener, flavor, package_type, pack, volume, carbonation]
 
 # ── mining band for in-batch negatives ───────────────────────────────────────
 mining:

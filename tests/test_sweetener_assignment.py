@@ -50,12 +50,19 @@ def test_unsweetened_unknown_and_contradictory_declarations_stay_distinct():
 
 
 def test_previous_canonical_schema_reads_as_unknown_without_guessing():
-    added = {"sweetener_type_set", "sweetening_set", "attribute_consistency_flags"}
+    # the additive universe_evidence column is part of the upgrade set (same
+    # in-flight wave that landed it in CANONICAL_RECORDS_COLUMNS upstream)
+    added = {"sweetener_type_set", "sweetening_set", "attribute_consistency_flags",
+             "universe_evidence"}
     previous = [key for key in CANONICAL_RECORDS_COLUMNS if key not in added]
     old = pd.DataFrame([{key: "" for key in previous}], columns=previous)
     upgraded = upgrade_canonical_records_frame(old)
     assert tuple(upgraded.columns) == CANONICAL_RECORDS_COLUMNS
-    assert all(upgraded.iloc[0][key] == "[]" for key in added)
+    set_added = added - {"universe_evidence"}
+    assert all(upgraded.iloc[0][key] == "[]" for key in set_added)
+    # universe_evidence is a MAPPING column: its empty upgrade is "{}", not
+    # "[]" (load-bearing — the reader raises on a list literal there)
+    assert upgraded.iloc[0]["universe_evidence"] == "{}"
     assert tuple(old.columns) == tuple(previous)
     malformed = old.drop(columns="gtin")
     assert upgrade_canonical_records_frame(malformed) is malformed

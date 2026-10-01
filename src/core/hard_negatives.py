@@ -540,7 +540,13 @@ def mine_targeted_attribute_negatives(
             df, gates, canonical_records, gtin_to_row, gtin_to_canon_idx,
             existing=neg, n_target=int(targeted_cfg["target"]),
             min_similarity=float(targeted_cfg["min_similarity"]),
+            # BOTH volume cuts: a relative-only cut rejects small-volume
+            # pairs the gate accepts (at 14ml, 5% is 0.7ml), which would
+            # mine a true match as a label-0 row.
             volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
+            volume_absolute_tolerance_ml=float(
+                training_cfg().gate.vol_abs_tolerance
+            ),
             canonical_map=canon_map, funnel=funnel,
         )
         for step, in_count, out_count, reason in funnel.stages():

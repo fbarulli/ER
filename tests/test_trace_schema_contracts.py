@@ -416,6 +416,9 @@ def canonical_frame(**over: object) -> pd.DataFrame:
         "n_titles": 2,
         "description_evidence": "[]",
         "breadcrumb_evidence": "[]",
+        # Valid per-title capture: the contract rejects a null/empty/unparseable
+        # one, because stage 7 failing open is the defect the column fixes.
+        "source_rows": '[{"title": "brand orange water", "attributes": "type water"}]',
     }
     row.update(over)
     return pd.DataFrame([row], columns=list(CANONICAL_RECORDS_COLUMNS))

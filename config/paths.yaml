@@ -181,6 +181,17 @@ layouts:
     fields: {run_id: str, worker: int}
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
+# SSOT for EVERY column name in the project (owner ruling 2026-10-01).
+# Read once by core.columns, which derives:
+#   * RAW_EXPORT_COLUMNS / CANONICAL_COLUMNS / COLUMN_MAPPING
+#   * SOURCE_ROW_FIELDS   — which columns the per-title original-evidence
+#                           capture (canonical_records.source_rows) retains
+#   * every required-column contract downstream of it
+# Code must NOT hardcode a column-name tuple. A literal list is a second
+# declaration that cannot be steered by this file and drifts silently — the
+# same class of defect as the volume tolerance (five lanes each declaring one
+# tolerance) and the stage-7 re-parse (a mechanism reading column names that
+# no caller supplied).
 column_mapping:
   sku_id: product_id
   retailer: retailer
@@ -195,6 +206,116 @@ column_mapping:
   brand: brand
   category: category
   attribute: attributes
+
+# ── per-column evidence ruling (canonical_records.source_rows) ───────────────
+# EVERY mapped column is declared here, exactly once, with the ruling on
+# whether it survives into the per-title evidence JSON that the decision
+# engine's stage-7 clarification re-reads, and the reason either way.
+#
+# Why all thirteen and not only the captured ones: a column that is merely
+# ABSENT from the config is indistinguishable from one somebody forgot. An
+# exclusion recorded as `capture: false` plus a reason is auditable — it can be
+# re-opened by changing the ruling with its stated basis, never by taste.
+# core.schemas asserts the declaration is a total, duplicate-free partition of
+# column_mapping's values.
+#
+# capture: true  — the column can corroborate or refute a product-attribute
+#   claim, or is an identity confounder the gate must be able to see.
+# capture: false — the column cannot bear on WHICH product a title describes.
+#     url / image_url  listing IDENTIFIERS: they differ per retailer for one
+#                      and the same trade item, so they carry no product
+#                      semantics.
+#     price            commercial, varying by retailer, stock and time.
+#     product_id       a listing key; the GTIN supersedes it for identity.
+#     barcode          identity, not description — already carried as `gtin`,
+#                      and an identity match is decided before any of this.
+column_evidence:
+  title:
+    column: title
+    capture: true
+    reason: primary stage-7 evidence; the string every attribute claim is read from
+  attributes:
+    column: attributes
+    capture: true
+    reason: stage-7 census SSOT parse (parse_universe_cell) source
+  description:
+    column: description
+    capture: true
+    reason: prose claims (carbonation/sweetener/pulp) and sweetener status
+  category_path:
+    column: category_path
+    capture: true
+    reason: category context for flavor/type disambiguation
+  category:
+    column: category
+    capture: true
+    reason: category context, narrower than category_path
+  brand:
+    column: brand
+    capture: true
+    reason: brand is an identity attribute the gate blocks on
+  retailer:
+    column: retailer
+    capture: true
+    reason: identity CONFOUNDER — same trade item listed by two retailers
+  country:
+    column: country
+    capture: true
+    reason: identity CONFOUNDER — same trade item across markets
+  barcode:
+    column: barcode
+    capture: false
+    reason: identity, not description; carried as gtin and decided before stage 7
+  product_id:
+    column: product_id
+    capture: false
+    reason: retailer listing key; the GTIN supersedes it for identity
+  url:
+    column: url
+    capture: false
+    reason: listing locator; differs per retailer for the same trade item
+  image_url:
+    column: image_url
+    capture: false
+    reason: rendering of a listing, not a property of the product
+  price:
+    column: price
+    capture: false
+    reason: commercial data varying by retailer, stock and time
+
+# Extra names a column is known by, beyond the raw and canonical names
+# column_mapping already declares. Every read path that accepts "either name"
+# had hardcoded the pair — e.g. ("attributes", "attr"),
+# ("description", "description_short_eng"), {"title": "sku_name_eng"} — which
+# is a second declaration of a fact this file already owns, and one that drifts
+# the moment a rename happens. core.columns.resolve_aliases() serves them.
+column_aliases:
+  attributes:
+    - attr
+  product_id:
+    - SKU_ID
+
+# Columns the data-prep lane cannot run without (subset of column_mapping).
+# The raw-export load guard and the canonical-dataset guard both read this.
+data_prep_required_columns:
+  - gtin
+  - sku_name_eng
+  - attribute
+  - brand
+  - description_short_eng
+  - breadcrumbs_eng
+
+# canonical_records columns a record may LACK because they were added after the
+# first artifact version, and the value that means "unknown" for that column.
+# Declared here rather than as a tuple in the read adapter so the shape
+# difference between a list column ("[]") and a mapping column ("{}") is DATA,
+# not a special case in code — the adapter used to branch on the column name.
+canonical_optional_columns:
+  sweetener_type_set: "[]"
+  sweetening_set: "[]"
+  attribute_consistency_flags: "[]"
+  universe_evidence: "{}"
+  source_rows: "[]"
 
 # ── seed (whole tree uses this one value) ───────────────────────────────────
 seed: 42

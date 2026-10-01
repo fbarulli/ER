@@ -90,6 +90,15 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
         _upload_with_retries=lambda *a, **k: None, _remote_auth_env_script=lambda **k: '',
         run_detached_stage=detached, _read_remote_text=lambda _: file_hash(saved),
         _download_one_remote_file=download)
+    # `model_tracks.colab.run` does `from cli import colab as backend`, which
+    # resolves the attribute on the ALREADY-IMPORTED cli package before
+    # consulting sys.modules — so with cli.colab imported by an earlier test
+    # (e.g. test_colab_keep_alive_boundary), patching only sys.modules left the
+    # real backend running a live session probe ("Session
+    # 'my-highram-session' not found") instead of this fake. Patch BOTH the
+    # attribute and the sys.modules entry (order-independent).
+    import cli
+    monkeypatch.setattr(cli, 'colab', backend)
     monkeypatch.setitem(sys.modules, 'cli.colab', backend)
     with pytest.raises(RuntimeError, match='worker failure'):
         colab.run(inputs, 'smoke')

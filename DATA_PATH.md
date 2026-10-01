@@ -11,8 +11,8 @@ what a COMPLETE run publishes. Partial recovery lives under
 
 | stage | producer | inputs | outputs (the contract) |
 |---|---|---|---|
-| S0 source | dedupe (src/training/dedupe.py) | dataset.csv (71,623 rows, sha-pinned in config audit.source_export_expected_sha256) | data/dataset_deduped.csv (61,529) |
-| S1 validation population | build_final_validation (src/training/build_final_validation.py) | merged component graph (training positives UNION labeled positives) | data/final_validation.csv (6,345 scored pairs = 564 pos / 5,781 neg, folds 2+3) + results/training/validation_fold_map.csv (14,981 entities -> fold + component; complete split accounting). The 3k/5k holdout lanes (dataset_deduped_sample_3000/5000 + train_minus_3000/5000, built by the deleted `training/sample_deduped_dataset.py` stratified sampler) are RETIRED by owner ruling — their leakage diagnosis (23.3% of positives with both endpoints in train) is the reason the merged graph replaces them |
+| S0 source | dedupe (src/training/dedupe.py) | dataset.csv (71,623 rows, sha-pinned in config audit.source_export_expected_sha256; census closes: 63,079 deduped + 8,544 dropped = 71,623, 2026-10-01 regen) | data/dataset_deduped.csv (63,079) |
+| S1 validation population | build_final_validation (src/training/build_final_validation.py) | merged component graph (training positives UNION labeled positives) | data/final_validation.csv (6,351 scored pairs = 565 pos / 5,786 neg) + results/training/validation_fold_map.csv (14,946 entities -> fold + component; complete split accounting). The 3k/5k holdout lanes (dataset_deduped_sample_3000/5000 + train_minus_3000/5000, built by the deleted `training/sample_deduped_dataset.py` stratified sampler) are RETIRED by owner ruling — their leakage diagnosis (23.3% of positives with both endpoints in train) is the reason the merged graph replaces them. Row counts are derived at exec time with a byte-stability assert (training.complete_colab_worker.scored_validation_accounting), never hardcoded |
 | S2 gate/pairs | pipeline + labeled_pairs | deduped CSV | data/canonical_records.csv, data/gate_results.csv, data/labeled_pairs.csv, results/training/balanced_pairs_*.csv |
 | S3 bundle build (LOCAL, pre-training) | `training.train --prepare-bundle` | S1 CSV + canonical + gate + labeled pairs | data/prepared/full/worker_{1,2}_baseline.pkl.gz + .json manifests (pos/neg/train_neg + sources, mask audits, structured features) |
 | S4 training (Colab VM) | `training.train_prepared` -> training.train_one_config | S3 bundle + config | results/train_<model>_holdout_<variant>_fold_metrics.csv; results/logs/<run_tag>/{see contract below}; _checkpoints/<model>/checkpoint-N (safetensors + trainer_state.json) |
@@ -100,11 +100,9 @@ Preconditions: tracking fixes F1-F5 + smoke-sampler fix landed; agents 1
    --prepare-bundle data/prepared/full/worker_1_baseline.pkl.gz
    --no-mask-effect --no-plot` (repeat for worker_2 with --seed
    variance per the existing worker scheme). ~531 s/worker measured.
-   NOTE: the colab lane currently still binds
-   `colab.training_dataset_csv = data/dataset_deduped_train_minus_5000.csv`
-   (config/training.yaml) — retargeting that to the full deduped catalog is
-   the pending half of the 3k/5k retirement; the holdout is no longer
-   derived from a row sample but from the component fold map here in S1.
+   NOTE: LANDED 2026-10-01 — `colab.training_dataset_csv` binds the full
+   deduped catalog (`data/dataset_deduped.csv`); the 3k/5k train-minus-sample
+   inputs stay retired.
 3. Gate the bundles: `PYTHONPATH=src .venv/bin/python
    scripts/diet_manifest.py data/prepared/full/worker_1_baseline.pkl.gz`
    — expect PASS with the corrected (projection-free) arithmetic; then
@@ -127,11 +125,11 @@ Preconditions: tracking fixes F1-F5 + smoke-sampler fix landed; agents 1
 7. Consolidation: collect contract artifacts (DATA_PATH.md list), run
    the coverage-identity check, generate the training report, then
    final inference via the colab `final_inference` lane (device: cuda
-   enforced). That lane still binds `input_csv =
-   data/dataset_deduped_sample_5000.csv` (config/training.yaml) — the
-   retired 5k holdout file; its retarget (and whether the merged-graph
-   `final_validation.csv` becomes the scored population) is the pending
-   owner call flagged in P0, not a settled contract of this doc.
+   enforced). SCORED-PAIR contract LANDED 2026-10-01: the lane scores the
+   SSOT `files.final_validation` binding resolved by core.common, i.e.
+   `data/final_validation.csv` (the scored-pair population of the merged
+   component-graph folds 2+3) — the retired 5k holdout path literal is gone
+   from config/training.yaml and FinalInferenceSpec carries no input path.
 
 
 

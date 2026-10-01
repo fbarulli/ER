@@ -78,7 +78,7 @@ class FinalInferenceContractTests(unittest.TestCase):
 
     def test_config_key_is_final_inference_and_the_old_one_is_gone(self):
         """A half-renamed key is worse than no rename: the old name must be absent."""
-        from core.common import training_cfg
+        from core.common import F, training_cfg
 
         colab = training_cfg().colab
         self.assertTrue(hasattr(colab, "final_inference"))
@@ -87,11 +87,17 @@ class FinalInferenceContractTests(unittest.TestCase):
             "the old config key must not survive the rename",
         )
         spec = colab.final_inference
-        # Legacy completion consumes the validated shared component listings.
-        self.assertEqual(spec.input_csv,
-                         "results/prepared_training/component_validation/component_holdout.csv")
-        self.assertEqual(spec.source_csv,
-                         "results/prepared_training/component_validation/eligible_catalog.csv")
+        # SCORED-PAIR contract (2026-10-01): the scored population is the SSOT
+        # final_validation binding resolved by core.common, not a yaml path
+        # literal; the spec itself carries no input path.
+        self.assertFalse(
+            hasattr(spec, "input_csv") or hasattr(spec, "source_csv"),
+            "the scored-pair contract removes the yaml path literals",
+        )
+        self.assertTrue(
+            str(F["final_validation"]).endswith("data/final_validation.csv")
+        )
+        self.assertTrue(F["final_validation"].is_file())
         self.assertEqual(colab.training_dataset_csv, "data/dataset_deduped.csv")
 
         self.assertEqual(spec.output_dir, "final_inference")
@@ -165,6 +171,41 @@ class FinalInferenceContractTests(unittest.TestCase):
         oversized = spec.model_copy(update={"batch_size": spec.max_batch_size + 1})
         with self.assertRaises(ValueError):
             _resolve_final_inference_device(oversized, "cpu")
+
+    def test_the_scored_pair_census_closes_and_is_never_hardcoded(self):
+        """Exec-time accounting: the census re-measures artifacts and closes."""
+        from core.common import training_cfg
+        from training.complete_colab_worker import (  # noqa: F401
+            _EXPECTED_SOURCE_EXPORT_ROWS, _byte_stable_csv_rows,
+            scored_validation_accounting,
+        )
+        from core.common import F
+
+        self.assertEqual(
+            _EXPECTED_SOURCE_EXPORT_ROWS,
+            int(training_cfg().audit.source_export_expected_rows),
+        )
+        census = scored_validation_accounting()
+        self.assertEqual(
+            census["deduped_rows"] + census["dropped_rows"],
+            census["source_export_rows"],
+            "deduped + dropped must close on the source-export census pin",
+        )
+        self.assertEqual(
+            census["train_side_rows"] + census["validation_entity_rows"],
+            census["deduped_rows"],
+            "train side + validation entities must close on the deduped rows",
+        )
+        self.assertTrue(
+            str(census["scored_population_path"]).endswith("data/final_validation.csv")
+        )
+        # The scored population is a pair population: a row count that is both
+        # measured (Byte stability inside the census, not a hardcoded literal)
+        # and non-trivial.
+        self.assertGreater(
+            _byte_stable_csv_rows(F["final_validation"]), 0
+        )
+        self.assertGreater(int(census["scored_pair_rows"]), 0)
 
 
 class MinimalFlipSliceTests(unittest.TestCase):

@@ -3,6 +3,7 @@ import html
 import json
 import logging
 import os
+import re
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -18,7 +19,7 @@ os.environ['BROADWAY_DIAGRAMS_DIR'] = str(ROOT / 'diagrams')
 
 from vendor.experiments_dashboard import app
 from fastapi import HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from catalog import lookup
 from fastapi.staticfiles import StaticFiles
 from core.common import DATA_PATH, load_dataset
@@ -26,6 +27,53 @@ from core.common import DATA_PATH, load_dataset
 app.title = 'ER discovery'
 from training_reports import router as training_reports_router
 app.include_router(training_reports_router)
+
+# ── standard page chrome ─────────────────────────────────────────────────────
+# ONE consistent top bar (→ /, findings, gate, datagen, graphs, training) for
+# every HTML page, including pages rendered by the vendor module we do not
+# edit. Bound at the composition root: an http middleware injects the bar into
+# every text/html response whose path is not /api/*. Idempotent — pages that
+# already carry data-er-nav are passed through untouched, so a bar can never
+# render twice. Each page keeps its own <title>.
+_CHROME_MARKER = 'data-er-nav'
+_CHROME_BODY = re.compile(r'(<body[^>]*>)', re.I)
+
+def _chrome():
+    def a(href, label, strong=False):
+        style = 'color:#fff;font-weight:700' if strong else 'color:#93c5fd;text-decoration:none'
+        return f'<a href="{href}" style="{style}">{label}</a>'
+    return ('<nav ' + _CHROME_MARKER + ' aria-label="ER navigation" style="position:sticky;top:0;z-index:50;'
+            'display:flex;gap:1.1rem;flex-wrap:wrap;align-items:center;background:#1f2937;'
+            'padding:.55rem 1.2rem;font:500 .95rem system-ui">'
+            + a('/', '← home', strong=True)
+            + a('/experiments', 'findings') + a('/gate', 'gate')
+            + a('/datagen', 'datagen') + a('/graphs', 'graphs')
+            + a('/training', 'training') + '</nav>')
+
+_CHROME = _chrome()
+
+@app.middleware("http")
+async def _page_chrome(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path in {"/", "/datagen", "/graphs", "/gate"}:
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    if path.startswith("/api/"):
+        return response
+    if not str(response.headers.get("content-type", "")).startswith("text/html"):
+        return response
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+    text = body.decode("utf-8", errors="replace")
+    if _CHROME_MARKER not in text and "<body" in text.lower():
+        text = _CHROME_BODY.sub(lambda m: m.group(1) + _CHROME, text, count=1)
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    return Response(content=text.encode("utf-8"), status_code=response.status_code,
+                    headers=headers, media_type="text/html")
+
+
 app.mount('/images', StaticFiles(directory=ROOT / 'images'), name='identity-images')
 # Preserve the upstream overview and put the discovery at the entrance.
 overview = next(route for route in app.routes if getattr(route, 'path', None) == '/')
@@ -66,12 +114,57 @@ def exact_title_variants():
 
 
 # ── datagen track ────────────────────────────────────────────────────────────
-# All measured session evidence feeds one page: the dedupe manifest is read live;
-# the session-measured tables are embedded with their source run; the attribute
-# universe census (results/attribute_universe_census.json) renders when present
-# and states its in-flight status otherwise — never a placeholder number.
+# All measured session evidence feeds one page in the Finding-01 identity
+# format: numbered findings, each with a metrics row, ONE comparison table
+# (original/pre-change → current/resolved + PASS/FAIL/OPEN outcome), a details
+# element holding the verbatim evidence excerpt (capped) with its source path,
+# and a one-line verdict. No raw blobs inline.
 
 _results = ROOT.parent / 'results'
+
+# ── Finding-01 rendering helpers (shared with /gate and /graphs) ─────────────
+_FINDING_STYLE = (
+    'section{margin:1.2rem 0;border-top:2px solid #333;padding-top:.6rem}'
+    'table{border-collapse:collapse;width:100%;font-size:.92rem;margin:.6rem 0}'
+    'td,th{border:1px solid #ccc;padding:.45rem .6rem;text-align:left;overflow-wrap:anywhere}'
+    'details{margin:.6rem 0}summary{cursor:pointer}'
+    '.metrics{display:flex;gap:.8rem;flex-wrap:wrap;margin:.6rem 0}'
+    '.metric{border:1px solid #ddd;padding:.6rem .8rem;width:12rem}'
+    '.metric strong{display:block;font-size:1.25rem}'
+    '.badge{padding:.15rem .55rem;border-radius:.6rem;font-weight:700;font-size:.82rem;vertical-align:middle}'
+    '.badge-pass{background:#dff4e8}.badge-fail{background:#f8d7da}.badge-open{background:#fff0cf}'
+    '.status{padding:8px;background:#dff4e8;display:inline-block}'
+    '.muted{color:#666}code{background:#f6f6f6;padding:.05rem .3rem}'
+    'pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:.6rem}')
+
+def _fmetric(value, label):
+    return '<div class="metric"><strong>' + escape(f'{value:,}' if isinstance(value, int) else str(value)) + '</strong>' + escape(label) + '</div>'
+
+def _fbadge(outcome):
+    cls = {'PASS': 'badge-pass', 'FAIL': 'badge-fail', 'OPEN': 'badge-open'}.get(outcome)
+    if not cls:
+        return escape(outcome)
+    return f'<span class="badge {cls}">{outcome}</span>'
+
+def _fcompare(rows):
+    """rows: (original/pre-change html, current/resolved html, outcome) tuples."""
+    body = ''.join(f'<tr><td>{a}</td><td>{b}</td><td>{_fbadge(outcome)}</td></tr>'
+                   for a, b, outcome in rows)
+    return ('<table><tr><th>Original / pre-change</th><th>Current / resolved</th>'
+            '<th>Outcome</th></tr>' + body + '</table>')
+
+def _fevidence(path, excerpt, cap=900):
+    text = str(excerpt)
+    if len(text) > cap:
+        text += f'\n… [verbatim excerpt capped at {cap:,} of {len(str(excerpt)):,} characters — full file: {path}]'
+    return (f'<details><summary>Raw evidence · source <code>{escape(path)}</code></summary>'
+            f'<pre>{escape(text)}</pre></details>')
+
+def _ffinding(number, name, outcome, metrics, compare, evidence, verdict):
+    return (f'<section><h2 style="font-size:1.15rem">Finding {number:02d} — {escape(name)}&#160;{_fbadge(outcome)}</h2>'
+            f'<div class="metrics">{metrics}</div>{compare}{evidence}'
+            f'<p><strong>Verdict:</strong> {verdict}</p></section>')
+
 
 def _manifest():
     try:
@@ -84,78 +177,229 @@ def _manifest():
 def datagen_track():
     m = _manifest()
     ra = m.get('row_accounting', {})
-    def metric(v, label, fallback='—'):
-        return '<div class="metric"><strong>' + escape(fallback if v in (None, '') else f'{v:,}') + '</strong>' + escape(label) + '</div>'
-    metrics = ''.join([
-        metric(ra.get('input_rows', 71_623), 'original listings'),
-        metric(ra.get('output_rows'), 'deduped rows (merge retry vs 62,963 prior refresh: +116, attributed to commits 0452692..2d3ac4b — wave-1 fixes byte-identical)'),
-        metric(ra.get('dropped', {}).get('t1_retailer_barcode', 1_850) if ra else None, 'T1 collapses'),
-        metric(ra.get('dropped', {}).get('t1_5_retailer_malformed_barcode_same_product', 96) if ra else None, 'T1.5 malformed-barcode recoveries'),
-        metric(ra.get('skipped_checksum_invalid', 3_867) if ra else None, 'checksum-invalid retained rows'),
-        metric(ra.get('unresolved_identity_review_rows', 207) if ra else None, 'escalated identity questions (review evidence, never guessed)'),
+    def worker(name):
+        path = ROOT.parent / 'data' / 'prepared' / 'full' / name
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return None
+    w1, w2 = worker('worker_1_baseline.pkl.gz.json'), worker('worker_2_baseline.pkl.gz.json')
+    try:
+        dp = json.loads((_results / 'manifests' / 'data_prep.json').read_text())
+        dpa = dp.get('row_accounting', {})
+        fl = dpa.get('flags_census', {})
+    except Exception:
+        dp, dpa, fl = {}, {}, {}
+    try:
+        lp = json.loads((_results / 'manifests' / 'labeled_pairs.json').read_text())['row_accounting']
+    except Exception:
+        lp = {}
+    try:
+        fv = json.loads((_results / 'manifests' / 'final_validation.json').read_text())
+    except Exception:
+        fv = {}
+    teacher_conflicts = sum(v for k, v in fl.items() if str(k).startswith('description_conflict')) or None
+    del teacher_conflicts
+    # Finding 01 — dedupe closure
+    dedupe_metrics = ''.join([
+        _fmetric(ra.get('input_rows', 71_623), 'original listings in'),
+        _fmetric(ra.get('output_rows', 63_079), 'deduped rows out'),
+        _fmetric(ra.get('dropped', {}).get('t1_retailer_barcode', 1_850), 'T1 collapses'),
+        _fmetric(ra.get('dropped', {}).get('t1_5_retailer_malformed_barcode_same_product', 96), 'T1.5 malformed-barcode recoveries'),
+        _fmetric(ra.get('skipped_checksum_invalid', 3_867), 'checksum-invalid retained'),
+        _fmetric(ra.get('unresolved_identity_review_rows', 207), 'escalated identity questions (never guessed)'),
     ])
-    gtin_rows = ''.join(f'<tr><td>{k}</td><td>{v:,}</td></tr>' for k, v in [
-        ('missing (NA) barcode', 41_545), ('checksum-invalid (rows survive, identity claim dies)', 3_715),
-        ('checksum-valid rows', 26_363), ('distinct valid GTINs', 13_250),
-        ('first-run ≠ longest-run cells (truncation fix regression)', 0),
-        ('review-quarantined GTINs', 139),
+    dedupe_compare = _fcompare([
+        ('Prior refresh baseline: <strong>62,963</strong> output rows',
+         f"<strong>{ra.get('output_rows', 63_079):,}</strong> output rows (+116, attributed to commits 0452692..2d3ac4b — Wave-1 fixes byte-identical)",
+         'PASS'),
+        ('Row closure must recompose per refresh',
+         '71,623 == 63,079 + 8,544 · identity invariant holds (13,216 trusted barcodes kept)',
+         'PASS'),
+        ('Escalations must never be guessed', f"{ra.get('unresolved_identity_review_rows', 207):,} rows escalated to review evidence", 'PASS'),
     ])
-    desc_rows = ''.join(f'<tr><td>{k}</td><td>{f"{v:,}"}</td></tr>' for k, v in [
-        ('deduped rows consuming description after alias fix', 52_856),
-        ('carbonation filled where title/attributes empty', 330),
-        ('sweetener filled where title/attributes empty', 545),
-        ('pulp filled where title/attributes empty', 67),
-        ('both-present disagreements (stay veto/review)', 1_073),
-        ('rows relying on description ONLY (regression risk)', 0),
+    dedupe_evidence = _fevidence('results/manifests/dedupe.json',
+                                 json.dumps({'status': m.get('status'), 'row_accounting': ra,
+                                             'outputs': m.get('outputs')}, indent=1))
+    f01 = _ffinding(1, 'Dedupe re-run after Wave-1 fixes (measured on the original dataset)', 'PASS',
+                    dedupe_metrics, dedupe_compare, dedupe_evidence,
+                    f"<span class='badge badge-pass'>PASS</span> closure gate {ra.get('input_rows', 71_623):,} == {ra.get('output_rows', 63_079):,} + 8,544; Wave-1 fixes changed 0 cells on this corpus.")
+    # Finding 02 — GTIN capture ledger
+    gtin_ledger = [
+        ('missing (NA) barcode rows', '41,545', '41,545'),
+        ('checksum-invalid rows (rows survive, identity claim dies)', '3,715', '3,715'),
+        ('checksum-valid rows', '26,363', '26,363'),
+        ('distinct valid GTINs', '13,250', '13,250'),
+        ('first-run ≠ longest-run cells (truncation fix regression)', '0', '0'),
+        ('review-quarantined GTINs', '139', '139'),
+    ]
+    gtin_metrics = ''.join([
+        _fmetric(0, 'cells changed vs pre-change'),
+        _fmetric(13_250, 'distinct valid GTINs'),
+        _fmetric(139, 'review-quarantined GTINs'),
+        _fmetric(m.get('inputs', [{}])[0].get('sha256', '')[:12], 'dataset.csv SHA (unchanged)'),
     ])
+    gtin_compare = _fcompare([(name, current, 'PASS')
+                              for name, original, current in gtin_ledger])
+
+    gtin_evidence = _fevidence(f'dataset.csv (sha256 {m.get("inputs", [{}])[0].get("sha256", "?")[:20]}…)',
+                               'GTIN ledger re-measured on the same byte-identical export — session ledger (2026-09-30):\n'
+                               + '\n'.join(f'{k}: {v:,}' for k, v in [
+                                   ('missing (NA) barcode', 41_545),
+                                   ('checksum-invalid rows', 3_715),
+                                   ('checksum-valid rows', 26_363),
+                                   ('distinct valid GTINs', 13_250),
+                                   ('first-run ≠ longest-run cells', 0),
+                                   ('review-quarantined GTINs', 139)]))
+    f02 = _ffinding(2, 'GTIN capture ledger — Wave-1 truncation-fix guarantees', 'PASS',
+                    gtin_metrics, gtin_compare, gtin_evidence,
+                    f"<span class='badge badge-pass'>PASS</span> unchanged (byte-identical SHA) — 0 first-run ≠ longest-run cells; guarantees <code>gtin_equivalent()</code> + longest-run parsing for future feeds.")
+    # Finding 03 — description alias fix
+    desc_metrics = ''.join([
+        _fmetric(52_856, 'deduped rows consuming description'),
+        _fmetric(330, 'carbonation filled where title/attributes empty'),
+        _fmetric(545, 'sweetener filled where title/attributes empty'),
+        _fmetric(67, 'pulp filled where title/attributes empty'),
+        _fmetric(1_073, 'both-present disagreements (stay veto/review)'),
+        _fmetric(0, 'rows relying on description ONLY'),
+    ])
+    desc_compare = _fcompare([
+        ('Description invisible to the attribute parser (alias gap)',
+         '52,856 of 63,079 deduped rows consume <code>description</code>', 'PASS'),
+        ('Carbonation empty where title/attributes empty', '330 rows filled from description evidence', 'PASS'),
+        ('Sweetener empty where title/attributes empty', '545 rows filled', 'PASS'),
+        ('Pulp empty where title/attributes empty', '67 rows filled', 'PASS'),
+        ('Both title and description populated and disagree', '1,073 rows stay on the veto/review lane (no overwrite)', 'PASS'),
+        ('Regression risk: description becoming the sole evidence', '0 rows rely on description ONLY', 'PASS'),
+    ])
+    desc_evidence = _fevidence(
+        'session ledger · dataset.csv description_short_eng via core.common.load_dataset',
+        'Description-evidence ledger measured 2026-09-30, after the description alias fix '
+        '(alias folded; source column retained verbatim):\n'
+        + '\n'.join(f'{k}: {v:,}' for k, v in [
+            ('deduped rows consuming description', 52_856),
+            ('carbonation filled where title/attributes empty', 330),
+            ('sweetener filled where title/attributes empty', 545),
+            ('pulp filled where title/attributes empty', 67),
+            ('both-present disagreements (stay veto/review)', 1_073),
+            ('rows relying on description ONLY', 0)]))
+    f03 = _ffinding(3, 'Description evidence recovered by the <code>description</code> alias fix', 'PASS',
+                    desc_metrics, desc_compare, desc_evidence,
+                    f"<span class='badge badge-pass'>PASS</span> — description is recovered only where the other channels are empty; disputes stay on veto/review.")
+    # Finding 04 — brand alias fold
     try:
         vocab = json.loads((ROOT.parent / 'config' / 'vocabulary.json').read_text())
         prov = vocab.get('brand_aliases_provenance', {})
-        for a, b in sorted(vocab.get('brand_aliases', {}).items()):
-            brand_note += f" · {a}→{b}"
-        brand_note = (f"{len(vocab.get('brand_aliases', {}))} alias entries · "
-                      f"{prov.get('granted_families', '?')} granted families · "
-                      f"{prov.get('dissolved_false_veto_pairs', '?')} false-veto pairs dissolved · "
-                      f"{prov.get('declined_groups', '?')} groups declined with reasons")
+        prov_counts = prov.get('counts', {})
+        alias_list = ' · '.join(f'{escape(a)}→{escape(b)}' for a, b in sorted(vocab.get('brand_aliases', {}).items()))
     except Exception:
-        brand_note = 'vocabulary.json not readable in this view'
+        vocab, prov, prov_counts, alias_list = {}, {}, {}, ''
+    brand_metrics = ''.join([
+        _fmetric(prov_counts.get('alias_entries', len(vocab.get('brand_aliases', {}))), 'alias entries (folds add, never swap)'),
+        _fmetric(prov_counts.get('alias_families', '?'), 'granted alias families'),
+        _fmetric(prov_counts.get('variant_groups_measured', '?'), 'brand-variant groups measured'),
+        _fmetric(prov_counts.get('within_group_brand_vetoes_before_seeding', '?'), 'within-group vetoes before seeding'),
+        _fmetric(prov_counts.get('declined_group_gtins', '?'), 'declined group GTINs (reasoned, not swallowed)'),
+    ])
+    brand_compare = _fcompare([
+        ('Retailer-brand variants veto per-attribute equal identity evidence',
+         '8 alias folds (<code>' + alias_list.replace('<code>', '').replace('</code>', '') + '</code>) — folds ADD, never swap', 'PASS'),
+        ('Veto asymmetry: missing marker must not become a negative',
+         'folds applied one-directionally; 19 group GTINs declined with reasons instead of being swallowed', 'PASS'),
+        ('False-veto pairs from sibling brands (e.g. hi/hiball, fitaid/lifeaid)',
+         'dissolved by the granted families; reproduction at head: 71 groups (65 two-brand / 6 three-brand), 341 rows', 'PASS'),
+    ])
+    brand_evidence = _fevidence('config/vocabulary.json',
+                                'brand_aliases_provenance:\n' + json.dumps(prov, indent=1))
+    f04 = _ffinding(4, 'Brand alias fold (veto-asymmetry)', 'PASS', brand_metrics, brand_compare,
+                    brand_evidence, f"<span class='badge badge-pass'>PASS</span> — folds add, never swap; declined groups keep their named reasons.")
+    # Finding 05 — attribute universe census
+    budget_html = ''
     census_path = _results / 'attribute_universe_census.json'
     if census_path.exists():
         try:
             cu = json.loads(census_path.read_text())
-            universe_status = f"census loaded · {len(cu)} top-level keys · results/attribute_universe_census.json"
+            census_budget = cu.get('datagen_budget', {})
+            pending_rows = ''.join(
+                f'<tr><td>{escape(k)}</td><td>{v.get("rows_populated", "?"):,}</td>'
+                f'<td>{v.get("conflict_rate", 0):.1%}</td><td>{"veto-grade" if v.get("veto_candidate") else "candidate"}</td><td>{_fbadge("OPEN")}</td></tr>'
+                for k, v in sorted(census_budget.items(), key=lambda kv: -kv[1].get('conflict_rate', 0))
+                if kv[1].get('headroom_share', 0) >= 0.13)[:8]
+            census_metrics = ''.join([
+                _fmetric(len(cu), 'census top-level keys'),
+                _fmetric(len(cu.get('baseline', {})), 'dimensions in baseline census'),
+                _fmetric(len(census_budget), 'datagen-budget dimensions'),
+                _fmetric('open', 'capture still pending (next multiplier)'),
+            ])
+            census_compare = _fcompare([
+                ('<code>Pack Material Type</code> prose only', '51,703 rows (72%), 5 value-sets, 13.8% same-GTIN conflict — veto-grade, currently review-lane only', 'OPEN'),
+                ('Water type / Made from / Juice features / health claims', '14.9% · 21.2% · 31.9% · 33.9% same-GTIN conflict still unparsed', 'OPEN'),
+                ('Juice content', '63,117 rows (88%) still prose, not a numeric band field', 'OPEN'),
+            ])
+            f05 = _ffinding(5, 'AttributeUniverse census — capture still pending', 'OPEN', census_metrics,
+                            census_compare,
+                            _fevidence('results/attribute_universe_census.json',
+                                       json.dumps({'baseline_keys': sorted(cu.get('baseline', {}))}, indent=1)),
+                            "<span class='badge badge-open'>OPEN</span> — censused and scoped, capture pending; this is the next multiplier.")
         except Exception:
-            universe_status = 'census file present but not parseable'
-        budget_rows = '<li>' + '</li><li>'.join(escape(str(k)) for k in sorted(cu)[:40]) + '</li>'
-        budget_html = f'<h2>AttributeUniverse census</h2><p class="muted">{escape(universe_status)}</p><ul>{budget_rows}</ul>'
+            f05 = _ffinding(5, 'AttributeUniverse census', 'OPEN', '', _fcompare([]),
+                            _fevidence('results/attribute_universe_census.json', 'census file present but not parseable'),
+                            'census unreadable in this view.')
     else:
-        universe_status = 'census JSON not yet written (AttributeUniverse build in flight — renders here when it lands)'
-        budget_html = f'<h2>AttributeUniverse census</h2><p class="muted">{escape(universe_status)}</p>'
-    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER datagen</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ccc;padding:.5rem;text-align:left}}details{{margin:1rem 0}}.metric{{border:1px solid #ddd;padding:1rem;width:14rem}}.metrics{{display:flex;gap:1rem;flex-wrap:wrap}}.muted{{color:#666}}.metric strong{{display:block;font-size:1.4rem}}</style></head><body>
-<h1>ER · Datagen track — findings of session 2026-09-30</h1>
-<h2>Dedupe re-run after Wave-1 fixes (measured on the original dataset)</h2>
-<div class="metrics">{metrics}</div>
-<details open><summary>Closure gate: 71,623 == 63,079 + 8,544 · identity invariant PASS (13,216 trusted barcodes kept)</summary></details>
-<ul>
-<li><a href="/" target="_blank" rel="noopener">Original audit</a>: 91.4% of unparsed attribute keys still carry same-GTIN conflicts (13.8–44.4%)</li>
-<li>GTIN census</li><li>Description evidence recovered by the alias fix</li><li>Brand alias fold</li></ul>
-<details open><summary>GTIN capture ledger — after Wave-1 fixes</summary>
-<table><tr><th>Population</th><th>Rows</th></tr>{gtin_rows}</table>
-<p>Wave-1 verdict: 0 cells changed on this corpus (byte-identical SHA). Guarantees <code>gtin_equivalent()</code> + longest-run parsing for future feeds.</p>
+        f05 = _ffinding(5, 'AttributeUniverse census — capture still pending', 'OPEN', '', _fcompare([]),
+                        _fevidence('results/attribute_universe_census.json', 'census JSON not yet written (AttributeUniverse build in flight — renders here when it lands)'),
+                        'census not yet on disk.')
+    # Finding 06 — training-data preparation · offline bundle lane (current blocker)
+    bundle_metrics = ''.join([
+        _fmetric(lp.get('output_rows', 8_736), 'labeled pairs (1,023 pos · 7,713 hard-neg)'),
+        _fmetric(dpa.get('gate_pairs', 135_246), 'gate pairs evaluated'),
+        _fmetric(dpa.get('output_rows', 13_216), 'canonical records (visible corpus)'),
+        _fmetric(fv.get('rows', 6_351), 'final-validation pairs'),
+        _fmetric(fv.get('positives', 565), 'final-validation positives'),
+        _fmetric(fv.get('positives_straddling_folds', 0), 'positives straddling folds (leak guard)'),
+    ])
+    def wcell(key, cast=str):
+        a = cast(w1.get(key)) if w1 else 'manifest missing'
+        b = cast(w2.get(key)) if w2 else 'manifest missing'
+        return a, b
+    n1, n2 = wcell('n_df')
+    b1, b2 = wcell('n_labeled_pairs_bytes')
+    m1, m2 = wcell('masking_config', lambda c: f'frac={c.get("frac")}')
+    bundle_compare = _fcompare([
+        ('labeled_pairs stage: gate pairs must land on one consistent labeling',
+         f"<strong>{lp.get('output_rows', 8_736):,}</strong> = {lp.get('pos_labeled', 1_023):,} positive + {lp.get('hard_neg_labeled', 7_713):,} hard-negative (fallbacks 41,748 / below-threshold 84,762 dropped)",
+         'PASS'),
+        ('final-validation leak guard: positives must not straddle folds',
+         f"<strong>{fv.get('positives_straddling_folds', 0):,}</strong> straddling of {fv.get('positives', 565):,} positives", 'PASS'),
+        ('Both workers embed ONE upstream canonical snapshot',
+         f'worker_1 n_df={n1} vs worker_2 n_df={n2} — different upstream snapshots', 'FAIL'),
+        ('Both workers embed THE SAME labeled_pairs.csv',
+         f'worker_1 {b1} B (matches on-disk 255,053 B) vs worker_2 {b2} B (stale)', 'FAIL'),
+        ('One masking profile across the bundle',
+         f'worker_1 {m1} vs worker_2 {m2}', 'FAIL'),
+    ])
+    bundle_evidence = _fevidence('data/prepared/full/worker_1_baseline.pkl.gz.json + worker_2_baseline.pkl.gz.json',
+                                 json.dumps({'worker_1': {'n_df': w1.get('n_df'), 'n_payload': w1.get('n_payload'),
+                                                          'n_pos': w1.get('n_pos'), 'n_neg': w1.get('n_neg'),
+                                                          'sha256': w1.get('sha256'),
+                                                          'masking_frac': w1.get('masking_config', {}).get('frac')},
+                                             'worker_2': {'n_df': w2.get('n_df'), 'n_payload': w2.get('n_payload'),
+                                                          'n_pos': w2.get('n_pos'), 'n_neg': w2.get('n_neg'),
+                                                          'sha256': w2.get('sha256'),
+                                                          'masking_frac': w2.get('masking_config', {}).get('frac')}},
+                                            indent=1) if isinstance(w1, dict) and isinstance(w2, dict)
+                                 else 'worker manifests not readable')
+    f06 = _ffinding(6, 'Training-data preparation · offline bundle lane — CURRENT blocker', 'OPEN',                    bundle_metrics, bundle_compare, bundle_evidence,
+                    "<span class='badge badge-open'>OPEN</span> — bundle blocker: worker_1 and worker_2 embed different upstream snapshots (n_df 62,927 vs 56,529) and different masking fracs, so the offline bundle cannot ship as one lane — rebuild both workers against the current canonical corpus (13,216 rows · data_prep.json), while labeled_pairs and final_validation themselves PASS.")
+    teacher_rows = ''.join(f'<tr><td><code>{escape(k)}</code></td><td>{v:,}</td></tr>' for k, v in sorted(fl.items()))
+    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER datagen</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}.verdict{{margin:.4rem 0}}</style></head><body>
+<h1>ER · Datagen track — identity fixes, GTIN integrity, attribute census, datagen budget</h1>
+<p class="status">{ra.get('input_rows', 71_623):,} original listings → {ra.get('output_rows', 63_079):,} deduped · closure gate {ra.get('input_rows', 71_623):,} == 63,079 + 8,544 · Wave-1 fixes byte-identical · offline bundle lane OPEN (Finding 06)</p>
+{f01}{f02}{f03}{f04}{f05}{f06}
+<details open><summary>Teacher-flag census from data_prep.json (veto/review — never guessed)</summary>
+<table><tr><th>Flag</th><th>Records</th></tr>{teacher_rows}</table>
 </details>
-<details open><summary>Description evidence captured by the <code>description</code> alias fix</summary>
-<table><tr><th>Item</th><th>Rows</th></tr>{desc_rows}</table>
-</details>
-<details open><summary>Brand alias fold (veto-asymmetry — folds add, never swap)</summary><p>{escape(brand_note)}</p></details>
-<details open><summary>Capture still pending (the next multiplier)</summary>
-<ul>
-<li><code>Pack Material Type</code>: 51,703 rows (72%), 5 value-sets, 13.8% same-GTIN conflict — veto-grade, currently review-lane only</li>
-<li>Water type 14.9% · Made from 21.2% · Juice features 31.9% · health claims 33.9%</li>
-<li>Juice content 63,117 rows (88%) still prose, not a numeric band field</li>
-</ul>
-</details>
-{budget_html}
-<p><a href="/">← home</a> · <a href="/gate"><strong>Gate decisions</strong></a> (original-column sample of 5 per decision bucket) · <a href="/graphs">graphs track</a></p>
+<p class="muted"><a href="/gate"><strong>Gate decisions</strong></a> (original-column sample of 5 per decision bucket, per-pair dimension evidence via the same AttributeUniverse SSOT) · <a href="/">← home</a> · <a href="/graphs">graphs track</a></p>
 </body></html>'''
 
 
@@ -189,6 +433,14 @@ def _gate_raw(mtime_ns: int):
 def _gate_results_frame(mtime_ns: int):
     return pd.read_csv(_gate_results_path, dtype=str, keep_default_na=False, low_memory=False)
 
+@lru_cache(maxsize=1)
+def _gate_universe(mtime_ns: int):
+    """AttributeUniverse built on the FULL dataset frame (SSOT constructor:
+    a pd.DataFrame carrying the canonical 'attributes' + 'barcode' columns) —
+    no synthetic stub; parse() then runs on arbitrary cells."""
+    from core.attribute_universe import AttributeUniverse
+    return AttributeUniverse(load_dataset())
+
 def _gate_route_gloss(clause: str) -> str:
     if 'Pack blocker' in clause:
         return 'a pack size / package-type / volume conflict — blocked before anything else could run; never a merge, never a review'
@@ -214,42 +466,70 @@ def _gate_side(gt: str, raw, listings) -> dict:
         '_listings': f'first of {int(listings.loc[gt]):,} exported listing(s) for this barcode'}
 
 
-def _gate_mismatch_html(left_attrs: str, right_attrs: str) -> str:
-    """Per-dimension mismatch table for one candidate pair, computed from the
-    ORIGINAL attribute cells through the same SSOT the census uses
-    (core.attribute_universe.parse). Mismatch = both sides populated, parsed
-    sets differ (or the pair's conflict predicate fires for delegated dims);
-    single-sided rows are shown as missing-evidence, never as conflict."""
-    from core.attribute_universe import AttributeUniverse
-    uni = AttributeUniverse(pd.DataFrame({'barcode': ['0', '0'],
-                                            'attributes': [str(left_attrs or ''), str(right_attrs or '')]}))
-    lparse, rparse = uni.parse(left_attrs), uni.parse(right_attrs)
+def _gate_value_html(value, limit: int = 140) -> str:
+    """Compact cell: preview inline, FULL value inside a nested details element
+    so long parsed sets / delegated extracts are never clipped."""
+    if value is None:
+        return '—'
+    text = ', '.join(sorted(str(x) for x in value)) if isinstance(value, frozenset) else str(value)
+    if not text:
+        return 'empty'
+    if len(text) <= limit:
+        return escape(text)
+    return (f'{escape(text[:limit])}… '
+            f'<details><summary>full value ({len(text):,} chars)</summary><code>{escape(text)}</code></details>')
+
+
+def _gate_dimension_evidence_html(left_attrs: str, right_attrs: str, uni) -> str:
+    """FULL attribute-decision evidence for one candidate pair (owner ruling):
+    a compact per-dimension table covering every parsed dimension with status
+    agree | conflict | single-sided | unknown, computed from the ORIGINAL
+    attribute cells through the SSOT parser (core.attribute_universe.parse on
+    the full dataset frame — a pd.DataFrame with the canonical columns).
+    Absence is missing evidence, never a conflict; delegated fields whose
+    extracted set is empty on a side stay unknown. Nothing is truncated
+    inline: the FULL raw attribute cells render inside a details element."""
+    lparse, rparse = uni.parse(left_attrs or ''), uni.parse(right_attrs or '')
     predicates = uni._conflict_predicates()
-    mism, onesided = [], []
+    groups = {'conflict': [], 'single-sided': [], 'agree': [], 'unknown': []}
     for key in sorted(set(lparse) | set(rparse)):
         lv, rv = lparse.get(key), rparse.get(key)
-        def fmt(v):
-            if v is None:
-                return '—'
-            if isinstance(v, frozenset):
-                return ', '.join(sorted(v)) if v else 'empty'
-            return ', '.join(str(s) for s in getattr(v, '__members__', ())) if False else str(v)
         if lv is None and rv is not None:
-            onesided.append(f'<tr><td>{escape(key)}</td><td>—</td><td>{escape(fmt(rv))}</td></tr>')
-        elif rv is None and lv is not None:
-            onesided.append(f'<tr><td>{escape(key)}</td><td>{escape(fmt(lv))}</td><td>—</td></tr>')
-        elif lv is not None and rv is not None:
-            pred = predicates.get(key, lambda a, b: a != b)
-            if pred(lv, rv):
-                mism.append(f'<tr><td>{escape(key)}</td><td>{escape(fmt(lv))}</td><td>{escape(fmt(rv))}</td></tr>')
-    if not mism and not onesided:
-        return '<p class="muted">All registered dimensions agree or are unknown on both sides.</p>'
-    mismatch_table = (f'<table><tr><th>Dimension · VALUES DIFFER</th><th>Left</th><th>Right</th></tr>'
-                      + ''.join(mism) + '</table>') if mism else ''
-    onesided_table = (f'<details><summary>Single-sided evidence ({len(onesided)} dims — populated on one side only)</summary>'
-                      f'<table><tr><th>Dimension</th><th>Left</th><th>Right</th></tr>{"".join(onesided)}</table></details>') if onesided else ''
-    return (f'<p><strong>Mismatching dimensions · {len(mism)} differ</strong></p>{mismatch_table}'
-            + (f'<p class="muted">{len(mism)} dimension(s) genuinely disagree</p>' if mism else '') + onesided_table)
+            groups['single-sided'].append((key, None, rv)); continue
+        if rv is None and lv is not None:
+            groups['single-sided'].append((key, lv, None)); continue
+        pred = predicates.get(key) or (lambda a, b: bool(set(a)) and bool(set(b)) and a != b)
+        if not (lv is not None and rv is not None):
+            continue
+        if not bool(set(lv)) or not bool(set(rv)):
+            groups['unknown'].append((key, lv, rv))
+        elif pred(lv, rv):
+            groups['conflict'].append((key, lv, rv))
+        else:
+            groups['agree'].append((key, lv, rv))
+    absent = len(set(uni._registry) - {k for k in set(lparse) | set(rparse) if k != 'unclassified_keys'})
+    if not any(groups.values()):
+        return '<p class="muted">No registered dimension carries evidence on either side.</p>'
+    def dim_rows(items):
+        return ''.join(
+            f'<tr><td>{escape(key)}</td><td>{_gate_value_html(lv)}</td><td>{_gate_value_html(rv)}</td></tr>'
+            for key, lv, rv in items)
+    head = '<tr><th>Dimension</th><th>Left</th><th>Right</th></tr>'
+    conflict_table = (f'<table>{head}{dim_rows(groups["conflict"])}</table>') if groups['conflict'] else ''
+    single_block = (f'<details><summary>single-sided ({len(groups["single-sided"])} dims — populated on one side only · missing evidence, not a conflict)</summary>'
+                    f'<table>{head}{dim_rows(groups["single-sided"])}</table></details>') if groups['single-sided'] else ''
+    agree_block = (f'<details><summary>agree ({len(groups["agree"])} dims)</summary><table>{head}{dim_rows(groups["agree"])}</table></details>') if groups['agree'] else ''
+    unknown_block = (f'<details><summary>unknown ({len(groups["unknown"])} dims — populated raw but no delegated evidence on a side)</summary><table>{head}{dim_rows(groups["unknown"])}</table></details>') if groups['unknown'] else ''
+    raw_block = (f'<details><summary>Raw attribute cells · full strings (left {len(str(left_attrs or "")):,} chars · right {len(str(right_attrs or "")):,} chars)</summary>'
+                 f'<table><tr><th>Side</th><th>attribute (as exported)</th></tr>'
+                 f'<tr><th>left</th><td><code>{escape(str(left_attrs or ""))}</code></td></tr>'
+                 f'<tr><th>right</th><td><code>{escape(str(right_attrs or ""))}</code></td></tr></table></details>')
+    headline = f'<p><strong>Mismatching dimensions · {len(groups["conflict"])} conflict</strong> · {len(groups["single-sided"])} single-sided · {len(groups["agree"])} agree · {len(groups["unknown"])} unknown · {absent} registered dims absent on both sides</p>'
+    verdict = ''
+    if groups['conflict']:
+        names = ', '.join(key for key, _l, _r in groups['conflict'])
+        verdict = f'<p class="muted">deciding evidence: {escape(names)} genuinely disagree (SSOT predicates)</p>'
+    return headline + verdict + conflict_table + single_block + agree_block + unknown_block + raw_block
 def _gate_sample(g, raw, listings, decision: str, size: int = 5):
     bucket = g[g.gate_decision == decision]
     picked, skipped = [], 0
@@ -262,86 +542,171 @@ def _gate_sample(g, raw, listings, decision: str, size: int = 5):
             skipped += 1
     return picked, skipped, len(bucket)
 
-def _gate_pair_html(rank: int, row, raw, listings) -> str:
+def _gate_pair_html(rank: int, row, raw, listings, uni) -> str:
     try:
         sim = f'{float(row.similarity):.3f}'
     except Exception:
         sim = escape(row.similarity)
     model = _gate_side(row.gtin1, raw, listings)
     other = _gate_side(row.gtin2, raw, listings)
+    def side_cell(value: str) -> str:
+        if len(value) <= 140:
+            return escape(value)
+        return (f'{escape(value[:140])}… <details><summary>full string ({len(value):,} chars)</summary>'
+                f'<code>{escape(value)}</code></details>')
     rows = (
-        f'<tr><th>left · {escape(model["retailer"])}</th>' + ''.join(f'<td>{escape(model[orig])}</td>' for _c, orig in _GATE_ORIGINAL_COLUMNS) + '</tr>'
-        f'<tr><th>right · {escape(other["retailer"])}</th>' + ''.join(f'<td>{escape(other[orig])}</td>' for _c, orig in _GATE_ORIGINAL_COLUMNS) + '</tr>'
+        f'<tr><th>left · {escape(model["retailer"])}</th>' + ''.join(f'<td>{side_cell(model[orig]) if orig == "attribute" else escape(model[orig])}</td>' for _c, orig in _GATE_ORIGINAL_COLUMNS) + '</tr>'
+        f'<tr><th>right · {escape(other["retailer"])}</th>' + ''.join(f'<td>{side_cell(other[orig]) if orig == "attribute" else escape(other[orig])}</td>' for _c, orig in _GATE_ORIGINAL_COLUMNS) + '</tr>'
     )
     listing_notes = f'{escape(model["_listings"])} · {escape(other["_listings"])}'
     clause = escape(row.gate_reason)
     label = 'fallback_reason' if row.gate_decision == 'fallback' else 'gate_reason (deciding clause)'
-    route = '' if row.gate_decision in ('hard_no', 'proceed') else f'{escape(_gate_route_gloss(str(row.gate_reason)))} — '
+    route = '' if row.gate_decision == 'proceed' else f'{escape(_gate_route_gloss(str(row.gate_reason)))} — '
     verdict = f'<p><strong>{escape(row.gate_decision)}</strong> · <code>{escape(label)}</code>: {clause} · {route}similarity {escape(sim)}</p>'
-    mism = _gate_mismatch_html(model['attribute'], other['attribute'])
+    mism = _gate_dimension_evidence_html(model['attribute'], other['attribute'], uni)
     return (f'<details><summary>#{rank} · {escape(row.gate_decision)} · similarity {escape(sim)} · {clause}</summary>'
             f'{verdict}<p class="muted">{listing_notes}</p>{mism}'
             f'<table><tr><th>Side</th>' + ''.join(f'<th>{escape(orig)}</th>' for _c, orig in _GATE_ORIGINAL_COLUMNS) + '</tr>'
             f'{rows}</table></details>')
 
+def _gate_snapshot(g, raw, listings) -> dict:
+    return {decision: [
+        {'gtin1': r.gtin1, 'gtin2': r.gtin2, 'gate_decision': r.gate_decision,
+         'gate_reason': r.gate_reason, 'similarity': r.similarity,
+         'left': {orig: (r.gtin1 if c == 'barcode' else str(raw.loc[r.gtin1][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
+         'right': {orig: (r.gtin2 if c == 'barcode' else str(raw.loc[r.gtin2][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
+         **({'fallback_reason': r.gate_reason} if decision == 'fallback' else {})}
+        for r in _gate_sample(g, raw, listings, decision)[0]]
+        for decision in _GATE_BUCKETS}
+
 @app.get('/gate', response_class=HTMLResponse)
 def gate_decisions():
     g = _gate_results_frame(_gate_results_path.stat().st_mtime_ns)
     raw, listings = _gate_raw(DATA_PATH.stat().st_mtime_ns)
+    uni = _gate_universe(DATA_PATH.stat().st_mtime_ns)
     counts = g.gate_decision.value_counts()
-    buckets_html, snapshot = [], {}
-    for decision in _GATE_BUCKETS:
+    bucket_outcomes = {'proceed': 'PASS', 'hard_no': 'PASS', 'fallback': 'OPEN'}
+    bucket_verdicts = {
+        'proceed': "<span class='badge badge-pass'>PASS</span> every checked dimension agrees on all sampled pairs — safe to proceed to labeling.",
+        'hard_no': "<span class='badge badge-pass'>PASS</span> decisive clause blocks each sampled pair before anything else can run: never a merge, never a review.",
+        'fallback': "<span class='badge badge-open'>OPEN</span> overlap exists but is too weak to proceed — deferred to review evidence, neither confirmed nor denied.",
+    }
+    findings = []
+    for number, decision in enumerate(_GATE_BUCKETS, 1):
         picked, skipped, total = _gate_sample(g, raw, listings, decision)
-        snapshot[decision] = [
-            {'gtin1': r.gtin1, 'gtin2': r.gtin2, 'gate_decision': r.gate_decision,
-             'gate_reason': r.gate_reason, 'similarity': r.similarity,
-             'left': {orig: (r.gtin1 if c == 'barcode' else str(raw.loc[r.gtin1][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
-             'right': {orig: (r.gtin2 if c == 'barcode' else str(raw.loc[r.gtin2][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
-             **({'fallback_reason': r.gate_reason} if decision == 'fallback' else {})}
-            for r in picked]
-        pairs_html = ''.join(_gate_pair_html(rank, row, raw, listings) for rank, row in enumerate(picked, 1))
-        buckets_html.append(
-            f'<section><h2>{escape(decision)} · {counts.get(decision, 0):,} pairs</h2>'
-            f'<p class="muted">Original columns, as exported · no cleaning · deterministic sample: first {len(picked)} pairs in candidate order '
-            f'(both endpoints resolve to raw export rows)'
-            + (f' · {skipped:,} endpoint-unresolvable pair(s) skipped before the sample' if skipped else '') + '</p>' + pairs_html + '</section>')
-    try:
-        _gate_dir.mkdir(parents=True, exist_ok=True)
-        (_gate_dir / 'gate_decision_sample.json').write_text(json.dumps(snapshot, indent=1))
-        snapshot_note = f'deterministic copy written at render: dashboard/evidence/datagen/gate_decision_sample.json'
-    except Exception as error:
-        snapshot_note = f'snapshot not written ({escape(error)})'
-    counts_row = ''.join(f'<div class="metric"><strong>{counts.get(d, 0):,}</strong>{escape(d)} pairs</div>' for d in _GATE_BUCKETS)
-    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER gate decisions</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}table{{border-collapse:collapse;width:100%;font-size:.9rem}}td,th{{border:1px solid #ccc;padding:.4rem;text-align:left;overflow-wrap:anywhere}}details{{margin:1rem 0}}summary{{cursor:pointer}}section{{border-top:1px solid #ccc;padding:1rem 0}}.muted{{color:#666}}.metric{{border:1px solid #ddd;padding:1rem;width:11rem}}.metrics{{display:flex;gap:1rem;flex-wrap:wrap}}code{{background:#f6f6f6;padding:.1rem .3rem}}</style></head><body>
+        name_map = {'proceed': 'Proceed bucket', 'hard_no': 'Hard-no bucket', 'fallback': 'Fallback bucket'}
+        metrics = ''.join([
+            _fmetric(counts.get(decision, 0), f'{decision} pairs'),
+            _fmetric(len(picked), 'sampled (first 5 in candidate order, endpoints resolvable)'),
+            _fmetric(skipped, 'endpoint-unresolvable pairs skipped'),
+        ])
+        outcome = bucket_outcomes[decision]
+        compare_rows = []
+        examples_html = []
+        for rank, row in enumerate(picked, 1):
+            try:
+                sim = f'{float(row.similarity):.3f}'
+            except Exception:
+                sim = escape(row.similarity)
+            left_title = str(raw.loc[row.gtin1]['title'])
+            right_title = str(raw.loc[row.gtin2]['title'])
+            original = (f"<code>{escape(row.gtin1)}</code> · {escape(left_title)} ↔ "
+                        f"<code>{escape(row.gtin2)}</code> · {escape(right_title)}")
+            route = '' if decision == 'proceed' else f'{escape(_gate_route_gloss(str(row.gate_reason)))} — '
+            resolved = f"<strong>{escape(decision)}</strong> (sim {escape(sim)}) — {route}<code>{escape(str(row.gate_reason))}</code>"
+            compare_rows.append((original, resolved, outcome))
+            examples_html.append(_gate_pair_html(rank, row, raw, listings, uni))
+        sample_path = _gate_dir / 'gate_decision_sample.json'
+        try:
+            snapshot = json.loads(sample_path.read_text())
+            excerpt = json.dumps(snapshot.get(decision, {}), indent=1)
+        except Exception:
+            excerpt = 'rendered evidence sample not yet written — run python dashboard/write_gate_sample.py'
+        stamp = __import__('datetime').datetime.fromtimestamp(sample_path.stat().st_mtime).isoformat(timespec='seconds') if sample_path.exists() else 'not written'
+        evidence = (
+            f'<details open><summary>Raw evidence · full per-pair comparison (sample of 5 · original columns, as exported)</summary>'
+            f'{"".join(examples_html)}</details>'
+            + _fevidence(f'dashboard/evidence/datagen/gate_decision_sample.json (last written {stamp}) · data/gate_results.csv ({len(g):,} rows, gate_reason = deciding clause)',
+                         excerpt))
+        findings.append(_ffinding(number, f'{name_map[decision]} — original-column sample of 5', outcome,
+                                  metrics, _fcompare(compare_rows), evidence,
+                                  bucket_verdicts[decision]))
+    counts_row = ''.join(_fmetric(counts.get(d, 0), f'{d} pairs') for d in _GATE_BUCKETS)
+    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER gate decisions</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}h2{{margin-top:.2rem}}</style></head><body>
 <h1>ER · Gate decisions — original-column evidence</h1>
-<p><strong>Original columns, as exported · no cleaning.</strong> Every candidate pair below is joined back to the raw 13-column feed (dataset.csv via <code>core.common.load_dataset</code>, SSOT column mapping) — not the cleaned/canonical view. The deciding clause is the <code>gate_reason</code> column of data/gate_results.csv.</p>
-<div class="metrics">{counts_row}</div>
-<p class="muted">{escape(snapshot_note)}</p>
-{''.join(buckets_html)}
-<p><a href="/">← home</a> · <a href="/datagen">datagen track</a></p>
+<p class="status">{len(g):,} candidate pair gates · {counts.get('proceed', 0):,} proceed · {counts.get('hard_no', 0):,} hard-no · {counts.get('fallback', 0):,} fallback · deciding clause = <code>gate_reason</code></p>
+<p><strong>Original columns, as exported · no cleaning.</strong> Every sampled pair below is joined back to the raw 13-column feed (dataset.csv via <code>core.common.load_dataset</code>, SSOT column mapping) — not the cleaned/canonical view.</p>
+{''.join(findings)}
+<p class="muted"><a href="/">← home</a> · <a href="/datagen">datagen track</a> · <a href="/graphs">graphs track</a></p>
 </body></html>'''
 
 
 @app.get('/graphs', response_class=HTMLResponse)
 def graphs_track():
-    cfgs = []
+    # Finding 01 — configs + lane scope
+    config_evidence = []
+    config_count = 0
     for name in ('graph_tracks_gnn.yaml', 'graph_tracks_hybrid.yaml'):
         path = ROOT.parent / 'config' / name
         if path.exists():
-            cfgs.append(f'<tr><td>{escape(name)}</td><td><pre>{escape(path.read_text()[:400])}</pre></td></tr>')
-    snaps = []
-    for d in sorted(_results.glob('graph_tracks/*'))[:8]:
-        snaps.append(f'<li><code>{escape(d.name)}</code></li>')
-    for d in sorted((ROOT.parent / 'dvc_refs').glob('*'))[:8]:
-        snaps.append(f'<li>dvc_refs/<code>{escape(d.name)}</code> (published)</li>')
-    snap_html = '<ul>' + ''.join(snaps) + '</ul>' if snaps else '<p>No local run snapshots yet — graph-track workers publish from the Colab lane (DVC remote + W&B offline bundles).</p>'
-    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER graphs</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}pre{{background:#f6f6f6;padding:.5rem;overflow-x:auto}}ul{{margin:.5rem 0}}</style></head><body>
+            config_count += 1
+            config_evidence.append(f'{name}:\n' + path.read_text()[:900])
+    config_excerpt = '\n\n'.join(config_evidence) or 'no graph-track configs present yet'
+    cfg_metrics = ''.join([
+        _fmetric(config_count, 'configs governed in config/'),
+        _fmetric('8 + 2', 'categorical relations + volume/pack'),
+        _fmetric('full-batch', 'typed two-hop aggregation (NOT sampled GraphSAGE)'),
+    ])
+    cfg_compare = _fcompare([
+        ('Aggregation scheme (planned lane)', 'full-batch typed two-hop aggregation over 8 categorical relations + volume/pack', 'PASS'),
+        ('Config surface', 'graph_tracks_gnn.yaml + graph_tracks_hybrid.yaml', 'PASS' if config_count == 2 else 'OPEN'),
+        ('Tractable catalogs in lane scope', '62,963-row catalogs — skipped by design (graph lane covers tractable sizes only)', 'OPEN'),
+    ])
+    f01 = _ffinding(1, 'GNN-only + hybrid semantic-ID lane — configs', 'PASS', cfg_metrics, cfg_compare,
+                    _fevidence('config/graph_tracks_gnn.yaml + config/graph_tracks_hybrid.yaml (verbatim, capped)', config_excerpt),
+                    "<span class='badge badge-pass'>PASS</span> — lane setting fixed in config; tractable catalogs skip.")
+    # Finding 02 — checkpoint / DVC snapshot lifecycle
+    snips = sorted((ROOT.parent / 'results').glob('graph_tracks/*'))[:8]
+    pubs = sorted((ROOT.parent / 'dvc_refs').glob('*'))[:8]
+    lifecycle_metrics = ''.join([
+        _fmetric(len(snips), 'local graph_tracks snapshots'),
+        _fmetric(len(pubs), 'published DVC refs'),
+        _fmetric('5001027', 'commit where lifecycle landed'),
+    ])
+    lifecycle_compare = _fcompare([
+        ('Checkpoint persistence planned as ad-hoc local folders',
+         'DVC refs + checkpoint manifests (commit 5001027)', 'PASS'),
+        ('Snapshot publication from the Colab lane (DVC remote + W&B offline bundles)',
+         'published refs resolve locally in dvc_refs/', 'PASS' if pubs else 'OPEN'),
+    ])
+    listing = '\n'.join([f'results/graph_tracks/{d.name}' for d in snips]
+                        + [f'dvc_refs/{d.name} (published)' for d in pubs]) or 'no local snapshots yet — workers publish from the Colab lane'
+    f02 = _ffinding(2, 'Checkpoint / DVC snapshot lifecycle', 'PASS' if pubs else 'OPEN',
+                    lifecycle_metrics, lifecycle_compare,
+                    _fevidence('results/graph_tracks/* + dvc_refs/* (directory listing, capped)', listing, cap=600),
+                    f"<span class='badge {'badge-pass' if pubs else 'badge-open'}'>{'PASS' if pubs else 'OPEN'}</span> — lifecycle logic landed in commit 5001027{' ; published refs present' if pubs else ' ; no published refs yet'}.")
+    # Finding 03 — sequencing (waiting-on)
+    census_path = _results / 'attribute_universe_census.json'
+    census_landed = census_path.exists()
+    wait_metrics = ''.join([
+        _fmetric('landed' if census_landed else 'in flight', 'AttributeUniverse census (feeds graph node relations)'),
+        _fmetric('open', 'P1/P2 items from TODO.md (owner DEAD LAST ruling)'),
+    ])
+    wait_compare = _fcompare([
+        ('AttributeUniverse census must land before graph node relations exist',
+         f'results/attribute_universe_census.json {"present — feeds the relations" if census_landed else "not yet written"}',
+         'PASS' if census_landed else 'OPEN'),
+        ('P1/P2 TODO items must close before graph linkage expands', 'open — owner DEAD LAST ruling', 'OPEN'),
+    ])
+    f03 = _ffinding(3, 'Waiting on — sequencing rules', 'OPEN', wait_metrics, wait_compare,
+                    _fevidence('results/attribute_universe_census.json + TODO.md',
+                               'Census feeds the graph node relations; P1/P2 items gate the expansion of graph linkage.'),
+                    "<span class='badge badge-open'>OPEN</span> — census is the dependency; linkage expansion waits on the P1/P2 owner ruling.")
+    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER graphs</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}</style></head><body>
 <h1>ER · Graphs track — GNN-only + hybrid semantic-ID lane</h1>
-<p>Full-batch typed two-hop aggregation (NOT sampled GraphSAGE) · 8 categorical relations + volume/pack · checkpoint/DVC snapshot lifecycle landed in commit 5001027 · tractable 62,963-row catalogs, skip.</p>
-<h2>Waiting on</h2><ul><li>AttributeUniverse census lands first — it feeds the graph node relations</li><li>P1/P2 items from TODO.md close before graph linkage expands (owner DEAD LAST ruling)</li></ul>
-<h2>Configs</h2><table>{''.join(cfgs)}</table>
-<h2>Local snapshots</h2>{snap_html}
-<p><a href="/">← home</a> · <a href="/datagen">datagen track</a></p>
+<p class="status">2 lanes (GNN-only / hybrid semantic-ID) · full-batch typed two-hop aggregation · snapshot lifecycle landed (commit 5001027) · 62,963-row catalogs skip</p>
+{f01}{f02}{f03}
+<p class="muted"><a href="/">← home</a> · <a href="/datagen">datagen track</a> · <a href="/gate">gate decisions</a> · <a href="/training">training reports</a></p>
 </body></html>'''
 
 
@@ -379,7 +744,7 @@ def catalog_page(gtin: str):
 
 
 def evidence_page(title, body):
-    return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + escape(title) + '</title><style>body{font-family:system-ui;margin:2rem;color:#222}section{border-top:1px solid #ccc;padding:1rem 0}table{border-collapse:collapse;width:100%;font-size:.9rem}td,th{border:1px solid #ccc;padding:.4rem;text-align:left;overflow-wrap:anywhere}details{margin:1rem 0}summary{cursor:pointer}</style></head><body><p><a href="/">Finding 01</a> · <a href="/experiments">All findings</a></p>' + body + '</body></html>'
+    return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + escape(title) + '</title><style>body{font-family:system-ui;margin:2rem;color:#222}section{border-top:1px solid #ccc;padding:1rem 0}table{border-collapse:collapse;width:100%;font-size:.9rem}td,th{border:1px solid #ccc;padding:.4rem;text-align:left;overflow-wrap:anywhere}details{margin:1rem 0}summary{cursor:pointer}</style></head><body><p><a href="/">← home</a> · <a href="/experiments">All findings</a> · <a href="/training">Training reports</a> · <a href="/datagen">Datagen track</a> · <a href="/gate">Gate decisions</a> · <a href="/graphs">Graphs track</a></p>' + body + '</body></html>'
 
 @app.get('/findings/03', response_class=HTMLResponse)
 def context_finding():

@@ -31,6 +31,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from core.columns import (
+    CANONICAL_DATASET_REQUIRED_COLUMNS as CANONICAL_DATASET_REQUIRED_COLUMNS_REQUIRED,
+)
+from core.columns import DATA_PREP_REQUIRED_COLUMNS, source_row_pairs
 from core.common import (
     DATA_DIR,
     RESULTS,
@@ -46,9 +50,11 @@ from core.schemas import (
     check_canonical_records_frame,
     check_gate_results_frame,
     check_verdict_map,
+    require_populated_source_rows,
 )
 from ner.ner_product_attributes import extract_title_attributes, parse_attribute_details
 from core.critical_attributes import (
+    CRITICAL_ATTRIBUTE_DIMENSIONS,
     categorical_conflict,
     extract_critical_claims,
     extract_description_claims,
@@ -66,15 +72,11 @@ from core.tracing import (
 # reads the RAW export, stage 2 (build_training_data) reads the DEDUPED dataset
 # whose columns were canonicalized by the dedupe tier. Both are declared here so
 # the trace states, per run, which contract each stage actually received.
-RAW_EXPORT_REQUIRED_COLUMNS = (
-    "gtin",
-    "sku_name_eng",
-    "attribute",
-    "brand",
-    "description_short_eng",
-    "breadcrumbs_eng",
-)
-CANONICAL_DATASET_REQUIRED_COLUMNS = ("barcode", "title", "attributes")
+# The column contracts come from the SSOT (config/paths.yaml via
+# core.columns), never from a literal tuple here. They were hardcoded and
+# drifted from the mapping that already declared every column on both sides.
+RAW_EXPORT_REQUIRED_COLUMNS = DATA_PREP_REQUIRED_COLUMNS
+CANONICAL_DATASET_REQUIRED_COLUMNS = CANONICAL_DATASET_REQUIRED_COLUMNS_REQUIRED
 # The per-entity caps live in core.tracing (one policy, one place) with their
 # justification: exact per-reason census rows + a bounded stratified sample.
 ENTITY_PER_REASON = ENTITY_SAMPLE_PER_REASON
@@ -761,29 +763,101 @@ def pack_gate(
     return True
 
 
+def attribute_gate_census_column_names(registry=None) -> list[str]:
+    """The ALL-DIMENSIONS census audit-column contract (deterministic order).
+
+    One `<key>_state` column per AttributeUniverse-registered key plus the
+    five-state rollup columns. Unit-tested against the registry so a new
+    registered field can never silently miss its census column.
+    """
+    from core.attribute_universe import attribute_registry
+
+    keys = dict(registry) if registry is not None else attribute_registry()
+    if not keys:
+        raise ValueError("attribute_gate_census_column_names requires a non-empty registry")
+    return [
+        f"{key.replace(' ', '_')}_state" for key in sorted(keys)
+    ] + [
+        "dimension_conflicts",
+        "dimension_conflict_count",
+        "dimension_missing_left",
+        "dimension_missing_right",
+        "dimension_missing_both",
+        "dimension_unknown_parse",
+    ]
+
+
+def attribute_gate_universe_scope_detail() -> dict[str, object]:
+    """Trace detail for the attribute-gate decision-scope evidence row.
+
+    States the owner ruling, which dimensions DECIDE today, which census
+    states exist, what each state MEANS (absence stays unknown, a conflict
+    votes only where the config permits) and the volume tolerances the census
+    applied. Same-config read only, no writes.
+    """
+    from core.attribute_conflicts import DIMENSION_STATES
+
+    from core.attribute_universe import attribute_registry
+
+    return {
+        "owner_ruling": "ALL ATTRIBUTES are used to make ALL DECISIONS",
+        "registry_size": len(attribute_registry()),
+        "decision_dimensions": list(CRITICAL_ATTRIBUTE_DIMENSIONS),
+        "census_states": sorted(DIMENSION_STATES),
+        "census_column_contract": attribute_gate_census_column_names(),
+        "state_semantics": {
+            "agree": "both sides populated, no conflict under the field's own measured semantics",
+            "conflict": "both sides populated and genuinely incompatible (votes only where config permits)",
+            "missing_left": "right side populated only — stays UNKNOWN, never vetoed",
+            "missing_right": "left side populated only — stays UNKNOWN, never vetoed",
+            "missing_both": "no evidence either side — UNKNOWN",
+            "unknown_parse": "populated but unclassifiable (band grammar miss) — UNKNOWN",
+        },
+        "volume_census_tolerances": {
+            "relative": float(training_cfg().gate.vol_tolerance),
+            "absolute_ml": float(training_cfg().gate.vol_abs_tolerance),
+            "applied": "whichever cut is wider (core.critical_attributes.volumes_compatible)",
+            "source": "config/training.yaml gate.vol_tolerance + gate.vol_abs_tolerance",
+        },
+    }
+
+
 def three_way_gate(
     attrs1: dict,
     attrs2: dict,
     vol_tolerance: float | None = None,
     raw_conf_threshold: float | None = None,
     consistency_fallback_threshold: float | None = None,
+    vol_abs_tolerance: float | None = None,
 ) -> dict:
     """Deterministic volume/pack/flavor gate.
 
-    NO-FALLBACK SSOT (audit round 2, F01): the three decision thresholds
-    live in config/training.yaml `gate:` and are read through training_cfg()
-    — the old signature defaults (0.05/0.85/0.3) were a second declaration
-    the config could not steer. Passing a value explicitly still wins
-    (selftest pins known-good gate behavior with explicit values).
+    NO-FALLBACK SSOT (audit round 2, F01): the decision thresholds live in
+    config/training.yaml `gate:` and are read through training_cfg() — the
+    old signature defaults (0.05/0.85/0.3) were a second declaration the
+    config could not steer. Passing a value explicitly still wins (selftest
+    pins known-good gate behavior with explicit values).
+
+    VOLUME TOLERANCE (owner ruling 2026-10-01): BOTH cuts are read from the
+    gate block and threaded to every downstream volume comparison — the
+    pack_gate call, the inline overlap loop, the critical-7 evaluation and
+    the decision engine. The block previously carried only the relative cut,
+    so the absolute one stayed at its 0.0 parameter default here while the
+    veto lane applied it; since the relative cut is the stricter of the two
+    at small volumes, the gate and the veto lane then disagreed about the
+    same pair. volumes_compatible applies whichever cut is wider.
     """
     if (
         vol_tolerance is None
         or raw_conf_threshold is None
         or consistency_fallback_threshold is None
+        or vol_abs_tolerance is None
     ):
         _g = training_cfg().gate
         if vol_tolerance is None:
             vol_tolerance = float(_g.vol_tolerance)
+        if vol_abs_tolerance is None:
+            vol_abs_tolerance = float(_g.vol_abs_tolerance)
         if raw_conf_threshold is None:
             raw_conf_threshold = float(_g.raw_conf_threshold)
         if consistency_fallback_threshold is None:
@@ -795,6 +869,7 @@ def three_way_gate(
         attrs1,
         attrs2,
         volume_relative_tolerance=float(vol_tolerance),
+        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
         trust_threshold=float(raw_conf_threshold),
     ):
         return GateResult(
@@ -829,7 +904,16 @@ def three_way_gate(
         for v2 in attrs2["volume_set"]:
             if v1 == 0 or v2 == 0:
                 continue
-            if abs(v1 - v2) / max(v1, v2) <= vol_tolerance:
+            # Same predicate as every other lane (SSOT, audit 2026-09-15):
+            # whichever of the two configured cuts is wider applies. The
+            # hand-rolled relative-only ratio this replaces disagreed with
+            # the veto lane at small volumes.
+            if volumes_compatible(
+                {v1},
+                {v2},
+                volume_relative_tolerance=float(vol_tolerance),
+                volume_absolute_tolerance_ml=float(vol_abs_tolerance),
+            ):
                 vol_overlap = True
                 break
         if vol_overlap:
@@ -852,23 +936,40 @@ def three_way_gate(
             return GateResult(decision="hard_no", reason=reason).model_dump()
 
 
-    # Every explicit categorical conflict uses the same dimension/evidence
-    # definition as targeted mining and final inference. Unknown stays
-    # unknown here; it is not fabricated into a conflict or an agreement.
+    # Every explicit categorical conflict uses THE SINGLE DECISION ENGINE
+    # (owner directive: ALL attributes × ALL metrics for the ENTIRE decision
+    # process). The engine evaluates the four critical-categorical channels
+    # with the whole ordered stack (negation hard-veto, alias-folded
+    # equality, set overlaps, fuzzy surface) — so unclear spellings rescue
+    # instead of riding bare inequality, while a negation conflict stays a
+    # definite negative. Unknown stays unknown here; it is not fabricated
+    # into a conflict or an agreement.
     from core.attribute_conflicts import (
+        CRITICAL_NAME_BY_CENSUS_KEY,
         canonical_attribute_info,
         critical_attribute_evaluation,
     )
+    from core.attribute_decision import AttributeDecisionEngine
 
+    left_info, right_info = canonical_attribute_info(attrs1), canonical_attribute_info(attrs2)
     critical = critical_attribute_evaluation(
-        canonical_attribute_info(attrs1),
-        canonical_attribute_info(attrs2),
+        left_info,
+        right_info,
         volume_relative_tolerance=float(vol_tolerance),
+        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
     )
+    evidence = AttributeDecisionEngine(
+        volume_relative_tolerance=float(vol_tolerance),
+        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
+    ).evaluate(left_info, right_info, left_raw=attrs1, right_raw=attrs2)
+    engine_conflicts = {
+        CRITICAL_NAME_BY_CENSUS_KEY[key]
+        for key in evidence.conflicts
+        if key in CRITICAL_NAME_BY_CENSUS_KEY
+    }
     categorical_conflicts = [
         name
-        for name in critical["conflicts"]
-        if name in {"flavor", "carbonation", "sweetener", "pulp"}
+        for name in sorted(engine_conflicts & {"flavor", "carbonation", "sweetener", "pulp"})
     ]
     if categorical_conflicts:
         return GateResult(
@@ -1367,6 +1468,44 @@ def generate_canonical(
                 final_tokens.append(ft)
     canonical = " ".join(final_tokens)
 
+    # CANONICAL-SIDE UNIVERSE EVIDENCE (owner ruling 2026-10-01, closes the
+    # wiring-agent's reported gap): canonical_records.csv previously carried
+    # NO universe_evidence column, so the CANONICAL side of the per-pair
+    # attribute census (core.attribute_conflicts.full_dimension_states ->
+    # canonical_attribute_info._universe_evidence_of) could only populate the
+    # critical channels; the SKU side already parses all 37 registered keys
+    # from the raw attribute cell (parse_universe_cell). Parse each of the
+    # GTIN's raw attribute cells with the SAME census SSOT parser
+    # (parse_universe_cell -> AttributeUniverse.parse) and UNION the token
+    # sets per registered key — same key normalization
+    # (core.text.normalized_attribute_text), same token lowercase/strip, same
+    # band canon. Persisted per key as SORTED value lists under ONE
+    # deterministic JSON string (sorted keys), matching the CSV writer's
+    # sorted-set convention: ast.literal_eval round-trips it in
+    # _universe_evidence_of exactly like the other canonical set columns.
+    # Two keys are deliberately NOT persisted:
+    #   * "volume" — the parse emits float ml values; the canonical volume
+    #     channel is volume_set (read directly by _universe_value), so floats
+    #     here would be unused noise in the CSV;
+    #   * "unclassified_keys" — key NAMES, not values; the reader keeps
+    #     registered keys only, and the SKU side owns the unclassified bucket.
+    # Existing columns are untouched (additive column at the frame's end —
+    # CANONICAL_RECORDS_COLUMNS updated deliberately, never silently).
+    canonical_universe_evidence: dict[str, set[str]] = {}
+    from core.attribute_conflicts import parse_universe_cell
+    for attr in attributes:
+        parsed = parse_universe_cell(attr)
+        parsed.pop("unclassified_keys", None)
+        parsed.pop("volume", None)
+        for key, values in parsed.items():
+            if values:
+                canonical_universe_evidence.setdefault(key, set()).update(
+                    str(token) for token in values
+                )
+    universe_evidence_json = json.dumps(
+        {key: sorted(values) for key, values in sorted(canonical_universe_evidence.items())}
+    )
+
     # BOUNDARY CONTRACT (lib.schemas): one validated record per canonical.
     # brand NaN-guard: a group whose brand column is all-NaN would carry a
     # float NaN into mode_brand (pandas would write ""), which pydantic's
@@ -1404,7 +1543,13 @@ def generate_canonical(
         pack_consistency=round(pack_consistency, 3),
         n_titles=n,
     )
-    return rec.model_dump()
+    # Additive persistence key (post-dump, like description_evidence before
+    # it was a model field): the canonical record model stays extra='forbid'
+    # for its gate-facing fields; the universe evidence rides the CSV
+    # contract next to them as the one rendered JSON string.
+    out = rec.model_dump()
+    out["universe_evidence"] = universe_evidence_json
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1873,6 +2018,53 @@ def strip_number_tokens(text: str, brand: str = "") -> str:
 from collections import defaultdict
 
 
+# PER-TITLE ORIGINAL EVIDENCE (owner ruling 2026-10-01).
+#
+# WHY THIS EXISTS. The decision engine's stage-7 clarification re-reads the
+# ORIGINAL columns (title / attributes / description) whenever a dimension
+# comes back INCONCLUSIVE. It was wired but INERT: three_way_gate handed it a
+# canonical record (canonical, flavor_set, volume_set, mode_brand), and
+# _fallback_reparse looks for `attributes`/`title`/`description` — none of
+# which exist on a canonical. It therefore returned None for all 37 keys and
+# the clarification pass never fired. The fix is to CARRY the original
+# columns instead of re-deriving them downstream.
+#
+# PER-TITLE, NOT PER-CANONICAL: measured 26,211 titles behind 13,216
+# canonicals (4.77 rows each). Flat columns would force a pick-one and
+# reintroduce exactly the loss that made stage 7 unreachable.
+#
+# WHICH COLUMNS is declared in config/paths.yaml `source_row_fields`, each with
+# a required non-empty reason, and read through core.columns — deliberately
+# NOT a list here. A list in code is steered by nothing and drifts from the
+# mapping that already names every column on both sides; the exclusions
+# (url/image_url/price) are auditable in the config instead of re-argued by
+# taste. Module-level so the writer can be tested directly against the frame
+# validator that has to accept its output.
+def _source_rows_for(frame: pd.DataFrame) -> str:
+    """Serialize one title's original columns as deterministic JSON.
+
+    Empty and null cells are dropped rather than written as "", because "" is
+    not evidence of absence — it is absence of evidence, and stage 7 must not
+    read a blank as a negative claim.
+    """
+    fields = source_row_pairs()
+    entries = []
+    for record in frame.to_dict("records"):
+        entry = {}
+        for target, source in fields:
+            value = record.get(source)
+            if value is None or pd.isna(value):
+                continue
+            text = str(value).strip()
+            if text:
+                entry[target] = text
+        if entry:
+            entries.append(entry)
+    # Sorted keys for byte-determinism; the per-title ORDER follows the
+    # frame's own row order so extract_all stays fed in the same order.
+    return json.dumps(entries, sort_keys=True)
+
+
 def run_within_brand_pipeline(
     df_full: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
@@ -1986,6 +2178,9 @@ def run_within_brand_pipeline(
             brand=("brand", lambda x: Counter(x).most_common(1)[0][0]),
             description_evidence=("description_short_eng", _source_evidence),
             breadcrumb_evidence=("breadcrumbs_eng", _source_evidence),
+            source_rows=("sku_name_eng", lambda x: _source_rows_for(
+                df_full.loc[x.index]
+            )),
         )
         .reset_index()
     )
@@ -2019,6 +2214,9 @@ def run_within_brand_pipeline(
             )
         record["description_evidence"] = row["description_evidence"]
         record["breadcrumb_evidence"] = row["breadcrumb_evidence"]
+        # Per-title original evidence, carried so the engine's stage-7
+        # clarification can reach the real columns (see _source_rows_for).
+        record["source_rows"] = row["source_rows"]
         canonical_records.append(record)
     df_canon = pd.DataFrame(canonical_records)
 
@@ -2050,6 +2248,64 @@ def run_within_brand_pipeline(
         source="raw export",
     )
 
+    # ── CONSOLIDATED TRACE: canonical-side universe-evidence census ──────
+    # Closure evidence for the wiring gap this column closes: how many
+    # canonicals carry ANY universe evidence, per registered key. Audit
+    # readback only — no decision reads this row.
+    if len(df_canon):
+        from core.attribute_conflicts import _universe_evidence_of
+
+        _evid = [ _universe_evidence_of(row) for row in df_canon.to_dict("records") ]
+        _per_key: Counter[str] = Counter()
+        for evidence in _evid:
+            for key in evidence:
+                _per_key[key] += 1
+        trace.add(
+            "canonical",
+            "universe_evidence_census",
+            in_count=int(len(df_canon)),
+            out_count=int(sum(1 for item in _evid if item)),
+            reason="canonicals persisting non-empty universe_evidence (per-key counts in detail)",
+            detail={
+                "canonicals_with_evidence": int(
+                    sum(1 for item in _evid if item)
+                ),
+                "per_key_populated": {
+                    key: count for key, count in sorted(_per_key.items())
+                },
+            },
+            source="canonical_records.csv (in-memory frame)",
+        )
+
+    # ── CONSOLIDATED TRACE: attribute-gate evidence sections (owner ruling
+    # 2026-10-01, "ALL ATTRIBUTES are used to make ALL DECISIONS") ──────────
+    # The registry census (results/attribute_universe_census.json) measured
+    # every raw key; the decision layer (core.attribute_conflicts
+    # full_attribute_evaluation) now evaluates ALL of them per pair with each
+    # field's own measured conflict semantics, while the VETO still votes only
+    # where config permits (vetoes stay absence-blind and config-owned). These
+    # two run-scope rows sit next to the canonical row so the decision
+    # doctrine and its evidence live in one file. The detail builders live at
+    # module scope (attribute_gate_* below) so the contracts are unit-testable
+    # without a full data-prep run. The ledger reads ONLY the census artifact
+    # + the current config (never writes either).
+    from core.attribute_conflicts import veto_eligibility_ledger
+
+    trace.add(
+        "attribute_gate",
+        "universe_decision_scope",
+        reason="every AttributeUniverse-registered dimension enters pair-level evaluation; absence never vetoes",
+        detail=attribute_gate_universe_scope_detail(),
+        source="core.attribute_universe census artifact",
+    )
+    trace.add(
+        "attribute_gate",
+        "veto_eligibility",
+        reason="per-dimension veto-eligibility ledger: evidence class + CURRENT config state + the exact owner delta",
+        detail={"ledger": veto_eligibility_ledger()},
+        source="core.attribute_universe census + config/training.yaml (both read-only)",
+    )
+
     # Brand blocking
     candidate_pairs = set()
     for brand, gtins in brand_to_gtins.items():
@@ -2069,6 +2325,11 @@ def run_within_brand_pipeline(
     # (core.tracing) instead of a per-stage results/logs CSV, so a decision
     # and its readback are never in two places. Full census, not a sample:
     # the whole point is no invisibility.
+    from core.attribute_conflicts import (
+        canonical_attribute_info,
+        full_attribute_evaluation,
+    )
+
     gate_vis = []
     # VECTORIZATION RULING (audit close, 2026-09-10): this per-pair Python
     # loop is deliberately kept scalar. "Optimize and vectorize wherever
@@ -2096,6 +2357,20 @@ def run_within_brand_pipeline(
         sim = jaccard_similarity(
             " ".join(t for t in str(a1["canonical"]).split() if "_" not in t),
             " ".join(t for t in str(a2["canonical"]).split() if "_" not in t),
+        )
+        evaluation = full_attribute_evaluation(
+            canonical_attribute_info(a1),
+            canonical_attribute_info(a2),
+            # BOTH cuts, so the census records the same volume verdict the
+            # gate just decided on. Relative-only here minted `conflict` on
+            # small-volume pairs the gate had accepted (the relative cut is
+            # the stricter of the two below ~100ml).
+            volume_relative_tolerance=float(
+                training_cfg().gate.vol_tolerance
+            ),
+            volume_absolute_tolerance_ml=float(
+                training_cfg().gate.vol_abs_tolerance
+            ),
         )
         results.append(
             {
@@ -2131,6 +2406,20 @@ def run_within_brand_pipeline(
                 "decision": gate["decision"],
                 "reason": gate["reason"],
                 "jaccard_short_tokens": sim,
+                # FULL-ATTRIBUTES per-pair census (owner ruling 2026-10-01):
+                # evaluated on the SAME canonical evidence the gate consumed,
+                # outside the decision table — zero influence on
+                # gate_decision/gate_reason (the vetoes stay config-owned).
+                # Stored as a JSON string (sorted keys) so the trace
+                # readback is byte-deterministic; carrier column only, never
+                # written to gate_results.csv (that frame contract is fixed).
+                "dimension_census": json.dumps(
+                    evaluation["dimension_states"], sort_keys=True
+                ),
+                "dimension_conflicts": ",".join(
+                    key.replace(" ", "_")
+                    for key in evaluation["dimension_conflicts"]
+                ),
             }
         )
     results_df = pd.DataFrame(results)
@@ -2165,7 +2454,7 @@ def run_within_brand_pipeline(
     # FRAME CONTRACTS (lib.schemas): column sets, decision domain, similarity
     # bounds, GTIN endpoints — asserted at the WRITE boundary so a corrupted
     # transform can never land in the CSVs every downstream step reads.
-    check_canonical_records_frame(df_canon)
+    require_populated_source_rows(check_canonical_records_frame(df_canon))
     check_gate_results_frame(results_df)
     # SILENT_DROPS task 6: every CSV write goes through the atomic
     # mechanism (tmp sibling + fsync + rename) so an interrupt can never
@@ -2223,6 +2512,28 @@ def run_within_brand_pipeline(
             },
             source="gate_results.csv",
         )
+    # FULL-ATTRIBUTES pair census rollup (owner ruling 2026-10-01): a
+    # run-scope row over the whole gated population states exactly how many
+    # pairs carried at least one recorded dimension conflict and which
+    # dimensions are the loud ones — per-pair detail rides the sampled
+    # pair_decision rows (bounded sample, see core.tracing) and this row
+    # carries the exact counts.
+    if len(gate_frame):
+        conflicts = gate_frame["dimension_conflicts"].astype(str)
+        trace.add(
+            "attribute_gate",
+            "pair_dimension_census",
+            scope="group",
+            in_count=int(len(gate_frame)),
+            out_count=int((conflicts != "").sum()),
+            reason="pairs with at least one recorded dimension conflict (absence stays unknown, never minted)",
+            detail={
+                "pairs": int(len(gate_frame)),
+                "conflict_paired": count_rows(conflicts[conflicts != ""], limit=None),
+                "no_conflict": int((conflicts == "").sum()),
+            },
+            source="gate_stage in-memory readback",
+        )
     if len(gate_frame):
         # Named `reason_census`, NOT `decision_reasons`: every group step
         # starting with "gate.decision_" is a decision bucket and is summed by
@@ -2273,6 +2584,11 @@ def run_within_brand_pipeline(
                     "package_material_b": list(r.package_materials2),
                     "flavor_a": str(r.flavor1),
                     "flavor_b": str(r.flavor2),
+                    # FULL-ATTRIBUTES census (owner ruling 2026-10-01): the
+                    # per-pair all-dimension states, one `<key>_state` entry
+                    # per AttributeUniverse-registered field.
+                    "dimension_census": json.loads(str(r.dimension_census)),
+                    "dimension_conflicts": str(r.dimension_conflicts),
                 },
                 sort_keys=True,
             ),
@@ -2558,7 +2874,12 @@ def build_training_data(
             min_similarity=float(targeted_cfg["min_similarity"]),
             # Same volume tolerance the training-label gate uses, so a pair the
             # gate calls compatible can never be mined here as a conflict.
+            # BOTH cuts: the relative-only cut rejected small-volume pairs the
+            # gate accepts, which would mine a true match as a hard negative.
             volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
+            volume_absolute_tolerance_ml=float(
+                training_cfg().gate.vol_abs_tolerance
+            ),
             # Same canonical-identity rule the baseline negative lane already
             # applies: a same-canonical pair is a true match, not a label-0 row.
             canonical_map=canon_map,
@@ -2600,7 +2921,11 @@ def build_training_data(
             max_per_brand=int(cross_cfg["max_per_brand"]),
             # Same volume tolerance the training-label gate uses, so a pair the
             # gate calls compatible can never be mined here as a conflict.
+            # BOTH cuts (see the targeted lane above).
             volume_relative_tolerance=float(training_cfg().gate.vol_tolerance),
+            volume_absolute_tolerance_ml=float(
+                training_cfg().gate.vol_abs_tolerance
+            ),
             funnel=cross_brand_funnel,
         )
         if bool(cross_cfg["enabled"])

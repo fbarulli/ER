@@ -1094,6 +1094,11 @@ def _main_inner(_mlf, _wandb) -> None:
             volume_relative_tolerance=float(
                 load_config()["gate"]["vol_tolerance"]
             ),
+            # Both cuts: relative-only rejects small-volume pairs the gate
+            # accepts, which would mine a true match as a hard negative.
+            volume_absolute_tolerance_ml=float(
+                load_config()["gate"]["vol_abs_tolerance"]
+            ),
         )
     elif attribute_conflict_enabled:
         _attr_neg = np.empty((0, 2), dtype=int)

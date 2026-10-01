@@ -42,6 +42,7 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field
 from sklearn.metrics import adjusted_rand_score
 
+from core.columns import alias_names
 from core.ann_config import load_ann_config
 from core.attribute_conflicts import (
     canonical_attribute_info,
@@ -341,13 +342,38 @@ def targeted_veto_gate(
         volume_relative_tolerance=relative_tolerance,
         volume_absolute_tolerance_ml=absolute_tolerance_ml,
     )
+    # THE SINGLE DECISION ENGINE (owner directive 2026-10-01: ALL attributes
+    # × ALL metrics for the ENTIRE decision process). One dataclass
+    # (PairEvidence) loaded across the process evaluates the full 37-key
+    # registry through the ordered stack — unit normalization, negation
+    # hard-veto, alias-folded equality, numeric/band interval math, set
+    # overlaps and the fuzzy surface stage — replacing every hand-rolled
+    # per-dimension clause here (the old material block above included).
+    # Registry-key conflicts map to critical dimension names through the SSOT
+    # inversion table, so the audit and veto columns stay in the critical
+    # vocabulary while the evidence now spans the WHOLE universe.
+    from core.attribute_conflicts import CRITICAL_NAME_BY_CENSUS_KEY
+    from core.attribute_decision import AttributeDecisionEngine
+
+    evidence = AttributeDecisionEngine(
+        volume_relative_tolerance=relative_tolerance,
+        volume_absolute_tolerance_ml=absolute_tolerance_ml,
+    ).evaluate(sku_info, candidate_info)
+    registry_conflicts = {
+        CRITICAL_NAME_BY_CENSUS_KEY[census_key]
+        for census_key in evidence.conflicts
+        if census_key in CRITICAL_NAME_BY_CENSUS_KEY
+    }
+    all_conflicts = list(critical["conflicts"]) + sorted(
+        registry_conflicts - set(critical["conflicts"])
+    )
     # SSOT (audit 2026-09-15): this audit column used to call a second
     # ``pack_gate`` that lived in core.attribute_conflicts and answered the
     # opposite way from the training-label gate for the same input. It is now
     # derived from the SAME evaluation object that already drives the veto and
     # defer routing below, so the reported boolean can no longer disagree with
     # the decision it claims to audit.
-    pack_gate_pass = not critical["conflicts"] and not critical["unknown"]
+    pack_gate_pass = not all_conflicts and not critical["unknown"]
 
     pack_conflict = bool(left_pack and right_pack and not (left_pack & right_pack))
     volume_conflict = bool(
@@ -391,12 +417,15 @@ def targeted_veto_gate(
         "targeted_package_type_a": json.dumps(sorted(left_package_type)),
         "targeted_package_type_b": json.dumps(sorted(right_package_type)),
         "targeted_pack_gate_pass": int(pack_gate_pass),
-        "targeted_critical_conflicts": ",".join(critical["conflicts"]),
+        # pack_material rides the same conflict/vetoed audit columns as the
+        # shared dimensions, so the difference between the two lists stays
+        # exactly "what the configured veto set excluded".
+        "targeted_critical_conflicts": ",".join(all_conflicts),
         # The conflicts that were allowed to veto -- the difference between
         # this and targeted_critical_conflicts is exactly what the configured
         # veto set excludes, so the decision stays inspectable.
         "targeted_vetoed_conflicts": ",".join(
-            d for d in critical["conflicts"] if d in set(settings["veto_dimensions"])
+            d for d in all_conflicts if d in set(settings["veto_dimensions"])
         ),
         "targeted_critical_agreements": ",".join(critical["agreements"]),
         "targeted_brand_a": left_brand,
@@ -422,10 +451,12 @@ def targeted_veto_gate(
     # is AUDITED rather than hidden -- it simply stops spending true matches.
     # The default set is the measured optimum: adding "sweetener" back removes
     # one more false merge and costs 74 true ones (see config/training.yaml).
+    # pack_material vetoes only when configured; its conflict already shows in
+    # all_conflicts (and therefore targeted_critical_conflicts) either way.
     veto_dimensions = set(settings["veto_dimensions"])
     veto_reasons: list[str] = [
         f"{dimension}_mismatch"
-        for dimension in critical["conflicts"]
+        for dimension in all_conflicts
         if dimension in veto_dimensions
     ]
     if brand_conflict_flag and bool(settings["brand_mismatch_veto"]):
@@ -855,7 +886,7 @@ def candidate_gate_fields(
 ) -> dict[str, object]:
     """Build the shared candidate gate record used by all matching lanes."""
     candidate_info = canonical_attribute_info(candidate_record)
-    sku_gtin = metadata_text(row_metadata_text(row, "barcode", "gtin")).strip()
+    sku_gtin = metadata_text(row_metadata_text(row, *alias_names("barcode"))).strip()
     status = gtin_status(sku_gtin, candidate_gtin)
     exact = int(status == "both_equal")
     targeted_gate = targeted_veto_gate(
@@ -1310,7 +1341,7 @@ class RandMatcher:
 
         rows: list[dict[str, object]] = []
         for position, (_, row) in enumerate(frame.iterrows()):
-            sku_gtin = self._gtin(row_metadata_text(row, "barcode", "gtin"))
+            sku_gtin = self._gtin(row_metadata_text(row, *alias_names("barcode")))
             candidate_indexes = self._candidate_indexes(
                 hit_labels[position].tolist(), sku_gtin
             )
@@ -2248,7 +2279,7 @@ def _load_calibration_frame(
         )
     calibration["gtin_status"] = [
         matcher.gtin_status(
-            row_metadata_text(row, "barcode", "gtin"), row["true_item_id"]
+            row_metadata_text(row, *alias_names("barcode")), row["true_item_id"]
         )
         for _, row in calibration.iterrows()
     ]
@@ -2897,7 +2928,7 @@ def _evaluate_holdout(
     holdout["true_item_id"] = holdout["true_item_id"].astype(str)
     holdout["gtin_status"] = [
         matcher.gtin_status(
-            row_metadata_text(row, "barcode", "gtin"), row["true_item_id"]
+            row_metadata_text(row, *alias_names("barcode")), row["true_item_id"]
         )
         for _, row in holdout.iterrows()
     ]

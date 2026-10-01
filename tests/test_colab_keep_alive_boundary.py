@@ -24,38 +24,50 @@ from cli import colab, colab_cli_entry
 
 
 class TrainingLifecyclePreflightTests(unittest.TestCase):
-    def test_held_out_inference_sample_reconstructs_the_source(self):
+    def test_preflight_reports_the_scored_pair_accounting(self):
+        """SCORED-PAIR contract (2026-10-01): no reconstruct-the-source claim.
+
+        The preflight derives its rows at exec time from the artifacts
+        (census-simulated here) and serves the scored population to the
+        remote completion, never the retired component holdout.
+        """
+        census = {
+            "source_export_rows": 71_623,
+            "deduped_rows": 63_079,
+            "dropped_rows": 8_544,
+            "train_side_rows": 49_152,
+            "validation_entity_rows": 13_927,
+            "scored_pair_rows": 6_351,
+            "scored_population_path": "/repo/data/final_validation.csv",
+        }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            paths = {
-                "source": root / "source.csv",
-                "training": root / "training.csv",
-                "inference": root / "inference.csv",
-            }
-            paths["source"].write_text("product_id\na\nb\nc\nd\ne\n", encoding="utf-8")
-            paths["training"].write_text("product_id\na\nb\nc\n", encoding="utf-8")
-            paths["inference"].write_text("product_id\nd\ne\n", encoding="utf-8")
-            by_config_path = {
-                colab._COLAB.training_dataset_csv: paths["training"],
-                colab._FINAL_INFERENCE.input_csv: paths["inference"],
-                colab._FINAL_INFERENCE.source_csv: paths["source"],
-            }
-            with mock.patch.object(
-                colab, "_validation_input_path", side_effect=by_config_path.__getitem__
-            ), mock.patch.object(colab, "_expand_worker_profiles", return_value=["baseline"]), \
-                 mock.patch.object(colab, "_legacy_validation_sources", return_value={
-                     "source": paths["source"], "training": paths["training"],
-                     "sample": paths["inference"]}):
+            training = root / "training.csv"
+            training.write_text("product_id\na\nb\n", encoding="utf-8")
+            with mock.patch.object(colab, "_validation_input_path", return_value=training), \
+                 mock.patch.object(colab, "_expand_worker_profiles", return_value=["baseline"]), \
+                 mock.patch.object(colab, "_scored_validation_census", return_value=census):
                 result = colab.training_lifecycle_preflight(
                     workers=1, model="minilm_l6", masking_profile="baseline"
                 )
-        self.assertEqual(result["product_id_overlap"], 0)
-        self.assertTrue(result["reconstructs_source"])
-        self.assertEqual(result["source_rows"], 5)
-        self.assertIn(
-            "component_holdout.csv",
-            " ".join(result["remote_completion_argv"]),
+        # The identity the real census asserts before the dict is built:
+        self.assertEqual(
+            census["train_side_rows"] + census["validation_entity_rows"],
+            census["deduped_rows"],
         )
+        self.assertEqual(
+            census["deduped_rows"] + census["dropped_rows"],
+            census["source_export_rows"],
+        )
+        self.assertEqual(result["training_rows"], 49_152)
+        self.assertEqual(result["inference_rows"], 6_351)
+        self.assertTrue(str(result["inference_dataset"]).endswith("final_validation.csv"))
+        self.assertNotIn(
+            "component_holdout.csv",
+            str(result),
+            "the retired component holdout is no longer the scored population",
+        )
+        self.assertNotIn("reconstructs_source", result)
 
 
 class DaemonAtProvisioningTests(unittest.TestCase):

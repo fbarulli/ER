@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import nullcontext
+from functools import lru_cache
 import fcntl
 import hashlib
 import json
@@ -160,6 +161,37 @@ _CHECKPOINT_ROOT_NAME = "_checkpoints"
 _LATEST_BEST_MARKER = "latest_best.json"
 _WORKER_MONITOR_SECONDS = _COLAB.worker_monitor_seconds
 _FINAL_INFERENCE = _COLAB.final_inference
+
+# ── scored-pair validation row contract (reconciled 2026-10-01) ─────────────
+# The row counts are NOT module constants: the scored population is the SSOT
+# files.final_validation binding (core.common, data/final_validation.csv)
+# plus the fold map, and both are re-measured from the artifacts at exec
+# time, byte-stability asserted, by training.complete_colab_worker's census.
+# Reconciled live numbers for the 2026-10-01 regen: source census 71,623
+# (config audit pin) = deduped 63,079 + dropped 8,544; fold map 14,946
+# entities (7,452 fold 0 train side, 3,782 + 3,712 folds 2+3); scored
+# population 6,351 pairs (565 pos / 5,786 neg); train side
+# 63,079 - 13,927 validation-entity rows = 49,152.
+
+
+@lru_cache(maxsize=1)
+def _scored_validation_census() -> dict[str, object]:
+    """The exec-time scored-pair row census and its identity (fail-loud)."""
+    from training.complete_colab_worker import scored_validation_accounting
+
+    return scored_validation_accounting()
+
+
+def _expected_training_rows() -> int:
+    """Train-side rows: deduped rows minus validation fold 2+3 entities."""
+    return int(_scored_validation_census()["train_side_rows"])
+
+
+def _expected_inference_rows() -> int:
+    """Scored-pair population rows, re-measured from final_validation.csv."""
+    return int(_scored_validation_census()["scored_pair_rows"])
+
+
 _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
 # config path is supplied. This workspace's home is read-only, so isolate the
@@ -260,29 +292,34 @@ def training_lifecycle_preflight(
     *, workers: int, model: str | None, masking_profile: str,
     train_only: bool = False,
 ) -> dict[str, object]:
-    """Validate prepared component partitions without contacting Colab."""
-    import pandas as pd
-    sources = _legacy_validation_sources()
-    frames = {key: pd.read_csv(path, dtype=str, keep_default_na=False)
-              for key, path in sources.items()}
+    """Validate the scored-pair validation contract without contacting Colab.
+
+    The scored population is the SSOT final_validation binding (the
+    merged-graph folds 2+3 scored pairs), so the row accounting here is
+    derived from the artifacts at exec time — never hardcoded — and closes
+    on the identity `scored_pair_validation_census` asserts before the dict
+    is built (train side + validation entities == deduped; deduped + dropped
+    == the 71,623 source-export census pin).
+    """
     training_path = _validation_input_path(_COLAB.training_dataset_csv)
     profiles = _expand_worker_profiles(masking_profile, workers, "masking")
     model_key = model or str(training_cfg().training.base_model)
+    census = _scored_validation_census()
     return {
         "contacts_colab": False,
         "workers": workers,
         "model": model_key,
         "masking_profiles": profiles,
-        "split_protocol": "training.folds.derive_holdout",
+        "split_protocol": "merged component graph (folds 2+3 scored pairs)",
         "training_dataset": str(training_path),
-        "training_rows": len(frames['training']),
-        "training_provenance_dataset": str(sources['training']),
-        "inference_dataset": str(sources['sample']),
-        "inference_rows": len(frames['sample']),
-        "source_dataset": str(sources['source']),
-        "source_rows": len(frames['source']),
-        "product_id_overlap": 0,
-        "reconstructs_source": True,
+        "training_rows": census["train_side_rows"],
+        "validation_entity_rows": census["validation_entity_rows"],
+        "deduped_rows": census["deduped_rows"],
+        "dropped_rows": census["dropped_rows"],
+        "source_census_rows": census["source_export_rows"],
+        "inference_dataset": census["scored_population_path"],
+        "inference_rows": census["scored_pair_rows"],
+        "identity_closes": True,
         "train_only": train_only,
         "final_inference_enabled": not train_only,
         "prepared_train_argv": [
@@ -292,9 +329,8 @@ def training_lifecycle_preflight(
         "remote_completion_argv": (
             None if train_only else [
                 "<remote-python>", "-m", "training.complete_colab_worker",
-                "--validation-input", "<uploaded-component_holdout.csv>",
-                "--training-input", "<uploaded-component_train.csv>",
-                "--validation-source", "<uploaded-eligible_catalog.csv>",
+                "--validation-input", "<final_validation scored population>",
+                "--training-input", "<dataset_deduped training census>",
             ]
         ),
         "successful_worker_order": (
@@ -1336,12 +1372,18 @@ for number in range(1, {workers} + 1):
             collapse_guardrail_profiles[number - 1],
         ])
     command = " ".join(shlex.quote(part) for part in worker_args)
+    # SCORED-PAIR contract (2026-10-01): --validation-input is the VM-side
+    # SSOT final_validation binding, not the staged component holdout. These
+    # are interpolated verbatim so the remote script resolves ITS F at exec
+    # time (a local absolute path would not exist on the VM).
+    validation_input_arg = 'str(F["final_validation"])'
+    training_input_arg = 'str(F["dataset_deduped"])'
     completion_args = [
         sys.executable, "-m", "training.complete_colab_worker",
         "--source", str(out), "--run-id", run_id, "--worker", str(number),
-        "--validation-input", {remote_validation_inputs['sample']!r},
+        "--validation-input", {validation_input_arg},
         "--validation-source", {remote_validation_inputs['source']!r},
-        "--training-input", {remote_validation_inputs['training']!r},
+        "--training-input", {training_input_arg},
     ]
     if inference_sample is not None:
         completion_args.extend(["--sample", str(inference_sample)])
@@ -3156,13 +3198,18 @@ for worker_dir in {worker_dirs!r}:
 
 
 def _validation_input_path(configured_value: str) -> Path:
-    """Resolve one configured validation artifact inside the repository."""
+    """Resolve one configured lane input artifact inside the repository.
+
+    Both callers pass the TRAINING dataset today; the scored-pair
+    final-inference population is no longer a config literal — it is the
+    SSOT final_validation binding and is never resolved here.
+    """
     configured = Path(configured_value)
     source = configured if configured.is_absolute() else TRAIN_ROOT / configured
     source = source.resolve()
     if not source.is_relative_to(TRAIN_ROOT.resolve()):
         raise ValueError(
-            "colab.final_inference.input_csv must stay inside the repository"
+            "the configured lane input CSV must stay inside the repository"
         )
     if _FINAL_INFERENCE.enabled and not source.is_file():
         raise FileNotFoundError(f"configured final-inference CSV is missing: {source}")
@@ -3545,9 +3592,9 @@ inference_device = {inference_device!r}
 completion = [
     sys.executable, "-m", "training.complete_colab_worker",
     "--source", str(out), "--run-id", {run_id!r}, "--worker", "1",
-        "--validation-input", {remote_validation_inputs['sample']!r},
+        "--validation-input", str(F["final_validation"]),
         "--validation-source", {remote_validation_inputs['source']!r},
-    "--training-input", {remote_validation_inputs['training']!r},
+    "--training-input", str(F["dataset_deduped"]),
 ]
 if inference_sample is not None:
     completion.extend(["--sample", str(inference_sample)])

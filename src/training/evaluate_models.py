@@ -209,6 +209,37 @@ if _unmapped:
 
 _TRAIN_FOLD = 0
 _DEV_FOLD, _TEST_FOLD = 2, 3
+# ── scored-half negative fold-assignment policy (DECIDED 2026-10-01 — see ──
+# the DECISION block in src/training/build_final_validation.py: policy B
+# "train_side" is the config default; the negatives that scored nowhere
+# before (straddle 4,728) now all score. This is the ONE rule both surfaces
+# obey — imported, not re-derived, or the consumer would fork the split a
+# second time exactly like its own history (the P0 leak) records.
+_NEG_POLICY = str(_CFG["split"]["negative_fold_policy"])
+_NEG_N_FOLDS = int(_CFG["split"]["holdout_component_folds"])
+if str(_NEG_POLICY) not in ("withhold_straddle", "train_side"):
+    raise ValueError(f"unknown split.negative_fold_policy {_NEG_POLICY!r}")
+from training.build_final_validation import negative_pair_fold  # noqa: E402
+
+if _NEG_POLICY == "train_side":
+    # apply the SAME assignment rule the artifact used: negatives fold whole
+    # (train-side fold when a train-side endpoint exists, else fold_a); the
+    # raw endpoint mismatch stays visible as fold_raw (byte-visible evidence)
+    _raw = df[["fold", "fold_2", "true_label"]].copy()
+    df["fold_raw_only_census"] = _raw["fold"]
+    df.loc[df["true_label"] == 0, "fold"] = [
+        negative_pair_fold(
+            _NEG_POLICY, int(f1), int(f2), n_folds=_NEG_N_FOLDS
+        )
+        for f1, f2 in zip(_raw["fold"], _raw["fold_2"])
+    ]
+    df.loc[df["true_label"] == 0, "fold_2"] = df.loc[df["true_label"] == 0, "fold"]
+    # ATTRIBUTION (measured on the current census, 1,023 positives / 7,713
+    # negatives): dropped.straddling_fold_pairs 4,728 -> 0 and
+    # parked_fold_pairs 1,927 -> 5,669 under policy B; in-play grows
+    # 1,623 -> 2,609 (DEV 976 -> 1,471, TEST 647 -> 1,138). When a future
+    # census regen moves these, the pinned-update convention applies: the
+    # inline old number is re-recorded in this comment before it changes.
 in_dev = (df["fold"] == _DEV_FOLD) & (df["fold_2"] == _DEV_FOLD)
 in_test = (df["fold"] == _TEST_FOLD) & (df["fold_2"] == _TEST_FOLD)
 straddle = df["fold"] != df["fold_2"]  # endpoints in different quarters — unassignable

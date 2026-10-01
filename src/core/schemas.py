@@ -277,6 +277,23 @@ class ResultBundleManifest(BaseModel):
     excluded: list[ResultBundleExcludedFile]
 
 
+class ColumnEvidenceSpec(BaseModel):
+    """One column's per-title capture ruling, with the reason either way.
+
+    Every mapped column is declared, not only the captured ones: a column
+    that is merely absent from the config is indistinguishable from one
+    somebody forgot. ``reason`` is REQUIRED and must be non-empty, so an
+    exclusion is auditable and can only be re-opened by changing the ruling
+    with its stated basis.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    column: str = Field(min_length=1)
+    capture: bool
+    reason: str = Field(min_length=1)
+
+
 class DataConfig(BaseModel):
     """config/paths.yaml — the SHARED data contract (paths, file names, column
     mapping, seed, category-macro taxonomy, model registry, owned layouts).
@@ -288,9 +305,113 @@ class DataConfig(BaseModel):
     files: DataFilesSpec
     layouts: dict[str, LayoutSpec] = Field(default_factory=dict)
     column_mapping: dict[str, str] = Field(min_length=1)
+    # EVERY mapped column's capture ruling + reason (see ColumnEvidenceSpec).
+    column_evidence: dict[str, ColumnEvidenceSpec] = Field(min_length=1)
+    # Extra names for a column beyond its raw and canonical names (see
+    # core.columns.alias_names). Every "accept either name" read path must
+    # resolve through here rather than re-declaring the pair.
+    column_aliases: dict[str, list[str]] = Field(default_factory=dict)
+    # The data-prep lane's hard requirement, as RAW names. Validated against
+    # column_mapping's keys by _column_contracts_are_consistent below.
+    data_prep_required_columns: list[str] = Field(min_length=1)
+    # canonical_records columns a record may lack, and their unknown-value
+    # literal. Read by upgrade_canonical_records_frame.
+    canonical_optional_columns: dict[str, str] = Field(min_length=1)
     seed: int
     models: dict[str, str] = Field(min_length=1)
     embedding_model_keys: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _column_contracts_are_consistent(cls, v: "DataConfig") -> "DataConfig":
+        """The column SSOT must agree with itself.
+
+        Five ways this could silently rot, all caught at load:
+          * a column_evidence entry that is not a real canonical column — the
+            capture would write a key nothing can read back;
+          * a mapped column with NO ruling — a column that is merely absent is
+            indistinguishable from one somebody forgot, so exclusions must be
+            declared as `capture: false` with their reason;
+          * two rulings naming the same column — the declaration must be a
+            partition, or "the" ruling for a column would be ambiguous;
+          * a data_prep_required_columns entry that is not a real raw column —
+            the raw guard would require a column the export does not have;
+          * a mapping that is not injective — two raw names collapsing onto one
+            canonical name would make the rename lossy and unreadable.
+        """
+        canonical = set(v.column_mapping.values())
+        raw = set(v.column_mapping)
+        other_aliases: dict[str, str] = {}
+        for name, spec in sorted(v.column_evidence.items()):
+            if spec.column not in canonical:
+                raise ValueError(
+                    f"column_evidence.{name}.column={spec.column!r} is not a "
+                    f"canonical column (column_mapping values: {sorted(canonical)})"
+                )
+            if name != spec.column:
+                raise ValueError(
+                    f"column_evidence key {name!r} != its column {spec.column!r}; "
+                    f"the key is the canonical column name"
+                )
+        ruled = {spec.column for spec in v.column_evidence.values()}
+        undeclared = sorted(canonical - ruled)
+        if undeclared:
+            raise ValueError(
+                f"column_evidence leaves mapped columns {undeclared} undeclared; "
+                f"every column needs a capture ruling with a reason"
+            )
+        duplicates = sorted(
+            column
+            for column in ruled
+            if sum(
+                1 for spec in v.column_evidence.values() if spec.column == column
+            )
+            > 1
+        )
+        if duplicates:
+            raise ValueError(
+                f"column_evidence names {duplicates} more than once; the ruling "
+                f"must be a partition of the mapped columns"
+            )
+        unknown = sorted(set(v.data_prep_required_columns) - raw)
+        if unknown:
+            raise ValueError(
+                f"data_prep_required_columns names non-raw columns {unknown}; "
+                f"raw columns are {sorted(raw)}"
+            )
+        if len(v.column_mapping) != len(canonical):
+            raise ValueError(
+                "column_mapping is not injective — two raw names collapse onto "
+                f"the same canonical name: {sorted(canonical)}"
+            )
+        for column, empty in v.canonical_optional_columns.items():
+            if not str(empty).strip():
+                raise ValueError(
+                    f"canonical_optional_columns.{column} has an empty "
+                    f"unknown-value literal; 'unknown' must be expressible"
+                )
+        # An alias that collides with a real column name, or that two columns
+        # both claim, makes name resolution ambiguous — the reader would get a
+        # value from whichever column happened to be checked first.
+        taken = set(canonical) | raw
+        for column, aliases in sorted(v.column_aliases.items()):
+            if column not in canonical:
+                raise ValueError(
+                    f"column_aliases key {column!r} is not a canonical column"
+                )
+            for alias in aliases:
+                if alias in taken:
+                    raise ValueError(
+                        f"column_aliases.{column} claims {alias!r}, which is "
+                        f"already a real column name; aliases must be distinct"
+                    )
+                if alias in other_aliases:
+                    raise ValueError(
+                        f"column_aliases: {alias!r} is claimed by both "
+                        f"{other_aliases[alias]!r} and {column!r}"
+                    )
+                other_aliases[alias] = column
+                taken.add(alias)
+        return v
 
     model_validator(mode="after")
 
@@ -379,6 +500,23 @@ class SplitSpec(BaseModel):
     test_fraction: float = Field(ge=0.0, le=1.0)
     fixed_threshold: float = Field(gt=0.0, lt=1.0)
     cv_folds: int = Field(ge=2)
+    # DECIDED (2026-10-01, measured — see the DECISION block in
+    # src/training/build_final_validation.py): the scored half's negative
+    # fold-assignment policy. The winner is coded as the required default in
+    # config/training.yaml split.negative_fold_policy; this field has NO
+    # pydantic default on purpose (fail-loud: a config that omits it is a
+    # load error, not a silent policy choice).
+    #   "withhold_straddle" (A, legacy): a negative with mismatched endpoint
+    #     folds scores nowhere. Measured DEV 592 / TEST 466 scored negatives,
+    #     4,728 withheld and consumed by nothing.
+    #   "train_side" (B): every negative gets ONE whole fold — the fold of
+    #     its train-side endpoint if one endpoint is a train fold, else the
+    #     fold of gtin1. Measured DEV 1,087 (+495, +83.6%) / TEST 957
+    #     (+491, +105.4%); slice-cell thinness share improves
+    #     (DEV 67.6% -> 64.9%, TEST 70.2% -> 67.2% below
+    #     robust_validation.min_test_negatives=5) and no trained-on endpoint
+    #     enters the scored half under either policy.
+    negative_fold_policy: Literal["withhold_straddle", "train_side"]
 
     @model_validator(mode="after")
     def _shares_sum_to_one(self) -> SplitSpec:
@@ -647,6 +785,12 @@ class EvaluationSpec(BaseModel):
     robust_validation: RobustValidationSpec
     uniformity: UniformitySpec
     attribute_separation: AttributeSeparationSpec
+    # DECIDED (2026-10-01): slice-flag agreement semantics (see the DECISION
+    # block in src/training/build_final_validation.py). "set_bag" (new
+    # default) means the final-validation slice coverages compare the two
+    # endpoints as BAGS of extracted values; "scalar" is the legacy raw
+    # string comparison and stays reachable for byte-stability audits.
+    slice_agreement: Literal["scalar", "set_bag"]
 
     @model_validator(mode="after")
     def _folds_distinct_and_in_range(self) -> EvaluationSpec:
@@ -810,7 +954,16 @@ class RandMatchingSpec(BaseModel):
         def _veto_dimensions_are_critical(cls, values: list[str]) -> list[str]:
             from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
 
-            allowed = set(CRITICAL_ATTRIBUTE_DIMENSIONS)
+            # pack_material (owner ruling 2026-10-01) is the one measured veto
+            # addition beyond the seven shared critical dimensions: audit-safe
+            # evidence (canonical package_material_set unions), 32,641/67,899
+            # genuinely disjoint both-populated pairs, identity-safe because
+            # same-canonical sides share one set (see
+            # tests/test_pack_material_veto.py). Evidence travels ONLY through
+            # targeted_veto_gate's discrete material clause; it is not a
+            # CRITICAL_ATTRIBUTE_DIMENSIONS member, so the minimum blast
+            # radius stays inside the final rand lane.
+            allowed = set(CRITICAL_ATTRIBUTE_DIMENSIONS) | {"pack_material"}
             unknown = sorted(set(values) - allowed)
             if unknown:
                 raise ValueError(
@@ -1357,6 +1510,17 @@ class GateSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     vol_tolerance: float = Field(gt=0.0, lt=1.0)
+    # ABSOLUTE volume tolerance, in ml (owner ruling 2026-10-01). The gate
+    # block previously declared only the RELATIVE cut, so every lane that
+    # consults volumes_compatible fell back to the parameter default of 0.0
+    # and the configured value (rand_matching.targeted_veto_gates.
+    # volume_absolute_tolerance_ml) reached only the veto lane. That is not
+    # cosmetic: at small volumes the relative cut is the STRICTER of the two
+    # (5% of 14ml is 0.7ml, so 14 vs 16ml reads as incompatible on the
+    # relative rule alone), so the census and the veto lane disagreed on 61
+    # within-brand pairs. Both tolerances are declared here; the predicate
+    # applies whichever is wider (core.critical_attributes.volumes_compatible).
+    vol_abs_tolerance: float = Field(ge=0.0)
     raw_conf_threshold: float = Field(gt=0.0, le=1.0)
     consistency_fallback_threshold: float = Field(gt=0.0, le=1.0)
 
@@ -1702,6 +1866,96 @@ class SweepSpec(BaseModel):
         return v
 
 
+class CalibrationSweepSpec(BaseModel):
+    """TIER 3 calibration-sweep SPEC (config/training.yaml calibration_sweep:).
+
+    DECIDED 2026-10-01 — formalized as a DOCUMENTED-BUT-DISABLED block, not
+    run: the sweep needs training runs and this environment cannot start one
+    (owner's constraint "TIER 3: cannot run locally"). The training cycle is
+    the activator: when a run lane exists, it reads this block verbatim.
+
+    What it decides (the fracs sweep, on HELD-OUT P@R95 only):
+      * ``counterfactual_frac`` — the entire counterfactual-twin hypothesis
+        rests on this one unswept knob (config default 0.10).
+      * ``hard_negative_frac`` — unswept; the config-only route alone is
+        ~0.33 (TODO TIER 3(a)), which is a band-aid unless the sweep shows
+        the frequency itself is the cause.
+
+    Order is MEASURED-WEAKNESS, not arbitrary: the sweetener slice goes
+    FIRST (margin 0.0017, 62.4% ranked correct, n=109 at the last audit),
+    flavor second (0.0113/89.3%). Both margins were read through
+    scripts/minimal_flip_slice.py, which is NOT yet self-reviewed —
+    the review is a precondition of the sweep, pinned here.
+
+    Acceptance is the twin-bucket floor contract the checkpoint-eval section
+    already defines, nothing softer:
+      * per-bucket twin P@R95 floor >= 0.500 (overall up + twin down means
+        over-smoothing — that combination REJECTS the arm outright);
+      * overall P@R95 target 0.355 -> ~0.500 by epoch 3;
+      * twin margin mean must lift off the ~0.008 pre-training level; a
+        post-training margin ~= 0 reopens field markers as an ablation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # DOCUMENTED BUT DISABLED: flipping this requires a training-run lane AND
+    # flips BOTH sweep fields below away from null. With enabled=false the
+    # block is pure spec documentation and every sweep field MUST be null —
+    # a half-activated sweep is the exact silent-divergence defect class.
+    enabled: bool
+    counterfactual_fracs: list[float] | None
+    hard_negative_fracs: list[float] | None
+    eval_model: str
+    slice_order: list[str] = Field(min_length=1)
+
+    @field_validator("counterfactual_fracs")
+    @classmethod
+    def _cf_fracs_valid(cls, v: list[float] | None) -> list[float] | None:
+        if v is None:
+            return None
+        bad = [f for f in v if not 0.0 < f < 1.0]
+        if bad:
+            raise ValueError(f"counterfactual_fracs must be in (0,1): {bad}")
+        return v
+
+    @field_validator("hard_negative_fracs")
+    @classmethod
+    def _hn_fracs_valid(cls, v: list[float] | None) -> list[float] | None:
+        if v is None:
+            return None
+        bad = [f for f in v if not 0.0 < f <= 1.0]
+        if bad:
+            raise ValueError(f"hard_negative_fracs must be in (0,1]: {bad}")
+        return v
+
+    @model_validator(mode="after")
+    def _disabled_means_null_sweep(self) -> CalibrationSweepSpec:
+        if not self.enabled:
+            if self.counterfactual_fracs is not None or self.hard_negative_fracs is not None:
+                raise ValueError(
+                    "calibration_sweep is DISABLED but declares sweep fractions: "
+                    f"counterfactual_fracs={self.counterfactual_fracs}, "
+                    f"hard_negative_fracs={self.hard_negative_fracs}. A disabled "
+                    "block is documentation; set enabled=true when a training "
+                    "run lane exists and only then declare the sweep."
+                )
+            return self
+        if not self.counterfactual_fracs or not self.hard_negative_fracs:
+            raise ValueError(
+                "calibration_sweep is enabled without sweep fractions — the "
+                "sweep would silently calibrate nothing"
+            )
+        # Sweetener first is the measured-weakness pin (margin 0.0017, n=109,
+        # vs flavor 0.0113); a spec that reorders it is a different sweep.
+        if self.slice_order[0] != "sweetener":
+            raise ValueError(
+                "calibration_sweep.slice_order must start with 'sweetener' "
+                "(measured-weakness order: 0.0017/62.4% n=109 beats flavor "
+                f"0.0113/89.3%); got {self.slice_order}"
+            )
+        return self
+
+
 class WandbTrackingSpec(BaseModel):
     """W&B configuration; its API key is environment-only."""
 
@@ -1718,18 +1972,19 @@ class TrackingSpec(BaseModel):
 
 
 class FinalInferenceSpec(BaseModel):
-    """Final inference over the whole catalog, run before a Colab worker is published.
+    """Final inference over the SCORED-PAIR validation population (2026-10-01).
 
-    Not a validation sample: the lane scores the full deduped catalog and uses the
-    held-out rows only for the threshold view, which is why it is not named
-    "validation_inference".
+    A different contract from the retired reconstruct-the-source holdout
+    lane: the scored population is not a yaml path literal but the SSOT
+    ``files.final_validation`` binding (data/final_validation.csv, the
+    scored-pair rows of merged-graph folds 2+3), resolved by consumers via
+    core.common. Device/batch-size/threshold/error-threshold knobs are
+    unchanged; the config block carries no input path anymore.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
-    source_csv: str = Field(min_length=1)
-    input_csv: str = Field(min_length=1)
     output_dir: str = Field(min_length=1)
     # Inference holds no gradients and no optimiser moments, so it can run a far
     # larger batch than finetuning on the same card: the finetune batch here is
@@ -1898,6 +2153,7 @@ class TrainingConfig(BaseModel):
     hpo: HpoSpec
     rerank: RerankSpec
     sweep: SweepSpec
+    calibration_sweep: CalibrationSweepSpec
     tracking: TrackingSpec
     colab: ColabSpec
     rand_matching: RandMatchingSpec
@@ -2598,6 +2854,20 @@ CANONICAL_RECORDS_COLUMNS: tuple[str, ...] = (
     "n_titles",
     "description_evidence",
     "breadcrumb_evidence",
+    # CANONICAL-SIDE UNIVERSE EVIDENCE (owner ruling 2026-10-01, additive on
+    # purpose; contract updated deliberately, never silently): one JSON
+    # object string mapping registered attribute-universe keys to SORTED
+    # value lists, parsed with the census SSOT parser (pipeline
+    # parse_universe_cell) and round-tripped via ast.literal_eval in
+    # core.attribute_conflicts._universe_evidence_of. Existing columns are
+    # byte-stable; this column only appends.
+    "universe_evidence",
+    # PER-TITLE ORIGINAL EVIDENCE (owner ruling 2026-10-01). One JSON array
+    # string, one entry per contributing title, keys drawn from the column
+    # SSOT (config/paths.yaml source_row_fields). It exists because the
+    # decision engine's stage-7 clarification re-reads the ORIGINAL columns and
+    # was handed a canonical record carrying none of them — so it never fired.
+    "source_rows",
 )
 
 GATE_RESULTS_COLUMNS: tuple[str, ...] = (
@@ -2746,20 +3016,65 @@ def check_cross_country_pair_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def upgrade_canonical_records_frame(df: pd.DataFrame) -> pd.DataFrame:
-    """Read the previous exact schema with absent ingredient fields as unknown.
+def _data_cfg() -> "DataConfig":
+    """Validated paths.yaml, imported late (core.common imports this module)."""
+    from core.common import data_cfg
 
-    This is a read compatibility adapter, not ingredient backfill. Rebuilding
-    canonical artifacts from source declarations is needed to populate them.
+    return data_cfg()
+
+
+def upgrade_canonical_records_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Read an older canonical schema with later-added columns as unknown.
+
+    This is a read compatibility adapter, not backfill. Rebuilding canonical
+    artifacts from source declarations is needed to populate the added
+    columns for real.
+
+    It fills in ANY subset of the later-added columns, not one specific
+    historical shape. It used to require the frame to equal exactly ONE prior
+    schema (contract minus all of `added`), which is a trap: each new column
+    makes the artifact on disk a shape the shim no longer recognises, so the
+    read fails at the moment the column is added rather than at the moment
+    the artifact was written. data/canonical_records.csv on disk is already
+    past that shim — it carries universe_evidence but not the ingredient set
+    columns, which the exact-match shim could not load.
     """
-    added = {"sweetener_type_set", "sweetening_set", "attribute_consistency_flags"}
-    previous = tuple(column for column in CANONICAL_RECORDS_COLUMNS if column not in added)
-    if tuple(df.columns) == previous:
-        df = df.copy()
-        for column in added:
-            df[column] = "[]"
-        return df.loc[:, list(CANONICAL_RECORDS_COLUMNS)]
-    return df
+    # source_rows upgrades to an EMPTY LIST ("[]"), not "{}": it is a per-title
+    # ARRAY. An empty capture is honest for a record built before the column
+    # existed (stage 7 then finds nothing to re-read and the dimension stays
+    # INCONCLUSIVE) whereas inventing entries would fabricate evidence. This
+    # is a read adapter only — rebuilding from source is what populates it.
+    # Which columns a record may lack, and what "unknown" looks like for each,
+    # both come from config/paths.yaml `canonical_optional_columns` — NOT a
+    # tuple here. That tuple was a second declaration of the same fact which
+    # could not be steered, and it needed a name-based special case ("{}" for
+    # the mapping column, "[]" for the rest); making the literal part of the
+    # declaration turns that branch into data.
+    optional = dict(_data_cfg().canonical_optional_columns)
+    present = set(df.columns)
+    missing = [column for column in optional if column not in present]
+    contract = set(CANONICAL_RECORDS_COLUMNS)
+    # A frame is upgradable only if it is genuinely an OLDER VERSION of this
+    # contract: every column that has always existed is present, nothing
+    # unknown is present, and the survivors are in contract order. Anything
+    # else is a MALFORMED frame and must reach the checker untouched, so the
+    # error names the real defect instead of a patch that hides it. (Filling
+    # any optional subset without this guard would silently "repair" a frame
+    # that had lost gtin.)
+    unknown = present - contract
+    always_present = [c for c in CANONICAL_RECORDS_COLUMNS if c not in optional]
+    if (
+        not missing
+        or unknown
+        or any(column not in present for column in always_present)
+        or tuple(c for c in df.columns if c in contract)
+        != tuple(c for c in CANONICAL_RECORDS_COLUMNS if c in present)
+    ):
+        return df
+    df = df.copy()
+    for column in missing:
+        df[column] = optional[column]
+    return df.loc[:, list(CANONICAL_RECORDS_COLUMNS)]
 
 
 def check_canonical_records_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -2794,7 +3109,86 @@ def check_canonical_records_frame(df: pd.DataFrame) -> pd.DataFrame:
     n = pd.to_numeric(df["n_titles"], errors="coerce")
     if n.isna().any() or (n < 1).any():
         raise ValueError(f"canonical_records.n_titles < 1 on {(n < 1).sum()} rows")
+    # source_rows must be a JSON ARRAY of per-title objects whose keys are all
+    # declared evidence fields. Fail-loud: a silently empty or mis-keyed
+    # capture would make stage 7 a no-op again — exactly the defect the column
+    # exists to fix — and the symptom would be invisible in every decision.
+    _check_source_rows_column(df["source_rows"])
     return df
+
+
+def require_populated_source_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Assert every freshly built record actually carries its per-title evidence.
+
+    WRITE-time half of the capture contract. check_canonical_records_frame
+    validates STRUCTURE and must tolerate an empty capture, because that is
+    exactly what upgrade_canonical_records_frame produces for an artifact
+    written before the column existed — a read adapter that emitted something
+    the checker rejects would be self-contradictory. So absence is legal on
+    read, and forbidden on write: a record built NOW always has at least one
+    source title behind it (n_titles >= 1), so an empty capture means the
+    writer lost the evidence rather than that there was none.
+
+    Assert-only boundary, like every other frame checker.
+    """
+    _check_source_rows_column(df["source_rows"], require_populated=True)
+    return df
+
+
+def _check_source_rows_column(
+    values: pd.Series, *, require_populated: bool = False
+) -> None:
+    """Validate the per-title original-evidence capture, loudly."""
+    from core.columns import SOURCE_ROW_FIELD_NAMES
+
+    allowed = set(SOURCE_ROW_FIELD_NAMES)
+    for row_index, raw in enumerate(values):
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            raise ValueError(
+                f"canonical_records.source_rows is null at row {row_index}"
+            )
+        text = str(raw).strip()
+        if not text:
+            raise ValueError(
+                f"canonical_records.source_rows is empty at row {row_index}"
+            )
+        try:
+            entries = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"canonical_records.source_rows row {row_index} is not JSON: "
+                f"{text[:120]!r}"
+            ) from exc
+        if not isinstance(entries, list):
+            raise ValueError(
+                f"canonical_records.source_rows row {row_index} is not a list of "
+                f"per-title entries"
+            )
+        if not entries:
+            if require_populated:
+                raise ValueError(
+                    f"canonical_records.source_rows row {row_index} is empty; a "
+                    f"record written now must carry at least one source title "
+                    f"(an empty capture means the writer lost the evidence, not "
+                    f"that there was none)"
+                )
+            # Empty is a legitimate READ state: upgrade_canonical_records_frame
+            # writes "[]" for a record that predates the column, and stage 7
+            # then simply finds nothing to re-read.
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry:
+                raise ValueError(
+                    f"canonical_records.source_rows row {row_index} has a "
+                    f"non-object or empty entry: {entry!r}"
+                )
+            unknown = sorted(set(entry) - allowed)
+            if unknown:
+                raise ValueError(
+                    f"canonical_records.source_rows row {row_index} carries "
+                    f"undeclared fields {unknown}; the column SSOT declares "
+                    f"{sorted(allowed)}"
+                )
 
 
 def check_gate_results_frame(df: pd.DataFrame) -> pd.DataFrame:
