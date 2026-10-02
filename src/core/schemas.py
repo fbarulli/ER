@@ -509,8 +509,8 @@ class ExtractionPolicySpec(BaseModel):
         required = {"nested", "multiplier", "pack_of", "count", "compact", "container", "attribute"}
         if set(self.pack_confidence) != required:
             raise ValueError(f"pack_confidence requires exactly {sorted(required)}")
-        if set(self.source_groups) != {"attributes", "title", "sku_url", "image_url"}:
-            raise ValueError("source_groups requires attributes, title, sku_url, image_url")
+        if set(self.source_groups) != {"attributes", "title", "sku_url", "image_url", "description"}:
+            raise ValueError("source_groups requires attributes, title, sku_url, image_url, description")
         if any(not value.strip() for value in self.source_groups.values()):
             raise ValueError("source_groups names cannot be blank")
         if any(not term.strip() for term in self.bulk_container_terms):
@@ -1900,6 +1900,7 @@ class GateSpec(BaseModel):
         clean_proceed: str = Field(min_length=1)
         source_conflict: str = Field(min_length=1)
         supporting_feature_review: str = Field(min_length=1)
+        declared_identity_review: str = Field(min_length=1)
 
     reasons: GateReasonsSpec
 
