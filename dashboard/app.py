@@ -27,6 +27,8 @@ from core.common import DATA_PATH, F, data_cfg, load_dataset
 app.title = 'ER discovery'
 from training_reports import router as training_reports_router
 app.include_router(training_reports_router)
+from jev_reports import router as jev_reports_router
+app.include_router(jev_reports_router)
 
 # ── standard page chrome ─────────────────────────────────────────────────────
 # ONE consistent top bar (→ /, findings, gate, datagen, graphs, training) for
@@ -48,7 +50,7 @@ def _chrome():
             + a('/', '← home', strong=True)
             + a('/experiments', 'findings') + a('/gate', 'gate')
             + a('/datagen', 'datagen') + a('/graphs', 'graphs')
-            + a('/training', 'training') + '</nav>')
+            + a('/training', 'training') + a('/jev', 'JEV audits') + '</nav>')
 
 _CHROME = _chrome()
 
@@ -56,7 +58,7 @@ _CHROME = _chrome()
 async def _page_chrome(request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path in {"/", "/datagen", "/graphs", "/gate", "/gate/fallback"}:
+    if path in {"/", "/datagen", "/graphs", "/gate", "/gate/fallback", "/jev"}:
         response.headers["Cache-Control"] = "no-store, max-age=0"
     if path.startswith("/api/"):
         return response

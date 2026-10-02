@@ -19,9 +19,15 @@ FIELDS = ('volume', 'pack', 'package_type', 'flavor', 'carbonation', 'sweetener'
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--seed', type=int, default=43)
-    ap.add_argument('--per-stratum', type=int, default=20)
-    ap.add_argument('--pool-per-stratum', type=int, default=150)
+    ap.add_argument('--pairs', type=int, default=500)
+    ap.add_argument('--pool-per-stratum', type=int, default=400)
     args = ap.parse_args()
+    if args.pairs < 1 or args.pool_per_stratum < 1:
+        ap.error('pair and pool counts must be positive')
+    output_path = ROOT/'jev/sample_doubled_3.json'
+    retained = [x for x in json.loads(output_path.read_text()) if x['copy'] == 'a_order'] if output_path.exists() else []
+    if len(retained) > args.pairs:
+        ap.error('requested total is smaller than the already reserved sample')
     rng = random.Random(args.seed)
     excluded = set()
     for name in ('audit_results.jsonl', 'audit_results_2.jsonl'):
@@ -46,6 +52,13 @@ def main():
     candidates = []
     for pool_key, pool in sorted(pools.items()):
         candidates.extend(rng.sample(pool, min(args.pool_per_stratum, len(pool))))
+    candidate_keys = {tuple(sorted((x['gtin1'],x['gtin2']))) for x in candidates}
+    for row in retained:
+        pair = tuple(sorted((row['gtin1'],row['gtin2'])))
+        if pair not in candidate_keys:
+            candidates.append({**row, 'gate_decision':row['frozen_gate']})
+            candidate_keys.add(pair)
+    retained_keys = {tuple(sorted((x['gtin1'],x['gtin2']))) for x in retained}
     buckets = defaultdict(list)
     infos = {}
     def info(gtin):
@@ -71,11 +84,20 @@ def main():
     selected = []
     coverage = Counter()
     allocation = {}
-    for stratum in ('positive_high','positive_lower','negative_high','negative_lower','uncertain_high','uncertain_lower'):
+    strata = ('positive_high','positive_lower','negative_high','negative_lower','uncertain_high','uncertain_lower')
+    for stratum_index, stratum in enumerate(strata):
+        target = args.pairs // len(strata) + (stratum_index < args.pairs % len(strata))
         pool = buckets[stratum]
         rng.shuffle(pool)
-        picks = []
-        while pool and len(picks) < args.per_stratum:
+        pool_size = len(pool)
+        picks = [x for x in pool if tuple(sorted((x['gtin1'],x['gtin2']))) in retained_keys]
+        for pick in picks:
+            pool.remove(pick)
+            for k,v in pick['attribute_states'].items(): coverage[(stratum,k,v)] += 1
+            for k,v in pick['universe_states'].items(): coverage[(stratum,'universe:'+k,v)] += 1
+        if len(picks) > target or pool_size < target:
+            raise ValueError(f'{stratum}: {pool_size} candidates, {len(picks)} reserved, target {target}; increase --pool-per-stratum')
+        while pool and len(picks) < target:
             def novelty(item):
                 tokens = [(stratum,k,v) for k,v in item['attribute_states'].items()]
                 tokens += [(stratum,'universe:'+k,v) for k,v in item['universe_states'].items() if v in ('conflict','agree','subset')]
@@ -86,7 +108,9 @@ def main():
             for k,v in pick['attribute_states'].items(): coverage[(stratum,k,v)] += 1
             for k,v in pick['universe_states'].items(): coverage[(stratum,'universe:'+k,v)] += 1
         selected.extend(picks)
-        allocation[stratum] = {'candidate_pool':len(buckets[stratum])+len(picks), 'selected':len(picks), 'requested':args.per_stratum}
+        allocation[stratum] = {'candidate_pool':pool_size, 'selected':len(picks), 'requested':target}
+    assert len(selected) == args.pairs
+    assert retained_keys <= {tuple(sorted((x['gtin1'],x['gtin2']))) for x in selected}
     doubled = []
     for row in selected:
         reverse_states = {k: {'missing_left':'missing_right', 'missing_right':'missing_left'}.get(v,v) for k,v in row['universe_states'].items()}
@@ -95,7 +119,7 @@ def main():
         doubled.extend([{**row,'copy':'a_order'}, {**row,'gtin1':row['gtin2'],'gtin2':row['gtin1'], 'gate_reason':reverse['reason'], 'universe_states':reverse_states,'copy':'b_swapped'}])
     out = ROOT/'jev/sample_doubled_3.json'
     out.write_text(json.dumps(doubled, indent=1)+'\n')
-    summary = {'seed':args.seed,'unique_pairs':len(selected),'calls':len(doubled),
+    summary = {'seed':args.seed,'retained_pairs':len(retained),'requested_pairs':args.pairs,'unique_pairs':len(selected),'calls':len(doubled),
                'excluded_previously_staged_or_tested_pairs':len(excluded), 'candidate_pairs_replayed':len(candidates),
                'allocations':allocation, 'attribute_coverage':{'|'.join(k):v for k,v in sorted(coverage.items())},
                'source_sha256':{name:hashlib.sha256((ROOT/'data'/name).read_bytes()).hexdigest() for name in ('gate_results.csv','canonical_records.csv')},

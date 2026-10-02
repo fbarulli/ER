@@ -79,3 +79,8 @@ Policy: `config/identity_reviews.json`. Identity trust, split inputs, and graph
 preparation enforce the holds. Existing frozen artifacts were repaired with
 `PYTHONPATH=src .venv/bin/python scripts/apply_identity_review_exclusions.py --apply`.
 Re-render comparisons with `PYTHONPATH=src .venv/bin/python scripts/render_identity_fixes.py`.
+
+JEV audit samples and results are available at `/jev`. The page reads the
+`jev/` sample ledger, current checkpoints, round-3 attribute coverage, and
+saved verification results on each request. Round 3 contains 500 unique
+pairs (1,000 ordered calls), staged but not yet tested.
