@@ -1474,10 +1474,13 @@ def mine_hard_negatives(
         bc_blk = barcodes[idx]
         br_blk = brands[idx]
         bcv_blk = bc_valid[idx]
+        # Gather once: advanced indexing otherwise copies the entire macro's
+        # embeddings for every query chunk. Row slices below are views.
+        emb_blk = emb[idx]
         chunk_size = int(ann_cfg.chunk_size)
         for c0 in range(0, n, chunk_size):
             c1 = min(c0 + chunk_size, n)
-            sims_chunk = emb[idx[c0:c1]] @ emb[idx].T  # (c, n) cosine
+            sims_chunk = emb_blk[c0:c1] @ emb_blk.T  # (c, n) cosine
             top = np.argpartition(-sims_chunk, kth=k_eff - 1, axis=1)[:, :k_eff]
             # candidate pairs from top-k membership: (local_i, local_j)
             li = np.repeat(np.arange(c0, c1), k_eff)

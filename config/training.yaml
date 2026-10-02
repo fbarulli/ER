@@ -295,6 +295,24 @@ gate:
   vol_abs_tolerance: 5.0
   raw_conf_threshold: 0.85
   consistency_fallback_threshold: 0.3
+  # The gate's reason strings — the single declared source. three_way_gate
+  # composes decisions from these; consumers (gate_replay's fired-stage map,
+  # reason-keyed audits) read the same values, so a wording change lands
+  # everywhere at once instead of leaving a stale copy behind.
+  reasons:
+    pack_blocker: "Pack blocker: pack size, package type, or volume mismatch"
+    ambiguous_volume: "Ambiguous volume evidence"
+    low_volume_confidence: "Low raw volume confidence"
+    low_pack_confidence: "Low raw pack confidence"
+    no_volume_overlap: "No volume overlap"
+    no_pack_overlap: "No pack overlap"
+    package_type_mismatch: "Package type mismatch"
+    package_material_mismatch: "Package material mismatch"
+    packaging_level_mismatch: "Packaging level mismatch"
+    packaging_level_review: "Packaging level asserted on one side only (case vs unstated) — needs review"
+    categorical_mismatch: "Critical attribute mismatch:"
+    low_consistency: "Overlap but low consistency"
+    clean_proceed: "Known critical attributes compatible"
 
 # ── brand-differentiation audit (owner theory 2026-10-01) ──────────────────
 # Does between-GTIN card delta exceed within-GTIN (same product,

@@ -116,6 +116,21 @@ def test_prepared_cli_accepts_cpu_and_withheld_test(monkeypatch):
     assert args.report_test is False
 
 
+def test_prepared_trainer_rejects_ignored_guardrail_override(monkeypatch):
+    from training import train_prepared as trainer
+
+    monkeypatch.setattr('sys.argv', ['train_prepared', '--bundle', 'missing.pkl.gz',
+                                    '--collapse-guardrail-profile', 'different'])
+    args = trainer._parse_args()
+    monkeypatch.setattr(trainer, 'load_config',
+                        lambda: {'collapse_guardrail': {'profile': 'configured'}})
+    monkeypatch.setattr(trainer, 'set_determinism', lambda _: None)
+    monkeypatch.setattr(trainer, 'load_prepared_bundle',
+                        lambda _: pytest.fail('must reject override before loading bundle'))
+    with pytest.raises(ValueError, match='CLI profile=.*differs from'):
+        trainer._main(args, SimpleNamespace())
+
+
 @pytest.mark.parametrize('report_test', [False, True])
 @pytest.mark.parametrize('sample', [False, True])
 def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, report_test, sample):

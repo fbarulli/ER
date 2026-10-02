@@ -19,7 +19,6 @@ from core.common import (
     F,
     RESULTS,
     SEED,
-    collapse_guardrail_cfg,
     load_config,
     masking_cfg,
     resolve_model,
@@ -73,6 +72,16 @@ def main() -> None:
 def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
     set_determinism(SEED)
     cfg = load_config()
+    if (
+        args.collapse_guardrail_profile is not None
+        and args.collapse_guardrail_profile != str(cfg["collapse_guardrail"]["profile"])
+    ):
+        raise ValueError(
+            "prepared training uses the configured collapse guardrail profile; "
+            f"CLI profile={args.collapse_guardrail_profile!r} differs from "
+            f"active profile={cfg['collapse_guardrail']['profile']!r}. "
+            "Set the profile in config/training.yaml before preparing and launching."
+        )
     manifest, bundle = load_prepared_bundle(args.bundle)
     if args.payload != manifest.payload_variant:
         raise ValueError(
@@ -85,7 +94,6 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         )
     model_id = resolve_model(args.model)
     profile = masking_cfg(manifest.masking_profile)
-    collapse_cfg = collapse_guardrail_cfg(str(cfg["collapse_guardrail"]["profile"]))
     df = bundle["df"]
     payload = bundle["payload"]
     structured_features = np.asarray(bundle["structured_features"], dtype=np.float32)

@@ -482,16 +482,8 @@ def _main_inner(_mlf, _wandb) -> None:
         dataset_path = args.dataset.expanduser().resolve()
         if not dataset_path.is_file():
             raise FileNotFoundError(f"training dataset override is missing: {dataset_path}")
-        df = pd.read_csv(dataset_path, dtype=str)
-        required_columns = set(pd.read_csv(F["dataset_deduped"], nrows=0).columns)
-        missing_columns = sorted(required_columns - set(df.columns))
-        if missing_columns:
-            raise ValueError(
-                f"training dataset override lacks deduped columns: {missing_columns}"
-            )
+        df = load_dataset_deduped(dataset_path)
         print(f"[dataset] override={dataset_path} rows={len(df):,}", flush=True)
-    from core.identity_policy import exclude_reviewed_rows
-    df = exclude_reviewed_rows(df)
     if args.sample:
         df = df.head(args.sample).reset_index(drop=True)
         print(f"SAMPLE MODE: first {args.sample} rows", flush=True)

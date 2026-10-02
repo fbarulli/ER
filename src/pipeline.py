@@ -1070,6 +1070,7 @@ def three_way_gate(
             consistency_fallback_threshold = float(
                 _g.consistency_fallback_threshold
             )
+    _r = training_cfg().gate.reasons
     if not pack_gate(
         0.0,
         attrs1,
@@ -1080,13 +1081,13 @@ def three_way_gate(
     ):
         return GateResult(
             decision="hard_no",
-            reason="Pack blocker: pack size, package type, or volume mismatch",
+            reason=_r.pack_blocker,
         ).model_dump()
     if _has_attribute_flag(attrs1, "ambiguous_volume") or _has_attribute_flag(
         attrs2, "ambiguous_volume"
     ):
         return GateResult(
-            decision="fallback", reason="Ambiguous volume evidence"
+            decision="fallback", reason=_r.ambiguous_volume
         ).model_dump()
     # raw confidence check
     if (
@@ -1094,7 +1095,7 @@ def three_way_gate(
         or attrs2["volume_confidence"] < raw_conf_threshold
     ):
         return GateResult(
-            decision="fallback", reason="Low raw volume confidence"
+            decision="fallback", reason=_r.low_volume_confidence
         ).model_dump()
     # Pack confidence: skip when both sides have no pack evidence
     # (single-unit products with no "Count per Unit" in source attributes).
@@ -1105,7 +1106,7 @@ def three_way_gate(
             or attrs2["pack_confidence"] < raw_conf_threshold
         ):
             return GateResult(
-                decision="fallback", reason="Low raw pack confidence"
+                decision="fallback", reason=_r.low_pack_confidence
             ).model_dump()
 
     # volume overlap
@@ -1129,19 +1130,19 @@ def three_way_gate(
         if vol_overlap:
             break
     if not vol_overlap:
-        return GateResult(decision="hard_no", reason="No volume overlap").model_dump()
+        return GateResult(decision="hard_no", reason=_r.no_volume_overlap).model_dump()
 
     # pack overlap: skip when both sides have no pack evidence
     # (single-unit products with no "Count per Unit" in source).
     if attrs1["pack_set"] or attrs2["pack_set"]:
         pack_overlap = attrs1["pack_set"] & attrs2["pack_set"]
         if not pack_overlap:
-            return GateResult(decision="hard_no", reason="No pack overlap").model_dump()
+            return GateResult(decision="hard_no", reason=_r.no_pack_overlap).model_dump()
 
     for field, reason in (
-        ("package_type_set", "Package type mismatch"),
-        ("package_material_set", "Package material mismatch"),
-        ("packaging_level_set", "Packaging level mismatch"),
+        ("package_type_set", _r.package_type_mismatch),
+        ("package_material_set", _r.package_material_mismatch),
+        ("packaging_level_set", _r.packaging_level_mismatch),
     ):
         left, right = set(attrs1.get(field, set())), set(attrs2.get(field, set()))
         if left and right and not (left & right):
@@ -1179,14 +1180,19 @@ def three_way_gate(
         for key in evidence.conflicts
         if key in CRITICAL_NAME_BY_CENSUS_KEY
     }
-    categorical_conflicts = [
-        name
-        for name in sorted(engine_conflicts & {"flavor", "sweetener", "pulp"})
-    ]
+    numeric_veto_dimensions = frozenset(
+        training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
+    )
+    categorical_conflicts = sorted(
+        engine_conflicts
+        & (numeric_veto_dimensions - frozenset(
+            {"volume", "pack", "package_type", "pack_material"}
+        ))
+    )
     if categorical_conflicts:
         return GateResult(
             decision="hard_no",
-            reason="Critical attribute mismatch: " + ",".join(categorical_conflicts),
+            reason=f"{_r.categorical_mismatch} " + ",".join(categorical_conflicts),
         ).model_dump()
 
     # PACKAGING LEVEL is one-sided in practice (measured 2026-09-30: 217 of
@@ -1213,7 +1219,7 @@ def three_way_gate(
     if _lvl_a and not _lvl_b or _lvl_b and not _lvl_a:
         return GateResult(
             decision="fallback",
-            reason="Packaging level asserted on one side only (case vs unstated) — needs review",
+            reason=_r.packaging_level_review,
         ).model_dump()
 
     # consistency check
@@ -1224,11 +1230,11 @@ def three_way_gate(
         or attrs2["pack_consistency"] < consistency_fallback_threshold
     ):
         return GateResult(
-            decision="fallback", reason="Overlap but low consistency"
+            decision="fallback", reason=_r.low_consistency
         ).model_dump()
 
     return GateResult(
-        decision="proceed", reason="Known critical attributes compatible"
+        decision="proceed", reason=_r.clean_proceed
     ).model_dump()
 
 

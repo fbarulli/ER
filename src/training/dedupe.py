@@ -4,8 +4,8 @@
 match on price — so ~9,080 same-title rows at one retailer are DISTINCT
 marketplace offers (Gittigidiyor-style sellers), not scrape glitches.
 Collapsing them is PRICE-AGGREGATION, not noise-removal, so the representative
-is chosen deliberately: has barcode (trusted identity) > most complete >
-lowest price.
+is chosen deliberately using barcode presence and descriptor completeness;
+price does not rank representatives.
 
 Tiers (each operates on the rows surviving the previous tier):
   T1  retailer+barcode      same product at one retailer -> 1 row (barcode is
@@ -14,8 +14,8 @@ Tiers (each operates on the rows surviving the previous tier):
       barcode               same product -> 1 row. Identity decided by the
                            descriptor bundle (core.product_identity), never by
                            price or URL.
-  T2  retailer+title+       identical everything -> 1 row (lossless). Price is
-      price+barcode         NOT part of the key (it is a seller attribute);
+  T2  retailer+title+       matching identity partition -> 1 row. Price is
+      identity partition    NOT part of the key (it is a seller attribute);
                            same retailer+title+barcode at two prices is the
                            same product offered twice, which is T3's
                            price-aggregation and is flagged, not silent.
@@ -31,8 +31,8 @@ products lost their ONLY row in the corpus — present in canonical_records.csv,
 absent from the deduped output, with a representative carrying a sibling's
 barcode. T2 already detects exactly this hazard and deferred to T3; T3 then
 merged them anyway. The partition closes it: rows carrying DIFFERENT trusted
-barcodes never collapse together, and two rows with NO barcode still do
-(price aggregation, flagged).
+barcodes never collapse together. Rows without a barcode may share a populated
+title for price aggregation; rows with missing titles stay separate in T2/T3.
 
 Identity is decided by `core.product_identity` (the SSOT) and by nothing else.
 Representative choice deliberately ignores `price`, `url` and `image_url`:
@@ -59,10 +59,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from core.common import DATA_PATH, SEED, F, ensure_parent, load_dataset
+from core.common import DATA_PATH, SEED, F, ensure_parent, load_dataset, data_cfg
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
+from core.deduplication import collapse_representatives
 from core.product_identity import (
-    completeness as descriptor_completeness,
+    completeness_frame,
     evaluate_product_identity,
     identity_conflict,
     row_identity,
@@ -85,7 +86,8 @@ HELPERS = ["_price", "_complete", "_has_bc", "_t2_bc", "_bc_valid", "_ident"]
 # on their ORIGINAL (unnormalized) data — full title, attributes, brand,
 # category, price. 8 are genuine product splits (keep separate), 2 are
 # same-product where a listing qualified a shared trait (collapse). Keyed by
-# (retailer, barcode) so the T1.5 loop can look up the verdict directly.
+# (retailer, barcode) in config/paths.yaml dedupe_adjudications so the T1.5
+# loop can look up the reviewed verdict directly.
 #
 # This table is the reason the text predicate is allowed to decide T1.5 at
 # all: measured on barcode-labeled ground truth (2026-09-30) the descriptor
@@ -94,39 +96,12 @@ HELPERS = ["_price", "_complete", "_has_bc", "_t2_bc", "_bc_valid", "_ident"]
 # NOT sufficient — a byte-identical malformed barcode at one retailer plus a
 # descriptor verdict is, and anything the verdict cannot settle is escalated
 # here rather than merged.
-_STEP2_COLLAPSE = {  # (retailer, barcode) -> same product, collapse
-    # L&A All Cranberry Juice: 3 listings, all L&A cranberry juice 32oz;
-    # "No Sugar Added" on one is a shared listing qualifier, not a split.
-    ("amazon", "41755098003"),
-    # Orange Crush Sugar Free Singles: both are Orange Crush sugar-free
-    # orange drink-mix singles; the second title is listing spam ("...Fashion
-    # Accessories") over the same product.
-    ("amazon", "72392329915"),
-}
-_STEP2_KEEP = {  # (retailer, barcode) -> genuine split, keep separate
-    # Whole Foods nutrient water vs Zero-Calorie Lemonade variant (lemon).
-    ("Wholefoods", "99482464950"),
-    # Ozarka sparkling water: Lemon vs Lime.
-    ("amazon", "22592446530"),
-    # Cool Brew cold-brew concentrate: French Roast vs Vanilla.
-    ("amazon", "53721632036"),
-    # Montellier mineral water: Lemon vs Lime.
-    ("amazon", "56918000304"),
-    # Pennsylvania Dutch birch beer: regular vs Diet.
-    ("amazon", "71573024687"),
-    # Zephyrhills sparkling water: Lemon vs Lime vs Spring.
-    ("amazon", "73430910713"),
-    # Stewart's root beer: Original vs Diet.
-    ("amazon", "98794313048"),
-    # Thick & Easy cranberry: Hormel vs Thick & Easy (different brands).
-    ("amazon", "99429158133"),
-}
 
 
 def _same_product_by_title(sub: pd.DataFrame, retailer: str, barcode: str) -> bool:
     """Two-step product-identity decision for a (retailer, barcode) group.
 
-    STEP 0 — adjudicated overrides win outright (owner review, see _STEP2_*).
+    STEP 0 — config-owned adjudicated overrides win outright.
     STEP 1 — the descriptor bundle decides: no dimension may PROVE the rows are
       different products. `core.product_identity` owns that comparison, so the
       dedupe, the gate and the vetoes cannot drift apart. Category is
@@ -141,10 +116,9 @@ def _same_product_by_title(sub: pd.DataFrame, retailer: str, barcode: str) -> bo
     the same product and should collapse.
     """
     key = (retailer, barcode)
-    if key in _STEP2_KEEP:
-        return False
-    if key in _STEP2_COLLAPSE:
-        return True
+    for reviewed in data_cfg().dedupe_adjudications:
+        if key == (reviewed.retailer, reviewed.barcode):
+            return reviewed.decision == "collapse"
 
     identities = [row_identity(row) for row in sub.to_dict("records")]
     # Compatibility is not transitive: A={lemon,lime} can overlap B={lemon}
@@ -153,6 +127,23 @@ def _same_product_by_title(sub: pd.DataFrame, retailer: str, barcode: str) -> bo
     return all(evaluate_product_identity(left, right)["decision"] in {
         "same", "compatible_unverified"
     } for left, right in combinations(identities, 2))
+
+
+def _protect_missing_titles(frame: pd.DataFrame) -> pd.DataFrame:
+    """Give untitled listings separate partitions before title-based collapse.
+
+    T1 has already consumed trustworthy retailer/barcode identity. An absent
+    title cannot prove identity for the remaining T2/T3 rows, even when both
+    also lack a barcode. Use row positions rather than a possibly missing or
+    repeated listing ID, preserving every such source row independently.
+    """
+    missing = frame["title"].fillna("").astype(str).str.strip().eq("")
+    if not missing.any():
+        return frame
+    frame = frame.copy()
+    positions = np.flatnonzero(missing.to_numpy())
+    frame.loc[missing, "_ident"] = [f"untitled-row:{i}" for i in positions]
+    return frame
 
 
 
@@ -175,7 +166,7 @@ def main() -> None:
         # of two export-noise columns while a complete title with no image lost
         # (measured 2026-09-30). price is excluded too — it is a seller
         # attribute, not a description of the product.
-        _complete=[descriptor_completeness(r) for r in df.to_dict("records")],
+        _complete=completeness_frame(df),
         _has_bc=(df["barcode"].fillna("").str.len() > 0).astype(int),
     )
 
@@ -190,39 +181,6 @@ def main() -> None:
     # Updated per tier and resolved transitively at the end (a T1 survivor may
     # itself be collapsed by T2/T3).
     parent = {i: i for i in work.index}
-
-    def collapse(frame: pd.DataFrame, groups: list[str], sort_cols: list[str],
-                 ascending: list[bool]) -> tuple[pd.DataFrame, pd.Index]:
-        """Collapse each group to one representative; record the mapping.
-
-        ONE sorted pass + ONE groupby-min reduction: sort by the
-        representative-preference columns, then every row learns its
-        group's minimum position (= the first row in preference order —
-        the same first-of-group semantics drop_duplicates keep="first"
-        had, with groupby dropna=False so NaN==NaN grouping matches).
-        The old form ran drop_duplicates AND a per-group Python loop that
-        re-walked every group just to fill parent[]; measured 465ms ->
-        27ms on the 71.6k-row corpus.
-        """
-        ordered = frame.sort_values(sort_cols, ascending=ascending,
-                                    na_position="last",
-                                    kind="stable")
-        pos = pd.Series(np.arange(len(ordered)), index=ordered.index)
-        rep_pos = pos.groupby(
-            [ordered[c] for c in groups], dropna=False
-        ).transform("min")
-        survivors = ordered.loc[rep_pos == pos]
-        parent.update(
-            dict(
-                zip(
-                    ordered.index,
-                    ordered.index.to_numpy()[rep_pos.to_numpy()],
-                    strict=True,
-                )
-            )
-        )
-        dropped = frame.index.difference(survivors.index)
-        return survivors, dropped
 
     summary = []
 
@@ -254,8 +212,8 @@ def main() -> None:
     t1_bc_invalid = work[(work["_has_bc"] == 1) & (~work["_bc_valid"])]
     no_bc = work[work["_has_bc"] == 0]
     n_t1_skipped = len(t1_bc_invalid)
-    t1, dropped1 = collapse(with_bc, ["retailer", "barcode"],
-                            ["_complete"], [False])
+    t1, dropped1 = collapse_representatives(with_bc, ["retailer", "barcode"],
+                            ["_complete"], [False], parent=parent)
     work = pd.concat([t1, t1_bc_invalid, no_bc])
     summary.append({"tier": "T1 retailer+barcode",
                     "dropped_rows": len(dropped1),
@@ -341,6 +299,7 @@ def main() -> None:
     # collapse only when their trusted barcodes agree (same non-empty
     # identity, or both without one). Two DIFFERENT trusted barcodes under one
     # title are different products and must not be merged here.
+    work = _protect_missing_titles(work)
     with_price = work.copy()
     with_price["_t2_bc"] = with_price["_ident"]
     no_price = work.iloc[0:0]
@@ -349,13 +308,14 @@ def main() -> None:
     # all-same-identity group collapses losslessly; a group with >1 distinct
     # trusted barcode carries genuinely different products — those rows all
     # flow to T3 (kept here via the conflict mask).
-    bc_sig = with_price.groupby(["retailer", "title"], sort=False, dropna=False)["_t2_bc"].transform(
-        lambda s: "1" if s.nunique() <= 1 else "0")
-    t2_clean = with_price[bc_sig == "1"]
-    t2_conflict = with_price[bc_sig == "0"]
+    bc_agrees = with_price.groupby(
+        ["retailer", "title"], sort=False, dropna=False
+    )["_t2_bc"].transform("nunique").le(1)
+    t2_clean = with_price[bc_agrees]
+    t2_conflict = with_price[~bc_agrees]
 
-    t2, dropped2 = collapse(t2_clean, ["retailer", "title", "_t2_bc"],
-                            ["_complete"], [False])
+    t2, dropped2 = collapse_representatives(t2_clean, ["retailer", "title", "_t2_bc"],
+                            ["_complete"], [False], parent=parent)
     work = pd.concat([t2, t2_conflict.drop(columns=["_t2_bc"]), no_price])
     summary.append({"tier": "T2 retailer+title+barcode",
                     "dropped_rows": len(dropped2),
@@ -369,9 +329,9 @@ def main() -> None:
     # the output, represented by a sibling's barcode). Rows sharing a title
     # with NO trusted barcode still collapse together — that is the genuine
     # price-aggregation case, and it is flagged rather than silent.
-    t3, dropped3 = collapse(work, ["retailer", "title", "_ident"],
+    t3, dropped3 = collapse_representatives(work, ["retailer", "title", "_ident"],
                             ["_has_bc", "_complete", "title"],
-                            [False, False, True])
+                            [False, False, True], parent=parent)
     work = t3
     summary.append({"tier": "T3 retailer+title+identity-partition (price-aggregation)",
                     "dropped_rows": len(dropped3)})

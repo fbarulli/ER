@@ -140,6 +140,34 @@ class BundleCacheTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def test_frozen_input_edits_invalidate_cache_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset = root / "dataset.csv"
+            dataset.write_bytes(b"unchanged dataset")
+            inputs = {
+                name: root / f"{name}.csv"
+                for name in ("labeled_pairs", "canonical_records", "gate_results")
+            }
+            for path in inputs.values():
+                path.write_bytes(b"original")
+            with mock.patch.object(colab, "F", {**colab.F, **inputs}), \
+                 mock.patch.object(colab, "_CACHE_PREPARED_BUNDLES", True), \
+                 mock.patch.object(colab, "_tree_digest", return_value="unchanged"):
+                def cache_path():
+                    return colab._bundle_cache_dir(
+                        profiles=["baseline"], model_key="model", sample=None,
+                        payload="full", training_dataset=dataset,
+                    )
+                original = cache_path()
+                self.assertEqual(original, cache_path())
+                for name, path in inputs.items():
+                    with self.subTest(input=name):
+                        path.write_bytes(b"edited")
+                        self.assertNotEqual(original, cache_path())
+                        path.write_bytes(b"original")
+                        self.assertEqual(original, cache_path())
+
     def _fixture(self, temporary: str):
         root = Path(temporary)
         dataset = root / "dataset.csv"

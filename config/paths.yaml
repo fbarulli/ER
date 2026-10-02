@@ -192,6 +192,36 @@ layouts:
 # same class of defect as the volume tolerance (five lanes each declaring one
 # tolerance) and the stage-7 re-parse (a mechanism reading column names that
 # no caller supplied).
+# Preserve pandas' existing string/NA parsing across all dataset loaders.
+dataset_csv_read:
+  dtype: str
+  keep_default_na: true
+  na_filter: true
+
+# Completeness scores use product descriptors; all other mapped columns are
+# excluded. Order preserves the existing product-identity metadata contract.
+descriptor_columns:
+  - title
+  - brand
+  - category
+  - category_path
+  - attributes
+  - description
+
+# Owner-reviewed malformed-barcode groups. Repeated keys are rejected even
+# when they carry the same verdict, so keep/collapse can never overlap.
+dedupe_adjudications:
+  - {retailer: amazon, barcode: "41755098003", decision: collapse, reason: "L&A cranberry juice: no-sugar-added qualifier describes the shared product"}
+  - {retailer: amazon, barcode: "72392329915", decision: collapse, reason: "Orange Crush sugar-free singles: listing spam describes the shared product"}
+  - {retailer: Wholefoods, barcode: "99482464950", decision: keep, reason: "Nutrient water versus zero-calorie lemonade"}
+  - {retailer: amazon, barcode: "22592446530", decision: keep, reason: "Ozarka sparkling water: lemon versus lime"}
+  - {retailer: amazon, barcode: "53721632036", decision: keep, reason: "Cool Brew concentrate: French Roast versus vanilla"}
+  - {retailer: amazon, barcode: "56918000304", decision: keep, reason: "Montellier mineral water: lemon versus lime"}
+  - {retailer: amazon, barcode: "71573024687", decision: keep, reason: "Pennsylvania Dutch birch beer: regular versus diet"}
+  - {retailer: amazon, barcode: "73430910713", decision: keep, reason: "Zephyrhills: lemon versus lime versus spring"}
+  - {retailer: amazon, barcode: "98794313048", decision: keep, reason: "Stewart's root beer: original versus diet"}
+  - {retailer: amazon, barcode: "99429158133", decision: keep, reason: "Cranberry: Hormel versus Thick & Easy brands"}
+
 column_mapping:
   sku_id: product_id
   retailer: retailer

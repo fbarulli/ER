@@ -469,6 +469,25 @@ class UrlEvidenceSpec(BaseModel):
         return v
 
 
+class DatasetCsvReadSpec(BaseModel):
+    """Shared raw, deduped, and override dataset parsing semantics."""
+
+    model_config = ConfigDict(extra="forbid")
+    dtype: Literal["str"]
+    keep_default_na: bool
+    na_filter: bool
+
+
+class DedupeAdjudicationSpec(BaseModel):
+    """Reviewed identity decision for one malformed-barcode retailer group."""
+
+    model_config = ConfigDict(extra="forbid")
+    retailer: str = Field(min_length=1)
+    barcode: str = Field(pattern=r"^[0-9]+$")
+    decision: Literal["collapse", "keep"]
+    reason: str = Field(min_length=1)
+
+
 class DataConfig(BaseModel):
     """config/paths.yaml — the SHARED data contract (paths, file names, column
     mapping, seed, category-macro taxonomy, model registry, owned layouts).
@@ -480,6 +499,9 @@ class DataConfig(BaseModel):
     files: DataFilesSpec
     layouts: dict[str, LayoutSpec] = Field(default_factory=dict)
     column_mapping: dict[str, str] = Field(min_length=1)
+    dataset_csv_read: DatasetCsvReadSpec
+    descriptor_columns: list[str] = Field(min_length=1)
+    dedupe_adjudications: list[DedupeAdjudicationSpec]
     # EVERY mapped column's capture ruling + reason (see ColumnEvidenceSpec).
     column_evidence: dict[str, ColumnEvidenceSpec] = Field(min_length=1)
     # Extra names for a column beyond its raw and canonical names (see
@@ -525,6 +547,14 @@ class DataConfig(BaseModel):
         """
         canonical = set(v.column_mapping.values())
         raw = set(v.column_mapping)
+        if len(v.descriptor_columns) != len(set(v.descriptor_columns)):
+            raise ValueError("descriptor_columns contains duplicates")
+        unknown_descriptors = sorted(set(v.descriptor_columns) - canonical)
+        if unknown_descriptors:
+            raise ValueError(f"descriptor_columns names non-canonical columns {unknown_descriptors}")
+        adjudication_keys = [(row.retailer, row.barcode) for row in v.dedupe_adjudications]
+        if len(adjudication_keys) != len(set(adjudication_keys)):
+            raise ValueError("dedupe_adjudications contains duplicate retailer/barcode decisions")
         other_aliases: dict[str, str] = {}
         for name, spec in sorted(v.column_evidence.items()):
             if spec.column not in canonical:
@@ -1768,6 +1798,33 @@ class GateSpec(BaseModel):
     vol_abs_tolerance: float = Field(ge=0.0)
     raw_conf_threshold: float = Field(gt=0.0, le=1.0)
     consistency_fallback_threshold: float = Field(gt=0.0, le=1.0)
+
+    class GateReasonsSpec(BaseModel):
+        """The gate's reason strings — one declared source.
+
+        three_way_gate composes its output reason from these; the census
+        consumers (training.gate_replay's fired-stage map, reason-keyed
+        audits) map THE SAME config values instead of carrying a second
+        copy. Changing wording here changes the gate output contract
+        everywhere at once, loudly."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        pack_blocker: str = Field(min_length=1)
+        ambiguous_volume: str = Field(min_length=1)
+        low_volume_confidence: str = Field(min_length=1)
+        low_pack_confidence: str = Field(min_length=1)
+        no_volume_overlap: str = Field(min_length=1)
+        no_pack_overlap: str = Field(min_length=1)
+        package_type_mismatch: str = Field(min_length=1)
+        package_material_mismatch: str = Field(min_length=1)
+        packaging_level_mismatch: str = Field(min_length=1)
+        packaging_level_review: str = Field(min_length=1)
+        categorical_mismatch: str = Field(min_length=1)
+        low_consistency: str = Field(min_length=1)
+        clean_proceed: str = Field(min_length=1)
+
+    reasons: GateReasonsSpec
 
 
 class BandSpec(BaseModel):

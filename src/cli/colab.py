@@ -2948,6 +2948,13 @@ def _bundle_cache_dir(
             "payload": payload,
             "collapsed_guardrail": _COLLAPSE_GUARDRAIL_PROFILE,
             "dataset_sha256": sha256_file(training_dataset),
+            # These inputs are read by preparation and frozen into the bundle.
+            # Dataset/source identity alone cannot detect label or canonical
+            # edits made since the previous build.
+            "frozen_inputs_sha256": {
+                name: sha256_file(Path(F[name]))
+                for name in ("labeled_pairs", "canonical_records", "gate_results")
+            },
             "sources_sha256": _tree_digest(),
         },
         sort_keys=True,

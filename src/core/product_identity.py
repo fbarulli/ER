@@ -55,7 +55,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Iterable, Mapping
 
-from core.common import vocabulary
+import pandas as pd
+
+from core.common import data_cfg, training_cfg, vocabulary
 from core.critical_attributes import (
     DECLARED_FLAVOR_LEXICON,
     FLAVOR_ALIASES,
@@ -74,16 +76,14 @@ from pipeline import normalize_text
 # ── descriptor columns ─────────────────────────────────────────────────────
 # The columns that DESCRIBE a product. `price`, `url`, `image_url` and
 # `country` are excluded on purpose (rule 3).
-DESCRIPTOR_COLUMNS: tuple[str, ...] = (
-    "title", "brand", "category", "category_path", "attributes", "description",
-)
+DESCRIPTOR_COLUMNS: tuple[str, ...] = tuple(data_cfg().descriptor_columns)
 NON_DESCRIPTOR_COLUMNS: frozenset[str] = frozenset(
-    {"price", "url", "image_url", "country", "retailer", "product_id", "barcode"}
+    set(data_cfg().column_mapping.values()) - set(DESCRIPTOR_COLUMNS)
 )
 
 # The gate's 5% relative tolerance; `volumes_compatible` is the SSOT for the
 # predicate, so reusing the number keeps "compatible" meaning one thing.
-VOLUME_RELATIVE_TOLERANCE = 0.05
+VOLUME_RELATIVE_TOLERANCE = float(training_cfg().gate.vol_tolerance)
 
 # `sku_info` returns {1.0} as its explicit "no pack count observed" sentinel,
 # so 1.0 is NOT evidence of a single-unit product.
@@ -291,7 +291,24 @@ def completeness(row: Mapping[str, Any] | Any) -> int:
     get = (lambda k: row.get(k, "")) if isinstance(row, Mapping) else (
         lambda k: getattr(row, k, "")
     )
-    return sum(1 for col in DESCRIPTOR_COLUMNS if str(get(col) or "").strip())
+    return sum(
+        1 for col in DESCRIPTOR_COLUMNS
+        if not pd.isna(get(col)) and str(get(col)).strip()
+    )
+
+
+def completeness_frame(frame: pd.DataFrame) -> pd.Series:
+    """Descriptor counts with the same missing-value policy as completeness.
+
+    Work column by column instead of materializing a dictionary per source row.
+    Preserve the input index so counts align during representative selection.
+    """
+    scores = pd.Series(0, index=frame.index, dtype="int64")
+    for column in DESCRIPTOR_COLUMNS:
+        if column in frame:
+            populated = frame[column].notna() & frame[column].fillna("").astype(str).str.strip().ne("")
+            scores += populated.astype("int64")
+    return scores
 
 
 def attr_token_set(attr: object, key: str) -> frozenset[str]:

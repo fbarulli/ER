@@ -30,7 +30,7 @@ from decimal import Decimal
 from functools import lru_cache
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 def _find_project_root() -> Path:
     """Locate the project from stable markers, never a magic parent offset."""
@@ -637,6 +637,7 @@ def gate_census_drift_report(
     *,
     measured: dict[str, int],
     previous_labeled_csv: Path | None = None,
+    current_gate: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Per-sample map of what a gate-census drift DID to the labeled data.
 
@@ -657,7 +658,7 @@ def gate_census_drift_report(
     (results/ is gitignored scratch) and returns the summary + sample lists.
     """
     pin = training_cfg().rand_matching.gate_census_pin.model_dump()
-    g = pd.read_csv(
+    g = current_gate if current_gate is not None else pd.read_csv(
         RESULTS / F["gate_results"],
         dtype=str,
         keep_default_na=False,
@@ -677,8 +678,15 @@ def gate_census_drift_report(
         import subprocess
         from io import BytesIO
 
+        try:
+            git_path = labeled_path.resolve().relative_to(TRAIN_ROOT.resolve())
+        except ValueError as exc:
+            raise FileNotFoundError(
+                f"Previous labeled artifact is missing outside the repository: {labeled_path}"
+            ) from exc
         head = subprocess.run(
-            ["git", "show", f"HEAD:{labeled_path.as_posix()}"],
+            ["git", "show", f"HEAD:{git_path.as_posix()}"],
+            cwd=TRAIN_ROOT,
             capture_output=True,
         )
         if head.returncode != 0:
@@ -954,16 +962,31 @@ def _validate_source_export(
         )
 
 
-def load_dataset() -> pd.DataFrame:
-    """Load the ACTIVE dataset as raw strings (no silent coercion).
+def _read_dataset_csv(path: Path, *, columns: Sequence[str] | None = None) -> pd.DataFrame:
+    """Read every dataset lane with the configured string/NA contract."""
+    if columns is not None and not columns:
+        raise ValueError("source export projection requires at least one column")
+    return pd.read_csv(path, usecols=columns, **data_cfg().dataset_csv_read.model_dump())
+
+
+def _load_source_export(columns: Sequence[str] | None = None) -> pd.DataFrame:
+    """Parse selected raw columns while retaining the source census/hash guard."""
+    df = _read_dataset_csv(DATA_PATH, columns=columns)
+    _validate_source_export(df, DATA_PATH)
+    return df
+
+
+def load_dataset(*, columns: Sequence[str] | None = None) -> pd.DataFrame:
+    """Load the active source with string dtype and pandas missing-value semantics.
 
     THE dataset for this series until further notice: euromonitor. Rename
     DATA_PATH + this loader when the active dataset changes; steps import
     `load_dataset`, never a hardcoded path. Columns are canonicalized
-    project-wide via COLUMN_MAPPING (config/paths.yaml).
+    project-wide via COLUMN_MAPPING (config/paths.yaml). Optional ``columns``
+    uses canonical names and projects at CSV parsing time; the complete source
+    row-count and hash checks still run. Pandas missing-value semantics remain
+    the same as the full loader.
     """
-    df = pd.read_csv(DATA_PATH, dtype=str)
-    _validate_source_export(df, DATA_PATH)
     # Imported HERE, not as a module global: COLUMN_MAPPING is reachable as
     # a module attribute only through the lazy __getattr__ below (which
     # fires for attribute access, NOT for a bare global name lookup inside a
@@ -973,32 +996,47 @@ def load_dataset() -> pd.DataFrame:
     # kept for `from core.common import COLUMN_MAPPING` consumers.
     from core.columns import COLUMN_MAPPING as _column_mapping
 
+    raw_columns = None
+    if columns is not None:
+        canonical_to_raw = {canonical: raw for raw, canonical in _column_mapping.items()}
+        unknown = sorted(set(columns) - set(canonical_to_raw))
+        if unknown:
+            raise ValueError(f"unknown canonical source columns: {unknown}")
+        raw_columns = [canonical_to_raw[column] for column in columns]
+    df = _load_source_export(raw_columns)
     return df.rename(columns=_column_mapping)
 
 
-def load_raw_export() -> pd.DataFrame:
+def load_raw_export(*, columns: Sequence[str] | None = None) -> pd.DataFrame:
     """The raw export WITHOUT column renames — the data-prep pipeline
     (src/training/data_prep) works in raw-export column names (gtin, sku_name_eng,
-    attribute); the training/eval lane works in canonical ones."""
+    attribute); the training/eval lane works in canonical ones. Optional
+    ``columns`` uses raw names and retains the complete source validation."""
     if not DATA_PATH.exists():
         raise FileNotFoundError(f"{DATA_PATH} missing")
-    df = pd.read_csv(DATA_PATH, dtype=str)
-    _validate_source_export(df, DATA_PATH)
-    return df
+    return _load_source_export(columns)
 
 
-def load_dataset_deduped() -> pd.DataFrame:
+def load_dataset_deduped(path: Path | None = None) -> pd.DataFrame:
     """The DEDUPED dataset (06 tiered dedupe) — the matching-stage input.
 
     Step 03+ matching consumes this (one row per retailer-product after
     marketplace-listing collapse); the raw export remains the source of
     truth via load_dataset. Columns are already canonical (written by 06).
+    An explicit path uses the same parsing, column, and reviewed-identity
+    contracts as the default catalog; it need not depend on a second CSV.
     """
-    path = F["dataset_deduped"]
+    path = Path(path) if path is not None else F["dataset_deduped"]
     if not path.exists():
         raise FileNotFoundError(f"{path} missing — run src/training/dedupe.py first")
     from core.identity_policy import exclude_reviewed_rows
-    return exclude_reviewed_rows(pd.read_csv(path, dtype=str))
+    from core.columns import CANONICAL_COLUMNS
+
+    df = _read_dataset_csv(path)
+    missing_columns = sorted(set(CANONICAL_COLUMNS) - set(df.columns))
+    if missing_columns:
+        raise ValueError(f"deduped dataset lacks canonical columns: {missing_columns}")
+    return exclude_reviewed_rows(df)
 
 
 # load_euromonitor alias REMOVED (audit 2026-09-09): zero importers —
