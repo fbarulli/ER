@@ -389,6 +389,15 @@ def _interval_overlap(a: frozenset[str], b: frozenset[str]) -> bool | None:
 # Type dispatch — the ordered decision stack
 # ════════════════════════════════════════════════════════════════════════════
 
+# JEV audit (2026-10-02): per-key token stoplists whose overlap carries no
+# identity weight for STRING dimensions. Measured minting source: canonical
+# flavor inference unions every listing's tokens, so 'fruit' lands on both
+# sides of lemon/elderflower vs lime/mint and 'cola' lands on flavored
+# sodas whose actual flavors never match.
+_GENERIC_TOKENS: dict[str, frozenset[str]] = {
+    "flavor": frozenset({"fruit", "cola", "juice"}),
+}
+
 
 def attribute_metrics(
     val_a: frozenset[str],
@@ -435,6 +444,7 @@ def attribute_metrics(
 
 
 def evaluate_metrics(
+    key: str,
     type_key: str,
     val_a: frozenset[str],
     val_b: frozenset[str],
@@ -472,6 +482,18 @@ def evaluate_metrics(
         return ComparisonResult.MATCH
     if metrics.containment_a == 1.0 or metrics.containment_b == 1.0:
         return ComparisonResult.SUBSET
+    # JEV audit (2026-10-02): a STRING-set overlap whose ENTIRE intersection
+    # is made of GENERIC tokens ('fruit', 'cola') is not identity evidence.
+    # These tokens overlap across genuinely different flavors (Nordic Mist
+    # lemon/elderflower vs lime/mint both inferred 'cola fruit') and were
+    # minting MATCH → gate proceed on ~84% false positives in the JEV-graded
+    # slice. The overlap falls through to the specificity devices below and
+    # lands INCONCLUSIVE, where weaker surface lanes (mode_flavor) can
+    # review it instead of a bare proceed.
+    if type_key == "STRING" and key in _GENERIC_TOKENS:
+        intersection = val_a & val_b
+        if intersection and intersection <= _GENERIC_TOKENS[key]:
+            return ComparisonResult.INCONCLUSIVE
     if metrics.overlap_coef > 0.0 or metrics.jaccard >= 0.6:
         return ComparisonResult.MATCH
     short_side = min(
@@ -633,7 +655,7 @@ class AttributeDecisionEngine:
                 right_set = frozenset(str(token) for token in right_value)
                 metrics = attribute_metrics(left_set, right_set, type_key=type_key, key=key)
                 result = evaluate_metrics(
-                    type_key, left_set, right_set, metrics,
+                    key, type_key, left_set, right_set, metrics,
                     domain=domain_by_key[key],
                 )
                 # Stage 8: semantic-family rescue. A lexical-fail pair whose
@@ -842,7 +864,7 @@ class AttributeDecisionEngine:
             # cross-channel: no engine evaluation, return an uncertainty
             return ComparisonResult.INCONCLUSIVE, "claim_conflict"
         reborn = attribute_metrics(a, b)
-        result = evaluate_metrics(_type_key_for(key, specs[key]), a, b, reborn)
+        result = evaluate_metrics(key, _type_key_for(key, specs[key]), a, b, reborn)
         return result, "original_columns"
 
 

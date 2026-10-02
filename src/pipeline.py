@@ -1461,6 +1461,23 @@ def three_way_gate(
                 reason=_r.supporting_feature_review + " " + ",".join(sorted(differing_support)),
             ).model_dump()
 
+    # MODE_FLAVOR SURFACE LANE (JEV audit, 2026-10-02): reached only when
+    # no census conflict vetoed the pair. When the canonical mode_flavor
+    # values are both populated and different, this is not a clean
+    # proceed — the mode is the deterministic per-listing consensus and it
+    # disagrees. Measured on the JEV-graded slice: 216/523 falsified
+    # positives carry differing modes (plus 69 with one empty side, not
+    # reachable by this two-sided rule). REVIEW only, never a hard_no: a
+    # mode is weaker evidence than a census conflict, matching the
+    # packaging-level doctrine.
+    mf1 = str(attrs1.get("mode_flavor", "") or "").strip().lower()
+    mf2 = str(attrs2.get("mode_flavor", "") or "").strip().lower()
+    if mf1 and mf2 and mf1 != mf2:
+        return GateResult(
+            decision="fallback",
+            reason=_r.supporting_feature_review + " mode_flavor:" + mf1 + "|" + mf2,
+        ).model_dump()
+
     return GateResult(
         decision="proceed", reason=_r.clean_proceed
     ).model_dump()
