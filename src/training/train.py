@@ -454,6 +454,19 @@ def _main_inner(_mlf, _wandb) -> None:
     # cap). Same hard indexing.
     swap_max_field_share = float(mask_cfg["swap_max_field_share"])
     swap_max_value_share = float(mask_cfg["swap_max_value_share"])
+    # Measured-variation wiring (duplicate variation census 2026-10-01):
+    # per-field slot quotas for the swap lanes (measured same-GTIN conflict
+    # rates), cross-retailer donor precedence, declaration-dropout lane.
+    # The dict from masking_cfg() is validated through the MaskingSpec
+    # contract first: a missing/untyped YAML block dies on schema
+    # validation, never on a silent default.
+    from core.schemas import MaskingSpec
+
+    _mask_spec = MaskingSpec(**mask_cfg)
+    field_quota_shares = dict(_mask_spec.field_quota_shares)
+    cross_retailer_donors = bool(_mask_spec.cross_retailer_donors)
+    _dropout_cfg = _mask_spec.declaration_dropout
+    dropout_frac = float(_dropout_cfg.frac) if _dropout_cfg is not None else 0.0
 
     import torch
 
@@ -510,6 +523,18 @@ def _main_inner(_mlf, _wandb) -> None:
         data["row_bc"],
         data["pos"],
         data["neg"],
+    )
+    # Retailer per payload row, for the cross-retailer donor precedence the
+    # duplicate census asked for (91.4% of real same-GTIN duplicates are
+    # cross-retailer). Sku rows carry their import retailer; the canonical
+    # tail carries "" (mixed-provenance slots). Only pool-range indices are
+    # consulted by the donor loops, so the suffix needs no bookkeeping.
+    _ret_sku = df["retailer"].fillna("").astype(str).to_numpy()
+    _n_ret_sku = min(len(_ret_sku), len(payload))
+    payload_retailers = np.array(
+        [str(x) for x in _ret_sku[:_n_ret_sku]]
+        + [""] * (len(payload) - _n_ret_sku),
+        dtype=object,
     )
     # Entity keys for donor-disjointness (one per ORIGINAL payload row;
     # augmentation copies inherit via audit lineage, so this never grows).
@@ -755,6 +780,8 @@ def _main_inner(_mlf, _wandb) -> None:
             shared_value_counts=_shared_value_counts,
             cap_base=_swap_pick_total,
             max_donor_overlap=swap_max_donor_overlap,
+            field_quota_shares=field_quota_shares or None,
+            row_retailer=payload_retailers,
         )
         mask_audit.extend(value_audit)
         from training.masking import extend_augmented_features
@@ -762,6 +789,34 @@ def _main_inner(_mlf, _wandb) -> None:
         structured_features = extend_augmented_features(
             structured_features, payload, mask_audit
         )
+        # ── declaration-dropout lane (duplicate census 2026-10-01) ──
+        # Attribute cells differ in 100% of same-GTIN groups: every retailer
+        # declares a different partial key subset. Mint that shape: copy the
+        # anchor, remove 1..3 random declared structured groups, pair with
+        # the unchanged positive. Label-safe (removing evidence cannot
+        # contradict identity); this is also the lane that reaches the
+        # registry-only weak spots no token group serves.
+        n_dropout_added = 0
+        if dropout_frac > 0:
+            from training.masking import augment_declaration_dropout as _aug_drop
+
+            _pos_pre_drop = len(pos)
+            pos, payload, row_bc, n_dropout_added, _drop_audit = _aug_drop(
+                pos,
+                payload,
+                row_bc,
+                frac=dropout_frac,
+                seed=SEED + 6,
+                pool_size=n_pre_mask_pos,
+                min_drop=int(_dropout_cfg.min_drop),
+                max_drop=int(_dropout_cfg.max_drop),
+                max_value_share=swap_max_value_share,
+            )
+            if n_dropout_added:
+                mask_audit.extend(_drop_audit)
+                structured_features = extend_augmented_features(
+                    structured_features, payload, _drop_audit
+                )
         if len(structured_features) != len(payload):
             raise RuntimeError(
                 "structured feature/payload length mismatch after masking: "
@@ -854,6 +909,8 @@ def _main_inner(_mlf, _wandb) -> None:
             shared_value_counts=_shared_value_counts,
             cap_base=_swap_pick_total,
             max_donor_overlap=swap_max_donor_overlap,
+            field_quota_shares=field_quota_shares or None,
+            row_retailer=payload_retailers,
         )
         _neg_new_audit = _neg_mask_audit + _neg_value_audit
         if _neg_new_audit:
@@ -928,6 +985,8 @@ def _main_inner(_mlf, _wandb) -> None:
             shared_value_counts=_shared_value_counts,
             cap_base=_swap_pick_total,
             max_donor_overlap=swap_max_donor_overlap,
+            field_quota_shares=field_quota_shares or None,
+            row_retailer=payload_retailers,
         )
         _cf_new = np.asarray(_cf_full, dtype=int)[_cf_pos_len:]
         if n_cf_added:

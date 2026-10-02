@@ -312,10 +312,136 @@ def augment_pairs(
         )
         # per-pair varied extent: next draw differs even for same anchor
     res = MaskingResult(
-        pos=np.vstack([pos, np.array(extra, dtype=int)]),
+        pos=np.vstack([pos, np.array(extra, dtype=int)]) if extra else np.asarray(pos),
         payload=new_payload,
         row_bc=np.array(new_bc),
         n_added=len(extra),
+        audit=audit,
+    )
+    return res.pos, res.payload, res.row_bc, res.n_added, res.audit_dicts()
+
+
+def augment_declaration_dropout(
+    pairs: np.ndarray,
+    payload: list[str],
+    row_bc: np.ndarray,
+    *,
+    frac: float,
+    seed: int = 0,
+    pool_size: int | None = None,
+    min_drop: int = 1,
+    max_drop: int = 3,
+    shared_value_counts: Counter[tuple[str, tuple[str, ...]]] | None = None,
+    cap_base: int | None = None,
+    max_value_share: float | None = None,
+) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
+    """Remove structured groups from ONE side of a positive pair — the
+    missing_both shape duplicate pairs really have.
+
+    The duplicate census (2026-10-01) showed attribute cells differ in 100%
+    of same-GTIN groups: each retailer declares a different partial key
+    subset. This lane mints that exact shape: copy the anchor and delete
+    min_drop..max_drop random declared groups (not just blank them — the
+    tokens LEAVE, so the copy under-declares like a thinner retailer feed).
+    No tokens are invented and none are replaced, so the copy still agrees
+    with its counterpart everywhere both sides ever spoke; label stays 1 by
+    construction (removing evidence cannot contradict identity). This is the
+    lane that reaches the registry-only weak spots no token group serves
+    (health claims, made from, sustainable sourcing...): their claims ride
+    in prose, and prose survives pruning of the STRUCTURED tail.
+
+    Footprint caps shared with the value lanes (per group: the pair's
+    removed (group, token-signature) draw is bounded by max_value_share of
+    the cap base, so one popular subset cannot dominate). Deterministic.
+    """
+    import math
+    from collections import Counter
+
+    if max_value_share is not None and not 0.0 < max_value_share <= 1.0:
+        raise ValueError("max_value_share must be in (0, 1]")
+    pool = int(pool_size) if pool_size is not None else len(pairs)
+    pool = max(0, min(pool, len(pairs)))
+    if frac <= 0 or pool == 0:
+        res = MaskingResult(
+            pos=pairs, payload=list(payload), row_bc=np.asarray(row_bc),
+            n_added=0, audit=[],
+        )
+        return res.pos, res.payload, res.row_bc, res.n_added, []
+    rng = random.Random(seed)
+    n_pick = int(pool * min(frac, 1.0))
+    picked = rng.sample(range(pool), n_pick) if n_pick else []
+    if not picked:
+        res = MaskingResult(
+            pos=pairs, payload=list(payload), row_bc=np.asarray(row_bc),
+            n_added=0, audit=[],
+        )
+        return res.pos, res.payload, res.row_bc, res.n_added, []
+    _base = int(cap_base) if cap_base else n_pick
+    value_cap = max(1, math.ceil(max_value_share * _base)) if max_value_share else None
+    used_values = shared_value_counts if shared_value_counts is not None else Counter()
+    for_seen: Counter[str] = Counter()
+    out_pairs: list[tuple[int, int]] = []
+    out_payload: list[str] = []
+    out_bc: list[str] = []
+    audit: list[dict] = []
+    for i in picked:
+        a, b = int(pairs[i][0]), int(pairs[i][1])
+        surfaces = _field_surfaces(payload[a])
+        if not surfaces:
+            continue
+        groups = sorted(surfaces)
+        n_drop = (rng.randint(min_drop, max_drop) if max_drop >= min_drop else min_drop)
+        n_drop = min(n_drop, len(groups))
+        if n_drop <= 0:
+            continue
+        dropped = rng.sample(groups, n_drop)
+        dropped_set = set(dropped)
+        kept = [
+            tok for tok in payload[a].split()
+            if field_of(tok) is None or field_of(tok) not in dropped_set
+        ]
+        del_surfaces = {g: surfaces[g] for g in dropped}
+        if value_cap is not None:
+            signature_key = (tuple(dropped), tuple(sorted(
+                t.lower() for g in dropped for t in del_surfaces[g])))
+            if used_values[(signature_key, ())] >= value_cap:
+                continue
+            used_values[(signature_key, ())] += 1
+        copy_text = " ".join(kept)
+        if copy_text == payload[a] or copy_text == payload[b]:
+            continue
+        extent = round(len(del_surfaces and [
+            t for g in dropped for t in del_surfaces[g]
+        ]) / max(len(payload[a].split()), 1), 4)
+        copy_idx = len(payload) + len(out_payload)
+        out_payload.append(copy_text)
+        out_bc.append(str(row_bc[a]))
+        out_pairs.append((copy_idx, b))
+        for_seen[tuple(dropped)] += 1
+        audit.append({
+            "anchor_payload_idx": a,
+            "copy_payload_idx": copy_idx,
+            "pair_payload_idx": b,
+            "barcode": str(row_bc[a]),
+            "realized_extent": extent,
+            "configured_mask_lo": None,
+            "configured_mask_hi": None,
+            "mask_prob": None,
+            "anchor_text": payload[a],
+            "masked_text": copy_text,
+            "population": "positive",
+            "target_mode": "declaration_dropout",
+            "fields_hit": dropped,
+            "donor_anchor_payload_idx": None,
+            "donor_pair_payload_idx": None,
+            "copy_pair_payload_idx": None,
+        })
+    res = MaskingResult(
+        pos=(np.vstack([pairs, np.array(out_pairs, dtype=int)])
+             if out_pairs else np.asarray(pairs)),
+        payload=[*payload, *out_payload],
+        row_bc=np.array([*map(str, row_bc), *out_bc]),
+        n_added=len(out_payload),
         audit=audit,
     )
     return res.pos, res.payload, res.row_bc, res.n_added, res.audit_dicts()
@@ -551,6 +677,8 @@ def augment_value_swaps(
     shared_value_counts: Counter[tuple[str, tuple[str, ...]]] | None = None,
     cap_base: int | None = None,
     max_donor_overlap: float | None = None,
+    field_quota_shares: dict[str, float] | None = None,
+    row_retailer: np.ndarray | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Append copies whose structured VALUE was transplanted from a donor pair.
 
@@ -560,6 +688,14 @@ def augment_value_swaps(
     donor is chosen here, before training, from the same pair pool, and the
     audit names it. No invented tokens: every transplanted token already
     exists in the corpus payload.
+
+    ``row_retailer`` (same length as payload, retailer string per row):
+    donors come from a DIFFERENT retailer first (91.4% of real same-GTIN
+    duplicates are cross-retailer — the phrasing gap a minted pair should
+    train); after 10 strict tries the loop relaxes so rich lanes never
+    mint nothing. Deterministic. ``field_quota_shares`` (field -> share
+    of this lane's picks): the measured-conflict-rate slot allocation,
+    binding like a per-field cap with the same soft fallback.
 
     Label safety is structural, and differs per population:
 
@@ -647,18 +783,29 @@ def augment_value_swaps(
     _base = int(cap_base) if cap_base else n_pick
     field_cap = max(1, math.ceil(max_field_share * _base)) if max_field_share else None
     value_cap = max(1, math.ceil(max_value_share * _base)) if max_value_share else None
+    quota_caps = (
+        {f: max(1, math.ceil(s * n_pick)) for f, s in field_quota_shares.items() if s > 0}
+        if field_quota_shares
+        else None
+    )
+    _ret = np.asarray(row_retailer, dtype=object) if row_retailer is not None else None
     extra = []
     for i in picked:
         a, b = int(pairs[i][0]), int(pairs[i][1])
         anchor_fields = _field_surfaces(payload[a])
         anchor_entities = {entities[a], entities[b]}
         chosen: tuple[str, list[str], list[str] | None, int, int] | None = None
-        for _ in range(10):
+        for _attempt in range(14):
+            _relaxed_retailer = _ret is None or _attempt >= 10
             j = rng.randrange(pool)
             if j == i:
                 continue
             c, d = int(pairs[j][0]), int(pairs[j][1])
             if anchor_entities & {entities[c], entities[d]}:
+                continue
+            if not _relaxed_retailer and str(_ret[c]) == str(_ret[a]):
+                # strict cross-retailer donor first: real duplicates are 91.4%
+                # cross-seller, so a same-store donor teaches the wrong gap
                 continue
             if max_donor_overlap is not None:
                 anchor_toks = set(payload[a].split())
@@ -683,6 +830,9 @@ def augment_value_swaps(
             )
             if not candidates:
                 continue
+            if quota_caps is not None:
+                qunder = [f for f in candidates if f not in quota_caps or used_fields[f] < quota_caps[f]]
+                candidates = qunder or candidates
             if field_cap is not None:
                 under = [f for f in candidates if used_fields[f] < field_cap]
                 candidates = under or candidates
@@ -871,6 +1021,8 @@ def augment_counterfactual_twins(
     shared_value_counts: Counter[tuple[str, tuple[str, ...]]] | None = None,
     cap_base: int | None = None,
     max_donor_overlap: float | None = None,
+    field_quota_shares: dict[str, float] | None = None,
+    row_retailer: np.ndarray | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Mint minimal-flip negatives from positive pairs: (A1', A2) labeled 0.
 
@@ -939,6 +1091,12 @@ def augment_counterfactual_twins(
     _base = int(cap_base) if cap_base else n_pick
     field_cap = max(1, math.ceil(max_field_share * _base)) if max_field_share else None
     value_cap = max(1, math.ceil(max_value_share * _base)) if max_value_share else None
+    quota_caps = (
+        {f: max(1, math.ceil(s * n_pick)) for f, s in field_quota_shares.items() if s > 0}
+        if field_quota_shares
+        else None
+    )
+    _ret = np.asarray(row_retailer, dtype=object) if row_retailer is not None else None
     extra = []
     for i in picked:
         a, b = int(pairs[i][0]), int(pairs[i][1])
@@ -955,12 +1113,17 @@ def augment_counterfactual_twins(
             continue
         anchor_entities = {entities[a], entities[b]}
         chosen: tuple[str, list[str], int, int] | None = None
-        for _ in range(10):
+        for _attempt in range(14):
+            _relaxed_retailer = _ret is None or _attempt >= 10
             j = rng.randrange(pool)
             if j == i:
                 continue
             c, d = int(pairs[j][0]), int(pairs[j][1])
             if anchor_entities & {entities[c], entities[d]}:
+                continue
+            if not _relaxed_retailer and str(_ret[c]) == str(_ret[a]):
+                # strict cross-retailer donor first: real duplicates are 91.4%
+                # cross-seller, so a same-store donor teaches the wrong gap
                 continue
             if max_donor_overlap is not None:
                 anchor_toks = set(payload[a].split())
@@ -981,6 +1144,9 @@ def augment_counterfactual_twins(
             )
             if not candidates:
                 continue
+            if quota_caps is not None:
+                qunder = [f for f in candidates if f not in quota_caps or used_fields[f] < quota_caps[f]]
+                candidates = qunder or candidates
             if field_cap is not None:
                 under = [f for f in candidates if used_fields[f] < field_cap]
                 candidates = under or candidates

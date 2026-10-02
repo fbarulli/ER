@@ -389,6 +389,29 @@ class UnitsSpec(BaseModel):
         return v
 
 
+class ProductTypeSpec(BaseModel):
+    """One product-type class: its name and the title words that claim it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    words: list[str] = Field(min_length=1)
+    # subtypes within a larger family (coffee > latte/espresso/mocha) are
+    # matched FIRST when ordered_ matters — the registry keeps list order.
+    subtypes: list[str] = Field(default_factory=list)
+
+
+class ProductTypesSpec(BaseModel):
+    """Product-type + subtype vocabulary (config/paths.yaml product_types).
+
+    Reads like a dict in YAML but keeps ORDER, because subtype specificity
+    is a precedence question (latte must not collapse into coffee).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    types: dict[str, ProductTypeSpec] = Field(min_length=1)
+
+
 class UrlEvidenceSpec(BaseModel):
     """Vocabulary + thresholds for reading product text out of a listing URL.
 
@@ -475,6 +498,10 @@ class DataConfig(BaseModel):
     # Vocabulary + thresholds for reading product text out of url/image_url
     # (see UrlEvidenceSpec).
     url_evidence: UrlEvidenceSpec
+    # Product-type + subtype vocabulary (see ProductTypesSpec): the title's
+    # product-type classes read by pipeline.extract_all — config-owned so the
+    # type words are steerable without code edits.
+    product_types: ProductTypesSpec
     seed: int
     models: dict[str, str] = Field(min_length=1)
     embedding_model_keys: list[str] = Field(min_length=1)
@@ -1213,6 +1240,23 @@ class RandMatchingSpec(BaseModel):
             )
         return self
 
+class DeclarationDropoutSpec(BaseModel):
+    """Declaration-dropout lane contract (masking.declaration_dropout)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    frac: float = Field(ge=0.0, le=1.0)
+    min_drop: int = Field(default=1, ge=1)
+    max_drop: int = Field(default=3, ge=1)
+
+    @model_validator(mode="after")
+    def _drop_bounds_consistent(self):
+        if self.min_drop > self.max_drop:
+            raise ValueError(
+                f"declaration_dropout.min_drop ({self.min_drop}) must be <= max_drop ({self.max_drop})"
+            )
+        return self
+
 
 class MaskingSpec(BaseModel):
     """Masking augmentation contract (config/training.yaml masking:)."""
@@ -1251,6 +1295,21 @@ class MaskingSpec(BaseModel):
     # so no single string becomes a synthetic-generation artifact).
     swap_max_field_share: float = Field(gt=0.0, le=1.0)
     swap_max_value_share: float = Field(gt=0.0, le=1.0)
+    # Measured-variation wiring (duplicate variation census 2026-10-01):
+    # per-field slot quotas for the swap/twin lanes — shares of that lane's
+    # picks, weighted by each field group's measured same-GTIN conflict rate.
+    # Unnamed fields fall back to the soft max_field_share cap; named fields
+    # bind to ceil(share * picks) with the same soft fallback.
+    field_quota_shares: dict[str, float] = Field(default_factory=dict)
+    # Cross-retailer donor precedence: donors draw from a different store
+    # first (91.4% of real duplicates are cross-retailer); after 10 strict
+    # tries the donor loop relaxes so rich lanes never mint nothing.
+    cross_retailer_donors: bool = False
+    # Declaration-dropout lane: attribute cells differ in 100% of same-GTIN
+    # groups — each retailer declares a different partial key subset. Copies
+    # the anchor and removes min_drop..max_drop random declared groups;
+    # label stays 1 (removing evidence cannot contradict identity).
+    declaration_dropout: "DeclarationDropoutSpec | None" = None
     # Near-duplicate donor guard: refuse donors whose anchor text is at
     # least this token-similar to the anchor (probable same-entity relist
     # the cluster map cannot see). Measured cost at 0.95: 0/490 smoke
@@ -2278,6 +2337,24 @@ class ColabSpec(BaseModel):
     final_inference: FinalInferenceSpec
 
 
+class DifferentiationAuditSpec(BaseModel):
+    """Brand-differentiation audit knobs (config/training.yaml
+    differentiation_audit:) — the per-brand measurement of whether
+    between-GTIN card delta exceeds within-GTIN cross-retailer noise.
+    Declares only NEW knobs; card parsing/volume predicate/extraction are
+    the existing SSOT functions (attribute_conflicts set parsers,
+    critical_attributes.volumes_compatible, pipeline.extract_all)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sim_min: float = Field(gt=0.0, lt=1.0)
+    min_between_pairs: int = Field(ge=1)
+    min_within_gtins: int = Field(ge=1)
+    volume_margin: float = Field(gt=0.0)
+    max_listings_per_gtin: int = Field(ge=1)
+    max_between_pairs_per_brand: int = Field(ge=1)
+
+
 class TrainingConfig(BaseModel):
     """config/training.yaml — the training lane's OWN config (in its dir).
 
@@ -2300,6 +2377,7 @@ class TrainingConfig(BaseModel):
         min_length=1
     )
     gate: GateSpec
+    differentiation_audit: DifferentiationAuditSpec
     training: TrainingSpec
     pairs: PairsSpec
     plots: TrainingPlotsSpec
@@ -2410,6 +2488,7 @@ class ExtractedAttributes(BaseModel):
     sweetening_set: set[str] = Field(default_factory=set)
     attribute_consistency_flags: set[str] = Field(default_factory=set)
     pulp_set: set[str] = Field(default_factory=set)
+    organic_set: set[str] = Field(default_factory=set)
 
 
 class GateResult(BaseModel):
@@ -2447,6 +2526,7 @@ class CanonicalRecord(BaseModel):
     sweetening_set: set[str] = Field(default_factory=set)
     attribute_consistency_flags: set[str] = Field(default_factory=set)
     pulp_set: set[str] = Field(default_factory=set)
+    organic_set: set[str] = Field(default_factory=set)
     volume_confidence: float = Field(ge=0.0, le=1.0)
     pack_confidence: float = Field(ge=0.0, le=1.0)
     volume_consistency: float = Field(ge=0.0, le=1.0)
@@ -3005,6 +3085,7 @@ CANONICAL_RECORDS_COLUMNS: tuple[str, ...] = (
     "sweetening_set",
     "attribute_consistency_flags",
     "pulp_set",
+    "organic_set",
     "volume_confidence",
     "pack_confidence",
     "volume_consistency",
@@ -3020,6 +3101,11 @@ CANONICAL_RECORDS_COLUMNS: tuple[str, ...] = (
     # core.attribute_conflicts._universe_evidence_of. Existing columns are
     # byte-stable; this column only appends.
     "universe_evidence",
+    # GTIN CARD (per-attribute ordered, additive): the union of every
+    # listing card's evidence ledger, one JSON array string ordered by
+    # (field, column, value) with `listing` origin per entry. Persisted
+    # with the same JSON-string convention as universe_evidence.
+    "evidence_ledger",
     # PER-TITLE ORIGINAL EVIDENCE (owner ruling 2026-10-01). One JSON array
     # string, one entry per contributing title, keys drawn from the column
     # SSOT (config/paths.yaml source_row_fields). It exists because the

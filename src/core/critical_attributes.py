@@ -42,17 +42,23 @@ FLAVOR_ALIASES: dict[str, str] = {
     # truncation artifacts seen in feed titles
     "strawberr": "strawberry", "grapefru": "grapefruit", "chery": "cherry",
     "rhubar": "rhubarb", "fruite": "fruit",
+    # spelling variants measured in titles (2026-10-01 lexicon audit):
+    "litchi": "lychee",
     # EXCLUDED deliberately: pearl~pear (different word, 28 rows measured),
     # sucralose~sucrose-class attribute confusions (distinct values).
 }
 FLAVOR_LEXICON: frozenset[str] = frozenset(
     {
-        "aloe", "apple", "berry", "cherry", "chocolate", "citrus",
-        "coconut", "coffee", "cola", "cranberry", "elderflower", "fruit",
-        "ginger", "grape", "grapefruit", "lemon", "lime", "mango", "mint",
-        "orange", "passion", "passionfruit", "peach", "pear", "pineapple",
-        "pomegranate", "raspberry", "rhubarb", "rose", "strawberry",
-        "tamarind", "tonic", "tropical", "vanilla", "watermelon",
+        "aloe", "angelica", "apple", "berry", "boysenberry", "buckthorn",
+        "calamansi", "cherry", "chokeberry", "chocolate", "clementine",
+        "cloudberry", "coconut", "coffee", "cola", "cranberry",
+        "citrus", "elderberry", "elderflower", "fruit",
+        "ginger", "grape", "grapefruit", "juniper", "lemon", "lime",
+        "lingonberry", "lychee", "mango", "mint", "nectarine", "orange",
+        "passion", "passionfruit", "peach", "pear", "pecan", "pineapple",
+        "pomegranate", "quince",
+        "raspberry", "rhubarb", "rose", "strawberry", "tamarind", "tonic",
+        "tropical", "vanilla", "violet", "watermelon",
     }
 )
 # Additional values observed in explicit Flavour/Flavor declarations. Keep
@@ -75,6 +81,8 @@ DECLARED_FLAVOR_LEXICON: frozenset[str] = frozenset({
     "raisin", "rosehip", "rosemary", "sea salt", "spearmint",
     "tangerine", "tea", "thistle", "thyme", "toffee", "tomato",
     "walnut",
+    # Measured declared misses (2026-10-01 lexicon audit):
+    "wild berries",
 })
 DECLARED_FLAVOR_FIELD_RE = re.compile(r"(?:^|;)\s*flavou?r\s*:\s*([^;]*)", re.IGNORECASE)
 
@@ -215,11 +223,22 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     if with_pulp:
         pulp.add("with_pulp")
 
+    # Organic claim (audit 2026-10-01, valio pair): the certification is a
+    # product differentiator within brands (the organic sibling of a fruit
+    # juice), spelled "organic" in English feeds and "luomu" in Finnish
+    # ones. "bio" is deliberately ABSENT: in this corpus it is both the EU
+    # organic badge and unrelated parts of brand names, too ambiguous to
+    # carry a certification claim alone.
+    organic: frozenset[str] = (
+        frozenset({"organic"}) if re.search(r"\b(?:organic|luomu)\b", text) else frozenset()
+    )
+
     return {
         "flavor": extract_flavor_tokens(text) | extract_declared_flavor_tokens(*values),
         "carbonation": frozenset(carbonation),
         "sweetener": frozenset(sweetener),
         "pulp": frozenset(pulp),
+        "organic": organic,
     }
 
 
@@ -230,7 +249,7 @@ def extract_description_claims(description: object) -> dict[str, frozenset[str]]
     not the product's declared flavor.
     """
     found = extract_critical_claims(str(description or ""))
-    return {key: found[key] for key in ("carbonation", "sweetener", "pulp")}
+    return {key: found[key] for key in ("carbonation", "sweetener", "pulp", "organic")}
 
 
 def sweetener_conflict(left: set[str], right: set[str]) -> bool:

@@ -1,0 +1,14 @@
+1119856	./data/sku_to_rep.csv
+1200243	./data/final_validation.csv
+127238	./data/validation/slice_review_sample.csv
+254339	./data/labeled_pairs.csv
+273482	./results/training/ambiguous_offer_groups.csv
+28531762	./data/gate_results.csv
+308168	./results/training/validation_fold_map.csv
+343	./results/training/dedupe_summary.csv
+355659	./results/training/dedupe_removals.csv
+36308	./results/training/dedupe_conflicts.csv
+41910998	./data/canonical_records.csv
+47493111	./data/dataset_deduped.csv
+54656	./data/number_tokens_reference.csv
+7805262	./results/logs/training_trace.csv

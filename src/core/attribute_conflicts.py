@@ -242,12 +242,30 @@ def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def sku_attribute_info(title: object, attributes: object, description: object = "") -> dict[str, object]:
-    """Extract SKU-side attributes using the same parser as the data lane."""
+def sku_attribute_info(
+    title: object,
+    attributes: object,
+    description: object = "",
+    url: object = "",
+    image_url: object = "",
+    category_path: object = "",
+    category: object = "",
+) -> dict[str, object]:
+    """Extract SKU-side attributes using the same parser as the data lane.
+
+    Accepts the same evidence columns extract_all does — url, image_url,
+    category_path, category — so SKU-side reads see what the canonical
+    lane sees. All default to "" for backward compatibility.
+    """
     from pipeline import extract_all
 
-    desc = "" if description is None or (isinstance(description, float) and description != description) else str(description)
-    extracted = extract_all(str(title), str(attributes), desc)
+    columns = []
+    for value in (description, url, image_url, category_path, category):
+        if value is None or (isinstance(value, float) and value != value):
+            value = ""
+        columns.append(str(value))
+    desc, url_s, img_s, cat_path_s, cat_s = columns
+    extracted = extract_all(str(title), str(attributes), desc, url_s, img_s, cat_path_s, cat_s)
     volume_ml = extracted.get("volume_ml")
     # Zero is the extractor's sentinel for "no volume mention".  It must
     # remain unknown here; turning it into {0.0} makes every known canonical
@@ -565,11 +583,20 @@ def _universe_value(record: Mapping[str, object], key: str, spec) -> object:
         )
         return frozenset(_string_value_set(value, kind="carbonation"))
     if key == "pack type":
-        # Mirror the critical pack channel the same way.
-        value = (
-            record.get("pack_set") or record.get("pack")
-            or _universe_evidence_of(record).get(key) or ()
-        )
+        # The pack dimension is PACK COUNT and reads the curated count channel
+        # only. The registry key named "pack type" carries package FORMAT
+        # (bottle/can/carton/bag in box — attribute_universe FieldSpec "cat",
+        # 14 distinct value sets), so falling back to universe_evidence["pack
+        # type"] when pack_set is empty fed a different vocabulary into the
+        # count channel: two single-title listings of one SKU (pack_set empty
+        # on both sides, e.g. Bawls bag-in-box vs bottle) reported a
+        # pack_mismatch conflict out of pure listing-completeness noise — 63
+        # of 16,570 gate-proceed pairs rejected for it. Absence stays absence
+        # here, exactly as the module docstring requires: empty evidence is
+        # evaluated as MISSING by the caller (human_review), never invented
+        # into a conflict. Package format is the curated
+        # package_type_set / package_type dimension's business.
+        value = record.get("pack_set") or record.get("pack") or ()
         return frozenset(_string_value_set(value, kind="pack type"))
     evidence = record.get("universe_evidence")
     if not isinstance(evidence, Mapping):

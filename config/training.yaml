@@ -41,6 +41,27 @@ masking:
   # more than ~3% (hard skip — the transplant-footprint guard).
   swap_max_field_share: 0.35
   swap_max_value_share: 0.03
+  # ── measured-variation wiring (duplicate variation census 2026-10-01) ──────
+  # Same-GTIN duplicate groups measured WHAT retailers actually vary: title
+  # token dissimilarity 0.703 mean / 0.750 median; 91.4% of duplicates are
+  # cross-retailer; attribute cells differ in 100% of groups (partial
+  # declarations); same-GTIN copies genuinely disagree per field group
+  # (health claims 58.1%, juice features 63.6%, caffeine 33.3%, sweetener
+  # 30.2%, carbonization 26.1%). That measured distribution IS the headroom —
+  # it supersedes the earlier weakspot-quota crosstest shares.
+  # Ceiling: quotas expressed over the structurally-maskable field groups
+  # (weights = measured conflict rate of the mapped registry keys, renormalized
+  # to 1); packs/volume droplets ride the soft field cap.
+  field_quota_shares:
+    sweetener: 0.82   # sweetener + sweetener_type + sweetening + diets
+    carbonation: 0.07
+    package_material: 0.07
+    juice_content: 0.04
+  cross_retailer_donors: true
+  declaration_dropout:
+    frac: 0.30        # share of ORIGINAL positive anchors minted as dropouts
+    min_drop: 1
+    max_drop: 3
   # Near-duplicate donor guard (second net behind entity clusters).
   swap_max_donor_overlap: 0.95
   # Diet contract (scripts/diet_manifest.py gates every bundle on these).
@@ -274,6 +295,25 @@ gate:
   vol_abs_tolerance: 5.0
   raw_conf_threshold: 0.85
   consistency_fallback_threshold: 0.3
+
+# ── brand-differentiation audit (owner theory 2026-10-01) ──────────────────
+# Does between-GTIN card delta exceed within-GTIN (same product,
+# cross-retailer) noise — per brand? The graph-lane go/no-go: brands that
+# PASS can be differentiated by slot-filling (volume/pack/package
+# comparison against the product's own observed variation); brands that
+# FAIL send their low-confidence pairs to the original-dataset
+# clarification lane. Knobs are the audit's own; the card parsing, the
+# volume predicate and the extraction are the existing SSOT functions
+# (core.attribute_conflicts set parsers, core.critical_attributes.
+# volumes_compatible, pipeline.extract_all) — this block declares ONLY
+# what is new, never a copy of another block's value.
+differentiation_audit:
+  sim_min: 0.35            # gate-similarity floor for a pair = "similar products"
+  min_between_pairs: 30    # a brand verdict needs at least this many similar pairs
+  min_within_gtins: 5      # ...and at least this many multi-listing GTINs
+  volume_margin: 1.5       # verdict: median between-delta >= margin × median within-noise
+  max_listings_per_gtin: 20
+  max_between_pairs_per_brand: 200
 
 # ── split (component-aware; no pair ever straddles a boundary) ─────────────
 # train  = 50% of connected components — the ONLY data the model trains on

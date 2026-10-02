@@ -81,6 +81,16 @@ _DIGIT_RUN = re.compile(r"\b\d+\b")
 # (.../small_image/220x/…). Real pack notation carries its unit — "12x355ml"
 # — so it survives the digit-run and dimension rules intact.
 _IMAGE_DIM = re.compile(r"^\d+x$")
+# SLUG-DECIMAL remap (audit 2026-10-01, zeroh "0-8l"): retailers write decimal
+# volumes in the slug with the decimal point as a hyphen ("0-8l"). The volume
+# SSOT (core.text extract_volume_match) already repairs the comma-less
+# space-decimal "0 8l" -> 0.8 l — but ONLY if the "0" survives THIS reader's
+# digit-run strip, which deletes it as an article number first. Re-fuse the
+# fragment here so the SSOT branch receives the intact decimal: "0-8" ->
+# "0.8". Lookbehind keeps digit chains ("12-12", "…4100-5604") and dots out;
+# a "0" is never a count and takes no lead-zero integer reading, so the remap
+# is unambiguous. This is sanitation hand-off, not a second volume parser.
+_SLUG_DECIMAL = re.compile(r"(?<![\d.])0-(\d)(?=[a-z])")
 _VOWELS = frozenset("aeiou")
 
 
@@ -204,6 +214,7 @@ def url_text(url: object) -> str:
     slug = parts[1] if len(parts) > 1 else parts[0]
     slug = _EXTENSION.sub("", slug)
     slug = _UUID.sub(" ", slug)
+    slug = _SLUG_DECIMAL.sub(r"0.\1", slug)
     slug = re.sub(r"[-_+]+", " ", slug)
     slug = _DIGIT_RUN.sub(" ", slug)
     tokens = [

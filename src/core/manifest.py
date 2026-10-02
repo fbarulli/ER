@@ -37,6 +37,7 @@ loudly (no silent overwrite) per the repo's no-fallbacks doctrine.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import platform
@@ -187,17 +188,35 @@ def _utc_now() -> str:
 def _csv_rows(path: Path) -> tuple[int | None, int | None]:
     """(data_rows, cols) for CSV-ish files, (None, None) otherwise.
 
-    Counts by newline without loading the file into memory (the 53MB raw
-    export must stay cheap to snapshot).
+    Counts CSV RECORDS by streaming the file through the csv module —
+    newlines quoted inside multi-line fields (product descriptions carry
+    them) must not inflate the count as bogus extra rows. Cols from the
+    header RECORD for the same reason (a quoted header field could hold
+    commas). A malformed final fragment under a strict reader is repaired
+    via errors='replace' + strict=False so counting never turns into the
+    stage's failure mode.
     """
     if path.suffix.lower() not in {".csv", ".tsv"}:
         return None, None
+    total = 0
     cols = None
-    with path.open("rb") as stream:
-        header = stream.readline()
-        if header:
-            cols = header.count(b",") + 1
-        total = sum(1 for line in stream if line.strip())
+    import csv
+    import sys
+
+    # Quoted product descriptions can exceed csv's 128KiB per-field guard;
+    # a counting helper must not turn field size into a stage failure.
+    csv.field_size_limit(sys.maxsize)
+
+    with path.open("rb") as raw:
+        text = io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="")
+        rows = csv.reader(text)
+        try:
+            header = next(rows)
+            cols = len(header)
+        except StopIteration:
+            return 0, None
+        for _ in rows:
+            total += 1
     return total, cols
 
 

@@ -438,15 +438,29 @@ def test_audit_census_names_all_seven_dimensions_while_the_deferral_scope_names_
 def test_live_gate_positive_population_is_not_starved_of_auto_merge():
     """The regression, pinned on the LIVE frozen artifacts.
 
-    Every pair the training gate labelled ``proceed`` is by construction
-    compatible on every dimension with explicit evidence on both sides
-    (``pipeline.three_way_gate`` hard-rejects on volume/pack overlap failure),
-    so the calibration gate must not take their automatic merge away. Before
-    the fix this population routed 1,591/1,592 (99.94%) to human review,
-    because ``pulp_set`` is populated on ~2% of canonical records.
+    The invariant is NO INVENTED CONFLICT: an explicit conflict is exactly
+    what the training gate refuses to label ``proceed``, so the calibration
+    gate must never reject this population. Before the first fix it routed
+    1,591/1,592 (99.94%) to human review because ``pulp_set`` is populated on
+    ~2% of canonical records; before the 2026-10-01 pack-evidence fix it
+    rejected 63/16,570 because the ``pack`` dimension fell back to the
+    ``pack type`` registry cell — package FORMAT (bag in box vs bottle),
+    which is the ``package_type`` dimension's vocabulary, not a pack count.
+
+    What is NOT an invariant any more: auto_merge for every pair.
+    ``pipeline.three_way_gate`` no longer reads "no pack count was extracted
+    on either side" as low confidence (an empty ``pack_set`` is a single-unit
+    product, not an unmeasured one), so the proceed population grew 13.4x to
+    16,570 and 92.1% of it carries no curated pack evidence at all.
+    ``rand_matching.DEFERRAL_DIMENSIONS`` routes exactly that case to review
+    by design — "it can never silently become an automatic graph edge" —
+    behind the ``missing_pack_or_volume_route`` dial. The population is
+    therefore pinned as: nothing rejected, everything routed, and every
+    review attributable to the two declared deferral dimensions.
     """
     from core.attribute_conflicts import canonical_attribute_info
     from core.common import F, canonical_records_frame
+    from training.rand_matching import DEFERRAL_DIMENSIONS
 
     gate_path = F["gate_results"]
     if not gate_path.exists():
@@ -467,6 +481,7 @@ def test_live_gate_positive_population_is_not_starved_of_auto_merge():
     routes = {"auto_merge": 0, "human_review": 0, "reject": 0}
     resolved = 0
     missing_census: dict[str, int] = {}
+    reviewed_without_deferral_evidence = 0
     for _, row in proceed.iterrows():
         left_gtin, right_gtin = str(row["gtin1"]), str(row["gtin2"])
         if left_gtin not in by_gtin or right_gtin not in by_gtin:
@@ -479,22 +494,42 @@ def test_live_gate_positive_population_is_not_starved_of_auto_merge():
             candidate_brand=by_gtin[right_gtin].get("mode_brand"),
             exact_gtin=left_gtin == right_gtin,
         )
-        routes[str(gate["targeted_gate_route"])] += 1
-        for token in str(gate["targeted_missing_attributes"]).split(","):
-            if token:
-                missing_census[token] = missing_census.get(token, 0) + 1
+        route = str(gate["targeted_gate_route"])
+        routes[route] += 1
+        tokens = {
+            token for token in str(gate["targeted_missing_attributes"]).split(",")
+            if token
+        }
+        for token in tokens:
+            missing_census[token] = missing_census.get(token, 0) + 1
+        if route == "human_review" and not tokens & {
+            f"{dimension}_{side}"
+            for dimension in DEFERRAL_DIMENSIONS
+            for side in ("a", "b")
+        }:
+            reviewed_without_deferral_evidence += 1
 
     assert resolved == len(proceed)
     # No conflict can exist in this population: an explicit conflict is exactly
     # what the training gate refuses to label ``proceed``.
     assert routes["reject"] == 0
-    assert routes["human_review"] == 0
-    assert routes["auto_merge"] == resolved
+    # Nothing is lost: every pair takes a route, and a review is only ever the
+    # DECLARED deferral (pack/volume absent on a side), never starvation.
+    assert routes["auto_merge"] + routes["human_review"] == resolved
+    assert reviewed_without_deferral_evidence == 0
+    # Measured split, re-pinned 2026-10-02 against the regenerated
+    # gate_results.csv (13.4x wider proceed population; see the docstring).
+    assert resolved == 16570
+    assert routes["auto_merge"] == 1294
+    assert routes["human_review"] == 15276
     # The audit census is untouched by the routing scope: these absence counts
     # are what the diagnostics consume, and they must keep being reported.
     assert missing_census["pulp_a"] > 0
     assert missing_census["pulp_b"] > 0
     assert missing_census["package_type_a"] > 0
+    # ...and the deferral that drives the review share is the pack channel.
+    assert missing_census["pack_a"] == 15276
+    assert missing_census["pack_b"] == 15276
 
 
 def test_all_dimensions_known_and_agreeing_is_the_cleanest_auto_merge_path():

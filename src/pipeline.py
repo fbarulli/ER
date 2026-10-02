@@ -39,6 +39,7 @@ from core.common import (
     DATA_DIR,
     RESULTS,
     F,
+    data_cfg,
     load_config,
     training_cfg,
     vocabulary,
@@ -58,6 +59,7 @@ from core.critical_attributes import (
     categorical_conflict,
     extract_critical_claims,
     extract_description_claims,
+    extract_flavor_tokens,
     volumes_compatible,
 )
 from core.tracing import (
@@ -146,7 +148,10 @@ def extract_volume_from_title(title: str) -> dict:
     # normalize FIRST (the old path's behavior — "23.7-ounce" only reads
     # because normalize_text turns the hyphen into a separating space).
     value, unit, _ambiguous, raw = extract_volume_match(normalize_text(str(title or "")))
-    if value is None or unit is None:
+    # A captured value of 0 is never a volume ("0.5 l" fragments, URL slugs
+    # with dimension tokens) — canonical_volume_ml rejects it, so treat it
+    # the same as no mention instead of raising mid-pipeline.
+    if value is None or unit is None or float(value) <= 0:
         return {"volume_ml": 0.0, "confidence": 0.0, "raw_match": "",
                 "parse_status": "no_volume_mention"}
     entry = _volume_entry(unit)
@@ -389,27 +394,128 @@ def capture_universe_attributes(attribute: object) -> dict[str, frozenset[str]]:
     return {key: frozenset(values) for key, values in captured.items()}
 
 
-def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
-    """Extract structured fields plus salient tokens from a single SKU row."""
+class ProductTypeMatcher:
+    """Reads `type` and `subtype` for a normalized text off the config SSOT.
+
+    List order is precedence: specific subtypes are matched before family
+    words regardless of position (latte -> coffee even when the title never
+    says coffee), and phrases ("coconut water") before their containing
+    word ("water").
+    """
+
+    def __init__(self, spec) -> None:
+        # subtype patterns first (specificity), then family words — both in
+        # registry order so a config edit steers the matching as data.
+        self._subtype_entries: list[tuple[str, str, re.Pattern]] = [
+            (type_name, sub, re.compile(r"\b" + re.escape(sub) + r"\b"))
+            for type_name, entry in spec.types.items()
+            for sub in entry.subtypes
+        ]
+        self._word_entries: list[tuple[str, re.Pattern]] = [
+            (type_name, re.compile(r"\b" + re.escape(word) + r"\b"))
+            for type_name, entry in spec.types.items()
+            for word in entry.words
+        ]
+
+    def match(self, text: str) -> tuple[str, str]:
+        """(type, subtype) — ("", "") when the text carries neither."""
+        for type_name, sub, pattern in self._subtype_entries:
+            if pattern.search(text):
+                # when the family word is also unambiguous in the text, the
+                # card keeps the SPECIFIC subtype and the coarse family name
+                return type_name, sub
+        for type_name, pattern in self._word_entries:
+            if pattern.search(text):
+                return type_name, ""
+        return "", ""
+
+
+_PRODUCT_TYPE_MATCHER: ProductTypeMatcher | None = None
+
+
+def _product_type_matcher() -> ProductTypeMatcher:
+    """The card's product-type matcher (config/paths.yaml product_types),
+    parsed once — every extract_all call shares one compiled instance."""
+    global _PRODUCT_TYPE_MATCHER
+    if _PRODUCT_TYPE_MATCHER is None:
+        _PRODUCT_TYPE_MATCHER = ProductTypeMatcher(data_cfg().product_types)
+    return _PRODUCT_TYPE_MATCHER
+
+
+def fuse_confidence(claims: list[tuple[float, float, str]]) -> float:
+    """Confidence of ONE card field from its independent reader list.
+
+    The card's fusion ruling (2026-10-01): a value corroborated by two
+    independent columns is COLLECTIVELY more trustworthy than each —
+    noisy-OR over the readers' confidences (1 - prod(1 - conf)). A
+    disagreement caps instead of boosts: the card cannot be more sure
+    than its least-confident contradicting reader, so it falls back to
+    the weakest of the two disagreeing top claims. Empty = no evidence.
+    ``claims`` is (value, confidence, source) in the card's precedence
+    order — attributes, title, sku_url, image_url.
+    """
+    if not claims:
+        return 0.0
+    values = {round(value, 3) for value, _, _ in claims}
+    if len(values) == 1:
+        confidence = 1.0
+        for _, conf, _ in claims:
+            confidence *= (1.0 - conf)
+        return min(1.0, 1.0 - confidence)
+    if len(claims) == 1:
+        return min(1.0, max(0.0, claims[0][1]))
+    return min(claims[0][1], claims[1][1])
+
+
+def extract_all(sku_name: str, attribute: str, description: str = "",
+     url: str = "", image_url: str = "", category_path: str = "",
+     category: str = "") -> dict:
+    """Extract structured fields plus salient tokens from a single SKU row.
+
+    Evidence is drawn from ALL available columns — title, attributes,
+    description, URL slug, image filename, category path, and category —
+    so the gate sees every product-bearing signal before deciding.
+    """
     from core.sweetener_values import declared_sweeteners, extract_sweetening_status, title_sweetener_types
+    from core.url_evidence import url_text
 
     sweeteners = declared_sweeteners(attribute)
     sweeteners["sweetener_type"].update(title_sweetener_types(sku_name))
     sweeteners["sweetener_type"].update(title_sweetener_types(description))
     sweeteners["sweetening"].update(extract_sweetening_status(sku_name, attribute, description))
     t = normalize_text(sku_name)
+    # URL tokens: product-bearing prose from the listing slug.
+    # Fed into volume/pack extraction when title/attributes are silent.
+    # url_text is the reader for BOTH URL columns (docstring, url_evidence.py):
+    # image filenames go through the same normalizer — hashes, media dims and
+    # scaffolding fall out; size tokens ("250ml") survive.
+    url_tokens = url_text(url)
+    img_tokens = url_text(image_url)
+    url_norm = normalize_text(url_tokens)
+    img_norm = normalize_text(img_tokens)
+    # Category evidence: category_path and category provide
+    # product-type signals (flavor hints, carbonation clues)
+    # that title/attributes may miss.
+    cat_tokens = normalize_text(category_path) + " " + normalize_text(category)
+    cat_tokens = cat_tokens.strip()
     # Critical categorical evidence is parsed once for the canonical, model,
     # mining, and inference lanes.  Keep the historical scalar flavor as a
     # deterministic first value for compatibility with existing CSV readers.
     critical = extract_critical_claims(sku_name, attribute)
     description_claims = extract_description_claims(description)
     consistency_flags = set(sweeteners["consistency_flags"])
+    # Product card evidence ledger: every claim the columns yield, recorded
+    # with its source at the moment of extraction (surface-one-by-one
+    # ruling 2026-10-01). Rides the result dict additively, like
+    # attribute_universe_evidence — schema stays extra="forbid".
+    ledger: list[dict] = []
     opposing_values = {
         "carbonation": (("carbonated", "still"),),
         "sweetener": (("sugar", "no_sugar"), ("sugar", "diet")),
         "pulp": (("with_pulp", "no_pulp"),),
+        "organic": (("organic", "not_organic"),),
     }
-    for dimension in ("carbonation", "sweetener", "pulp"):
+    for dimension in ("carbonation", "sweetener", "pulp", "organic"):
         base = set(critical[dimension])
         described = set(description_claims[dimension])
         if not base:
@@ -428,23 +534,44 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
     if "no_added_sugar" in critical["sweetener"] and "cane_sugar" in sweeteners["sweetener_type"]:
         consistency_flags.add("no_added_sugar_with_cane_sugar")
     flavor_set = set(critical["flavor"])
+    if flavor_set:
+        ledger.append({"field": "flavor", "column": "title+attributes",
+                       "value": sorted(flavor_set)})
+    # Category tokens may carry flavor evidence
+    # (e.g. "Orange Juice" in category path) when title/attributes
+    # are silent on flavor.
+    cat_flavors = extract_flavor_tokens(cat_tokens) if cat_tokens else frozenset()
+    if cat_flavors:
+        ledger.append({"field": "flavor", "column": "category",
+                       "value": sorted(cat_flavors)})
+        flavor_set.update(cat_flavors)
     flavor = sorted(flavor_set)[0] if flavor_set else ""
-    if re.search(r"\bcoconut\s+water\b", t):
-        ptype = "coconut water"
-    elif re.search(r"\bmineral\s+water\b", t) or re.search(r"\bwater\b", t):
-        ptype = "water"
-    elif re.search(r"\bjuice\b", t):
-        ptype = "juice"
-    elif re.search(r"\b(?:ice\s+)?tea\b", t):
-        ptype = "tea"
-    elif re.search(r"\benergy\s+(?:drink|water)\b", t):
-        ptype = "energy"
-    elif re.search(r"\b(?:soda|soft\s+drink)\b", t):
-        ptype = "soda"
-    elif re.search(r"\btonic\b", t):
-        ptype = "tonic"
-    else:
-        ptype = ""
+    for dimension in ("carbonation", "sweetener", "pulp", "organic"):
+        if critical[dimension]:
+            ledger.append({"field": dimension, "column": "title+attributes",
+                           "value": sorted(critical[dimension])})
+        if description_claims[dimension]:
+            ledger.append({"field": dimension, "column": "description",
+                           "value": sorted(description_claims[dimension])})
+    # Product type + subtype: config SSOT (config/paths.yaml product_types),
+    # read once. Title first, then the category-lane fallback; the subtype
+    # (latte, kombucha, ale...) is the finer axis the differentiation lane
+    # consumes and is recorded per column like every claim.
+    ptype, subtype = _product_type_matcher().match(t)
+    if ptype:
+        ledger.append({"field": "type", "column": "title", "value": ptype})
+    if subtype:
+        ledger.append({"field": "subtype", "column": "title", "value": subtype})
+    # Fallback: category tokens may carry the product type
+    # when the title is too generic (e.g. "Product" with no type word).
+    if not ptype and cat_tokens:
+        cat_ptype, cat_subtype = _product_type_matcher().match(cat_tokens)
+        if cat_ptype:
+            ptype = cat_ptype
+            subtype = subtype or cat_subtype
+            ledger.append({"field": "type", "column": "category", "value": cat_ptype})
+            if cat_subtype:
+                ledger.append({"field": "subtype", "column": "category", "value": cat_subtype})
 
     # Volume and pack from title
     vol_title = extract_volume_from_title(sku_name)
@@ -455,10 +582,41 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         attribute
     )
 
+    # URL evidence: product tokens from the listing slug.
+    # Used when title/attributes are silent on volume/pack.
+    vol_url = extract_volume_from_title(url_norm)
+    pack_url, pack_conf_url = extract_pack_from_title(url_norm)
+    vol_img = extract_volume_from_title(img_norm)
+    pack_img, pack_conf_img = extract_pack_from_title(img_norm)
+
     # Combine: prefer attribute if present, but default to title when
     # the two disagree by 10x+ (title misparses "0, 33l" as 33000ml
     # vs attribute 330ml — the title is the correct unit here).
     title_vol = float(vol_title["volume_ml"] or 0.0)
+    if attr_vol > 0:
+        ledger.append({"field": "volume_ml", "column": "attributes",
+                       "value": attr_vol, "confidence": attr_vol_conf})
+    if title_vol > 0:
+        ledger.append({"field": "volume_ml", "column": "title", "value": title_vol,
+                       "confidence": vol_title["confidence"]})
+    if vol_url["volume_ml"] > 0:
+        ledger.append({"field": "volume_ml", "column": "sku_url",
+                       "value": vol_url["volume_ml"], "confidence": vol_url["confidence"]})
+    if vol_img["volume_ml"] > 0:
+        ledger.append({"field": "volume_ml", "column": "image_url",
+                       "value": vol_img["volume_ml"], "confidence": vol_img["confidence"]})
+    if attr_pack > 1 or attr_pack_conf > 0:
+        ledger.append({"field": "pack_qty", "column": "attributes",
+                       "value": attr_pack, "confidence": attr_pack_conf})
+    if pack_title > 1 or pack_conf_title > 0:
+        ledger.append({"field": "pack_qty", "column": "title",
+                       "value": pack_title, "confidence": pack_conf_title})
+    if pack_url > 1 or pack_conf_url > 0:
+        ledger.append({"field": "pack_qty", "column": "sku_url",
+                       "value": pack_url, "confidence": pack_conf_url})
+    if pack_img > 1 or pack_conf_img > 0:
+        ledger.append({"field": "pack_qty", "column": "image_url",
+                       "value": pack_img, "confidence": pack_conf_img})
     if attr_vol > 0 and title_vol > 0:
         ratio = max(attr_vol, title_vol) / min(attr_vol, title_vol)
         if ratio >= 10.0:
@@ -477,6 +635,18 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         volume_conf = attr_vol_conf
         volume_raw = f"attribute: {attr_vol}"
         volume_status = "attribute_volume"
+    elif vol_url["volume_ml"] > 0:
+        volume_ml = vol_url["volume_ml"]
+        volume_conf = vol_url["confidence"]
+        volume_raw = vol_url["raw_match"]
+        volume_status = vol_url["parse_status"]
+        consistency_flags.add("volume_from_url")
+    elif vol_img["volume_ml"] > 0:
+        volume_ml = vol_img["volume_ml"]
+        volume_conf = vol_img["confidence"]
+        volume_raw = vol_img["raw_match"]
+        volume_status = vol_img["parse_status"]
+        consistency_flags.add("volume_from_image_url")
     else:
         volume_ml = vol_title["volume_ml"]
         volume_conf = vol_title["confidence"]
@@ -486,9 +656,46 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
     if attr_pack > 1 or attr_pack_conf > 0:
         pack_qty = attr_pack
         pack_conf = attr_pack_conf
+    elif pack_url > 1 or pack_conf_url > 0:
+        pack_qty = pack_url
+        pack_conf = pack_conf_url
+    elif pack_img > 1 or pack_conf_img > 0:
+        pack_qty = pack_img
+        pack_conf = pack_conf_img
     else:
         pack_qty = pack_title
         pack_conf = pack_conf_title
+    # CORROBORATION FUSION (2026-10-01 ruling): the card's confidence is a
+    # property of the CLAIM, not of the winning column — agreeing
+    # independent readers pool upward, disagreeing readers cap the card at
+    # the weaker one. The winner chain above decides VALUE + precedence;
+    # this only changes confidence.
+    vol_claims = [
+        (value, conf, column)
+        for value, conf, column in (
+            (attr_vol, attr_vol_conf, "attributes"),
+            (title_vol, vol_title["confidence"], "title"),
+            (vol_url["volume_ml"], vol_url["confidence"], "sku_url"),
+            (vol_img["volume_ml"], vol_img["confidence"], "image_url"),
+        )
+        if value > 0 and conf > 0
+    ]
+    pack_claims = [
+        (value, conf, column)
+        for value, conf, column in (
+            (attr_pack, attr_pack_conf, "attributes"),
+            (pack_title, pack_conf_title, "title"),
+            (pack_url, pack_conf_url, "sku_url"),
+            (pack_img, pack_conf_img, "image_url"),
+        )
+        if value > 0 and conf > 0
+    ]
+    volume_conf = fuse_confidence(vol_claims)
+    pack_conf = fuse_confidence(pack_claims)
+    if vol_claims and len({round(value, 3) for value, _, _ in vol_claims}) > 1:
+        consistency_flags.add("volume_sources_disagree")
+    if pack_claims and len({value for value, _, _ in pack_claims}) > 1:
+        consistency_flags.add("pack_sources_disagree")
     # Sanity bounds (audit 2026-09-28): vendor tables swap fields and drop
     # decimals, so an out-of-range winner is not auto-trusted blindly.
     # Canonical distribution: p99 = 2,500ml, 27/12,621 rows above 5,000ml
@@ -554,16 +761,54 @@ def extract_all(sku_name: str, attribute: str, description: str = "") -> dict:
         sweetening_set=sweeteners["sweetening"],
         attribute_consistency_flags=consistency_flags,
         pulp_set=set(critical["pulp"]),
+        organic_set=set(critical["organic"]),
     ).model_dump()
     # The extract dict is a plain dict after the boundary validation, so the
-    # evidence section rides ADDITIVELY beside the model dump: old consumers
+    # evidence section rides ADDITIVELY beside the model dump. Old consumers
     # iterate the named fields, the model channel reads the two wired keys,
     # the census parity test reads the whole section. Sorted lists, never
     # sets — byte-determinism (PYTHONHASHSEED) is the contract here too.
     result["attribute_universe_evidence"] = {
         key: sorted(values) for key, values in universe_evidence.items() if values
     }
+    result["evidence_ledger"] = ledger
     return result
+
+
+# ============================================================================
+# CARD SURFACE
+# ============================================================================
+def surface_card(extracted: dict) -> str:
+    """One listing's card as text: the card fill, then evidence one by one.
+
+    ``extracted`` is an extract_all() result dict. The fill is what the card
+    actually carries (winners from the precedence chain); the ledger beneath
+    repeats EVERY claim any column yielded, winner or loser, with its source.
+    """
+    lines = [
+        f"PRODUCT  {extracted.get('type', '') or '?'}"
+        f"  flavor={extracted.get('flavor', '') or '?'}",
+        f"VOLUME   {extracted.get('volume_ml', 0.0) or '?'} ml"
+        f"  (conf {extracted.get('volume_confidence', 0.0):.2f},"
+        f" {extracted.get('volume_status', '')}; raw: {extracted.get('volume_raw', '')})",
+        f"PACK     {extracted.get('pack_qty', 1)}"
+        f"  (conf {extracted.get('pack_confidence', 0.0):.2f})",
+    ]
+    for value in extracted.get("package_types") or []:
+        if isinstance(value, str) and value:
+            lines.append(f"PKG-TYPE {value}")
+    for value in extracted.get("package_materials") or []:
+        lines.append(f"PKG-MAT  {value}")
+    flags = extracted.get("attribute_consistency_flags") or []
+    for flag in sorted(flags):
+        lines.append(f"FLAG     {flag}")
+    lines.append("EVIDENCE (one per source claim)")
+    for item in extracted.get("evidence_ledger") or []:
+        lines.append(
+            f"  [{item['column']}] {item['field']}"
+            f" = {item['value']} (conf {item.get('confidence', '')})"
+        )
+    return "\n".join(lines)
 
 
 # ============================================================================
@@ -670,6 +915,11 @@ def pack_gate(
         and _trusted(sku_a, "pack_confidence")
         and _trusted(sku_b, "pack_confidence")
     ):
+        return False
+    # One side has pack evidence, the other doesn't → different pack
+    # sizes (single vs multi-pack). Empty pack_set means no pack
+    # count was extracted (single-unit product), not "unknown".
+    if (left_pack and not right_pack) or (right_pack and not left_pack):
         return False
 
     # PACKAGE TYPE: disjoint categorical evidence conflicts.
@@ -846,13 +1096,17 @@ def three_way_gate(
         return GateResult(
             decision="fallback", reason="Low raw volume confidence"
         ).model_dump()
-    if (
-        attrs1["pack_confidence"] < raw_conf_threshold
-        or attrs2["pack_confidence"] < raw_conf_threshold
-    ):
-        return GateResult(
-            decision="fallback", reason="Low raw pack confidence"
-        ).model_dump()
+    # Pack confidence: skip when both sides have no pack evidence
+    # (single-unit products with no "Count per Unit" in source attributes).
+    # pack_gate already treats low-confidence pack evidence as unknown.
+    if attrs1["pack_set"] or attrs2["pack_set"]:
+        if (
+            attrs1["pack_confidence"] < raw_conf_threshold
+            or attrs2["pack_confidence"] < raw_conf_threshold
+        ):
+            return GateResult(
+                decision="fallback", reason="Low raw pack confidence"
+            ).model_dump()
 
     # volume overlap
     vol_overlap = False
@@ -877,10 +1131,12 @@ def three_way_gate(
     if not vol_overlap:
         return GateResult(decision="hard_no", reason="No volume overlap").model_dump()
 
-    # pack overlap
-    pack_overlap = attrs1["pack_set"] & attrs2["pack_set"]
-    if not pack_overlap:
-        return GateResult(decision="hard_no", reason="No pack overlap").model_dump()
+    # pack overlap: skip when both sides have no pack evidence
+    # (single-unit products with no "Count per Unit" in source).
+    if attrs1["pack_set"] or attrs2["pack_set"]:
+        pack_overlap = attrs1["pack_set"] & attrs2["pack_set"]
+        if not pack_overlap:
+            return GateResult(decision="hard_no", reason="No pack overlap").model_dump()
 
     for field, reason in (
         ("package_type_set", "Package type mismatch"),
@@ -1245,14 +1501,31 @@ def generate_canonical(
     brand_idf: NgramIDF | None,
     *,
     descriptions: list[str] | None = None,
+    urls: list[str] | None = None,
+    image_urls: list[str] | None = None,
+    category_paths: list[str] | None = None,
+    categories: list[str] | None = None,
+    countries: list[str] | None = None,
+    retailers: list[str] | None = None,
 ) -> dict:  # CanonicalRecord.model_dump() — validated shape, plain dict
     titles = [sku for sku, attr in rows]
     attributes = [attr for sku, attr in rows]
     descriptions = descriptions or [""] * len(rows)
-    if len(descriptions) != len(rows):
-        raise ValueError("canonical descriptions must align with title/attribute rows")
-    extracted = [extract_all(sku, attr, "" if pd.isna(desc) else str(desc))
-                 for (sku, attr), desc in zip(rows, descriptions, strict=True)]
+    urls = urls or [""] * len(rows)
+    image_urls = image_urls or [""] * len(rows)
+    category_paths = category_paths or [""] * len(rows)
+    categories = categories or [""] * len(rows)
+    countries = countries or [""] * len(rows)
+    retailers = retailers or [""] * len(rows)
+    extracted = [
+        extract_all(
+            sku, attr,
+            "" if pd.isna(desc) else str(desc),
+            url, img_url, cat_path, cat,
+        )
+        for (sku, attr), desc, url, img_url, cat_path, cat
+        in zip(rows, descriptions, urls, image_urls, category_paths, categories, strict=True)
+    ]
 
     brand_norm = normalize_text(spell_numeric_brand(brand))
     brand_tokens = set(brand_norm.split())
@@ -1285,6 +1558,7 @@ def generate_canonical(
     sweetening_set = {value for x in extracted for value in x["sweetening_set"]}
     attribute_consistency_flags = {value for x in extracted for value in x["attribute_consistency_flags"]}
     pulp_set = {value for x in extracted for value in x["pulp_set"]}
+    organic_set = {value for x in extracted for value in x.get("organic_set") or set()}
 
     # Confidence / consistency
     vol_confs = [x["volume_confidence"] for x in extracted if x["volume_ml"] > 0]
@@ -1493,6 +1767,7 @@ def generate_canonical(
         sweetening_set=sweetening_set,
         attribute_consistency_flags=attribute_consistency_flags,
         pulp_set=pulp_set,
+        organic_set=organic_set,
         volume_confidence=round(vol_conf, 3),
         pack_confidence=round(pack_conf, 3),
         volume_consistency=round(volume_consistency, 3),
@@ -1505,6 +1780,20 @@ def generate_canonical(
     # contract next to them as the one rendered JSON string.
     out = rec.model_dump()
     out["universe_evidence"] = universe_evidence_json
+    # GTIN CARD (evidence ledger, one per listing): every claim any of the
+    # gtin's listing cards recorded, with listing origin kept so the surface
+    # can walk a card listing by listing. Ordered PER ATTRIBUTE — sorted by
+    # (field, source, value) via whole-entry JSON — deterministic across
+    # hash seeds; exact repeats (two listings extracting the identical
+    # claim) collapse via the same serialization.
+    json_entries = [
+        json.dumps({"listing": listing_index, **entry}, sort_keys=True)
+        for listing_index, per_listing in enumerate(extracted)
+        for entry in (per_listing.get("evidence_ledger") or [])
+    ]
+    out["evidence_ledger"] = json.dumps(
+        [json.loads(e) for e in sorted(dict.fromkeys(json_entries))]
+    )
     return out
 
 
@@ -2024,10 +2313,13 @@ def _source_rows_for(frame: pd.DataFrame) -> str:
 def run_within_brand_pipeline(
     df_full: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:  # (gate results, canonical records)
-    # Preserve the two high-coverage, previously-unused source fields as
-    # canonical-level evidence.  They remain OUTSIDE the frozen canonical
+    # Preserve the evidence-bearing source fields as canonical-level inputs.
+    #  They remain OUTSIDE the frozen canonical
     # text until a component-safe ablation establishes their value.
-    for column in ("description_short_eng", "breadcrumbs_eng"):
+    for column in (
+        "description_short_eng", "breadcrumbs_eng",
+        "sku_url", "image_url", "category", "country", "retailer",
+    ):
         if column not in df_full:
             df_full = df_full.assign(**{column: ""})
 
@@ -2126,11 +2418,17 @@ def run_within_brand_pipeline(
     grouped = (
         df_full.groupby("gtin")
         .agg(
-                rows=(
-                    "sku_name_eng",
-                    lambda x: list(zip(x, df_full.loc[x.index, "attribute"], strict=True)),
-                ),
-                descriptions=("description_short_eng", list),
+            rows=(
+                "sku_name_eng",
+                lambda x: list(zip(x, df_full.loc[x.index, "attribute"], strict=True)),
+            ),
+            descriptions=("description_short_eng", list),
+            urls=("sku_url", list),
+            image_urls=("image_url", list),
+            category_paths=("breadcrumbs_eng", list),
+            categories=("category", list),
+            countries=("country", list),
+            retailers=("retailer", list),
             brand=("brand", lambda x: Counter(x).most_common(1)[0][0]),
             description_evidence=("description_short_eng", _source_evidence),
             breadcrumb_evidence=("breadcrumbs_eng", _source_evidence),
@@ -2158,16 +2456,21 @@ def run_within_brand_pipeline(
 
     # Generate canonical records
     canonical_records = []
-    for _, row in grouped.iterrows():
+    from tqdm import tqdm
+    for _, row in tqdm(grouped.iterrows(), total=len(grouped), unit="gtin", desc="cards", disable=None):
         brand_key = row["brand"].lower().strip()
         record = generate_canonical(
-                row["gtin"],
-                row["brand"],
-                row["rows"],
-                global_idf,
-                brand_idf_map[brand_key],
-                descriptions=row["descriptions"],
-            )
+            row["gtin"],
+            row["brand"],
+            row["rows"],
+            global_idf,
+            brand_idf_map[brand_key],
+            descriptions=row["descriptions"],
+            urls=row["urls"],
+            image_urls=row["image_urls"],
+            category_paths=row["category_paths"],
+            categories=row["categories"],
+        )
         record["description_evidence"] = row["description_evidence"]
         record["breadcrumb_evidence"] = row["breadcrumb_evidence"]
         # Per-title original evidence, carried so the engine's stage-7
@@ -2287,6 +2590,7 @@ def run_within_brand_pipeline(
     )
 
     gate_vis = []
+    from tqdm import tqdm as _tqdm_pairs
     # VECTORIZATION RULING (audit close, 2026-09-10): this per-pair Python
     # loop is deliberately kept scalar. "Optimize and vectorize wherever
     # possible" reaches HOT paths; this is not one — it runs ONCE per
@@ -2300,7 +2604,7 @@ def run_within_brand_pipeline(
     # becomes a hot path, vectorize with the equivalence protocol:
     # pinned counts + diagonal crosstab vs the previous CSV + 0-tolerance
     # confidence match, revert on ANY divergence.
-    for g1, g2 in candidate_pairs:
+    for g1, g2 in _tqdm_pairs(sorted(candidate_pairs), unit="pair", desc="gate", disable=None):
         a1 = gtin_to_canon[g1]
         a2 = gtin_to_canon[g2]
         gate = three_way_gate(a1, a2)

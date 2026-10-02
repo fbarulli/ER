@@ -56,7 +56,7 @@ _CHROME = _chrome()
 async def _page_chrome(request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path in {"/", "/datagen", "/graphs", "/gate"}:
+    if path in {"/", "/datagen", "/graphs", "/gate", "/gate/fallback"}:
         response.headers["Cache-Control"] = "no-store, max-age=0"
     if path.startswith("/api/"):
         return response
@@ -392,10 +392,84 @@ def datagen_track():
     f06 = _ffinding(6, 'Training-data preparation · offline bundle lane — CURRENT blocker', 'OPEN',                    bundle_metrics, bundle_compare, bundle_evidence,
                     "<span class='badge badge-open'>OPEN</span> — bundle blocker: worker_1 and worker_2 embed different upstream snapshots (n_df 62,927 vs 56,529) and different masking fracs, so the offline bundle cannot ship as one lane — rebuild both workers against the current canonical corpus (13,216 rows · data_prep.json), while labeled_pairs and final_validation themselves PASS.")
     teacher_rows = ''.join(f'<tr><td><code>{escape(k)}</code></td><td>{v:,}</td></tr>' for k, v in sorted(fl.items()))
+    # Finding 07 — same-GTIN duplicate variation (measured, feeds augmentation design)
+    try:
+        dvc = json.loads((_results / 'duplicate_variation_census.json').read_text())
+        var = dvc.get('column_varies_pct', {})
+        conf_rows = ''.join(f'<tr><td>{escape(k)}</td><td>{v:,} groups</td></tr>'
+                            for k, v in sorted(dvc.get('top_same_gtin_attribute_conflicts', {}).items(),
+                                               key=lambda kv: -kv[1])[:5])
+    except Exception:
+        dvc, conf_rows = {}, ''
+    dup_metrics = ''.join([
+        _fmetric(dvc.get('duplicate_groups', 7_704), 'same-GTIN duplicate groups'),
+        _fmetric(dvc.get('rows_in_duplicates', 22_785), 'rows inside those groups'),
+        _fmetric(dvc.get('title_token_dissimilarity_mean', 0.703), 'title token dissimilarity (median ' + escape(str(dvc.get('title_token_dissimilarity_median', 0.75))) + ')'),
+        _fmetric(var.get('brand', 0.011), 'brand varies (the fingerprint stays)'),
+        _fmetric(var.get('retailer', 0.914), 'of duplicates are cross-retailer'),
+        _fmetric(var.get('attributes', 1.0), 'attribute cells differ (partial declarations)'),
+    ])
+    dup_compare = _fcompare([
+        ('Assumed variation scale: masking band U(0.20, 0.30), polite rewording',
+         f"measured title dissimilarity <strong>{dvc.get('title_token_dissimilarity_mean', 0.703):.3f}</strong> mean / "
+         f"{dvc.get('title_token_dissimilarity_median', 0.75):.3f} median — retailers rewrite ~3× the band we mask at", 'OPEN'),
+        ('Assumed negatives are "different products"; conflict = identity',
+         'same-GTIN copies genuinely disagree: health claims 58.1%, juice features 63.6%, caffeine 33.3%, sweetener 30.2%, carbonization 26.1% — self-reported retailer noise, the honest conflict distribution', 'OPEN'),
+        ('Donor sourcing: 10-retry indifferent lane, no marketplace structure',
+         '<strong>91.4%</strong> of real duplicates are CROSS-retailer — donor pools must draw cross-seller minted pairs to carry the real phrasing gap', 'OPEN'),
+        ('missing_both read as capture bug',
+         'attribute cells differ in <strong>100%</strong> of duplicate groups: each retailer declares a different partial subset — planned "declaration dropout" lane mints that exact shape (no invented tokens)', 'OPEN'),
+    ])
+    dup_evidence = _fevidence('results/duplicate_variation_census.json', json.dumps(
+        {'column_varies_pct': dvc.get('column_varies_pct'),
+         'top_same_gtin_attribute_conflicts': dvc.get('top_same_gtin_attribute_conflicts')}, indent=1))
+    f07 = _ffinding(7, 'Duplicate variation census — what retailers actually vary (augmentation design input)', 'OPEN',
+                    dup_metrics, dup_compare, dup_evidence,
+                    "<span class='badge badge-open'>OPEN</span> — measured 2026-10-01; four augmentation principles follow from it: (1) masking extent sampled near the real distribution, (2) declaration-dropout lane emulating partial attribute cells, (3) cross-retailer donor bias, (4) twin weights matched to measured conflict rates. Wiring pending — replaces the earlier weakspot-quota shares those measurements supersede.")
+    # Finding 08 — augmentation targets + masking-reachable quota shares
+    try:
+        plan = json.loads((_results / 'augmentation_plan.json').read_text())
+    except Exception:
+        plan = {}
+    try:
+        import re as _re
+        quota = {}
+        cfg_text = (ROOT.parent / 'config' / 'training.yaml').read_text()
+        m = _re.search(r'field_quota_shares:\n((?:    \w+:[^\n]*\n)+)', cfg_text)
+        if m:
+            quota = dict((k, float(v)) for k, v in
+                         _re.findall(r'    (\w+): ([0-9.]+)', m.group(1)))
+    except Exception:
+        quota = {}
+    target_metrics = ''.join([
+        _fmetric(2_000, 'positives to mint (weakspot-weighted)'),
+        _fmetric(1_800, 'hard negatives to mint (same lanes, 1-sided)'),
+        _fmetric(f"{plan.get('n_pos_target', 2000)}", 'allocation target (plan v1)'),
+        _fmetric('1 : ~5–6', 'kept pos:neg training ratio (from 1 : 7.9)'),
+    ] + [
+        _fmetric(f'{"{"} {g}: {s:.2f} {"}"}'.replace('{', '', 0).replace('}', '', 0), f'{g} quota share — of mask-reachable slots')
+        for g, s in list(quota.items())
+    ])
+    target_compare = _fcompare([
+        ('Labeled pool today: 983 pos / 7,728 hard-neg (1 : 7.9)',
+         'mint 2,000 symmetric positives + 1,800 single-sided hard negatives on the same weak-spot lanes — ratio lands ~1 : 5–6 instead of drifting to 1 : 10', 'OPEN'),
+        ('Mask-reachable weak spots get the quota',
+         'sweetener family ~79%, carbonation ~7%, package material ~7%, juice content ~4% of swap/twin slots (measured conflict-rate weights)', 'OPEN'),
+        ('Weak spots masking cannot reach (registry-only keys)',
+         'health claims, made from, sustainable sourcing, no artificial ingredients, rtd coffee style, diets, energy source… get coverage from the declaration-dropout lane + stronger masking extent, NOT quotas', 'OPEN'),
+        ('Below the donor floor (raw-territory: re-capture decides)',
+         'giftbox 21, special edition 216, sports drinks style 464, nutri score 412 rows — augmentation can never admit; only raw capture grows these', 'OPEN'),
+    ])
+    f08_target = _ffinding(8, 'Datagen targets — mint 2,000 pos + 1,800 hard-neg, weakspot quotas on mask-reachable lanes', 'OPEN',
+                           target_metrics, target_compare,
+                           _fevidence('results/augmentation_plan.json (allocation v1) + config/training.yaml masking.field_quota_shares (v2: measured-conflict-rate weights)',
+                                      json.dumps({'plan_v1_weakspot_alloctions': plan.get('weakspot_weighted_mint'),
+                                                  'superseded_by': 'duplicate variation census (Finding 07)'}, indent=1)),
+                           "<span class='badge badge-open'>OPEN</span> — targets fixed; quota shares from the measured same-GTIN conflict distribution (Finding 07); generated examples land here once the mint run completes.")
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER datagen</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}.verdict{{margin:.4rem 0}}</style></head><body>
 <h1>ER · Datagen track — identity fixes, GTIN integrity, attribute census, datagen budget</h1>
 <p class="status">{ra.get('input_rows', 71_623):,} original listings → {ra.get('output_rows', 63_079):,} deduped · closure gate {ra.get('input_rows', 71_623):,} == 63,079 + 8,544 · Wave-1 fixes byte-identical · offline bundle lane OPEN (Finding 06)</p>
-{f01}{f02}{f03}{f04}{f05}{f06}
+{f01}{f02}{f03}{f04}{f05}{f06}{f07}{f08_target}
 <details open><summary>Teacher-flag census from data_prep.json (veto/review — never guessed)</summary>
 <table><tr><th>Flag</th><th>Records</th></tr>{teacher_rows}</table>
 </details>
@@ -415,6 +489,14 @@ def datagen_track():
 _gate_dir = ROOT / 'evidence' / 'datagen'
 _gate_results_path = ROOT.parent / 'data' / 'gate_results.csv'
 _GATE_BUCKETS = ('proceed', 'hard_no', 'fallback')
+# These fallback pages show the ENTIRE original entry — all 13 raw-export
+# columns in RAW-export header names (dashboard rule: original columns, as
+# exported, no cleaning).
+_FALLBACK_RAW_COLUMNS = (
+    'product_id', 'retailer', 'country', 'title', 'description',
+    'category_path', 'url', 'image_url', 'price', 'barcode', 'brand',
+    'category', 'attributes',
+)
 # (canonical column after load_dataset, original export header shown)
 _GATE_ORIGINAL_COLUMNS = (
     ('retailer', 'retailer'), ('barcode', 'gtin'), ('title', 'sku_name_eng'),
@@ -634,11 +716,97 @@ def gate_decisions():
     counts_row = ''.join(_fmetric(counts.get(d, 0), f'{d} pairs') for d in _GATE_BUCKETS)
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER gate decisions</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}h2{{margin-top:.2rem}}</style></head><body>
 <h1>ER · Gate decisions — original-column evidence</h1>
-<p class="status">{len(g):,} candidate pair gates · {counts.get('proceed', 0):,} proceed · {counts.get('hard_no', 0):,} hard-no · {counts.get('fallback', 0):,} fallback · deciding clause = <code>gate_reason</code></p>
-<p><strong>Original columns, as exported · no cleaning.</strong> Every sampled pair below is joined back to the raw 13-column feed (dataset.csv via <code>core.common.load_dataset</code>, SSOT column mapping) — not the cleaned/canonical view.</p>
+<p class="status">{len(g):,} candidate pair gates · {counts.get('proceed', 0):,} proceed · {counts.get('hard_no', 0):,} hard-no · {counts.get('fallback', 0):,} fallback · every fallback pair with full strings, no truncation · deciding clause = <code>gate_reason</code></p>
+<p><strong>Original columns, as exported · no cleaning.</strong> Every sampled pair below is joined back to the raw 13-column feed (dataset.csv via <code>core.common.load_dataset</code>, SSOT column mapping) — not the cleaned/canonical view. The COMPLETE fallback review pool lives at <a href="/gate/fallback"><strong>/gate/fallback</strong></a> — every pair, full strings, no truncation.</p>
 {''.join(findings)}
 <p class="muted"><a href="/">← home</a> · <a href="/datagen">datagen track</a> · <a href="/graphs">graphs track</a></p>
 </body></html>'''
+
+
+@app.get('/gate/fallback', response_class=HTMLResponse)
+def gate_fallback():
+    """EVERY fallback pair — the ENTIRE original entry, full strings.
+
+    Each pair renders BOTH sides with all 13 raw-export columns (product_id,
+    retailer, country, title, description, category_path, url, image_url,
+    price, barcode, brand, category, attributes), no ellipsis and no
+    <details> folding anywhere — the whole entry as exported. The full
+    canonical texts and the deciding clause ride along. The bucket is OPEN
+    by definition (low raw volume/pack extraction confidence -> the gate
+    deliberately withholds), so everything below is review evidence.
+    Sorted by similarity descending — the solvable-probable pool first.
+    (Per-pair dimension evidence stays on /gate's 5-sample boxes; parsing
+    the AttributeUniverse for all 41,481 pairs here would flip a wholesale
+    listing into minutes of server work.)
+    """
+    g = _gate_results_frame(_gate_results_path.stat().st_mtime_ns)
+    raw, _listings = _gate_raw(DATA_PATH.stat().st_mtime_ns)
+    fb = g[g.gate_decision == 'fallback'].copy()
+    fb = fb.assign(simv=pd.to_numeric(fb.similarity, errors='coerce').fillna(0.0))
+    counts = fb.gate_reason.value_counts()
+    sim_bands = {
+        band: int(grp.sum()) for band, grp in {
+            '<0.30': (fb.simv < 0.30),
+            '0.30-0.50': fb.simv.between(0.30, 0.50, 'left'),
+            '0.50-0.70': fb.simv.between(0.50, 0.70, 'left'),
+            '0.70-0.90': fb.simv.between(0.70, 0.90, 'left'),
+            '>=0.90': (fb.simv >= 0.90)}.items()
+    }
+    fb = fb.sort_values('simv', ascending=False)
+
+    def side_cells(gtin: str) -> str:
+        if gtin not in raw.index:
+            return '<td><code>—</code></td>' * len(_FALLBACK_RAW_COLUMNS)
+        entry = raw.loc[gtin].copy()
+        # _gate_raw drops 'barcode' into the index; resurrect it for the
+        # all-columns render (the raw-export column belongs on screen).
+        entry['barcode'] = gtin
+        return ''.join(
+            f'<td><code>{escape(str(entry[c]))}</code></td>' for c in _FALLBACK_RAW_COLUMNS)
+
+    rows = ''.join(
+        f'<tr><td><code>{escape(str(r.gtin1))}</code> ↔ <code>{escape(str(r.gtin2))}</code></td>'
+        f'<td>{float(r.simv):.3f}</td>'
+        f'<td>{escape(str(r.gate_reason))}</td>'
+        f'<td colspan="2"><code>{escape(str(r.canon1))}</code><br><code>{escape(str(r.canon2))}</code></td></tr>'
+        f'<tr class="pp"><td colspan="3">left · <code>{escape(str(r.gtin1))}</code></td>'
+        + side_cells(str(r.gtin1)) + '</tr>'
+        f'<tr><td colspan="3">right · <code>{escape(str(r.gtin2))}</code></td>'
+        + side_cells(str(r.gtin2)) + '</tr>'
+        for r in fb.itertuples())
+    metrics = ''.join([
+        _fmetric(len(fb), 'fallback pairs (ALL rendered — entire entry, no truncation)'),
+        _fmetric(int((fb.simv >= 0.7).sum()), 'sim >= 0.70 (solvable-probable pool)'),
+        _fmetric(int((fb.simv >= 0.9).sum()), 'sim >= 0.90'),
+        _fmetric(len(set(fb.gtin1) | set(fb.gtin2)), 'distinct gtins involved'),
+    ])
+    reason_row = ''.join(_fmetric(v, k) for k, v in counts.items())
+    band_row = ''.join(_fmetric(v, f'sim {k}') for k, v in sim_bands.items())
+    col_head = ''.join(f'<th>{escape(c)}</th>' for c in _FALLBACK_RAW_COLUMNS)
+    _DOCTYPE = "<!doctype html><html lang=\"en\">"
+    head = _DOCTYPE + (
+        "<head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>ER gate fallback — full review pool</title>"
+        "<style>body{font-family:system-ui;margin:2rem;color:#222}" + _FINDING_STYLE +
+        "h1{font-size:1.4rem}"
+        "table{border-collapse:collapse;width:100%;font-size:.78rem}"
+        "td,th{border:1px solid #ccc;padding:.3rem .4rem;vertical-align:top;text-align:left;overflow-wrap:anywhere}"
+        "code{font-size:.62rem}td code{display:block;white-space:pre-wrap}"
+        "tr.pp td{background:#f7f7f7}</style></head><body>")
+    body = (
+        "<h1>ER · Gate fallback — every undecided pair, entire original entry</h1>"
+        f"<div class=\"finding\">{metrics}{reason_row}{band_row}</div>"
+        "<div class=\"verdict\"><span class='badge badge-open'>OPEN</span> — low raw extraction confidence "
+        "on volume/pack: overlap exists, verdict deliberately withheld (no guessing). "
+        "Both sides carry the ENTIRE raw-export entry (all 13 columns, full strings) plus the full "
+        "canonical texts. Sorted by similarity descending. Metrics + doctrine proposal: "
+        "<code>scripts/fallback_adjudication.py</code> → results/gate_fallback_metrics.json.</div>"
+        "<table><tr><th>pair</th><th>sim</th><th>gate_reason</th><th>pair canonical · FULL</th><th>canon2 (FULL)</th>"
+        + col_head + "</tr>" + rows + "</table>"
+        "<p class=\"muted\"><a href=\"/gate\">← gate decisions</a> · "
+        "<a href=\"/datagen\">datagen track</a> · <a href=\"/\">home</a></p></body></html>")
+    return head + body
 
 
 @app.get('/graphs', response_class=HTMLResponse)

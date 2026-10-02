@@ -1,6 +1,6 @@
 {
-  "captured_from_commit": "2a15852e6594b545bed917ecd8809e2770eccdb3",
-  "code_state": "UNMODIFIED legacy text composition",
+  "captured_from_commit": "c14be8a-dirty",
+  "code_state": "capture wave in working tree (see note 2026-10-02)",
   "structured_features_config": {
     "enabled": true,
     "append_to_text": true,
@@ -10,7 +10,7 @@
     "pack_scale": 100.0,
     "max_set_size": 8
   },
-  "note": "legacy_* strings are the byte-exact output of the committed predict_items.py / rand_matching.py / pipeline.py composition path, captured before any change. They are the rollback contract. 2026-09-28: legacy_sku_text for 952300679 (title declares Real Sugar + soda pop) and 54272430 (No Bubbles = still) refreshed after reviewed extractor recall gains; all other 853 rows byte-identical. 2026-09-28b: 12 legacy_sku_text rows refreshed for the guarded bare-soda rule (all verified carbonated beverages; syrups/concentrates and still-declared rows stay excluded); all other rows byte-identical. 2026-09-28c: refreshed legacy_sku_text rows for flavor-alias normalization (plural/adjective/foreign near-flavor words -> canonical) and the volume_ml_250 producer drift; all other rows byte-identical. 2026-09-30: legacy_sku_text refreshed for the attribute-universe capture wiring (pipeline.extract_all structured evidence section -> structured_features [FIELD_PACK_MATERIAL]/[FIELD_JUICE_CONTENT_BAND]; measured: 842 of 853 sku rows grew, 626 with material evidence, 781 with juice-content bands; every growth verified APPEND-ONLY — the pre-capture token stream is a byte-prefix of the refreshed string and ONLY capture tokens appear in the delta (package_material_* / juice_content_* / their markers); legacy_canonical_text rows grew for 626 records whose regenerated canonical record now carries package_material_set (the existing generate_canonical union of the same evidence; append-only verified the same way); 11 rows (no material, no juice evidence) were untouched. Existing [FIELD_*] groups are byte-unchanged everywhere. 2026-10-01: legacy_sku_text for 89087089 refreshed for the volume-unification closure (config units SSOT): the single unified volume parse recovers '200 ml' (dl family) the retired 4-copy regex set missed; the delta is the sole inserted [FIELD_VOLUME] volume_ml_200 token — every existing token byte-identical; legacy_canonical_text rows all untouched. 2026-10-01b: legacy_sku_text for 269510344 refreshed on the same grounds as 89087089 — sole delta the inserted [FIELD_VOLUME] volume_ml_200 token; all other 854 rows byte-identical.",
+  "note": "legacy_* strings are the byte-exact output of the committed predict_items.py / rand_matching.py / pipeline.py composition path, captured before any change. They are the rollback contract. 2026-09-28: legacy_sku_text for 952300679 (title declares Real Sugar + soda pop) and 54272430 (No Bubbles = still) refreshed after reviewed extractor recall gains; all other 853 rows byte-identical. 2026-09-28b: 12 legacy_sku_text rows refreshed for the guarded bare-soda rule (all verified carbonated beverages; syrups/concentrates and still-declared rows stay excluded); all other rows byte-identical. 2026-09-28c: refreshed legacy_sku_text rows for flavor-alias normalization (plural/adjective/foreign near-flavor words -> canonical) and the volume_ml_250 producer drift; all other rows byte-identical. 2026-09-30: legacy_sku_text refreshed for the attribute-universe capture wiring (pipeline.extract_all structured evidence section -> structured_features [FIELD_PACK_MATERIAL]/[FIELD_JUICE_CONTENT_BAND]; measured: 842 of 853 sku rows grew, 626 with material evidence, 781 with juice-content bands; every growth verified APPEND-ONLY — the pre-capture token stream is a byte-prefix of the refreshed string and ONLY capture tokens appear in the delta (package_material_* / juice_content_* / their markers); legacy_canonical_text rows grew for 626 records whose regenerated canonical record now carries package_material_set (the existing generate_canonical union of the same evidence; append-only verified the same way); 11 rows (no material, no juice evidence) were untouched. Existing [FIELD_*] groups are byte-unchanged everywhere. 2026-10-01: legacy_sku_text for 89087089 refreshed for the volume-unification closure (config units SSOT): the single unified volume parse recovers '200 ml' (dl family) the retired 4-copy regex set missed; the delta is the sole inserted [FIELD_VOLUME] volume_ml_200 token — every existing token byte-identical; legacy_canonical_text rows all untouched. 2026-10-01b: legacy_sku_text for 269510344 refreshed on the same grounds as 89087089 — sole delta the inserted [FIELD_VOLUME] volume_ml_200 token; all other 854 rows byte-identical. 2026-10-02: legacy_sku_text refreshed for 16 rows. One volume recovery (750643907: the title 'tax tropical fruits 0, 25l' EU-comma decimal now yields the [FIELD_VOLUME] volume_ml_250 pair) and 15 flavor rows for the measured FLAVOR_LEXICON expansion (elderberry, buckthorn, clementine, lychee); the elderberry/lychee/clementine tokens arrive from ingredient cells ('Immune Support Ingredients', 'Made From'), which is the same text-scan channel every other lexicon word already used, so the CAPTURE is unchanged and only the vocabulary grew. Every row verified append-only: the pre-existing token stream is an ordered subsequence of the refreshed string and ONLY capture tokens (volume_ml_*/flavor_*/their [FIELD_*] markers) appear in the delta. All other 839 sku rows byte-identical; legacy_canonical_text rows all untouched. The same capture also carried a volume REGRESSION the fixture caught and that is fixed here (core.text bare-space-decimal decode: a non-zero head is a size-range/count head, never a decimal — '8 12 fl. oz.' is 12 fl. oz. and '2 200 ml' is 200 ml, not 812 fl. oz. (24014 ml) and 2200 ml): 565234106, 943924907, 112114167, 318255542 and 251699831 had lost their declared 355/355/355/300/200 ml and now match their pre-capture bytes again, as does 1023526471.",
   "records": [
     {
       "legacy_canonical_text": "powerking pear carbonated aspartame_energy_source_green Powerking stored at room temperature. all supplies sports energy drinks energy beverages energy drinks [FIELD_VOLUME] volume_ml_500 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_pear [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_metal",
@@ -5732,7 +5732,7 @@
         "package_material_set": "['metal']"
       },
       "nearest_item_id": "8720157462910",
-      "legacy_sku_text": "tax tropical fruits still concentrate made passion fruit pineapple apple good source vitamins hydrating vitamin brand taksi description product description tropical fruit mix pineapple passion fruit apple. dairy added vitamin c. briefly heated. tax tropical fruits delicious one fruit category drinks up breadcrumbs products fresh coffee tea juices drinks uncooled juices drinks fresh fruit drinks [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_fruit flavor_passion flavor_pineapple flavor_tropical [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_metal [FIELD_JUICE_CONTENT_BAND] juice_content_25-50%",
+      "legacy_sku_text": "tax tropical fruits still concentrate made passion fruit pineapple apple good source vitamins hydrating vitamin brand taksi description product description tropical fruit mix pineapple passion fruit apple. dairy added vitamin c. briefly heated. tax tropical fruits delicious one fruit category drinks up breadcrumbs products fresh coffee tea juices drinks uncooled juices drinks fresh fruit drinks [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_fruit flavor_passion flavor_pineapple flavor_tropical [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_metal [FIELD_JUICE_CONTENT_BAND] juice_content_25-50%",
       "sku": {
         "title": "tax tropical fruits 0, 25l",
         "attributes": "Carbonization: still; Juice Features: from concentrate; Made From: passion fruit, pineapple, apple; Health Claims: good source of vitamins, hydrating; Immune Support Ingredients: vitamin c; Pack Material Type: Metal; Juice Content: 25-50%; Volume: 250",
@@ -5994,7 +5994,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "9001400005009",
-      "legacy_sku_text": "yo fruit syrup strawberry caffeine sweetener hfcs sugar elderberry strawberry brand fruchtsirup description yo fruit syrup strawberry category liquid concentrates breadcrumbs grocery store beverages soft drinks syrup [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_fruit flavor_strawberry [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_10-15%",
+      "legacy_sku_text": "yo fruit syrup strawberry caffeine sweetener hfcs sugar elderberry strawberry brand fruchtsirup description yo fruit syrup strawberry category liquid concentrates breadcrumbs grocery store beverages soft drinks syrup [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_elderberry flavor_fruit flavor_strawberry [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_10-15%",
       "sku": {
         "title": "YO fruit syrup strawberry 6 x 0.7 l",
         "attributes": "Caffeine: 15-25 mg; Pack Type: Bottle; Sweetener: hfcs, sugar; Pack Material Type: Glass; Immune Support Ingredients: elderberry; Juice Content: 10-15%; Flavour: strawberry; Volume: 700",
@@ -8717,7 +8717,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "3250390001522",
-      "legacy_sku_text": "syrup berries aromas contains minerals sulfur berry sweetener sugar antioxidants elderberry caffeine brand sir up description gof which fatty which dietary sodiu category liquid concentrates breadcrumbs all products beverages coffee tea soft drinks syrup [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_berry [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass",
+      "legacy_sku_text": "syrup berries aromas contains minerals sulfur berry sweetener sugar antioxidants elderberry caffeine brand sir up description gof which fatty which dietary sodiu category liquid concentrates breadcrumbs all products beverages coffee tea soft drinks syrup [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_berry flavor_elderberry [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass",
       "sku": {
         "title": "syrup\nberries, 30% with aromas",
         "attributes": "Volume: 750; Pack Type: Bottle; Contains Minerals: sulfur; Flavour: berry; Sweetener: sugar; Pack Material Type: Glass; Immune Support Ingredients: antioxidants, elderberry; Caffeine: 15-25 mg",
@@ -8750,7 +8750,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "7340083480263",
-      "legacy_sku_text": "apple elder without pulp pulp free smoothie elderflower apple elderberry made elderberry apple still brand garant description pressed apple elder without pulp. pressas immediately after harvest. category concentrate breadcrumbs fruit smoothie chilled nectar [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_elderflower [FIELD_CARBONATION] carbonation_still [FIELD_PULP] pulp_no_pulp [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "apple elder without pulp pulp free smoothie elderflower apple elderberry made elderberry apple still brand garant description pressed apple elder without pulp. pressas immediately after harvest. category concentrate breadcrumbs fruit smoothie chilled nectar [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_elderberry flavor_elderflower [FIELD_CARBONATION] carbonation_still [FIELD_PULP] pulp_no_pulp [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "apple elder Juice without pulp",
         "attributes": "Juice Content: 100%; Pack Material Type: Glass; Juice Features: pulp free, smoothie; Volume: 1000; Pack Type: Bottle; Flavour: elderflower, apple; Immune Support Ingredients: elderberry; Made From: elderberry, apple; Carbonization: still",
@@ -9931,7 +9931,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "4041685002572",
-      "legacy_sku_text": "axisis gmbh sea buckthorn pure kba vital house still brand vitalhaus description axisis gmbh sea buckthorn pure kba vital house category concentrate breadcrumbs beauty sports nutrition [FIELD_VOLUME] volume_ml_200 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "axisis gmbh sea buckthorn pure kba vital house still brand vitalhaus description axisis gmbh sea buckthorn pure kba vital house category concentrate breadcrumbs beauty sports nutrition [FIELD_VOLUME] volume_ml_200 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_buckthorn [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "axisis gmbh sea buckthorn pure juice kba vital house 200 ml 04434600",
         "attributes": "Carbonization: still; Volume: 200; Juice Content: 100%; Pack Material Type: Glass; Pack Type: Bottle",
@@ -14485,7 +14485,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "7611612516587",
-      "legacy_sku_text": "erbology aronia sea buckthorn aronia made aronia berry still brand erbology description erbology please best before expiration uk dd mm yyyy category concentrate breadcrumbs grocery gourmet food beverages bottled beverages mixes [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_berry [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "erbology aronia sea buckthorn aronia made aronia berry still brand erbology description erbology please best before expiration uk dd mm yyyy category concentrate breadcrumbs grocery gourmet food beverages bottled beverages mixes [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_berry flavor_buckthorn [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "Erbology Organic Aronia & Sea Buckthorn Juice - 250ml (8.79 fl oz)",
         "attributes": "Pack Material Type: Glass; Sustainable Sourcing: organic; Flavour: aronia; Juice Content: 0-2%; Pack Type: Bottle; Volume: 250; Made From: aronia berry; Carbonization: still",
@@ -14748,7 +14748,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "9015160105930",
-      "legacy_sku_text": "syrup syrup raspberry syrup raspberry caffeine origin switzerland sweetener sugar elderberry brand sir up description name syrup start sugar raspberry concentrate acid citric acid colouring elderberry concentrate preservative end category liquid concentrates breadcrumbs drinks coffee tea soft drinks syrups [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_raspberry [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass",
+      "legacy_sku_text": "syrup syrup raspberry syrup raspberry caffeine origin switzerland sweetener sugar elderberry brand sir up description name syrup start sugar raspberry concentrate acid citric acid colouring elderberry concentrate preservative end category liquid concentrates breadcrumbs drinks coffee tea soft drinks syrups [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_elderberry flavor_raspberry [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass",
       "sku": {
         "title": "syrup · Syrup · Raspberry syrup 30%",
         "attributes": "Pack Type: Bottle; Flavour: raspberry; Volume: 1500; Caffeine: 15-25 mg; Geographic Origin: switzerland; Sweetener: sugar; Pack Material Type: Glass; Immune Support Ingredients: elderberry",
@@ -17457,7 +17457,7 @@
         "pulp_set": "[]"
       },
       "nearest_item_id": "793674480208",
-      "legacy_sku_text": "living plus focus blackberry elderberry kombucha drinks filtered sweetener cane sugar botanicals functional ginseng sparkling blackberry elderberry probiotic fatigue relief good source vitamins sweeteners tea green herbal sencha brand living description blackberry elderberry lightly sparkling kombucha panax ginseng vitamin b12 authentically brewed kombucha live cultures all great tasting category carbonated rtd tea kombucha breadcrumbs food drinks kombucha [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_12 [FIELD_CARBONATION] carbonation_carbonated [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "living plus focus blackberry elderberry kombucha drinks filtered sweetener cane sugar botanicals functional ginseng sparkling blackberry elderberry probiotic fatigue relief good source vitamins sweeteners tea green herbal sencha brand living description blackberry elderberry lightly sparkling kombucha panax ginseng vitamin b12 authentically brewed kombucha live cultures all great tasting category carbonated rtd tea kombucha breadcrumbs food drinks kombucha [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_12 [FIELD_FLAVOR] flavor_elderberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "No.1 Living Plus Focus Blackberry & Elderberry Kombucha Drinks 12x 250ml",
         "attributes": "Water Type: filtered; Sweetener: cane sugar; Botanicals And Functional Ingredients: ginseng; Carbonization: sparkling; Flavour: blackberry; Immune Support Ingredients: elderberry; Juice Content: 0-2%; Naturally derived: natural flavours, natural; Pack Type: Can; Health Claims: probiotic, fatigue relief, good source of vitamins; Volume: 250; No Artificial Ingredients: no artificial sweeteners; Tea Type: green, herbal, sencha",
@@ -20241,7 +20241,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "6410270005591",
-      "legacy_sku_text": "marjex cold pressed sea buckthorn cold press still brand marjex category concentrate breadcrumbs beverages [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "marjex cold pressed sea buckthorn cold press still brand marjex category concentrate breadcrumbs beverages [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_buckthorn [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "marjex cold pressed sea buckthorn juice 0.5l",
         "attributes": "Pack Material Type: Glass; Volume: 500; Juice Content: 100%; Pack Type: Bottle; Juice Features: cold press; Carbonization: still",
@@ -20307,7 +20307,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "7340130503983",
-      "legacy_sku_text": "ren voltaire kombucha raspberry elder elderberry caffeine tea green filtered elderflower raspberry carbonated sweetener cane sugar brand ren voltaire description ren voltaire kombucha raspberry elder one fermented green tea brewed according one traditionally chinese prescription. something sour easy carbonated fits pe category carbonated rtd tea kombucha breadcrumbs lifestyle food beverages shakes kombucha [FIELD_VOLUME] volume_ml_275 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_elderflower flavor_raspberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "ren voltaire kombucha raspberry elder elderberry caffeine tea green filtered elderflower raspberry carbonated sweetener cane sugar brand ren voltaire description ren voltaire kombucha raspberry elder one fermented green tea brewed according one traditionally chinese prescription. something sour easy carbonated fits pe category carbonated rtd tea kombucha breadcrumbs lifestyle food beverages shakes kombucha [FIELD_VOLUME] volume_ml_275 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_elderberry flavor_elderflower flavor_raspberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "renée voltaire kombucha raspberry & elder 275 ml",
         "attributes": "Immune Support Ingredients: elderberry; Volume: 275; Naturally derived: natural fragrances; No Artificial Ingredients: no artificial additives; Caffeine: 15-25 mg; Juice Content: 0-2%; Tea Type: green; Water Type: filtered; Pack Type: Bottle; Flavour: elderflower, raspberry; Pack Material Type: Glass; Sustainable Sourcing: organic; Carbonization: carbonated; Sweetener: cane sugar",
@@ -21427,7 +21427,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "7340083489846",
-      "legacy_sku_text": "tropical without pulp made passion fruit pineapple clementine apple mango sweetener sugar pulp free smoothie still brand garant description fruit fresh sweetness fruit sugars. guarantors pressas immediately after harvest. addition goes reserve category concentrate breadcrumbs fruit smoothie chilled nectar [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_fruit flavor_mango flavor_passion flavor_pineapple flavor_tropical [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PULP] pulp_no_pulp [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "tropical without pulp made passion fruit pineapple clementine apple mango sweetener sugar pulp free smoothie still brand garant description fruit fresh sweetness fruit sugars. guarantors pressas immediately after harvest. addition goes reserve category concentrate breadcrumbs fruit smoothie chilled nectar [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_clementine flavor_fruit flavor_mango flavor_passion flavor_pineapple flavor_tropical [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PULP] pulp_no_pulp [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "tropical Juice without pulp",
         "attributes": "Pack Material Type: Glass; Naturally derived: natural; Pack Type: Bottle; Made From: passion fruit, pineapple, clementine, apple, mango; Juice Content: 100%; Volume: 1000; Sweetener: sugar; Juice Features: pulp free, smoothie; Carbonization: still",
@@ -23622,7 +23622,7 @@
         "pulp_set": "[]",
         "package_material_set": "['plastic']"
       },
-      "legacy_sku_text": "smarty syrup forest fruits sugar calories sweetener sucralose caffeine elderberry sugar calories brand slimpie description forest fruits syrup. sugar calories gluten free. unique mixing ratio more lemonade gluten free category liquid concentrates breadcrumbs groceries drinks lemonade syrup forest fruits [FIELD_VOLUME] volume_ml_580 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_fruit [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
+      "legacy_sku_text": "smarty syrup forest fruits sugar calories sweetener sucralose caffeine elderberry sugar calories brand slimpie description forest fruits syrup. sugar calories gluten free. unique mixing ratio more lemonade gluten free category liquid concentrates breadcrumbs groceries drinks lemonade syrup forest fruits [FIELD_VOLUME] volume_ml_580 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_elderberry flavor_fruit [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
       "legacy_canonical_text": "slimpie no_sugar smarty_syrup_forest_fruit type_plastic_volume Slimpie forest fruits syrup. sugar calories gluten free. unique mixing ratio more lemonade gluten free groceries drinks lemonade syrup forest fruits [FIELD_VOLUME] volume_ml_580 [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_plastic"
     },
     {
@@ -24874,7 +24874,7 @@
         "pulp_set": "[]",
         "package_material_set": "['glass']"
       },
-      "legacy_sku_text": "scallop apple elderberry bio milliliters apple elderberry still sweetener sugar made elderberry apple brand schulp description data scallop apple elderberry bio milliliters apple elderberry bio scallop apple elderberries biological start biological dutch apples category concentrate breadcrumbs food drinks syrup [FIELD_VOLUME] volume_ml_200 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "scallop apple elderberry bio milliliters apple elderberry still sweetener sugar made elderberry apple brand schulp description data scallop apple elderberry bio milliliters apple elderberry bio scallop apple elderberries biological start biological dutch apples category concentrate breadcrumbs food drinks syrup [FIELD_VOLUME] volume_ml_200 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_elderberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "legacy_canonical_text": "schulp apple still sugar scallop_elderberry Schulp data scallop apple elderberry bio milliliters apple elderberry bio scallop apple elderberries biological start biological dutch apples food drinks syrup [FIELD_VOLUME] volume_ml_200 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass"
     },
     {
@@ -24940,7 +24940,7 @@
         "pulp_set": "[]",
         "package_material_set": "['paper / carton']"
       },
-      "legacy_sku_text": "mautner markhof grape elder syrup elderberry sweetener hfcs sugar caffeine grape elderflower brand mautner markhof description start allergenic sugar glucose fructose syrup elderberry grape acidulants citric acid vitamin aroma. fruit juic category liquid concentrates breadcrumbs beverages soft drinks [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_elderflower flavor_grape [FIELD_PACK_MATERIAL] package_material_paper_/_carton",
+      "legacy_sku_text": "mautner markhof grape elder syrup elderberry sweetener hfcs sugar caffeine grape elderflower brand mautner markhof description start allergenic sugar glucose fructose syrup elderberry grape acidulants citric acid vitamin aroma. fruit juic category liquid concentrates breadcrumbs beverages soft drinks [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_elderberry flavor_elderflower flavor_grape [FIELD_PACK_MATERIAL] package_material_paper_/_carton",
       "legacy_canonical_text": "mautner markhof elderflower grape elder_syrup_material_type sugar Mautner Markhof start and allergenic sugar glucose fructose syrup elderberry grape acidulants citric acid vitamin c aroma. from fruit juic beverages soft drinks [FIELD_VOLUME] volume_ml_700 [FIELD_FLAVOR] flavor_elderflower flavor_grape [FIELD_PACK_MATERIAL] package_material_paper_/_carton"
     },
     {
@@ -25398,7 +25398,7 @@
         "pulp_set": "[]",
         "package_material_set": "['glass']"
       },
-      "legacy_sku_text": "yo strawberry fruit syrup sweetener hfcs sugar elderberry strawberry brand yo description fruit syrup strawberry seductive but also shape color strawberry. strawberry seductive fruit marketed becomes has origin history ancient strawber category liquid concentrates breadcrumbs home page beverages soft drinks syrup [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_fruit flavor_strawberry [FIELD_PACK_MATERIAL] package_material_glass",
+      "legacy_sku_text": "yo strawberry fruit syrup sweetener hfcs sugar elderberry strawberry brand yo description fruit syrup strawberry seductive but also shape color strawberry. strawberry seductive fruit marketed becomes has origin history ancient strawber category liquid concentrates breadcrumbs home page beverages soft drinks syrup [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_elderberry flavor_fruit flavor_strawberry [FIELD_PACK_MATERIAL] package_material_glass",
       "legacy_canonical_text": "yo fruit strawberry syrup_volume_type_sweetener sugar Yo fruit syrup strawberry seductive but is also the shape and color the strawberry. that the strawberry as seductive fruit marketed becomes has its origin in the history in the ancient was the strawber home page beverages soft drinks syrup [FIELD_VOLUME] volume_ml_700 [FIELD_FLAVOR] flavor_fruit flavor_strawberry [FIELD_PACK_MATERIAL] package_material_glass"
     },
     {
@@ -25529,7 +25529,7 @@
         "pulp_set": "[]",
         "package_material_set": "['paper / carton']"
       },
-      "legacy_sku_text": "cool best vita day tropical made banana peach apple pineapple orange pear passion fruit kiwi lychee guava smoothie concentrate caffeine good source vitamins still liquid vitamin brand cool best description vita day tropical tropical fruits. one good recommended daily allowance important vitamins. store use storage advice keep me cool. keep cooled category concentrate breadcrumbs groceries soft juices fresh juices smoothies fresh juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_fruit flavor_orange flavor_passion flavor_peach flavor_pear flavor_pineapple flavor_tropical [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "cool best vita day tropical made banana peach apple pineapple orange pear passion fruit kiwi lychee guava smoothie concentrate caffeine good source vitamins still liquid vitamin brand cool best description vita day tropical tropical fruits. one good recommended daily allowance important vitamins. store use storage advice keep me cool. keep cooled category concentrate breadcrumbs groceries soft juices fresh juices smoothies fresh juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_fruit flavor_lychee flavor_orange flavor_passion flavor_peach flavor_pear flavor_pineapple flavor_tropical [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "legacy_canonical_text": "cool best apple still fruit orange passion peach pear pineapple tropical kiwi_lychee_guava_juice Cool Best vita day tropical is packed tropical fruits. one is good for of the recommended daily allowance from important vitamins. store use storage advice keep me cool. keep it cooled m groceries soft juices and fresh juices and smoothies fresh juices [FIELD_VOLUME] volume_ml_1000 [FIELD_FLAVOR] flavor_apple flavor_fruit flavor_orange flavor_passion flavor_peach flavor_pear flavor_pineapple flavor_tropical [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_paper_/_carton"
     },
     {

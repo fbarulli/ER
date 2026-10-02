@@ -84,17 +84,19 @@ NUTRITION_RE = re.compile(
     r"per\s*(?:100|1)\s*(?:ml|g|gram|grams)|kcal\s*per|per\s*serving",
     re.IGNORECASE,
 )
-# Number part: a single-digit integer may carry a comma-decimal with optional
-# whitespace ("0, 33l" = 0.33 L, "1, 5l" = 1.5 L — EU notation with a space);
-# multi-digit integers may NOT ("case of 24, 500ml" is a count-list, not
-# 24.5 ml). A DOT decimal never takes a space ("pH 9.0 bottle 600 ml" must
-# stay 600, not "9. 600"). The (?<![0-9.])(?![0-9]) pair pins the single-digit
-# branch to a REAL single digit, so "24, 500ml" is never read as "4, 500".
-# A leading-dot decimal (".14 oz" = 0.14 oz, ".5 l" = 0.5 L) is a THIRD branch
-# so the multi-digit branch never eats the digits after the dot and inflates
-# the value 10x/100x (".14" must not read as 14).
+# Number part: a single-digit integer may carry a comma-decimal OR a bare
+# space-decimal with optional whitespace ("0, 33l" = 0.33 L, "0 8l" = 0.8 L —
+# EU comma AND the slug form where url_text has already folded the
+# hyphen-decimal "0-8l" into "0 8l"); multi-digit integers may NOT ("case of
+# 24, 500ml" is a count-list, not 24.5 ml). A DOT decimal never takes a
+# space ("pH 9.0 bottle 600 ml" must stay 600, not "9. 600"). The
+# (?<![0-9.])(?![0-9]) pair pins the single-digit branch to a REAL single
+# digit, so "24, 500ml" is never read as "4, 500" and "24 500ml" is never a
+# splittable decimal. A leading-dot decimal (".14 oz" = 0.14 oz, ".5 l" =
+# 0.5 L) is a THIRD branch so the multi-digit branch never eats the digits
+# after the dot and inflates the value 10x/100x (".14" must not read as 14).
 _NUMBER_PART = (
-    r"((?<![0-9.])\d(?![0-9])(?:,\s*\d+|\.\d+)?"
+    r"((?<![0-9.])\d(?![0-9])(?:,?\s*\d+|\.\d+)?"
     r"|(?<![0-9.])\d{2,}(?:[.,]\d+)?"
     r"|(?<![0-9])\.\d+)"
 )
@@ -293,6 +295,8 @@ def extract_volume_match(text: str) -> tuple:
         if (before and len(after) == 3 and after.isdigit()
                 and float(raw_value.replace(",", ".")) * to_ml[unit] < 20):
             raw_value = before + after
+    if " " in raw_value:
+        raw_value = " ".join(raw_value.split())
     # EU-decimal-with-space vs count-list: "0, 33l" = 0.33 L; "24, 500ml" is a
     # count/volume pair, not 24.5 ml. Same plausibility rule as above.
     if "," in raw_value and " " in raw_value:
@@ -300,6 +304,34 @@ def extract_volume_match(text: str) -> tuple:
         dec_ml = float((head + "." + tail).replace(" ", "")) * to_ml[unit]
         if float(head) >= 1 and dec_ml < 100:
             raw_value = tail.strip()
+    elif " " in raw_value:
+        # COMMA-LESS twin ("0 8l", the slug's hyphen-decimal after url_text) —
+        # a zero head is never a count, so the decimal is the only plausible
+        # reading: this is where the zeroh 8000ml lie becomes 800ml. A
+        # NON-ZERO head is the opposite case and must NOT be decoded as a
+        # decimal, nor by deleting the separator: "8 12 fl. oz." is a size
+        # RANGE and "2 200 ml" a count head, and concatenating them read
+        # 812 fl. oz. (24014ml) and 2200ml. The head is dropped instead, which
+        # is what the range/list reading has always meant (and what the
+        # pre-bare-space-decimal regex got by never matching the head).
+        head, _, tail = raw_value.partition(" ")
+        tail = tail.strip()
+        if head == "0" and tail.isdigit():
+            raw_value = head + "." + tail
+        elif head.isdigit() and tail[:1].isdigit():
+            raw_value = tail
+    # Slug-fragment salvage (audit 2026-10-01, zeroh "0-8l"): URL slugs split
+    # a decimal fraction on the hyphen, so the captured fragment can arrive
+    # headless ("8l" for 0.8 l) or with the zero fused ("08l"). SAME REPAIR
+    # CLASS as the EU-decimal-with-space branch above — a zero head is never
+    # a count, so the only plausible reading is the decimal:
+    #   fused   "08l"  -> 0.8 l  (exactly one digit after the zero; the
+    #                           multi-digit run keeps the artifact refusal
+    #                           so "0123" can never decode as 123.4),
+    #   spaced  "0 8l" -> 0.8 l  via the single-digit branch below eating
+    #                           the zero with its optional separator.
+    if re.fullmatch(r"0\d", raw_value):
+        raw_value = "0." + raw_value[1:]
     value = float(raw_value.replace(",", ".").replace(" ", ""))
     return value, unit, unit in ambiguous_units, match.group(0)
 

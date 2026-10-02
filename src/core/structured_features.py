@@ -118,13 +118,28 @@ def info_from_sets(
 
 
 def sku_info(
-    title: object, attributes: object, description: object = ""
+    title: object,
+    attributes: object,
+    description: object = "",
+    url: object = "",
+    image_url: object = "",
+    category_path: object = "",
+    category: object = "",
 ) -> dict[str, set[float] | set[str]]:
-    """Parse one source SKU using the pipeline's existing extractor."""
+    """Parse one source SKU using the pipeline's existing extractor.
+
+    Accepts the same evidence columns extract_all does — url, image_url,
+    category_path, category — defaulting to "" for backward compatibility.
+    """
     from pipeline import extract_all
 
-    desc = "" if description is None or (isinstance(description, float) and np.isnan(description)) else str(description)
-    extracted = extract_all(str(title), str(attributes), desc)
+    values = []
+    for value in (description, url, image_url, category_path, category):
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            value = ""
+        values.append(str(value))
+    desc, url_s, img_s, cat_path_s, cat_s = values
+    extracted = extract_all(str(title), str(attributes), desc, url_s, img_s, cat_path_s, cat_s)
     flags = _as_string_set(
         extracted.get("attribute_consistency_flags"),
         kind="attribute_consistency_flags",

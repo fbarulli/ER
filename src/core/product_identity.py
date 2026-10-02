@@ -349,13 +349,20 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
     title = str(get("title", "") or "")
     attributes = get("attributes", "")
     description = str(get("description", "") or "")
+    url = str(get("url", "") or "")
+    image_url = str(get("image_url", "") or "")
     category_text = " ".join(
         str(get(col, "") or "") for col in ("category", "category_path")
     )
 
     from core.structured_features import sku_info
 
-    info = sku_info(title, attributes, description)
+    info = sku_info(
+        title, attributes, description,
+        url=url, image_url=image_url,
+        category_path=str(get("category_path", "") or ""),
+        category=str(get("category", "") or ""),
+    )
     declared = identity_tokens_set(attributes)
     title_tokens = set(_TOKEN_RE.findall(normalize_text(title)))
     flavor = alias_fold(set(info["flavor"]) | set(declared), qualifiers=True)

@@ -327,6 +327,8 @@ canonical_optional_columns:
   attribute_consistency_flags: "[]"
   universe_evidence: "{}"
   source_rows: "[]"
+  evidence_ledger: "[]"
+  organic_set: "[]"
 
 # ── unit taxonomy (core.text, core.unit_canonicalization, ner features) ─────
 # THE one table for volume units and pack bounds; three module-local literals
@@ -512,6 +514,68 @@ url_evidence:
   # A short letter+digit run is a media code ("k6rmm", "ab12") unless its letter
   # part is a declared unit, which keeps "250ml" and "2l" intact.
   short_code_letters: 3
+
+# ── product-type + subtype vocabulary (pipeline.extract_all reads; SSOT) ───
+# The card's `type`/`subtype` product words. Everything that used to be
+# inline regexes in extract_all is moved here (one declaration, never two).
+# Words are measured (corpus census 2026-10-01): the previous coarse
+# classes keep their semantics, and the subtype rows recover the measured
+# ~20% of titles that carried a product word the coarse classes never
+# read (coffee 706, smoothie 323, kombucha 284...).
+# Matching rule: list order is precedence — phrases before their
+# containing word ("coconut water" must not collapse into "water") and
+# subtypes before their family (latte stays latte, not coffee).
+product_types:
+  types:
+    coconut_water:
+      words: [coconut water]
+    water:
+      words: [water]
+    juice:
+      words: [juice]
+    tea:
+      words: [ice tea, iced tea, tea]
+    energy:
+      words: [energy drink, energy water]
+    soda:
+      words: [soda, soft drink]
+    tonic:
+      words: [tonic]
+    coffee:
+      words: [coffee]
+      subtypes: [latte, cappuccino, espresso, mocha, mocca, macchiato]
+    smoothie:
+      words: [smoothie]
+    kombucha:
+      words: [kombucha]
+    drink_mix:
+      words: [drink mix, drinkmix]
+    beer:
+      words: [beer]
+      subtypes: [ale, lager, pilsner, stout, porter, ipa, cider]
+    shot:
+      words: [shot]
+    nectar:
+      words: [nectar]
+    lemonade:
+      words: [lemonade]
+    punch:
+      words: [punch, squash, cordial]
+    matcha:
+      words: [matcha]
+    chai:
+      words: [chai]
+    yerba:
+      words: [yerba]
+    infusion:
+      words: [infusion]
+    shake:
+      words: [shake, protein]
+    milk:
+      words: [milk]
+    isotonic:
+      words: [isotonic]
+
 
 # ── seed (whole tree uses this one value) ───────────────────────────────────
 seed: 42
