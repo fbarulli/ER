@@ -436,3 +436,34 @@ def test_stage7_ignores_media_slugs_but_kept_slug_semantics_only_when_present():
     two = {"title": "can of cola"}
     verdict = engine._fallback_reparse("sweetener", {}, {}, one, two, specs)
     assert verdict is None, "no URL claim = reparse must return None (not a guess)"
+
+
+@pytest.mark.parametrize("key", ["flavor", "flavour"])
+@pytest.mark.parametrize("left,right,expected", [
+    ({"fruit"}, {"fruit", "pear"}, "inconclusive"),
+    ({"cola", "lemon"}, {"fruit", "lemon"}, "match"),
+    ({"caramel coffee latte"}, {"coffee latte vanilla"}, "conflict"),
+    ({"apple", "honey"}, {"orange", "honey"}, "conflict"),
+    ({"lemon"}, {"lemon", "mint"}, "subset"),
+])
+def test_flavor_specificity_precedes_overlap_and_generic_containment(key, left, right, expected):
+    from core.attribute_decision import attribute_metrics, evaluate_metrics
+
+    for a, b in ((left, right), (right, left)):
+        a, b = frozenset(a), frozenset(b)
+        metrics = attribute_metrics(a, b, key=key)
+        assert evaluate_metrics(key, "STRING", a, b, metrics).name.lower() == expected
+
+
+def test_flavour_conflict_cannot_be_rescued_by_semantic_family(monkeypatch):
+    import core.attribute_decision as module
+
+    monkeypatch.setattr(module, "semantic_family_shared", lambda a, b: True)
+    engine = module.AttributeDecisionEngine(
+        volume_relative_tolerance=0.05, volume_absolute_tolerance_ml=5.0
+    )
+    left = {"flavor_set": {"apple", "honey"}}
+    right = {"flavor_set": {"orange", "honey"}}
+    decision = engine.evaluate(left, right).dimensions["flavour"]
+    assert decision.result is module.ComparisonResult.CONFLICT
+    assert decision.fallback_from == ""

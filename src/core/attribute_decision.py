@@ -480,20 +480,22 @@ def evaluate_metrics(
         if metrics.overlap_coef == 0.0:
             return ComparisonResult.CONFLICT
         return ComparisonResult.MATCH
+    # JEV audits: partial flavor overlap is not identity evidence. Compare
+    # specific token bags before containment so generic-only subsets cannot
+    # approve a pair. Exact/alias matches above retain their existing meaning.
+    if type_key == "STRING" and key in ("flavor", "flavour"):
+        generic = _GENERIC_TOKENS["flavor"]
+        non_a = _tokens(_concept_fold(val_a, key=key)) - generic
+        non_b = _tokens(_concept_fold(val_b, key=key)) - generic
+        if not non_a or not non_b:
+            return ComparisonResult.INCONCLUSIVE
+        if non_a == non_b:
+            return ComparisonResult.MATCH
+        if non_a <= non_b or non_b <= non_a:
+            return ComparisonResult.SUBSET
+        return ComparisonResult.CONFLICT
     if metrics.containment_a == 1.0 or metrics.containment_b == 1.0:
         return ComparisonResult.SUBSET
-    # JEV audit (2026-10-02): a STRING-set overlap whose ENTIRE intersection
-    # is made of GENERIC tokens ('fruit', 'cola') is not identity evidence.
-    # These tokens overlap across genuinely different flavors (Nordic Mist
-    # lemon/elderflower vs lime/mint both inferred 'cola fruit') and were
-    # minting MATCH → gate proceed on ~84% false positives in the JEV-graded
-    # slice. The overlap falls through to the specificity devices below and
-    # lands INCONCLUSIVE, where weaker surface lanes (mode_flavor) can
-    # review it instead of a bare proceed.
-    if type_key == "STRING" and key in _GENERIC_TOKENS:
-        intersection = val_a & val_b
-        if intersection and intersection <= _GENERIC_TOKENS[key]:
-            return ComparisonResult.INCONCLUSIVE
     if metrics.overlap_coef > 0.0 or metrics.jaccard >= 0.6:
         return ComparisonResult.MATCH
     short_side = min(
@@ -662,8 +664,16 @@ class AttributeDecisionEngine:
                 # members sit in ONE evidenced family (built from the capture
                 # census at tau) is a sibling phrasing, not a conflict —
                 # recorded with its source so audits trace the downgrade.
-                if result is ComparisonResult.CONFLICT and semantic_family_shared(
-                    left_set, right_set
+                # JEV audit (2026-10-02): FLAVOR is exempt — the flavor branch
+                # above already mints MATCH/SUBSET for equal or subset
+                # specific sets, so a family rescue for flavor can only ever
+                # fire on DIVERGENT specific sets ({apple,honey} vs
+                # {orange,honey}), which the graded sample falsified at
+                # noul 0.01-0.07. The rescue stays for every other dimension.
+                if (
+                    result is ComparisonResult.CONFLICT
+                    and key not in ("flavor", "flavour")
+                    and semantic_family_shared(left_set, right_set)
                 ):
                     result = ComparisonResult.MATCH
                     fallback_from = "semantic_family"

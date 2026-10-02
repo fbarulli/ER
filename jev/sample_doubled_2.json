@@ -1,0 +1,772 @@
+[
+ {
+  "gtin1": "739510000612",
+  "gtin2": "739510900400",
+  "stratum": "proceed_survivor",
+  "similarity": "0.2857142857142857",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "739510900400",
+  "gtin2": "739510000612",
+  "stratum": "proceed_survivor",
+  "similarity": "0.2857142857142857",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "732623733477",
+  "gtin2": "794398000116",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "794398000116",
+  "gtin2": "732623733477",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "6415712610982",
+  "gtin2": "6415712614393",
+  "stratum": "proceed_survivor",
+  "similarity": "1.0",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "6415712614393",
+  "gtin2": "6415712610982",
+  "stratum": "proceed_survivor",
+  "similarity": "1.0",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "5705010079309",
+  "gtin2": "7313619001843",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7313619001843",
+  "gtin2": "5705010079309",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "754436584480",
+  "gtin2": "758763251923",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "758763251923",
+  "gtin2": "754436584480",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "7070841002931",
+  "gtin2": "7070841005604",
+  "stratum": "proceed_survivor",
+  "similarity": "0.8",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7070841005604",
+  "gtin2": "7070841002931",
+  "stratum": "proceed_survivor",
+  "similarity": "0.8",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "7044610874746",
+  "gtin2": "7044610876313",
+  "stratum": "proceed_survivor",
+  "similarity": "0.6",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7044610876313",
+  "gtin2": "7044610874746",
+  "stratum": "proceed_survivor",
+  "similarity": "0.6",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "748927068252",
+  "gtin2": "796520501843",
+  "stratum": "proceed_survivor",
+  "similarity": "0.6",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "796520501843",
+  "gtin2": "748927068252",
+  "stratum": "proceed_survivor",
+  "similarity": "0.6",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3014400223003",
+  "gtin2": "3014400224994",
+  "stratum": "proceed_survivor",
+  "similarity": "0.6666666666666666",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "3014400224994",
+  "gtin2": "3014400223003",
+  "stratum": "proceed_survivor",
+  "similarity": "0.6666666666666666",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "668723034889",
+  "gtin2": "752697964546",
+  "stratum": "proceed_survivor",
+  "similarity": "1.0",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "752697964546",
+  "gtin2": "668723034889",
+  "stratum": "proceed_survivor",
+  "similarity": "1.0",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3268650006057",
+  "gtin2": "3268650604055",
+  "stratum": "proceed_survivor",
+  "similarity": "0.75",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "3268650604055",
+  "gtin2": "3268650006057",
+  "stratum": "proceed_survivor",
+  "similarity": "0.75",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "796520501737",
+  "gtin2": "796520501744",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "796520501744",
+  "gtin2": "796520501737",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "5600377970729",
+  "gtin2": "5600377971696",
+  "stratum": "proceed_survivor",
+  "similarity": "0.4",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "5600377971696",
+  "gtin2": "5600377970729",
+  "stratum": "proceed_survivor",
+  "similarity": "0.4",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "5400706617987",
+  "gtin2": "5400706617994",
+  "stratum": "proceed_survivor",
+  "similarity": "1.0",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "5400706617994",
+  "gtin2": "5400706617987",
+  "stratum": "proceed_survivor",
+  "similarity": "1.0",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "7313619000259",
+  "gtin2": "7313619001416",
+  "stratum": "proceed_survivor",
+  "similarity": "0.8181818181818182",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7313619001416",
+  "gtin2": "7313619000259",
+  "stratum": "proceed_survivor",
+  "similarity": "0.8181818181818182",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "5710176002030",
+  "gtin2": "5710176004867",
+  "stratum": "proceed_survivor",
+  "similarity": "0.3333333333333333",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "5710176004867",
+  "gtin2": "5710176002030",
+  "stratum": "proceed_survivor",
+  "similarity": "0.3333333333333333",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "688267000799",
+  "gtin2": "688267000850",
+  "stratum": "proceed_survivor",
+  "similarity": "0.25",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "688267000850",
+  "gtin2": "688267000799",
+  "stratum": "proceed_survivor",
+  "similarity": "0.25",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "4000349500274",
+  "gtin2": "4000349500298",
+  "stratum": "proceed_survivor",
+  "similarity": "0.8333333333333334",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "4000349500298",
+  "gtin2": "4000349500274",
+  "stratum": "proceed_survivor",
+  "similarity": "0.8333333333333334",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "4770301232238",
+  "gtin2": "4770301238650",
+  "stratum": "proceed_survivor",
+  "similarity": "1.0",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "4770301238650",
+  "gtin2": "4770301232238",
+  "stratum": "proceed_survivor",
+  "similarity": "1.0",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3291330006054",
+  "gtin2": "3291337605274",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5714285714285714",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "3291337605274",
+  "gtin2": "3291330006054",
+  "stratum": "proceed_survivor",
+  "similarity": "0.5714285714285714",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "7310867561631",
+  "gtin2": "7310867565936",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.2857142857142857",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7310867565936",
+  "gtin2": "7310867561631",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.2857142857142857",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "628451056164",
+  "gtin2": "628451056201",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "628451056201",
+  "gtin2": "628451056164",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "8713300051642",
+  "gtin2": "8720157462705",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.36363636363636365",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "8720157462705",
+  "gtin2": "8713300051642",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.36363636363636365",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "5012876107498",
+  "gtin2": "5012876388064",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.625",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "5012876388064",
+  "gtin2": "5012876107498",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.625",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3292090000245",
+  "gtin2": "3292090000252",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.625",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "3292090000252",
+  "gtin2": "3292090000245",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.625",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "8713300049755",
+  "gtin2": "8720157463863",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.38461538461538464",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "8720157463863",
+  "gtin2": "8713300049755",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.38461538461538464",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "6415130095644",
+  "gtin2": "7310865085634",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5384615384615384",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7310865085634",
+  "gtin2": "6415130095644",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5384615384615384",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "8713300049847",
+  "gtin2": "8720157401247",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "8720157401247",
+  "gtin2": "8713300049847",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "7313619000433",
+  "gtin2": "7313619001270",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.35714285714285715",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7313619001270",
+  "gtin2": "7313619000433",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.35714285714285715",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3760225491744",
+  "gtin2": "3760225493052",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.45454545454545453",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "3760225493052",
+  "gtin2": "3760225491744",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.45454545454545453",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "7340116870016",
+  "gtin2": "7340116879484",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7340116879484",
+  "gtin2": "7340116870016",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "8437016390023",
+  "gtin2": "8437016390108",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.6",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "8437016390108",
+  "gtin2": "8437016390023",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.6",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3124480189158",
+  "gtin2": "5410221306143",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "5410221306143",
+  "gtin2": "3124480189158",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3760212620195",
+  "gtin2": "3760212620201",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5833333333333334",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "3760212620201",
+  "gtin2": "3760212620195",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5833333333333334",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3564700813621",
+  "gtin2": "3564700814260",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5555555555555556",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "3564700814260",
+  "gtin2": "3564700813621",
+  "stratum": "hardno_newly_minted",
+  "similarity": "0.5555555555555556",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "4006220014984",
+  "gtin2": "4006220019446",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.5384615384615384",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "4006220019446",
+  "gtin2": "4006220014984",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.5384615384615384",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "8715600244328",
+  "gtin2": "87338256",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "87338256",
+  "gtin2": "8715600244328",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "4250616677240",
+  "gtin2": "4250616677271",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "4250616677271",
+  "gtin2": "4250616677240",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3272030008234",
+  "gtin2": "3272030014235",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.7142857142857143",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "3272030014235",
+  "gtin2": "3272030008234",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.7142857142857143",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "5705010079293",
+  "gtin2": "5705010079309",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.75",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "5705010079309",
+  "gtin2": "5705010079293",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.75",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "6415130027942",
+  "gtin2": "6415130048589",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.5555555555555556",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "6415130048589",
+  "gtin2": "6415130027942",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.5555555555555556",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "5201005001824",
+  "gtin2": "5201005004443",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.3076923076923077",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "5201005004443",
+  "gtin2": "5201005001824",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.3076923076923077",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "852750003035",
+  "gtin2": "852750003059",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.42857142857142855",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "852750003059",
+  "gtin2": "852750003035",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.42857142857142855",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "3265261310894",
+  "gtin2": "3265261606676",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.4444444444444444",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "3265261606676",
+  "gtin2": "3265261310894",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.4444444444444444",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "8437010011030",
+  "gtin2": "8437010011269",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "8437010011269",
+  "gtin2": "8437010011030",
+  "stratum": "fallback_newly_minted",
+  "similarity": "0.6666666666666666",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "7611612514842",
+  "gtin2": "7611612515054",
+  "stratum": "hardno_kept",
+  "similarity": "0.125",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7611612515054",
+  "gtin2": "7611612514842",
+  "stratum": "hardno_kept",
+  "similarity": "0.125",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "622356615358",
+  "gtin2": "622356643252",
+  "stratum": "hardno_kept",
+  "similarity": "0.375",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "622356643252",
+  "gtin2": "622356615358",
+  "stratum": "hardno_kept",
+  "similarity": "0.375",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "7310050005355",
+  "gtin2": "7310050106106",
+  "stratum": "hardno_kept",
+  "similarity": "0.16666666666666666",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7310050106106",
+  "gtin2": "7310050005355",
+  "stratum": "hardno_kept",
+  "similarity": "0.16666666666666666",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "87222531",
+  "gtin2": "87338669",
+  "stratum": "hardno_kept",
+  "similarity": "0.5",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "87338669",
+  "gtin2": "87222531",
+  "stratum": "hardno_kept",
+  "similarity": "0.5",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "4002627001084",
+  "gtin2": "4002627403659",
+  "stratum": "hardno_kept",
+  "similarity": "0.6",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "4002627403659",
+  "gtin2": "4002627001084",
+  "stratum": "hardno_kept",
+  "similarity": "0.6",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "6415712610562",
+  "gtin2": "6438574025916",
+  "stratum": "hardno_kept",
+  "similarity": "0.6",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "6438574025916",
+  "gtin2": "6415712610562",
+  "stratum": "hardno_kept",
+  "similarity": "0.6",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "7035620011221",
+  "gtin2": "7035620038082",
+  "stratum": "hardno_kept",
+  "similarity": "0.13333333333333333",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "7035620038082",
+  "gtin2": "7035620011221",
+  "stratum": "hardno_kept",
+  "similarity": "0.13333333333333333",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "5449000216496",
+  "gtin2": "5449000227645",
+  "stratum": "hardno_kept",
+  "similarity": "0.14285714285714285",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "5449000227645",
+  "gtin2": "5449000216496",
+  "stratum": "hardno_kept",
+  "similarity": "0.14285714285714285",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "5000112627428",
+  "gtin2": "5449000227638",
+  "stratum": "hardno_kept",
+  "similarity": "0.125",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "5449000227638",
+  "gtin2": "5000112627428",
+  "stratum": "hardno_kept",
+  "similarity": "0.125",
+  "copy": "b_swapped"
+ },
+ {
+  "gtin1": "8427406010815",
+  "gtin2": "8427406012314",
+  "stratum": "hardno_kept",
+  "similarity": "0.4444444444444444",
+  "copy": "a_order"
+ },
+ {
+  "gtin1": "8427406012314",
+  "gtin2": "8427406010815",
+  "stratum": "hardno_kept",
+  "similarity": "0.4444444444444444",
+  "copy": "b_swapped"
+ }
+]
