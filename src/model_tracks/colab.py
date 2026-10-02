@@ -81,8 +81,8 @@ root=pathlib.Path({backend.REMOTE_ROOT!r})
 archive_path=pathlib.Path({remote_zip!r})
 if hashlib.sha256(archive_path.read_bytes()).hexdigest() != {file_hash(archive)!r}:
     raise ValueError("prepared all-track upload mismatch")
-subprocess.run(["git","fetch",{backend.GIT_REMOTE_NAME!r},{metadata['revision']!r}],cwd=root,check=True)
-subprocess.run(["git","checkout","--detach",{metadata['revision']!r}],cwd=root,check=True)
+ subprocess.run(["git","fetch",{backend.GIT_REMOTE_NAME!r},{backend.BRANCH!r}],cwd=root,check=True)
+ subprocess.run(["git","checkout","--detach",{metadata['revision']!r}],cwd=root,check=True)
 with zipfile.ZipFile(archive_path) as archive:
     for member in archive.infolist():
         if not (root/member.filename).resolve().is_relative_to(root.resolve()):
