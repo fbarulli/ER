@@ -45,6 +45,7 @@ def verify(sample_path, checkpoint_path, records):
         forward = three_way_gate(records[a], records[b])
         reverse = three_way_gate(records[b], records[a])
         replay.append({"gtin1": a, "gtin2": b, "stratum": orders[0]["stratum"],
+                       "input_scope": orders[0].get("input_scope", "first_source_listing"),
                        "scores": [x["noul"] for x in orders],
                        "mean_score": sum(x["noul"] for x in orders)/2,
                        "order_gap": abs(orders[0]["noul"]-orders[1]["noul"]),
@@ -54,7 +55,17 @@ def verify(sample_path, checkpoint_path, records):
         scores = [x["noul"] for x in rows if x["stratum"] == stratum]
         strata[stratum] = {"calls": len(scores), "mean": sum(scores)/len(scores),
                            "below_0_2": sum(x < .2 for x in scores), "above_0_8": sum(x > .8 for x in scores)}
-    return {"sample": sample_path.name, "checkpoint": checkpoint_path.name,
+    cohorts = {}
+    for scope in sorted({x['input_scope'] for x in replay}):
+        scope_pairs = [x for x in replay if x['input_scope'] == scope]
+        cohorts[scope] = {}
+        for decision in ('proceed','hard_no','fallback'):
+            subset = [x for x in scope_pairs if x['current_gate']['decision'] == decision]
+            cohorts[scope][decision] = {'pairs':len(subset),
+                'mean_score':sum(x['mean_score'] for x in subset)/len(subset) if subset else None,
+                'both_below_0_2':sum(max(x['scores']) < .2 for x in subset),
+                'both_above_0_8':sum(min(x['scores']) > .8 for x in subset)}
+    return {"sample": sample_path.name, "input_cohorts":cohorts, "checkpoint": checkpoint_path.name,
             "staged_calls": len(sample), "completed_calls": len(rows), "unique_pairs": len(pairs),
             "integrity_errors": errors, "strata": strata,
             "max_order_gap": max(x["order_gap"] for x in replay),
@@ -70,7 +81,7 @@ def verify(sample_path, checkpoint_path, records):
 def main():
     records = canonical_records_from_csv()
     reports = [verify(ROOT / "jev" / f"sample_doubled{suffix}.json",
-                      ROOT / "jev" / f"audit_results{suffix}.jsonl", records) for suffix in ("", "_2", "_3")]
+                      ROOT / "jev" / f"audit_results{suffix}.jsonl", records) for suffix in ("", "_2", "_3", "_4")]
     out = ROOT / "jev" / "verification_results.json"
     out.write_text(json.dumps(reports, indent=2) + "\n")
     for report in reports:

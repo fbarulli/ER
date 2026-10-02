@@ -20,11 +20,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--seed', type=int, default=43)
     ap.add_argument('--pairs', type=int, default=500)
+    ap.add_argument('--round', type=int, default=3)
     ap.add_argument('--pool-per-stratum', type=int, default=400)
     args = ap.parse_args()
     if args.pairs < 1 or args.pool_per_stratum < 1:
         ap.error('pair and pool counts must be positive')
-    output_path = ROOT/'jev/sample_doubled_3.json'
+    suffix = f'_{args.round}'
+    output_path = ROOT/'jev'/f'sample_doubled{suffix}.json'
+    checkpoint_path = ROOT/'jev'/f'audit_results{suffix}.jsonl'
+    if checkpoint_path.exists():
+        ap.error('checkpoint already exists; use a new round to protect tested samples')
     retained = [x for x in json.loads(output_path.read_text()) if x['copy'] == 'a_order'] if output_path.exists() else []
     if len(retained) > args.pairs:
         ap.error('requested total is smaller than the already reserved sample')
@@ -34,9 +39,14 @@ def main():
         for line in (ROOT/'jev'/name).read_text().splitlines():
             row = json.loads(line)
             excluded.add(tuple(sorted((row['gtin1'], row['gtin2']))))
+    ledger_path = ROOT/'jev/sample_ledger.json'
+    if ledger_path.exists():
+        for item in json.loads(ledger_path.read_text()):
+            if item['round'] != args.round:
+                excluded.update(tuple(pair) for pair in item['pairs'])
     # Reserve every previously staged pair as well, including unsuccessful calls.
     for sample_path in sorted((ROOT/'jev').glob('sample_doubled*.json')):
-        if sample_path.name == 'sample_doubled_3.json': continue
+        if sample_path == output_path: continue
         for row in json.loads(sample_path.read_text()):
             excluded.add(tuple(sorted((row['gtin1'], row['gtin2']))))
     pools = defaultdict(list)
@@ -117,14 +127,14 @@ def main():
         reverse = three_way_gate(records[row['gtin2']], records[row['gtin1']])
         assert reverse['decision'] == row['gate']
         doubled.extend([{**row,'copy':'a_order'}, {**row,'gtin1':row['gtin2'],'gtin2':row['gtin1'], 'gate_reason':reverse['reason'], 'universe_states':reverse_states,'copy':'b_swapped'}])
-    out = ROOT/'jev/sample_doubled_3.json'
+    out = output_path
     out.write_text(json.dumps(doubled, indent=1)+'\n')
     summary = {'seed':args.seed,'retained_pairs':len(retained),'requested_pairs':args.pairs,'unique_pairs':len(selected),'calls':len(doubled),
                'excluded_previously_staged_or_tested_pairs':len(excluded), 'candidate_pairs_replayed':len(candidates),
                'allocations':allocation, 'attribute_coverage':{'|'.join(k):v for k,v in sorted(coverage.items())},
                'source_sha256':{name:hashlib.sha256((ROOT/'data'/name).read_bytes()).hexdigest() for name in ('gate_results.csv','canonical_records.csv')},
                'meaning':'Positive/negative are CURRENT gate decisions, not human ground truth. Similarity high >= 0.8; lower < 0.8. Attribute-balanced selection within each stratum from a deterministic candidate subsample; not a prevalence estimate.'}
-    (ROOT/'jev/sample_3_summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+    (ROOT/'jev'/f'sample_{args.round}_summary.json').write_text(json.dumps(summary,indent=2)+'\n')
     print(json.dumps({k:v for k,v in summary.items() if k not in ('attribute_coverage','source_sha256')},indent=2))
     print('Staged only; no live calls.')
 

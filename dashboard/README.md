@@ -84,3 +84,8 @@ JEV audit samples and results are available at `/jev`. The page reads the
 `jev/` sample ledger, current checkpoints, round-3 attribute coverage, and
 saved verification results on each request. Round 3 contains 500 unique
 pairs (1,000 ordered calls), tested via OpenRouter (all 1,000 calls completed).
+
+The JEV page now defaults to the latest fresh-sample round (round 4), with
+250 gate-data pairs and 250 original-data pairs. It displays per-cohort
+judgments and the deliberately repeated same-pair comparison (round 5).
+Downloads include frozen inputs, successful results, and run provenance.

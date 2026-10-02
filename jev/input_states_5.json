@@ -1,0 +1,165 @@
+{
+ "gate_data": {
+  "810036262576": {
+   "gtin": "810036262576",
+   "salient_ngrams": "['morey_time', 'mores_graham_crackers_flavored']",
+   "mode_brand": "Bones Coffee Company",
+   "mode_type": "coffee",
+   "dropped_redundant_ngrams": "['cold_brew_latte_mores', 'brew_latte_mores_graham', 'latte_mores_graham_crackers', 'no_added_sugar', 'still', 'sugar']",
+   "mode_flavor": "coffee",
+   "canonical": "bones coffee company still no_added_sugar latte morey_time mores_graham_crackers_flavored",
+   "pack_set": [
+    4
+   ],
+   "sweetener_type_set": [],
+   "sweetener_set": [
+    "no_added_sugar"
+   ],
+   "package_type_set": [
+    "can"
+   ],
+   "volume_set": [
+    325.0
+   ],
+   "pulp_set": [],
+   "sweetening_set": [],
+   "packaging_level_set": [],
+   "package_material_set": [],
+   "attribute_consistency_flags": [],
+   "carbonation_set": [
+    "still"
+   ],
+   "organic_set": [],
+   "flavor_set": [
+    "coffee",
+    "latte"
+   ],
+   "pack_consistency": 1.0,
+   "pack_confidence": 0.875,
+   "volume_confidence": 0.867,
+   "volume_consistency": 1.0,
+   "n_titles": 2,
+   "description_evidence": "[\"Brand Bones Coffee Company \\nItem Form Liquid \\nFlavor Cold Brew Latte S'mores & Graham Crackers \\nUnit Count 44.00 Fl Oz \\nNumber of Items 1 \\n* * *\\n# About this item \\n* Perfect Campfire Flavor: Have a ta\", '[ingredients_start]\\n Milk, Soy May Contain: Peanuts, Tree Nuts, Wheat Dietary Needs: Gluten- Free Coffee Bean Type: Arabica Beans Caffeine claim: Caffeinated Coffee roast: Medium Roast Coffee variety']",
+   "breadcrumb_evidence": "['[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Coffee\"\",\"\" Iced Coffee & Cold- Brew\"\"]', '[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Coffee\"\",\"\" Cold Brew & Bottled Coffee\"\"]']",
+   "universe_evidence": "{\"caffeine\": [\"15-25mg\"], \"carbonization\": [\"still\"], \"coffee type\": [\"arabica\"], \"diets\": [\"vegan\"], \"environmentally friendly\": [\"climate pledge friendly\", \"environmentally friendly\"], \"flavour\": [\"latte\"], \"free from\": [\"dairy free\", \"no allergens\", \"no caffeine\"], \"geographic origin\": [\"united states\"], \"health claims\": [\"no added sugar\"], \"juice content\": [\"0-2%\"], \"roast type\": [\"medium\"], \"rtd coffee style\": [\"cold brew\", \"latte\"], \"sustainable sourcing\": [\"from sustainable sources (product)\", \"rainforest alliance\"], \"weight\": [\"312\"]}",
+   "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 325.0}, {\"column\": \"category\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"coffee\"]}, {\"column\": \"category\", \"field\": \"flavor\", \"listing\": 1, \"value\": [\"coffee\"]}, {\"column\": \"title\", \"confidence\": 0.75, \"field\": \"volume_ml\", \"listing\": 1, \"value\": 325.0}, {\"column\": \"title\", \"confidence\": 0.85, \"field\": \"pack_qty\", \"listing\": 0, \"value\": 4}, {\"column\": \"title\", \"confidence\": 0.85, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 325.0}, {\"column\": \"title\", \"confidence\": 0.9, \"field\": \"pack_qty\", \"listing\": 1, \"value\": 4}, {\"column\": \"title\", \"field\": \"measurement\", \"listing\": 0, \"value\": {\"ambiguous\": false, \"column\": \"title\", \"end\": 134, \"raw_match\": \"11 Fl Oz\", \"role\": \"package_volume\", \"start\": 126, \"unit\": \"fl oz\", \"value\": 11.0}}, {\"column\": \"title\", \"field\": \"measurement\", \"listing\": 1, \"value\": {\"ambiguous\": true, \"column\": \"title\", \"end\": 49, \"raw_match\": \"11 oz\", \"role\": \"package_volume\", \"start\": 44, \"unit\": \"oz\", \"value\": 11.0}}, {\"column\": \"title\", \"field\": \"pack_quantity\", \"listing\": 0, \"value\": {\"column\": \"title\", \"confidence\": 0.85, \"count\": 4, \"end\": 142, \"raw_match\": \"4 Pack\", \"role\": \"unit_count\", \"rule\": \"count\", \"start\": 136}}, {\"column\": \"title\", \"field\": \"pack_quantity\", \"listing\": 1, \"value\": {\"column\": \"title\", \"confidence\": 0.9, \"count\": 4, \"end\": 59, \"raw_match\": \"Pack of 4\", \"role\": \"unit_count\", \"rule\": \"pack_of\", \"start\": 50}}, {\"column\": \"title\", \"field\": \"subtype\", \"listing\": 0, \"value\": \"latte\"}, {\"column\": \"title\", \"field\": \"subtype\", \"listing\": 1, \"value\": \"latte\"}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"coffee\"}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 1, \"value\": \"coffee\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"still\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"coffee\", \"latte\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 1, \"value\": [\"coffee\", \"latte\"]}, {\"column\": \"title+attributes\", \"field\": \"sweetener\", \"listing\": 0, \"value\": [\"no_added_sugar\"]}]"
+  },
+  "810036266772": {
+   "gtin": "810036266772",
+   "salient_ngrams": "['brew_sustainable_sourcing_sustainable', 'high_voltage']",
+   "mode_brand": "Bones Coffee Company",
+   "mode_type": "coffee",
+   "dropped_redundant_ngrams": "['latte_cold_brew_sustainable', 'cold_brew_sustainable_sourcing', 'cold_brew_sustainable', 'no_added_sugar', 'no_sugar', 'still']",
+   "mode_flavor": "coffee",
+   "canonical": "bones coffee company still no_added_sugar no_sugar latte brew_sustainable_sourcing high_voltage",
+   "pack_set": [
+    4
+   ],
+   "sweetener_type_set": [],
+   "sweetener_set": [
+    "no_added_sugar",
+    "no_sugar"
+   ],
+   "package_type_set": [
+    "can"
+   ],
+   "volume_set": [
+    325.0
+   ],
+   "pulp_set": [],
+   "sweetening_set": [],
+   "packaging_level_set": [],
+   "package_material_set": [],
+   "attribute_consistency_flags": [],
+   "carbonation_set": [
+    "still"
+   ],
+   "organic_set": [],
+   "flavor_set": [
+    "coffee",
+    "latte"
+   ],
+   "pack_consistency": 1.0,
+   "pack_confidence": 0.875,
+   "volume_confidence": 0.867,
+   "volume_consistency": 1.0,
+   "n_titles": 2,
+   "description_evidence": "['Brand Bones Coffee Company \\nItem Form Liquid \\nFlavor Cold Brew Latte Sweet and Creamy \\nPackage Information Can \\nUnit Count 44.00 Fl Oz \\n* * *\\n# About this item \\n* 100% Cold Brewed Coffee, Perfectly sw', '[ingredients_start]\\n Milk, Soy May Contain: Peanuts, Tree Nuts, Wheat Dietary Needs: Gluten- Free Coffee Bean Type: Arabica Beans Caffeine claim: Caffeinated Coffee roast: Medium Roast Coffee variety']",
+   "breadcrumb_evidence": "['[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Coffee\"\",\"\" Ready to Drink Liquid Coffee\"\"]', '[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Coffee\"\",\"\" Cold Brew & Bottled Coffee\"\"]']",
+   "universe_evidence": "{\"caffeine\": [\"15-25mg\", \"50-100mg\"], \"carbonization\": [\"still\"], \"coffee type\": [\"arabica\"], \"diets\": [\"vegan\"], \"flavour\": [\"latte\"], \"free from\": [\"dairy free\", \"no caffeine\"], \"geographic origin\": [\"united states\"], \"health claims\": [\"no added sugar\", \"no sugar\"], \"juice content\": [\"0-2%\"], \"pack type\": [\"can\", \"tin\"], \"roast type\": [\"french\", \"medium\"], \"rtd coffee style\": [\"cold brew\", \"latte\"], \"sustainable sourcing\": [\"from sustainable sources (product)\"], \"weight\": [\"312\"]}",
+   "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 325.0}, {\"column\": \"category\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"coffee\"]}, {\"column\": \"category\", \"field\": \"flavor\", \"listing\": 1, \"value\": [\"coffee\"]}, {\"column\": \"title\", \"confidence\": 0.75, \"field\": \"volume_ml\", \"listing\": 1, \"value\": 325.0}, {\"column\": \"title\", \"confidence\": 0.85, \"field\": \"pack_qty\", \"listing\": 0, \"value\": 4}, {\"column\": \"title\", \"confidence\": 0.85, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 325.0}, {\"column\": \"title\", \"confidence\": 0.9, \"field\": \"pack_qty\", \"listing\": 1, \"value\": 4}, {\"column\": \"title\", \"field\": \"measurement\", \"listing\": 0, \"value\": {\"ambiguous\": false, \"column\": \"title\", \"end\": 120, \"raw_match\": \"11 Fl Oz\", \"role\": \"package_volume\", \"start\": 112, \"unit\": \"fl oz\", \"value\": 11.0}}, {\"column\": \"title\", \"field\": \"measurement\", \"listing\": 1, \"value\": {\"ambiguous\": true, \"column\": \"title\", \"end\": 49, \"raw_match\": \"11 oz\", \"role\": \"package_volume\", \"start\": 44, \"unit\": \"oz\", \"value\": 11.0}}, {\"column\": \"title\", \"field\": \"pack_quantity\", \"listing\": 0, \"value\": {\"column\": \"title\", \"confidence\": 0.85, \"count\": 4, \"end\": 128, \"raw_match\": \"4 Pack\", \"role\": \"unit_count\", \"rule\": \"count\", \"start\": 122}}, {\"column\": \"title\", \"field\": \"pack_quantity\", \"listing\": 1, \"value\": {\"column\": \"title\", \"confidence\": 0.9, \"count\": 4, \"end\": 59, \"raw_match\": \"Pack of 4\", \"role\": \"unit_count\", \"rule\": \"pack_of\", \"start\": 50}}, {\"column\": \"title\", \"field\": \"subtype\", \"listing\": 0, \"value\": \"latte\"}, {\"column\": \"title\", \"field\": \"subtype\", \"listing\": 1, \"value\": \"latte\"}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"coffee\"}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 1, \"value\": \"coffee\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"still\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"coffee\", \"latte\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 1, \"value\": [\"coffee\", \"latte\"]}, {\"column\": \"title+attributes\", \"field\": \"sweetener\", \"listing\": 0, \"value\": [\"no_added_sugar\", \"no_sugar\"]}, {\"column\": \"title+attributes+description\", \"field\": \"negated_sweetener_type\", \"listing\": 0, \"value\": [\"sugar\"]}]"
+  }
+ },
+ "original_data": {
+  "810036262576": {
+   "gtin": "810036262576",
+   "listings": [
+    {
+     "attributes": "Diets: vegan; Flavour: latte, coffee; Volume: 325; Carbonization: still; Juice Content: 0-2%; Free From: no allergens, dairy free; Environmentally Friendly: environmentally friendly, climate pledge friendly; Caffeine: 15-25 mg; Coffee Type: arabica; RTD Coffee Style: latte, cold brew; Roast Type: medium; Geographic Origin: united states; Health Claims: no added sugar; Sustainable Sourcing: from sustainable sources (product), rainforest alliance",
+     "barcode": "810036262576",
+     "brand": "Bones Coffee Company",
+     "category": "RTD Coffee",
+     "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Coffee\"\",\"\" Iced Coffee & Cold- Brew\"\"]",
+     "country": "USA",
+     "description": "Brand Bones Coffee Company \nItem Form Liquid \nFlavor Cold Brew Latte S'mores & Graham Crackers \nUnit Count 44.00 Fl Oz \nNumber of Items 1 \n* * *\n# About this item \n* Perfect Campfire Flavor: Have a ta",
+     "image_url": "https://m.media-amazon.com/images/I/71Zdnvp8BDL._AC_UL320_.jpg",
+     "price": "11.92",
+     "product_id": "747031267",
+     "retailer": "amazon",
+     "title": "morey Time Cold Brew Latte S'mores & Graham Crackers Flavored Coffee | Ready To Drink 100% Coffee Can Smooth Sweet Blend Cans 11 Fl Oz (4 Pack), 44.0 Fl",
+     "url": "https://www.amazon.com/dp/B0BWSMNPK3"
+    },
+    {
+     "attributes": "Geographic Origin: united states; Weight: 312; Sustainable Sourcing: from sustainable sources (product); Juice Content: 0-2%; RTD Coffee Style: latte, cold brew; Caffeine: 15-25 mg; Roast Type: medium; Flavour: latte, coffee; Free From: no caffeine; Coffee Type: arabica",
+     "barcode": "810036262576",
+     "brand": "Bones Coffee Company",
+     "category": "RTD Coffee",
+     "category_path": "[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Coffee\"\",\"\" Cold Brew & Bottled Coffee\"\"]",
+     "country": "USA",
+     "description": "[ingredients_start]\n Milk, Soy May Contain: Peanuts, Tree Nuts, Wheat Dietary Needs: Gluten- Free Coffee Bean Type: Arabica Beans Caffeine claim: Caffeinated Coffee roast: Medium Roast Coffee variety",
+     "image_url": "https://target.scene7.com/is/image/Target/GUEST_1c73255a-1acd-43a8-83d3-af599c0b7b45",
+     "price": "15.99",
+     "product_id": "964245012",
+     "retailer": "Target",
+     "title": "Bones Coffee Cold Brew Latte - S'morey Time 11 oz Pack of 4",
+     "url": "https://www.target.com/p/bones-coffee-company-s-morey-time-flavored-cold-brew-coffee-s-mores-graham-crackers-flavor/-/A-91254933"
+    }
+   ]
+  },
+  "810036266772": {
+   "gtin": "810036266772",
+   "listings": [
+    {
+     "attributes": "Carbonization: still; Volume: 325; Geographic Origin: united states; Free From: dairy free; Roast Type: french, medium; Diets: vegan; Coffee Type: arabica; Juice Content: 0-2%; Caffeine: 50-100 mg; Flavour: latte, coffee; Pack Type: Tin; RTD Coffee Style: latte, cold brew; Sustainable Sourcing: from sustainable sources (product); Health Claims: no added sugar, no sugar",
+     "barcode": "810036266772",
+     "brand": "Bones Coffee Company",
+     "category": "RTD Coffee",
+     "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Coffee\"\",\"\" Ready to Drink Liquid Coffee\"\"]",
+     "country": "USA",
+     "description": "Brand Bones Coffee Company \nItem Form Liquid \nFlavor Cold Brew Latte Sweet and Creamy \nPackage Information Can \nUnit Count 44.00 Fl Oz \n* * *\n# About this item \n* 100% Cold Brewed Coffee, Perfectly sw",
+     "image_url": "https://m.media-amazon.com/images/I/71oYkue7lDL._AC_UL320_.jpg",
+     "price": "7.99",
+     "product_id": "789837999",
+     "retailer": "amazon",
+     "title": "Bones Coffee Company High Voltage Brewed Latte Coffee in a Can, Ready to Drink Coffee, Sweet and Creamy Flavor (11 Fl Oz, 4 Pack)",
+     "url": "https://www.amazon.com/dp/B0C9VMWH6M"
+    },
+    {
+     "attributes": "Weight: 312; Coffee Type: arabica; Flavour: latte, coffee; Roast Type: medium; Geographic Origin: united states; Juice Content: 0-2%; Free From: no caffeine; Pack Type: Can; RTD Coffee Style: latte, cold brew; Sustainable Sourcing: from sustainable sources (product); Caffeine: 15-25 mg",
+     "barcode": "810036266772",
+     "brand": "Bones Coffee Company",
+     "category": "RTD Coffee",
+     "category_path": "[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Coffee\"\",\"\" Cold Brew & Bottled Coffee\"\"]",
+     "country": "USA",
+     "description": "[ingredients_start]\n Milk, Soy May Contain: Peanuts, Tree Nuts, Wheat Dietary Needs: Gluten- Free Coffee Bean Type: Arabica Beans Caffeine claim: Caffeinated Coffee roast: Medium Roast Coffee variety",
+     "image_url": "https://target.scene7.com/is/image/Target/GUEST_0cfabecd-d2a2-46ff-b1d3-f8fc0b87f59c",
+     "price": "15.99",
+     "product_id": "965021529",
+     "retailer": "Target",
+     "title": "Bones Coffee Cold Brew Latte - High Voltage 11 oz Pack of 4",
+     "url": "https://www.target.com/p/bones-coffee-company-high-voltage-flavored-cold-brew-coffee-sweet-and-cream-flavor/-/A-91254946"
+    }
+   ]
+  }
+ }
+}

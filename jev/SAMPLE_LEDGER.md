@@ -32,3 +32,22 @@ Round 3 completed all 1,000 calls via OpenRouter (typesafe/jev-1.13).
 The initial sandbox DNS errors are preserved separately in audit_errors_3.jsonl;
 audit_results_3.jsonl contains the successful checkpoint. audit_run_3.json
 records the adapter, model, question, completion time, and artifact hashes.
+
+Round 4: 500 fresh pairs, 1,000 completed OpenRouter calls. Excludes all
+635 prior pairs. Stratified split seed 44 assigns 250 pairs to merged gate
+inputs and 250 to all original source listings. Both halves have 84 proceed,
+83 negative, and 83 fallback pairs, with balanced similarity bands. Gate
+inputs omit source_rows and do not include gate decisions. Original inputs
+retain all source fields and full descriptions. Independent cohorts do not
+establish the causal effect of the input representation.
+
+Round 5: deliberate controlled repeat of round-4 pair 810036262576 /
+810036266772 (Bones Coffee S'morey Time versus High Voltage). One unique
+pair, both input representations, both orders: four completed OpenRouter
+calls. This repetition is intentional and must not be counted as four
+unique pairs. sample_control_5.json and audit_results_5.jsonl preserve it.
+
+Rounds 4–5 save frozen input_states files, request SHA-256 hashes, raw
+responses, model/adapter metadata, and timestamps. Reproduce verification
+with `.venv/bin/python jev/verify_frozen_runs.py`. The ledger now records
+1,135 distinct reserved pairs; round 5 repeats one of those intentionally.

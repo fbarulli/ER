@@ -1,0 +1,18 @@
+{
+  "seed": null,
+  "unique_pairs": 1,
+  "calls": 4,
+  "input_cohorts": {
+    "gate_data": {
+      "controlled_repeat": 1
+    },
+    "original_data": {
+      "controlled_repeat": 1
+    }
+  },
+  "input_definitions": {
+    "gate_data": "Merged canonical gate evidence; source_rows omitted; no gate verdict provided to JEV.",
+    "original_data": "All original source_rows with full fields and untruncated descriptions."
+  },
+  "comparison": "Intentional repeat of the same round-4 pair under both input formats and both orders."
+}

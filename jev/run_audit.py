@@ -6,6 +6,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import math
+from datetime import datetime, timezone
 import json
 import sys
 import threading
@@ -15,14 +18,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from client import JevClient
+from client import JevClient, ADAPTERS, build_questions
 from state import load_record_index, listing_state
 
 AUDIT_JSON = Path(__file__).parent / "sample_doubled.json"
 OUT_JSONL = Path(__file__).parent / "audit_results.jsonl"
 
 
-def load_done(output: Path = OUT_JSONL) -> set[tuple[str, str]]:
+def load_done(output: Path = OUT_JSONL) -> set[tuple[str, str, str]]:
     if not output.exists():
         return set()
     keys = set()
@@ -30,7 +33,7 @@ def load_done(output: Path = OUT_JSONL) -> set[tuple[str, str]]:
         try:
             r = json.loads(line)
             if r.get("status") == "ok":
-                keys.add((r["gtin1"], r["gtin2"]))
+                keys.add((r.get("input_scope", ""), r["gtin1"], r["gtin2"]))
         except (json.JSONDecodeError, KeyError):
             continue
     return keys
@@ -42,6 +45,7 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--staging", type=Path, default=AUDIT_JSON)
     ap.add_argument("--out", type=Path, default=OUT_JSONL)
+    ap.add_argument("--states", type=Path, help="Frozen per-cohort record inputs")
     args = ap.parse_args()
     if args.workers < 1:
         ap.error("--workers must be positive")
@@ -51,20 +55,38 @@ def main() -> None:
     with args.staging.open(encoding="utf-8") as fh:
         sample = json.load(fh)
     done = load_done(args.out)
-    todo = [s for s in sample if (s["gtin1"], s["gtin2"]) not in done]
+    todo = [s for s in sample if (s.get("input_scope", ""), s["gtin1"], s["gtin2"]) not in done]
     print(f"adapter={args.adapter} staged={len(sample)} done={len(done)} todo={len(todo)}", flush=True)
     if not todo:
         return
 
-    records = load_record_index()
-    client = JevClient(args.adapter)
+    records = load_record_index() if not args.states else None
+    frozen = json.loads(args.states.read_text()) if args.states else None
+    if frozen:
+        for s in sample:
+            for field in ("gtin1", "gtin2"):
+                if s[field] not in frozen[s["input_scope"]]:
+                    ap.error(f"frozen state missing for {s[field]}")
+    api_key = JevClient(args.adapter).api_key
     lock = threading.Lock()
 
     def job(s):
         try:
-            probs = client.ask_noul({"record_a": listing_state(s["gtin1"], records[s["gtin1"]]),
-                                     "record_b": listing_state(s["gtin2"], records[s["gtin2"]])})
-            row = {**s, "noul": probs.get("is_same_product"), "status": "ok"}
+            state = ({"record_a": frozen[s["input_scope"]][s["gtin1"]],
+                      "record_b": frozen[s["input_scope"]][s["gtin2"]]} if frozen else
+                     {"record_a": listing_state(s["gtin1"], records[s["gtin1"]]),
+                      "record_b": listing_state(s["gtin2"], records[s["gtin2"]])})
+            request = {"model": ADAPTERS[args.adapter]["model"], "state": state, "questions": build_questions()}
+            client = JevClient(args.adapter, api_key=api_key)
+            probs = client.ask_noul(state)
+            score = probs.get("is_same_product")
+            if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) or not 0 <= score <= 1:
+                raise ValueError("invalid same-product score")
+            row = {**s, "noul": score, "status": "ok", "adapter": args.adapter,
+                   "model": ADAPTERS[args.adapter]["model"],
+                   "completed_utc": datetime.now(timezone.utc).isoformat(),
+                   "request_sha256": hashlib.sha256(json.dumps(request).encode()).hexdigest(),
+                   "raw_response": client.last_raw}
         except Exception as e:
             row = {**s, "status": f"error:{str(e)[:160]}"}
         with lock:

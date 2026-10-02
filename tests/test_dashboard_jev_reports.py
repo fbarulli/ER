@@ -35,3 +35,13 @@ def test_artifact_download_rejects_traversal_and_unknown_round(reports):
     with pytest.raises(HTTPException): reports.artifact('../training_prep.md')
     with pytest.raises(HTTPException): reports.jev(round=99)
     assert reports.artifact('sample_doubled_3.json').filename == 'sample_doubled_3.json'
+
+def test_controlled_repeat_displays_all_four_calls_and_both_formats(reports):
+    page=reports.jev(round=5)
+    assert 'Same-pair input comparison' in page
+    assert 'gate_data' in page and 'original_data' in page
+    assert '0.24' in page and '0.06' in page
+    assert '>4</td>' in page
+    latest=reports.jev()
+    assert '<h2>Round 4</h2>' in latest
+    assert 'Judgments by input cohort' in latest

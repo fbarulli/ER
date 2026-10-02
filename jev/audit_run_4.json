@@ -1,0 +1,21 @@
+{
+  "round": 4,
+  "adapter": "openrouter",
+  "model": "typesafe/jev-1.13",
+  "questions": {
+    "is_same_product": {
+      "type": "noul",
+      "instructions": "Do record_a and record_b describe the exact same retail product (same brand, product type, flavor/variant, and pack size), accounting for typos, abbreviations, and wording differences?"
+    }
+  },
+  "completed_utc": "2026-10-02T20:15:07.768849+00:00",
+  "calls_completed": 1000,
+  "unique_pairs": 500,
+  "request_hashes_verified": true,
+  "raw_responses_saved": true,
+  "sha256": {
+    "jev/sample_doubled_4.json": "8ddc0eacea8038d13e462c9c65777ffcedf2b40936e98612b7689837aa866610",
+    "jev/audit_results_4.jsonl": "16b72743c9a6d7a4da591e446a05242d1b1ff432bebefa25b967213d35fb8975",
+    "jev/input_states_4.json": "1a6def84debe41f4cc09b040c0e99116bf894ecc014478406c2a49b6fe2ea6ce"
+  }
+}

@@ -58,3 +58,24 @@ only the 1,000 successes; the 1,000 sandbox DNS failures from the initial
 attempt are retained separately in audit_errors_3.jsonl. The first-source
 versus merged-input limitation remains. No gate changes were made from
 these new judgments.
+
+Round 4 — 50/50 evidence split
+
+All 1,000 calls succeeded. All frozen request hashes and raw response scores
+verified; there are no gate decision asymmetries or checkpoint integrity
+errors. Each cohort has 250 pairs: 84 proceed, 83 rejected, 83 fallback.
+Gate-data proceeds include 60/84 pairs with both JEV scores below 0.2;
+original-data proceeds include 68/84. Neither cohort has a rejected pair
+with both scores above 0.8. This independent-cohort comparison does not
+isolate the effect of the evidence representation.
+
+Round 5 — controlled same-pair repeat
+
+Bones Coffee S'morey Time (810036262576) versus High Voltage (810036266772)
+is a gate-approved pair whose original listings explicitly name distinct
+variants, while the captured flavor values share latte/coffee. OpenRouter
+returned 0.24 / 0.06 on merged gate inputs and 0.04 / 0.04 on original
+listings, in original / swapped order respectively. All four responses and
+request hashes verified. Both representations lean against matching;
+merged inputs are less stable in this case. This selected example is not
+a population estimate. control_comparison_5.json records the comparison.
