@@ -141,12 +141,32 @@ parsing. Existing generated-data edits and prepared-worker deletions preserved.
   to review. Direct evidence: URL vanilla/orange now vetoes flavor; sugar
   versus no-added-sugar stays compatible; No Stevia plus declared Stevia
   routes to review. Tests deferred by user.
-- [ ] Missing-flavor supporting evidence gap: capture-correct replay finds
+- [x] Missing-flavor supporting evidence gap: capture-correct replay finds
   86 passing pairs with two-sided made-from sets where neither is a subset.
   Include configured ingredient disagreement as review evidence when flavor
   is missing; preserve hard-veto policy. Evidence includes cabbage/tomato
   juice and Peapod vegetable versus peach/mango juice.
 
+
+- [x] Sweetener absence scope error: `no artificial sweeteners` was emitted
+  as `no_sweeteners`; 3,713 source-field occurrences in the current export.
+  Preserve artificial-only and added-only scopes separately. Natural sugar
+  or stevia presence must not contradict absence of artificial sweeteners.
+
+- [x] Explicit sweetener ingredient capture gap: ingredient reader only
+  recognizes cane/brown/raw sugar and stevia, dropping `made with sugar`
+  and other explicit ingredient phrases (105 title fields, 462 description
+  fields screened). Extend the shared explicit phrase grammar and retain
+  negation; include product-bearing URL/image sources in the consumer.
+
+- [x] Ingredient decision channel still consumes registry sweetening states
+  and unmapped declarations as positive ingredients. Direct source proof:
+  `Sweetener: unsweetened` versus `Sweetener: stevia` invents an ingredient
+  hard veto. Preserve raw registry diagnostics but filter ingredient decisions
+  to recognized ingredients, keeping absence/negation in their own channels.
+  Fixed both canonical resolver and original-source clarification; raw
+  diagnostics persist. Direct proof now proceeds without invented ingredient
+  conflict. Explicit source negation contradictions still review.
 
 Fix-first checkpoint: full 71,623-row extraction has zero errors; existing
 extraction fields change on 16,942 rows and volume/pack assignment on 602.

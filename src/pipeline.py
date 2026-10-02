@@ -574,6 +574,8 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     img_tokens = url_text(image_url)
     url_norm = normalize_text(url_tokens)
     img_norm = normalize_text(img_tokens)
+    sweeteners["sweetener_type"].update(title_sweetener_types(url_tokens))
+    sweeteners["sweetener_type"].update(title_sweetener_types(img_tokens))
     # Category evidence: category_path and category provide
     # product-type signals (flavor hints, carbonation clues)
     # that title/attributes may miss.
@@ -585,7 +587,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     critical = extract_critical_claims(sku_name, attribute)
     description_claims = extract_description_claims(description)
     consistency_flags = set(sweeteners["consistency_flags"])
-    negative_ingredients = negated_sweetener_types(sku_name, attribute, description)
+    negative_ingredients = negated_sweetener_types(sku_name, attribute, description, url_tokens, img_tokens)
     consistency_flags.update(
         f"sweetener_source_conflict:{ingredient}"
         for ingredient in negative_ingredients & sweeteners["sweetener_type"]
@@ -1428,6 +1430,25 @@ def three_way_gate(
         return GateResult(
             decision="fallback", reason=_r.low_consistency
         ).model_dump()
+
+    # Supporting attributes can require review when the critical flavor
+    # evidence is incomplete. They never acquire a hard-veto permission.
+    if not left_info.get("flavor_set") or not right_info.get("flavor_set"):
+        from core.attribute_conflicts import _universe_value
+        supporting = training_cfg().rand_matching.targeted_veto_gates.supporting_feature_review_dimensions
+        specs = attribute_registry()
+        differing_support = []
+        for dimension in supporting:
+            spec = specs[dimension]
+            left = set(_universe_value(left_info, dimension, spec))
+            right = set(_universe_value(right_info, dimension, spec))
+            if left and right and not (left <= right or right <= left):
+                differing_support.append(dimension)
+        if differing_support:
+            return GateResult(
+                decision="fallback",
+                reason=_r.supporting_feature_review + " " + ",".join(sorted(differing_support)),
+            ).model_dump()
 
     return GateResult(
         decision="proceed", reason=_r.clean_proceed

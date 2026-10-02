@@ -314,6 +314,7 @@ gate:
     low_consistency: "Overlap but low consistency"
     clean_proceed: "Known critical attributes compatible"
     source_conflict: "Contradictory source attribute evidence"
+    supporting_feature_review: "Missing flavor evidence with differing supporting attributes:"
 
 # ── brand-differentiation audit (owner theory 2026-10-01) ──────────────────
 # Does between-GTIN card delta exceed within-GTIN (same product,
@@ -549,6 +550,9 @@ rand_matching:
     # identity): water type 14.9%, made from 21.2%, caffeine 3.2% same-GTIN
     # noise.
     veto_dimensions: [volume, pack, package_type, flavor, sweetener, pulp, pack_material]
+    # Two-sided ingredient sets that are neither subsets require review when
+    # flavor is missing. Capture-correct audit: 86 previously passing pairs.
+    supporting_feature_review_dimensions: ["made from"]
     pack_mismatch_veto: true
     volume_mismatch_veto: true
     package_type_mismatch_veto: true

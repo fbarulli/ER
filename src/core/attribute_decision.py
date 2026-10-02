@@ -585,6 +585,15 @@ class AttributeDecisionEngine:
                 continue
             left_value = _universe_value(left, key, spec)
             right_value = _universe_value(right, key, spec)
+            if key == "sweetener":
+                # Retain raw status/unmapped values in the census, while the
+                # identity decision compares only recognized ingredients.
+                from core.sweetener_values import SWEETENER_TYPES
+                ingredients = {token.replace(" ", "_") for token in SWEETENER_TYPES}
+                left_value = frozenset(str(token).replace(" ", "_") for token in left_value
+                                       if str(token).replace(" ", "_") in ingredients)
+                right_value = frozenset(str(token).replace(" ", "_") for token in right_value
+                                        if str(token).replace(" ", "_") in ingredients)
             populated = bool(left_value) and bool(right_value)
             state = _census_state_for_field(
                 left_value,
@@ -782,7 +791,9 @@ class AttributeDecisionEngine:
                             str(t) for t in tokens
                         )
             if ingredient_types:
-                out["sweetener"] = out.get("sweetener", frozenset()) | frozenset(ingredient_types)
+                out["sweetener"] = frozenset(ingredient_types)
+            else:
+                out.pop("sweetener", None)
             if ingredient_source_conflict or negative_ingredients & ingredient_types:
                 out["_sweetener_source_conflict"] = frozenset({"contradiction"})
             return out

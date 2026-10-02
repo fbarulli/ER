@@ -1213,6 +1213,11 @@ class RandMatchingSpec(BaseModel):
         # shared critical dimensions, and it must not be empty: a gate that can
         # veto nothing is a different feature, not a configuration.
         veto_dimensions: list[str] = Field(min_length=1)
+        # Supporting ingredients expose uncertainty when critical flavor is absent.
+        # They never become hard-veto dimensions through this review policy.
+        supporting_feature_review_dimensions: list[Literal["made from"]] = Field(
+            default_factory=list
+        )
         pack_mismatch_veto: bool
         volume_mismatch_veto: bool
         package_type_mismatch_veto: bool
@@ -1855,6 +1860,7 @@ class GateSpec(BaseModel):
         low_consistency: str = Field(min_length=1)
         clean_proceed: str = Field(min_length=1)
         source_conflict: str = Field(min_length=1)
+        supporting_feature_review: str = Field(min_length=1)
 
     reasons: GateReasonsSpec
 

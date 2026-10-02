@@ -19,7 +19,9 @@ SWEETENER_CLAIMS = frozenset({"diet", "no sugar", "no added sugar", "sugar free"
 
 SWEETENING_PATTERNS = {
     "unsweetened": re.compile(r"\bunsweetened\b", re.I),
-    "no_sweeteners": re.compile(r"\b(?:no|without)\s+(?:(?:added|artificial)\s+)?sweeteners?\b", re.I),
+    "no_sweeteners": re.compile(r"\b(?:no|without)\s+sweeteners?\b", re.I),
+    "no_artificial_sweeteners": re.compile(r"\b(?:no|without)\s+artificial\s+sweeteners?\b", re.I),
+    "no_added_sweeteners": re.compile(r"\b(?:no|without)\s+added\s+sweeteners?\b", re.I),
     "low_sugar": re.compile(r"\b(?:low|less|light)\s+(?:in\s+)?sugar\b", re.I),
     "reduced_sugar": re.compile(r"\breduced\s+(?:in\s+)?sugar\b", re.I),
     "sweetened": re.compile(r"\b(?:lightly\s+)?sweetened\b", re.I),
@@ -39,7 +41,14 @@ def title_sweetener_types(title: str) -> set[str]:
     found: set[str] = set()
     if re.search(r"\b(?:cane|brown|raw) sugar\b", text):
         found.add("cane_sugar" if re.search(r"\bcane sugar\b", text) else "sugar")
-    if re.search(r"\b(?:with|sweetened with|made with) stevia\b", text):
+    ingredients = "|".join(re.escape(value) for value in sorted(SWEETENER_TYPES, key=len, reverse=True))
+    for match in re.finditer(
+        r"\b(?:sweetened with|made with|(?:drink|soda|beverage|cola|juice|tea|coffee)\s+with)\s+("
+        + ingredients + r")\b(?!\s+free\b)",
+        text,
+    ):
+        found.add(match.group(1).replace(" ", "_"))
+    if re.search(r"\bwith stevia\b(?!\s+free\b)", text):
         found.add("stevia")
     return found
 
