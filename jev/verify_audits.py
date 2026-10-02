@@ -1,4 +1,4 @@
-"""Offline checkpoint integrity checks and current-gate replay for both audits."""
+"""Offline checkpoint integrity checks and current-gate replay for all audits."""
 from __future__ import annotations
 
 import json
@@ -70,7 +70,7 @@ def verify(sample_path, checkpoint_path, records):
 def main():
     records = canonical_records_from_csv()
     reports = [verify(ROOT / "jev" / f"sample_doubled{suffix}.json",
-                      ROOT / "jev" / f"audit_results{suffix}.jsonl", records) for suffix in ("", "_2")]
+                      ROOT / "jev" / f"audit_results{suffix}.jsonl", records) for suffix in ("", "_2", "_3")]
     out = ROOT / "jev" / "verification_results.json"
     out.write_text(json.dumps(reports, indent=2) + "\n")
     for report in reports:

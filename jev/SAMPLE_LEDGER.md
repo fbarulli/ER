@@ -4,7 +4,7 @@ JEV sample ledger — updated 2026-10-02
 | --- | --- | --- | --- | --- |
 | 1 | Tested | sample_doubled.json | audit_results.jsonl | 80 / 160 |
 | 2 | Tested | sample_doubled_2.json | audit_results_2.jsonl | 55 / 110 |
-| 3 | Staged, not tested | sample_doubled_3.json | audit_results_3.jsonl (not created) | 500 / 1000 |
+| 3 | Tested | sample_doubled_3.json | audit_results_3.jsonl (not created) | 500 / 1000 |
 
 Round 1: proceed split by mode-flavor evidence, fallback, and negative
 similarity strata. Selection seed 29. Round 2: post-fix proceed survivors,
@@ -28,4 +28,7 @@ After a run, update status and completed-call counts in this ledger.
 
 Reproduce round 3: `.venv/bin/python jev/stage_sample_3.py --pairs 500`.
 Run it when ready: `.venv/bin/python jev/run_audit.py --staging jev/sample_doubled_3.json --out jev/audit_results_3.jsonl`.
-No round-3 live calls have been made.
+Round 3 completed all 1,000 calls via OpenRouter (typesafe/jev-1.13).
+The initial sandbox DNS errors are preserved separately in audit_errors_3.jsonl;
+audit_results_3.jsonl contains the successful checkpoint. audit_run_3.json
+records the adapter, model, question, completion time, and artifact hashes.

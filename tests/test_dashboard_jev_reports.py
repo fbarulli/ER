@@ -11,10 +11,10 @@ def reports():
     spec.loader.exec_module(module)
     return module
 
-def test_staged_500_pair_sample_and_coverage_display(reports):
+def test_saved_500_pair_sample_and_coverage_display(reports):
     page = reports.jev()
     assert '500' in page and '1000' in page
-    assert 'Staged, not tested' in page
+    assert 'Tested' in page
     assert 'Attribute coverage' in page and 'positive_high' in page
     assert 'Low-score proceeds' in page
     assert 'Pairs (84)' in reports.jev(stratum='positive_high')

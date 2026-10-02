@@ -39,3 +39,22 @@ model/adapter metadata, or timestamps. This verification establishes saved
 checkpoint integrity and current replay behavior; it cannot independently
 prove historical payload fidelity or reproduce the live model responses.
 No new live calls were made.
+
+Round 3 — live OpenRouter audit
+
+All 1,000 calls completed successfully for 500 fresh pairs using
+OpenRouter typesafe/jev-1.13. Sample/checkpoint metadata, score ranges,
+uniqueness, and doubled ordering passed verification. Current gate decisions
+agree in both orders for every pair.
+
+Current routes: 168 proceed, 166 hard_no, 166 fallback. Of the proceed
+pairs, 127 score below 0.2 in both orders. One hard_no pair scores above
+0.8 in both orders. These are review candidates, not established truth
+labels. Mean absolute JEV order difference is 0.03752; maximum is 0.61.
+Detailed pairs and attribute strata are in verification_results.json.
+
+audit_run_3.json records run provenance. audit_results_3.jsonl contains
+only the 1,000 successes; the 1,000 sandbox DNS failures from the initial
+attempt are retained separately in audit_errors_3.jsonl. The first-source
+versus merged-input limitation remains. No gate changes were made from
+these new judgments.

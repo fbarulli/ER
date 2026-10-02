@@ -1,0 +1,24 @@
+{
+  "round": 3,
+  "adapter": "openrouter",
+  "model": "typesafe/jev-1.13",
+  "endpoint": "https://openrouter.ai/api/v1/systemone",
+  "questions": {
+    "is_same_product": {
+      "type": "noul",
+      "instructions": "Do record_a and record_b describe the exact same retail product (same brand, product type, flavor/variant, and pack size), accounting for typos, abbreviations, and wording differences?"
+    }
+  },
+  "workers": 6,
+  "completed_utc": "2026-10-02T20:09:59.612590+00:00",
+  "gate_commit": "b85715bc0d1aa7099eb80a86be427cdf2019a307",
+  "completed_calls": 1000,
+  "unique_pairs": 500,
+  "initial_sandbox_dns_failures": 1000,
+  "sha256": {
+    "jev/sample_doubled_3.json": "9c62d5ca9733e6b74c0ec1a2dd1131e2e6022bca82aafa7d0771bf21bd87ab02",
+    "jev/audit_results_3.jsonl": "0699a8a89f2de9296ba608a5f9014e7bfabd02edd92758ff014b364cc9edfb0c",
+    "data/canonical_records.csv": "beaf35cd45517afba1a9b8b75ecf6eee6b3e8cbe30480b08f6b90ac7c5d9a584"
+  },
+  "input_scope": "First source listing per GTIN, description truncated to 300 characters; raw HTTP responses were not saved."
+}

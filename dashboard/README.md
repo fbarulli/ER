@@ -83,4 +83,4 @@ Re-render comparisons with `PYTHONPATH=src .venv/bin/python scripts/render_ident
 JEV audit samples and results are available at `/jev`. The page reads the
 `jev/` sample ledger, current checkpoints, round-3 attribute coverage, and
 saved verification results on each request. Round 3 contains 500 unique
-pairs (1,000 ordered calls), staged but not yet tested.
+pairs (1,000 ordered calls), tested via OpenRouter (all 1,000 calls completed).

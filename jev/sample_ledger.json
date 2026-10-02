@@ -565,12 +565,12 @@
   },
   {
     "round": 3,
-    "status": "staged_not_tested",
+    "status": "tested",
     "sample": "jev/sample_doubled_3.json",
     "sample_sha256": "9c62d5ca9733e6b74c0ec1a2dd1131e2e6022bca82aafa7d0771bf21bd87ab02",
     "checkpoint": "jev/audit_results_3.jsonl",
     "calls_staged": 1000,
-    "calls_completed": 0,
+    "calls_completed": 1000,
     "unique_pairs": 500,
     "pairs": [
       [

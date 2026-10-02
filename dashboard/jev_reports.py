@@ -60,6 +60,12 @@ def jev(round: int = 3, stratum: str = ''):
     body += f'<h3>Pairs ({len(filtered)})</h3><p>Preview shows up to 100 pairs. Download the sample for all pairs and both orders.</p>'
     body += table(['GTIN A','GTIN B','Stratum','Gate','Similarity','Attribute states'], [[x['gtin1'],x['gtin2'],x['stratum'],x.get('gate',''),x['similarity'], '; '.join(f'{k}: {v}' for k,v in x.get('attribute_states',{}).items())] for x in filtered[:100]])
     body += f'<p><a href="/jev/artifact?name={e(Path(selected["sample"]).name)}">Download sample</a> · <a href="/jev/artifact?name=sample_ledger.json">Download ledger</a></p>'
+    checkpoint_name = Path(selected['checkpoint']).name
+    if (PROJECT/'jev'/checkpoint_name).exists():
+        body += f'<p><a href="/jev/artifact?name={e(checkpoint_name)}">Download completed results</a></p>'
+    if round == 3 and (PROJECT/'jev/audit_run_3.json').exists():
+        run = load('audit_run_3.json', {})
+        body += '<p>Adapter: ' + e(run.get('adapter','')) + '; model: ' + e(run.get('model','')) + '; completed: ' + e(run.get('completed_utc','')) + '.</p><p><a href="/jev/artifact?name=audit_run_3.json">Download run metadata</a></p>'
     reports = load('verification_results.json', [])
     body += '<h2>Verified rounds</h2>' + table(['Checkpoint','Pairs','Low-score proceeds','High-score rejections','Decision order differences'], [[x['checkpoint'],x['unique_pairs'],len(x['low_score_proceeds']),len(x['high_score_rejections']),len(x['gate_asymmetries'])] for x in reports])
     body += '<p>Low-score proceeds have JEV scores below 0.2 in both orders; high-score rejections score above 0.8 in both. These are saved replay findings, not a live replay of future gate changes. JEV judged the first source listing; gates use merged canonical evidence. Balanced discovery samples do not measure population accuracy.</p>'
@@ -69,7 +75,7 @@ def jev(round: int = 3, stratum: str = ''):
 
 @router.get('/jev/artifact')
 def artifact(name: str):
-    allowed = {'sample_ledger.json','sample_3_summary.json','verification_results.json','SAMPLE_LEDGER.md','VERIFICATION.md'}
+    allowed = {'sample_ledger.json','sample_3_summary.json','verification_results.json','SAMPLE_LEDGER.md','VERIFICATION.md','audit_run_3.json','audit_errors_3.jsonl'}
     for item in load('sample_ledger.json',[]):
         allowed.update((Path(item['sample']).name,Path(item['checkpoint']).name))
     path = PROJECT/'jev'/name
