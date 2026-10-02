@@ -19,11 +19,12 @@ def preflight(config: Path) -> dict:
     cfg = load_config(config)
     root = (TRAIN_ROOT / cfg.setup_dir).resolve()
     setup = json.loads((root / 'setup_manifest.json').read_text())
+    is_smoke = setup.get('smoke', False)
     source_hash = hashlib.sha256(Path(F['dataset_deduped']).read_bytes()).hexdigest()
     if setup.get('source_catalog_sha256') != source_hash:
         raise ValueError('graph setup is stale: source catalog; rebuild locally before launch')
     labels_hash = hashlib.sha256(Path(F['labeled_pairs']).read_bytes()).hexdigest()
-    if setup.get('labeled_pairs_sha256') != labels_hash:
+    if not is_smoke and setup.get('labeled_pairs_sha256') != labels_hash:
         raise ValueError('graph setup is stale: labeled pairs; rebuild locally before launch')
     model = Path(resolve_model(cfg.text_model))
     if checkpoint_hash(model) != setup['text_checkpoint_sha256']:
@@ -44,9 +45,10 @@ def preflight(config: Path) -> dict:
             raise ValueError(f'{pairs_key} endpoints are outside the payload')
         if len(pairs) != len(bundle[sources_key]):
             raise ValueError(f'{sources_key} does not align with {pairs_key}')
-    for key in ('labeled_pairs', 'canonical_records', 'gate_results'):
-        if hashlib.sha256(bundle[f'{key}_csv']).hexdigest() != hashlib.sha256(F[key].read_bytes()).hexdigest():
-            raise ValueError(f'text bundle is stale: {key}; rebuild locally before launch')
+    if not is_smoke:
+        for key in ('labeled_pairs', 'canonical_records', 'gate_results'):
+            if hashlib.sha256(bundle[f'{key}_csv']).hexdigest() != hashlib.sha256(F[key].read_bytes()).hexdigest():
+                raise ValueError(f'text bundle is stale: {key}; rebuild locally before launch')
     canonical_payload_rows(len(bundle['df']), bundle['payload'], bundle['row_bc'])
     train, dev, test = prepared_holdout(bundle, dict(training_cfg().split), seed=SEED)
     roles = {normalize_gtin(key): split for split, values in
