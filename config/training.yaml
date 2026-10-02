@@ -783,6 +783,15 @@ training:
   dev_fraction: 0.15          # dev share OF THE TRAIN side (early stopping)
   max_triples: 5000           # triplet-lane cap (build_triplets reads this)
   track_datapoint_usage: true # per-presentation population/epoch verifier
+  # Controlled batch sampler (owner): offline prep determines
+  # composition; default HF sampling is used when disabled.
+  batch_sampler:
+    enabled: true
+    composition:
+      gate_positive: 4
+      masked_positive: 4
+      hard_negative: 8
+    seed: 42
 
 # ── pair-selection thresholds (owner's label semantics) ─────────────────────
 # thresholds: the label rule; caps: eval-pair construction (were EDA/eda.yaml

@@ -3780,9 +3780,8 @@ def train_one_config(
                         "sentence2": s2,
                         "label": lab,
                         "pair_id": list(range(len(s1))),
+                        "pair_population": pair_populations,
                         "structured_features": [
-                            [structured_features[int(a)].tolist(), structured_features[int(b)].tolist()]
-                            for a, b in list(train_all) + list(tr_negs)
                         ],
                     }
                 )
@@ -3950,14 +3949,26 @@ def train_one_config(
                     {
                         "anchor": [ex.texts[0] for ex in examples],
                         "positive": [ex.texts[1] for ex in examples],
-                        "negative": [ex.texts[2] for ex in examples],
-                    }
-                )
+                         "negative": [ex.texts[2] for ex in examples],
+                         "pair_population": ["triplet"] * len(examples),
+                     }
+                 )
 
             batch_size = BATCH_SIZE_CUDA if on_cuda else BATCH_SIZE_CPU
             n_steps_per_epoch = max(1, len(train_ds) // batch_size)
             warmup_steps = int(n_steps_per_epoch * cfg["epochs"] * cfg["warmup_ratio"])
             eval_steps = max(1, n_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
+            bs_cfg = cfg["training"].get("batch_sampler", {})
+            controlled_sampler = (
+                ControlledBatchSampler(
+                    train_ds,
+                    batch_size=batch_size,
+                    composition=bs_cfg["composition"],
+                    seed=bs_cfg.get("seed", seed + fold_i),
+                )
+                if bs_cfg.get("enabled", False)
+                else None
+            )
 
             # dev evaluator: pos pairs vs hard negatives, binary AUC-style
             from sentence_transformers.evaluation import BinaryClassificationEvaluator
@@ -4082,6 +4093,7 @@ def train_one_config(
             from sentence_transformers.sentence_transformer.training_args import (
                 BatchSamplers,
             )
+            from training.sampler import ControlledBatchSampler
 
             class PairIdDataCollator(SentenceTransformerDataCollator):
                 """Keep telemetry and structured features out of tokenization."""
@@ -4192,13 +4204,17 @@ def train_one_config(
                 report_to=[],
                 seed=seed + fold_i,
                 use_cpu=not on_cuda,
-                # MNRL treats every other row's positive/explicit negative
-                # as an in-batch negative. Augmented views and repeated
-                # canonicals must not collide within one batch.
+                # Controlled batch sampler (owner): offline prep
+                # determines composition; default HF sampling is
+                # used when batch_sampler.enabled is false.
                 batch_sampler=(
-                    BatchSamplers.NO_DUPLICATES
-                    if loss == "mnrl"
-                    else BatchSamplers.BATCH_SAMPLER
+                    controlled_sampler
+                    if controlled_sampler is not None
+                    else (
+                        BatchSamplers.NO_DUPLICATES
+                        if loss == "mnrl"
+                        else BatchSamplers.BATCH_SAMPLER
+                    )
                 ),
             )
             # discriminative LRs: bottom layers hold pretrained knowledge ->

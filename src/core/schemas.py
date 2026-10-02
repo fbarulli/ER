@@ -1715,6 +1715,24 @@ class TrainingSpec(BaseModel):
     max_triples: int = Field(ge=1)
     track_datapoint_usage: bool
 
+    class BatchSamplerSpec(BaseModel):
+        """Controlled batch composition (owner).
+
+        When enabled, the ControlledBatchSampler constructs each batch
+        from the exact per-population counts below instead of the default
+        HF sampler.  All counts must be positive and sum to the batch size.
+        """
+
+        model_config = ConfigDict(extra="forbid")
+
+        enabled: bool = False
+        composition: dict[str, int] = Field(default_factory=dict, min_length=1)
+        seed: int = 0
+
+    batch_sampler: BatchSamplerSpec = Field(
+        default_factory=lambda: TrainingSpec.BatchSamplerSpec()
+    )
+
 
 class PairsSpec(BaseModel):
     """Pair-label thresholds + eval-pair caps (config/training.yaml pairs:) —
