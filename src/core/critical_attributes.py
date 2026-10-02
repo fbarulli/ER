@@ -112,12 +112,12 @@ def extract_declared_flavor_tokens(*values: object) -> frozenset[str]:
 # anchored phrase "no dugar"; arbitrary fuzzy matches are not trusted claims.
 # The numeric branch excludes "0 sugar added", which is a different claim.
 NO_SUGAR_RE = re.compile(
-    r"\b(?:no (?:sugars?|dugar)|zero sugars?|"
+    r"\b(?:no (?:sugars?|dugar)(?!\s+added\b)|zero sugars?(?!\s+added\b)|"
     r"0\s*(?:g|grams?)?\s*sugars?\b(?!\s+added\b)|"
-    r"sugar free|sugarfree|sugarless|without sugar|free of sugar)\b"
+    r"sugar free|sugarfree|sugarless|without sugar(?!\s+added\b)|free of sugar)\b"
 )
 NO_ADDED_SUGAR_RE = re.compile(
-    r"\b(?:(?:no|without|zero|0) added sugar|(?:zero|0) sugar added)\b"
+    r"\b(?:(?:no|without|zero|0) added sugars?|(?:no|without|zero|0) sugars? added)\b"
 )
 SUGAR_CLAIM_RE = re.compile(
     r"\b(?:with added sugar|contains sugar|sweetened with sugar|"

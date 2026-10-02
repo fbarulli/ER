@@ -363,6 +363,7 @@ def targeted_veto_gate(
         CRITICAL_NAME_BY_CENSUS_KEY[census_key]
         for census_key in evidence.conflicts
         if census_key in CRITICAL_NAME_BY_CENSUS_KEY
+        and (census_key != "pack type" or (left_package_type and right_package_type))
     }
     all_conflicts = list(critical["conflicts"]) + sorted(
         registry_conflicts - set(critical["conflicts"])
@@ -449,8 +450,8 @@ def targeted_veto_gate(
     # Only the configured dimensions may hard-block. Every conflict is still
     # reported in targeted_critical_conflicts below, so an excluded dimension
     # is AUDITED rather than hidden -- it simply stops spending true matches.
-    # The default set is the measured optimum: adding "sweetener" back removes
-    # one more false merge and costs 74 true ones (see config/training.yaml).
+    # Historical sweetener measurements are documented in config; only the
+    # current configured set determines which conflicts can veto.
     # pack_material vetoes only when configured; its conflict already shows in
     # all_conflicts (and therefore targeted_critical_conflicts) either way.
     veto_dimensions = set(settings["veto_dimensions"])

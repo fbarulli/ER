@@ -50,7 +50,9 @@ def snapshot(target: Path, *, label: str, chunk_rows: int) -> dict:
             "code_fingerprints": {str(path): sha256_file(TRAIN_ROOT / path)
                                   for path in ["src/pipeline.py", "src/core/text.py", "src/core/critical_attributes.py",
                                                "src/core/url_evidence.py", "src/core/sweetener_values.py",
-                                               "src/ner/ner_product_attributes.py", "config/paths.yaml", "config/training.yaml"]}}
+                                               "src/ner/ner_product_attributes.py", "src/core/date_evidence.py",
+                                               "src/core/attribute_conflicts.py", "src/core/attribute_decision.py",
+                                               "src/core/attribute_universe.py", "config/paths.yaml", "config/training.yaml"]}}
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".pending")
     count, errors = 0, Counter()

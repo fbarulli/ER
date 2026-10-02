@@ -644,13 +644,39 @@ def _gate_listing_evidence_html(left: str, right: str, frame) -> str:
     blocks = []
     for side, gtin in (('left', left), ('right', right)):
         selected = frame[frame['barcode'].eq(gtin)]
+        records = selected.where(selected.notna(), '').to_dict('records')
         cells = ''.join('<tr>' + ''.join(
             f'<td>{_gate_value_html(record.get(column))}</td>' for column, _original in _GATE_ORIGINAL_COLUMNS
-        ) + '</tr>' for record in selected.where(selected.notna(), '').to_dict('records'))
+        ) + '</tr>' for record in records)
         headings = ''.join(f'<th>{escape(original)}</th>' for _column, original in _GATE_ORIGINAL_COLUMNS)
         blocks.append(f'<details><summary>{side} · all {len(selected):,} original listings for {escape(gtin)}</summary>'
-                      f'<table><tr>{headings}</tr>{cells}</table></details>')
+                      f'<table><tr>{headings}</tr>{cells}</table>{_gate_date_context_html(records)}</details>')
     return ''.join(blocks)
+
+
+def _gate_date_context_html(records: list[dict]) -> str:
+    from core.date_evidence import extract_date_evidence
+
+    roles = {'expiry': 'Expiry', 'manufacture': 'Manufacture', 'shelf_life': 'Shelf life',
+             'expiry_reference': 'Expiry reference', 'date_format_reference': 'Date format guidance',
+             'unspecified_calendar_date': 'Date (context unclear)'}
+    entries = []
+    for record in records:
+        for column in ('title', 'attributes', 'description', 'category_path', 'category'):
+            for entry in extract_date_evidence(record.get(column)):
+                value = ' or '.join(entry['normalized_candidates']) or 'No definite calendar date'
+                if entry['role'] == 'shelf_life':
+                    value = f"{entry['duration_value']} {entry['duration_unit']}s"
+                entries.append('<tr>' + ''.join(f'<td>{escape(str(part))}</td>' for part in (
+                    record.get('product_id', ''), column, roles[entry['role']], entry['raw_match'], value,
+                )) + '</tr>')
+    if not entries:
+        return ''
+    return ('<details><summary>Stock dates and shelf life · listing context</summary>'
+            '<p class="muted">Date differences describe stock or batches. These are review context; '
+            'the deciding gate clause is shown separately. The export has no collection timestamp.</p>'
+            '<table><tr><th>Listing</th><th>Source</th><th>Role</th><th>Original text</th>'
+            '<th>Interpretation</th></tr>' + ''.join(entries) + '</table></details>')
 
 
 def _gate_pair_html(rank: int, row, raw, listings, uni, cards=None, source_frame=None) -> str:

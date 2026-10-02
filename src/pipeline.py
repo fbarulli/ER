@@ -174,17 +174,24 @@ def extract_volume_from_title(title: str) -> dict:
 
 def extract_pack_evidence(title: str) -> list[dict]:
     """Retain physical-unit and outer-package quantities with original spans."""
-    text = str(title or "").replace("×", "x")
+    text = str(title or "")
+    from core.text import extract_volume_evidence
+    measurements = extract_volume_evidence(text)
     confidence = data_cfg().extraction.pack_confidence
+    # Count tokens must include their entire number: decimal and price tails
+    # cannot masquerade as integer quantities. Grouped thousands are counts.
+    count_token = r"([1-9]\d{0,2}(?:[.,]\d{3})+|\d+)(?!\d|[.,]\d)"
+    number = r"(?<![\w$€£])(?<!\d[.,])" + count_token
+    containers = r"(?:bottles?|bt|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)"
     patterns = (
-        ("nested", r"\b(\d+)\s*x\s*(\d+)\s*(?:x|/)\s*\d+(?:[.,]\d+)?\s*[a-z]", "unit_count"),
-        ("multiplier", r"\b(\d+)\s*x\s*\d+(?:[.,]\d+)?\s*[a-z]", "unit_count"),
-        ("pack_of", r"\b(?:packs?|packages?)\s+of\s*(\d+)\b", "unit_count"),
-        ("pack_of", r"\bcases?\s+of\s*(\d+)\b", "unit_count"),
-        ("count", r"\b(\d+)\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
-        ("compact", r"\bpack\s*(\d+)\b", "unit_count"),
-        ("container", r"\b(\d+)\s*(?:glass\s*)?(?:bottles?|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)\b", "unit_count"),
-        ("count", r"\b(\d+)\s*cases?\b", "outer_count"),
+        ("nested", rf"{number}\s*[x×]\s*(\d+)\s*(?:{containers}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?\s*[a-z]", "unit_count"),
+        ("multiplier", rf"{number}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?\s*[a-z]", "unit_count"),
+        ("pack_of", rf"\b(?:packs?|packages?)\s+of\s*{count_token}\b", "unit_count"),
+        ("pack_of", rf"\bcases?\s+of\s*{count_token}\b", "unit_count"),
+        ("count", rf"{number}\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
+        ("compact", rf"\bpack\s*[- ]?\s*{count_token}\b", "unit_count"),
+        ("container", rf"{number}\s*(?:glass\s*)?{containers}\b", "unit_count"),
+        ("count", rf"{number}\s*cases?\b", "outer_count"),
     )
     evidence = []
     occupied = []
@@ -192,7 +199,20 @@ def extract_pack_evidence(title: str) -> list[dict]:
         for match in re.finditer(pattern, text, re.I):
             if any(start <= match.start() < end for start, end in occupied):
                 continue
-            count = int(match.group(1))
+            if kind == "compact" and any(
+                entry["start"] == match.start(1) for entry in measurements
+            ):
+                continue
+            if kind == "compact" and text[match.end():].startswith(")") and re.search(
+                rf"\b{int(re.sub(r'[.,]', '', match.group(1))) + 1}\)",
+                text[match.end() + 1:],
+            ):
+                # "Combo Pack - 1) product A & 2) product B" is a list.
+                continue
+            # Currency followed by whitespace still denotes a price.
+            if re.search(r"[$€£]\s*$", text[:match.start()]):
+                continue
+            count = int(re.sub(r"[.,]", "", match.group(1)))
             if kind == "nested":
                 count *= int(match.group(2))
             if count <= 0:
@@ -201,6 +221,76 @@ def extract_pack_evidence(title: str) -> list[dict]:
             evidence.append({"count": count, "confidence": confidence[kind],
                              "role": role, "raw_match": match.group(0),
                              "start": match.start(), "end": match.end(), "rule": kind})
+    word_counts = dict(zip(
+        ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"),
+        range(1, 13), strict=True,
+    ))
+    for match in re.finditer(r"\b(" + "|".join(word_counts) + r")\s*[- ]\s*packs?\b", text, re.I):
+        evidence.append({"count": word_counts[match.group(1).lower()],
+                         "confidence": confidence["count"], "role": "unit_count",
+                         "raw_match": match.group(0), "start": match.start(),
+                         "end": match.end(), "rule": "count"})
+    inner = re.search(rf"(?<![\d.,]){count_token}\s*sticks?\s+per\s+box\b", text, re.I)
+    if inner:
+        inner_count = int(re.sub(r"[.,]", "", inner.group(1)))
+        evidence.append({"count": inner_count, "confidence": confidence["count"],
+                         "role": "inner_count", "raw_match": inner.group(0),
+                         "start": inner.start(), "end": inner.end(), "rule": "count"})
+        for entry in list(evidence):
+            if entry["rule"] == "compact" and entry["role"] == "unit_count":
+                entry["role"] = "outer_count"
+                entry["hierarchy_ambiguous"] = True
+                start, end = min(entry["start"], inner.start()), max(entry["end"], inner.end())
+                evidence.append({"count": inner_count * entry["count"],
+                                 "confidence": min(entry["confidence"], confidence["count"]),
+                                 "role": "derived_inner_total", "hierarchy_ambiguous": True,
+                                 "raw_match": text[start:end], "start": start, "end": end,
+                                 "rule": "nested"})
+        outer = re.search(rf"{number}\s*boxes\b", text, re.I)
+        if outer:
+            start, end = min(outer.start(), inner.start()), max(outer.end(), inner.end())
+            evidence.insert(0, {"count": inner_count * int(re.sub(r"[.,]", "", outer.group(1))),
+                                "confidence": confidence["nested"], "role": "unit_count",
+                                "raw_match": text[start:end], "start": start, "end": end,
+                                "rule": "nested"})
+    # Whitespace alone is not a multiplier. A nearby explicitly stated total
+    # can prove the relation, e.g. "6 330 ml (Total 1980 ml)".
+    from core.unit_canonicalization import canonical_volume_ml
+    for unit_entry, total_entry in zip(measurements, measurements[1:]):
+        prefix = re.search(rf"{number}\s+$", text[:unit_entry["start"]])
+        between = text[unit_entry["end"]:total_entry["start"]]
+        if prefix is None or not re.fullmatch(r"[ .()]*total\s*", between, re.I):
+            continue
+        if any(start <= prefix.start() < end for start, end in occupied):
+            continue
+        count = int(re.sub(r"[.,]", "", prefix.group(1)))
+        unit_volume = canonical_volume_ml(unit_entry["value"], unit_entry["unit"])
+        total_volume = canonical_volume_ml(total_entry["value"], total_entry["unit"])
+        if count > 0 and unit_volume > 0 and math.isclose(count * unit_volume, total_volume):
+            start, end = prefix.start(), total_entry["end"]
+            evidence.append({"count": count, "confidence": confidence["multiplier"],
+                             "role": "unit_count", "raw_match": text[start:end],
+                             "start": start, "end": end, "rule": "multiplier"})
+    for total_entry in measurements:
+        if total_entry["role"] != "total_volume":
+            continue
+        for unit_entry in measurements:
+            if (unit_entry["role"] != "package_volume"
+                or unit_entry["end"] >= total_entry["start"]
+                or unit_entry["unit"] != total_entry["unit"]
+                or unit_entry["value"] <= 0):
+                continue
+            ratio = total_entry["value"] / unit_entry["value"]
+            count = round(ratio)
+            if count <= 1 or not math.isclose(ratio, count):
+                continue
+            if any(entry["role"] == "unit_count" for entry in evidence):
+                break
+            start, end = unit_entry["start"], total_entry["end"]
+            evidence.append({"count": count, "confidence": confidence["multiplier"],
+                             "role": "unit_count", "raw_match": text[start:end],
+                             "start": start, "end": end, "rule": "multiplier"})
+            break
     return evidence
 
 
@@ -209,6 +299,9 @@ def extract_pack_from_title(title: str) -> tuple:
     units = [entry for entry in evidence if entry["role"] == "unit_count"]
     if units:
         return units[0]["count"], units[0]["confidence"]
+    ambiguous_outer = [entry for entry in evidence if entry.get("hierarchy_ambiguous") and entry["role"] == "outer_count"]
+    if ambiguous_outer:
+        return ambiguous_outer[0]["count"], ambiguous_outer[0]["confidence"]
     # Outer cases do not state the number of consumer units in each case.
     return 1, 0.0
 
@@ -224,21 +317,27 @@ def parse_attribute_volume_pack(
     pack_conf = 0.0
     if not attr_str or attr_str == "nan":
         return vol_ml, vol_conf, pack_qty, pack_conf
+    from core.text import extract_volume_evidence
     m_vol = re.search(
-        r"Volume:\s*(\d+(?:[.,]\d+)?)\s*"
-        r"(ml|milliliters?|millilitres?|cc|cl|centiliters?|centilitres?|"
-        r"l|lt|ltr|liters?|litres?|fl\.?\s*oz|fluid\s+ounces?|oz\.?|"
-        r"ounces?|qt|quarts?|pt|pints?|gal|gallons?)?",
-        attr_str,
-        re.IGNORECASE,
+        r"\bVolume:\s*(.*?)(?=;|\n|\s+[A-Za-z][A-Za-z ]*:|$)",
+        attr_str, re.IGNORECASE,
     )
     if m_vol:
-        vol_ml = canonical_volume_ml(m_vol.group(1), m_vol.group(2) or "ml")
-        vol_conf = 0.9
-    m_pack = re.search(r"Count per Unit:\s*(\d+)", attr_str, re.IGNORECASE)
+        declared = m_vol.group(1).strip()
+        measurements = extract_volume_evidence(declared)
+        if measurements and measurements[0]["start"] == 0:
+            entry = measurements[0]
+            vol_ml = canonical_volume_ml(entry["value"], entry["unit"])
+        elif re.fullmatch(r"\d+(?:[.,]\s*\d+)?", declared):
+            # Historical export convention: unitless declared Volume is ml.
+            number = re.sub(r"\s+", "", declared)
+            if float(number.replace(",", ".")) > 0:
+                vol_ml = canonical_volume_ml(number, "ml")
+        if vol_ml > 0:
+            vol_conf = 0.9
+    m_pack = re.search(r"Count per Unit:\s*(\d+)(?!\d|[.,/]\s*\d)", attr_str, re.IGNORECASE)
     if m_pack and int(m_pack.group(1)) > 0:
-        # zero-guard: same contract as extract_pack_from_title — a 0 here is
-        # export noise, not a pack count (default 1 with conf 0 below)
+        # zero-guard: export noise remains unknown rather than a count.
         pack_qty = canonical_pack_count(m_pack.group(1))
         pack_conf = data_cfg().extraction.pack_confidence["attribute"]
     return vol_ml, vol_conf, pack_qty, pack_conf
@@ -499,6 +598,18 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     if negative_ingredients:
         ledger.append({"field": "negated_sweetener_type", "column": "title+attributes+description",
                        "value": sorted(negative_ingredients)})
+    from core.date_evidence import extract_date_evidence
+    date_evidence = [
+        {"column": column, **entry}
+        for column, text in (
+            ("title", sku_name), ("attributes", attribute),
+            ("description", description), ("category_path", category_path),
+            ("category", category),
+        )
+        for entry in extract_date_evidence(str(text or ""))
+    ]
+    for entry in date_evidence:
+        ledger.append({"field": "source_date", "column": entry["column"], "value": entry})
     measurement_evidence = [
         {"column": column, **entry}
         for column, text in (("title", str(sku_name or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
@@ -511,6 +622,8 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         for column, text in (("title", str(sku_name or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
         for entry in extract_pack_evidence(text)
     ]
+    if any(entry.get("hierarchy_ambiguous") for entry in pack_evidence):
+        consistency_flags.add("pack_hierarchy_ambiguous")
     for entry in pack_evidence:
         ledger.append({"field": "pack_quantity", "column": entry["column"], "value": entry})
     opposing_values = {
@@ -786,6 +899,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         key: sorted(values) for key, values in universe_evidence.items() if values
     }
     result["evidence_ledger"] = ledger
+    result["date_evidence"] = date_evidence
     result["measurement_evidence"] = measurement_evidence
     result["pack_evidence"] = pack_evidence
     result["negated_sweetener_type_set"] = sorted(negative_ingredients)
@@ -921,7 +1035,9 @@ def pack_gate(
         guessed here.
         """
         dimension = "volume" if "volume_confidence" in names else "pack"
-        if _has_attribute_flag(obj, f"{dimension}_sources_disagree"):
+        if _has_attribute_flag(obj, f"{dimension}_sources_disagree") or (
+            dimension == "pack" and _has_attribute_flag(obj, "pack_hierarchy_ambiguous")
+        ):
             return False
         raw = _value(obj, *names)
         if raw is None or raw == "":
@@ -929,7 +1045,8 @@ def pack_gate(
         if trust_threshold is None:
             return True
         try:
-            return float(raw) >= float(trust_threshold)
+            value = float(raw)
+            return math.isfinite(value) and 0.0 <= value <= 1.0 and value >= float(trust_threshold)
         except (TypeError, ValueError):
             return False
 
@@ -937,7 +1054,8 @@ def pack_gate(
     left_pack = _set(_value(sku_a, "pack_size", "pack_set", "pack_qty"))
     right_pack = _set(_value(sku_b, "pack_size", "pack_set", "pack_qty"))
     if (
-        left_pack
+        "pack" in veto_dimensions
+        and left_pack
         and right_pack
         and not (left_pack & right_pack)
         and _trusted(sku_a, "pack_confidence")
@@ -964,7 +1082,8 @@ def pack_gate(
         else _set(_value(sku_b, "volume", "volume_set", "volume_ml"))
     )
     if (
-        left_volume
+        "volume" in veto_dimensions
+        and left_volume
         and right_volume
         and _trusted(sku_a, "volume_confidence")
         and _trusted(sku_b, "volume_confidence")
@@ -1146,11 +1265,19 @@ def three_way_gate(
     sweetener_source_conflict = any(
         flag.startswith("sweetener_source_conflict:") for flag in source_flags
     )
+    uncertain_categorical_dimensions = {
+        flag.split(":", 1)[1] for flag in source_flags
+        if flag.startswith(("description_conflict:", "categorical_source_conflict:"))
+    }
+    if sweetener_source_conflict or source_flags & {
+        "unsweetened_with_declared_sweetener", "sweetening_status_conflict"
+    }:
+        uncertain_categorical_dimensions.add("sweetener")
     # Pulp has no registry key; the registry sweetener key owns ingredient
     # identity, not sugar/no-sugar claims. Preserve these separate explicit
     # claim predicates and report their actual dimensions.
     claim_conflicts = sorted(
-        dimension for dimension in veto_dimensions & {"sweetener", "pulp"}
+        dimension for dimension in (veto_dimensions & {"sweetener", "pulp"}) - uncertain_categorical_dimensions
         if categorical_conflict(dimension, left_info, right_info)
     )
     if claim_conflicts:
@@ -1166,7 +1293,7 @@ def three_way_gate(
     # re-parsing. The census still evaluates the complete universe separately.
     categorical_registry = {
         key: spec for key, spec in attribute_registry().items()
-        if CRITICAL_NAME_BY_CENSUS_KEY.get(key) in categorical_dimensions
+        if CRITICAL_NAME_BY_CENSUS_KEY.get(key) in categorical_dimensions - uncertain_categorical_dimensions
     }
     categorical_conflicts = []
     if categorical_registry:
@@ -1188,7 +1315,7 @@ def three_way_gate(
             reason=f"{_r.categorical_mismatch} " + ",".join(categorical_conflicts),
         ).model_dump()
 
-    if sweetener_source_conflict or source_flags & {"volume_sources_disagree", "pack_sources_disagree"}:
+    if uncertain_categorical_dimensions or source_flags & {"volume_sources_disagree", "pack_sources_disagree", "pack_hierarchy_ambiguous"}:
         return GateResult(decision="fallback", reason=_r.source_conflict).model_dump()
 
     if _has_attribute_flag(attrs1, "ambiguous_volume") or _has_attribute_flag(
@@ -1197,12 +1324,20 @@ def three_way_gate(
         return GateResult(
             decision="fallback", reason=_r.ambiguous_volume
         ).model_dump()
+    def _reliable(value: object, threshold: float) -> bool:
+        # NaN bypasses ordinary less-than checks; invalid evidence is unknown.
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(number) and 0.0 <= number <= 1.0 and number >= threshold
+
     # raw confidence check
     if (
         not attrs1["volume_set"]
         or not attrs2["volume_set"]
-        or attrs1["volume_confidence"] < raw_conf_threshold
-        or attrs2["volume_confidence"] < raw_conf_threshold
+        or not _reliable(attrs1["volume_confidence"], raw_conf_threshold)
+        or not _reliable(attrs2["volume_confidence"], raw_conf_threshold)
     ):
         return GateResult(
             decision="fallback", reason=_r.low_volume_confidence
@@ -1214,8 +1349,8 @@ def three_way_gate(
         if (
             not attrs1["pack_set"]
             or not attrs2["pack_set"]
-            or attrs1["pack_confidence"] < raw_conf_threshold
-            or attrs2["pack_confidence"] < raw_conf_threshold
+            or not _reliable(attrs1["pack_confidence"], raw_conf_threshold)
+            or not _reliable(attrs2["pack_confidence"], raw_conf_threshold)
         ):
             return GateResult(
                 decision="fallback", reason=_r.low_pack_confidence
@@ -1241,14 +1376,14 @@ def three_way_gate(
                 break
         if vol_overlap:
             break
-    if not vol_overlap:
+    if "volume" in veto_dimensions and not vol_overlap:
         return GateResult(decision="hard_no", reason=_r.no_volume_overlap).model_dump()
 
     # pack overlap: skip when both sides have no pack evidence
     # (single-unit products with no "Count per Unit" in source).
     if attrs1["pack_set"] or attrs2["pack_set"]:
         pack_overlap = attrs1["pack_set"] & attrs2["pack_set"]
-        if not pack_overlap:
+        if "pack" in veto_dimensions and not pack_overlap:
             return GateResult(decision="hard_no", reason=_r.no_pack_overlap).model_dump()
 
     # PACKAGING LEVEL is one-sided in practice (measured 2026-09-30: 217 of
@@ -1280,10 +1415,10 @@ def three_way_gate(
 
     # consistency check
     if (
-        attrs1["volume_consistency"] < consistency_fallback_threshold
-        or attrs2["volume_consistency"] < consistency_fallback_threshold
-        or attrs1["pack_consistency"] < consistency_fallback_threshold
-        or attrs2["pack_consistency"] < consistency_fallback_threshold
+        not _reliable(attrs1["volume_consistency"], consistency_fallback_threshold)
+        or not _reliable(attrs2["volume_consistency"], consistency_fallback_threshold)
+        or not _reliable(attrs1["pack_consistency"], consistency_fallback_threshold)
+        or not _reliable(attrs2["pack_consistency"], consistency_fallback_threshold)
     ):
         return GateResult(
             decision="fallback", reason=_r.low_consistency
@@ -1619,8 +1754,26 @@ def generate_canonical(
     sweetener_type_set = {value for x in extracted for value in x["sweetener_type_set"]}
     sweetening_set = {value for x in extracted for value in x["sweetening_set"]}
     attribute_consistency_flags = {value for x in extracted for value in x["attribute_consistency_flags"]}
+    # Negations can be on a different listing of the same GTIN from the
+    # affirmative ingredient. Preserve that contradiction at aggregation.
+    negative_ingredients = {
+        value for x in extracted for value in x.get("negated_sweetener_type_set", ())
+    }
+    attribute_consistency_flags.update(
+        f"sweetener_source_conflict:{ingredient}"
+        for ingredient in negative_ingredients & sweetener_type_set
+    )
     pulp_set = {value for x in extracted for value in x["pulp_set"]}
     organic_set = {value for x in extracted for value in x.get("organic_set") or set()}
+
+    for dimension, values, opposites in (
+        ("sweetener", sweetener_set, (("sugar", "no_sugar"), ("sugar", "diet"))),
+        ("carbonation", carbonation_set, (("still", "carbonated"),)),
+        ("pulp", pulp_set, (("no_pulp", "with_pulp"),)),
+        ("organic", organic_set, (("organic", "not_organic"),)),
+    ):
+        if any({left, right} <= values for left, right in opposites):
+            attribute_consistency_flags.add(f"categorical_source_conflict:{dimension}")
 
     # Confidence / consistency
     vol_confs = [x["volume_confidence"] for x in extracted if x["volume_ml"] > 0]

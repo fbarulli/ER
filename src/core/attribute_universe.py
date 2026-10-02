@@ -101,10 +101,10 @@ NON_YIELD_KINDS = frozenset({"CONSTANT"})
 PACK_MATERIAL_ENUM = frozenset({"glass", "metal", "paper / carton", "plastic", "flexible pack"})
 
 # Veto band (measured origin): the existing vetoed dimensions sit at 2.5%
-# (volume) through 13.8% (pack material) same-GTIN conflict rate; keys below
-# the floor can never veto (they agree too often to separate), keys above the
-# ceiling are review-lane fields (their disagreement is feed noise, not
-# identity). Advisory evidence for owner config edits, never an automatic one —
+# (volume) through 13.8% (pack material) same-GTIN conflict rate. This is an
+# advisory historical candidate band, not a measure of between-product
+# separability or proof of identity safety. Rates outside it do not establish
+# that a feature lacks signal. Advisory evidence for config edits —
 # the implemented veto list lives in config/training.yaml
 # rand_matching.targeted_veto_gates.veto_dimensions and its schema only admits
 # the critical dimensions.
@@ -236,7 +236,7 @@ def _registry() -> dict[str, FieldSpec]:
         "diets": FieldSpec(cat, "tokens", "set_inequality",
             "session rate 14.3%"),
         "sports ingredients": FieldSpec(cat, "tokens", "set_inequality",
-            "session rate 3.6% (below the veto floor)"),
+            "session rate 3.6%; within the historical 2.5-15% advisory band"),
         "concentrate format": FieldSpec(cat, "tokens", "set_inequality",
             "session rate 48.5% — review lane, not a veto"),
         "rtd coffee style": FieldSpec(cat, "tokens", "set_inequality",
@@ -248,7 +248,7 @@ def _registry() -> dict[str, FieldSpec]:
         "botanicals and functional ingredients": FieldSpec(
             cat, "tokens", "set_inequality"),
         "coffee type": FieldSpec(cat, "tokens", "set_inequality",
-            "session rate 2.6% (just below the veto floor)"),
+            "session rate 2.6%; within the historical 2.5-15% advisory band"),
         "sports positioning": FieldSpec(cat, "tokens", "set_inequality",
             "session rate 10.8%"),
         "sports drinks style": FieldSpec(cat, "tokens", "set_inequality"),

@@ -582,22 +582,15 @@ def _universe_value(record: Mapping[str, object], key: str, spec) -> object:
             or _universe_evidence_of(record).get(key) or ()
         )
         return frozenset(_string_value_set(value, kind="carbonation"))
-    if key == "pack type":
-        # The pack dimension is PACK COUNT and reads the curated count channel
-        # only. The registry key named "pack type" carries package FORMAT
-        # (bottle/can/carton/bag in box — attribute_universe FieldSpec "cat",
-        # 14 distinct value sets), so falling back to universe_evidence["pack
-        # type"] when pack_set is empty fed a different vocabulary into the
-        # count channel: two single-title listings of one SKU (pack_set empty
-        # on both sides, e.g. Bawls bag-in-box vs bottle) reported a
-        # pack_mismatch conflict out of pure listing-completeness noise — 63
-        # of 16,570 gate-proceed pairs rejected for it. Absence stays absence
-        # here, exactly as the module docstring requires: empty evidence is
-        # evaluated as MISSING by the caller (human_review), never invented
-        # into a conflict. Package format is the curated
-        # package_type_set / package_type dimension's business.
+    if key == "count per unit":
+        # Count is numeric evidence; missing count must not borrow format.
         value = record.get("pack_set") or record.get("pack") or ()
-        return frozenset(_string_value_set(value, kind="pack type"))
+        return frozenset(_string_value_set(value, kind="count per unit"))
+    if key == "pack type":
+        value = record.get("package_type_set") or record.get("package_type")
+        if value:
+            return frozenset(_string_value_set(value, kind="pack type"))
+        return _universe_evidence_of(record).get(key, frozenset())
     evidence = record.get("universe_evidence")
     if not isinstance(evidence, Mapping):
         return frozenset()
@@ -775,8 +768,8 @@ VETO_CENSUS_KEY_BY_DIMENSION: dict[str, str] = {
     # where the two lanes name the same evidence differently, SSOT mapping
     # documented here once).
     "volume": "volume",
-    "pack": "pack type",
-    "package_type": "",   # title-parsed; no raw attribute-cell census key
+    "pack": "count per unit",
+    "package_type": "pack type",
     "flavor": "flavour",
     "carbonation": "carbonization",
     "sweetener": "sweetener",
@@ -792,7 +785,7 @@ CONFIG_MEASURED_VETO_ARGUMENT: dict[str, str] = {
     "flavor": "1 false merge removed, 0 true lost (delegated rate 0.09%)",
     "carbonation": "0 false merges removed",
     "pulp": "3 false merges removed, 0 true lost",
-    "sweetener": "6 false merges, 74 TRUE LOST — 12:1 against, excluded by the owner",
+    "sweetener": "Historical: 6 false merges, 74 true lost (12:1); current enablement follows runtime veto_dimensions",
     "pack_material": "32,641/67,899 disjoint both-populated; same-canonical subset argument",
 }
 

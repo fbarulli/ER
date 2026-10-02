@@ -47,7 +47,7 @@ def title_sweetener_types(title: str) -> set[str]:
 @lru_cache(maxsize=1)
 def _negated_ingredient_pattern():
     ingredients = '|'.join(re.escape(value) for value in sorted(SWEETENER_TYPES, key=len, reverse=True))
-    return re.compile(r'\b(?:no|without|not made with|not sweetened with)\s+(' + ingredients + r')\b', re.I)
+    return re.compile(r'\b(?:no|without|not made with|not sweetened with)\s+(' + ingredients + r')\b(?!\s+added\b)', re.I)
 
 
 def negated_sweetener_types(*values: object) -> set[str]:

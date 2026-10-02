@@ -20,8 +20,8 @@ as about what it keeps:
 
   * scaffolding dropped — `ip`, `shop`, `media`, `catalog`, `product`,
     `cache`, `small_image`, `seo`, and the rest of PATH_SCHEMA_WORDS;
-  * article numbers dropped — retailer ids like `17619697`, and any
-    digit-run, which are never product tokens;
+  * article numbers dropped — retailer ids like `17619697`; numbers inside
+    explicit size/count spans survive because they describe the product;
   * hashes dropped — `9df78eab33525d08d6e5fb8d27136e95`, `d6bc7f7c`, `K6RMM`.
     This is why image_url is only PARTIALLY evidentiary: walmart's
     `seo/Concord-Foods-Smoothie-Banana-Drink-Mix-2-oz_d6bc7f7c` keeps its
@@ -39,7 +39,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from core.text import normalize_text
+from core.text import PACK_RE, extract_volume_evidence, normalize_text
 
 __all__ = ["PATH_SCHEMA_WORDS", "UNITS", "is_evidentiary", "url_text"]
 
@@ -76,11 +76,9 @@ _SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
 _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{6,}", re.I
 )
-# A digit-run of any length is an article/size id, never a product token.
-_DIGIT_RUN = re.compile(r"(?<![\w.])\d+(?![\w.])")
 # A bare "NNNx" is an image-dimension spec from a media path
 # (.../small_image/220x/…). Real pack notation carries its unit — "12x355ml"
-# — so it survives the digit-run and dimension rules intact.
+# — so it survives the numeric-noise and dimension rules intact.
 _IMAGE_DIM = re.compile(r"^\d+x$")
 # Observed slug decimals (zeroh 0-8l; Sierra 7-5oz) must survive number
 # stripping. Require the complete configured volume-unit suffix before
@@ -232,11 +230,19 @@ def url_text(url: object) -> str:
     slug = _UUID.sub(" ", slug)
     slug = _slug_decimal_pattern().sub(r"\1.\2", slug)
     slug = re.sub(r"[-_+]+", " ", slug)
-    slug = _DIGIT_RUN.sub(" ", slug)
+    slug = normalize_text(slug)
+    # A bare retailer id is noise; a number in an explicit measurement or
+    # pack phrase is product evidence. Preserve only recognized spans, using
+    # the same grammar as downstream readers (including multiword fl oz).
+    quantity_spans = [(entry['start'], entry['end']) for entry in extract_volume_evidence(slug)]
+    quantity_spans.extend(match.span() for match in PACK_RE.finditer(slug))
     tokens = [
         token
-        for token in (part.rstrip('.') for part in normalize_text(slug).split())
-        if not _is_noise(token)
+        for match in re.finditer(r'\S+', slug)
+        for token in [match.group().rstrip('.')]
+        if (re.fullmatch(r'\d+(?:\.\d+)?', token)
+            and any(start <= match.start() and match.end() <= end for start, end in quantity_spans))
+        or not _is_noise(token)
     ]
     return " ".join(tokens)
 

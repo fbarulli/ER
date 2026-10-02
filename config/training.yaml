@@ -528,10 +528,10 @@ rand_matching:
     # The full seven remove 82 false merges but lose 74 true matches, dropping
     # recall 0.8670 -> 0.8536 for +0.001 precision. Excluding sweetener keeps 81
     # of the 82 and loses NONE: precision 0.9751 -> 0.9915 at UNCHANGED recall.
-    # Sweetener's rule fires on a positive-vs-diet clash, which within one GTIN
-    # is usually a parsing artefact rather than a different product, so it is
-    # kept in the audit columns and left out of the veto. Add it back here to
-    # restore the old behaviour -- the measurement above is the argument.
+    # That historical evaluation argued for excluding sweetener. The CURRENT
+    # list below includes it; the measured exclusion result is retained as
+    # review evidence, not a description of today's active veto policy.
+    # Changes to this policy require a fresh measured decision.
     #
     # pack_material (owner ruling, 2026-10-01). Measured full-corpus, original
     # 13-column feed, session numbers (attribute_universe census semantics):

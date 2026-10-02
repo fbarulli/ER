@@ -1,5 +1,153 @@
 # TODO (updated 2026-10-02, branch main)
 
+## Continued extraction/gating investigation — 2026-10-02
+
+Two agents use separate ownership: primary owns shared measurement/sugar
+parsing and this ledger; additional agent owns pipeline numeric gate/pack
+parsing. Existing generated-data edits and prepared-worker deletions preserved.
+
+- [x] Correct added-sugar semantics: fingerprinted scan of 71,623 source rows
+  screens 262 “No/Zero Sugar Added” titles; title-only `no_sugar` and negated
+  sugar go 262 -> 0, `no_added_sugar` goes 0 -> 262. These are extraction
+  assertions, not source conflicts, canonical movement, or match accuracy.
+- [x] Numeric pack/volume vetoes obey configured dimensions in both early
+  `pack_gate` and later overlap branches. Flavor-only policy previously gives
+  hard_no for 355/1000 ml or pack 1/6; corrected examples proceed.
+- [x] Reject nonfinite/out-of-range reliability at gate consumption: NaN
+  confidence/consistency previously proceeds, now falls back. Definite
+  configured categorical contradictions still veto. CSV loader continues
+  accepting NaN; review happens when the gate consumes it.
+- [x] Fix decimal/thousands pack boundaries, price-as-count artifacts, nested
+  container multipliers, and Unicode multiplication (additional agent).
+  Reproduced: SKU674502574/674559022 `38.304 bottles` -> 304 at .9;
+  `$0.05 Bottle` adds false count 5 (including SKU674512045). SKU87399796
+  `6 330 ml (Total1980ml)` and SKU90558864 `3 200 ml (Total600ml)` have
+  unknown pack 1/0. Synthetic `0.5 bottle` -> 5 and
+  `2 x 12 bottles x 330 ml` -> 2. Repair explicit arithmetic with provenance.
+  During full title review, a proposed `Pack - N` extension misreads
+  SKU955609156/961351592 “Pack - 12 Fl. Oz.” as count 12. Distinguish
+  volume-bearing number from count; “Pack - 4-12 Fl. Oz.” can support 4.
+  Pack provenance must also retain the original Unicode × span unchanged.
+  Further full-scan counterexample: SKU153429386/989087387 “Cortas Combo
+  Pack - 1) ... & 2) ... Total 2 Bottles” changes 2/.9 -> 1/.75 because
+  item enumeration is mistaken for compact pack quantity. Preserve count 2.
+  Further real missing evidence: SKU111529819 “Three Pack 16oz Bottles” ->
+  unknown; SKU863131687 “LT.1.5 X 6BT” -> unknown count and no title volume;
+  SKU476889523 “12 Oz ... Total of 72 Oz” -> unknown count, total wrongly
+  package volume; SKU1014485680 “6 Sticks per Box (Pack - 12)” -> 12
+  without inner/outer distinction (72 sticks). Preserve hierarchy and derive
+  count only from explicit compatible total/per-unit arithmetic.
+- [x] Fix mixed/improper fraction volumes without breaking count/size `24 / 2oz`;
+  distinguish per-serving/ingredient quantity, total volume, and package size.
+- [x] Diagnose model-input golden mismatch for SKU1041744561: golden has
+  `volume_ml_8` for dry drink mix; HEAD already omits it. Baseline reproduction
+  confirmed independently of this session's code changes. Do not restore a
+  false liquid volume merely to satisfy stale golden bytes.
+  Full 855-row golden comparison exposes 13 SKU-text movements. Review
+  pack regressions before accepting: SKU508628351/483090740 `Pack of 10,`
+  -> unknown; SKU689989863 `24 x 8 fl ounce`, SKU54290452 `4 x 1, 5l`,
+  SKU955789718 `Pack - 6`, SKU7842215 `6x20 organic cl` lose count.
+  Distinguish pre-existing HEAD failures from new boundary changes. Any golden
+  correction must retain old bytes and an independently justified expectation.
+  Later broad check adds SKU114282359 explicit “Six Pack” -> 6 instead of
+  unknown. The older unit test treating “12 cases” as 12 consumer units is
+  stale against HEAD's outer-count policy; pin unknown unit count and retained
+  outer count 12 instead. Eight golden corrections preserve historical bytes.
+- [ ] Full fingerprinted HEAD/working extraction comparison, fresh affected
+  canonical aggregation and gate replay; keep extraction and gate populations
+  separate and do not claim independent accuracy from rule comparisons.
+- [x] Preserve negated ingredient evidence across listings: `generate_canonical`
+  unions positive sweetener types but drops negative sets. Two listings of
+  one GTIN declaring “No sucralose” and `Sweetener: sucralose` therefore lose
+  the cross-listing conflict. Union negatives and flag intersections.
+- [x] Recover explicit separated numeric URL quantities before noise filtering:
+  `drink-330-ml` loses 330 and `drink-24-pack` loses 24. Protect only spans
+  recognized by shared measurement/pack grammar; preserve ID/hash controls
+  and keep copied title/URL/image surfaces in one confidence source group.
+- [x] Synthetic declared-field parser boundaries: `Volume: 1, 5 l` and
+  `Volume: 1 / 2 l` incorrectly give 1 ml at .9; `Volume: 1.5 dl`
+  gives 2 ml because the optional unit regex omits dl and accepts a unitless
+  prefix. No spaced-decimal, fraction, or decimal pack attribute examples
+  matched in the full source scan. Reject fractional count prefixes and use
+  shared volume grammar within the declared field; do not claim prevalence.
+- [x] Gate review loses description contradictions: canonical “no sugar” title
+  + “Contains sugar” description flags `description_conflict:sweetener`, yet
+  self-pair proceeds. Likewise “with pulp” + “No pulp” flags but proceeds.
+  Review configured conflicted dimensions while preserving definite unrelated
+  categorical vetoes. Config comment says sweetener excluded while live
+  `veto_dimensions` includes it; correct stale rationale, retain runtime policy.
+- [x] Date usage audit: no timestamp column or date attribute keys in the
+  71,623-row export. Initial numeric calendar screen finds 7 title/10
+  description rows; wording screen finds 20 title/779 description/14 category
+  path rows (overlapping, lexical counts; dot dates and “Best BY” not yet in
+  screen). Examples: SKU918764187 `Best BY: 11-13-2024`, SKU53164338
+  `best before 2018-12-31`, and SKU87983382 `best before 26.3.2024`.
+  Preserve date spans and explicit expiry/manufacture roles as review context;
+  ambiguous date ordering stays ambiguous. Expiry belongs to stock/batch,
+  so a difference alone must not become a product-identity veto. There is no
+  collection timestamp to establish how current these listings are.
+  Extend review evidence to explicit shelf-life durations and expiry references
+  such as “Best Before (See Base)” without inventing a calendar date; preserve
+  two-digit-year expiry text as ambiguous-century evidence.
+  Date full-scan counterexample: descriptions saying “not Best Before /
+  Expiration UK is DD/MM/YYYY\n8-12 DAYS DELIVERY” incorrectly attach
+  delivery ranges (and decimal oz/lbs on the next line) to expiry. Require
+  same-clause cues, exclude measurement/delivery suffixes, and retain negated
+  date-format guidance as guidance instead of a positive expiry assertion.
+- [x] Registry routing bug: `VETO_CENSUS_KEY_BY_DIMENSION` maps numeric
+  `pack` to categorical `pack type`, while `count per unit` is separate.
+  `_universe_value` consequently substitutes pack counts into `pack type`
+  and loses actual package-format evidence. Route count and format to their
+  respective keys, keeping direct gate policy and missing-count semantics.
+  The sweetener eligibility ledger also incorrectly describes current policy
+  as excluded; distinguish historical loss measurement from runtime config.
+  Correct routing exposes a targeted-gate disagreement on frozen pair
+  688267001253/688267001574: missing curated package type borrows raw
+  `aerosol` and hard rejects despite `targeted_package_type_conflict=0`.
+  Keep raw format comparison in full evidence; permit package-format veto
+  only with two-sided curated format evidence, matching direct gate policy.
+- [x] Explicit sweetening conflicts not consumed: `Sweetener: unsweetened,
+  cane sugar` emits `unsweetened_with_declared_sweetener` yet self-pair
+  proceeds. Route explicit contradictory sweetening states to sweetener
+  review, preserving unrelated veto precedence. `no_added_sugar_with_cane_sugar`
+  is a separate claim/ingredient uncertainty; review its semantics and
+  population before changing hard-negative policy.
+- [x] Synthetic zero-quantity safety: `extract_all('0 ml bottle; total 600 ml','')`
+  now divides by zero in derived-pack arithmetic; `Volume: 0` raises instead
+  of remaining unknown. Invalid/nonpositive measurements must not become
+  package evidence or crash extraction. Not a measured corpus prevalence.
+- [x] Removed-feature rationale error: registry notes call sports ingredients
+  3.6% and coffee type 2.6% “below” the 2.5% veto-band floor. Correct the
+  arithmetic and distinguish within-GTIN feed disagreement from separability
+  between different products. The band is advisory; it cannot establish that
+  a feature lacks signal or that enabling a hard veto is identity-safe.
+- [x] Surface newly extracted date roles in the gate review listing cards,
+  including ambiguous dates and shelf-life duration. Raw source strings alone
+  do not expose the parsed interpretation; keep stock context separate from
+  the gate's deciding clause and do not infer current expiration without a
+  collection timestamp.
+- [ ] Fresh registry census reproduces 71,623 rows / 26,214 valid-GTIN rows /
+  30,182 same-GTIN pairs, but flavour distinct sets are 338 versus pin 333
+  (+1.50%, outside 1%). Keep the pin unchanged; diagnose baseline/source
+  provenance. Current diagnostic census is separate from the production pin.
+  HEAD's unchanged flavour parser also reproduces 338 on the same source;
+  this drift predates the current fixes, so the pin remains unchanged.
+- [ ] Original-column clarification routing error: critical extraction returns
+  `flavor`/`carbonation`, but stage 7 expects `flavour`/`carbonization` and
+  fails to route their claims. It also inserts sugar-status claims into the
+  sweetener-ingredient registry, conflating different semantics. Correct
+  aliases and use declared ingredient readers for the ingredient channel.
+
+Fix-first checkpoint: full 71,623-row extraction has zero errors; existing
+extraction fields change on 16,942 rows and volume/pack assignment on 602.
+The new date evidence field is additive on all rows, so that alone is not an
+improvement count. Fresh canonical/gate replay is being corrected to include
+exact production source-row captures. Earlier broad checks passed 574 tests
+and exposed two stale expectations; source-reviewed corrections are retained
+locally. User ruling: push fixes now and defer further test work.
+Evidence: `results/regex_logic_eval/added_sugar_before.json` and
+`added_sugar_after.json`; repeat with `scripts/audit_added_sugar.py`.
+
 ## Current work — measured gate/regex repairs (2026-10-02)
 
 Evidence: `GATE_REGEX_REVIEW_20261002.md`,

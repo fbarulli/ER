@@ -339,9 +339,10 @@ def _extract_volume_match_legacy(text: str) -> tuple:
 @lru_cache(maxsize=1)
 def _measurement_candidate_re():
     units = r"(?:" + "|".join(entry.pattern for entry in _unit_spec().volume) + r")"
-    number = r"(?:\d+\s*/\s*\d+|\d{1,3}[ \u00a0]+000|0\s+\d+|\d+(?:\s*[.,]\s*\d+)?|\.\d+)"
+    number = r"(?:\d+[ \u00a0]+\d+\s*/\s*\d+|\d+\s*/\s*\d+|\d{1,3}[ \u00a0]+000|0\s+\d+|\d+(?:\s*[.,]\s*\d+)?|\.\d+)"
     return re.compile(
-        r"(?<![\d.])(?P<number>" + number + r")\s*-?\s*(?P<unit>" + units + r")(?![a-z])",
+        r"(?<![\d.])(?P<number>" + number + r")\s*-?\s*(?P<unit>" + units + r")(?![a-z])"
+        r"|\b(?P<prefix_unit>ml|cl|ltr|lt|l)\.\s*(?P<prefix_number>\d+(?:[.,]\d+)?)(?![\d.])",
         re.IGNORECASE | re.VERBOSE,
     )
 
@@ -350,30 +351,43 @@ def extract_volume_evidence(text: str) -> list[dict]:
     """Keep measurement roles and original spans before punctuation cleanup.
 
     A recipe yield, nutrition denominator, or dry weight is useful evidence,
-    but cannot assert liquid package volume. Only proper fractions (numerator
-    smaller than denominator) are decoded; ``24 / 2oz`` is count/size notation.
+    but cannot assert liquid package volume. Mixed and improper fractions are
+    decoded before normalization; spaced ambiguous-ounce count/size notation
+    such as ``24 / 2oz`` retains its package-size interpretation.
     """
     if not isinstance(text, str):
         return []
     candidates = []
     dry_product = bool(re.search(r"\b(?:powder(?:ed)?|dry mix|drink mix|tea bags?)\b", text, re.I))
     for match in _measurement_candidate_re().finditer(text):
-        number, unit_surface = match.group('number', 'unit')
+        number = match.group('number') or match.group('prefix_number')
+        unit_surface = match.group('unit') or match.group('prefix_unit')
         unit = norm_unit(unit_surface)
         preceding = text[:match.start()].rstrip()
+        following = text[match.end():]
         role = 'package_volume'
-        if re.search(r"\bper\s*$", preceding, re.I):
+        if (re.search(r"\bper\s*$", preceding, re.I)
+                or re.match(r"\s*(?:per\s+(?:serving|portion)|/\s*serving)\b", following, re.I)):
             role = 'nutrition'
+        elif (re.search(r"\btotal\s*(?:of\s*)?[:=]?\s*$", preceding, re.I)
+              or re.match(r"\s*(?:in\s+)?total\b", following, re.I)):
+            role = 'total_volume'
         elif re.search(r"\b(?:makes?|yields?|dilutes?\s+to)\s*$", preceding, re.I):
             role = 'yield'
+        elif (re.search(r"\bcontains?\s*$", preceding, re.I)
+              and re.match(r"\s*(?:of\s+)?(?:juice|concentrate|syrup)\s+(?:in|per|within)\b", following, re.I)):
+            role = 'ingredient_volume'
         elif dry_product and unit in {'oz', 'ounce', 'ounces'}:
             role = 'net_weight'
         if '/' in number:
-            numerator, denominator = (int(part.strip()) for part in number.split('/'))
+            fraction = re.fullmatch(r'(?:(\d+)\s+)?(\d+)\s*/\s*(\d+)', number)
+            whole, numerator, denominator = (int(part or 0) for part in fraction.groups())
             if denominator == 0:
                 continue
             nested_count = bool(re.search(r'\d+\s*[x×]\s*$', preceding, re.I))
-            value = numerator / denominator if numerator < denominator and not nested_count else float(denominator)
+            count_size = (nested_count or (not whole and numerator >= denominator
+                          and unit in _volume_views()[1] and bool(re.search(r'\s/', number))))
+            value = float(denominator) if count_size else whole + numerator / denominator
             parsed = (value, unit, unit in _volume_views()[1], match.group(0))
         else:
             # Preserve comma decimal semantics. General normalization would
@@ -382,7 +396,7 @@ def extract_volume_evidence(text: str) -> list[dict]:
             numeric = count_list.group(2) if count_list else re.sub(r'\s*([.,])\s*', r'\1', number)
             parsed = _extract_volume_match_legacy(numeric + ' ' + unit_surface)
         value, parsed_unit, ambiguous, _ = parsed
-        if value is None or parsed_unit is None:
+        if value is None or parsed_unit is None or value <= 0:
             continue
         glued = match.start() > 0 and text[match.start() - 1].isalpha() and text[match.start() - 1].casefold() != 'x'
         if glued and value * _volume_views()[0][parsed_unit] > _unit_spec().glued_code_max_ml:
