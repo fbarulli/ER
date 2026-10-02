@@ -3958,7 +3958,7 @@ def train_one_config(
             n_steps_per_epoch = max(1, len(train_ds) // batch_size)
             warmup_steps = int(n_steps_per_epoch * cfg["epochs"] * cfg["warmup_ratio"])
             eval_steps = max(1, n_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
-            bs_cfg = cfg["training"].get("batch_sampler", {})
+            bs_cfg = cfg.get("training", {}).get("batch_sampler", {})
             controlled_sampler = (
                 ControlledBatchSampler(
                     train_ds,
