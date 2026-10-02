@@ -464,6 +464,9 @@ def _main_inner(_mlf, _wandb) -> None:
 
     _mask_spec = MaskingSpec(**mask_cfg)
     field_quota_shares = dict(_mask_spec.field_quota_shares)
+    attribute_augment = {
+        k: v.model_dump() for k, v in _mask_spec.attribute_augment.items()
+    }
     cross_retailer_donors = bool(_mask_spec.cross_retailer_donors)
     _dropout_cfg = _mask_spec.declaration_dropout
     dropout_frac = float(_dropout_cfg.frac) if _dropout_cfg is not None else 0.0
@@ -774,6 +777,7 @@ def _main_inner(_mlf, _wandb) -> None:
             max_donor_overlap=swap_max_donor_overlap,
             field_quota_shares=field_quota_shares or None,
             row_retailer=payload_retailers,
+            attribute_augment=attribute_augment or None,
         )
         mask_audit.extend(value_audit)
         from training.masking import extend_augmented_features
@@ -903,6 +907,7 @@ def _main_inner(_mlf, _wandb) -> None:
             max_donor_overlap=swap_max_donor_overlap,
             field_quota_shares=field_quota_shares or None,
             row_retailer=payload_retailers,
+            attribute_augment=attribute_augment or None,
         )
         _neg_new_audit = _neg_mask_audit + _neg_value_audit
         if _neg_new_audit:
@@ -979,6 +984,7 @@ def _main_inner(_mlf, _wandb) -> None:
             max_donor_overlap=swap_max_donor_overlap,
             field_quota_shares=field_quota_shares or None,
             row_retailer=payload_retailers,
+            attribute_augment=attribute_augment or None,
         )
         _cf_new = np.asarray(_cf_full, dtype=int)[_cf_pos_len:]
         if n_cf_added:

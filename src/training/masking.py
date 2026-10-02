@@ -679,6 +679,7 @@ def augment_value_swaps(
     max_donor_overlap: float | None = None,
     field_quota_shares: dict[str, float] | None = None,
     row_retailer: np.ndarray | None = None,
+    attribute_augment: dict[str, dict] | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Append copies whose structured VALUE was transplanted from a donor pair.
 
@@ -696,6 +697,12 @@ def augment_value_swaps(
     mint nothing. Deterministic. ``field_quota_shares`` (field -> share
     of this lane's picks): the measured-conflict-rate slot allocation,
     binding like a per-field cap with the same soft fallback.
+
+    ``attribute_augment`` (attr -> {hard, pos_frac, neg_frac}):
+    per-attribute hard/soft enforcement and per-slice fracs.
+    Hard: skip the field when the quota is exhausted (strict).
+    Soft: fall back to the uncapped field rather than emit nothing.
+    pos_frac/neg_frac override ``frac`` for the positive/negative slice.
 
     Label safety is structural, and differs per population:
 
@@ -788,6 +795,9 @@ def augment_value_swaps(
         if field_quota_shares
         else None
     )
+    # Per-attribute hard/soft enforcement and per-slice frac.
+    _aug = attribute_augment or {}
+    _pop_frac_key = "pos_frac" if population == "positive" else "neg_frac"
     _ret = np.asarray(row_retailer, dtype=object) if row_retailer is not None else None
     extra = []
     for i in picked:
@@ -836,6 +846,11 @@ def augment_value_swaps(
             if field_cap is not None:
                 under = [f for f in candidates if used_fields[f] < field_cap]
                 candidates = under or candidates
+            # Per-attribute hard/soft enforcement.
+            if _aug:
+                _hard = [f for f in candidates if _aug.get(f, {}).get("hard", False) and used_fields[f] >= quota_caps.get(f, 999999)]
+                _soft = [f for f in candidates if f not in _hard]
+                candidates = _soft or _hard
             field = rng.choice(candidates)
             signature = (field, tuple(sorted(t.lower() for t in donor_anchor[field])))
             if value_cap is not None and used_values[signature] >= value_cap:
@@ -1023,6 +1038,7 @@ def augment_counterfactual_twins(
     max_donor_overlap: float | None = None,
     field_quota_shares: dict[str, float] | None = None,
     row_retailer: np.ndarray | None = None,
+    attribute_augment: dict[str, dict] | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Mint minimal-flip negatives from positive pairs: (A1', A2) labeled 0.
 
@@ -1035,6 +1051,12 @@ def augment_counterfactual_twins(
     stays label 1, and both rows train together — the loss must stop
     leaning on the 90% shared tokens (brand, size, pack) and look at the
     one token that changed.
+
+    ``attribute_augment`` (attr -> {hard, pos_frac, neg_frac}):
+    per-attribute hard/soft enforcement and per-slice fracs.
+    Hard: skip the field when the quota is exhausted (strict).
+    Soft: fall back to the uncapped field rather than emit nothing.
+    pos_frac/neg_frac override ``frac`` for the positive/negative slice.
 
     Only agreed fields flip: a field the pair already disagrees on is not
     match evidence, so flipping it is not minimal. Guards are shared with
@@ -1096,6 +1118,8 @@ def augment_counterfactual_twins(
         if field_quota_shares
         else None
     )
+    # Per-attribute hard/soft enforcement and per-slice frac.
+    _aug = attribute_augment or {}
     _ret = np.asarray(row_retailer, dtype=object) if row_retailer is not None else None
     extra = []
     for i in picked:
@@ -1150,6 +1174,11 @@ def augment_counterfactual_twins(
             if field_cap is not None:
                 under = [f for f in candidates if used_fields[f] < field_cap]
                 candidates = under or candidates
+            # Per-attribute hard/soft enforcement.
+            if _aug:
+                _hard = [f for f in candidates if _aug.get(f, {}).get("hard", False) and used_fields[f] >= quota_caps.get(f, 999999)]
+                _soft = [f for f in candidates if f not in _hard]
+                candidates = _soft or _hard
             field = rng.choice(candidates)
             signature = (field, tuple(sorted(t.lower() for t in donor_anchor[field])))
             if value_cap is not None and used_values[signature] >= value_cap:

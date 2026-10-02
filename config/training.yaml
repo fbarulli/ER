@@ -57,6 +57,43 @@ masking:
     carbonation: 0.07
     package_material: 0.07
     juice_content: 0.04
+  # Per-attribute augmentation: hard/soft enforcement and
+  # per-slice (pos/neg) fracs, configurable per attribute.
+  # Hard: skip the field when quota exhausted (strict).
+  # Soft: fall back to uncapped field rather than emit nothing.
+  attribute_augment:
+    volume:
+      hard: true
+      pos_frac: 0.15
+      neg_frac: 0.10
+    pack:
+      hard: true
+      pos_frac: 0.15
+      neg_frac: 0.10
+    flavor:
+      hard: false
+      pos_frac: 0.20
+      neg_frac: 0.15
+    sweetener:
+      hard: true
+      pos_frac: 0.25
+      neg_frac: 0.15
+    carbonation:
+      hard: false
+      pos_frac: 0.10
+      neg_frac: 0.05
+    package_type:
+      hard: false
+      pos_frac: 0.10
+      neg_frac: 0.05
+    package_material:
+      hard: true
+      pos_frac: 0.10
+      neg_frac: 0.05
+    juice_content:
+      hard: false
+      pos_frac: 0.10
+      neg_frac: 0.05
   cross_retailer_donors: true
   declaration_dropout:
     frac: 0.30        # share of ORIGINAL positive anchors minted as dropouts

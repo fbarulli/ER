@@ -1334,6 +1334,21 @@ class RandMatchingSpec(BaseModel):
             )
         return self
 
+class AttributeAugmentSpec(BaseModel):
+    """Per-attribute augmentation config (masking.attribute_augment).
+
+    Per attribute: hard vs soft enforcement and per-slice (pos/neg) fracs.
+    Hard: skip the field when the quota is exhausted (strict).
+    Soft: fall back to the uncapped field rather than emitting nothing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    hard: bool = False
+    pos_frac: float = Field(ge=0.0, le=1.0, default=0.0)
+    neg_frac: float = Field(ge=0.0, le=1.0, default=0.0)
+
+
 class DeclarationDropoutSpec(BaseModel):
     """Declaration-dropout lane contract (masking.declaration_dropout)."""
 
@@ -1395,6 +1410,11 @@ class MaskingSpec(BaseModel):
     # Unnamed fields fall back to the soft max_field_share cap; named fields
     # bind to ceil(share * picks) with the same soft fallback.
     field_quota_shares: dict[str, float] = Field(default_factory=dict)
+    # Per-attribute augmentation: hard/soft enforcement and per-slice
+    # (pos/neg) fracs, configurable per attribute via aug config.
+    attribute_augment: dict[str, AttributeAugmentSpec] = Field(
+        default_factory=dict
+    )
     # Cross-retailer donor precedence: donors draw from a different store
     # first (91.4% of real duplicates are cross-retailer); after 10 strict
     # tries the donor loop relaxes so rich lanes never mint nothing.
@@ -1457,6 +1477,7 @@ class MaskingProfileSpec(BaseModel):
     swap_max_donor_overlap: float | None = Field(default=None, gt=0.0, le=1.0)
     diet_min_neg_aug_frac: float | None = Field(default=None, ge=0.0, le=1.0)
     diet_max_pos_neg_view_ratio: float | None = Field(default=None, gt=0.0)
+    attribute_augment: dict[str, AttributeAugmentSpec] | None = None
 
 
 class UniformityRegularizationSpec(BaseModel):
