@@ -760,6 +760,11 @@ def run_colab_exec_capture(
                     # is decoded below.  Surface non-JSON diagnostics now so
                     # an upstream client/kernel failure is visible at once.
                     if not line.lstrip().startswith(("{", "[")):
+                        if "jupyter_kernel_client" in line or "KernelClient" in line:
+                            continue
+                        stripped = line.strip()
+                        if stripped in ("}", "]", "},", "],", "{", "["):
+                            continue
                         report_probe_progress(f"[probe-out] {line.rstrip()}")
 
             def emit_heartbeat() -> None:
