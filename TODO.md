@@ -132,11 +132,21 @@ parsing. Existing generated-data edits and prepared-worker deletions preserved.
   provenance. Current diagnostic census is separate from the production pin.
   HEAD's unchanged flavour parser also reproduces 338 on the same source;
   this drift predates the current fixes, so the pin remains unchanged.
-- [ ] Original-column clarification routing error: critical extraction returns
+- [x] Original-column clarification routing error: critical extraction returns
   `flavor`/`carbonation`, but stage 7 expects `flavour`/`carbonization` and
   fails to route their claims. It also inserts sugar-status claims into the
   sweetener-ingredient registry, conflating different semantics. Correct
   aliases and use declared ingredient readers for the ingredient channel.
+  Fixed SSOT aliases and ingredient-only readers; source contradictions route
+  to review. Direct evidence: URL vanilla/orange now vetoes flavor; sugar
+  versus no-added-sugar stays compatible; No Stevia plus declared Stevia
+  routes to review. Tests deferred by user.
+- [ ] Missing-flavor supporting evidence gap: capture-correct replay finds
+  86 passing pairs with two-sided made-from sets where neither is a subset.
+  Include configured ingredient disagreement as review evidence when flavor
+  is missing; preserve hard-veto policy. Evidence includes cabbage/tomato
+  juice and Peapod vegetable versus peach/mango juice.
+
 
 Fix-first checkpoint: full 71,623-row extraction has zero errors; existing
 extraction fields change on 16,942 rows and volume/pack assignment on 602.

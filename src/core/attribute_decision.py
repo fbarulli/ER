@@ -729,6 +729,13 @@ class AttributeDecisionEngine:
             from core.url_evidence import url_text
 
             url_names = alias_names("url")
+            from core.attribute_conflicts import VETO_CENSUS_KEY_BY_DIMENSION
+            from core.sweetener_values import (
+                declared_sweeteners, title_sweetener_types, negated_sweetener_types,
+            )
+            ingredient_types: set[str] = set()
+            negative_ingredients: set[str] = set()
+            ingredient_source_conflict = False
             for source_row in _iter_source_rows(row):
                 for source in attribute_names:
                     cell = str(source_row.get(source) or "")
@@ -746,36 +753,46 @@ class AttributeDecisionEngine:
                     url_text(source_row.get(name) or "")
                     for name in url_names
                 ).strip()
-                claims = extract_critical_claims(
-                    " ".join(
-                        text
-                        for text in (
-                            " ".join(
-                                str(source_row.get(name) or "")
-                                for name in title_names
-                            ).strip(),
-                            url_blob,
-                        )
-                        if text
-                    ),
-                    cell_text,
-                    " ".join(
-                        str(source_row.get(name) or "") for name in attribute_names
-                    ).strip(),
+                title_blob = " ".join(
+                    text for text in (
+                        " ".join(str(source_row.get(name) or "") for name in title_names).strip(),
+                        url_blob,
+                    ) if text
                 )
+                attribute_blob = " ".join(
+                    str(source_row.get(name) or "") for name in attribute_names
+                ).strip()
+                declared = declared_sweeteners(attribute_blob)
+                ingredient_types.update(declared["sweetener_type"])
+                ingredient_types.update(title_sweetener_types(title_blob))
+                ingredient_types.update(title_sweetener_types(cell_text))
+                negative_ingredients.update(
+                    negated_sweetener_types(title_blob, cell_text, attribute_blob)
+                )
+                ingredient_source_conflict |= bool(declared["consistency_flags"])
+                claims = extract_critical_claims(title_blob, cell_text, attribute_blob)
                 for field, tokens in claims.items():
-                    if tokens:
-                        alias = {
-                            "flavour": "flavour", "sweetener": "sweetener",
-                        }.get(field, field)
-                        if alias in specs:
-                            out[alias] = out.get(alias, frozenset()) | frozenset(
-                                str(t) for t in tokens
-                            )
+                    # The registry sweetener channel compares ingredients.
+                    # Sugar/no-sugar/no-added-sugar are a separate claim axis.
+                    if field == "sweetener":
+                        continue
+                    alias = VETO_CENSUS_KEY_BY_DIMENSION.get(field, field)
+                    if tokens and alias in specs:
+                        out[alias] = out.get(alias, frozenset()) | frozenset(
+                            str(t) for t in tokens
+                        )
+            if ingredient_types:
+                out["sweetener"] = out.get("sweetener", frozenset()) | frozenset(ingredient_types)
+            if ingredient_source_conflict or negative_ingredients & ingredient_types:
+                out["_sweetener_source_conflict"] = frozenset({"contradiction"})
             return out
 
         left_sets = reparse(left_raw)
         right_sets = reparse(right_raw)
+        if key == "sweetener" and (
+            left_sets.get("_sweetener_source_conflict") or right_sets.get("_sweetener_source_conflict")
+        ):
+            return ComparisonResult.INCONCLUSIVE, "source_conflict"
         a, b = left_sets.get(key, frozenset()), right_sets.get(key, frozenset())
         if not a or not b:
             return None

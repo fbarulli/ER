@@ -1307,6 +1307,11 @@ def three_way_gate(
         categorical_conflicts = sorted(
             CRITICAL_NAME_BY_CENSUS_KEY[key] for key in evidence.conflicts
         )
+        uncertain_categorical_dimensions.update(
+            CRITICAL_NAME_BY_CENSUS_KEY[key]
+            for key, entry in evidence.dimensions.items()
+            if entry.fallback_from == "source_conflict"
+        )
     if sweetener_source_conflict:
         categorical_conflicts = [name for name in categorical_conflicts if name != "sweetener"]
     if categorical_conflicts:
