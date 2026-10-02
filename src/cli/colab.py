@@ -40,7 +40,7 @@ Usage:
 """
 
 from __future__ import annotations
-
+ 
 import argparse
 import base64
 from contextlib import nullcontext
@@ -62,6 +62,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
 # AUDIT FIX (round 2 F15, round 3): RESULTS/DATA come from the config SSOT
 # via lib.common (config/paths.yaml paths.results_dir/data_dir) — were
 # re-derived inline (HERE / "artifacts" / "results"), a second declaration

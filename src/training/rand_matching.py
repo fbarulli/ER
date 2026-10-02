@@ -468,6 +468,19 @@ def targeted_veto_gate(
             "targeted_gate_reason": "+".join(veto_reasons),
             "targeted_gate_route": "reject",
         }
+    from core.identity_variants import matching_review_reasons
+    review = matching_review_reasons(sku_info, candidate_info)
+    flags = set()
+    for info in (sku_info, candidate_info):
+        raw = info.get("attribute_consistency_flags") or ()
+        if isinstance(raw, str):
+            import ast
+            raw = ast.literal_eval(raw)
+        flags.update(raw)
+    if flags & {"canonical_volume_conflict", "canonical_pack_conflict"}:
+        review.append("canonical_measurement_conflict")
+    if review:
+        return common | {"targeted_gate_decision": "defer", "targeted_gate_reason": "identity_review:" + ",".join(review), "targeted_gate_route": "human_review"}
     if deferral_missing:
         return common | {
             "targeted_gate_decision": "defer",

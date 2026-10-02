@@ -662,18 +662,16 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         consistency_flags.add("sweetening_status_conflict")
     if "no_added_sugar" in critical["sweetener"] and "cane_sugar" in sweeteners["sweetener_type"]:
         consistency_flags.add("no_added_sugar_with_cane_sugar")
-    flavor_set = set(critical["flavor"])
+    from core.critical_attributes import extract_declared_flavor_tokens
+    from core.identity_variants import extract_identity_variants
+    # Product flavor comes from titles and explicit Flavor declarations.
+    # Ingredients and broad category/breadcrumb inventories are context.
+    flavor_set = set(extract_flavor_tokens(sku_name)) | set(extract_declared_flavor_tokens(attribute))
+    identity_variant_set = extract_identity_variants(sku_name)
     if flavor_set:
-        ledger.append({"field": "flavor", "column": "title+attributes",
-                       "value": sorted(flavor_set)})
-    # Category tokens may carry flavor evidence
-    # (e.g. "Orange Juice" in category path) when title/attributes
-    # are silent on flavor.
-    cat_flavors = extract_flavor_tokens(cat_tokens) if cat_tokens else frozenset()
-    if cat_flavors:
-        ledger.append({"field": "flavor", "column": "category",
-                       "value": sorted(cat_flavors)})
-        flavor_set.update(cat_flavors)
+        ledger.append({"field": "flavor", "column": "title+declared_flavor", "value": sorted(flavor_set)})
+    if identity_variant_set:
+        ledger.append({"field": "identity_variant", "column": "title", "value": sorted(identity_variant_set)})
     flavor = sorted(flavor_set)[0] if flavor_set else ""
     for dimension in ("carbonation", "sweetener", "pulp", "organic"):
         if critical[dimension]:
@@ -894,6 +892,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         package_materials=package_materials,
         packaging_levels=packaging_levels,
         flavor_set=flavor_set,
+        identity_variant_set=identity_variant_set,
         carbonation_set=set(critical["carbonation"]),
         sweetener_set=set(critical["sweetener"]),
         sweetener_type_set=sweeteners["sweetener_type"],
@@ -1333,7 +1332,7 @@ def three_way_gate(
             reason=f"{_r.categorical_mismatch} " + ",".join(categorical_conflicts),
         ).model_dump()
 
-    if uncertain_categorical_dimensions or source_flags & {"volume_sources_disagree", "pack_sources_disagree", "pack_hierarchy_ambiguous"}:
+    if uncertain_categorical_dimensions or source_flags & {"volume_sources_disagree", "pack_sources_disagree", "pack_hierarchy_ambiguous", "canonical_volume_conflict", "canonical_pack_conflict"}:
         return GateResult(decision="fallback", reason=_r.source_conflict).model_dump()
 
     if _has_attribute_flag(attrs1, "ambiguous_volume") or _has_attribute_flag(
@@ -1460,6 +1459,11 @@ def three_way_gate(
                 decision="fallback",
                 reason=_r.supporting_feature_review + " " + ",".join(sorted(differing_support)),
             ).model_dump()
+
+    from core.identity_variants import matching_review_reasons
+    review = matching_review_reasons(left_info, right_info)
+    if review:
+        return GateResult(decision="fallback", reason=_r.supporting_feature_review + " " + ",".join(review)).model_dump()
 
     # MODE_FLAVOR SURFACE LANE (JEV audit, 2026-10-02): reached only when
     # no census conflict vetoed the pair. When the canonical mode_flavor
@@ -1803,6 +1807,7 @@ def generate_canonical(
     packaging_level_set = {value for x in extracted for value in x["packaging_levels"]}
     package_material_set = {value for x in extracted for value in x["package_materials"]}
     flavor_set = {value for x in extracted for value in x["flavor_set"]}
+    identity_variant_set = {value for x in extracted for value in x["identity_variant_set"]}
     carbonation_set = {value for x in extracted for value in x["carbonation_set"]}
     sweetener_set = {value for x in extracted for value in x["sweetener_set"]}
     sweetener_type_set = {value for x in extracted for value in x["sweetener_type_set"]}
@@ -1843,6 +1848,14 @@ def generate_canonical(
     pack_mode = Counter(
         x["pack_qty"] for x in extracted if x["pack_confidence"] > 0
     )
+    if len(volume_set) > 1:
+        gate_config = training_cfg().gate
+        if not volumes_compatible({min(volume_set)}, {max(volume_set)},
+                volume_relative_tolerance=float(gate_config.vol_tolerance),
+                volume_absolute_tolerance_ml=float(gate_config.vol_abs_tolerance)):
+            attribute_consistency_flags.add("canonical_volume_conflict")
+    if len(pack_set) > 1:
+        attribute_consistency_flags.add("canonical_pack_conflict")
     # mode share over rows that HAVE a volume (unknown-volume rows don't vote)
     volume_consistency = (
         (vol_mode.most_common(1)[0][1] / sum(vol_mode.values())) if vol_mode else 1.0
@@ -1874,6 +1887,7 @@ def generate_canonical(
     # Explicit categorical fields are spoken before free-form n-grams. This
     # guarantees that polarity survives canonical generation even when its
     # source phrase is not among the top TF-IDF n-grams.
+    parts.extend(sorted(token.replace(":", "_") for token in identity_variant_set))
     parts.extend(sorted(carbonation_set))
     parts.extend(sorted(sweetener_set))
     parts.extend(sorted(pulp_set))
@@ -2030,6 +2044,7 @@ def generate_canonical(
         package_type_set=package_type_set,
         package_material_set=package_material_set,
         flavor_set=flavor_set,
+        identity_variant_set=identity_variant_set,
         carbonation_set=carbonation_set,
         sweetener_set=sweetener_set,
         sweetener_type_set=sweetener_type_set,
@@ -2965,6 +2980,7 @@ def run_within_brand_pipeline(
         "packaging_level_set",
         "package_material_set",
         "flavor_set",
+        "identity_variant_set",
         "carbonation_set",
         "sweetener_set",
         "sweetener_type_set",

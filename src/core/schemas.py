@@ -2643,6 +2643,7 @@ class ExtractedAttributes(BaseModel):
     package_types: list[str] = Field(default_factory=list)
     package_materials: list[str] = Field(default_factory=list)
     packaging_levels: set[str] = Field(default_factory=set)
+    identity_variant_set: set[str] = Field(default_factory=set)
     flavor_set: set[str] = Field(default_factory=set)
     carbonation_set: set[str] = Field(default_factory=set)
     sweetener_set: set[str] = Field(default_factory=set)
@@ -2681,6 +2682,7 @@ class CanonicalRecord(BaseModel):
     package_type_set: set[str] = Field(default_factory=set)
     package_material_set: set[str] = Field(default_factory=set)
     packaging_level_set: set[str] = Field(default_factory=set)
+    identity_variant_set: set[str] = Field(default_factory=set)
     flavor_set: set[str] = Field(default_factory=set)
     carbonation_set: set[str] = Field(default_factory=set)
     sweetener_set: set[str] = Field(default_factory=set)
@@ -3241,6 +3243,7 @@ CANONICAL_RECORDS_COLUMNS: tuple[str, ...] = (
     "package_material_set",
     "packaging_level_set",
     "flavor_set",
+    "identity_variant_set",
     "carbonation_set",
     "sweetener_set",
     "sweetener_type_set",

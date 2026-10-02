@@ -24,7 +24,8 @@ CRITICAL_ATTRIBUTE_DIMENSIONS: tuple[str, ...] = (
 )
 
 FLAVOR_ALIASES: dict[str, str] = {
-    "berries": "berry",
+    "berries": "berry", "blackcurrants": "blackcurrant", "cacao": "cocoa",
+    "lemongass": "lemongrass", "chili": "chilli",
     "cocoanut": "coconut",
     # 2026-09-28 low-hanging-fruit normalization (measured on the
     # 108,046-row payload, scripts/flip_validity_audit.py companion mining:
@@ -59,6 +60,8 @@ FLAVOR_LEXICON: frozenset[str] = frozenset(
         "pomegranate", "quince",
         "raspberry", "rhubarb", "rose", "strawberry", "tamarind", "tonic",
         "tropical", "vanilla", "violet", "watermelon",
+        "matcha", "brownie", "cocoa", "chilli", "lavender", "parsley",
+        "anise", "orgeat", "lemongrass",
     }
 )
 # Additional values observed in explicit Flavour/Flavor declarations. Keep
@@ -89,7 +92,15 @@ DECLARED_FLAVOR_FIELD_RE = re.compile(r"(?:^|;)\s*flavou?r\s*:\s*([^;]*)", re.IG
 
 def extract_flavor_tokens(*values: object) -> frozenset[str]:
     text = normalized_attribute_text(*values)
-    return frozenset(
+    phrases = set()
+    for pattern, flavor in ((r"\bblood oranges?\b", "blood orange"),
+                            (r"\bs\s*'?\s*mores?\b", "smores"),
+                            (r"\bgraham crackers?\b", "graham cracker"),
+                            (r"\bsnow cone\b", "snow cone"),
+                            (r"\bpu erh\b", "pu erh"),
+                            (r"\b(?:plain|unflavou?red)\b", "plain")):
+        if re.search(pattern, text): phrases.add(flavor)
+    return frozenset(phrases) | frozenset(
         FLAVOR_ALIASES.get(token, token)
         for token in text.split()
         if FLAVOR_ALIASES.get(token, token) in FLAVOR_LEXICON

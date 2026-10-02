@@ -374,6 +374,7 @@ data_prep_required_columns:
 # difference between a list column ("[]") and a mapping column ("{}") is DATA,
 # not a special case in code — the adapter used to branch on the column name.
 canonical_optional_columns:
+  identity_variant_set: "[]"
   sweetener_type_set: "[]"
   sweetening_set: "[]"
   attribute_consistency_flags: "[]"
