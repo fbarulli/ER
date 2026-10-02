@@ -4369,9 +4369,9 @@ def stop(*, stop_local_owner: bool = False) -> None:
 def main() -> None:
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--what", required=True,
+    ap.add_argument("--what", default="tracks",
                     choices=["train", "tracks", "dual-train", "hpo", "sims", "mixed", "smoke", "stop"],
-                    help="what to run on the VM")
+                    help="what to run on the VM (default: tracks)")
     ap.add_argument('--tracks-config', type=Path, default=None,
                     help='prepared all-track suite; uses the existing Colab lifecycle')
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,

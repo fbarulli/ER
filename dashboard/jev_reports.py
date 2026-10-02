@@ -87,6 +87,11 @@ def jev(round: int | None = None, stratum: str = ''):
         body += f'<p><a href="/jev/artifact?name=paired_comparison_{round}.json">Download paired comparison</a></p>'
     if selected_report and round >= 4:
         body += '<h3>Judgments by input cohort</h3>' + table(['Input','Gate decision','Pairs','Mean score','Both scores < 0.2','Both scores > 0.8'], [[scope,decision,v['pairs'],f"{v['mean_score']:.3f}" if v['mean_score'] is not None else '',v['both_below_0_2'],v['both_above_0_8']] for scope,decisions in selected_report.get('input_cohorts',{}).items() for decision,v in decisions.items()])
+    inspection = load(f'inspection_{round}.json', None)
+    if inspection:
+        body += '<h3>Inspected judgment changes</h3>' + table(['Pair','Gate','Finding','Evidence','Next step'], [[x['gtin1'] + ' / ' + x['gtin2'],x['gate'],x['finding'],x['observation'],x['next_step']] for x in inspection['changed_pairs']])
+        body += '<p>' + e(inspection['limitations']) + '</p>'
+        body += f'<p><a href="/jev/artifact?name=INSPECTION_{round}.md">Download inspection report</a> · <a href="/jev/artifact?name=inspection_{round}.json">Download evidence details</a></p>'
     control = load('control_comparison_5.json', {})
     if control:
         body += '<h3>Same-pair input comparison</h3><p>' + e(' ↔ '.join(control['pair'])) + '</p>'
@@ -104,7 +109,7 @@ def artifact(name: str):
         allowed.update((Path(item['sample']).name,Path(item['checkpoint']).name))
     for item in load('sample_ledger.json',[]):
         n=item['round']
-        allowed.update((f'audit_run_{n}.json',f'sample_{n}_summary.json',f'input_states_{n}.json',f'paired_comparison_{n}.json'))
+        allowed.update((f'audit_run_{n}.json',f'sample_{n}_summary.json',f'input_states_{n}.json',f'paired_comparison_{n}.json',f'inspection_{n}.json',f'INSPECTION_{n}.md'))
     path = PROJECT/'jev'/name
     if name not in allowed or not path.is_file() or path.is_symlink():
         raise HTTPException(404, 'Artifact not found')
