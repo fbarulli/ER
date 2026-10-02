@@ -2349,11 +2349,9 @@ if (root / ".git").is_dir():
     subprocess.run(["git", "pull", "--ff-only", remote_name, {BRANCH!r}], cwd=root, check=True)
 else:
     root.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([
-        "git", "clone", "--origin", remote_name, "--depth", "1",
-        "--branch", {BRANCH!r},
-        {REPOSITORY!r}, str(root),
-    ], check=True)
+     subprocess.run(["git", "clone", "--origin", remote_name,
+         "--branch", {BRANCH!r},
+         {REPOSITORY!r}, str(root)], check=True)
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
 print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
