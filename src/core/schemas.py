@@ -1115,6 +1115,33 @@ class RandMatchingSpec(BaseModel):
         max_penalty: float = Field(ge=0.0, le=1.0)
         preserve_exact_gtin: bool
 
+    class GateCensusPinSpec(BaseModel):
+        """Measured gate-outcome census tripwire (drift detector, config SSOT).
+
+        Single declared source for the gate census counts that BOTH the
+        labeled-pairs exclusion assert and the selftest oracle compare
+        against. Previously each held its own hardcoded literal, so an
+        intentional gate change silently invalidated one while the other
+        kept passing. The census must sum exactly to total_pairs.
+        """
+
+        model_config = ConfigDict(extra="forbid")
+
+        total_pairs: int = Field(ge=0)
+        hard_no: int = Field(ge=0)
+        proceed: int = Field(ge=0)
+        fallback: int = Field(ge=0)
+
+        @model_validator(mode="after")
+        def _census_is_closed(self) -> RandMatchingSpec.GateCensusPinSpec:
+            if self.hard_no + self.proceed + self.fallback != self.total_pairs:
+                raise ValueError(
+                    "rand_matching.gate_census_pin must sum exactly to "
+                    f"total_pairs: {self.hard_no}+{self.proceed}+{self.fallback}"
+                    f" != {self.total_pairs}"
+                )
+            return self
+
     class TargetedVetoGatesSpec(BaseModel):
         """Hard attribute guards for non-exact automatic assignments."""
 
@@ -1176,6 +1203,7 @@ class RandMatchingSpec(BaseModel):
     targeted_veto_gates: TargetedVetoGatesSpec
     confidence_penalty_mask: ConfidencePenaltyMaskSpec
     flavor_overlap_penalty: FlavorOverlapPenaltySpec
+    gate_census_pin: GateCensusPinSpec
     target_recall: float = Field(gt=0.0, le=1.0)
     threshold_tie_break: list[
         Literal["rand_index", "fewest_unmatched_skus", "lowest_threshold"]

@@ -1150,7 +1150,7 @@ def three_way_gate(
 
     # Every explicit categorical conflict uses THE SINGLE DECISION ENGINE
     # (owner directive: ALL attributes × ALL metrics for the ENTIRE decision
-    # process). The engine evaluates the four critical-categorical channels
+    # process). The engine evaluates the three critical-categorical channels
     # with the whole ordered stack (negation hard-veto, alias-folded
     # equality, set overlaps, fuzzy surface) — so unclear spellings rescue
     # instead of riding bare inequality, while a negation conflict stays a
@@ -1181,7 +1181,7 @@ def three_way_gate(
     }
     categorical_conflicts = [
         name
-        for name in sorted(engine_conflicts & {"flavor", "carbonation", "sweetener", "pulp"})
+        for name in sorted(engine_conflicts & {"flavor", "sweetener", "pulp"})
     ]
     if categorical_conflicts:
         return GateResult(

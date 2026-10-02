@@ -529,7 +529,7 @@ rand_matching:
     # with their same-GTIN noise rates (informational only -- feed noise, not
     # identity): water type 14.9%, made from 21.2%, caffeine 3.2% same-GTIN
     # noise.
-    veto_dimensions: [volume, pack, package_type, flavor, carbonation, pulp, pack_material]
+    veto_dimensions: [volume, pack, package_type, flavor, sweetener, pulp, pack_material]
     pack_mismatch_veto: true
     volume_mismatch_veto: true
     package_type_mismatch_veto: true
@@ -558,6 +558,19 @@ rand_matching:
     minimum_overlap: 0.50
     max_penalty: 0.05
     preserve_exact_gtin: true
+  # Measured gate-outcome census TRIPWIRE — NOT a business constant. It exists
+  # so an unintended gate/universe change fails loudly instead of silently
+  # skewing the labeled lane. This block is the SINGLE declared source: both
+  # training/labeled_pairs.py (fallback exclusion) and training/selftest.py
+  # (oracle_pinned_counts) read it, replacing two divergent hardcoded literals.
+  # Update ONLY on an intentional, measured gate change, and update it here
+  # once — the schema enforces hard_no + proceed + fallback == total_pairs.
+  # Measured against the regenerated gate_results.csv (13,216 products).
+  gate_census_pin:
+    total_pairs: 135246
+    hard_no: 112372
+    proceed: 16611
+    fallback: 6263
   target_recall: 0.90
   threshold_tie_break:
     - "rand_index"
