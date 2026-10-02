@@ -62,7 +62,16 @@ def _negated_ingredient_pattern():
 def negated_sweetener_types(*values: object) -> set[str]:
     """Explicit absent ingredient claims; silence never asserts absence."""
     text = normalized_attribute_text(*values)
-    return {match.group(1).replace(' ', '_') for match in _negated_ingredient_pattern().finditer(text)}
+    found = {match.group(1).replace(' ', '_') for match in _negated_ingredient_pattern().finditer(text)}
+    # General sugar-free wording belongs to sugar-status claims. Named
+    # ingredient-free wording is explicit ingredient absence.
+    ingredients = "|".join(re.escape(value) for value in sorted(
+        SWEETENER_TYPES - {"sugar", "cane sugar"}, key=len, reverse=True
+    ))
+    found.update(match.group(1).replace(" ", "_") for match in re.finditer(
+        r"\b(" + ingredients + r")\s+free\b", text
+    ))
+    return found
 
 
 def declared_sweeteners(attributes: str) -> dict[str, set[str]]:

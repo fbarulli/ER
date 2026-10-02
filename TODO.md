@@ -168,6 +168,18 @@ parsing. Existing generated-data edits and prepared-worker deletions preserved.
   diagnostics persist. Direct proof now proceeds without invented ingredient
   conflict. Explicit source negation contradictions still review.
 
+- [x] Ingredient absence suffixes are dropped: `aspartame-free` and other
+  ingredient-specific `X free` phrases produced no negated ingredient. Source
+  screen finds 11 title fields and 67 description fields, including SKU
+  208935320 `Aspartame- Free`. Capture named ingredient absence separately
+  from general sugar-status claims, and retain contradiction review.
+
+- [x] Named-month dates and BBD expiry shorthand are dropped: SKU718539463
+  `BBD: april 2024` produced no date evidence; now expiry month 2024-04. Named-date source screen finds
+  one title and 145 description fields (including brand history). Capture
+  calendar precision and original spans; classify BBD/BBE as expiry while
+  historical dates without a stock cue remain unspecified calendar context.
+
 Fix-first checkpoint: full 71,623-row extraction has zero errors; existing
 extraction fields change on 16,942 rows and volume/pack assignment on 602.
 The new date evidence field is additive on all rows, so that alone is not an

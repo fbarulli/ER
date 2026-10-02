@@ -4,12 +4,26 @@ import re
 
 
 _CALENDAR = re.compile(r"(?<!\d)(?:\d{4}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}|\d{1,2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{4})(?!\d)")
-_EXPIRY = re.compile(r"\b(?:best\s+(?:before|by)|use\s+by|expir(?:y|ation|es)|tht)\b[^;\n]{0,35}\Z", re.I)
-_MANUFACTURE = re.compile(r"\b(?:manufactur(?:ed|e|ing)(?:\s+date)?|production\s+date)\b[^;\n]{0,35}\Z", re.I)
+_EXPIRY = re.compile(r"\b(?:best\s+(?:before|by)|use\s+by|expir(?:y|ation|es)|tht|bbd|bbe|exp)\b[^;\n]{0,35}\Z", re.I)
+_MANUFACTURE = re.compile(r"\b(?:manufactur(?:ed|e|ing)(?:\s+date)?|production\s+date|mfg|mfd)\b[^;\n]{0,35}\Z", re.I)
 _MONTH = re.compile(r"(?<!\d)(\d{1,2})\s*[-/.]\s*(\d{4})(?!\d)")
 _SHORT_YEAR = re.compile(r"(?<!\d)(\d{1,2})\s*[-/.]\s*(\d{2})(?!\d)")
-_EXPIRY_CUE = re.compile(r"\b(?:best\s+(?:before|by)|use\s+by|expir(?:y|ation|es)|tht)\b", re.I)
+_EXPIRY_CUE = re.compile(r"\b(?:best\s+(?:before|by)|use\s+by|expir(?:y|ation|es)|tht|bbd|bbe|exp)\b", re.I)
 _SHELF_LIFE = re.compile(r"\bshelf\s+life\s*:\s*(\d+)\s*(days?|months?|years?)\b", re.I)
+
+_MONTH_NAMES = {name: month for month, names in enumerate((
+    ("jan", "january"), ("feb", "february"), ("mar", "march"),
+    ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
+    ("aug", "august"), ("sep", "sept", "september"), ("oct", "october"),
+    ("nov", "november"), ("dec", "december"),
+), 1) for name in names}
+_NAMED_MONTH = "|".join(sorted(_MONTH_NAMES, key=len, reverse=True))
+_NAMED_CALENDAR = re.compile(
+    r"\b(?:(?P<day_first>\d{1,2})(?:st|nd|rd|th)?\s+)?"
+    r"(?P<month>" + _NAMED_MONTH + r")\.?\s+"
+    r"(?:(?P<day_last>\d{1,2})(?:st|nd|rd|th)?,?\s+)?"
+    r"(?P<year>\d{4})\b", re.I
+)
 
 
 def _role(prefix):
@@ -56,8 +70,8 @@ def extract_date_evidence(text: object) -> list[dict]:
         month, year = map(int, match.groups())
         found.append({"raw_match": match.group(), "start": match.start(), "end": match.end(),
                       "role": role, "precision": "month",
-                      "normalized_candidates": [f"{year:04d}-{month:02d}"] if 1 <= month <= 12 else [],
-                      "parse_status": "parsed" if 1 <= month <= 12 else "invalid",
+                      "normalized_candidates": [f"{year:04d}-{month:02d}"] if 1 <= month <= 12 and 1 <= year <= 9999 else [],
+                      "parse_status": "parsed" if 1 <= month <= 12 and 1 <= year <= 9999 else "invalid",
                       "gate_use": "stock_review_context"})
         occupied.append(match.span())
     for match in _SHORT_YEAR.finditer(text):
@@ -72,6 +86,24 @@ def extract_date_evidence(text: object) -> list[dict]:
         found.append({"raw_match": match.group(), "start": match.start(), "end": match.end(),
                       "role": role, "precision": "month", "normalized_candidates": [],
                       "parse_status": "ambiguous_century" if 1 <= month <= 12 else "invalid",
+                      "gate_use": "stock_review_context"})
+        occupied.append(match.span())
+    for match in _NAMED_CALENDAR.finditer(text):
+        year = int(match.group("year"))
+        month = _MONTH_NAMES[match.group("month").lower()]
+        day_text = match.group("day_first") or match.group("day_last")
+        candidates = []
+        try:
+            if match.group("day_first") and match.group("day_last"):
+                raise ValueError("two day components")
+            normalized = date(year, month, int(day_text) if day_text else 1)
+            candidates = [normalized.isoformat()] if day_text else [f"{year:04d}-{month:02d}"]
+        except ValueError:
+            pass
+        found.append({"raw_match": match.group(), "start": match.start(), "end": match.end(),
+                      "role": _role(text[:match.start()]), "precision": "day" if day_text else "month",
+                      "normalized_candidates": candidates,
+                      "parse_status": "parsed" if candidates else "invalid",
                       "gate_use": "stock_review_context"})
         occupied.append(match.span())
     for match in _EXPIRY_CUE.finditer(text):
