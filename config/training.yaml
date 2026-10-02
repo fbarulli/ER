@@ -281,7 +281,7 @@ colab:
 # The gate's decision table, formerly signature defaults in
 # data_pipe.three_way_gate (vol_tolerance=0.05 / raw_conf_threshold=0.85 /
 # consistency_fallback_threshold=0.3). Same values, now config-owned:
-#   vol_tolerance               ± relative volume overlap (250ml ≈ 500ml)
+#   vol_tolerance               ± relative volume overlap (250ml ≈ 260ml)
 #   vol_abs_tolerance           ± absolute volume overlap in ml; applied
 #                               WHICHER of the two is wider. Declared here so
 #                               the gate, census, miners and masking lanes all

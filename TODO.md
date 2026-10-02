@@ -180,6 +180,11 @@ parsing. Existing generated-data edits and prepared-worker deletions preserved.
   calendar precision and original spans; classify BBD/BBE as expiry while
   historical dates without a stock cue remain unspecified calendar context.
 
+- [x] Partial expiry date misclassified: SKU784178483 `exp. 20 / 09`
+  was invalid under a month/year-only interpretation. Preserve possible
+  day/month components without inventing a year; short dates such as 05/12
+  retain both component-order and century ambiguity.
+
 Fix-first checkpoint: full 71,623-row extraction has zero errors; existing
 extraction fields change on 16,942 rows and volume/pack assignment on 602.
 The new date evidence field is additive on all rows, so that alone is not an

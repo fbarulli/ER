@@ -82,11 +82,23 @@ def extract_date_evidence(text: object) -> list[dict]:
             continue
         if re.match(r"\s*(?:days?|delivery|fl\b|oz\b|lbs?\b|ml\b|cl\b|kg\b|grams?\b)", text[match.end():], re.I):
             continue
-        month = int(match.group(1))
+        first, second = map(int, match.groups())
+        partial_dates = set()
+        for month, day in ((second, first), (first, second)):
+            try:
+                date(2000, month, day)  # Validate components without choosing a year.
+                partial_dates.add(f"--{month:02d}-{day:02d}")
+            except ValueError:
+                pass
+        possible_month_year = 1 <= first <= 12
+        status = ("ambiguous_components" if possible_month_year and partial_dates
+                  else "ambiguous_century" if possible_month_year
+                  else "missing_year" if partial_dates else "invalid")
         found.append({"raw_match": match.group(), "start": match.start(), "end": match.end(),
-                      "role": role, "precision": "month", "normalized_candidates": [],
-                      "parse_status": "ambiguous_century" if 1 <= month <= 12 else "invalid",
-                      "gate_use": "stock_review_context"})
+                      "role": role, "precision": "unknown" if possible_month_year and partial_dates
+                          else "month" if possible_month_year else "day_month",
+                      "normalized_candidates": [], "partial_candidates": sorted(partial_dates),
+                      "parse_status": status, "gate_use": "stock_review_context"})
         occupied.append(match.span())
     for match in _NAMED_CALENDAR.finditer(text):
         year = int(match.group("year"))
