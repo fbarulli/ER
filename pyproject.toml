@@ -14,6 +14,7 @@ atlas = ["nomic"]
 [project.scripts]
 er-colab = "cli.colab:main"
 er-train = "training.train:main"
+er-prepare = "training.prepare_all:main"
 er-rand-match = "training.rand_matching:main"
 er-ann-index = "training.build_ann_index:main"
 er-generate-rand-truth = "training.generate_rand_truth:main"

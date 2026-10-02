@@ -36,7 +36,7 @@ def load_record_index(path: Path = RECORDS_CSV) -> dict[str, Listing]:
                 brand=(src.get("brand") or "").strip(),
                 attributes=(src.get("attributes") or "").strip(),
                 category=(src.get("category") or "").strip(),
-                description=(src.get("description") or "").strip()[:300],
+                description=(src.get("description") or "").strip(),
             )
     return index
 

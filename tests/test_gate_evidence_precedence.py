@@ -51,7 +51,7 @@ def test_disabled_carbonation_is_not_early_veto():
     a, b = _attrs(carbonation_set={'still'}), _attrs(carbonation_set={'carbonated'})
     assert 'carbonation' not in training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
     assert pack_gate(0, a, b)
-    assert three_way_gate(a,b)['decision'] == 'proceed'
+    assert three_way_gate(a,b)['decision'] == 'fallback'
 
 
 def test_categorical_config_steers_both_gate_paths(monkeypatch):
@@ -72,7 +72,7 @@ def test_config_disables_material_and_type_veto(monkeypatch):
     a = _attrs()
     b = _attrs(package_type_set={'can'}, package_material_set={'glass'})
     assert pack_gate(0,a,b)
-    assert three_way_gate(a,b)['decision'] == 'proceed'
+    assert three_way_gate(a,b)['decision'] == 'fallback'
 
 
 def test_ambiguous_volume_never_numeric_veto():

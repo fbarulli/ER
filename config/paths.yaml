@@ -211,6 +211,7 @@ extraction:
     title: listing_text
     sku_url: listing_text
     image_url: listing_text
+    description: listing_text
   pack_confidence:
     nested: 0.95
     multiplier: 0.90

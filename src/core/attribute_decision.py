@@ -35,6 +35,11 @@ from enum import Enum, auto
 from functools import lru_cache
 from typing import Iterable, Mapping, Sequence
 
+# Original source captures are immutable during a run. Cache their complete
+# parse across attributes and candidate pairs, rather than reparsing up to
+# 37 times per pair. Direct uncaptured records retain the ordinary path.
+_RAW_EVIDENCE_CACHE: dict[str, dict[str, frozenset]] = {}
+
 # ════════════════════════════════════════════════════════════════════════════
 # THE single decision vocabulary
 # ════════════════════════════════════════════════════════════════════════════
@@ -578,7 +583,7 @@ class AttributeDecisionEngine:
             _census_state_for_field,
             _universe_value,
         )
-        from core.attribute_universe import NON_YIELD_KINDS, attribute_registry
+        from core.attribute_universe import attribute_registry
 
         specs = dict(registry) if registry is not None else attribute_registry()
         domain_by_key = {
@@ -590,23 +595,8 @@ class AttributeDecisionEngine:
         decisions: dict[str, DimensionDecision] = {}
         for key in sorted(specs):
             spec = specs[key]
-            # NON_YIELD_KINDS (currently CONSTANT) are keys whose every
-            # populated row carries the SAME value — measured on the raw
-            # export, `giftbox` and `special edition` appear only as the
-            # literal pairs "Giftbox: giftbox" / "Special Edition: special
-            # edition" (21 and 216 of 71,623 rows). A constant cannot
-            # disagree with itself, so every pair it lands on is a forced
-            # MATCH or a forced INCONCLUSIVE that carries no information.
-            #
-            # The registry declared this itself ("100% constant — no yield")
-            # and attribute_conflicts ledgers these as evidence_class
-            # "no_yield", but this loop was unconditional: it re-derived a
-            # verdict for them anyway. The exclusion existed as a constant
-            # consulted only by the census/budget helper, never by the
-            # decision loop. Skipped here so the declared class is honoured
-            # where verdicts are actually produced.
-            if spec.kind in NON_YIELD_KINDS:
-                continue
+            # Constant flags also receive a comparison and provenance trace.
+            # The approval policy never treats them as recipe identity proof.
             left_value = _universe_value(left, key, spec)
             right_value = _universe_value(right, key, spec)
             if key == "sweetener":
@@ -660,6 +650,14 @@ class AttributeDecisionEngine:
                     key, type_key, left_set, right_set, metrics,
                     domain=domain_by_key[key],
                 )
+                if key == 'volume':
+                    from core.critical_attributes import volumes_compatible
+                    compatible = volumes_compatible(
+                        left_value, right_value,
+                        volume_relative_tolerance=self.volume_relative_tolerance,
+                        volume_absolute_tolerance_ml=self.volume_absolute_tolerance_ml,
+                    )
+                    result = ComparisonResult.MATCH if compatible else ComparisonResult.CONFLICT
                 # Stage 8: semantic-family rescue. A lexical-fail pair whose
                 # members sit in ONE evidenced family (built from the capture
                 # census at tau) is a sibling phrasing, not a conflict —
@@ -749,6 +747,10 @@ class AttributeDecisionEngine:
             yield row
 
         def reparse(row: Mapping[str, object]) -> dict[str, frozenset]:
+            captured = row.get('source_rows')
+            cache_key = captured if isinstance(captured, str) else ''
+            if cache_key and cache_key in _RAW_EVIDENCE_CACHE:
+                return _RAW_EVIDENCE_CACHE[cache_key]
             out: dict[str, frozenset] = {}
             # The columns read here come from the capture declaration
             # (config/paths.yaml column_evidence) via alias_names, so this
@@ -781,6 +783,9 @@ class AttributeDecisionEngine:
             for source_row in _iter_source_rows(row):
                 for source in attribute_names:
                     cell = str(source_row.get(source) or "")
+                    from core.product_selection import selected_identity_inputs
+                    _, cell, _ = selected_identity_inputs(
+                        " ".join(str(source_row.get(name) or "") for name in title_names), cell)
                     if cell:
                         for k, v in parse_universe_cell(cell).items():
                             if v:
@@ -812,7 +817,9 @@ class AttributeDecisionEngine:
                     negated_sweetener_types(title_blob, cell_text, attribute_blob)
                 )
                 ingredient_source_conflict |= bool(declared["consistency_flags"])
-                claims = extract_critical_claims(title_blob, cell_text, attribute_blob)
+                from core.product_selection import selected_identity_inputs
+                selected_title, selected_attributes, _ = selected_identity_inputs(title_blob, attribute_blob)
+                claims = extract_critical_claims(selected_title, cell_text, selected_attributes)
                 for field, tokens in claims.items():
                     # The registry sweetener channel compares ingredients.
                     # Sugar/no-sugar/no-added-sugar are a separate claim axis.
@@ -840,6 +847,10 @@ class AttributeDecisionEngine:
                 out.pop("sweetener", None)
             if ingredient_source_conflict or negative_ingredients & ingredient_types:
                 out["_sweetener_source_conflict"] = frozenset({"contradiction"})
+            if cache_key:
+                if len(_RAW_EVIDENCE_CACHE) >= 16384:
+                    _RAW_EVIDENCE_CACHE.pop(next(iter(_RAW_EVIDENCE_CACHE)))
+                _RAW_EVIDENCE_CACHE[cache_key] = out
             return out
 
         left_sets = reparse(left_raw)

@@ -10,7 +10,7 @@
     "pack_scale": 100.0,
     "max_set_size": 8
   },
-  "note": "legacy_* strings are the byte-exact output of the committed predict_items.py / rand_matching.py / pipeline.py composition path, captured before any change. They are the rollback contract. 2026-09-28: legacy_sku_text for 952300679 (title declares Real Sugar + soda pop) and 54272430 (No Bubbles = still) refreshed after reviewed extractor recall gains; all other 853 rows byte-identical. 2026-09-28b: 12 legacy_sku_text rows refreshed for the guarded bare-soda rule (all verified carbonated beverages; syrups/concentrates and still-declared rows stay excluded); all other rows byte-identical. 2026-09-28c: refreshed legacy_sku_text rows for flavor-alias normalization (plural/adjective/foreign near-flavor words -> canonical) and the volume_ml_250 producer drift; all other rows byte-identical. 2026-09-30: legacy_sku_text refreshed for the attribute-universe capture wiring (pipeline.extract_all structured evidence section -> structured_features [FIELD_PACK_MATERIAL]/[FIELD_JUICE_CONTENT_BAND]; measured: 842 of 853 sku rows grew, 626 with material evidence, 781 with juice-content bands; every growth verified APPEND-ONLY — the pre-capture token stream is a byte-prefix of the refreshed string and ONLY capture tokens appear in the delta (package_material_* / juice_content_* / their markers); legacy_canonical_text rows grew for 626 records whose regenerated canonical record now carries package_material_set (the existing generate_canonical union of the same evidence; append-only verified the same way); 11 rows (no material, no juice evidence) were untouched. Existing [FIELD_*] groups are byte-unchanged everywhere. 2026-10-01: legacy_sku_text for 89087089 refreshed for the volume-unification closure (config units SSOT): the single unified volume parse recovers '200 ml' (dl family) the retired 4-copy regex set missed; the delta is the sole inserted [FIELD_VOLUME] volume_ml_200 token — every existing token byte-identical; legacy_canonical_text rows all untouched. 2026-10-01b: legacy_sku_text for 269510344 refreshed on the same grounds as 89087089 — sole delta the inserted [FIELD_VOLUME] volume_ml_200 token; all other 854 rows byte-identical. 2026-10-02: legacy_sku_text refreshed for 16 rows. One volume recovery (750643907: the title 'tax tropical fruits 0, 25l' EU-comma decimal now yields the [FIELD_VOLUME] volume_ml_250 pair) and 15 flavor rows for the measured FLAVOR_LEXICON expansion (elderberry, buckthorn, clementine, lychee); the elderberry/lychee/clementine tokens arrive from ingredient cells ('Immune Support Ingredients', 'Made From'), which is the same text-scan channel every other lexicon word already used, so the CAPTURE is unchanged and only the vocabulary grew. Every row verified append-only: the pre-existing token stream is an ordered subsequence of the refreshed string and ONLY capture tokens (volume_ml_*/flavor_*/their [FIELD_*] markers) appear in the delta. All other 839 sku rows byte-identical; legacy_canonical_text rows all untouched. The same capture also carried a volume REGRESSION the fixture caught and that is fixed here (core.text bare-space-decimal decode: a non-zero head is a size-range/count head, never a decimal — '8 12 fl. oz.' is 12 fl. oz. and '2 200 ml' is 200 ml, not 812 fl. oz. (24014 ml) and 2200 ml): 565234106, 943924907, 112114167, 318255542 and 251699831 had lost their declared 355/355/355/300/200 ml and now match their pre-capture bytes again, as does 1023526471.",
+  "note": "legacy_* strings are the byte-exact output of the committed predict_items.py / rand_matching.py / pipeline.py composition path, captured before any change. They are the rollback contract. 2026-09-28: legacy_sku_text for 952300679 (title declares Real Sugar + soda pop) and 54272430 (No Bubbles = still) refreshed after reviewed extractor recall gains; all other 853 rows byte-identical. 2026-09-28b: 12 legacy_sku_text rows refreshed for the guarded bare-soda rule (all verified carbonated beverages; syrups/concentrates and still-declared rows stay excluded); all other rows byte-identical. 2026-09-28c: refreshed legacy_sku_text rows for flavor-alias normalization (plural/adjective/foreign near-flavor words -> canonical) and the volume_ml_250 producer drift; all other rows byte-identical. 2026-09-30: legacy_sku_text refreshed for the attribute-universe capture wiring (pipeline.extract_all structured evidence section -> structured_features [FIELD_PACK_MATERIAL]/[FIELD_JUICE_CONTENT_BAND]; measured: 842 of 853 sku rows grew, 626 with material evidence, 781 with juice-content bands; every growth verified APPEND-ONLY — the pre-capture token stream is a byte-prefix of the refreshed string and ONLY capture tokens appear in the delta (package_material_* / juice_content_* / their markers); legacy_canonical_text rows grew for 626 records whose regenerated canonical record now carries package_material_set (the existing generate_canonical union of the same evidence; append-only verified the same way); 11 rows (no material, no juice evidence) were untouched. Existing [FIELD_*] groups are byte-unchanged everywhere. 2026-10-01: legacy_sku_text for 89087089 refreshed for the volume-unification closure (config units SSOT): the single unified volume parse recovers '200 ml' (dl family) the retired 4-copy regex set missed; the delta is the sole inserted [FIELD_VOLUME] volume_ml_200 token — every existing token byte-identical; legacy_canonical_text rows all untouched. 2026-10-01b: legacy_sku_text for 269510344 refreshed on the same grounds as 89087089 — sole delta the inserted [FIELD_VOLUME] volume_ml_200 token; all other 854 rows byte-identical. 2026-10-02: legacy_sku_text refreshed for 16 rows. One volume recovery (750643907: the title 'tax tropical fruits 0, 25l' EU-comma decimal now yields the [FIELD_VOLUME] volume_ml_250 pair) and 15 flavor rows for the measured FLAVOR_LEXICON expansion (elderberry, buckthorn, clementine, lychee); the elderberry/lychee/clementine tokens arrive from ingredient cells ('Immune Support Ingredients', 'Made From'), which is the same text-scan channel every other lexicon word already used, so the CAPTURE is unchanged and only the vocabulary grew. Every row verified append-only: the pre-existing token stream is an ordered subsequence of the refreshed string and ONLY capture tokens (volume_ml_*/flavor_*/their [FIELD_*] markers) appear in the delta. All other 839 sku rows byte-identical; legacy_canonical_text rows all untouched. The same capture also carried a volume REGRESSION the fixture caught and that is fixed here (core.text bare-space-decimal decode: a non-zero head is a size-range/count head, never a decimal — '8 12 fl. oz.' is 12 fl. oz. and '2 200 ml' is 200 ml, not 812 fl. oz. (24014 ml) and 2200 ml): 565234106, 943924907, 112114167, 318255542 and 251699831 had lost their declared 355/355/355/300/200 ml and now match their pre-capture bytes again, as does 1023526471. 2026-10-02 JEV identity fixes: 11 SKU strings gain only flavor_anise/flavor_blackcurrant/flavor_exotic and any necessary FIELD_FLAVOR marker from the expanded vocabulary; prior strings retained per changed row. Existing token order and all canonical golden bytes retained.",
   "records": [
     {
       "legacy_canonical_text": "powerking pear carbonated aspartame_energy_source_green Powerking stored at room temperature. all supplies sports energy drinks energy beverages energy drinks [FIELD_VOLUME] volume_ml_500 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_pear [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_metal",
@@ -949,7 +949,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "8691530927824",
-      "legacy_sku_text": "naren pomegranate set pomegranate made pomegranate still brand naren description naren pomegranate unadulterated pomegranate category concentrate breadcrumbs home page supermarket other drinks [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_pomegranate [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "naren pomegranate set pomegranate made pomegranate still brand naren description naren pomegranate unadulterated pomegranate category concentrate breadcrumbs home page supermarket other drinks [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_12 [FIELD_FLAVOR] flavor_pomegranate [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "naren pomegranate juice 250 ml set of 12",
         "attributes": "Flavour: pomegranate; Made From: pomegranate; Juice Content: 100%; Volume: 250; Naturally derived: natural; Carbonization: still; Pack Material Type: Glass",
@@ -957,7 +957,9 @@
         "description": "naren 100% pomegranate juice 250 ml \nnatural unadulterated pomegranate juice",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" home page\"\",\"\"supermarket\"\",\"\"drink\"\",\"\" other drinks\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "naren pomegranate set pomegranate made pomegranate still brand naren description naren pomegranate unadulterated pomegranate category concentrate breadcrumbs home page supermarket other drinks [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_pomegranate [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "rieme lemon carbonated sugar lime lemonade Rieme sparkling and refreshing lemon lime lemonade with unchanged prescription in almost one century from maison rieme. only with clean additives. storage stored for a maximum of hours c sparkling and refreshing lemon lime lemonade with unchanged prescription in almost one century from maison rieme. only with clean additives. stored standing on a cool and dry place avoid direct sunli all supplies soda small beverages fruit berry drinks lask lemon limesmak [FIELD_VOLUME] volume_ml_750 [FIELD_FLAVOR] flavor_lemon flavor_lime [FIELD_CARBONATION] carbonation_carbonated [FIELD_SWEETENER_DIET] sweetener_diet_sugar",
@@ -3217,7 +3219,7 @@
         "package_material_set": "['plastic']"
       },
       "nearest_item_id": "7310070005953",
-      "legacy_sku_text": "shelf spacing domestic mineral raspberry contains minerals magnesium raspberry flavoured mineral carbonated brand kotimaista description domestic raspberry flavored mineral we will update product information actively. however we recommend checking always sales package. category sparkling flavoured bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_raspberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "shelf spacing domestic mineral raspberry contains minerals magnesium raspberry flavoured mineral carbonated brand kotimaista description domestic raspberry flavored mineral we will update product information actively. however we recommend checking always sales package. category sparkling flavoured bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_raspberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "shelf spacing 15 - 6 x domestic mineral water raspberry 1.5l",
         "attributes": "Volume: 1500; Contains Minerals: magnesium; Flavour: raspberry; Juice Content: 0-2%; Water Type: flavoured, mineral; Pack Material Type: Plastic; Carbonization: carbonated",
@@ -3225,7 +3227,9 @@
         "description": "domestic raspberry flavored mineral water 1.5 we will update product information actively. however, we recommend checking ingredients always from the sales package.",
         "category": "Sparkling Flavoured Bottled Water",
         "category_path": "[\"\" selection\"\",\"\" beverages\"\",\"\" waters\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "shelf spacing domestic mineral raspberry contains minerals magnesium raspberry flavoured mineral carbonated brand kotimaista description domestic raspberry flavored mineral we will update product information actively. however we recommend checking always sales package. category sparkling flavoured bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_raspberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "clean energy carbonated blueberry_bcaa Clean Drink energy all supplies sports energy drinks energy sport energy energy [FIELD_VOLUME] volume_ml_330 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_metal",
@@ -3282,7 +3286,7 @@
         "pulp_set": "[]"
       },
       "nearest_item_id": "7311043000418",
-      "legacy_sku_text": "smoothie raspberry strawberry blueberry smoothie concentrate strawberry blueberry raspberry still made banana strawberry blackcurrant orange apple blueberry raspberry liquid brand bravo description enjoy bravo smoothie full raspberries strawberries blueberry well mixed tasty useful filling smoothie. fits all family different occasions during day breakfast category concentrate breadcrumbs fruit drinks smoothie [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_orange flavor_raspberry flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "smoothie raspberry strawberry blueberry smoothie concentrate strawberry blueberry raspberry still made banana strawberry blackcurrant orange apple blueberry raspberry liquid brand bravo description enjoy bravo smoothie full raspberries strawberries blueberry well mixed tasty useful filling smoothie. fits all family different occasions during day breakfast category concentrate breadcrumbs fruit drinks smoothie [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_blackcurrant flavor_orange flavor_raspberry flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "Smoothie raspberry, strawberry & blueberry",
         "attributes": "Juice Features: smoothie, from concentrate; Flavour: strawberry, blueberry, raspberry; Volume: 1000; Juice Content: 100%; Carbonization: still; Made From: banana, strawberry, blackcurrant, orange, apple, blueberry, raspberry; Pack Type: Liquid Carton",
@@ -3290,7 +3294,9 @@
         "description": "enjoy Bravo smoothie full of raspberries, strawberries and blueberry, well mixed to a tasty, useful and filling smoothie. fits all in the family on different occasions during the day as for breakfast ",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" drink\"\",\"\" juice & fruit drinks\"\",\"\" Smoothie\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_identity_fix": "smoothie raspberry strawberry blueberry smoothie concentrate strawberry blueberry raspberry still made banana strawberry blackcurrant orange apple blueberry raspberry liquid brand bravo description enjoy bravo smoothie full raspberries strawberries blueberry well mixed tasty useful filling smoothie. fits all family different occasions during day breakfast category concentrate breadcrumbs fruit drinks smoothie [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_orange flavor_raspberry flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "legacy_canonical_text": "alvalle lemon still garlic_tomato_cucumber_pepper Alvalle good shake before serving. serve well fresh. keep cool c . cold soup vegetables keep refrigerated c . to consume in days after opening. at consume before see cap. true consumer service pepsico france sas building doors of the defense boulevard charles de gaulle manufacturing country france more information brand alvalle instructions keep cool c . shake before serving. serve cold. product dates name of the operator of the food business pepsi cofoods. a.i.and. name of the foo name of the food gazpacho name of the operator pepsi co manufacturing a.i.and. operator address pol. ind. san andrews y n sewer murcia spain net amount milliliters fresh vegetable name of the food gazpacho original name of the operator tropicana alvalle s.l. operator address c higher polygon sun fields bridge bacon murcia spain net amount milliliters drinks fruits and vegetables fresh and soup fresh fresh soups and gazpacho feeding general feeding broths soups purees and gazpacho gazpacho and salmorejo fresh products fruits vegetables soup fresh fruits and vegetables fresh fruits and vegetables fresh soups and gazpachos supermarket general feeding broths soups purees and gazpacho gazpacho and salmorejo supermarket the shelf preserves soups and precooked gazpacho and salmorejo [FIELD_VOLUME] volume_ml_250 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_FLAVOR] flavor_lemon [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -3838,7 +3844,7 @@
         "package_material_set": "['paper / carton']"
       },
       "nearest_item_id": "3335880007717",
-      "legacy_sku_text": "lingon cranberry soft sweetener sugar still cranberry caffeine good source vitamins origin sweden vitamin made apple blackcurrant cranberry brand bob description bob soft refreshing lovely taste cranberries lingon enriched vitamin c. good easily fixed meal fits whole family. dilute concentrate category drinks up breadcrumbs all supplies fruit drinks chilled fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_cranberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton",
+      "legacy_sku_text": "lingon cranberry soft sweetener sugar still cranberry caffeine good source vitamins origin sweden vitamin made apple blackcurrant cranberry brand bob description bob soft refreshing lovely taste cranberries lingon enriched vitamin c. good easily fixed meal fits whole family. dilute concentrate category drinks up breadcrumbs all supplies fruit drinks chilled fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_blackcurrant flavor_cranberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton",
       "sku": {
         "title": "lingon & cranberry soft drink",
         "attributes": "Sweetener: sugar; Pack Type: Carton/Box; Volume: 1000; Carbonization: still; Flavour: cranberry; Caffeine: 15-25 mg; Health Claims: good source of vitamins; Geographic Origin: sweden; Naturally derived: natural fragrances; Immune Support Ingredients: vitamin c; Pack Material Type: Paper / Carton; Made From: apple, blackcurrant, cranberry",
@@ -3846,7 +3852,9 @@
         "description": "BOB soft drink with a refreshing and lovely taste of cranberries and lingon, enriched with vitamin c. a good and easily fixed meal drink that fits the whole family.\ndilute the concentrate 1 + 4 with w",
         "category": "Juice Drinks (up to 24% Juice)",
         "category_path": "[\"\" all supplies\"\",\"\" drink\"\",\"\" juice & fruit drinks\"\",\"\" not chilled fruit drink\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_identity_fix": "lingon cranberry soft sweetener sugar still cranberry caffeine good source vitamins origin sweden vitamin made apple blackcurrant cranberry brand bob description bob soft refreshing lovely taste cranberries lingon enriched vitamin c. good easily fixed meal fits whole family. dilute concentrate category drinks up breadcrumbs all supplies fruit drinks chilled fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_cranberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "legacy_canonical_text": "valio coffee still sugar vanilla latte Valio champion latte vanilla fudge is a fresh lactose free milk and coffee from jyv skyl its is a wonderful combination of milky coffee vanilla and cream toffee. grab one and enjoy a ref champion latte vanilla fudge is fresh lactose free milk coffee from jyv skyl its taste is lovely combination maitokahvia vanilla and kermatoffeeta. grab by and enjoy cooling at the milk cheese eggs and fats milk and buttermilk special milks milk eggs and fats milk and buttermilk special milks [FIELD_VOLUME] volume_ml_1000 [FIELD_FLAVOR] flavor_coffee flavor_vanilla [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton",
@@ -7842,7 +7850,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "3335880007823",
-      "legacy_sku_text": "prosain pure cassis sold made pomegranate still brand prosain description pomegranate red prosain pure cassis product information technical description product information mark category concentrate breadcrumbs grocery coffee tea drinks [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_pomegranate [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
+      "legacy_sku_text": "prosain pure cassis sold made pomegranate still brand prosain description pomegranate red prosain pure cassis product information technical description product information mark category concentrate breadcrumbs grocery coffee tea drinks [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_blackcurrant flavor_pomegranate [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
       "sku": {
         "title": "prosain - pure juice Cassis - 50 cl - sold by unit",
         "attributes": "Pack Material Type: Glass; Volume: 500; Made From: pomegranate; Carbonization: still; Sustainable Sourcing: organic; Pack Type: Bottle",
@@ -7850,7 +7858,9 @@
         "description": "* drink \n* pomegranate juice organic \n* juice organic red \n* prosain \n* pure juice Cassis - 50 cl \n## product information \n# technical description \n##### product information \nunits ‎1.00 unit \nmark ‎ ",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" juice\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_identity_fix": "prosain pure cassis sold made pomegranate still brand prosain description pomegranate red prosain pure cassis product information technical description product information mark category concentrate breadcrumbs grocery coffee tea drinks [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_pomegranate [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "legacy_canonical_text": "vi drate coconut no_sugar vitamin_electrolyte_weight zero Vi Drate recycling info all outer packaging is fully recyclable including tape . sachets not yet recyclable uses add x sachet to of and shake stir until mixed. consume within hours. ca diet fitness [FIELD_PACKAGE_TYPE] package_type_sachet [FIELD_FLAVOR] flavor_coconut [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar",
@@ -7907,7 +7917,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "3350033594142",
-      "legacy_sku_text": "natur pure pineapple benign set fast delivery france price per lot made pineapple pineapple origin france still brand natur pur description drinks vegetable classics natur pure pineapple benign category concentrate breadcrumbs grocery coffee tea drinks coffee tea hot chocolate tea infusions [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_pineapple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "natur pure pineapple benign set fast delivery france price per lot made pineapple pineapple origin france still brand natur pur description drinks vegetable classics natur pure pineapple benign category concentrate breadcrumbs grocery coffee tea drinks coffee tea hot chocolate tea infusions [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_3 [FIELD_FLAVOR] flavor_pineapple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "O natur - pure juice D' pineapple of benign 75 cl organic - set of 3 - fast delivery in france - price per lot",
         "attributes": "Juice Content: 100%; Pack Type: Bottle; Made From: pineapple; Sustainable Sourcing: organic; Pack Material Type: Glass; Flavour: pineapple; Volume: 750; Geographic Origin: france; Carbonization: still",
@@ -7915,7 +7925,9 @@
         "description": "* drinks \n* juice, vegetable juice \n* juice classics \n* O natur \n* pure juice D' pineapple of benign 75 cl organic \n,",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" coffee, tea and hot chocolate\"\",\"\" tea and infusions\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "natur pure pineapple benign set fast delivery france price per lot made pineapple pineapple origin france still brand natur pur description drinks vegetable classics natur pure pineapple benign category concentrate breadcrumbs grocery coffee tea drinks coffee tea hot chocolate tea infusions [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_pineapple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "peapod cola carbonated calorie Peapod ahold calorie cola. amount and daily value per serving. a fat free food. calories fat . sodium . quality guaranteed or your money back. please recycle. ahol beverages diet cola [FIELD_VOLUME] volume_ml_2000 [FIELD_FLAVOR] flavor_cola [FIELD_CARBONATION] carbonation_carbonated",
@@ -8037,7 +8049,7 @@
         "package_material_set": "['paper / carton']"
       },
       "nearest_item_id": "3335880007717",
-      "legacy_sku_text": "lingon cranberry soft good source vitamins origin sweden smoothie made apple blackcurrant cranberry cranberry vitamin sweetener sugar still caffeine brand bob description bob soft refreshing lovely taste cranberries lingon enriched vitamin c. good easily fixed meal fits whole family. dilute concentrate category drinks up breadcrumbs dairy cheese eggs fruit smoothie chilled fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_cranberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton",
+      "legacy_sku_text": "lingon cranberry soft good source vitamins origin sweden smoothie made apple blackcurrant cranberry cranberry vitamin sweetener sugar still caffeine brand bob description bob soft refreshing lovely taste cranberries lingon enriched vitamin c. good easily fixed meal fits whole family. dilute concentrate category drinks up breadcrumbs dairy cheese eggs fruit smoothie chilled fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_blackcurrant flavor_cranberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton",
       "sku": {
         "title": "lingon & cranberry soft drink",
         "attributes": "Health Claims: good source of vitamins; Geographic Origin: sweden; Pack Type: Carton/Box; Volume: 1000; Juice Features: smoothie; Made From: apple, blackcurrant, cranberry; Flavour: cranberry; Immune Support Ingredients: vitamin c; Sweetener: sugar; Naturally derived: natural fragrances; Pack Material Type: Paper / Carton; Carbonization: still; Caffeine: 15-25 mg",
@@ -8045,7 +8057,9 @@
         "description": "BOB soft drink with a refreshing and lovely taste of cranberries and lingon, enriched with vitamin c. a good and easily fixed meal drink that fits the whole family.\ndilute the concentrate 1 + 4 with w",
         "category": "Juice Drinks (up to 24% Juice)",
         "category_path": "[\"\" dairy, cheese & eggs\"\",\"\" Juice, fruit drink & smoothie\"\",\"\" not chilled fruit drink\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_identity_fix": "lingon cranberry soft good source vitamins origin sweden smoothie made apple blackcurrant cranberry cranberry vitamin sweetener sugar still caffeine brand bob description bob soft refreshing lovely taste cranberries lingon enriched vitamin c. good easily fixed meal fits whole family. dilute concentrate category drinks up breadcrumbs dairy cheese eggs fruit smoothie chilled fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_cranberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "legacy_canonical_text": "mondariz natural_mineral_contains Mondariz general information name of the food mineral country of origin spain name of the operator waters of mondariz source of val s.l. operator address avda. of the val y name of the food mineral country of origin spain operator name waters of mondariz source of val s.l. operator address avda. of the val y n mondariz place of origin of the supermarket drinks soft drinks and juices and soda mineral without gas supermarket drinks soft drinks and juices and soda mineral without gas mineral without gas [FIELD_VOLUME] volume_ml_1500 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -8496,7 +8510,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "3272030030235",
-      "legacy_sku_text": "mill valdonne mint sirup set sweetener hfcs sugar mint brand moulin de valdonne description drinks syrups syrups mill valdonne mint sirup product description product description thanks simple recipes generous greedy syrups mill valdonne offers category liquid concentrates breadcrumbs grocery coffee tea drinks syrups concentrated juices [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_mint [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_15-25%",
+      "legacy_sku_text": "mill valdonne mint sirup set sweetener hfcs sugar mint brand moulin de valdonne description drinks syrups syrups mill valdonne mint sirup product description product description thanks simple recipes generous greedy syrups mill valdonne offers category liquid concentrates breadcrumbs grocery coffee tea drinks syrups concentrated juices [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_4 [FIELD_FLAVOR] flavor_mint [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_15-25%",
       "sku": {
         "title": "mill of valdonne - mint sirup 70 cl - set of 4",
         "attributes": "Juice Content: 15-25%; Sweetener: hfcs, sugar; Volume: 700; Naturally derived: natural fragrances; Pack Material Type: Glass; Flavour: mint; Pack Type: Bottle",
@@ -8504,7 +8518,9 @@
         "description": "* drinks \n* syrups \n* syrups \n* mill of valdonne \n* mint sirup 70 cl \n, \n## product description \n### product description \nthanks to simple recipes, generous and greedy, syrups mill of valdonne offers ",
         "category": "Liquid Concentrates",
         "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" syrups and concentrated juices\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "mill valdonne mint sirup set sweetener hfcs sugar mint brand moulin de valdonne description drinks syrups syrups mill valdonne mint sirup product description product description thanks simple recipes generous greedy syrups mill valdonne offers category liquid concentrates breadcrumbs grocery coffee tea drinks syrups concentrated juices [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_mint [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_15-25%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "actiph still Actiph actiph product bar code actiph known barcodes see more product details product description actiph actiph x known barcodes se grocery drinks [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_4 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
@@ -9348,7 +9364,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "7034280001962",
-      "legacy_sku_text": "ethical pure apple ethical set special offer caffeine apple still made apple brand ethiquable description number millilitre generic brand packaging information item litres about article salty grocery dietetics nutrition ethical pure category concentrate breadcrumbs grocery coffee tea drinks [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "ethical pure apple ethical set special offer caffeine apple still made apple brand ethiquable description number millilitre generic brand packaging information item litres about article salty grocery dietetics nutrition ethical pure category concentrate breadcrumbs grocery coffee tea drinks [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_3 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "ethical pure apple juice organic 1l - ethical - set of 3 - special offer",
         "attributes": "Pack Material Type: Glass; Caffeine: 150-200 mg; Volume: 1000; Pack Type: Bottle; Sustainable Sourcing: organic; Flavour: apple; Carbonization: still; Juice Content: 0-2%; Made From: apple",
@@ -9356,7 +9372,9 @@
         "description": "number of units 3000 millilitre \ngeneric brand \nbottle packaging information \nitem volume 1 Litres \n* * *\n# at about this article \n* salty grocery \n* dietetics and nutrition \n* organic \n* ethical pure",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" juice\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "ethical pure apple ethical set special offer caffeine apple still made apple brand ethiquable description number millilitre generic brand packaging information item litres about article salty grocery dietetics nutrition ethical pure category concentrate breadcrumbs grocery coffee tea drinks [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "clean citrus energy carbonated clement_bcaa Clean Drink energy undefined storage stored at maximum c all supplies sports energy drinks energy beverages energy sports drinks energy drinks energy vitamins energy sport energy energy [FIELD_VOLUME] volume_ml_330 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_citrus [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_metal",
@@ -9644,7 +9662,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "8718989925826",
-      "legacy_sku_text": "klosterneuburg abbey apple pear naturtryb made pear apple pear apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_pear [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "klosterneuburg abbey apple pear naturtryb made pear apple pear apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_apple flavor_pear [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "6x klosterneuburg abbey - apple juice with pear, naturtrYb - 1000ml",
         "attributes": "Made From: pear, apple; Pack Type: Bottle; Juice Content: 100%; Volume: 1000; Pack Material Type: Glass; Flavour: pear, apple; Carbonization: still",
@@ -9652,7 +9670,9 @@
         "description": "",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "klosterneuburg abbey apple pear naturtryb made pear apple pear apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_pear [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "waldquelle still bergische_forest_spring_mineral Waldquelle and allergenic contains mineral without carbonic acid allergen information contains does not contain any declarable allergens. item details brand bergische f beverages [FIELD_VOLUME] volume_ml_1000 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -11582,7 +11602,7 @@
         "package_material_set": "['plastic']"
       },
       "nearest_item_id": "6415712400071",
-      "legacy_sku_text": "shelf spacing domestic spring bag caffeine spring still brand kotimaista description domestic spring multilan source keski pohjanmaalta.we actively update product information service. however we recommend checking always sales package. category still bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "shelf spacing domestic spring bag caffeine spring still brand kotimaista description domestic spring multilan source keski pohjanmaalta.we actively update product information service. however we recommend checking always sales package. category still bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "shelf spacing 15 - 6 x domestic spring water 1.5l",
         "attributes": "Pack Type: Bag/Packet; Pack Material Type: Plastic; Volume: 1500; Juice Content: 0-2%; Caffeine: 0-15 mg; Water Type: spring; Carbonization: still",
@@ -11590,7 +11610,9 @@
         "description": "domestic spring water multilan from the source keski-pohjanmaalta.we actively update the product information of the service. however, we recommend checking ingredients always from the sales package.",
         "category": "Still Bottled Water",
         "category_path": "[\"\" selection\"\",\"\" beverages\"\",\"\" waters\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "shelf spacing domestic spring bag caffeine spring still brand kotimaista description domestic spring multilan source keski pohjanmaalta.we actively update product information service. however we recommend checking always sales package. category still bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "super coconut still pineapple sugar Super Drink description bodyarmor sports pineapple coconut is a hydrating sports with potassium packed electrolytes and flavors to help keep you hydrated. this sports provides essential description flavors. electrolytes potassium mg. total blend mg. gluten free. sweeteners. no caffeine. no colors from sources. bodyarmor is the sports for to upc beverages sports energy drinks pantry beverages sports drinks sport drinks [FIELD_VOLUME] volume_ml_473 [FIELD_FLAVOR] flavor_coconut flavor_pineapple [FIELD_CARBONATION] carbonation_still",
@@ -12233,7 +12255,7 @@
         "pulp_set": "[]"
       },
       "nearest_item_id": "7340083411199",
-      "legacy_sku_text": "niehoffs vaihinger orange two set deposit reusable made orange still sweetener sugar origin germany orange smoothie brand niehoffs vaihinger description milliliters brand mix company.de bar orange package information item allergen information contains sulphites product information te category concentrate breadcrumbs any category grocery drinks smoothies fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_orange [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "niehoffs vaihinger orange two set deposit reusable made orange still sweetener sugar origin germany orange smoothie brand niehoffs vaihinger description milliliters brand mix company.de bar orange package information item allergen information contains sulphites product information te category concentrate breadcrumbs any category grocery drinks smoothies fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_4 [FIELD_FLAVOR] flavor_orange [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "niehoffs vaihinger Orange Juice 1l TWO set of 4 with deposit Reusable",
         "attributes": "Volume: 1000; Made From: orange; Carbonization: still; Pack Type: Bottle; Juice Content: 100%; Sweetener: sugar; Geographic Origin: germany; Flavour: orange; Juice Features: smoothie",
@@ -12241,7 +12263,9 @@
         "description": "unit count 4000.0 milliliters \nbrand mix company.de bar & glass \nFlavour Orange \nPackage information Bottle \nitem volume 1 liter \nallergen information contains: Sulphites \n## Product information \n# Te",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" Any Category\"\",\"\" Grocery\"\",\"\" Drinks\"\",\"\" juice & smoothies\"\",\"\" Fruit Juice\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "niehoffs vaihinger orange two set deposit reusable made orange still sweetener sugar origin germany orange smoothie brand niehoffs vaihinger description milliliters brand mix company.de bar orange package information item allergen information contains sulphites product information te category concentrate breadcrumbs any category grocery drinks smoothies fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_orange [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "lete carbonated still mineral_volume Lete facilitates the digestion is indicated for diets low sodium it can have effects diuretics in the bottle like is born at the source quality checks everyday. microbiologically pure d.p.g.r. campan sales description mineral effervescent in the bottle like is born at the source helps digestion it can have effects diuretics is indicated for diets low sodium other informati drinks waters and drinks ed effervescent [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_CARBONATION] carbonation_carbonated carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
@@ -14396,7 +14420,7 @@
         "package_material_set": "['plastic']"
       },
       "nearest_item_id": "8719214811167",
-      "legacy_sku_text": "smarty syrup blood orange grapefruit sweetener sugar orange grapefruit sugar brand slimpie description smarty blood orange grapefruit syrup sugar. delectable pampering gluten free category liquid concentrates breadcrumbs eat soft coffee tea syrups [FIELD_VOLUME] volume_ml_650 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_grapefruit flavor_orange [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "smarty syrup blood orange grapefruit sweetener sugar orange grapefruit sugar brand slimpie description smarty blood orange grapefruit syrup sugar. delectable pampering gluten free category liquid concentrates breadcrumbs eat soft coffee tea syrups [FIELD_VOLUME] volume_ml_650 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_grapefruit flavor_orange [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "6x smarty syrup blood orange Grapefruit 650 ml",
         "attributes": "Pack Material Type: Plastic; Volume: 650; Sweetener: sugar; Pack Type: Bottle; Flavour: orange, grapefruit; Juice Content: 0-2%; Health Claims: no sugar",
@@ -14404,7 +14428,9 @@
         "description": "smarty blood orange Grapefruit is a syrup with 0% sugar. delectable pampering, gluten free…",
         "category": "Liquid Concentrates",
         "category_path": "[\"\" eat drink\"\",\"\" soft drink, juice, coffee and tea\"\",\"\" syrups\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "smarty syrup blood orange grapefruit sweetener sugar orange grapefruit sugar brand slimpie description smarty blood orange grapefruit syrup sugar. delectable pampering gluten free category liquid concentrates breadcrumbs eat soft coffee tea syrups [FIELD_VOLUME] volume_ml_650 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_grapefruit flavor_orange [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "fun apple still no_sugar coconut cloudy_appel_light_drink Fun fun light blissful cloudy apple a sugar free mixed with wonderful taste of sun ripened apples. try to cloudy apple as a sugar free one alternative to the breakfast or instead of ap the without sugar and with zero calories. with only aromas and colors. diluted which gives liters juice. fun light is made in sweden. perfect for everyone of the day meals or t beverages still drinks drinks toggle menu smoothie [FIELD_VOLUME] volume_ml_1000 [FIELD_FLAVOR] flavor_apple flavor_coconut [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_glass",
@@ -14429,7 +14455,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "7310090395164",
-      "legacy_sku_text": "klosterneuburg abbey apple golden delicious cloudy apple made apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
+      "legacy_sku_text": "klosterneuburg abbey apple golden delicious cloudy apple made apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
       "sku": {
         "title": "6x klosterneuburg abbey - apple juice Golden Delicious, naturally cloudy - 1000ml",
         "attributes": "Volume: 1000; Pack Type: Bottle; Flavour: apple; Pack Material Type: Glass; Made From: apple; Carbonization: still",
@@ -14437,7 +14463,9 @@
         "description": "",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "klosterneuburg abbey apple golden delicious cloudy apple made apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "qnt still nutrition_sport QNT description brand sportwater it s a that contains all minerals necessary for a body hydration balanced and allows to optimize hydration during or after a sportwater is a that contains all the minerals necessary for a balanced body hydration and allows to optimize hydration during or after a training session. it differs from common waters home nutrition and supplements nutrition and supplements drinks waters and juices [FIELD_VOLUME] volume_ml_500 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
@@ -14528,7 +14556,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "4306188267867",
-      "legacy_sku_text": "klosterneuburg abbey apple jonagold cloudy made apple apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
+      "legacy_sku_text": "klosterneuburg abbey apple jonagold cloudy made apple apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
       "sku": {
         "title": "6x klosterneuburg abbey - apple juice jonagold, naturally cloudy - 1000ml",
         "attributes": "Made From: apple; Flavour: apple; Volume: 1000; Pack Material Type: Glass; Naturally derived: natural; Pack Type: Bottle; Carbonization: still",
@@ -14536,7 +14564,9 @@
         "description": "",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "klosterneuburg abbey apple jonagold cloudy made apple apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "erikli still plum_type_volume Erikli plum lt source uludag summit at the point of the one plum residential from units quite to be high industrial agricultural and domestic from activities unaffected a pure to you with confidence deliver waters waters food beverages home page waters [FIELD_VOLUME] volume_ml_5000 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_pet",
@@ -15154,7 +15184,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "4101130002912",
-      "legacy_sku_text": "klosterneuburg abbey marillennektar naturtr brand stift category liquid concentrates breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "klosterneuburg abbey marillennektar naturtr brand stift category liquid concentrates breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "6x klosterneuburg abbey - Marillennektar, naturtr b - 750ml",
         "attributes": "Juice Content: 0-2%; Volume: 750; Pack Type: Bottle; Pack Material Type: Glass",
@@ -15162,7 +15192,9 @@
         "description": "",
         "category": "Liquid Concentrates",
         "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "klosterneuburg abbey marillennektar naturtr brand stift category liquid concentrates breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "nu naturals ginger no_sugar pumpkin Nu Naturals start does not contain any of the major allergens end state of readiness ready to use form liquid concentrate sweetener source stevia net weight ounces packag nu naturals nu stevia is a premium plant based herbal sweetener that comes from the stevia leaf an herb native to south america. nu stevia syrups are concentrated sweeteners designed to maximize flav product overview description sugar calories servings per bottle non gmo project verified the best time for pumpkin spice is all the time nu naturals nu stevia is a prem grocery honey sweeteners stevia grocery pantry baking staples syrups sauces pantry baking cooking [FIELD_VOLUME] volume_ml_473 [FIELD_FLAVOR] flavor_ginger [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar",
@@ -15219,7 +15251,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "787776666233",
-      "legacy_sku_text": "mill valdonne syrup orgeat set fast delivery france price per lot brand moulin de valdonne description syrup mill valdonne syrup orgeat category liquid concentrates breadcrumbs grocery coffee tea drinks syrups concentrated juices [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "mill valdonne syrup orgeat set fast delivery france price per lot brand moulin de valdonne description syrup mill valdonne syrup orgeat category liquid concentrates breadcrumbs grocery coffee tea drinks syrups concentrated juices [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_4 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "mill of valdonne - syrup Orgeat - the 750 ml bottle - set of 4 - fast delivery in france - price per lot",
         "attributes": "Pack Material Type: Glass; Volume: 750; Pack Type: Bottle; Juice Content: 0-2%",
@@ -15227,7 +15259,9 @@
         "description": "syrup\nmill of valdonne\nsyrup Orgeat\nthe 750 ml bottle",
         "category": "Liquid Concentrates",
         "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" syrups and concentrated juices\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "mill valdonne syrup orgeat set fast delivery france price per lot brand moulin de valdonne description syrup mill valdonne syrup orgeat category liquid concentrates breadcrumbs grocery coffee tea drinks syrups concentrated juices [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "bar le duc carbonated mineral_bottled_source_type Bar-le-Duc characteristics green point deposit only the netherlands keep save out of the sun on a dry cool and odorless place. perishable after opening. highlights of course sparkling mineral s mineral with added carbon dioxide store use storage advice save out of the sun on a dry cool and odorless place. ten best before end see date on the neck of the bottle. perishable after opening. extra information depar drinks coffee tea mineral spring groceries soft juices and carbonated soft juices syrups sparkling bottled carbonated [FIELD_VOLUME] volume_ml_1000 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -15285,7 +15319,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "721866642714",
-      "legacy_sku_text": "qcumber sparkling cucumber sparkling cucumber brand qcumber description qcumber sparkling cucumber qcumber sparkling cucumber qcumber category sparkling flavoured bottled breadcrumbs grocery coffee tea drinks waters [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "qcumber sparkling cucumber sparkling cucumber brand qcumber description qcumber sparkling cucumber qcumber sparkling cucumber qcumber category sparkling flavoured bottled breadcrumbs grocery coffee tea drinks waters [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_4 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "4x qcumber sparkling water cucumber 750 ml",
         "attributes": "Volume: 750; Carbonization: sparkling; Flavour: cucumber; Pack Type: Bottle; Pack Material Type: Glass; Juice Content: 0-2%",
@@ -15293,7 +15327,9 @@
         "description": "4x qcumber sparkling water cucumber 750 ml\n4x qcumber Sparkling Cucumber Water 750ml\n750ml (x4)\nqcumber",
         "category": "Sparkling Flavoured Bottled Water",
         "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" waters\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "qcumber sparkling cucumber sparkling cucumber brand qcumber description qcumber sparkling cucumber qcumber sparkling cucumber qcumber category sparkling flavoured bottled breadcrumbs grocery coffee tea drinks waters [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "alnavit berry still aronia Alnavit all categories beverages aronia direct all categories beverages aronia direct beverages luxury foods nutrition beverages [FIELD_VOLUME] volume_ml_330 [FIELD_FLAVOR] flavor_berry [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -15937,7 +15973,7 @@
         "package_material_set": "['paper / carton']"
       },
       "nearest_item_id": "7040518520358",
-      "legacy_sku_text": "pip strawberry blackcurrant uk smoothie origin united kingdom caffeine made strawberry blackcurrant apple still strawberry blackcurrant brand pip description strawberry blackcurrant vegan known barcodes see more product details product description pip strawberry blackcurrant category concentrate breadcrumbs grocery drinks smoothies [FIELD_VOLUME] volume_ml_180 [FIELD_PACK_SIZE] pack_qty_20 [FIELD_FLAVOR] flavor_apple flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "legacy_sku_text": "pip strawberry blackcurrant uk smoothie origin united kingdom caffeine made strawberry blackcurrant apple still strawberry blackcurrant brand pip description strawberry blackcurrant vegan known barcodes see more product details product description pip strawberry blackcurrant category concentrate breadcrumbs grocery drinks smoothies [FIELD_VOLUME] volume_ml_180 [FIELD_PACK_SIZE] pack_qty_20 [FIELD_FLAVOR] flavor_apple flavor_blackcurrant flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
       "sku": {
         "title": "Pip Organic | Strawberry & Blackcurrant | 5 x 4 x180ml (UK)",
         "attributes": "Juice Features: smoothie; Geographic Origin: united kingdom; Pack Material Type: Paper / Carton; Caffeine: 15-25 mg; Pack Type: Carton/Box; Made From: strawberry, blackcurrant, apple; Sustainable Sourcing: organic; Volume: 180; Carbonization: still; Juice Content: 100%; Flavour: strawberry, blackcurrant",
@@ -15945,7 +15981,9 @@
         "description": "* Strawberry & Blackcurrant \n* Vegan \n* Organic \n* Known Barcodes: 5060218974222, 5060218976226 \n› See more product details , \n## Product description \nPip Organic | Strawberry & Blackcurrant | 5 x 4 X",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" Grocery\"\",\"\" Drinks\"\",\"\" Juice & Smoothies\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_identity_fix": "pip strawberry blackcurrant uk smoothie origin united kingdom caffeine made strawberry blackcurrant apple still strawberry blackcurrant brand pip description strawberry blackcurrant vegan known barcodes see more product details product description pip strawberry blackcurrant category concentrate breadcrumbs grocery drinks smoothies [FIELD_VOLUME] volume_ml_180 [FIELD_PACK_SIZE] pack_qty_20 [FIELD_FLAVOR] flavor_apple flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_100%",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "legacy_canonical_text": "black forest still content_volume_carbonization Black Forest nutritional values average nutritional values unprepared per l mg mg mg mg mg sulfate mg mg hints from the hansjakobq beverages [FIELD_VOLUME] volume_ml_700 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass package_material_plastic",
@@ -16753,7 +16791,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "4100060024346",
-      "legacy_sku_text": "niehoffs vaihinger bananas nectar two set incl. pledge way made banana lemon vitamin antioxidants still sweetener sugar banana concentrate brand niehoffs vaihinger description niehoffs vaihinger bananas nectar two set incl. pledge way additional information nutritional values niehoffs vaihinger bananas nectar nutritional value per category nectars breadcrumbs food beverages soft drinks fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_lemon [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_25-50%",
+      "legacy_sku_text": "niehoffs vaihinger bananas nectar two set incl. pledge way made banana lemon vitamin antioxidants still sweetener sugar banana concentrate brand niehoffs vaihinger description niehoffs vaihinger bananas nectar two set incl. pledge way additional information nutritional values niehoffs vaihinger bananas nectar nutritional value per category nectars breadcrumbs food beverages soft drinks fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_lemon [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_25-50%",
       "sku": {
         "title": "niehoffs vaihinger bananas nectar 1l TWO - set of 6 incl. pledge MULTI-WAY",
         "attributes": "Pack Material Type: Glass; Made From: banana, lemon; Immune Support Ingredients: vitamin c, antioxidants; Juice Content: 25-50%; Volume: 1000; Carbonization: still; Pack Type: Bottle; Sweetener: sugar; Flavour: banana; Juice Features: from concentrate",
@@ -16761,7 +16799,9 @@
         "description": "niehoffs vaihinger bananas nectar 1l TWO - set of 6 incl. pledge MULTI-WAY \nadditional information: \nnutritional values: \nniehoffs vaihinger bananas nectar \nnutritional value per 100 ml, Brennwert230 ",
         "category": "Nectars",
         "category_path": "[\"\" food\"\",\"\" beverages\"\",\"\" soft drinks\"\",\"\" fruit juices\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_pack_fix": "niehoffs vaihinger bananas nectar two set incl. pledge way made banana lemon vitamin antioxidants still sweetener sugar banana concentrate brand niehoffs vaihinger description niehoffs vaihinger bananas nectar two set incl. pledge way additional information nutritional values niehoffs vaihinger bananas nectar nutritional value per category nectars breadcrumbs food beverages soft drinks fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_lemon [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_25-50%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "legacy_canonical_text": "fuska still low_salt_volume_caffeine Fuska fuska resource baby low sodium with the rate de t.c. ministry of approved by. low sodium including waters your babies kidneys for more is reliable. untouched no without nutrition baby drinks [FIELD_VOLUME] volume_ml_200 [FIELD_PACK_SIZE] pack_qty_12 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -20681,7 +20721,7 @@
         "package_material_set": "['paper / carton']"
       },
       "nearest_item_id": "8713300069906",
-      "legacy_sku_text": "tax exotic fruits concentrate still sweetener sugar caffeine good source vitamins made peach apple passion fruit mango vitamin brand taksi description characteristics recyclable wood certified origin keep after opening few days kept refrigerator max. best before see top pack. highlights created fr category drinks up breadcrumbs soft juices syrups fruit juices fruit multivitamin multivitamin grab [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_fruit flavor_mango flavor_passion flavor_peach [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_5-10%",
+      "legacy_sku_text": "tax exotic fruits concentrate still sweetener sugar caffeine good source vitamins made peach apple passion fruit mango vitamin brand taksi description characteristics recyclable wood certified origin keep after opening few days kept refrigerator max. best before see top pack. highlights created fr category drinks up breadcrumbs soft juices syrups fruit juices fruit multivitamin multivitamin grab [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_exotic flavor_fruit flavor_mango flavor_passion flavor_peach [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_5-10%",
       "sku": {
         "title": "tax exotic fruits",
         "attributes": "Pack Material Type: Paper / Carton; Juice Content: 5-10%; Naturally derived: natural fragrances; Juice Features: from concentrate; Volume: 1500; Carbonization: still; Sweetener: sugar; Caffeine: 15-25 mg; Health Claims: good source of vitamins; Made From: peach, apple, passion fruit, mango; Immune Support Ingredients: vitamin c",
@@ -20689,7 +20729,9 @@
         "description": "characteristics: recyclable, paper and/or wood of certified origin, \nkeep: after opening a few days can be kept in the refrigerator (max. 7°C).\nbest before: see top pack., \nHighlights: created from fr",
         "category": "Juice Drinks (up to 24% Juice)",
         "category_path": "[\"\" soft drink, juices, syrups, water\"\",\"\" fruit juices and fruit drink\"\",\"\" multivitamin drink\"\",\"\" multivitamin (to grab)\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_identity_fix": "tax exotic fruits concentrate still sweetener sugar caffeine good source vitamins made peach apple passion fruit mango vitamin brand taksi description characteristics recyclable wood certified origin keep after opening few days kept refrigerator max. best before see top pack. highlights created fr category drinks up breadcrumbs soft juices syrups fruit juices fruit multivitamin multivitamin grab [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_fruit flavor_mango flavor_passion flavor_peach [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_5-10%",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "legacy_canonical_text": "hi ball lemon carbonated diet no_sugar lime energy Hi Ball dairy free engine low fat low sodium paleo sugar conscious vegan vegetarian whole foods diet keto description contains juice. guarana ginseng caffeine hiballer.com. hi ball lemon lime sparkling energy water. caffeine. guarana. gin hiball sparkling energy waters have redefined the energy market and are our most popular product. a light refreshing hydrating that provides a boost of caffeine hiball s sparkli tasty sparkling energy delicious lemon lime zero calories zero sugar unsweetened guarana ginseng caffeine energy blend undefined start does not contain any of the major allergens form liquid end state of readiness ready to package quantity package individual item s beverages sports energy drinks beverages sports energy nutritional drinks grocery gourmet food beverages bottled beverages mixes juices beverages pantry beverages energy drinks target grocery beverages [FIELD_VOLUME] volume_ml_473 [FIELD_PACK_SIZE] pack_qty_12 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_lemon flavor_lime [FIELD_CARBONATION] carbonation_carbonated [FIELD_SWEETENER_DIET] sweetener_diet_diet sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_metal",
@@ -20879,7 +20921,7 @@
         "package_material_set": "['glass']"
       },
       "nearest_item_id": "6415712510602",
-      "legacy_sku_text": "shelf spacing domestic blackcurrant apple b6 b12 carbonated sweetener sugar caffeine apple blackcurrant good source vitamins brand kotimaista description blackcurrant apple flavored carbonated beverage. contain b6 b12 vitamins.we actively update product information service. however we recommend checking always category functional bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_carbonated [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass",
+      "legacy_sku_text": "shelf spacing domestic blackcurrant apple b6 b12 carbonated sweetener sugar caffeine apple blackcurrant good source vitamins brand kotimaista description blackcurrant apple flavored carbonated beverage. contain b6 b12 vitamins.we actively update product information service. however we recommend checking always category functional bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_blackcurrant [FIELD_CARBONATION] carbonation_carbonated [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass",
       "sku": {
         "title": "shelf spacing 14 - domestic 0.5l blackcurrant- apple b6 + b12 carbonated beverage",
         "attributes": "Sweetener: sugar; Caffeine: 0-15 mg; Flavour: apple, blackcurrant; Volume: 500; Health Claims: good source of vitamins; Naturally derived: natural fragrances; Pack Material Type: Glass; Pack Type: Bottle",
@@ -20887,7 +20929,9 @@
         "description": "blackcurrant and an apple -flavored carbonated beverage. contain b6- and b12 vitamins.we actively update the product information of the service. however, we recommend checking ingredients always from ",
         "category": "Functional Bottled Water",
         "category_path": "[\"\" selection\"\",\"\" beverages\"\",\"\" waters\"\"]"
-      }
+      },
+      "legacy_sku_text_before_jev_identity_fix": "shelf spacing domestic blackcurrant apple b6 b12 carbonated sweetener sugar caffeine apple blackcurrant good source vitamins brand kotimaista description blackcurrant apple flavored carbonated beverage. contain b6 b12 vitamins.we actively update product information service. however we recommend checking always category functional bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_carbonated [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "legacy_canonical_text": "healthy people orange still blood Healthy People new cold pressed blood orange in a packaging. by alone fresh to use and the never to heat stay vitamins and minerals maximally preserved. made from the b new cold pressed orange in a packaging. by alone fresh to use and the never to heat stay vitamins and minerals maximally preserved. packing made of pape groceries soft juices and fresh juices and smoothies fresh juices soft juices coffee tea fruit juices drinks orange orange orange chilled [FIELD_VOLUME] volume_ml_250 [FIELD_FLAVOR] flavor_orange [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -23175,8 +23219,10 @@
         "pulp_set": "[]",
         "package_material_set": "['metal']"
       },
-      "legacy_sku_text": "savse nina super blue raw smoothie sweetener sugar cold press smoothie caffeine vitamin antioxidants still made blueberry strawberry apple orange kale blackcurrant beet spinach system good source vitamins brand savs description information description blueberry blackcurrant beetroot strawberry kale spinach orange apple raw smoothies made different fruit veg cold pressed great taste cals kj contains category concentrate breadcrumbs drinks chilled fruit smoothies fruit veg blends [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_metal",
-      "legacy_canonical_text": "savs apple still sugar orange strawberry savse_nina_super_blue raw_smoothie_material_type Savsé information description blueberry blackcurrant beetroot strawberry kale spinach orange apple raw smoothies made different fruit veg cold pressed great taste cals kj contains drinks chilled fruit smoothies fruit veg blends [FIELD_VOLUME] volume_ml_250 [FIELD_FLAVOR] flavor_apple flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_metal"
+      "legacy_sku_text": "savse nina super blue raw smoothie sweetener sugar cold press smoothie caffeine vitamin antioxidants still made blueberry strawberry apple orange kale blackcurrant beet spinach system good source vitamins brand savs description information description blueberry blackcurrant beetroot strawberry kale spinach orange apple raw smoothies made different fruit veg cold pressed great taste cals kj contains category concentrate breadcrumbs drinks chilled fruit smoothies fruit veg blends [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_blackcurrant flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_metal",
+      "legacy_canonical_text": "savs apple still sugar orange strawberry savse_nina_super_blue raw_smoothie_material_type Savsé information description blueberry blackcurrant beetroot strawberry kale spinach orange apple raw smoothies made different fruit veg cold pressed great taste cals kj contains drinks chilled fruit smoothies fruit veg blends [FIELD_VOLUME] volume_ml_250 [FIELD_FLAVOR] flavor_apple flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_metal",
+      "legacy_sku_text_before_jev_identity_fix": "savse nina super blue raw smoothie sweetener sugar cold press smoothie caffeine vitamin antioxidants still made blueberry strawberry apple orange kale blackcurrant beet spinach system good source vitamins brand savs description information description blueberry blackcurrant beetroot strawberry kale spinach orange apple raw smoothies made different fruit veg cold pressed great taste cals kj contains category concentrate breadcrumbs drinks chilled fruit smoothies fruit veg blends [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_apple flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_metal",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "group": "singleton_gtin",
@@ -24329,8 +24375,10 @@
         "pulp_set": "[]",
         "package_material_set": "['plastic']"
       },
-      "legacy_sku_text": "ri top syrup lime mint set ever lime mint sweetener sugar low sugar low calories brand tri top description mixing ratio results approx. fruit syrup low calories less sugar intensity sweet individually dosed also ideal bubbly systems category liquid concentrates breadcrumbs kitchen food beverages fruit juices [FIELD_VOLUME] volume_ml_600 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_lime flavor_mint [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
-      "legacy_canonical_text": "tri top lime sugar mint ri_syrup Tri Top mixing ratio of results in approx. liter of fruit in syrup low in calories with less sugar intensity and are sweet individually dosed also ideal for bubbly systems and c kitchen food and beverages fruit juices [FIELD_VOLUME] volume_ml_600 [FIELD_FLAVOR] flavor_lime flavor_mint [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic"
+      "legacy_sku_text": "ri top syrup lime mint set ever lime mint sweetener sugar low sugar low calories brand tri top description mixing ratio results approx. fruit syrup low calories less sugar intensity sweet individually dosed also ideal bubbly systems category liquid concentrates breadcrumbs kitchen food beverages fruit juices [FIELD_VOLUME] volume_ml_600 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_lime flavor_mint [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
+      "legacy_canonical_text": "tri top lime sugar mint ri_syrup Tri Top mixing ratio of results in approx. liter of fruit in syrup low in calories with less sugar intensity and are sweet individually dosed also ideal for bubbly systems and c kitchen food and beverages fruit juices [FIELD_VOLUME] volume_ml_600 [FIELD_FLAVOR] flavor_lime flavor_mint [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
+      "legacy_sku_text_before_jev_pack_fix": "ri top syrup lime mint set ever lime mint sweetener sugar low sugar low calories brand tri top description mixing ratio results approx. fruit syrup low calories less sugar intensity sweet individually dosed also ideal bubbly systems category liquid concentrates breadcrumbs kitchen food beverages fruit juices [FIELD_VOLUME] volume_ml_600 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_lime flavor_mint [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "group": "singleton_gtin",
@@ -24593,8 +24641,10 @@
         "pulp_set": "[]",
         "package_material_set": "['plastic']"
       },
-      "legacy_sku_text": "orange strawberry strawberry orange still made strawberry orange mandarine blackcurrant carrot vitamin sweetener sugar caffeine brand sunny delight category drinks up breadcrumbs drinks fresh soups see everything [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
-      "legacy_canonical_text": "sunny delight orange still sugar strawberry mandarine_blackcurrant_carrot_material Sunny Delight drinks fresh soups see everything [FIELD_VOLUME] volume_ml_500 [FIELD_FLAVOR] flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic"
+      "legacy_sku_text": "orange strawberry strawberry orange still made strawberry orange mandarine blackcurrant carrot vitamin sweetener sugar caffeine brand sunny delight category drinks up breadcrumbs drinks fresh soups see everything [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_blackcurrant flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
+      "legacy_canonical_text": "sunny delight orange still sugar strawberry mandarine_blackcurrant_carrot_material Sunny Delight drinks fresh soups see everything [FIELD_VOLUME] volume_ml_500 [FIELD_FLAVOR] flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
+      "legacy_sku_text_before_jev_identity_fix": "orange strawberry strawberry orange still made strawberry orange mandarine blackcurrant carrot vitamin sweetener sugar caffeine brand sunny delight category drinks up breadcrumbs drinks fresh soups see everything [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_orange flavor_strawberry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "group": "singleton_gtin",
@@ -25151,8 +25201,10 @@
         "pulp_set": "[]",
         "package_material_set": "['glass']"
       },
-      "legacy_sku_text": "rh sparkling mineral without carbonic acid mineral sparkling caffeine origin germany brand rh nsprudel description nutritional values average nutritional values unprepared per nitrate sulfate category carbonated bottled breadcrumbs beverages [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
-      "legacy_canonical_text": "rh nsprudel carbonated without_carbonic_acid_material Rhönsprudel nutritional values average nutritional values unprepared per l mg mg mg mg mg mg nitrate mg sulfate mg mg beverages [FIELD_VOLUME] volume_ml_1000 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass"
+      "legacy_sku_text": "rh sparkling mineral without carbonic acid mineral sparkling caffeine origin germany brand rh nsprudel description nutritional values average nutritional values unprepared per nitrate sulfate category carbonated bottled breadcrumbs beverages [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_carbonated carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_canonical_text": "rh nsprudel carbonated without_carbonic_acid_material Rhönsprudel nutritional values average nutritional values unprepared per l mg mg mg mg mg mg nitrate mg sulfate mg mg beverages [FIELD_VOLUME] volume_ml_1000 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass",
+      "legacy_sku_text_before_carbonic_negation": "rh sparkling mineral without carbonic acid mineral sparkling caffeine origin germany brand rh nsprudel description nutritional values average nutritional values unprepared per nitrate sulfate category carbonated bottled breadcrumbs beverages [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "carbonic_negation_correction": "Explicit without carbonic is still; contradictory sparkling evidence is retained for review."
     },
     {
       "group": "singleton_gtin",
@@ -25348,8 +25400,10 @@
         "pulp_set": "[]",
         "package_material_set": "['glass']"
       },
-      "legacy_sku_text": "syrup pure cane anise mullion mullion house sweetener cane sugar brand meneau description true start brown cane sugar south america eau anise end farming category liquid concentrates breadcrumbs alcohol free drinks syrups drinks concentrated syrups [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
-      "legacy_canonical_text": "meneau syrup_pure_cane_anise sugar Meneau true start brown cane sugar d south america eau anise end from farming alcohol free drinks syrups and drinks concentrated syrups [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_MATERIAL] package_material_glass"
+      "legacy_sku_text": "syrup pure cane anise mullion mullion house sweetener cane sugar brand meneau description true start brown cane sugar south america eau anise end farming category liquid concentrates breadcrumbs alcohol free drinks syrups drinks concentrated syrups [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_anise [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_canonical_text": "meneau syrup_pure_cane_anise sugar Meneau true start brown cane sugar d south america eau anise end from farming alcohol free drinks syrups and drinks concentrated syrups [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_MATERIAL] package_material_glass",
+      "legacy_sku_text_before_jev_identity_fix": "syrup pure cane anise mullion mullion house sweetener cane sugar brand meneau description true start brown cane sugar south america eau anise end farming category liquid concentrates breadcrumbs alcohol free drinks syrups drinks concentrated syrups [FIELD_VOLUME] volume_ml_500 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "group": "singleton_gtin",
@@ -26169,8 +26223,10 @@
         "pulp_set": "[]",
         "package_material_set": "['metal']"
       },
-      "legacy_sku_text": "river rock vital still pear blackcurrant botanicals functional ginseng energy source vitamins sweetener sucralose caffeine zinc sugar low calories salt saturated fats nootropic enhanced mental performance pear blackcurrant still brand deep riverrock description details mental performance battling through fog daily life let clear cobwebs regain focus agility pantothenic acid contributes normal mental performance. low calorie st category functional bottled breadcrumbs drinks flavoured [FIELD_VOLUME] volume_ml_450 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_pear [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_metal",
-      "legacy_canonical_text": "deep riverrock pear still no_sugar blackcurrant Deep RiverRock details for mental performance battling through the fog of daily life let s clear the cobwebs to regain focus and agility pantothenic acid contributes to normal mental performance. low calorie st drinks flavoured [FIELD_VOLUME] volume_ml_450 [FIELD_FLAVOR] flavor_pear [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_metal"
+      "legacy_sku_text": "river rock vital still pear blackcurrant botanicals functional ginseng energy source vitamins sweetener sucralose caffeine zinc sugar low calories salt saturated fats nootropic enhanced mental performance pear blackcurrant still brand deep riverrock description details mental performance battling through fog daily life let clear cobwebs regain focus agility pantothenic acid contributes normal mental performance. low calorie st category functional bottled breadcrumbs drinks flavoured [FIELD_VOLUME] volume_ml_450 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_blackcurrant flavor_pear [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_metal",
+      "legacy_canonical_text": "deep riverrock pear still no_sugar blackcurrant Deep RiverRock details for mental performance battling through the fog of daily life let s clear the cobwebs to regain focus and agility pantothenic acid contributes to normal mental performance. low calorie st drinks flavoured [FIELD_VOLUME] volume_ml_450 [FIELD_FLAVOR] flavor_pear [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_metal",
+      "legacy_sku_text_before_jev_identity_fix": "river rock vital still pear blackcurrant botanicals functional ginseng energy source vitamins sweetener sucralose caffeine zinc sugar low calories salt saturated fats nootropic enhanced mental performance pear blackcurrant still brand deep riverrock description details mental performance battling through fog daily life let clear cobwebs regain focus agility pantothenic acid contributes normal mental performance. low calorie st category functional bottled breadcrumbs drinks flavoured [FIELD_VOLUME] volume_ml_450 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_FLAVOR] flavor_pear [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_metal",
+      "jev_identity_fix_review": "Recognized anise/blackcurrant/exotic tokens in title or source attributes; all existing tokens retained."
     },
     {
       "group": "singleton_gtin",
@@ -26267,8 +26323,10 @@
         "sweetener_set": "[]",
         "pulp_set": "[]"
       },
-      "legacy_sku_text": "lot infusion mint green tea still tea green earl grey tea mint brand infusion category still rtd tea breadcrumbs sweet groceries coffee tea hot drinks teas plain teas earl grey [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_FLAVOR] flavor_mint [FIELD_CARBONATION] carbonation_still [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
-      "legacy_canonical_text": "infusion mint tea still green_earl_grey_flavour Infusion tea sweet groceries coffee tea and hot drinks teas plain teas and earl grey [FIELD_VOLUME] volume_ml_250 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_FLAVOR] flavor_mint [FIELD_CARBONATION] carbonation_still"
+      "legacy_sku_text": "lot infusion mint green tea still tea green earl grey tea mint brand infusion category still rtd tea breadcrumbs sweet groceries coffee tea hot drinks teas plain teas earl grey [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_12 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_FLAVOR] flavor_mint [FIELD_CARBONATION] carbonation_still [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_canonical_text": "infusion mint tea still green_earl_grey_flavour Infusion tea sweet groceries coffee tea and hot drinks teas plain teas and earl grey [FIELD_VOLUME] volume_ml_250 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_FLAVOR] flavor_mint [FIELD_CARBONATION] carbonation_still",
+      "legacy_sku_text_before_jev_pack_fix": "lot infusion mint green tea still tea green earl grey tea mint brand infusion category still rtd tea breadcrumbs sweet groceries coffee tea hot drinks teas plain teas earl grey [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_FLAVOR] flavor_mint [FIELD_CARBONATION] carbonation_still [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "jev_pack_fix_review": "Source title explicitly declares a physical multipack with a package volume; replace the prior implicit singleton with that count. Original bytes retained."
     },
     {
       "group": "singleton_gtin",

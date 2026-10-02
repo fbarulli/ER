@@ -14,7 +14,7 @@ def test_source_capture_changes_missing_flavor_into_original_column_conflict():
                             urls=['https://shop.example/vanilla-water-330ml'])
     right=generate_canonical('1234567890130','Example',groups['1234567890130'],idf,None)
     assert not left['flavor_set']
-    assert three_way_gate(left,right)['decision']=='proceed'
+    assert three_way_gate(left,right)['decision']=='fallback'
     def source(title,url):
         return pd.DataFrame([dict(sku_name_eng=title,attribute='',description_short_eng='',
                                   breadcrumbs_eng='',sku_url=url)])

@@ -290,9 +290,9 @@ def build(
 ) -> pd.DataFrame:
     """Derive the merged graph, cut the split, and return the validation rows."""
     df = load_dataset_deduped()
-    from pipeline import build_training_data
+    from training.base_data import load_base_data
 
-    data = build_training_data(df, payload_variant="full")
+    data = load_base_data(df, payload_variant="full")
     pos = data["pos"]
     row_bc = data["row_bc"]
 

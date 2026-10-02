@@ -211,20 +211,24 @@ def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
     # the other canonical set fields use.
     universe_evidence = _universe_evidence_of(record)
     flavor_set = evidence("flavor_set", "flavor")
+    from core.declared_identity import record_identity
+    identity = record_identity(record)
     return {
         # Keep the flagged raw values in canonical records for audit, but do
         # not promote them into evidence used to classify a pair.
         "volume": (
             set()
-            if _has_consistency_flag(record, "ambiguous_volume")
+            if any(_has_consistency_flag(record, flag) for flag in ("ambiguous_volume", "volume_sources_disagree"))
             else _value_set(record.get("volume_set"), kind="volume")
         ),
-        "pack": _value_set(record.get("pack_set"), kind="pack"),
-        "package_type": _string_value_set(
+        "pack": set() if any(_has_consistency_flag(record, flag) for flag in ("pack_sources_disagree", "pack_hierarchy_ambiguous")) else _value_set(record.get("pack_set"), kind="pack"),
+        "package_type": set() if _has_consistency_flag(record, "categorical_source_conflict:package_type") else _string_value_set(
             record.get("package_type_set"), kind="package_type"
         ),
         "flavor": " ".join(sorted(flavor_set)),
         "flavor_set": flavor_set,
+        "declared_identity": identity,
+        "canonical": record.get("canonical", ""),
         "carbonation": evidence("carbonation_set", "carbonation"),
         "sweetener": evidence("sweetener_set", "sweetener"),
         "sweetener_type": _string_value_set(record.get("sweetener_type_set"), kind="sweetener_type"),
@@ -235,7 +239,7 @@ def canonical_attribute_info(record: Mapping[str, object]) -> dict[str, object]:
         # (package_material_set). Identity-safe by construction: both sides of
         # a verified true match share one canonical -> the same set -> the
         # set-intersection veto can never fire within it.
-        "pack_material": _string_value_set(
+        "pack_material": set() if _has_consistency_flag(record, "categorical_source_conflict:pack_material") else _string_value_set(
             record.get("package_material_set"), kind="package_material"
         ),
         "universe_evidence": universe_evidence,
@@ -275,7 +279,7 @@ def sku_attribute_info(
             {canonical_volume_ml(volume_ml)}
             if volume_ml is not None
             and float(volume_ml) > 0
-            and "ambiguous_volume" not in set(extracted.get("attribute_consistency_flags") or set())
+            and not {"ambiguous_volume", "volume_sources_disagree"} & set(extracted.get("attribute_consistency_flags") or set())
             else set()
         )
     except (TypeError, ValueError):
@@ -288,10 +292,13 @@ def sku_attribute_info(
             if pack_qty is not None
             and int(pack_qty) >= 1
             and float(pack_confidence or 0.0) > 0.0
+            and not {"pack_sources_disagree", "pack_hierarchy_ambiguous"} & set(extracted.get("attribute_consistency_flags") or set())
             else set()
         )
     except (TypeError, ValueError):
         pack = set()
+    from core.declared_identity import record_identity
+    identity = record_identity(extracted)
     flavor_set = set(extracted.get("flavor_set") or set())
     # Full-universe parse (owner ruling 2026-10-01, ALL ATTRIBUTES): the raw
     # attribute cell is re-parsed by the census SSOT parser so every
@@ -311,6 +318,7 @@ def sku_attribute_info(
         },
         "flavor": " ".join(sorted(flavor_set)),
         "flavor_set": flavor_set,
+        "declared_identity": identity,
         "carbonation": set(extracted.get("carbonation_set") or set()),
         "sweetener": set(extracted.get("sweetener_set") or set()),
         "sweetener_type": set(extracted.get("sweetener_type_set") or set()),
@@ -546,6 +554,13 @@ def _universe_value(record: Mapping[str, object], key: str, spec) -> object:
     key resolves to an empty frozenset — populated-side evidence, evaluated
     as missing by the caller, never invented.
     """
+    dimension = CRITICAL_NAME_BY_CENSUS_KEY.get(key)
+    if dimension and _has_consistency_flag(record, f"categorical_source_conflict:{dimension}"):
+        return frozenset()
+    if key == 'volume' and _has_consistency_flag(record, 'volume_sources_disagree'):
+        return frozenset()
+    if key == 'count per unit' and any(_has_consistency_flag(record, flag) for flag in ('pack_sources_disagree', 'pack_hierarchy_ambiguous')):
+        return frozenset()
     if key == "flavour":
         value = record.get("flavor_set")
         if value is None:
@@ -888,6 +903,8 @@ def veto_eligibility_ledger(
             "evidence_class": evidence_class,
             "identity_safety": identity_safety,
             "config_state": config_state,
+            "decision_participation": "hard_veto" if dimension in vetoed else "review_on_conflict_or_subset",
+
             "in_schema_allow_list": dimension in schema_admitted,
             "owner_delta": owner_delta,
         }

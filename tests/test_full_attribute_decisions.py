@@ -161,16 +161,14 @@ def test_full_evaluation_critical7_outputs_are_byte_stable():
     assert full["agreements"] == plain["agreements"]
 
 
-def test_three_way_gate_decision_is_identical_with_full_wiring_present():
+def test_water_type_conflict_drives_review_without_becoming_a_hard_veto():
     from pipeline import three_way_gate
-
-    # two pairs that differ ONLY in the captured water-type evidence: the
-    # gate's decision is byte-identical, because the veto still votes only
-    # where the config permits (water type is audit-only today).
     water_a = _rich_pair(universe_evidence={"water type": frozenset({"mineral"})})
     water_b = _rich_pair(universe_evidence={"water type": frozenset({"spring"})})
-    assert three_way_gate(water_a, water_b) == three_way_gate(water_a, water_a)
-    assert three_way_gate(water_a, water_b)["decision"] == "proceed"
+    assert three_way_gate(water_a, water_a)["decision"] == "proceed"
+    decision = three_way_gate(water_a, water_b)
+    assert decision["decision"] == "fallback"
+    assert 'water type' in decision['reason']
 
 
 # ── (d) every registered field appears in the trace census columns ──────────

@@ -59,7 +59,6 @@ from core.critical_attributes import (
     categorical_conflict,
     extract_critical_claims,
     extract_description_claims,
-    extract_flavor_tokens,
     volumes_compatible,
 )
 from core.tracing import (
@@ -231,6 +230,41 @@ def extract_pack_evidence(title: str) -> list[dict]:
             evidence.append({"count": count, "confidence": confidence[kind],
                              "role": role, "raw_match": match.group(0),
                              "start": match.start(), "end": match.end(), "rule": kind})
+    # A multiplier can precede the product name, not just its unit size.
+    # Require a physical-package measurement after it and reject dosage-only
+    # text; bare model codes and unproved whitespace counts stay unknown.
+    package_measurements = [m for m in measurements if m['role'] == 'package_volume']
+    for match in re.finditer(rf"{number}\s*[x×]\s+(?=[a-z])", text, re.I):
+        if any(start <= match.start() < end for start, end in occupied):
+            continue
+        following = next((m for m in package_measurements
+                          if match.end() <= m['start'] and m['start'] - match.end() <= 100), None)
+        if following is None:
+            continue
+        between = text[match.end():following['start']]
+        if re.search(r"[.;\n]|\b(?:dose|daily|times|servings?)\b", between, re.I):
+            continue
+        end = following['end']
+        evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
+                         'confidence': confidence['multiplier'], 'role': 'unit_count',
+                         'raw_match': text[match.start():end], 'start': match.start(),
+                         'end': end, 'rule': 'multiplier'})
+        occupied.append((match.start(), end))
+    if package_measurements:
+        for match in re.finditer(rf"\b(?:set|bundle)\s+of\s*{count_token}\b", text, re.I):
+            if re.match(r"\s*(?:flavou?rs?|choices?|colou?rs?|options?)\b", text[match.end():], re.I):
+                continue
+            evidence.append({'count': int(re.sub(r'[.,]', '', match.group(1))),
+                             'confidence': confidence['pack_of'], 'role': 'unit_count',
+                             'raw_match': match.group(0), 'start': match.start(),
+                             'end': match.end(), 'rule': 'pack_of'})
+    # Retail metadata is count evidence only when its unit is Count, not
+    # fluid ounces or a mass; decimal .00 is an integer count here.
+    for match in re.finditer(r"\bunit count\s+(\d+)(?:\.0+)?\s+count\b", text, re.I):
+        if int(match.group(1)):
+            evidence.append({'count': int(match.group(1)), 'confidence': confidence['count'],
+                             'role': 'unit_count', 'raw_match': match.group(0),
+                             'start': match.start(), 'end': match.end(), 'rule': 'count'})
     word_counts = dict(zip(
         ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"),
         range(1, 13), strict=True,
@@ -301,6 +335,28 @@ def extract_pack_evidence(title: str) -> list[dict]:
                              "role": "unit_count", "raw_match": text[start:end],
                              "start": start, "end": end, "rule": "multiplier"})
             break
+    # "4 x 250ml (Pack of 2)" describes two inner four-packs. Preserve
+    # levels and a proven physical-unit total instead of picking inner four.
+    outer = re.search(rf"\(\s*(?:pack(?:age)?\s+of\s*|[x×]\s*){count_token}\s*\)", text, re.I)
+    inner_units = [e for e in evidence if e['role'] == 'unit_count' and e['rule'] == 'multiplier'
+                   and (outer is None or e['end'] <= outer.start())]
+    if outer and inner_units:
+        inner = inner_units[0]
+        outer_count = int(re.sub(r'[.,]', '', outer.group(1)))
+        start, end = inner['start'], outer.end()
+        for entry in evidence:
+            if entry['role'] == 'unit_count':
+                entry['role'] = 'outer_count' if entry['start'] >= outer.start() else 'inner_count'
+        evidence.insert(0, {'count': inner['count'] * outer_count,
+                            'confidence': confidence['nested'], 'role': 'unit_count',
+                            'raw_match': text[start:end], 'start': start, 'end': end,
+                            'rule': 'nested'})
+    elif len({e['count'] for e in evidence if e['role'] == 'unit_count'}) > 1:
+        # Unresolved competing counts are not a license to select whichever
+        # happens to match another record.
+        for entry in evidence:
+            if entry['role'] == 'unit_count':
+                entry['hierarchy_ambiguous'] = True
     return evidence
 
 
@@ -594,7 +650,9 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     # Critical categorical evidence is parsed once for the canonical, model,
     # mining, and inference lanes.  Keep the historical scalar flavor as a
     # deterministic first value for compatibility with existing CSV readers.
-    critical = extract_critical_claims(sku_name, attribute)
+    from core.product_selection import selected_identity_inputs
+    identity_title, identity_attributes, selected_variant = selected_identity_inputs(sku_name, attribute)
+    critical = extract_critical_claims(identity_title, identity_attributes)
     description_claims = extract_description_claims(description)
     consistency_flags = set(sweeteners["consistency_flags"])
     negative_ingredients = negated_sweetener_types(sku_name, attribute, description, url_tokens, img_tokens)
@@ -631,7 +689,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         ledger.append({"field": "measurement", "column": entry["column"], "value": entry})
     pack_evidence = [
         {"column": column, **entry}
-        for column, text in (("title", str(sku_name or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
+        for column, text in (("title", str(sku_name or "")), ("description", str(description or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
         for entry in extract_pack_evidence(text)
     ]
     if any(entry.get("hierarchy_ambiguous") for entry in pack_evidence):
@@ -666,14 +724,14 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     if flavor_set:
         ledger.append({"field": "flavor", "column": "title+attributes",
                        "value": sorted(flavor_set)})
-    # Category tokens may carry flavor evidence
-    # (e.g. "Orange Juice" in category path) when title/attributes
-    # are silent on flavor.
-    cat_flavors = extract_flavor_tokens(cat_tokens) if cat_tokens else frozenset()
-    if cat_flavors:
-        ledger.append({"field": "flavor", "column": "category",
-                       "value": sorted(cat_flavors)})
-        flavor_set.update(cat_flavors)
+    # Categories classify products; they do not declare a SKU's flavor.
+    # Broad "Lemonade/Lime" and negated "Non-Cola" categories previously
+    # invented identity agreement between distinct variants.
+    from core.declared_identity import listing_identity
+    identity = listing_identity(sku_name, attribute, description)
+    if identity:
+        ledger.append({"field": "declared_identity", "column": "title+attributes+description",
+                       "value": identity})
     flavor = sorted(flavor_set)[0] if flavor_set else ""
     for dimension in ("carbonation", "sweetener", "pulp", "organic"):
         if critical[dimension]:
@@ -705,6 +763,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     # Volume and pack from title
     vol_title = extract_volume_from_title(sku_name)
     pack_title, pack_conf_title = extract_pack_from_title(sku_name)
+    pack_description, pack_conf_description = extract_pack_from_title(description)
 
     # Attribute parsing
     attr_vol, attr_vol_conf, attr_pack, attr_pack_conf = parse_attribute_volume_pack(
@@ -740,6 +799,9 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     if pack_title > 1 or pack_conf_title > 0:
         ledger.append({"field": "pack_qty", "column": "title",
                        "value": pack_title, "confidence": pack_conf_title})
+    if pack_conf_description > 0:
+        ledger.append({"field": "pack_qty", "column": "description",
+                       "value": pack_description, "confidence": pack_conf_description})
     if pack_url > 1 or pack_conf_url > 0:
         ledger.append({"field": "pack_qty", "column": "sku_url",
                        "value": pack_url, "confidence": pack_conf_url})
@@ -796,9 +858,12 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     elif pack_img > 1 or pack_conf_img > 0:
         pack_qty = pack_img
         pack_conf = pack_conf_img
-    else:
+    elif pack_conf_title > 0:
         pack_qty = pack_title
         pack_conf = pack_conf_title
+    else:
+        pack_qty = pack_description
+        pack_conf = pack_conf_description
     # CORROBORATION FUSION (2026-10-01 ruling): the card's confidence is a
     # property of the CLAIM, not of the winning column — agreeing
     # independent readers pool upward, disagreeing readers cap the card at
@@ -819,6 +884,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         for value, conf, column in (
             (attr_pack, attr_pack_conf, "attributes"),
             (pack_title, pack_conf_title, "title"),
+            (pack_description, pack_conf_description, "description"),
             (pack_url, pack_conf_url, "sku_url"),
             (pack_img, pack_conf_img, "image_url"),
         )
@@ -1252,6 +1318,8 @@ def three_way_gate(
     ):
         if dimension is not None and dimension not in veto_dimensions:
             continue
+        if dimension is not None and any(_has_attribute_flag(record, f"categorical_source_conflict:{dimension}") for record in (attrs1, attrs2)):
+            continue
         left, right = set(attrs1.get(field, set())), set(attrs2.get(field, set()))
         if left and right and not (left & right):
             return GateResult(decision="hard_no", reason=reason).model_dump()
@@ -1301,30 +1369,22 @@ def three_way_gate(
     categorical_dimensions = veto_dimensions - {
         "volume", "pack", "package_type", "pack_material"
     }
-    # The gate consumes only configured categorical verdicts. Per-key engine
-    # evaluation is independent, so project the registry before costly raw
-    # re-parsing. The census still evaluates the complete universe separately.
-    categorical_registry = {
-        key: spec for key, spec in attribute_registry().items()
-        if CRITICAL_NAME_BY_CENSUS_KEY.get(key) in categorical_dimensions - uncertain_categorical_dimensions
-    }
-    categorical_conflicts = []
-    if categorical_registry:
-        evidence = AttributeDecisionEngine(
-            volume_relative_tolerance=float(vol_tolerance),
-            volume_absolute_tolerance_ml=float(vol_abs_tolerance),
-        ).evaluate(
-            left_info, right_info, left_raw=attrs1, right_raw=attrs2,
-            registry=categorical_registry,
-        )
-        categorical_conflicts = sorted(
-            CRITICAL_NAME_BY_CENSUS_KEY[key] for key in evidence.conflicts
-        )
-        uncertain_categorical_dimensions.update(
-            CRITICAL_NAME_BY_CENSUS_KEY[key]
-            for key, entry in evidence.dimensions.items()
-            if entry.fallback_from in {"source_conflict", "claim_conflict"}
-        )
+    # Evaluate the complete registry; configured vetoes and review policy
+    # consume this same evidence rather than projecting away attributes.
+    evidence = AttributeDecisionEngine(
+        volume_relative_tolerance=float(vol_tolerance),
+        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
+    ).evaluate(left_info, right_info, left_raw=attrs1, right_raw=attrs2)
+    categorical_conflicts = sorted(
+        CRITICAL_NAME_BY_CENSUS_KEY[key] for key in evidence.conflicts
+        if CRITICAL_NAME_BY_CENSUS_KEY.get(key) in
+        categorical_dimensions - uncertain_categorical_dimensions
+    )
+    uncertain_categorical_dimensions.update(
+        CRITICAL_NAME_BY_CENSUS_KEY.get(key, key)
+        for key, entry in evidence.dimensions.items()
+        if entry.fallback_from in {"source_conflict", "claim_conflict"}
+    )
     if sweetener_source_conflict:
         categorical_conflicts = [name for name in categorical_conflicts if name != "sweetener"]
     if categorical_conflicts:
@@ -1472,10 +1532,31 @@ def three_way_gate(
     # packaging-level doctrine.
     mf1 = str(attrs1.get("mode_flavor", "") or "").strip().lower()
     mf2 = str(attrs2.get("mode_flavor", "") or "").strip().lower()
-    if mf1 and mf2 and mf1 != mf2:
+    equal_full_flavor = bool(left_info.get("flavor_set")) and left_info.get("flavor_set") == right_info.get("flavor_set")
+    if mf1 and mf2 and mf1 != mf2 and not equal_full_flavor:
         return GateResult(
             decision="fallback",
             reason=_r.supporting_feature_review + " mode_flavor:" + mf1 + "|" + mf2,
+        ).model_dump()
+
+    # Exact-product approval requires consistency of declared identity, not
+    # merely an absence of conflicts in generic or missing attribute sets.
+    # Review additions/subsets and named distinctions; existing configured
+    # hard vetoes retain precedence above this supplementary review lane.
+    from core.declared_identity import identity_review_dimensions
+    identity_differences = identity_review_dimensions(attrs1, attrs2)
+    if identity_differences:
+        return GateResult(
+            decision="fallback",
+            reason=_r.declared_identity_review + " " + ",".join(identity_differences),
+        ).model_dump()
+
+    from core.pair_policy import assess_pair
+    policy = assess_pair(evidence, attrs1, attrs2)
+    if policy['review']:
+        return GateResult(
+            decision="fallback",
+            reason=_r.supporting_feature_review + " full_evidence:" + ",".join(policy['review']),
         ).model_dump()
 
     return GateResult(
@@ -1828,6 +1909,20 @@ def generate_canonical(
     ):
         if any({left, right} <= values for left, right in opposites):
             attribute_consistency_flags.add(f"categorical_source_conflict:{dimension}")
+
+    gate_cfg = training_cfg().gate
+    observed_volumes = sorted(volume_set)
+    if any(not volumes_compatible({left}, {right},
+                                   volume_relative_tolerance=float(gate_cfg.vol_tolerance),
+                                   volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
+           for i, left in enumerate(observed_volumes) for right in observed_volumes[i + 1:]):
+        attribute_consistency_flags.add('volume_sources_disagree')
+    if len(pack_set) > 1:
+        attribute_consistency_flags.add('pack_sources_disagree')
+    if len(package_type_set) > 1:
+        attribute_consistency_flags.add('categorical_source_conflict:package_type')
+    if len(package_material_set) > 1:
+        attribute_consistency_flags.add('categorical_source_conflict:pack_material')
 
     # Confidence / consistency
     vol_confs = [x["volume_confidence"] for x in extracted if x["volume_ml"] > 0]
@@ -2877,16 +2972,8 @@ def run_within_brand_pipeline(
         a1 = gtin_to_canon[g1]
         a2 = gtin_to_canon[g2]
         gate = three_way_gate(a1, a2)
-        # Jaccard on the SHORT (non-compound) tokens of the canonical —
-        # brand + flavour + type semantics. On the FULL string the
-        # discriminative-ngram compounds (kr_white_grape_flavored...) almost
-        # never match across titles, crushing the distribution (14/44,530
-        # proceed pairs >= 0.8 vs 7,929 on the short form — measured
-        # 2026-09-06). The compounds stay in the canonical for other uses.
-        sim = jaccard_similarity(
-            " ".join(t for t in str(a1["canonical"]).split() if "_" not in t),
-            " ".join(t for t in str(a2["canonical"]).split() if "_" not in t),
-        )
+        from core.pair_policy import identity_similarity
+        sim = identity_similarity(a1["canonical"], a2["canonical"])
         evaluation = full_attribute_evaluation(
             canonical_attribute_info(a1),
             canonical_attribute_info(a2),

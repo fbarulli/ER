@@ -25,7 +25,7 @@ def test_numeric_veto_obeys_config(monkeypatch, dimension, changes, enabled):
     monkeypatch.setattr(pipeline, 'training_cfg', lambda:cfg)
     a, b = attrs(), attrs(**changes)
     assert pack_gate(0., a, b, trust_threshold=.85) is (not enabled)
-    assert three_way_gate(a, b)['decision'] == ('hard_no' if enabled else 'proceed')
+    assert three_way_gate(a, b)['decision'] == ('hard_no' if enabled else 'fallback')
 
 
 @pytest.mark.parametrize('field', ['volume_confidence', 'pack_confidence',

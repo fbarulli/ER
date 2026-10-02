@@ -404,7 +404,10 @@ def targeted_veto_gate(
             missing.append(f"{dimension}_{side}")
             if decisive:
                 deferral_missing.append(f"{dimension}_{side}")
+    from core.pair_policy import assess_pair
+    policy_evidence = assess_pair(evidence, sku_info, candidate_info)
     common = {
+        "targeted_attribute_policy": json.dumps(policy_evidence, sort_keys=True),
         "targeted_pack_conflict": int(pack_conflict),
         "targeted_volume_conflict": int(volume_conflict),
         "targeted_brand_conflict": int(brand_conflict_flag),
@@ -468,12 +471,30 @@ def targeted_veto_gate(
             "targeted_gate_reason": "+".join(veto_reasons),
             "targeted_gate_route": "reject",
         }
+    # Share the training gate's source-grounded identity review contract.
+    # Exact-GTIN and disabled-policy exits above retain their precedence.
+    from core.declared_identity import identity_review_dimensions
+    identity_differences = identity_review_dimensions(sku_info, candidate_info)
+    if identity_differences:
+        return common | {
+            "targeted_gate_decision": "defer",
+            "targeted_gate_reason": "declared_identity:" + ",".join(identity_differences),
+            "targeted_gate_route": "human_review",
+        }
     if deferral_missing:
         return common | {
             "targeted_gate_decision": "defer",
             "targeted_gate_reason": "missing_pack_or_volume:"
             + ",".join(deferral_missing),
             "targeted_gate_route": str(settings["missing_pack_or_volume_route"]),
+        }
+    from core.pair_policy import assess_pair
+    policy = assess_pair(evidence, sku_info, candidate_info)
+    if policy['review']:
+        return common | {
+            "targeted_gate_decision": "defer",
+            "targeted_gate_reason": "full_evidence:" + ",".join(policy['review']),
+            "targeted_gate_route": "human_review",
         }
     return common | {
         "targeted_gate_decision": "allow",

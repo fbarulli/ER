@@ -44,12 +44,13 @@ FLAVOR_ALIASES: dict[str, str] = {
     "rhubar": "rhubarb", "fruite": "fruit",
     # spelling variants measured in titles (2026-10-01 lexicon audit):
     "litchi": "lychee",
+    "cassis": "blackcurrant", "anis": "anise", "aniseed": "anise",
     # EXCLUDED deliberately: pearl~pear (different word, 28 rows measured),
     # sucralose~sucrose-class attribute confusions (distinct values).
 }
 FLAVOR_LEXICON: frozenset[str] = frozenset(
     {
-        "aloe", "angelica", "apple", "berry", "boysenberry", "buckthorn",
+        "aloe", "angelica", "anise", "blackcurrant", "exotic", "apple", "berry", "boysenberry", "buckthorn",
         "calamansi", "cherry", "chokeberry", "chocolate", "clementine",
         "cloudberry", "coconut", "coffee", "cola", "cranberry",
         "citrus", "elderberry", "elderflower", "fruit",
@@ -165,10 +166,10 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     # Remove explicit negative phrases before looking for positive
     # carbonation so "non-carbonated" cannot emit both states.
     non_carbonated = bool(
-        re.search(r"\b(?:non carbonated|uncarbonated|not carbonated|no bubbles?)\b", text)
+        re.search(r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?|no bubbles?)\b", text)
     )
     carbonation_text = re.sub(
-        r"\b(?:non carbonated|uncarbonated|not carbonated)\b", " ", text
+        r"\b(?:non carbonated|uncarbonated|not carbonated|without carbonic(?: acid)?)\b", " ", text
     )
     carbonation_text = re.sub(r"\b(?:baking|washing) soda\b", " ", carbonation_text)
     carbonation: set[str] = set()
@@ -218,6 +219,12 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
             text,
         )
     )
+    # Bits denotes juice pulp only in an explicit juice context. Smooth
+    # alone can describe a smoothie or mouthfeel and is not a pulp claim.
+    if re.search(r"\bjuice\b", text):
+        with_pulp |= bool(re.search(r"\bwith bits\b", text))
+        no_pulp |= bool(re.search(r"\b(?:no bits|without bits)\b", text))
+        no_pulp |= bool(re.search(r"\bsmooth(?:\s+\w+){0,3}\s+juice\b", text))
     if no_pulp:
         pulp.add("no_pulp")
     if with_pulp:

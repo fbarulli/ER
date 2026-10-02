@@ -87,7 +87,7 @@ def listing_contract(catalog, labels, populations):
 def setup(output: Path, checkpoint: Path) -> Path:
     from core.common import F, SEED, TRAIN_ROOT, load_dataset_deduped, training_cfg
     from core.identity_policy import POLICY_PATH
-    from pipeline import build_training_data
+    from training.base_data import load_base_data
     from training.folds import derive_holdout
     output = output.resolve()
     if output.exists():
@@ -95,7 +95,7 @@ def setup(output: Path, checkpoint: Path) -> Path:
     checkpoint = checkpoint.resolve()
     baseline_hash = checkpoint_hash(checkpoint)
     catalog = load_dataset_deduped().fillna('')
-    data = build_training_data(catalog, payload_variant='full')
+    data = load_base_data(catalog, payload_variant='full')
     train, dev, test = derive_holdout(data['pos'], data['row_bc'],
                                     dict(training_cfg().split), seed=SEED)
     labels = pd.read_csv(F['labeled_pairs'], dtype=str, keep_default_na=False)

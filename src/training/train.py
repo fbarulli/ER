@@ -58,9 +58,9 @@ def load_training_data(df: pd.DataFrame, payload_variant: str = "full") -> dict:
     """OFFICIAL pair construction (DATA_PIPE.pairs): payload = clean sku
     text per row + canonical per GTIN; pos = (sku, own canonical), neg =
     (sku, other canonical) from gate hard-no pairs."""
-    from pipeline import build_training_data
+    from training.base_data import load_base_data
 
-    return build_training_data(df, payload_variant=payload_variant)
+    return load_base_data(df, payload_variant=payload_variant)
 
 
 def _write_hard_negative_mask_trace(

@@ -352,6 +352,7 @@ gate:
     clean_proceed: "Known critical attributes compatible"
     source_conflict: "Contradictory source attribute evidence"
     supporting_feature_review: "Missing flavor evidence with differing supporting attributes:"
+    declared_identity_review: "Declared product identity differs or is incomplete:"
 
 # ── brand-differentiation audit (owner theory 2026-10-01) ──────────────────
 # Does between-GTIN card delta exceed within-GTIN (same product,
@@ -636,9 +637,9 @@ rand_matching:
   # 2506, new_merge_risk 14, lost_neg_review 1365.
   gate_census_pin:
     total_pairs: 135246
-    hard_no: 105370
-    proceed: 12733
-    fallback: 17143
+    hard_no: 115766
+    proceed: 337
+    fallback: 19143
   target_recall: 0.90
   threshold_tie_break:
     - "rand_index"

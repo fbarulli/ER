@@ -1,5 +1,37 @@
 # Training Prep — Commands to Generate All CSVs for Full Train + Smoke 200
 
+## One-call full preparation
+
+Run from `ER`:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m training.prepare_all
+```
+
+This rebuilds deduplication, SKU mapping, cross-country pairs, the number
+reference, canonical records, gates, labeled pairs, final validation and
+its fold map, graph-track inputs, and the full prepared text bundle. It
+updates the measured gate census before labeling and verifies that the
+bundle embeds the current CSVs and the graph manifest names the current
+checkpoint. Existing graph inputs and bundles are archived in the run folder.
+
+Smoke files are left untouched and training is not started. Step logs and
+the completion manifest are written under `results/training_prep/`. After
+the CLI package is installed, the same command is available as `er-prepare`.
+
+Validation, graph setup, and bundle preparation share one base payload per
+run. Reuse verifies the dataframe, input CSVs, configuration, source code,
+and payload checksum. Changed inputs stop reuse; a new run builds a fresh payload.
+
+To continue after an already completed CSV rebuild:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m training.prepare_all --resume-from validation
+```
+
+This checks the current CSV stage manifests before preparing downstream inputs.
+The individual steps below remain available for inspection or explicit smoke work.
+
 ## 0. Prerequisites
 
 - `data/track_setup/` must exist with CSV files (eligible_catalog.csv, listing_splits.csv, listing_pairs.csv)
