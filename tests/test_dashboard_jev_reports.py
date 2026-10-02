@@ -12,12 +12,12 @@ def reports():
     return module
 
 def test_saved_500_pair_sample_and_coverage_display(reports):
-    page = reports.jev()
+    page = reports.jev(round=3)
     assert '500' in page and '1000' in page
     assert 'Tested' in page
     assert 'Attribute coverage' in page and 'positive_high' in page
     assert 'Low-score proceeds' in page
-    assert 'Pairs (84)' in reports.jev(stratum='positive_high')
+    assert 'Pairs (84)' in reports.jev(round=3,stratum='positive_high')
 
 def test_checkpoint_progress_is_live_and_sample_bounded(reports, tmp_path, monkeypatch):
     monkeypatch.setattr(reports, 'PROJECT', tmp_path)
@@ -43,5 +43,14 @@ def test_controlled_repeat_displays_all_four_calls_and_both_formats(reports):
     assert '0.24' in page and '0.06' in page
     assert '>4</td>' in page
     latest=reports.jev()
-    assert '<h2>Round 4</h2>' in latest
+    assert '<h2>Round 6</h2>' in latest
     assert 'Judgments by input cohort' in latest
+
+def test_paired_comparison_displays_100_pairs_and_400_calls(reports):
+    page=reports.jev(round=6)
+    assert 'Paired evidence comparison' in page
+    assert '100 identical pairs' in page
+    assert 'Pair/input cases (200)' in page
+    assert '>400</td>' in page
+    assert 'paired_comparison_6.json' in page
+    assert 'gate_data' in page and 'original_data' in page

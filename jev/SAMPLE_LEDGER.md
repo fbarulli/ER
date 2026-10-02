@@ -51,3 +51,14 @@ Rounds 4–5 save frozen input_states files, request SHA-256 hashes, raw
 responses, model/adapter metadata, and timestamps. Reproduce verification
 with `.venv/bin/python jev/verify_frozen_runs.py`. The ledger now records
 1,135 distinct reserved pairs; round 5 repeats one of those intentionally.
+
+Round 6: paired comparison of 100 fresh pairs, excluding all 1,135 prior
+reserved pairs. Selection seed 46; 34 proceed, 34 rejected, 32 fallback.
+The same pairs are judged with merged processed gate evidence and all
+original listings, each in both orders: 400 completed OpenRouter calls.
+Each request contains both products using one evidence format, not the gate
+verdict or pair-level attribute agreement summary. input_states_6.json
+freezes both formats; audit_results_6.jsonl saves responses and request
+hashes; paired_comparison_6.json saves matched results. All hashes and scores
+verified. The ledger now reserves 1,235 distinct pairs, plus the intentional
+round-5 repeat. Future sampling must exclude the ledger's unordered pairs.

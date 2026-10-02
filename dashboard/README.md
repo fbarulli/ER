@@ -89,3 +89,8 @@ The JEV page now defaults to the latest fresh-sample round (round 4), with
 250 gate-data pairs and 250 original-data pairs. It displays per-cohort
 judgments and the deliberately repeated same-pair comparison (round 5).
 Downloads include frozen inputs, successful results, and run provenance.
+
+Round 6 compares both original and processed evidence on the same 100 fresh
+pairs (400 completed calls). The JEV page defaults to this round and shows
+matched score-category changes, per-format judgments, and a downloadable
+paired comparison. Ledger call counts distinguish input format and order.

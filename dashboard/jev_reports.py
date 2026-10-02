@@ -66,7 +66,8 @@ def jev(round: int | None = None, stratum: str = ''):
     strata = sorted({x['stratum'] for x in sample})
     body += f'<form><input type="hidden" name="round" value="{round}"><label>Stratum <select name="stratum"><option value="">All</option>' + ''.join(f'<option value="{e(x)}" {"selected" if x==stratum else ""}>{e(x)}</option>' for x in strata) + '</select></label> <button>Filter</button></form>'
     filtered = [x for x in sample if not stratum or x['stratum']==stratum]
-    body += f'<h3>Pairs ({len(filtered)})</h3><p>Preview shows up to 100 pairs. Download the sample for all pairs and both orders.</p>'
+    preview_label = 'Pair/input cases' if selected.get('kind') in {'paired_comparison','controlled_repeat'} else 'Pairs'
+    body += f'<h3>{preview_label} ({len(filtered)})</h3><p>Preview shows up to 100 pairs. Download the sample for all pairs and both orders.</p>'
     body += table(['GTIN A','GTIN B','Input','Stratum','Gate','Similarity','Attribute states'], [[x['gtin1'],x['gtin2'],x.get('input_scope','first source listing'),x['stratum'],x.get('gate',''),x['similarity'], '; '.join(f'{k}: {v}' for k,v in x.get('attribute_states',{}).items())] for x in filtered[:100]])
     body += f'<p><a href="/jev/artifact?name={e(Path(selected["sample"]).name)}">Download sample</a> · <a href="/jev/artifact?name=sample_ledger.json">Download ledger</a></p>'
     checkpoint_name = Path(selected['checkpoint']).name
@@ -79,6 +80,11 @@ def jev(round: int | None = None, stratum: str = ''):
     reports = load('verification_results.json', [])
     body += '<h2>Verified rounds</h2>' + table(['Checkpoint','Pairs','Low-score proceeds','High-score rejections','Decision order differences'], [[x['checkpoint'],x['unique_pairs'],len(x['low_score_proceeds']),len(x['high_score_rejections']),len(x['gate_asymmetries'])] for x in reports])
     selected_report = next((x for x in reports if x['checkpoint'] == checkpoint_name), None)
+    paired_report = load(f'paired_comparison_{round}.json', None)
+    if paired_report:
+        selected_report = paired_report
+        body += '<h3>Paired evidence comparison</h3><p>' + e(str(paired_report['unique_pairs']) + ' identical pairs tested with each format. ' + str(paired_report['bucket_disagreements']) + ' pairs changed score category; ' + str(paired_report['opposite_confident_judgments']) + ' changed between consistently low and consistently high.') + '</p>'
+        body += f'<p><a href="/jev/artifact?name=paired_comparison_{round}.json">Download paired comparison</a></p>'
     if selected_report and round >= 4:
         body += '<h3>Judgments by input cohort</h3>' + table(['Input','Gate decision','Pairs','Mean score','Both scores < 0.2','Both scores > 0.8'], [[scope,decision,v['pairs'],f"{v['mean_score']:.3f}" if v['mean_score'] is not None else '',v['both_below_0_2'],v['both_above_0_8']] for scope,decisions in selected_report.get('input_cohorts',{}).items() for decision,v in decisions.items()])
     control = load('control_comparison_5.json', {})
@@ -98,7 +104,7 @@ def artifact(name: str):
         allowed.update((Path(item['sample']).name,Path(item['checkpoint']).name))
     for item in load('sample_ledger.json',[]):
         n=item['round']
-        allowed.update((f'audit_run_{n}.json',f'sample_{n}_summary.json',f'input_states_{n}.json'))
+        allowed.update((f'audit_run_{n}.json',f'sample_{n}_summary.json',f'input_states_{n}.json',f'paired_comparison_{n}.json'))
     path = PROJECT/'jev'/name
     if name not in allowed or not path.is_file() or path.is_symlink():
         raise HTTPException(404, 'Artifact not found')

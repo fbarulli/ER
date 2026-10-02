@@ -9,7 +9,7 @@ from client import ADAPTERS,build_questions,_extract_noul
 
 def main():
     ledger_path=ROOT/'jev/sample_ledger.json';ledger=json.loads(ledger_path.read_text())
-    for n in (4,5):
+    for n in (4,5,6):
         item=next(x for x in ledger if x['round']==n)
         sample_path=ROOT/item['sample'];result_path=ROOT/item['checkpoint'];states_path=ROOT/'jev'/f'input_states_{n}.json'
         sample=json.loads(sample_path.read_text());states=json.loads(states_path.read_text());rows=[json.loads(l) for l in result_path.read_text().splitlines()]

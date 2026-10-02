@@ -79,3 +79,18 @@ listings, in original / swapped order respectively. All four responses and
 request hashes verified. Both representations lean against matching;
 merged inputs are less stable in this case. This selected example is not
 a population estimate. control_comparison_5.json records the comparison.
+
+Round 6 — paired original versus processed comparison
+
+All 400 calls completed for the same 100 new pairs under both formats and
+both orders. Frozen request hashes, raw response scores, uniqueness, and
+sample coverage passed verification. Processed versus original evidence:
+26/34 versus 30/34 approved pairs scored below 0.2 in both orders. Among
+34 rejected pairs, 34 versus 33 were consistently low; neither format had a
+consistently high rejection. Among 32 fallback pairs, 26 versus 29 were
+consistently low. Ten of 100 pairs changed category (low / uncertain / high)
+between formats; none flipped between consistently low and consistently
+high. Average original-minus-processed score was -0.0296. Two approved
+pairs scored consistently high with original evidence; none did with
+processed evidence. These judgments are diagnostic rather than ground
+truth, and this balanced sample does not measure population accuracy.
