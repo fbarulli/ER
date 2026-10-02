@@ -6,10 +6,10 @@ data, executes a lane, and pulls results back.
 
 Lanes (post second-series rename — the old second03/second04 scripts are
 now the src/training/ module chain):
-  train  — full-chain GPU training: data_prep -> train.py (contrastive,
-           OnlineContrastiveLoss, holdout 50/25/25). The production run:
-           the CPU lane proved the chain but 15s/step * 740 steps is 3h;
-           the T4 does ~1.5-2s/step.
+  train  — GPU training only from LOCALLY PREPARED worker bundles
+           (training.train_prepared; no data prep or masking on the VM —
+           bundles are built beforehand with training.train
+           --prepare-bundle or pulled checkout-native).
   hpo    — masking-enabled Optuna TPE search. Each trial trains on 50%,
            selects on the dev 25%, and does not read the test 25%.
   sims   — the configured zero-shot embedding lane. The current config uses
@@ -1222,7 +1222,12 @@ def run_parallel_train_and_tail(
     elif prepared_bundles is not None:
         remote_bundles = _upload_prepared_bundles(run_id=run_id, bundles=prepared_bundles)
     else:
-        remote_bundles = None
+        raise ValueError(
+            "no prepared bundles supplied: Colab is a GPU-training-only lane — "
+            "build worker bundles locally beforehand (training.train "
+            "--prepare-bundle) or pass checkout-native bundles; on-the-fly "
+            "data prep and masking are no longer permitted on the VM"
+        )
     if not final_inference:
         remote_validation_inputs = {"sample": "", "source": "", "training": ""}
     elif remote_validation_csv is not None:
@@ -1242,7 +1247,7 @@ def run_parallel_train_and_tail(
     launch = _BOOTSTRAP + _remote_auth_env_script(
         # train_prepared is deliberately remote-only and refuses to run
         # without W&B.  A Git-shipped bundle changes transport, not tracking.
-        include_wandb=remote_bundles is not None or not remote_checkout_inputs
+        include_wandb=True
     ) + f"""
 import base64, json, os, pathlib, shutil, shlex, subprocess, sys, time, traceback
 from core.common import F
@@ -1361,16 +1366,8 @@ for number in range(1, {workers} + 1):
     if worker_losses is not None:
         loss_index = worker_args.index("--loss") + 1
         worker_args[loss_index] = worker_losses[number - 1]
-    if remote_bundles is not None:
-        worker_args[worker_args.index("training.train")] = "training.train_prepared"
-        worker_args.extend(["--bundle", remote_bundles[number - 1]])
-    if masking_profiles is not None and {remote_bundles is None!r}:
-        worker_args.extend(["--masking-profile", masking_profiles[number - 1]])
-    if collapse_guardrail_profiles is not None and {remote_bundles is None!r}:
-        worker_args.extend([
-            "--collapse-guardrail-profile",
-            collapse_guardrail_profiles[number - 1],
-        ])
+    worker_args[worker_args.index("training.train")] = "training.train_prepared"
+    worker_args.extend(["--bundle", remote_bundles[number - 1]])
     command = " ".join(shlex.quote(part) for part in worker_args)
     # SCORED-PAIR contract (2026-10-01): --validation-input is the VM-side
     # SSOT final_validation binding, not the staged component holdout. These
