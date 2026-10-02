@@ -623,72 +623,132 @@ def __getattr__(name: str):
         return mapping
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-# ── pinned census counts (2026-09-12; mirrors src/training/selftest.py's
-# oracle_pinned_counts hard pin) ─────────────────────────────────────────────
-# The transductive-census gate_results.csv is the universe BOTH
-# src/training/labeled_pairs.py and the selftest oracle read. fallback pairs are
-# excluded from the labeled set BY CONSTRUCTION (uncertain tier, would
-# inject label noise) — this pin makes that exclusion LOUD and COUNTED
-# instead of silent. Same audit lineage as the selftest pin (2026-09-08:
-# the pack_qty >= 1 zero-guard fixed 26 gate decisions).
-# NOT recomputed here: a pinned constant, updated alongside any
-# intentional census drift (paired with the selftest oracle update).
-#
-# RE-PINNED 2026-09-30: 46,791 -> 41,928. The 46,791 figure was measured
-# 2026-09-15 against the gate census committed at 5132e9d
-# (proceed 1,737 / hard_no 87,241 / fallback 46,791). The GATE LOGIC has
-# moved since (7 commits touch src/pipeline.py after 5132e9d, including
-# 4a39fdc "all audit gaps resolved" and 1d146d3), and the current code
-# reproducibly yields proceed 1,506 / hard_no 92,335 / fallback 41,928.
-# `data/training/data_prep.py` was re-run from the raw export on 2026-09-30
-# and reproduced data/gate_results.csv BYTE-IDENTICALLY, so the 4,863-pair
-# shortfall is a real gate change, not a corrupt artifact.
-# CAVEAT, deliberately not papered over: the shift is large in absolute
-# terms (proceed -231, hard_no +5,094). It is NOT attributed here to a
-# specific commit — 4a39fdc/033c4ab/1d146d3 all touch gate paths and were
-# never individually bisected against the census. This pin now records what
-# the CURRENT code produces so the lane is consistent again; auditing WHY
-# the gate distribution moved is a separate, open question. It matters
-# because this census is the population P0's validation split is drawn from.
-#
-# RE-PINNED 2026-09-30 (packaging level): 41,928 -> 42,039. Cause is
-# UNDERSTOOD, unlike the 46,791->41,928 shift above, which remains
-# unattributed. `packaging_level_set` is a new canonical field: 217 of 13,250
-# records assert a case-level listing, and the gate now routes a one-sided
-# level claim to `fallback` instead of letting it merge silently. Effect is
-# proceed -111 (1,506 -> 1,395), fallback +111, and hard_no UNCHANGED at
-# 92,335 — a hard negative always outranks the review flag, verified by
-# control run with the rule disabled reproducing 92,335/1,506/41,928 exactly.
-# See the ordering note in three_way_gate.
-#
-#
-# RE-PINNED 2026-10-01 (wave-1/2 evidence wiring): 42,039 -> 41,748
-# (-291). Measured, per-clause, from the gate lane's OWN trace
-# (results/logs/training_trace.csv run-abbcd6e6ee2c = the pinned
-# 135,769/42,039 generation; run-c60abb62a6cb = the current census):
-#   universe 135,769 -> 135,246 (-523 candidates) — the dedupe chain
-#     rebuilt dataset_deduped.csv (SHA 73a94016, 63,079 rows; re-run
-#     byte-identical, 207 conflicts, closure + identity invariants PASS)
-#   Low raw pack confidence   33,833 -> 33,564 (-269)
-#   Low raw volume confidence  8,028 -> 8,016 (-12)
-#   Packaging level one-sided    113 ->   105 (-8)
-#   Ambiguous volume evidence     37 ->    36 (-1)
-#   Overlap but low consistency   28 ->    27 (-1)
-#   fallback total           42,039 -> 41,748 (-291)
-# Cascades (measured, same two trace runs): proceed 1,395 -> 1,239
-# (-156; the wave-1/2 evidence captures — pack material from the
-# attribute cells, juice-content bands, carbonization/prose,
-# description-alias — now resolve pairs the old census left for review)
-# and hard_no 92,335 -> 92,259 (-76): Package-material-mismatch 3 -> 253
-# (+250 NEW, the attribute-side material capture) and flavor mismatch
-# 922 -> 821 (-101), vs Pack blocker 91,410 -> 91,185 (-225, riding the
-# -523 candidate universe). CLOSURE: -523 universe = -291 fallback -156
-# proceed -76 hard_no exactly. NOT a thinning artifact: the same
-# census reproduces the labeled closure below, and labeled_pairs.py's
-# assert fired FIRST (excluded 41,748 vs pin 42,039) before this pin
-# moved. ALWAYS update this pin with src/training/selftest.py's
-# oracle_pinned_counts (same universe).
-PINNED_GATE_FALLBACK_PAIRS = 41_481
+# ── gate census tripwire ────────────────────────────────────────────────────
+# Single declared source: config/rand_matching.gate_census_pin (schema-
+# validated, sum-checked). Consumed by src/training/labeled_pairs.py
+# (fallback exclusion) and selftest oracle_pinned_counts. Update the CONFIG
+# only, on a measured intentional gate change; no code-side literal exists.
+PINNED_GATE_FALLBACK_PAIRS = int(
+    training_cfg().rand_matching.gate_census_pin.fallback
+)
+
+
+def gate_census_drift_report(
+    *,
+    measured: dict[str, int],
+    previous_labeled_csv: Path | None = None,
+) -> dict[str, Any]:
+    """Per-sample map of what a gate-census drift DID to the labeled data.
+
+    Fired by the census consumers (training.labeled_pairs, selftest
+    oracle_pinned_counts) when the measured gate census breaks the config
+    rand_matching.gate_census_pin pin. Diffing the CURRENT gate_results.csv
+    against the PREVIOUS data/labeled_pairs.csv (on disk, else git HEAD),
+    it classifies every labeled pair the census change moved:
+
+      lost_true_block   label 1 whose pair is now gated hard_no
+      lost_true_review  label 1 whose pair now lands in the fallback tier
+                        (excluded from labels — silent drop, counted here)
+      new_merge_risk    label 0 whose pair now passes the gate (proceed)
+      lost_neg_review   label 0 whose pair now lands in fallback (excluded)
+      survived          labeled pairs whose source outcome is unchanged
+
+    Writes the full per-sample report to results/gate_census_drift.json
+    (results/ is gitignored scratch) and returns the summary + sample lists.
+    """
+    pin = training_cfg().rand_matching.gate_census_pin.model_dump()
+    g = pd.read_csv(
+        RESULTS / F["gate_results"],
+        dtype=str,
+        keep_default_na=False,
+    )
+    outcome = {
+        (str(r.gtin1), str(r.gtin2)): (str(r.gate_decision), str(r.gate_reason))
+        for r in g.itertuples(index=False)
+    }
+    labeled_path = previous_labeled_csv or (DATA_DIR / F["labeled_pairs"])
+    if labeled_path.is_file():
+        labeled = pd.read_csv(
+            labeled_path,
+            dtype=str,
+            keep_default_na=False,
+        )
+    else:
+        import subprocess
+        from io import BytesIO
+
+        head = subprocess.run(
+            ["git", "show", f"HEAD:{labeled_path.as_posix()}"],
+            capture_output=True,
+        )
+        if head.returncode != 0:
+            raise FileNotFoundError(
+                f"No previous labeled artifact to diff against: neither "
+                f"{labeled_path.as_posix()} on disk nor in git HEAD — the "
+                "per-sample drift map needs SOME previous labeled set"
+            )
+        labeled = pd.read_csv(
+            BytesIO(head.stdout),
+            dtype=str,
+            keep_default_na=False,
+        )
+    classes: dict[str, list[dict[str, str]]] = {
+        key: []
+        for key in (
+            "lost_true_block",
+            "lost_true_review",
+            "new_merge_risk",
+            "lost_neg_review",
+            "survived",
+        )
+    }
+    missing_from_gate = 0
+    for row in labeled.itertuples(index=False):
+        state = outcome.get((str(row.gtin1), str(row.gtin2)))
+        if state is None:
+            missing_from_gate += 1
+            continue
+        decision, reason = state
+        label = int(float(row.true_label))
+        bucket = (
+            {
+                "proceed": "survived",
+                "hard_no": "lost_true_block",
+                "fallback": "lost_true_review",
+            }[decision]
+            if label == 1
+            else {
+                "hard_no": "survived",
+                "proceed": "new_merge_risk",
+                "fallback": "lost_neg_review",
+            }[decision]
+        )
+        classes[bucket].append(
+            {
+                "gtin1": str(row.gtin1),
+                "gtin2": str(row.gtin2),
+                "label": label,
+                "new_decision": decision,
+                "new_reason": reason,
+            }
+        )
+    summary = {
+        "config_pin": pin,
+        "measured_census": measured,
+        "deltas": {
+            key: int(measured.get(key, 0)) - int(pin.get(key, 0))
+            for key in pin
+        },
+        "degraded": {
+            key: len(items) for key, items in classes.items() if key != "survived"
+        },
+        "survived": len(classes["survived"]),
+        "pairs_absent_from_current_gate": missing_from_gate,
+        "samples": classes,
+    }
+    report_path = RESULTS / "gate_census_drift.json"
+    report_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
 
 
 def set_determinism(seed: int) -> None:

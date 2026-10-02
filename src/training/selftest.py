@@ -1180,7 +1180,7 @@ def oracle_pinned_counts() -> None:
     """Pinned real-data counts — drift here means a pipeline change
     altered the committed-data contract (update alongside any
     intentional drift, e.g. GTIN enforcement)."""
-    from core.common import RESULTS, F
+    from core.common import RESULTS, F, training_cfg
 
     try:
         g = pd.read_csv(RESULTS / F["gate_results"], keep_default_na=False)
@@ -1202,16 +1202,42 @@ def oracle_pinned_counts() -> None:
         # attribute-side material capture, flavor 922 -> 821), proceed
         # -156, fallback -291: Low raw pack 33,833 -> 33,564, Low raw
         # volume 8,028 -> 8,016, packaging-level one-sided 113 -> 105,
-        # ambiguous-volume 37 -> 36, low-consistency 28 -> 27). Full
-        # ledger lives on PINNED_GATE_FALLBACK_PAIRS (lib/common.py) —
-        # update BOTH together, never one alone.
-        check("gate pairs == 135,246", len(g) == 135246, f"got {len(g)}")
-        dec = g.gate_decision.value_counts().to_dict()
+        # ambiguous-volume 37 -> 36, low-consistency 28 -> 27). The census
+        # now reads from config rand_matching.gate_census_pin — ONE declared
+        # source for labeled_pairs.py and this oracle; no second pin.
+        measured = {
+            "total_pairs": len(g),
+            "hard_no": int((g.gate_decision == "hard_no").sum()),
+            "proceed": int((g.gate_decision == "proceed").sum()),
+            "fallback": int((g.gate_decision == "fallback").sum()),
+        }
+        _pin = training_cfg().rand_matching.gate_census_pin.model_dump()
+        if measured != _pin:
+            from core.common import gate_census_drift_report
+
+            _drift = gate_census_drift_report(measured=measured)
+            print(
+                "[oracle] CENSUS DRIFT — per-sample report at "
+                "results/gate_census_drift.json; degraded: "
+                f"{_drift['degraded']}",
+                flush=True,
+            )
         check(
-            "gate decisions hard_no=92,591 proceed=1,174 fallback=41,481",
+            "gate pairs == config gate_census_pin",
+            len(g) == training_cfg().rand_matching.gate_census_pin.total_pairs,
+            f"got {len(g)}",
+        )
+        dec = g.gate_decision.value_counts().to_dict()
+        pin = training_cfg().rand_matching.gate_census_pin
+        check(
+            "gate decisions == config gate_census_pin",
             # Threshold-independent: pair-similarity floors apply at the
             # labeled stage, never here.
-            dec == {"hard_no": 92591, "proceed": 1174, "fallback": 41481},
+            dec == {
+                "hard_no": pin.hard_no,
+                "proceed": pin.proceed,
+                "fallback": pin.fallback,
+            },
             f"got {dec}",
         )
         check(
