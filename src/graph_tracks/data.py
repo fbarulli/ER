@@ -1,7 +1,10 @@
 """Explicit input contract and train-only graph vocabulary.
 
 Input JSON deliberately excludes barcodes, identity links, and raw text.
-Splits are supplied by the caller, never randomly generated here.
+The relation/numeric schema is derived from the shared extractor contract
+(core.product_identity.graph_schema) rather than a hand-maintained subset,
+so it stays aligned with the data the text track trains on. Splits are
+supplied by the caller, never randomly generated here.
 """
 from __future__ import annotations
 
@@ -13,9 +16,15 @@ from pathlib import Path
 import numpy as np
 import torch
 
-RELATIONS = ("brand", "flavor", "carbonation", "sweetener", "sweetener_type",
-             "sweetening", "package_type", "package_material")
-NUMERIC = ("volume_ml", "pack")
+from core.product_identity import ProductIdentity, graph_schema
+
+# DERIVED, never pinned: the graph carries whatever the shared extractor
+# (`core.product_identity.row_identity`) yields — string descriptor fields are
+# typed relations, float fields numeric features (see ProductIdentity
+# .graph_schema). An update to the extractor's descriptor set moves this
+# automatically; staleness of previously prepared listings is caught at load
+# time by comparing the prepared manifest against this derivation.
+RELATIONS, NUMERIC = graph_schema()
 SPLITS = {"train", "dev", "test"}
 
 

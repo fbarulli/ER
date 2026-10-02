@@ -341,7 +341,7 @@ def _measurement_candidate_re():
     units = r"(?:" + "|".join(entry.pattern for entry in _unit_spec().volume) + r")"
     number = r"(?:\d+[ \u00a0]+\d+\s*/\s*\d+|\d+\s*/\s*\d+|\d{1,3}[ \u00a0]+000|0\s+\d+|\d+(?:\s*[.,]\s*\d+)?|\.\d+)"
     return re.compile(
-        r"(?<![\d.])(?P<number>" + number + r")\s*-?\s*(?P<unit>" + units + r")(?![a-z])"
+        r"(?<![\d.])(?P<number>" + number + r")\s*-?\s*(?P<unit>" + units + r")(?![^\W\d_])"
         r"|\b(?P<prefix_unit>ml|cl|ltr|lt|l)\.\s*(?P<prefix_number>\d+(?:[.,]\d+)?)(?![\d.])",
         re.IGNORECASE | re.VERBOSE,
     )

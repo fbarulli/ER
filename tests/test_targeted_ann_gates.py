@@ -518,18 +518,20 @@ def test_live_gate_positive_population_is_not_starved_of_auto_merge():
     assert routes["auto_merge"] + routes["human_review"] == resolved
     assert reviewed_without_deferral_evidence == 0
     # Measured split, re-pinned 2026-10-02 against the regenerated
-    # gate_results.csv (13.4x wider proceed population; see the docstring).
-    assert resolved == 16611
-    assert routes["auto_merge"] == 1320
-    assert routes["human_review"] == 15291
+    # gate_results.csv: proceed 16,611 -> 12,733 (extraction boundary
+    # repairs + stage-7 claim lift moves uncertain pairs to review; see
+    # the docstring).
+    assert resolved == 12733
+    assert routes["auto_merge"] == 968
+    assert routes["human_review"] == 11765
     # The audit census is untouched by the routing scope: these absence counts
     # are what the diagnostics consume, and they must keep being reported.
     assert missing_census["pulp_a"] > 0
     assert missing_census["pulp_b"] > 0
     assert missing_census["package_type_a"] > 0
     # ...and the deferral that drives the review share is the pack channel.
-    assert missing_census["pack_a"] == 15291
-    assert missing_census["pack_b"] == 15291
+    assert missing_census["pack_a"] == 11765
+    assert missing_census["pack_b"] == 11765
 
 
 def test_all_dimensions_known_and_agreeing_is_the_cleanest_auto_merge_path():

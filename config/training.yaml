@@ -589,11 +589,19 @@ rand_matching:
   # Update ONLY on an intentional, measured gate change, and update it here
   # once — the schema enforces hard_no + proceed + fallback == total_pairs.
   # Measured against the regenerated gate_results.csv (13,216 products).
+  # 2026-10-02 regen (attribution): extraction changes landed (16,942-row
+  # field motion), x-multiplier unit-boundary repaired (split 3),
+  # URL decimal pack evidence (26 rows), stage-7 claim lift with
+  # review-downgrade, and the no_added_sugar_with_cane_sugar routing.
+  # Prior pin: hard_no 112372, proceed 16611, fallback 6263. Mass moved
+  # INTO review: fallback 6263 -> 17143; hard_no -7002; proceed -3878.
+  # degraded map (vs prior pin): lost_true_block 300, lost_true_review
+  # 2506, new_merge_risk 14, lost_neg_review 1365.
   gate_census_pin:
     total_pairs: 135246
-    hard_no: 112372
-    proceed: 16611
-    fallback: 6263
+    hard_no: 105370
+    proceed: 12733
+    fallback: 17143
   target_recall: 0.90
   threshold_tie_break:
     - "rand_index"

@@ -33,7 +33,7 @@ from core.product_identity import (
 # The measured granted families + their source spellings. Kept as literals so
 # a silent vocabulary.json drift is caught (config as SSOT governs the map;
 # these constants guard the SEEDING CONTRACT, same doctrine as
-# common.PINNED_GATE_FALLBACK_PAIRS).
+# rand_matching.gate_census_pin in config/training.yaml).
 FAMILIES: dict[str, tuple[str, ...]] = {
     "shoc": ("a shoc", "adrenaline shoc", "accelerator"),
     "dg": ("dg", "ting"),

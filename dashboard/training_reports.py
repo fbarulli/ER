@@ -16,6 +16,7 @@ router = APIRouter()
 PROJECT = Path(__file__).resolve().parents[1]
 REPORT_ERRORS = (OSError, ValueError, zipfile.BadZipFile, RuntimeError, EOFError)
 METRIC_SUFFIXES = ('model_evaluation_summary.csv', 'retrieval_summary.csv', 'fold_metrics.csv')
+ERROR_SUFFIXES = ('report.json',)
 LOG_PREVIEW_BYTES = 64 * 1024
 COLLECTED_EVENTS = '__collected__/suite_events.jsonl'
 
@@ -59,7 +60,7 @@ def runs():
                 continue
             if path.is_dir() or (path.suffix == '.zip' and '__inputs' not in path.name):
                 key = path.relative_to(PROJECT).as_posix()
-                if path.is_dir() and not any(member.endswith(('.png',) + METRIC_SUFFIXES) or is_log(member)
+                if path.is_dir() and not any(member.endswith(('.png',) + METRIC_SUFFIXES + ERROR_SUFFIXES) or is_log(member)
                                              for member in entries(path)):
                     continue
                 found[key] = path
@@ -162,6 +163,28 @@ def plot(run: str, artifact: str):
         raise HTTPException(404, 'Report plot unavailable') from error
 
 
+@router.get('/training/error_analysis')
+def error_analysis(run: str):
+    path = runs().get(run)
+    if path is None:
+        raise HTTPException(404, 'Training run not found')
+    try:
+        members = entries(path)
+    except REPORT_ERRORS:
+        raise HTTPException(404, 'Training run unavailable')
+    report = None
+    for member in members:
+        if member.endswith('report.json'):
+            try:
+                report = json.loads(read(path, member))
+                break
+            except REPORT_ERRORS:
+                continue
+    if report is None:
+        raise HTTPException(404, 'No report.json found in this run')
+    return report
+
+
 @router.get('/training', response_class=HTMLResponse)
 def training(run: str | None = None):
     available = runs()
@@ -195,6 +218,7 @@ def training(run: str | None = None):
             body += f'<p>Device: {escape(str(cfg.get("device", "unknown")))} · Epochs: {escape(str(cfg.get("epochs", "unknown")))} · Test reporting: {escape(str(cfg.get("report_test", "unknown")))} · {"Complete suite" if complete else "Incomplete suite"}</p>'
         plots = sorted(m for m in members if m.endswith('.png'))
         summaries = sorted(m for m in members if m.endswith(METRIC_SUFFIXES))
+        error_reports = sorted(m for m in members if m.endswith(ERROR_SUFFIXES))
         for member in summaries:
             try:
                 metrics = table(read(path, member))
@@ -208,6 +232,33 @@ def training(run: str | None = None):
         body += '</div>'
         if not plots:
             body += '<p>This run has no saved plots.</p>'
+        for member in error_reports:
+            try:
+                report = json.loads(read(path, member))
+            except REPORT_ERRORS:
+                body += f'<p>{escape(member)} could not be read.</p>'
+                continue
+            body += '<h2>Post-training error analysis</h2>'
+            if 'confusion' in report:
+                body += '<h3>Confusion matrices</h3><table><tr><th>Operating point</th><th>TP</th><th>FP</th><th>FN</th><th>TN</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1</th></tr>'
+                for op, cm in report['confusion'].items():
+                    body += f'<tr><td>{escape(op)}</td><td>{cm.get("tp", "?")}</td><td>{cm.get("fp", "?")}</td><td>{cm.get("fn", "?")}</td><td>{cm.get("tn", "?")}</td><td>{cm.get("accuracy", "?")}</td><td>{cm.get("precision", "?")}</td><td>{cm.get("recall", "?")}</td><td>{cm.get("f1", "?")}</td></tr>'
+                body += '</table>'
+            if 'attribute_errors' in report:
+                body += '<h3>Attribute error rates</h3><table><tr><th>Attribute</th><th>Error rate</th><th>Errors</th><th>Mean score</th><th>n</th></tr>'
+                for attr, ae in sorted(report['attribute_errors'].items()):
+                    body += f'<tr><td>{escape(attr)}</td><td>{ae.get("error_rate", "?")}</td><td>{ae.get("errors", "?")}</td><td>{ae.get("mean_score", "?")}</td><td>{ae.get("n", "?")}</td></tr>'
+                body += '</table>'
+            if 'random_easy' in report:
+                body += '<h3>Score distributions</h3><table><tr><th>Population</th><th>Mean</th><th>Median</th><th>n</th></tr>'
+                for pop, stats in report['random_easy'].items():
+                    body += f'<tr><td>{escape(pop)}</td><td>{stats.get("mean", "?")}</td><td>{stats.get("median", "?")}</td><td>{stats.get("n", "?")}</td></tr>'
+                body += '</table>'
+            if 'score_overlap' in report:
+                body += '<h3>Score overlap</h3><table><tr><th>Split</th><th>Label 0 mean</th><th>Label 0 n</th><th>Label 1 mean</th><th>Label 1 n</th><th>Overlap coefficient</th></tr>'
+                for split, stats in report['score_overlap'].items():
+                    body += f'<tr><td>{escape(split)}</td><td>{stats.get("label_0_mean", "?")}</td><td>{stats.get("label_0_n", "?")}</td><td>{stats.get("label_1_mean", "?")}</td><td>{stats.get("label_1_n", "?")}</td><td>{stats.get("overlap_coefficient", "?")}</td></tr>'
+                body += '</table>'
         logs = sorted(member for member in members if is_log(member))
         body += '<h2>Training logs</h2><p>Durable structured events and raw worker output. Refresh to see newly saved events in local runs.</p>'
         for member in logs:

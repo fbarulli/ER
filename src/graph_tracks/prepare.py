@@ -1,7 +1,10 @@
 """Export graph inputs from shared identity extraction and explicit listing splits.
 
-No splits are invented and no barcode/label edges enter the model. The initial
-model supports only RELATIONS/NUMERIC; its manifest declares that subset.
+No splits are invented and no barcode/label edges enter the model. The
+listing schema is DERIVED from the shared extractor contract
+(core.product_identity.graph_schema) and its manifest records what was
+derived at prepare time; a loader that sees a different schema refuses the
+inputs as stale.
 """
 from __future__ import annotations
 import argparse
@@ -51,7 +54,7 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
         'listings_sha256': file_hash(listing_path), 'identity_extractor': 'core.product_identity.row_identity',
         'report_attributes_sha256': file_hash(output / FILENAME),
         'relations': list(RELATIONS), 'numeric': list(NUMERIC),
-        'feature_scope': 'initial subset, not all identity dimensions',
+        'feature_scope': 'derived from core.product_identity.graph_schema; every extractor descriptor is a model input',
         'excluded_model_inputs': ['barcode', 'verified identity edges', 'raw text'],
     })
     return listing_path

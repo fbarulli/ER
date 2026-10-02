@@ -8,7 +8,7 @@ import pytest
 import torch
 import yaml
 from graph_tracks.artifacts import name
-from graph_tracks.data import file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
+from graph_tracks.data import NUMERIC, RELATIONS, file_hash, fit_vocabulary, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN
 from graph_tracks.train import load_pairs, train
 from graph_tracks.infer import GraphEncoder, export
@@ -155,7 +155,9 @@ def test_prepared_export_shared_identity(tmp_path):
     assert 'barcode' not in prepared.read_text()
     manifest = json.loads((prepared.parent / 'input_manifest.json').read_text())
     assert manifest['identity_extractor'] == 'core.product_identity.row_identity'
-    assert 'not all' in manifest['feature_scope']
+    assert manifest['feature_scope'].startswith('derived from core.product_identity.graph_schema')
+    assert manifest['relations'] == list(RELATIONS)
+    assert manifest['numeric'] == list(NUMERIC)
     # Inference-only batches do not need a dummy training node.
     listings.write_text(json.dumps({'schema': 'er-graph-listings-v1', 'listings': out[-3:]}))
     assert len(load_records(listings, require_training=False)) == 3

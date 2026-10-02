@@ -185,6 +185,77 @@ parsing. Existing generated-data edits and prepared-worker deletions preserved.
   day/month components without inventing a year; short dates such as 05/12
   retain both component-order and century ambiguity.
 
+- [x] 2026-10-02 - `no_added_sugar_with_cane_sugar` now consumed by gate
+  review (three_way_gate uncertainty routing; src/pipeline.py). FRUISS
+  935465903 / RISE 49918733 style rows — one listing declaring both cane
+  sugar and no added sugar — emit the flag and route the sweetener
+  dimension to fallback/review, never hard_no; self-gate stays a plain
+  proceed for clean siblings. Tests: tests/test_gate_categorical_source_
+  review.py + extraction-level tests/test_added_sugar_semantics.py.
+  Still open: measuring the same-source vs cross-listing absence-evidence
+  screens (103 / 370 pairs) before changing further gate behavior.
+
+- [x] 2026-10-02 - Multiplier pack unit boundary fixed
+  (src/pipeline.py extract_pack_evidence): the x-multiplier/nested tails no
+  longer consume any following letter as a unit; the tail must be a
+  recognized measurement unit or container word, with one descriptive word
+  tolerated before a measurement ('6x20 organic cl', 'LT.1.5 X 6BT' kept;
+  '12x1 mineralwasser'/'12x1 pet'/'12x1 pet bottles' no longer fire).
+  SKUs 935970386/935979247/955514786 spans repaired without changing their
+  selected scalars (title corroboration unchanged). Tests:
+  tests/test_url_separated_quantities.py (gated multipliers + whole-unit
+  spans), all pre-existing pack pins (tests/test_pack_quantity_
+  boundaries.py) pass unchanged.
+- [x] 2026-10-02 - Boundary sweep across the quantity extractors (probe
+  outcome): (1) x-multiplier/nested tails also swallowed the '.' of URL
+  extension separators — '24x330ml.html' carried the raw span '24x330ml.'
+  (66 sku rows); the span now dies at the unit's word boundary. (2) The
+  volume unit grammar ended on (?![a-z]), so a non-ASCII glued word was
+  consumed — '124 LÜ' SKU 404195454 read the 'Ü' into the unit; the
+  lookahead is now any-unicode-letter. (3) Full-corpus OLD-vs-NEW
+  extract_pack_from_title diff: ZERO changed pack readings — both fixes
+  are span-level and strictly additive. (4) Glued-code junk from image
+  CDN naming (a1l1/wO4L/GOzLa6L) was screened: shadowed by title/attr in
+  826/880 rows and decodes to 0-the-rest when it surfaces (dead to the
+  value>0 guard) — no behavior change shipped. Tests: tests/test_url_
+  separated_quantities.py (extension separator), tests/test_unit_
+  canonicalization.py (cased-word tail).
+
+- [x] 2026-10-02 - Stage-7 sweetener claim lift wired + measured
+  (core/attribute_decision.py + three_way_gate uncertainty routing). Claims
+  only in the capture ("zero sugar"/"no sugar"/"diet" wording, no
+  ingredient tokens) now lift the sweetener axis: claim-vs-claim resolves
+  via the family predicate (compatible phrasings = MATCH/original_columns);
+  apparent clashes and claim-vs-ingredient cross-channel comparisons
+  downgrade to review ('claim_conflict' == source_conflict treatment).
+  Replay census over the committed 135,246-pair universe: 549 marginal
+  pairs, ALL toward review (proceed->fallback 188 labeled true pairs;
+  no new hard_no, no new merges beyond the baseline 5 new_merge_risk vs
+  18 baseline). Lexical claim comparison REJECTED by measurement (it
+  split 133 true-positive GTIN pairs). Tests: tests/test_column_ssot.py
+  (44 pass incl. both planted stage-7 cases).
+
+- [ ] Sweetener absence evidence remains diagnostic across some comparisons:
+  screen finds 103 passing pairs involving canonical absence plus ingredient
+  evidence, and 370 with absence versus positive evidence across endpoints.
+  These counts are screens; distinguish same-source contradictions, natural
+  sugar, scoped artificial-only absence, and cross-listing disagreement before
+  changing gate behavior.
+
+- [x] 2026-10-02 - URL decimal pack notation dropped as noise (scoped +
+  fixed). `_has_unit_suffix` accepted integer heads/parts only, so
+  `6x1.5l`/`4x0.25l`/`12x50.7oz`/`12x0.33l` shapes failed the pack-notation
+  branch and died under the no-vowel rule. Measured: 26 sku_url rows change
+  extracted URL pack 1 -> real count; 24/26 corroborated by the title pack,
+  2 rows (324800000 `6x33.8oz`, 766328750 `6x17.5cl`) gain their only pack
+  count from the URL. No media-dimension regression (220x1280 stays dead).
+  Fixed in core/url_evidence.py; tests: tests/test_url_separated_
+  quantities.py (decimal shapes + retrievability). Remaining adjacent
+  DEFERRED: the 'lt' unit alias is absent from config/paths.yaml
+  url_evidence.units, so '5x15lt'/'9x3lt'/'4x1lt' (8 url rows) still drop;
+  adding it changes 729 skus' bare-'lt' token handling — needs its own
+  cabinet measure before a config edit.
+
 Fix-first checkpoint: full 71,623-row extraction has zero errors; existing
 extraction fields change on 16,942 rows and volume/pack assignment on 602.
 The new date evidence field is additive on all rows, so that alone is not an

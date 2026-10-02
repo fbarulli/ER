@@ -185,10 +185,17 @@ def _has_unit_suffix(token: str, spec) -> bool:
             return True
         if re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)', head):
             return True
-        # pack notation: every "x"-separated part must itself be a size token
+        # pack notation: every "x"-separated part must itself be a size
+        # token — integer, decimal, or unit-bearing. Decimal heads are
+        # observed ("6x1.5l", "4x0.25l", "12x50.7oz", "12x0.33l": 26 sku_url
+        # rows, measured 2026-10-02, 24 of 26 corroborated by the title);
+        # the bare isdigit check dropped them as media codes.
         parts = head.split("x")
         if len(parts) > 1 and all(
-            part.isdigit() or _has_unit_suffix(part, spec) for part in parts
+            part.isdigit()
+            or re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)', part) is not None
+            or _has_unit_suffix(part, spec)
+            for part in parts
         ):
             return True
     return False

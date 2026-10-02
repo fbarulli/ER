@@ -182,6 +182,35 @@ class ProductIdentity:
         }
 
 
+def graph_schema() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Derive (relations, numeric) straight from the extractor's own contract.
+
+    The graph listing schema is NOT a hand-maintained subset: every
+    `ProductIdentity` descriptor field whose values are strings is a typed
+    relation, every float-valued field is a numeric feature, in declaration
+    order. A descriptor added to the extractor (new field here, populated in
+    `row_identity`) therefore enters the graph automatically, and a prepared
+    listings file built with an older schema is refused at load time by
+    comparing the manifest against this derivation — never silently stale.
+    Non-descriptor bookkeeping (claims flags, barcode key/review reason,
+    completeness, raw dimension evidence) is excluded by construction because
+    it is not a set-descriptor field.
+    """
+    import dataclasses
+    from typing import get_type_hints
+
+    hints = get_type_hints(ProductIdentity)
+    relations, numeric = tuple(), tuple()
+    for field in dataclasses.fields(ProductIdentity):
+        origin = hints[field.name]
+        descriptor = getattr(origin, "__args__", ()) and origin.__args__[0]
+        if getattr(origin, "__origin__", None) is frozenset and descriptor is str:
+            relations += (field.name,)
+        elif getattr(origin, "__origin__", None) is frozenset and descriptor is float:
+            numeric += (field.name,)
+    return relations, numeric
+
+
 # ── vocabulary (validated SSOT) ────────────────────────────────────────────
 @lru_cache(maxsize=1)
 def brand_aliases() -> Mapping[str, str]:

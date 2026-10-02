@@ -244,7 +244,7 @@ def test_fold_zero_title_attributes_reach_structured_scoring(
         ("elderflower presse 6-pack", 6, None),
         ("coffee 6 packages", 6, None),
         ("water case of 12 bottles", 12, "bottle"),
-        ("water 12 cases", 12, None),
+        ("water 12 cases", 1, None),
         ("juice 4 boxes", 4, "box"),
         ("juice 4 cartons", 4, "carton"),
         ("soda 8 tins", 8, "tin"),
@@ -255,6 +255,19 @@ def test_packaging_spacing_plural_and_hyphen_variants(
 ) -> None:
     extracted = extract_all(phrase, "")
     assert extracted["pack_qty"] == expected_pack
-    assert extracted["pack_confidence"] > 0.0
+    if phrase == "water 12 cases":
+        assert extracted["pack_confidence"] == 0
+        assert any(entry["count"] == 12 and entry["role"] == "outer_count"
+                   for entry in extracted["pack_evidence"])
+    else:
+        assert extracted["pack_confidence"] > 0.0
     if expected_type is not None:
         assert expected_type in extracted["package_types"]
+
+
+def test_volume_unit_never_gluons_a_cased_word():
+    """SKU 404195454 '...y 124 LÜ...' — a non-ASCII letter right after the
+    unit belongs to the next word, not to the unit; the candidate dies."""
+    from core.text import extract_volume_evidence
+    assert extract_volume_evidence('gala y 124 LÜBECK') == []
+    assert extract_volume_evidence('milk 250 ml.')    # unit then punctuation: kept

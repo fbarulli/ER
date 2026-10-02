@@ -29,6 +29,14 @@ def load_inputs(cfg):
                       ('identity_dimensions_sha256', TRAIN_ROOT / 'config/identity_dimensions.yaml')]:
         if manifest is not None and manifest.get(key) != file_hash(path):
             raise ValueError(f'prepared input mismatch: {key}')
+    from graph_tracks.data import NUMERIC, RELATIONS
+    prepared_schema = (manifest.get('relations'), manifest.get('numeric')) if manifest else (None, None)
+    if prepared_schema[0] is not None and prepared_schema[1] is not None:
+        if list(prepared_schema[0]) != list(RELATIONS) or list(prepared_schema[1]) != list(NUMERIC):
+            raise ValueError(
+                'prepared listings schema is stale: the extractor graph schema moved '
+                '(relations/numeric derive from core.product_identity.graph_schema); '
+                're-run local graph setup before launch')
     records = load_records(resolve(cfg.listings))
     if manifest is not None and manifest.get('report_attributes_sha256'):
         from graph_tracks.report_attributes import FILENAME, load_inputs as load_report_inputs

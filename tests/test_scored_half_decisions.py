@@ -130,12 +130,15 @@ def test_pinned_decision_criteria_hold_on_live_evidence(manifest: dict) -> None:
         if half == "dev":
             assert share_now <= share_was, half
     # the on-census measured pairs (regen drift makes a stale pin lie)
-    assert now["scored_dev_negatives"] == 468
-    assert now["scored_test_negatives"] == 539
-    assert now["negatives_withheld_from_scored_half"] == 4823
-    assert was["scored_dev_negatives"] == 961
-    assert was["scored_test_negatives"] == 997
-    assert was["negatives_withheld_from_scored_half"] == 3872
+    # 2026-10-02 re-pin (extraction boundary repairs + URL decimal pack
+    # evidence + stage-7 claim lift moved the gate population): the old
+    # numbers were (468 / 539 / 4,823) and (961 / 997 / 3,872).
+    assert now["scored_dev_negatives"] == 553
+    assert now["scored_test_negatives"] == 461
+    assert now["negatives_withheld_from_scored_half"] == 4677
+    assert was["scored_dev_negatives"] == 1009
+    assert was["scored_test_negatives"] == 875
+    assert was["negatives_withheld_from_scored_half"] == 3807
 
 
 def test_no_trained_on_endpoint_scores_under_assigned_semantics(
@@ -253,15 +256,23 @@ def test_live_disagree_counts_are_byte_identical_to_scalar(
     the pin moves): 2026-09-29 regen measured volume 13, pack 48,
     package_type 153, sweetener 127, flavor 363, carbonation 38 under BOTH
     semantics. The 2026-10-01 regeneration (volume-unification closure +
-    caretaken re-capture) moved them to the values below; scalar and bag
-    remain identical so the set_bag semantics is still unexercised
+    caretaken re-capture) moved them to volume 6, pack 47, package_type 105,
+    sweetener 86, flavor 254, carbonation 47 (422 positives).
+    2026-10-02 regeneration (extraction boundary repairs + URL decimal pack
+    evidence + stage-7 claim lift with review-downgrade) cut the gate's
+    proceed population 16,611 -> 12,733 BUT RAISED its threshold mass: the
+    fresh proceed set is similarity-dense (63% above the 0.50 POS floor vs
+    5.9% before), so data/labeled_pairs.csv grew 9,83 -> 8,071 positives and
+    the validation frame now holds 4,515 positives; the per-field disagree
+    counts below are recomputed on that population. scalar and bag remain
+    identical so the set_bag semantics is still unexercised
     difference-wise and cannot silently diverge.
     """
     pos = artifact[artifact.true_label == 1]
     fields = ("volume", "pack", "package_type", "sweetener", "flavor",
               "carbonation")
-    pinned = {"volume": 6, "pack": 47, "package_type": 105,
-              "sweetener": 86, "flavor": 254, "carbonation": 47}
+    pinned = {"volume": 123, "pack": 8, "package_type": 932,
+              "sweetener": 1127, "flavor": 3776, "carbonation": 270}
     for field in fields:
         a, b = pos[f"v1_{field}"], pos[f"v2_{field}"]
         for semantics in ("scalar", "set_bag"):

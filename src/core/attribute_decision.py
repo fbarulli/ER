@@ -745,6 +745,7 @@ class AttributeDecisionEngine:
             ingredient_types: set[str] = set()
             negative_ingredients: set[str] = set()
             ingredient_source_conflict = False
+            claim_tokens: set[str] = set()
             for source_row in _iter_source_rows(row):
                 for source in attribute_names:
                     cell = str(source_row.get(source) or "")
@@ -784,6 +785,8 @@ class AttributeDecisionEngine:
                     # The registry sweetener channel compares ingredients.
                     # Sugar/no-sugar/no-added-sugar are a separate claim axis.
                     if field == "sweetener":
+                        if tokens:
+                            claim_tokens.update(tokens)
                         continue
                     alias = VETO_CENSUS_KEY_BY_DIMENSION.get(field, field)
                     if tokens and alias in specs:
@@ -792,6 +795,15 @@ class AttributeDecisionEngine:
                         )
             if ingredient_types:
                 out["sweetener"] = frozenset(ingredient_types)
+            elif claim_tokens:
+                # Claim lift (stage 7): ingredients are absent, so the only
+                # sweetener evidence the capture carries is the claim axis
+                # ("zero sugar", "no sugar", "no added sugar", "diet"). The
+                # lift is footnoted so the comparison can use the claim
+                # family rules instead of lexical set equality — claims are
+                # PHRASING VARIANTS of one axis, never independent tokens.
+                out["sweetener"] = frozenset(claim_tokens)
+                out["_sweetener_claims_only"] = frozenset({"claims"})
             else:
                 out.pop("sweetener", None)
             if ingredient_source_conflict or negative_ingredients & ingredient_types:
@@ -807,6 +819,28 @@ class AttributeDecisionEngine:
         a, b = left_sets.get(key, frozenset()), right_sets.get(key, frozenset())
         if not a or not b:
             return None
+        if key == "sweetener" and (
+            "_sweetener_claims_only" in left_sets or "_sweetener_claims_only" in right_sets
+        ):
+            # 2026-10-02 MEASURED (replay census): claims are a channel,
+            # ingredients are another; the lexical engine across channels
+            # split 133 labeled true-positive GTIN pairs. claim-vs-claim
+            # (symmetric lift) -> family predicate below; claim-vs-
+            # ingredient (cross-channel) -> unresolvable, review.
+            symmetric = (
+                "_sweetener_claims_only" in left_sets
+                and "_sweetener_claims_only" in right_sets
+            )
+            from core.critical_attributes import sweetener_conflict
+
+            if symmetric and sweetener_conflict(set(a), set(b)):
+                # An apparent clash between phrasings is claim noise, not a
+                # product split; downgrade to review, never hard_no.
+                return ComparisonResult.INCONCLUSIVE, "claim_conflict"
+            if symmetric:
+                return ComparisonResult.MATCH, "original_columns"
+            # cross-channel: no engine evaluation, return an uncertainty
+            return ComparisonResult.INCONCLUSIVE, "claim_conflict"
         reborn = attribute_metrics(a, b)
         result = evaluate_metrics(_type_key_for(key, specs[key]), a, b, reborn)
         return result, "original_columns"

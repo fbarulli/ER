@@ -183,9 +183,19 @@ def extract_pack_evidence(title: str) -> list[dict]:
     count_token = r"([1-9]\d{0,2}(?:[.,]\d{3})+|\d+)(?!\d|[.,]\d)"
     number = r"(?<![\w$€£])(?<!\d[.,])" + count_token
     containers = r"(?:bottles?|bt|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)"
+    # The tail of an x-multiplier must be a RECOGNIZED measurement unit (or
+    # container word), never any letter. `12x1 mineralwasser`/`12x1 pet`
+    # (SKUs 935970386, 935979247, 955514786) emitted false raw spans
+    # `12x1 m`/`12x1 p` — the unit word's first letter. One descriptive
+    # word may sit between the count and a MEASUREMENT unit ('6x20 organic
+    # cl'); a bare container word may not be reached THROUGH material words
+    # ('12x1 pet bottles' is not a recognized span).
+    measurement_tail = r"(?:fl\.?\s?oz\.?|ltr|lt|ml|cl|dl|cc|kcal|mg|kg|lbs?|gr|fz|g\b|oz\b|l\b)"
+    multiplier_tail = (rf"(?:\s*(?:{measurement_tail}|{containers})\b"
+                       rf"|\s+[a-z]+\s*{measurement_tail})")
     patterns = (
-        ("nested", rf"{number}\s*[x×]\s*(\d+)\s*(?:{containers}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?\s*[a-z]", "unit_count"),
-        ("multiplier", rf"{number}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?\s*[a-z]", "unit_count"),
+        ("nested", rf"{number}\s*[x×]\s*(\d+)\s*(?:{containers}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
+        ("multiplier", rf"{number}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
         ("pack_of", rf"\b(?:packs?|packages?)\s+of\s*{count_token}\b", "unit_count"),
         ("pack_of", rf"\bcases?\s+of\s*{count_token}\b", "unit_count"),
         ("count", rf"{number}\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
@@ -1272,7 +1282,8 @@ def three_way_gate(
         if flag.startswith(("description_conflict:", "categorical_source_conflict:"))
     }
     if sweetener_source_conflict or source_flags & {
-        "unsweetened_with_declared_sweetener", "sweetening_status_conflict"
+        "unsweetened_with_declared_sweetener", "sweetening_status_conflict",
+        "no_added_sugar_with_cane_sugar",
     }:
         uncertain_categorical_dimensions.add("sweetener")
     # Pulp has no registry key; the registry sweetener key owns ingredient
@@ -1312,7 +1323,7 @@ def three_way_gate(
         uncertain_categorical_dimensions.update(
             CRITICAL_NAME_BY_CENSUS_KEY[key]
             for key, entry in evidence.dimensions.items()
-            if entry.fallback_from == "source_conflict"
+            if entry.fallback_from in {"source_conflict", "claim_conflict"}
         )
     if sweetener_source_conflict:
         categorical_conflicts = [name for name in categorical_conflicts if name != "sweetener"]

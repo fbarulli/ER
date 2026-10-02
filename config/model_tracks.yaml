@@ -1,6 +1,6 @@
 # One Colab runtime, one control channel, all three prepared tracks.
-setup_dir: data/track_setup_20261001
-text_bundle: data/track_setup_20261001/text_prepared.pkl.gz
+setup_dir: data/track_setup
+text_bundle: data/track_setup/text_prepared.pkl.gz
 text_model: minilm_l6
 epochs: 10
 device: cuda

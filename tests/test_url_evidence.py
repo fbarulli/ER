@@ -128,7 +128,7 @@ def test_deterministic() -> None:
     # "250ml" and 9 of "2l" in 8,000 sampled sku_url slugs. Size evidence
     # deleted as if it were a retailer media code.
     url = "https://example.com/p/red-bull-energy-drink-250ml-24-pack"
-    assert url_text(url) == url_text(url) == "red bull energy drink 250ml pack"
+    assert url_text(url) == url_text(url) == "red bull energy drink 250ml 24 pack"
 
 
 def test_size_tokens_survive() -> None:

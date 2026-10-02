@@ -328,7 +328,7 @@
         "pulp_set": "[]"
       },
       "nearest_item_id": "850025251198",
-      "legacy_sku_text": "cure hydration electrolyte mix blood orange each hydrating orange weight sports electrolytes concentrate powder electrolytes brand cure hydration category powder concentrates breadcrumbs nutrition hydration [FIELD_VOLUME] volume_ml_8 [FIELD_PACK_SIZE] pack_qty_14 [FIELD_PACKAGE_TYPE] package_type_packet [FIELD_FLAVOR] flavor_orange [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "cure hydration electrolyte mix blood orange each hydrating orange weight sports electrolytes concentrate powder electrolytes brand cure hydration category powder concentrates breadcrumbs nutrition hydration [FIELD_PACK_SIZE] pack_qty_14 [FIELD_PACKAGE_TYPE] package_type_packet [FIELD_FLAVOR] flavor_orange [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "Cure Hydration Electrolyte Drink Mix, Blood Orange, 14 Packets, 0.27 oz (7.7 g) Each",
         "attributes": "Health Claims: hydrating; Flavour: orange; Weight: 8; Sports Ingredients: electrolytes; Juice Content: 0-2%; Concentrate Format: powder, electrolytes",
@@ -336,7 +336,9 @@
         "description": "",
         "category": "Powder Concentrates",
         "category_path": "[\"\" Health\"\",\"\" Nutrition\"\",\"\" Hydration\"\"]"
-      }
+      },
+      "legacy_sku_text_before_semantic_repairs": "cure hydration electrolyte mix blood orange each hydrating orange weight sports electrolytes concentrate powder electrolytes brand cure hydration category powder concentrates breadcrumbs nutrition hydration [FIELD_VOLUME] volume_ml_8 [FIELD_PACK_SIZE] pack_qty_14 [FIELD_PACKAGE_TYPE] package_type_packet [FIELD_FLAVOR] flavor_orange [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "semantic_repair_rationale": "Dry drink mix 0.27 oz (7.7 g) is net weight, not liquid volume."
     },
     {
       "legacy_canonical_text": "dr. smoothie pineapple still mixes Dr. Smoothie dr. smoothie smoothie mixes crushed pineapple paradise grocery gourmet food beverages bottled beverages mixes juices [FIELD_FLAVOR] flavor_pineapple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -1272,7 +1274,7 @@
         "package_material_set": "['metal']"
       },
       "nearest_item_id": "10850019179238",
-      "legacy_sku_text": "clearly canadian wild cherry sparkling spring carbonated flavored seltzer cherry sweetener cane sugar carbonated sparkling seltzer spring caffeine gmo sugar brand clearly canadian description brand clearly canadian variety sparkling wild cherry package information item fluid ounces about item awaken your senses clearly canadian wild cherry sparkli category sparkling flavoured bottled breadcrumbs any department grocery gourmet food beverages bottled beverages mixes [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_cherry [FIELD_CARBONATION] carbonation_carbonated [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_metal [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "clearly canadian wild cherry sparkling spring carbonated flavored seltzer cherry sweetener cane sugar carbonated sparkling seltzer spring caffeine gmo sugar brand clearly canadian description brand clearly canadian variety sparkling wild cherry package information item fluid ounces about item awaken your senses clearly canadian wild cherry sparkli category sparkling flavoured bottled breadcrumbs any department grocery gourmet food beverages bottled beverages mixes [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_24 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_cherry [FIELD_CARBONATION] carbonation_carbonated [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_metal [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "Clearly Canadian Wild Cherry Sparkling Spring Water Beverage, Natural & Carbonated, Flavored Seltzer Water, 1 Case (24 cans x 12 fl oz)",
         "attributes": "Volume: 355; Flavour: cherry; Sweetener: cane sugar; Juice Content: 0-2%; Pack Material Type: Metal; Pack Type: Can; Carbonization: carbonated, sparkling; Water Type: seltzer, spring; Caffeine: 15-25 mg; Naturally derived: natural flavours, natural; No Artificial Ingredients: no gmo; Health Claims: no sugar",
@@ -1280,7 +1282,9 @@
         "description": "Brand Clearly Canadian \nVariety Sparkling \nFlavor Wild cherry \nPackage Information Can \nItem Volume 12 Fluid Ounces \n* * *\n# About this item \n* AWAKEN YOUR SENSES: Clearly Canadian Wild Cherry Sparkli",
         "category": "Sparkling Flavoured Bottled Water",
         "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Water\"\"]"
-      }
+      },
+      "legacy_sku_text_before_semantic_repairs": "clearly canadian wild cherry sparkling spring carbonated flavored seltzer cherry sweetener cane sugar carbonated sparkling seltzer spring caffeine gmo sugar brand clearly canadian description brand clearly canadian variety sparkling wild cherry package information item fluid ounces about item awaken your senses clearly canadian wild cherry sparkli category sparkling flavoured bottled breadcrumbs any department grocery gourmet food beverages bottled beverages mixes [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_cherry [FIELD_CARBONATION] carbonation_carbonated [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_metal [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "semantic_repair_rationale": "One case explicitly contains 24 cans; container quantity is the unit count."
     },
     {
       "legacy_canonical_text": "puhdistamo coconut still type_flavoured Puhdistamo coconut refreshing fresh coconut is perfect liquefier and janon extinguisher world the best flavored young green from thailand of coconut obtained coconut water. no indeed. from t all promotional products [FIELD_VOLUME] volume_ml_310 [FIELD_FLAVOR] flavor_coconut [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_metal",
@@ -1765,7 +1769,7 @@
         "package_material_set": "['metal']"
       },
       "nearest_item_id": "706098268871",
-      "legacy_sku_text": "coco rico puerto rico original six still origin united states brand coco rico description product description six coco rico six coco rico category other non cola carbonates breadcrumbs grocery gourmet food beverages bottled beverages mixes soft drinks [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_metal [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "coco rico puerto rico original six still origin united states brand coco rico description product description six coco rico six coco rico category other non cola carbonates breadcrumbs grocery gourmet food beverages bottled beverages mixes soft drinks [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_metal [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "Coco Rico Puerto Rico Original -12 fl oz ( Six Pack)",
         "attributes": "Carbonization: still; Volume: 355; Pack Material Type: Metal; Geographic Origin: united states; Juice Content: 0-2%; Pack Type: Can",
@@ -1773,7 +1777,9 @@
         "description": ", \n## Product description \nSix Pack Coco Rico 12oz \n, \nSix Pack Coco Rico 12oz",
         "category": "Other Non-Cola Carbonates",
         "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soft Drinks\"\"]"
-      }
+      },
+      "legacy_sku_text_before_semantic_repairs": "coco rico puerto rico original six still origin united states brand coco rico description product description six coco rico six coco rico category other non cola carbonates breadcrumbs grocery gourmet food beverages bottled beverages mixes soft drinks [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_metal [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "semantic_repair_rationale": "Explicit Six Pack states six consumer units; number words are package evidence."
     },
     {
       "legacy_canonical_text": "poikain parhaat orange still sugar boys_best_kasityolaissima Poikain Parhaat the most traditional by fermentation methods prepared orange kasityolaissiman taste and color is obtained time with genuine free industrial color or flavorings. fresh siman taste complem beverages seasonal drinks [FIELD_VOLUME] volume_ml_330 [FIELD_FLAVOR] flavor_orange [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -5568,7 +5574,7 @@
         "package_material_set": "['plastic']"
       },
       "nearest_item_id": "850044833290",
-      "legacy_sku_text": "north coast apple sugar added fluid ounces apple made apple still sugar usda brand north coast description brand north coast package weight pounds about item north coast apple sugar added usda import category concentrate breadcrumbs any department grocery gourmet food beverages bottled beverages mixes juices [FIELD_VOLUME] volume_ml_1893 [FIELD_PACK_SIZE] pack_qty_8 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_15-25%",
+      "legacy_sku_text": "north coast apple sugar added fluid ounces apple made apple still sugar usda brand north coast description brand north coast package weight pounds about item north coast apple sugar added usda import category concentrate breadcrumbs any department grocery gourmet food beverages bottled beverages mixes juices [FIELD_VOLUME] volume_ml_1893 [FIELD_PACK_SIZE] pack_qty_8 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_added_sugar sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_15-25%",
       "sku": {
         "title": "North Coast Organic Apple Juice, No Sugar Added, 64 Fluid Ounces ( Pack Of 8)",
         "attributes": "Volume: 1893; Flavour: apple; Juice Content: 15-25%; Pack Material Type: Plastic; Pack Type: Bottle; Made From: apple; Carbonization: still; Health Claims: no sugar; Sustainable Sourcing: usda organic, organic",
@@ -5576,7 +5582,9 @@
         "description": "Unit Count 512 Fl Oz \nBrand North Coast \nPackage Weight 1 Pounds \n* * *\n# About this item \n* North Coast Organic Apple Juice, No Sugar Added, USDA Organic, 64 Fluid Ounce ( Pack of 8) \n* * *\n## Import",
         "category": "Not from Concentrate 100% Juice",
         "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Juices\"\"]"
-      }
+      },
+      "legacy_sku_text_before_semantic_repairs": "north coast apple sugar added fluid ounces apple made apple still sugar usda brand north coast description brand north coast package weight pounds about item north coast apple sugar added usda import category concentrate breadcrumbs any department grocery gourmet food beverages bottled beverages mixes juices [FIELD_VOLUME] volume_ml_1893 [FIELD_PACK_SIZE] pack_qty_8 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_15-25%",
+      "semantic_repair_rationale": "No Sugar Added is an added-sugar claim; separate Health Claims:no sugar remains total-sugar evidence."
     },
     {
       "legacy_canonical_text": "me lemon tea still green Me Me tea bio and ecology drinks sodas iced teas and syrups [FIELD_VOLUME] volume_ml_1000 [FIELD_FLAVOR] flavor_lemon [FIELD_CARBONATION] carbonation_still",
@@ -6881,7 +6889,7 @@
         "package_material_set": "['paper / carton']"
       },
       "nearest_item_id": "810161207695",
-      "legacy_sku_text": "ibc premium rootbeer still brand ibc description old fashioned rootbeer category other non cola carbonates breadcrumbs any department grocery gourmet food beverages bottled beverages mixes soft drinks [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_24 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "ibc premium rootbeer still brand ibc description old fashioned rootbeer category other non cola carbonates breadcrumbs any department grocery gourmet food beverages bottled beverages mixes soft drinks [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "IBC Premium Rootbeer 12oz(24 case)",
         "attributes": "Volume: 355; Carbonization: still; Pack Material Type: Paper / Carton; Juice Content: 0-2%",
@@ -6889,7 +6897,9 @@
         "description": "Old Fashioned Rootbeer",
         "category": "Other Non-Cola Carbonates",
         "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soft Drinks\"\"]"
-      }
+      },
+      "legacy_sku_text_before_semantic_repairs": "ibc premium rootbeer still brand ibc description old fashioned rootbeer category other non cola carbonates breadcrumbs any department grocery gourmet food beverages bottled beverages mixes soft drinks [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_24 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "semantic_repair_rationale": "24 case is an outer-case count; missing physical-unit count stays unknown (legacy renderer uses implicit one)."
     },
     {
       "legacy_canonical_text": "dublin berry soda fru sugar Dublin soda fru fru berry is the newest in bottles of fl oz each made with pure cane sugar grocery gourmet food beverages bottled beverages mixes soft drinks [FIELD_VOLUME] volume_ml_355 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_FLAVOR] flavor_berry [FIELD_PACK_MATERIAL] package_material_metal",
@@ -14649,7 +14659,7 @@
         "package_material_set": "['paper / carton']"
       },
       "nearest_item_id": "5060102622215",
-      "legacy_sku_text": "s. pellegrino essenza blood orange black raspberry flavored mineral co2 added flavoured orange raspberry caffeine carbonated sparkling good source minerals calories brand pellegrino description important information start carbonated mineral flavors end legal disclaimer statements regarding dietary supplements have category sparkling flavoured bottled breadcrumbs grocery gourmet food beverages bottled beverages mixes drinking [FIELD_VOLUME] volume_ml_330 [FIELD_PACK_SIZE] pack_qty_11 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_orange flavor_raspberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_sku_text": "s. pellegrino essenza blood orange black raspberry flavored mineral co2 added flavoured orange raspberry caffeine carbonated sparkling good source minerals calories brand pellegrino description important information start carbonated mineral flavors end legal disclaimer statements regarding dietary supplements have category sparkling flavoured bottled breadcrumbs grocery gourmet food beverages bottled beverages mixes drinking [FIELD_VOLUME] volume_ml_330 [FIELD_PACK_SIZE] pack_qty_8 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_orange flavor_raspberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
       "sku": {
         "title": "S. Pellegrino Essenza Blood Orange Black Raspberry Flavored Mineral Water with CO2 Added, 8 Pack of 11.15 Fl Oz Cans",
         "attributes": "Water Type: flavoured; Volume: 330; Juice Content: 0-2%; Naturally derived: natural flavours; Pack Material Type: Paper / Carton; Flavour: orange, raspberry; Caffeine: 25-50 mg; Carbonization: carbonated, sparkling; Health Claims: good source of minerals, no calories",
@@ -14657,7 +14667,9 @@
         "description": "* * *\n## Important information \n[ingredients_start]\nIngredients \nCarbonated Mineral Water, Natural Flavors \n[ingredients_end]\n\nLegal Disclaimer \nStatements regarding dietary supplements have not been ",
         "category": "Sparkling Flavoured Bottled Water",
         "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Drinking Water\"\"]"
-      }
+      },
+      "legacy_sku_text_before_semantic_repairs": "s. pellegrino essenza blood orange black raspberry flavored mineral co2 added flavoured orange raspberry caffeine carbonated sparkling good source minerals calories brand pellegrino description important information start carbonated mineral flavors end legal disclaimer statements regarding dietary supplements have category sparkling flavoured bottled breadcrumbs grocery gourmet food beverages bottled beverages mixes drinking [FIELD_VOLUME] volume_ml_330 [FIELD_PACK_SIZE] pack_qty_11 [FIELD_PACKAGE_TYPE] package_type_can [FIELD_FLAVOR] flavor_orange flavor_raspberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_paper_/_carton [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "semantic_repair_rationale": "8 Pack of 11.15 Fl Oz has count eight; decimal volume prefix eleven is not a count."
     },
     {
       "legacy_canonical_text": "icee cherry still sugar Icee beverages fruit beverages non refrigerated other juices beverages smoothies apple cider [FIELD_VOLUME] volume_ml_237 [FIELD_FLAVOR] flavor_cherry [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -21921,7 +21933,7 @@
         "pulp_set": "[]"
       },
       "nearest_item_id": "810979004318",
-      "legacy_sku_text": "true orange mix orange mango free allergens concentrate powder sport electrolytes orange mango brand true orange description true lemon mix orange mango mix sports mixes food form powders container food condition shelf stable ambient start category powder concentrates breadcrumbs food beverages powdered mixes all powdered mix [FIELD_VOLUME] volume_ml_31 [FIELD_PACK_SIZE] pack_qty_10 [FIELD_PACKAGE_TYPE] package_type_packet [FIELD_FLAVOR] flavor_mango flavor_orange",
+      "legacy_sku_text": "true orange mix orange mango free allergens concentrate powder sport electrolytes orange mango brand true orange description true lemon mix orange mango mix sports mixes food form powders container food condition shelf stable ambient start category powder concentrates breadcrumbs food beverages powdered mixes all powdered mix [FIELD_PACK_SIZE] pack_qty_10 [FIELD_PACKAGE_TYPE] package_type_packet [FIELD_FLAVOR] flavor_mango flavor_orange",
       "sku": {
         "title": "True Orange Drink Mix, 1.06 Oz, Orange Mango, 10 Packets",
         "attributes": "Pack Type: Carton/Box; Free From: no allergens; Concentrate Format: powder, sport, electrolytes; Flavour: orange, mango",
@@ -21929,7 +21941,9 @@
         "description": "\"\" True Lemon Drink Mix, 1.06 Oz, Orange Mango, 10 Packets\"\" ; Drink Mix Type Sports Drink Mixes ; Food Form Powders ; Container Type Box ; Food Condition Shelf- Stable / Ambient ; \n[ingredients_start]\n",
         "category": "Powder Concentrates",
         "category_path": "[\"\" Food\"\",\"\" Beverages\"\",\"\" Powdered Drink Mixes\"\",\"\" All Powdered Drink Mix\"\"]"
-      }
+      },
+      "legacy_sku_text_before_semantic_repairs": "true orange mix orange mango free allergens concentrate powder sport electrolytes orange mango brand true orange description true lemon mix orange mango mix sports mixes food form powders container food condition shelf stable ambient start category powder concentrates breadcrumbs food beverages powdered mixes all powdered mix [FIELD_VOLUME] volume_ml_31 [FIELD_PACK_SIZE] pack_qty_10 [FIELD_PACKAGE_TYPE] package_type_packet [FIELD_FLAVOR] flavor_mango flavor_orange",
+      "semantic_repair_rationale": "Dry drink mix 1.06 oz is net weight, not liquid volume."
     },
     {
       "legacy_canonical_text": "cherry bay still no_added_sugar derived_natural_volume Cherry Bay tart cherry concentrate oz tart cherry concentrate oz tart cherry concentrate oz brand palko services upc undefined description all natural. pressed from over cherries. antioxidants. no preservatives. no sugar added. makes servings. www.cherrybayorchards.com. satisfaction guaranteed. questions cal imported or made in the u.s.a. reduce inflammation and pain the same compounds that give tart cherries their unique sweet tart and bright red color may provide an array of benefits resea prepared from mature clean montmorency tart cherries this pure fruit concentrate has no added sugar flavors colors or and is a source of beneficial antioxidants known any department grocery gourmet food beverages bottled beverages mixes juices fresh produce fresh beverages grocery food snacks general grocery marinades sauces pantry beverages juices [FIELD_VOLUME] volume_ml_946 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_FLAVOR] flavor_cherry [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_no_added_sugar [FIELD_PACK_MATERIAL] package_material_plastic",
@@ -23951,8 +23965,10 @@
         "pulp_set": "[]",
         "package_material_set": "['flexible pack']"
       },
-      "legacy_sku_text": "skratch labs sport hydration mix strawberries serving resealable bag flexible sports electrolytes strawberry diets kosher free dairy free hydrating concentrate powder sport electrolytes caffeine brand skratch labs description new improved version our original exercise hydration mix more electrolytes. new look same great taste hydrates faster than alone optimal ratio carbohydrates sodi category powder concentrates breadcrumbs grocery gourmet food beverages bottled beverages mixes sports drinks [FIELD_VOLUME] volume_ml_458 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACKAGE_TYPE] package_type_bag [FIELD_FLAVOR] flavor_strawberry [FIELD_PACK_MATERIAL] package_material_flexible_pack [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
-      "legacy_canonical_text": "skratch labs strawberry hydration_drink_mix_strawberries serving_resealable_bag Skratch Labs new and improved version of our original exercise hydration mix with more electrolytes. new look same great taste hydrates faster than alone with an optimal ratio of carbohydrates and sodi grocery gourmet food beverages bottled beverages mixes sports drinks [FIELD_VOLUME] volume_ml_458 [FIELD_PACKAGE_TYPE] package_type_bag [FIELD_FLAVOR] flavor_strawberry [FIELD_PACK_MATERIAL] package_material_flexible_pack"
+      "legacy_sku_text": "skratch labs sport hydration mix strawberries serving resealable bag flexible sports electrolytes strawberry diets kosher free dairy free hydrating concentrate powder sport electrolytes caffeine brand skratch labs description new improved version our original exercise hydration mix more electrolytes. new look same great taste hydrates faster than alone optimal ratio carbohydrates sodi category powder concentrates breadcrumbs grocery gourmet food beverages bottled beverages mixes sports drinks [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACKAGE_TYPE] package_type_bag [FIELD_FLAVOR] flavor_strawberry [FIELD_PACK_MATERIAL] package_material_flexible_pack [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "legacy_canonical_text": "skratch labs strawberry hydration_drink_mix_strawberries serving_resealable_bag Skratch Labs new and improved version of our original exercise hydration mix with more electrolytes. new look same great taste hydrates faster than alone with an optimal ratio of carbohydrates and sodi grocery gourmet food beverages bottled beverages mixes sports drinks [FIELD_VOLUME] volume_ml_458 [FIELD_PACKAGE_TYPE] package_type_bag [FIELD_FLAVOR] flavor_strawberry [FIELD_PACK_MATERIAL] package_material_flexible_pack",
+      "legacy_sku_text_before_semantic_repairs": "skratch labs sport hydration mix strawberries serving resealable bag flexible sports electrolytes strawberry diets kosher free dairy free hydrating concentrate powder sport electrolytes caffeine brand skratch labs description new improved version our original exercise hydration mix more electrolytes. new look same great taste hydrates faster than alone optimal ratio carbohydrates sodi category powder concentrates breadcrumbs grocery gourmet food beverages bottled beverages mixes sports drinks [FIELD_VOLUME] volume_ml_458 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_PACKAGE_TYPE] package_type_bag [FIELD_FLAVOR] flavor_strawberry [FIELD_PACK_MATERIAL] package_material_flexible_pack [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+      "semantic_repair_rationale": "Dry hydration drink mix 15.5 oz is net weight, not liquid volume."
     },
     {
       "group": "singleton_gtin",

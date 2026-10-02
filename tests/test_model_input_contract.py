@@ -3,9 +3,8 @@
 ``core.model_input`` is the single source of truth for the encoder text in both
 lanes.  These tests pin the two things that make the config switch safe:
 
-* the ``legacy`` profile still reproduces the committed byte stream exactly
-  (the rollback contract, checked against fixtures captured from the
-  unmodified code before any change), and
+* the ``legacy`` composition retains its byte contract, with explicitly
+  reviewed extraction corrections recorded beside historical fixture bytes,
 * the ``cleaned`` profile actually delivers what it claims — compound
   splitting, number preservation, boilerplate exclusion and source/target
   symmetry on real data, without collapsing different products together.
@@ -133,8 +132,8 @@ def test_model_input_block_is_declared_in_the_config_contract() -> None:
 def test_legacy_profile_reproduces_golden_bytes() -> None:
     """Every fixture row must round-trip byte for byte on BOTH sides.
 
-    The fixtures were captured from the committed composition before this
-    module existed, so a mismatch here means the rollback path changed.
+    Historical extraction mistakes have narrow source-reviewed corrections;
+    the fixture retains their original bytes and rationale alongside them.
     """
     checked = 0
     for record in RECORDS:
