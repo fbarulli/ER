@@ -488,6 +488,36 @@ class DedupeAdjudicationSpec(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class ExtractionPolicySpec(BaseModel):
+    """Configured plausibility and confidence policy for source readers."""
+
+    model_config = ConfigDict(extra="forbid")
+    volume_min_ml: float = Field(gt=0)
+    volume_max_ml: float = Field(gt=0)
+    bulk_volume_max_ml: float = Field(gt=0)
+    title_attribute_override_ratio: float = Field(gt=1)
+    bulk_container_terms: list[str] = Field(min_length=1)
+    source_groups: dict[str, str] = Field(min_length=1)
+    pack_confidence: dict[str, float] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _policy_is_consistent(self) -> "ExtractionPolicySpec":
+        if not self.volume_min_ml < self.volume_max_ml <= self.bulk_volume_max_ml:
+            raise ValueError("extraction volume bounds must be ordered")
+        if any(not 0 < value <= 1 for value in self.pack_confidence.values()):
+            raise ValueError("pack_confidence values must be in (0, 1]")
+        required = {"nested", "multiplier", "pack_of", "count", "compact", "container", "attribute"}
+        if set(self.pack_confidence) != required:
+            raise ValueError(f"pack_confidence requires exactly {sorted(required)}")
+        if set(self.source_groups) != {"attributes", "title", "sku_url", "image_url"}:
+            raise ValueError("source_groups requires attributes, title, sku_url, image_url")
+        if any(not value.strip() for value in self.source_groups.values()):
+            raise ValueError("source_groups names cannot be blank")
+        if any(not term.strip() for term in self.bulk_container_terms):
+            raise ValueError("bulk_container_terms cannot contain blank terms")
+        return self
+
+
 class DataConfig(BaseModel):
     """config/paths.yaml — the SHARED data contract (paths, file names, column
     mapping, seed, category-macro taxonomy, model registry, owned layouts).
@@ -500,6 +530,7 @@ class DataConfig(BaseModel):
     layouts: dict[str, LayoutSpec] = Field(default_factory=dict)
     column_mapping: dict[str, str] = Field(min_length=1)
     dataset_csv_read: DatasetCsvReadSpec
+    extraction: ExtractionPolicySpec
     descriptor_columns: list[str] = Field(min_length=1)
     dedupe_adjudications: list[DedupeAdjudicationSpec]
     # EVERY mapped column's capture ruling + reason (see ColumnEvidenceSpec).
@@ -1823,6 +1854,7 @@ class GateSpec(BaseModel):
         categorical_mismatch: str = Field(min_length=1)
         low_consistency: str = Field(min_length=1)
         clean_proceed: str = Field(min_length=1)
+        source_conflict: str = Field(min_length=1)
 
     reasons: GateReasonsSpec
 

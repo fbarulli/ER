@@ -1,0 +1,1219 @@
+{
+  "schema_version": "er.gate_regex_regressions.v1",
+  "baseline_source_sha256": "539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c",
+  "baseline_pipeline_sha256": "d7aaf54b108a5f03e0302b3869e49b58c65643b06a94f2af83d175ce8831e438",
+  "baseline_text_sha256": "789f7977c6dde8417d013cde3151c61d6e781647df51255fde2a528115548c12",
+  "listings": [
+    {
+      "product_id": "66923876",
+      "source_row": {
+        "product_id": "66923876",
+        "retailer": "Loblaws",
+        "country": "Canada",
+        "title": "President's Choice Natural Spring Water | 18 l",
+        "description": "Stay hydrated and quench your thirst with Natural Spring Water. It's ozonated and non-carbonated for the smooth and simple taste of water, and it's a perfect size for the whole family.",
+        "category_path": "[\"\" Food\"\",\"\" Drinks\"\",\"\" Water\"\"]",
+        "url": "https://www.loblaws.ca/en/natural-spring-water/p/20313917_EA#:#storeid=1032",
+        "image_url": "https://assets.shop.loblaws.ca/products/20313917/b1/en/front/20313917_front_a06_@2.png",
+        "price": "16.49",
+        "barcode": "60383683160",
+        "brand": "President's Choice",
+        "category": "Still Bottled Water",
+        "attributes": "Health Claims: hydrating; Juice Content: 0-2%; Water Type: spring; Volume: 100; Naturally derived: natural; Pack Type: Bucket; Pack Material Type: Plastic; Carbonization: still"
+      },
+      "baseline_extraction": {
+        "flavor": "",
+        "type": "water",
+        "volume_ml": 18000.0,
+        "volume_confidence": 0.9,
+        "volume_raw": "18 l",
+        "volume_status": "metric_volume",
+        "pack_qty": 1,
+        "pack_confidence": 0.0,
+        "package_types": [
+          "bucket"
+        ],
+        "package_materials": [
+          "plastic"
+        ],
+        "packaging_levels": [],
+        "flavor_set": [],
+        "carbonation_set": [
+          "still"
+        ],
+        "sweetener_set": [],
+        "sweetener_type_set": [],
+        "sweetening_set": [],
+        "attribute_consistency_flags": [
+          "ambiguous_volume",
+          "volume_inconsistency",
+          "volume_sources_disagree"
+        ],
+        "pulp_set": [],
+        "organic_set": [],
+        "attribute_universe_evidence": {
+          "pack material type": [
+            "plastic"
+          ],
+          "juice content": [
+            "0-2%"
+          ],
+          "carbonization": [
+            "still"
+          ],
+          "naturally derived": [
+            "natural"
+          ],
+          "water type": [
+            "spring"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "carbonation",
+            "column": "title+attributes",
+            "value": [
+              "still"
+            ]
+          },
+          {
+            "field": "carbonation",
+            "column": "description",
+            "value": [
+              "still"
+            ]
+          },
+          {
+            "field": "type",
+            "column": "title",
+            "value": "water"
+          },
+          {
+            "field": "volume_ml",
+            "column": "attributes",
+            "value": 100.0,
+            "confidence": 0.9
+          },
+          {
+            "field": "volume_ml",
+            "column": "title",
+            "value": 18000.0,
+            "confidence": 0.95
+          }
+        ]
+      },
+      "expected_corrected": {
+        "volume_ml": 18000,
+        "volume_absolute_tolerance_ml": 1,
+        "required_flags": [
+          "volume_sources_disagree"
+        ]
+      }
+    },
+    {
+      "product_id": "70179560",
+      "source_row": {
+        "product_id": "70179560",
+        "retailer": "amazon",
+        "country": "USA",
+        "title": "White Rock Products Corp Soda, Orange Cream 4 Pk, 40645- Ounce ( Pack of 6)",
+        "description": "",
+        "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Tea\"\",\"\" White\"\"]",
+        "url": "https://www.amazon.com/dp/B005H91GQQ",
+        "image_url": "https://m.media-amazon.com/images/I/51iBHH3dODL._AC_UL320_.jpg",
+        "price": "55",
+        "barcode": "72063012658",
+        "brand": "White Rock",
+        "category": "Other Non-Cola Carbonates",
+        "attributes": "Caffeine: 15-25 mg; Pack Material Type: Glass; Juice Content: 0-2%; Flavour: orange; Pack Type: Bottle"
+      },
+      "baseline_extraction": {
+        "flavor": "cola",
+        "type": "soda",
+        "volume_ml": 1202016.0,
+        "volume_confidence": 0.75,
+        "volume_raw": "40645 ounce",
+        "volume_status": "us_volume",
+        "pack_qty": 6,
+        "pack_confidence": 0.9,
+        "package_types": [
+          "bottle"
+        ],
+        "package_materials": [
+          "glass"
+        ],
+        "packaging_levels": [],
+        "flavor_set": [
+          "cola",
+          "orange"
+        ],
+        "carbonation_set": [
+          "carbonated"
+        ],
+        "sweetener_set": [],
+        "sweetener_type_set": [],
+        "sweetening_set": [],
+        "attribute_consistency_flags": [],
+        "pulp_set": [],
+        "organic_set": [],
+        "attribute_universe_evidence": {
+          "pack material type": [
+            "glass"
+          ],
+          "juice content": [
+            "0-2%"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "flavor",
+            "column": "title+attributes",
+            "value": [
+              "orange"
+            ]
+          },
+          {
+            "field": "flavor",
+            "column": "category",
+            "value": [
+              "cola"
+            ]
+          },
+          {
+            "field": "carbonation",
+            "column": "title+attributes",
+            "value": [
+              "carbonated"
+            ]
+          },
+          {
+            "field": "type",
+            "column": "title",
+            "value": "soda"
+          },
+          {
+            "field": "volume_ml",
+            "column": "title",
+            "value": 1202016.0,
+            "confidence": 0.75
+          },
+          {
+            "field": "pack_qty",
+            "column": "title",
+            "value": 6,
+            "confidence": 0.9
+          }
+        ]
+      },
+      "expected_corrected": {
+        "required_flags": [
+          "ambiguous_volume"
+        ],
+        "volume_confidence_below": 0.85
+      }
+    },
+    {
+      "product_id": "71073123",
+      "source_row": {
+        "product_id": "71073123",
+        "retailer": "amazon",
+        "country": "USA",
+        "title": "Reed's Ginger Beer Raspberry Ginger Brew ( 6X4 / 12 Oz)",
+        "description": "",
+        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soft Drinks\"\"]",
+        "url": "https://www.amazon.com/Reeds-Ginger-Beer-Raspberry-Brew/dp/B004QYHEK0/ref=sr_1_932?qid=1560953162&s=grocery&sr=1-932",
+        "image_url": "https://images-na.ssl-images-amazon.com/images/I/51AFLZI--8L._AC_US160_.jpg",
+        "price": "67.36",
+        "barcode": "8274555554",
+        "brand": "Reed's",
+        "category": "Other Non-Cola Carbonates",
+        "attributes": "Pack Material Type: Glass; Volume: 355; Immune Support Ingredients: ginger; Pack Type: Bottle; Flavour: ginger, raspberry; Juice Content: 0-2%; Carbonization: still"
+      },
+      "baseline_extraction": {
+        "flavor": "cola",
+        "type": "beer",
+        "volume_ml": 355.0,
+        "volume_confidence": 0.75,
+        "volume_raw": "attribute: 355.0",
+        "volume_status": "attribute_volume",
+        "pack_qty": 6,
+        "pack_confidence": 0.9,
+        "package_types": [
+          "bottle"
+        ],
+        "package_materials": [
+          "glass"
+        ],
+        "packaging_levels": [],
+        "flavor_set": [
+          "cola",
+          "ginger",
+          "raspberry"
+        ],
+        "carbonation_set": [
+          "still"
+        ],
+        "sweetener_set": [],
+        "sweetener_type_set": [],
+        "sweetening_set": [],
+        "attribute_consistency_flags": [
+          "volume_sources_disagree"
+        ],
+        "pulp_set": [],
+        "organic_set": [],
+        "attribute_universe_evidence": {
+          "pack material type": [
+            "glass"
+          ],
+          "juice content": [
+            "0-2%"
+          ],
+          "carbonization": [
+            "still"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "flavor",
+            "column": "title+attributes",
+            "value": [
+              "ginger",
+              "raspberry"
+            ]
+          },
+          {
+            "field": "flavor",
+            "column": "category",
+            "value": [
+              "cola"
+            ]
+          },
+          {
+            "field": "carbonation",
+            "column": "title+attributes",
+            "value": [
+              "still"
+            ]
+          },
+          {
+            "field": "type",
+            "column": "title",
+            "value": "beer"
+          },
+          {
+            "field": "volume_ml",
+            "column": "attributes",
+            "value": 355.0,
+            "confidence": 0.9
+          },
+          {
+            "field": "volume_ml",
+            "column": "title",
+            "value": 355.0,
+            "confidence": 0.75
+          },
+          {
+            "field": "volume_ml",
+            "column": "image_url",
+            "value": 8000.0,
+            "confidence": 0.95
+          },
+          {
+            "field": "pack_qty",
+            "column": "title",
+            "value": 6,
+            "confidence": 0.9
+          }
+        ]
+      },
+      "expected_corrected": {
+        "volume_ml": 355,
+        "volume_absolute_tolerance_ml": 5,
+        "pack_qty": 24
+      }
+    },
+    {
+      "product_id": "74185738",
+      "source_row": {
+        "product_id": "74185738",
+        "retailer": "amazon",
+        "country": "USA",
+        "title": "Tang Orange Powdered Drink Mix ( Makes 22 Quarts), 72- Ounce Canister ( Pack of 2) by Tang [ Foods]",
+        "description": "100% daily value of Vitamin C\nGood source of calcium\nDelicious with breakfast",
+        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Powdered Drink Mixes & Flavorings\"\"]",
+        "url": "https://www.amazon.com/Tang-Orange-Powdered-72-Ounce-Canister/dp/B00ICT9CQE/ref=sr_1_636?_encoding=UTF8&c=ts&keywords=Powdered+Drink+Mixes+%26+Flavorings&qid=1637652720&s=grocery&sr=1-636&ts_id=15525241011",
+        "image_url": "https://m.media-amazon.com/images/I/71QDYXv1nYL._AC_UL320_.jpg",
+        "price": "33.8",
+        "barcode": "",
+        "brand": "Tang",
+        "category": "Powder Concentrates",
+        "attributes": "Flavour: orange; Contains Minerals: calcium; Pack Material Type: Metal; Pack Type: Can; Health Claims: good source of calcium, good source of minerals; Weight: 2043; Immune Support Ingredients: vitamin c; Juice Content: 0-2%; Concentrate Format: powder, vitamins"
+      },
+      "baseline_extraction": {
+        "flavor": "orange",
+        "type": "drink_mix",
+        "volume_ml": 20820.0,
+        "volume_confidence": 0.95,
+        "volume_raw": "22 quarts",
+        "volume_status": "us_volume",
+        "pack_qty": 2,
+        "pack_confidence": 0.9,
+        "package_types": [
+          "can"
+        ],
+        "package_materials": [
+          "metal"
+        ],
+        "packaging_levels": [],
+        "flavor_set": [
+          "orange"
+        ],
+        "carbonation_set": [],
+        "sweetener_set": [],
+        "sweetener_type_set": [],
+        "sweetening_set": [],
+        "attribute_consistency_flags": [],
+        "pulp_set": [],
+        "organic_set": [],
+        "attribute_universe_evidence": {
+          "pack material type": [
+            "metal"
+          ],
+          "juice content": [
+            "0-2%"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "flavor",
+            "column": "title+attributes",
+            "value": [
+              "orange"
+            ]
+          },
+          {
+            "field": "type",
+            "column": "title",
+            "value": "drink_mix"
+          },
+          {
+            "field": "volume_ml",
+            "column": "title",
+            "value": 20820.0,
+            "confidence": 0.95
+          },
+          {
+            "field": "pack_qty",
+            "column": "title",
+            "value": 2,
+            "confidence": 0.9
+          }
+        ]
+      },
+      "expected_corrected": {
+        "volume_ml": 0,
+        "volume_absolute_tolerance_ml": 0,
+        "measurement_roles": [
+          "yield",
+          "net_weight"
+        ]
+      }
+    },
+    {
+      "product_id": "76118049",
+      "source_row": {
+        "product_id": "76118049",
+        "retailer": "amazon",
+        "country": "USA",
+        "title": "Sierra Lemon Lime Soda, 7.5 Fl Oz Cans, 6 Pack",
+        "description": "Light, crisp and refreshing\nThis caffeine free drink combines the great taste and bubbles of soda with the quenching refreshment of water plus delicious fruit flavor from a splash of real juice\nCrisp ",
+        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soda Soft Drinks\"\"]",
+        "url": "https://www.amazon.com/Sierra-Mist-Lemon-7-5oz-Packaging/dp/B071F77SQX/ref=sr_1_348?c=ts&keywords=Soda+Soft+Drinks&qid=1690514457&s=grocery&sr=1-348&ts_id=16318231",
+        "image_url": "https://m.media-amazon.com/images/I/71gzvrVDsAL._AC_UL320_.jpg",
+        "price": "27",
+        "barcode": "12000163197",
+        "brand": "Sierra Mist",
+        "category": "Other Non-Cola Carbonates",
+        "attributes": "Flavour: lemon, lime; Volume: 222; Free From: no caffeine; Pack Material Type: Paper / Carton; Caffeine: 0-15 mg; Juice Content: 0-2%"
+      },
+      "baseline_extraction": {
+        "flavor": "cola",
+        "type": "soda",
+        "volume_ml": 222.0,
+        "volume_confidence": 0.85,
+        "volume_raw": "attribute: 222.0",
+        "volume_status": "attribute_volume",
+        "pack_qty": 6,
+        "pack_confidence": 0.85,
+        "package_types": [
+          "can"
+        ],
+        "package_materials": [
+          "paper / carton"
+        ],
+        "packaging_levels": [],
+        "flavor_set": [
+          "cola",
+          "lemon",
+          "lime"
+        ],
+        "carbonation_set": [
+          "carbonated"
+        ],
+        "sweetener_set": [],
+        "sweetener_type_set": [],
+        "sweetening_set": [],
+        "attribute_consistency_flags": [
+          "volume_sources_disagree"
+        ],
+        "pulp_set": [],
+        "organic_set": [],
+        "attribute_universe_evidence": {
+          "pack material type": [
+            "paper / carton"
+          ],
+          "juice content": [
+            "0-2%"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "flavor",
+            "column": "title+attributes",
+            "value": [
+              "lemon",
+              "lime"
+            ]
+          },
+          {
+            "field": "flavor",
+            "column": "category",
+            "value": [
+              "cola"
+            ]
+          },
+          {
+            "field": "carbonation",
+            "column": "title+attributes",
+            "value": [
+              "carbonated"
+            ]
+          },
+          {
+            "field": "carbonation",
+            "column": "description",
+            "value": [
+              "carbonated"
+            ]
+          },
+          {
+            "field": "type",
+            "column": "title",
+            "value": "soda"
+          },
+          {
+            "field": "volume_ml",
+            "column": "attributes",
+            "value": 222.0,
+            "confidence": 0.9
+          },
+          {
+            "field": "volume_ml",
+            "column": "title",
+            "value": 222.0,
+            "confidence": 0.85
+          },
+          {
+            "field": "volume_ml",
+            "column": "sku_url",
+            "value": 148.0,
+            "confidence": 0.75
+          },
+          {
+            "field": "pack_qty",
+            "column": "title",
+            "value": 6,
+            "confidence": 0.85
+          }
+        ]
+      },
+      "expected_corrected": {
+        "volume_ml": 222,
+        "volume_absolute_tolerance_ml": 5,
+        "pack_qty": 6
+      }
+    },
+    {
+      "product_id": "79028934",
+      "source_row": {
+        "product_id": "79028934",
+        "retailer": "amazon",
+        "country": "USA",
+        "title": "Cool Breeze Beverages Ready to Use Slush Mix, Hurricane, 1 / 2 gal",
+        "description": "1 / 2 gallon of cool breeze slush mix\nConcentrate\nTaste great\nCan be mixed with alcohol",
+        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Cocktail Mixers\"\"]",
+        "url": "https://www.amazon.com/Cool-Breeze-Beverages-Ready-Hurricane/dp/B01HIWHWYO/ref=sr_1_2140?c=ts&keywords=Cocktail+Mixers&qid=1651736982&s=grocery&sr=1-2140&ts_id=119342011",
+        "image_url": "https://m.media-amazon.com/images/I/71hbbg79v0L._AC_UL320_.jpg",
+        "price": "32.81",
+        "barcode": "726682784075",
+        "brand": "Cool Breeze",
+        "category": "Liquid Concentrates",
+        "attributes": "Pack Type: Bottle; Pack Material Type: Plastic; Volume: 1893; Juice Content: 0-2%"
+      },
+      "baseline_extraction": {
+        "flavor": "",
+        "type": "water",
+        "volume_ml": 1893.0,
+        "volume_confidence": 0.9,
+        "volume_raw": "attribute: 1893.0",
+        "volume_status": "attribute_volume",
+        "pack_qty": 1,
+        "pack_confidence": 0.0,
+        "package_types": [
+          "bottle"
+        ],
+        "package_materials": [
+          "plastic"
+        ],
+        "packaging_levels": [],
+        "flavor_set": [],
+        "carbonation_set": [],
+        "sweetener_set": [],
+        "sweetener_type_set": [],
+        "sweetening_set": [],
+        "attribute_consistency_flags": [
+          "volume_sources_disagree"
+        ],
+        "pulp_set": [],
+        "organic_set": [],
+        "attribute_universe_evidence": {
+          "pack material type": [
+            "plastic"
+          ],
+          "juice content": [
+            "0-2%"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "type",
+            "column": "category",
+            "value": "water"
+          },
+          {
+            "field": "volume_ml",
+            "column": "attributes",
+            "value": 1893.0,
+            "confidence": 0.9
+          },
+          {
+            "field": "volume_ml",
+            "column": "title",
+            "value": 7571.0,
+            "confidence": 0.95
+          }
+        ]
+      },
+      "expected_corrected": {
+        "volume_ml": 1893,
+        "volume_absolute_tolerance_ml": 2,
+        "measurement_roles": [
+          "package_volume"
+        ]
+      }
+    },
+    {
+      "product_id": "91282402",
+      "source_row": {
+        "product_id": "91282402",
+        "retailer": "Courses U",
+        "country": "France",
+        "title": "fruit drink fresh soft California SUNNY DELIGHT, 1 ,25l",
+        "description": "## more details \n* ### usage tips \nStore in the refrigerator (max 7°). shake before tasting- To consume in 5 days after opening. \nshake before tasting \n* ### further information \n* france \n* net weigh",
+        "category_path": "[\"\" fresh products\"\",\"\" juice, cold soups\"\"]",
+        "url": "https://www.coursesu.com/p/boisson-au-jus-de-fruits-doux-california-sunny-delight---bouteille-125l/2333531.html",
+        "image_url": "https://www.coursesu.com/dw/image/v2/BBQX_PRD/on/demandware.static/-/Sites-digitalu-master-catalog/default/dw2aa72960/3661138600585_A1N1_2333531_S13.png?sw=250&sh=250&sm=fit",
+        "price": "2.14",
+        "barcode": "3661138600585",
+        "brand": "Sunny Delight",
+        "category": "Juice Drinks (up to 24% Juice)",
+        "attributes": "Made From: orange, mandarine; Naturally derived: natural flavours; Sweetener: sugar; Pack Type: Bottle; Geographic Origin: united states; Pack Material Type: Plastic; Carbonization: still; Caffeine: 15-25 mg; Immune Support Ingredients: vitamin c; Juice Content: 5-10%"
+      },
+      "baseline_extraction": {
+        "flavor": "fruit",
+        "type": "juice",
+        "volume_ml": 125000.0,
+        "volume_confidence": 0.95,
+        "volume_raw": "125l",
+        "volume_status": "metric_volume",
+        "pack_qty": 1,
+        "pack_confidence": 0.0,
+        "package_types": [
+          "bottle"
+        ],
+        "package_materials": [
+          "plastic"
+        ],
+        "packaging_levels": [],
+        "flavor_set": [
+          "fruit",
+          "orange"
+        ],
+        "carbonation_set": [
+          "still"
+        ],
+        "sweetener_set": [
+          "sugar"
+        ],
+        "sweetener_type_set": [
+          "sugar"
+        ],
+        "sweetening_set": [],
+        "attribute_consistency_flags": [
+          "ambiguous_volume",
+          "volume_from_url",
+          "volume_sources_disagree"
+        ],
+        "pulp_set": [],
+        "organic_set": [],
+        "attribute_universe_evidence": {
+          "pack material type": [
+            "plastic"
+          ],
+          "juice content": [
+            "5-10%"
+          ],
+          "carbonization": [
+            "still"
+          ],
+          "naturally derived": [
+            "natural flavours"
+          ],
+          "made from": [
+            "mandarine",
+            "orange"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "flavor",
+            "column": "title+attributes",
+            "value": [
+              "fruit",
+              "orange"
+            ]
+          },
+          {
+            "field": "carbonation",
+            "column": "title+attributes",
+            "value": [
+              "still"
+            ]
+          },
+          {
+            "field": "sweetener",
+            "column": "title+attributes",
+            "value": [
+              "sugar"
+            ]
+          },
+          {
+            "field": "type",
+            "column": "category",
+            "value": "juice"
+          },
+          {
+            "field": "volume_ml",
+            "column": "title",
+            "value": 25000.0,
+            "confidence": 0.95
+          },
+          {
+            "field": "volume_ml",
+            "column": "sku_url",
+            "value": 125000.0,
+            "confidence": 0.95
+          }
+        ]
+      },
+      "expected_corrected": {
+        "volume_ml": 1250,
+        "volume_absolute_tolerance_ml": 1
+      }
+    },
+    {
+      "product_id": "371312669",
+      "source_row": {
+        "product_id": "371312669",
+        "retailer": "amazon",
+        "country": "USA",
+        "title": "Culture Pop Soda, Orange Mango & Lime, Probiotic Low Sugar Soda, Sparkling Juice Alternative, Non-GMO, Kosher, Gluten- Free, No Stevia (12pk)",
+        "description": "* Soda you can feel good about! \n* Made with real organic spices, organic fruit juice and live probiotics \n* 40 Calories per can \n* Non-GMO, Plant Based, Vegan, Gluten- Free \n, \n## Product description",
+        "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soda Soft Drinks\"\"]",
+        "url": "https://www.amazon.com/dp/B08J8GPJZY",
+        "image_url": "https://m.media-amazon.com/images/I/81ZJoVkqYYL._AC_UL320_.jpg",
+        "price": "32.99",
+        "barcode": "",
+        "brand": "Culture Pop",
+        "category": "Orange Carbonates",
+        "attributes": "No Artificial Ingredients: no gmo; Juice Content: 0-2%; Sustainable Sourcing: organic; Volume: 355; Sweetener: stevia; Carbonization: sparkling; Pack Type: Can; Health Claims: low sugar, probiotic; Flavour: orange, lime, mango; Diets: plant-based, vegan, kosher"
+      },
+      "baseline_extraction": {
+        "flavor": "lime",
+        "type": "juice",
+        "volume_ml": 355.0,
+        "volume_confidence": 0.9,
+        "volume_raw": "attribute: 355.0",
+        "volume_status": "attribute_volume",
+        "pack_qty": 12,
+        "pack_confidence": 0.85,
+        "package_types": [
+          "can"
+        ],
+        "package_materials": [],
+        "packaging_levels": [],
+        "flavor_set": [
+          "lime",
+          "mango",
+          "orange"
+        ],
+        "carbonation_set": [
+          "carbonated"
+        ],
+        "sweetener_set": [],
+        "sweetener_type_set": [
+          "stevia"
+        ],
+        "sweetening_set": [
+          "low_sugar"
+        ],
+        "attribute_consistency_flags": [],
+        "pulp_set": [],
+        "organic_set": [
+          "organic"
+        ],
+        "attribute_universe_evidence": {
+          "juice content": [
+            "0-2%"
+          ],
+          "carbonization": [
+            "sparkling"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "flavor",
+            "column": "title+attributes",
+            "value": [
+              "lime",
+              "mango",
+              "orange"
+            ]
+          },
+          {
+            "field": "flavor",
+            "column": "category",
+            "value": [
+              "orange"
+            ]
+          },
+          {
+            "field": "carbonation",
+            "column": "title+attributes",
+            "value": [
+              "carbonated"
+            ]
+          },
+          {
+            "field": "carbonation",
+            "column": "description",
+            "value": [
+              "carbonated"
+            ]
+          },
+          {
+            "field": "organic",
+            "column": "title+attributes",
+            "value": [
+              "organic"
+            ]
+          },
+          {
+            "field": "organic",
+            "column": "description",
+            "value": [
+              "organic"
+            ]
+          },
+          {
+            "field": "type",
+            "column": "title",
+            "value": "juice"
+          },
+          {
+            "field": "volume_ml",
+            "column": "attributes",
+            "value": 355.0,
+            "confidence": 0.9
+          },
+          {
+            "field": "pack_qty",
+            "column": "title",
+            "value": 12,
+            "confidence": 0.85
+          }
+        ]
+      },
+      "expected_corrected": {
+        "negated_sweetener_type_includes": [
+          "stevia"
+        ],
+        "required_flags": [
+          "sweetener_source_conflict:stevia"
+        ]
+      }
+    },
+    {
+      "product_id": "674512045",
+      "source_row": {
+        "product_id": "674512045",
+        "retailer": "amazon",
+        "country": "USA",
+        "title": "Niagara Purified Drinking Water Pallet - 16.9oz Bottles - 84 Cases, 2016 Bottles - $0.05 Bottle Bill State",
+        "description": "Brand NIAGARA \nPackage Information Bottle \nNumber of Items 84 \nUnit Count 84.00 Count \nNet Content Volume 16.9 Fluid Ounces \n* * *\n# About this item \n* Niagara Purified Drinking Water is just that: wa",
+        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Drinking Water\"\"]",
+        "url": "https://www.amazon.com/dp/B09T4GCFDC",
+        "image_url": "https://m.media-amazon.com/images/I/51ntld8c9MS._AC_UL320_.jpg",
+        "price": "600",
+        "barcode": "",
+        "brand": "Niagara",
+        "category": "Still Bottled Water",
+        "attributes": "Water Type: drinking, purified; Health Claims: hydrating; Caffeine: 0-15 mg; Pack Material Type: Paper / Carton; Environmentally Friendly: environmentally friendly; Volume: 500; Juice Content: 0-2%; Sustainable Packaging: can be recycled; Carbonization: still"
+      },
+      "baseline_extraction": {
+        "flavor": "",
+        "type": "water",
+        "volume_ml": 500.0,
+        "volume_confidence": 0.975,
+        "volume_raw": "attribute: 500.0",
+        "volume_status": "attribute_volume",
+        "pack_qty": 84,
+        "pack_confidence": 0.85,
+        "package_types": [
+          "bottle",
+          "bottle",
+          "bottle"
+        ],
+        "package_materials": [
+          "paper / carton"
+        ],
+        "packaging_levels": [
+          "case"
+        ],
+        "flavor_set": [],
+        "carbonation_set": [
+          "still"
+        ],
+        "sweetener_set": [],
+        "sweetener_type_set": [],
+        "sweetening_set": [],
+        "attribute_consistency_flags": [],
+        "pulp_set": [],
+        "organic_set": [],
+        "attribute_universe_evidence": {
+          "pack material type": [
+            "paper / carton"
+          ],
+          "juice content": [
+            "0-2%"
+          ],
+          "carbonization": [
+            "still"
+          ],
+          "water type": [
+            "drinking",
+            "purified"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "carbonation",
+            "column": "title+attributes",
+            "value": [
+              "still"
+            ]
+          },
+          {
+            "field": "type",
+            "column": "title",
+            "value": "water"
+          },
+          {
+            "field": "volume_ml",
+            "column": "attributes",
+            "value": 500.0,
+            "confidence": 0.9
+          },
+          {
+            "field": "volume_ml",
+            "column": "title",
+            "value": 500.0,
+            "confidence": 0.75
+          },
+          {
+            "field": "pack_qty",
+            "column": "title",
+            "value": 84,
+            "confidence": 0.85
+          }
+        ]
+      },
+      "expected_corrected": {
+        "volume_ml": 500,
+        "volume_absolute_tolerance_ml": 5,
+        "pack_qty": 2016,
+        "required_pack_evidence": [
+          {
+            "count": 84,
+            "role": "outer_count"
+          },
+          {
+            "count": 2016,
+            "role": "unit_count"
+          }
+        ]
+      }
+    },
+    {
+      "product_id": "1052557924",
+      "source_row": {
+        "product_id": "1052557924",
+        "retailer": "amazon",
+        "country": "Germany",
+        "title": "share Organic Splash Cucumber Mint - 1 kcal per 100 ml - Flavoured Water without Sugar (24 x 330 ml) - No Additives - Organic Mineral Water - Provides Water for 1 day",
+        "description": "## Product information \n# Technical Details \n##### General Information \nUnits ‎24.0 pieces \nStorage Instructions ‎ Keep away from heat and dry \nBrand ‎share \nFormat ‎ Liquid \nSpeciality ‎ Organic, No ",
+        "category_path": "[\"\" Any Category\"\",\"\" Grocery\"\",\"\" Drinks\"\",\"\" Water\"\"]",
+        "url": "https://www.amazon.de/dp/B0F2FG3GSX",
+        "image_url": "https://m.media-amazon.com/images/I/81jU7WqlxHL._AC_UL320_.jpg",
+        "price": "34.56",
+        "barcode": "",
+        "brand": "Share",
+        "category": "Functional Bottled Water",
+        "attributes": "Pack Type: Can; Juice Content: 0-2%; Carbonization: sparkling; Naturally derived: natural fragrances, natural; Volume: 330; Sustainable Sourcing: organic, eu organic; Free From: lactose free, no eggs; Health Claims: good source of minerals, hydrating, no sugar, low calories; Flavour: cucumber, mint; No Artificial Ingredients: no artificial colours, no artificial preservatives, no artificial additives"
+      },
+      "baseline_extraction": {
+        "flavor": "cucumber",
+        "type": "water",
+        "volume_ml": 330.0,
+        "volume_confidence": 0.9,
+        "volume_raw": "attribute: 330.0",
+        "volume_status": "attribute_volume",
+        "pack_qty": 24,
+        "pack_confidence": 0.9,
+        "package_types": [
+          "can"
+        ],
+        "package_materials": [],
+        "packaging_levels": [],
+        "flavor_set": [
+          "cucumber",
+          "mint"
+        ],
+        "carbonation_set": [
+          "carbonated"
+        ],
+        "sweetener_set": [
+          "no_sugar"
+        ],
+        "sweetener_type_set": [],
+        "sweetening_set": [],
+        "attribute_consistency_flags": [
+          "volume_sources_disagree"
+        ],
+        "pulp_set": [],
+        "organic_set": [
+          "organic"
+        ],
+        "attribute_universe_evidence": {
+          "juice content": [
+            "0-2%"
+          ],
+          "carbonization": [
+            "sparkling"
+          ],
+          "naturally derived": [
+            "natural",
+            "natural fragrances"
+          ]
+        },
+        "evidence_ledger": [
+          {
+            "field": "flavor",
+            "column": "title+attributes",
+            "value": [
+              "cucumber",
+              "mint"
+            ]
+          },
+          {
+            "field": "carbonation",
+            "column": "title+attributes",
+            "value": [
+              "carbonated"
+            ]
+          },
+          {
+            "field": "sweetener",
+            "column": "title+attributes",
+            "value": [
+              "no_sugar"
+            ]
+          },
+          {
+            "field": "organic",
+            "column": "title+attributes",
+            "value": [
+              "organic"
+            ]
+          },
+          {
+            "field": "organic",
+            "column": "description",
+            "value": [
+              "organic"
+            ]
+          },
+          {
+            "field": "type",
+            "column": "title",
+            "value": "water"
+          },
+          {
+            "field": "volume_ml",
+            "column": "attributes",
+            "value": 330.0,
+            "confidence": 0.9
+          },
+          {
+            "field": "volume_ml",
+            "column": "title",
+            "value": 100.0,
+            "confidence": 0.95
+          },
+          {
+            "field": "pack_qty",
+            "column": "title",
+            "value": 24,
+            "confidence": 0.9
+          }
+        ]
+      },
+      "expected_corrected": {
+        "volume_ml": 330,
+        "volume_absolute_tolerance_ml": 1,
+        "pack_qty": 24,
+        "measurement_roles": [
+          "nutrition",
+          "package_volume"
+        ]
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "gtin1": "100140709075",
+      "gtin2": "100140791131",
+      "baseline_left": {
+        "gtin": "100140709075",
+        "salient_ngrams": "['flavoured_caffeine_15_carbonization']",
+        "mode_brand": "Strike Force",
+        "mode_type": "water",
+        "canonical": "strike force lime water carbonated flavoured_caffeine_15_carbonization",
+        "dropped_redundant_ngrams": "['sparkling_type_liquid_flavour', 'liquid_flavour_lime_volume', '15_carbonization_sparkling_type', 'type_liquid_flavour_lime', 'sparkling']",
+        "mode_flavor": "lime",
+        "sweetening_set": [],
+        "organic_set": [],
+        "flavor_set": [
+          "lime"
+        ],
+        "packaging_level_set": [],
+        "package_type_set": [
+          "carton"
+        ],
+        "sweetener_type_set": [],
+        "sweetener_set": [],
+        "volume_set": [
+          1000.0
+        ],
+        "pulp_set": [],
+        "carbonation_set": [
+          "carbonated"
+        ],
+        "pack_set": [
+          2
+        ],
+        "package_material_set": [],
+        "attribute_consistency_flags": [],
+        "pack_confidence": 0.9,
+        "pack_consistency": 1.0,
+        "volume_consistency": 1.0,
+        "volume_confidence": 0.995,
+        "n_titles": 1,
+        "description_evidence": "['\"\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat']",
+        "breadcrumb_evidence": "['[\"\" Food\"\",\"\" Beverages\"\",\"\" Water\"\",\"\" Flavored Water\"\",\"\" All Flavored Water\"\"]']",
+        "universe_evidence": "{\"caffeine\": [\"0-15mg\"], \"carbonization\": [\"sparkling\"], \"contains minerals\": [\"calcium\", \"iron\"], \"juice content\": [\"0-2%\"], \"pack type\": [\"liquid carton\"], \"water type\": [\"flavoured\"]}",
+        "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"confidence\": 0.9, \"field\": \"pack_qty\", \"listing\": 0, \"value\": 2}, {\"column\": \"title\", \"confidence\": 0.95, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"water\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"carbonated\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"lime\"]}]",
+        "source_rows": "[{\"attributes\": \"Contains Minerals: calcium, iron; Water Type: flavoured; Caffeine: 0-15 mg; Carbonization: sparkling; Pack Type: Liquid Carton; Flavour: lime; Volume: 1000; Juice Content: 0-2%\", \"barcode\": \"100140709075\", \"brand\": \"Strike Force\", \"category\": \"Sparkling Flavoured Bottled Water\", \"category_path\": \"[\\\"\\\" Food\\\"\\\",\\\"\\\" Beverages\\\"\\\",\\\"\\\" Water\\\"\\\",\\\"\\\" Flavored Water\\\"\\\",\\\"\\\" All Flavored Water\\\"\\\"]\", \"country\": \"USA\", \"description\": \"\\\"\\\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat\", \"image_url\": \"https://i5.walmartimages.com/seo/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter-Pack-of-2_617b8faa-db02-473d-96b4-93b9fc3891cc.5cd33152954ba15bd96f6efee769f4b8.jpeg\", \"price\": \"11.91\", \"product_id\": \"1047256705\", \"retailer\": \"Walmart\", \"title\": \"KR Key Lime Flavored Sparkling Bottled Water 1 liter - Pack of 2\", \"url\": \"https://www.walmart.com/ip/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter-Pack-of-2/15785060211?classType=REGULAR\"}]"
+      },
+      "baseline_right": {
+        "gtin": "100140791131",
+        "salient_ngrams": "['calcium_iron_volume_flavour']",
+        "mode_brand": "Strike Force",
+        "mode_type": "water",
+        "canonical": "strike force lime water carbonated calcium_iron_volume_flavour",
+        "dropped_redundant_ngrams": "['iron_volume_flavour_lime', 'flavoured_carbonization_sparkling_type', 'volume_flavour_lime_water', 'iron_volume_flavour', 'sparkling']",
+        "mode_flavor": "lime",
+        "sweetening_set": [],
+        "organic_set": [],
+        "flavor_set": [
+          "lime"
+        ],
+        "packaging_level_set": [],
+        "package_type_set": [
+          "carton"
+        ],
+        "sweetener_type_set": [],
+        "sweetener_set": [],
+        "volume_set": [
+          1000.0
+        ],
+        "pulp_set": [],
+        "carbonation_set": [
+          "carbonated"
+        ],
+        "pack_set": [],
+        "package_material_set": [],
+        "attribute_consistency_flags": [],
+        "pack_confidence": 0.0,
+        "pack_consistency": 1.0,
+        "volume_consistency": 1.0,
+        "volume_confidence": 0.995,
+        "n_titles": 1,
+        "description_evidence": "['\"\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat']",
+        "breadcrumb_evidence": "['[\"\" Food\"\",\"\" Beverages\"\",\"\" Water\"\",\"\" Flavored Water\"\",\"\" All Flavored Water\"\"]']",
+        "universe_evidence": "{\"caffeine\": [\"0-15mg\"], \"carbonization\": [\"sparkling\"], \"contains minerals\": [\"calcium\", \"iron\"], \"juice content\": [\"0-2%\"], \"pack type\": [\"liquid carton\"], \"water type\": [\"flavoured\"]}",
+        "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"confidence\": 0.95, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"water\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"carbonated\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"lime\"]}]",
+        "source_rows": "[{\"attributes\": \"Contains Minerals: calcium, iron; Volume: 1000; Flavour: lime; Water Type: flavoured; Carbonization: sparkling; Pack Type: Liquid Carton; Juice Content: 0-2%; Caffeine: 0-15 mg\", \"barcode\": \"100140791131\", \"brand\": \"Strike Force\", \"category\": \"Sparkling Flavoured Bottled Water\", \"category_path\": \"[\\\"\\\" Food\\\"\\\",\\\"\\\" Beverages\\\"\\\",\\\"\\\" Water\\\"\\\",\\\"\\\" Flavored Water\\\"\\\",\\\"\\\" All Flavored Water\\\"\\\"]\", \"country\": \"USA\", \"description\": \"\\\"\\\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat\", \"image_url\": \"https://i5.walmartimages.com/seo/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter_617b8faa-db02-473d-96b4-93b9fc3891cc.5cd33152954ba15bd96f6efee769f4b8.jpeg\", \"price\": \"7.92\", \"product_id\": \"1046775686\", \"retailer\": \"Walmart\", \"title\": \"KR Key Lime Flavored Sparkling Bottled Water 1 liter\", \"url\": \"https://www.walmart.com/ip/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter/15731024760\"}]"
+      },
+      "baseline_gate": {
+        "decision": "hard_no",
+        "reason": "Pack blocker: pack size, package type, or volume mismatch"
+      },
+      "expected_corrected": {
+        "decision": "fallback",
+        "reason_stage": "low_pack_confidence"
+      }
+    }
+  ],
+  "expectation_provenance": "Explicit source-evidence rulings supplied in task; corrected assertions are independent of parser outputs."
+}

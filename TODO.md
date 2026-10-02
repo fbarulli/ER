@@ -1,4 +1,89 @@
-# TODO (updated 2026-10-01, branch main)
+# TODO (updated 2026-10-02, branch main)
+
+## Current work — measured gate/regex repairs (2026-10-02)
+
+Evidence: `GATE_REGEX_REVIEW_20261002.md`,
+`results/gate_logic_eval/evidence.json`, and `results/regex_logic_eval/`.
+These counts are observations and rule counterfactuals, not independently
+labeled accuracy estimates. Existing generated-data edits are preserved.
+
+- [x] Audit all 13 source-column paths and 37 registered attribute dimensions;
+  distinguish original evidence, extracted claims, diagnostic metrics, and
+  actual deciding gate branches.
+- [x] Freeze previously mishandled source listings and old outputs in
+  `tests/fixtures/gate_regex_regressions.json` for before/after tracking.
+- [x] Fix blocking-audit pack parser's undefined configured bounds.
+- [x] Remove unused duplicate critical evaluation from the gate.
+- [ ] Repair fractions/decimal whitespace, nutrition denominators, prepared
+  yield/net-weight roles, nested pack quantities, and outer/inner counts.
+- [ ] Capture explicitly negated sweetener ingredients and expose source
+  contradictions instead of retaining an unqualified positive claim.
+- [ ] Correct confidence fusion across all contradicting readers; prevent
+  copied title/URL/image surfaces from acting as independent corroboration.
+- [ ] Move extraction bounds/confidence policy into validated YAML; stop
+  exempting arbitrary per-unit outliers solely because pack count exceeds one.
+- [ ] Make early categorical vetoes obey configured dimensions, preserve
+  trusted contradictions before review, and treat missing pack as unknown.
+- [ ] Add repeatable before/after extraction/gate measurement, tracked sample
+  assertions, source fingerprints, and regression/control tests.
+- [ ] Validate candidate decision movement and freshly extracted affected
+  canonical evidence separately; frozen-canonical replay cannot measure regex
+  improvements. Do not repin census counts to conceal unexplained drift.
+
+Measured starting points: 25,739 one-sided-pack rejected pairs (1,040 with
+low-confidence known pack); removing that blocker alone moves 7,875 to review,
+including 3,948 with other configured structured contradictions. There are
+1,236 low-confidence volume canonicals (875 missing, 361 observed), 9,921
+low-confidence pack canonicals (9,861 missing, 60 observed), and 1,252 volume
+source-disagreement flags. The confidence scan found 49 ignored weaker
+contradicting readers among 31,509 selected numeric URL/image rows. Preserve
+these denominators when reporting improvement.
+
+Follow-up after validated code: rebuild derived datasets/bundles using the
+existing stage manifests, review census/label movement, and rerun independent
+validation before training. Training-run calibration and independently reviewed
+accuracy estimates remain distinct from parser regression fixes.
+
+## Solo error audit checkpoint — 2026-10-02 (OPEN)
+
+Candidate repairs and measurement tooling are checkpointed, not a claim that
+all errors are fixed. Full refreshed extraction/gate replay and independent
+accuracy validation remain pending. Latest solo audit reproduced:
+
+- [ ] **Claim semantics:** 261 source titles contain “No Sugar Added”; the
+  parser classifies this as `no_sugar` and negates the sugar ingredient.
+  No positive/negative ingredient intersections occurred in those 261 rows;
+  do not report them as 261 source-conflict flags. “Zero Sugar Added” also
+  incorrectly retains `no_sugar`. Distinguish added sugar from total sugar.
+- [ ] **Quantity boundaries:** IDs `674502574` and `674559022` describe
+  19 pallets × 84 cases = 1.596 cases / 38.304 bottles. Extraction selects
+  304 bottles at confidence 0.9, without a conflict flag; expected 38,304.
+  `$0.05 Bottle` also generates bogus count 5 (including ID `674512045`).
+  Seven source titles matched the decimal-container screening pattern;
+  that screening count is not a count of confirmed erroneous winners.
+- [ ] **Missing quantity signal / total roles:** `87399796` has 6 × 330 ml,
+  total 1,980 ml; `90558864` has 3 × 200 ml, total 600 ml. Both return pack
+  1 with confidence 0 and no pack evidence. Totals are marked package volume
+  instead of total volume. Nine titles matched the total-volume screen.
+- [ ] **Configured veto bypass:** with only `flavor` enabled in
+  `veto_dimensions`, differing volume or pack still causes `hard_no`.
+  Numeric veto branches must honor the same configured dimension policy.
+- [ ] **Nonfinite confidence:** synthetic gate inputs containing NaN volume
+  confidence, pack confidence, or volume consistency can return `proceed`.
+  CSV canonical parsing accepts float NaN; reject or review invalid evidence.
+- [ ] **Synthetic parser edge regressions:** `1 1/2 l` becomes 500 ml;
+  `3/2 l` becomes 2,000 ml; `0.5 bottle` becomes count 5;
+  `2 x 12 bottles x 330 ml` becomes count 2. No corresponding mixed-fraction
+  or nested-container title matches were found in the current source scan.
+- [ ] **Synthetic measurement role gaps:** “330 ml per serving; bottle 1 l”
+  selects 330 ml; “contains 100 ml juice in 330 ml bottle” selects 100 ml.
+  These are reproduced edge cases, not measured corpus error prevalence.
+
+Previous focused verification passed 82 gate tests and 141 earlier checks.
+After the latest changes, all 90 focused extraction/gate/measurement tests
+passed; Python compilation and git diff whitespace checks passed. Broad model-input checks
+previously showed a failure and need diagnosis before rebuild/training.
+Keep generated dataset edits and deleted prepared workers out of this commit.
 
 ## SESSION LEDGER — GTIN + attribute capture + veto (2026-09-30, this branch)
 ### Landed (all measured; suite 840 passed / 2 skipped; selftest 279 oracles green)

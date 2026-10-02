@@ -313,6 +313,7 @@ gate:
     categorical_mismatch: "Critical attribute mismatch:"
     low_consistency: "Overlap but low consistency"
     clean_proceed: "Known critical attributes compatible"
+    source_conflict: "Contradictory source attribute evidence"
 
 # ── brand-differentiation audit (owner theory 2026-10-01) ──────────────────
 # Does between-GTIN card delta exceed within-GTIN (same product,

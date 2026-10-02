@@ -274,7 +274,7 @@ def _VOLUME_SEARCH(text: str):
 
 
 
-def extract_volume_match(text: str) -> tuple:
+def _extract_volume_match_legacy(text: str) -> tuple:
     """Return (value_in_unit, unit_token, is_ambiguous_unit, raw_match) — the
     ONE parse; every volume conversion path reads it and only the conversion
     differs (bucket_ml vs whole-ml canonical_volume_ml)."""
@@ -336,6 +336,70 @@ def extract_volume_match(text: str) -> tuple:
     return value, unit, unit in ambiguous_units, match.group(0)
 
 
+@lru_cache(maxsize=1)
+def _measurement_candidate_re():
+    units = r"(?:" + "|".join(entry.pattern for entry in _unit_spec().volume) + r")"
+    number = r"(?:\d+\s*/\s*\d+|\d{1,3}[ \u00a0]+000|0\s+\d+|\d+(?:\s*[.,]\s*\d+)?|\.\d+)"
+    return re.compile(
+        r"(?<![\d.])(?P<number>" + number + r")\s*-?\s*(?P<unit>" + units + r")(?![a-z])",
+        re.IGNORECASE | re.VERBOSE,
+    )
+
+
+def extract_volume_evidence(text: str) -> list[dict]:
+    """Keep measurement roles and original spans before punctuation cleanup.
+
+    A recipe yield, nutrition denominator, or dry weight is useful evidence,
+    but cannot assert liquid package volume. Only proper fractions (numerator
+    smaller than denominator) are decoded; ``24 / 2oz`` is count/size notation.
+    """
+    if not isinstance(text, str):
+        return []
+    candidates = []
+    dry_product = bool(re.search(r"\b(?:powder(?:ed)?|dry mix|drink mix|tea bags?)\b", text, re.I))
+    for match in _measurement_candidate_re().finditer(text):
+        number, unit_surface = match.group('number', 'unit')
+        unit = norm_unit(unit_surface)
+        preceding = text[:match.start()].rstrip()
+        role = 'package_volume'
+        if re.search(r"\bper\s*$", preceding, re.I):
+            role = 'nutrition'
+        elif re.search(r"\b(?:makes?|yields?|dilutes?\s+to)\s*$", preceding, re.I):
+            role = 'yield'
+        elif dry_product and unit in {'oz', 'ounce', 'ounces'}:
+            role = 'net_weight'
+        if '/' in number:
+            numerator, denominator = (int(part.strip()) for part in number.split('/'))
+            if denominator == 0:
+                continue
+            nested_count = bool(re.search(r'\d+\s*[x×]\s*$', preceding, re.I))
+            value = numerator / denominator if numerator < denominator and not nested_count else float(denominator)
+            parsed = (value, unit, unit in _volume_views()[1], match.group(0))
+        else:
+            # Preserve comma decimal semantics. General normalization would
+            # erase the comma and turn 1 ,25 litres into a count-list.
+            count_list = re.fullmatch(r'(\d{2,}),\s+(\d{3,})', number)
+            numeric = count_list.group(2) if count_list else re.sub(r'\s*([.,])\s*', r'\1', number)
+            parsed = _extract_volume_match_legacy(numeric + ' ' + unit_surface)
+        value, parsed_unit, ambiguous, _ = parsed
+        if value is None or parsed_unit is None:
+            continue
+        glued = match.start() > 0 and text[match.start() - 1].isalpha() and text[match.start() - 1].casefold() != 'x'
+        if glued and value * _volume_views()[0][parsed_unit] > _unit_spec().glued_code_max_ml:
+            continue
+        candidates.append(dict(value=value, unit=parsed_unit, ambiguous=ambiguous,
+                               raw_match=match.group(0), start=match.start(), end=match.end(), role=role))
+    return candidates
+
+
+def extract_volume_match(text: str) -> tuple:
+    """Select liquid package evidence, preserving non-package candidates separately."""
+    for candidate in extract_volume_evidence(text):
+        if candidate['role'] == 'package_volume':
+            return tuple(candidate[key] for key in ('value', 'unit', 'ambiguous', 'raw_match'))
+    return None, None, False, ''
+
+
 def _volume_spelling_index() -> dict:
     """post-norm_unit spelling -> the config entry declaring it.
 
@@ -393,6 +457,7 @@ def extract_pack_counts(text: str) -> set[int]:
     counts = set()
     if not isinstance(text, str):
         return counts
+    pack_min, pack_max = _volume_views()[3:5]
     for m in PACK_COUNT_RE.finditer(text):
         for g in m.groups():
             if g:

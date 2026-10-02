@@ -22,7 +22,7 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 from catalog import lookup
 from fastapi.staticfiles import StaticFiles
-from core.common import DATA_PATH, load_dataset
+from core.common import DATA_PATH, F, data_cfg, load_dataset
 
 app.title = 'ER discovery'
 from training_reports import router as training_reports_router
@@ -492,20 +492,24 @@ _GATE_BUCKETS = ('proceed', 'hard_no', 'fallback')
 # These fallback pages show the ENTIRE original entry — all 13 raw-export
 # columns in RAW-export header names (dashboard rule: original columns, as
 # exported, no cleaning).
-_FALLBACK_RAW_COLUMNS = (
-    'product_id', 'retailer', 'country', 'title', 'description',
-    'category_path', 'url', 'image_url', 'price', 'barcode', 'brand',
-    'category', 'attributes',
-)
+_FALLBACK_RAW_COLUMNS = tuple(data_cfg().column_mapping.values())
 # (canonical column after load_dataset, original export header shown)
-_GATE_ORIGINAL_COLUMNS = (
-    ('retailer', 'retailer'), ('barcode', 'gtin'), ('title', 'sku_name_eng'),
-    ('description', 'description_short_eng'), ('attributes', 'attribute'),
-)
+_GATE_ORIGINAL_COLUMNS = tuple((canonical, original) for original, canonical in data_cfg().column_mapping.items())
+
+
+@lru_cache(maxsize=1)
+def _gate_source_frame(mtime_ns: int):
+    return load_dataset()
+
+
+@lru_cache(maxsize=1)
+def _gate_cards(mtime_ns: int):
+    frame = pd.read_csv(F['canonical_records'], dtype=str, keep_default_na=False)
+    return frame.set_index('gtin', drop=False).to_dict('index')
 
 @lru_cache(maxsize=1)
 def _gate_raw(mtime_ns: int):
-    frame = load_dataset()
+    frame = _gate_source_frame(mtime_ns)
     listings = frame.barcode.value_counts()
     resolvable = frame[frame.barcode.notna() & frame.barcode.ne('')]
     first = resolvable.drop_duplicates('barcode', keep='first').set_index('barcode')
@@ -521,7 +525,7 @@ def _gate_universe(mtime_ns: int):
     a pd.DataFrame carrying the canonical 'attributes' + 'barcode' columns) —
     no synthetic stub; parse() then runs on arbitrary cells."""
     from core.attribute_universe import AttributeUniverse
-    return AttributeUniverse(load_dataset())
+    return AttributeUniverse(_gate_source_frame(mtime_ns))
 
 def _gate_route_gloss(clause: str) -> str:
     if 'Pack blocker' in clause:
@@ -545,7 +549,7 @@ def _gate_route_gloss(clause: str) -> str:
 def _gate_side(gt: str, raw, listings) -> dict:
     row = raw.loc[gt]
     return {orig: (gt if c == 'barcode' else str(row[c]) if pd.notna(row[c]) else '') for c, orig in _GATE_ORIGINAL_COLUMNS} | {
-        '_listings': f'first of {int(listings.loc[gt]):,} exported listing(s) for this barcode'}
+        '_listings': f'Illustrative preview: first of {int(listings.loc[gt]):,} exported listing(s); not the aggregated decision input'}
 
 
 def _gate_value_html(value, limit: int = 140) -> str:
@@ -610,7 +614,7 @@ def _gate_dimension_evidence_html(left_attrs: str, right_attrs: str, uni) -> str
     verdict = ''
     if groups['conflict']:
         names = ', '.join(key for key, _l, _r in groups['conflict'])
-        verdict = f'<p class="muted">deciding evidence: {escape(names)} genuinely disagree (SSOT predicates)</p>'
+        verdict = f'<p class="muted">Independent preview diagnostic: {escape(names)} disagree under attribute predicates; this is not attribution for the stored gate decision.</p>'
     return headline + verdict + conflict_table + single_block + agree_block + unknown_block + raw_block
 def _gate_sample(g, raw, listings, decision: str, size: int = 5):
     bucket = g[g.gate_decision == decision]
@@ -624,7 +628,32 @@ def _gate_sample(g, raw, listings, decision: str, size: int = 5):
             skipped += 1
     return picked, skipped, len(bucket)
 
-def _gate_pair_html(rank: int, row, raw, listings, uni) -> str:
+def _gate_canonical_evidence_html(left: str, right: str, cards: dict) -> str:
+    """Render actual aggregate values, including provenance, without re-extracting."""
+    left_card, right_card = cards.get(left, {}), cards.get(right, {})
+    fields = sorted(set(left_card) | set(right_card))
+    rows = ''.join(
+        f'<tr><th>{escape(field)}</th><td>{_gate_value_html(left_card.get(field))}</td>'
+        f'<td>{_gate_value_html(right_card.get(field))}</td></tr>' for field in fields)
+    return ('<details open><summary>Canonical decision inputs · aggregate sets, confidence and source provenance</summary>'
+            '<p class="muted">Values from the current canonical artifact; the stored gate reason below identifies the selected branch.</p>'
+            f'<table><tr><th>Field</th><th>Left</th><th>Right</th></tr>{rows}</table></details>')
+
+
+def _gate_listing_evidence_html(left: str, right: str, frame) -> str:
+    blocks = []
+    for side, gtin in (('left', left), ('right', right)):
+        selected = frame[frame['barcode'].eq(gtin)]
+        cells = ''.join('<tr>' + ''.join(
+            f'<td>{_gate_value_html(record.get(column))}</td>' for column, _original in _GATE_ORIGINAL_COLUMNS
+        ) + '</tr>' for record in selected.where(selected.notna(), '').to_dict('records'))
+        headings = ''.join(f'<th>{escape(original)}</th>' for _column, original in _GATE_ORIGINAL_COLUMNS)
+        blocks.append(f'<details><summary>{side} · all {len(selected):,} original listings for {escape(gtin)}</summary>'
+                      f'<table><tr>{headings}</tr>{cells}</table></details>')
+    return ''.join(blocks)
+
+
+def _gate_pair_html(rank: int, row, raw, listings, uni, cards=None, source_frame=None) -> str:
     try:
         sim = f'{float(row.similarity):.3f}'
     except Exception:
@@ -645,9 +674,12 @@ def _gate_pair_html(rank: int, row, raw, listings, uni) -> str:
     label = 'fallback_reason' if row.gate_decision == 'fallback' else 'gate_reason (deciding clause)'
     route = '' if row.gate_decision == 'proceed' else f'{escape(_gate_route_gloss(str(row.gate_reason)))} — '
     verdict = f'<p><strong>{escape(row.gate_decision)}</strong> · <code>{escape(label)}</code>: {clause} · {route}similarity {escape(sim)}</p>'
-    mism = _gate_dimension_evidence_html(model['attribute'], other['attribute'], uni)
+    mism = ('<details><summary>Independent attribute diagnostic · illustrative first listings</summary>'
+            + _gate_dimension_evidence_html(model['attribute'], other['attribute'], uni) + '</details>')
+    canonical = _gate_canonical_evidence_html(row.gtin1, row.gtin2, cards or {})
+    original_listings = _gate_listing_evidence_html(row.gtin1, row.gtin2, source_frame) if source_frame is not None else ''
     return (f'<details><summary>#{rank} · {escape(row.gate_decision)} · similarity {escape(sim)} · {clause}</summary>'
-            f'{verdict}<p class="muted">{listing_notes}</p>{mism}'
+            f'{verdict}{canonical}{original_listings}<p class="muted">{listing_notes}</p>{mism}'
             f'<table><tr><th>Side</th>' + ''.join(f'<th>{escape(orig)}</th>' for _c, orig in _GATE_ORIGINAL_COLUMNS) + '</tr>'
             f'{rows}</table></details>')
 
@@ -666,10 +698,12 @@ def gate_decisions():
     g = _gate_results_frame(_gate_results_path.stat().st_mtime_ns)
     raw, listings = _gate_raw(DATA_PATH.stat().st_mtime_ns)
     uni = _gate_universe(DATA_PATH.stat().st_mtime_ns)
+    cards = _gate_cards(F['canonical_records'].stat().st_mtime_ns)
+    source_frame = _gate_source_frame(DATA_PATH.stat().st_mtime_ns)
     counts = g.gate_decision.value_counts()
     bucket_outcomes = {'proceed': 'PASS', 'hard_no': 'PASS', 'fallback': 'OPEN'}
     bucket_verdicts = {
-        'proceed': "<span class='badge badge-pass'>PASS</span> every checked dimension agrees on all sampled pairs — safe to proceed to labeling.",
+        'proceed': "<span class='badge badge-pass'>PASS</span> stored gate decisions proceed; canonical inputs and selected branch are shown for each pair.",
         'hard_no': "<span class='badge badge-pass'>PASS</span> decisive clause blocks each sampled pair before anything else can run: never a merge, never a review.",
         'fallback': "<span class='badge badge-open'>OPEN</span> overlap exists but is too weak to proceed — deferred to review evidence, neither confirmed nor denied.",
     }
@@ -697,7 +731,7 @@ def gate_decisions():
             route = '' if decision == 'proceed' else f'{escape(_gate_route_gloss(str(row.gate_reason)))} — '
             resolved = f"<strong>{escape(decision)}</strong> (sim {escape(sim)}) — {route}<code>{escape(str(row.gate_reason))}</code>"
             compare_rows.append((original, resolved, outcome))
-            examples_html.append(_gate_pair_html(rank, row, raw, listings, uni))
+            examples_html.append(_gate_pair_html(rank, row, raw, listings, uni, cards, source_frame))
         sample_path = _gate_dir / 'gate_decision_sample.json'
         try:
             snapshot = json.loads(sample_path.read_text())

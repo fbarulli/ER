@@ -245,15 +245,13 @@ def test_gate_still_rejects_a_genuine_volume_mismatch() -> None:
 def test_gate_rejects_on_non_volume_attributes_unchanged() -> None:
     """The absolute cut must not soften any non-volume dimension.
 
-    pulp and carbonation are caught upstream in pack_gate, before the volume
-    comparison runs at all — so this also pins that the tolerance change did
-    not reorder the gate's decision precedence.
+    Configured categorical contradictions remain definite negatives.
+    Carbonation is excluded by the current veto policy.
     """
     from pipeline import three_way_gate
 
     for dimension, left, right in [
         ("pulp_set", {"no_pulp"}, {"with_pulp"}),
-        ("carbonation_set", {"still"}, {"carbonated"}),
         ("sweetener_set", {"sugar"}, {"no_sugar"}),
     ]:
         result = three_way_gate(
@@ -264,26 +262,10 @@ def test_gate_rejects_on_non_volume_attributes_unchanged() -> None:
         )
 
 
-def test_absent_volume_is_pinned_as_measured_not_as_desired() -> None:
-    """KNOWN TENSION, pinned deliberately. Do not read this as endorsement.
-
-    core.attribute_conflicts states the doctrine: "absence on either side is
-    UNKNOWN, never agreement and never veto". pack_gate honours it
-    (volumes_compatible returns True on absent evidence). three_way_gate's
-    inline volume/pack loops at src/pipeline.py do NOT: an empty set on one
-    side falls through to a `hard_no` ("No volume overlap" / "No pack
-    overlap"), so absence is minted into a definite negative.
-
-    Measured on data/gate_results.csv (pre-existing, reproduced with the
-    tolerance fix stashed): 13,228 of 135,246 rows are missing-evidence pairs
-    carrying the same "Pack blocker" string as genuine conflicts.
-
-    This is a DECISION change (it moves labelled pairs), not a wiring fix, so
-    it is NOT taken here. Pinned so the behaviour cannot drift silently and so
-    the next reader sees the measurement. See TODO.md.
-    """
+def test_absent_volume_routes_to_review() -> None:
+    """Missing measurements stay unknown even with optimistic confidence."""
     from pipeline import three_way_gate
 
     result = three_way_gate(_attrs(volume_set=set()), _attrs())
-    assert result["decision"] == "hard_no"
-    assert result["reason"] == "No volume overlap"
+    assert result["decision"] == "fallback"
+    assert result["reason"] == training_cfg().gate.reasons.low_volume_confidence

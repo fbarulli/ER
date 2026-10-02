@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from core.critical_attributes import normalized_attribute_text
 
@@ -34,12 +35,25 @@ def extract_sweetening_status(*values: object) -> set[str]:
 def title_sweetener_types(title: str) -> set[str]:
     """Capture explicit ingredient phrases in titles, not bare ingredient words."""
     text = normalized_attribute_text(title)
+    text = _negated_ingredient_pattern().sub(' ', text)
     found: set[str] = set()
     if re.search(r"\b(?:cane|brown|raw) sugar\b", text):
         found.add("cane_sugar" if re.search(r"\bcane sugar\b", text) else "sugar")
     if re.search(r"\b(?:with|sweetened with|made with) stevia\b", text):
         found.add("stevia")
     return found
+
+
+@lru_cache(maxsize=1)
+def _negated_ingredient_pattern():
+    ingredients = '|'.join(re.escape(value) for value in sorted(SWEETENER_TYPES, key=len, reverse=True))
+    return re.compile(r'\b(?:no|without|not made with|not sweetened with)\s+(' + ingredients + r')\b', re.I)
+
+
+def negated_sweetener_types(*values: object) -> set[str]:
+    """Explicit absent ingredient claims; silence never asserts absence."""
+    text = normalized_attribute_text(*values)
+    return {match.group(1).replace(' ', '_') for match in _negated_ingredient_pattern().finditer(text)}
 
 
 def declared_sweeteners(attributes: str) -> dict[str, set[str]]:

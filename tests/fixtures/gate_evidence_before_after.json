@@ -1,0 +1,378 @@
+[
+  {
+    "name": "100140705596:100140791131",
+    "left": {
+      "gtin": "100140705596",
+      "mode_brand": "Strike Force",
+      "dropped_redundant_ngrams": "['kr_white_grape_flavored', 'white_grape_flavored_sparkling', 'grape_flavored_sparkling_bottled', 'sparkling_bottled_water_carbonization', 'bottled_water_carbonization_sparkling', 'sparkling']",
+      "mode_type": "water",
+      "salient_ngrams": "['kr_white_flavored']",
+      "canonical": "strike force grape water carbonated kr_white_flavored",
+      "mode_flavor": "grape",
+      "flavor_set": [
+        "grape"
+      ],
+      "sweetening_set": [],
+      "sweetener_type_set": [],
+      "package_type_set": [
+        "carton"
+      ],
+      "package_material_set": [],
+      "pack_set": [
+        2
+      ],
+      "organic_set": [],
+      "pulp_set": [],
+      "packaging_level_set": [],
+      "carbonation_set": [
+        "carbonated"
+      ],
+      "attribute_consistency_flags": [],
+      "volume_set": [
+        1000.0
+      ],
+      "sweetener_set": [],
+      "pack_confidence": 0.9,
+      "volume_consistency": 1.0,
+      "pack_consistency": 1.0,
+      "volume_confidence": 0.995,
+      "n_titles": 1,
+      "description_evidence": "['\"\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat']",
+      "breadcrumb_evidence": "['[\"\" Food\"\",\"\" Beverages\"\",\"\" Water\"\",\"\" Flavored Water\"\",\"\" All Flavored Water\"\"]']",
+      "universe_evidence": "{\"caffeine\": [\"0-15mg\"], \"carbonization\": [\"sparkling\"], \"contains minerals\": [\"calcium\", \"iron\"], \"juice content\": [\"0-2%\"], \"pack type\": [\"liquid carton\"], \"water type\": [\"flavoured\"]}",
+      "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"confidence\": 0.9, \"field\": \"pack_qty\", \"listing\": 0, \"value\": 2}, {\"column\": \"title\", \"confidence\": 0.95, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"water\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"carbonated\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"grape\"]}]",
+      "source_rows": "[{\"attributes\": \"Carbonization: sparkling; Water Type: flavoured; Caffeine: 0-15 mg; Flavour: grape; Volume: 1000; Pack Type: Liquid Carton; Juice Content: 0-2%; Contains Minerals: calcium, iron\", \"barcode\": \"100140705596\", \"brand\": \"Strike Force\", \"category\": \"Sparkling Flavoured Bottled Water\", \"category_path\": \"[\\\"\\\" Food\\\"\\\",\\\"\\\" Beverages\\\"\\\",\\\"\\\" Water\\\"\\\",\\\"\\\" Flavored Water\\\"\\\",\\\"\\\" All Flavored Water\\\"\\\"]\", \"country\": \"USA\", \"description\": \"\\\"\\\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat\", \"image_url\": \"https://i5.walmartimages.com/seo/KR-White-Grape-Flavored-Sparkling-Bottled-Water-1-liter-Pack-of-2_391332d1-8222-418c-bb31-b2bf1ed65b6e.ae31a8a182a9eff75d1d10f3294e5526.jpeg\", \"price\": \"11.96\", \"product_id\": \"1047013616\", \"retailer\": \"Walmart\", \"title\": \"KR White Grape Flavored Sparkling Bottled Water 1 liter - Pack of 2\", \"url\": \"https://www.walmart.com/ip/KR-White-Grape-Flavored-Sparkling-Bottled-Water-1-liter-Pack-of-2/15788505507?classType=REGULAR\"}]"
+    },
+    "right": {
+      "gtin": "100140791131",
+      "mode_brand": "Strike Force",
+      "dropped_redundant_ngrams": "['iron_volume_flavour_lime', 'flavoured_carbonization_sparkling_type', 'volume_flavour_lime_water', 'iron_volume_flavour', 'sparkling']",
+      "mode_type": "water",
+      "salient_ngrams": "['calcium_iron_volume_flavour']",
+      "canonical": "strike force lime water carbonated calcium_iron_volume_flavour",
+      "mode_flavor": "lime",
+      "flavor_set": [
+        "lime"
+      ],
+      "sweetening_set": [],
+      "sweetener_type_set": [],
+      "package_type_set": [
+        "carton"
+      ],
+      "package_material_set": [],
+      "pack_set": [],
+      "organic_set": [],
+      "pulp_set": [],
+      "packaging_level_set": [],
+      "carbonation_set": [
+        "carbonated"
+      ],
+      "attribute_consistency_flags": [],
+      "volume_set": [
+        1000.0
+      ],
+      "sweetener_set": [],
+      "pack_confidence": 0.0,
+      "volume_consistency": 1.0,
+      "pack_consistency": 1.0,
+      "volume_confidence": 0.995,
+      "n_titles": 1,
+      "description_evidence": "['\"\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat']",
+      "breadcrumb_evidence": "['[\"\" Food\"\",\"\" Beverages\"\",\"\" Water\"\",\"\" Flavored Water\"\",\"\" All Flavored Water\"\"]']",
+      "universe_evidence": "{\"caffeine\": [\"0-15mg\"], \"carbonization\": [\"sparkling\"], \"contains minerals\": [\"calcium\", \"iron\"], \"juice content\": [\"0-2%\"], \"pack type\": [\"liquid carton\"], \"water type\": [\"flavoured\"]}",
+      "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"confidence\": 0.95, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"water\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"carbonated\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"lime\"]}]",
+      "source_rows": "[{\"attributes\": \"Contains Minerals: calcium, iron; Volume: 1000; Flavour: lime; Water Type: flavoured; Carbonization: sparkling; Pack Type: Liquid Carton; Juice Content: 0-2%; Caffeine: 0-15 mg\", \"barcode\": \"100140791131\", \"brand\": \"Strike Force\", \"category\": \"Sparkling Flavoured Bottled Water\", \"category_path\": \"[\\\"\\\" Food\\\"\\\",\\\"\\\" Beverages\\\"\\\",\\\"\\\" Water\\\"\\\",\\\"\\\" Flavored Water\\\"\\\",\\\"\\\" All Flavored Water\\\"\\\"]\", \"country\": \"USA\", \"description\": \"\\\"\\\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat\", \"image_url\": \"https://i5.walmartimages.com/seo/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter_617b8faa-db02-473d-96b4-93b9fc3891cc.5cd33152954ba15bd96f6efee769f4b8.jpeg\", \"price\": \"7.92\", \"product_id\": \"1046775686\", \"retailer\": \"Walmart\", \"title\": \"KR Key Lime Flavored Sparkling Bottled Water 1 liter\", \"url\": \"https://www.walmart.com/ip/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter/15731024760\"}]"
+    },
+    "before": {
+      "decision": "hard_no",
+      "reason": "Pack blocker: pack size, package type, or volume mismatch"
+    },
+    "after": {
+      "decision": "hard_no",
+      "reason": "Critical attribute mismatch: flavor"
+    }
+  },
+  {
+    "name": "100140709075:100140791131",
+    "left": {
+      "gtin": "100140709075",
+      "mode_brand": "Strike Force",
+      "dropped_redundant_ngrams": "['sparkling_type_liquid_flavour', 'liquid_flavour_lime_volume', '15_carbonization_sparkling_type', 'type_liquid_flavour_lime', 'sparkling']",
+      "mode_type": "water",
+      "salient_ngrams": "['flavoured_caffeine_15_carbonization']",
+      "canonical": "strike force lime water carbonated flavoured_caffeine_15_carbonization",
+      "mode_flavor": "lime",
+      "flavor_set": [
+        "lime"
+      ],
+      "sweetening_set": [],
+      "sweetener_type_set": [],
+      "package_type_set": [
+        "carton"
+      ],
+      "package_material_set": [],
+      "pack_set": [
+        2
+      ],
+      "organic_set": [],
+      "pulp_set": [],
+      "packaging_level_set": [],
+      "carbonation_set": [
+        "carbonated"
+      ],
+      "attribute_consistency_flags": [],
+      "volume_set": [
+        1000.0
+      ],
+      "sweetener_set": [],
+      "pack_confidence": 0.9,
+      "volume_consistency": 1.0,
+      "pack_consistency": 1.0,
+      "volume_confidence": 0.995,
+      "n_titles": 1,
+      "description_evidence": "['\"\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat']",
+      "breadcrumb_evidence": "['[\"\" Food\"\",\"\" Beverages\"\",\"\" Water\"\",\"\" Flavored Water\"\",\"\" All Flavored Water\"\"]']",
+      "universe_evidence": "{\"caffeine\": [\"0-15mg\"], \"carbonization\": [\"sparkling\"], \"contains minerals\": [\"calcium\", \"iron\"], \"juice content\": [\"0-2%\"], \"pack type\": [\"liquid carton\"], \"water type\": [\"flavoured\"]}",
+      "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"confidence\": 0.9, \"field\": \"pack_qty\", \"listing\": 0, \"value\": 2}, {\"column\": \"title\", \"confidence\": 0.95, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"water\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"carbonated\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"lime\"]}]",
+      "source_rows": "[{\"attributes\": \"Contains Minerals: calcium, iron; Water Type: flavoured; Caffeine: 0-15 mg; Carbonization: sparkling; Pack Type: Liquid Carton; Flavour: lime; Volume: 1000; Juice Content: 0-2%\", \"barcode\": \"100140709075\", \"brand\": \"Strike Force\", \"category\": \"Sparkling Flavoured Bottled Water\", \"category_path\": \"[\\\"\\\" Food\\\"\\\",\\\"\\\" Beverages\\\"\\\",\\\"\\\" Water\\\"\\\",\\\"\\\" Flavored Water\\\"\\\",\\\"\\\" All Flavored Water\\\"\\\"]\", \"country\": \"USA\", \"description\": \"\\\"\\\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat\", \"image_url\": \"https://i5.walmartimages.com/seo/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter-Pack-of-2_617b8faa-db02-473d-96b4-93b9fc3891cc.5cd33152954ba15bd96f6efee769f4b8.jpeg\", \"price\": \"11.91\", \"product_id\": \"1047256705\", \"retailer\": \"Walmart\", \"title\": \"KR Key Lime Flavored Sparkling Bottled Water 1 liter - Pack of 2\", \"url\": \"https://www.walmart.com/ip/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter-Pack-of-2/15785060211?classType=REGULAR\"}]"
+    },
+    "right": {
+      "gtin": "100140791131",
+      "mode_brand": "Strike Force",
+      "dropped_redundant_ngrams": "['iron_volume_flavour_lime', 'flavoured_carbonization_sparkling_type', 'volume_flavour_lime_water', 'iron_volume_flavour', 'sparkling']",
+      "mode_type": "water",
+      "salient_ngrams": "['calcium_iron_volume_flavour']",
+      "canonical": "strike force lime water carbonated calcium_iron_volume_flavour",
+      "mode_flavor": "lime",
+      "flavor_set": [
+        "lime"
+      ],
+      "sweetening_set": [],
+      "sweetener_type_set": [],
+      "package_type_set": [
+        "carton"
+      ],
+      "package_material_set": [],
+      "pack_set": [],
+      "organic_set": [],
+      "pulp_set": [],
+      "packaging_level_set": [],
+      "carbonation_set": [
+        "carbonated"
+      ],
+      "attribute_consistency_flags": [],
+      "volume_set": [
+        1000.0
+      ],
+      "sweetener_set": [],
+      "pack_confidence": 0.0,
+      "volume_consistency": 1.0,
+      "pack_consistency": 1.0,
+      "volume_confidence": 0.995,
+      "n_titles": 1,
+      "description_evidence": "['\"\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat']",
+      "breadcrumb_evidence": "['[\"\" Food\"\",\"\" Beverages\"\",\"\" Water\"\",\"\" Flavored Water\"\",\"\" All Flavored Water\"\"]']",
+      "universe_evidence": "{\"caffeine\": [\"0-15mg\"], \"carbonization\": [\"sparkling\"], \"contains minerals\": [\"calcium\", \"iron\"], \"juice content\": [\"0-2%\"], \"pack type\": [\"liquid carton\"], \"water type\": [\"flavoured\"]}",
+      "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"confidence\": 0.95, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"water\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"carbonated\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"lime\"]}]",
+      "source_rows": "[{\"attributes\": \"Contains Minerals: calcium, iron; Volume: 1000; Flavour: lime; Water Type: flavoured; Carbonization: sparkling; Pack Type: Liquid Carton; Juice Content: 0-2%; Caffeine: 0-15 mg\", \"barcode\": \"100140791131\", \"brand\": \"Strike Force\", \"category\": \"Sparkling Flavoured Bottled Water\", \"category_path\": \"[\\\"\\\" Food\\\"\\\",\\\"\\\" Beverages\\\"\\\",\\\"\\\" Water\\\"\\\",\\\"\\\" Flavored Water\\\"\\\",\\\"\\\" All Flavored Water\\\"\\\"]\", \"country\": \"USA\", \"description\": \"\\\"\\\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat\", \"image_url\": \"https://i5.walmartimages.com/seo/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter_617b8faa-db02-473d-96b4-93b9fc3891cc.5cd33152954ba15bd96f6efee769f4b8.jpeg\", \"price\": \"7.92\", \"product_id\": \"1046775686\", \"retailer\": \"Walmart\", \"title\": \"KR Key Lime Flavored Sparkling Bottled Water 1 liter\", \"url\": \"https://www.walmart.com/ip/KR-Key-Lime-Flavored-Sparkling-Bottled-Water-1-liter/15731024760\"}]"
+    },
+    "before": {
+      "decision": "hard_no",
+      "reason": "Pack blocker: pack size, package type, or volume mismatch"
+    },
+    "after": {
+      "decision": "fallback",
+      "reason": "Low raw pack confidence"
+    }
+  },
+  {
+    "name": "100140705596:100141649301",
+    "left": {
+      "gtin": "100140705596",
+      "mode_brand": "Strike Force",
+      "dropped_redundant_ngrams": "['kr_white_grape_flavored', 'white_grape_flavored_sparkling', 'grape_flavored_sparkling_bottled', 'sparkling_bottled_water_carbonization', 'bottled_water_carbonization_sparkling', 'sparkling']",
+      "mode_type": "water",
+      "salient_ngrams": "['kr_white_flavored']",
+      "canonical": "strike force grape water carbonated kr_white_flavored",
+      "mode_flavor": "grape",
+      "flavor_set": [
+        "grape"
+      ],
+      "sweetening_set": [],
+      "sweetener_type_set": [],
+      "package_type_set": [
+        "carton"
+      ],
+      "package_material_set": [],
+      "pack_set": [
+        2
+      ],
+      "organic_set": [],
+      "pulp_set": [],
+      "packaging_level_set": [],
+      "carbonation_set": [
+        "carbonated"
+      ],
+      "attribute_consistency_flags": [],
+      "volume_set": [
+        1000.0
+      ],
+      "sweetener_set": [],
+      "pack_confidence": 0.9,
+      "volume_consistency": 1.0,
+      "pack_consistency": 1.0,
+      "volume_confidence": 0.995,
+      "n_titles": 1,
+      "description_evidence": "['\"\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat']",
+      "breadcrumb_evidence": "['[\"\" Food\"\",\"\" Beverages\"\",\"\" Water\"\",\"\" Flavored Water\"\",\"\" All Flavored Water\"\"]']",
+      "universe_evidence": "{\"caffeine\": [\"0-15mg\"], \"carbonization\": [\"sparkling\"], \"contains minerals\": [\"calcium\", \"iron\"], \"juice content\": [\"0-2%\"], \"pack type\": [\"liquid carton\"], \"water type\": [\"flavoured\"]}",
+      "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"confidence\": 0.9, \"field\": \"pack_qty\", \"listing\": 0, \"value\": 2}, {\"column\": \"title\", \"confidence\": 0.95, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 1000.0}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"water\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"carbonated\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"grape\"]}]",
+      "source_rows": "[{\"attributes\": \"Carbonization: sparkling; Water Type: flavoured; Caffeine: 0-15 mg; Flavour: grape; Volume: 1000; Pack Type: Liquid Carton; Juice Content: 0-2%; Contains Minerals: calcium, iron\", \"barcode\": \"100140705596\", \"brand\": \"Strike Force\", \"category\": \"Sparkling Flavoured Bottled Water\", \"category_path\": \"[\\\"\\\" Food\\\"\\\",\\\"\\\" Beverages\\\"\\\",\\\"\\\" Water\\\"\\\",\\\"\\\" Flavored Water\\\"\\\",\\\"\\\" All Flavored Water\\\"\\\"]\", \"country\": \"USA\", \"description\": \"\\\"\\\" \\n* Nutrition Facts \\n* 3.0 servings per container \\n* Serving size 1 Bottle \\n* Amount per serving \\n* Calories 0 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fat \\n* Trans Fat\", \"image_url\": \"https://i5.walmartimages.com/seo/KR-White-Grape-Flavored-Sparkling-Bottled-Water-1-liter-Pack-of-2_391332d1-8222-418c-bb31-b2bf1ed65b6e.ae31a8a182a9eff75d1d10f3294e5526.jpeg\", \"price\": \"11.96\", \"product_id\": \"1047013616\", \"retailer\": \"Walmart\", \"title\": \"KR White Grape Flavored Sparkling Bottled Water 1 liter - Pack of 2\", \"url\": \"https://www.walmart.com/ip/KR-White-Grape-Flavored-Sparkling-Bottled-Water-1-liter-Pack-of-2/15788505507?classType=REGULAR\"}]"
+    },
+    "right": {
+      "gtin": "100141649301",
+      "mode_brand": "Strike Force",
+      "dropped_redundant_ngrams": "['juice_concentrate_original_packaging', 'original_packaging_may_vary', 'may_vary_flavour_orange', 'vary_flavour_orange_made', 'still']",
+      "mode_type": "juice",
+      "salient_ngrams": "['concentrate_original_packaging_may']",
+      "canonical": "strike force orange juice still concentrate_original_packaging_may",
+      "mode_flavor": "orange",
+      "flavor_set": [
+        "orange"
+      ],
+      "sweetening_set": [],
+      "sweetener_type_set": [],
+      "package_type_set": [
+        "bottle"
+      ],
+      "package_material_set": [],
+      "pack_set": [],
+      "organic_set": [],
+      "pulp_set": [],
+      "packaging_level_set": [],
+      "carbonation_set": [
+        "still"
+      ],
+      "attribute_consistency_flags": [],
+      "volume_set": [
+        473.0
+      ],
+      "sweetener_set": [],
+      "pack_confidence": 0.0,
+      "volume_consistency": 1.0,
+      "pack_consistency": 1.0,
+      "volume_confidence": 0.985,
+      "n_titles": 1,
+      "description_evidence": "['\"\" \\n* Nutrition Facts \\n* 2.0 servings per container \\n* Serving size 1 container (473 mL) \\n* Amount per serving \\n* Calories 120 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fa']",
+      "breadcrumb_evidence": "['[\"\" Food\"\",\"\" Beverages\"\",\"\" Tea\"\",\"\" Iced Tea\"\"]']",
+      "universe_evidence": "{\"carbonization\": [\"still\"], \"contains minerals\": [\"calcium\", \"iron\"], \"immune support ingredients\": [\"vitamin c\"], \"juice content\": [\"100%\"], \"juice features\": [\"from concentrate\"], \"made from\": [\"orange\"], \"pack type\": [\"bottle\"]}",
+      "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 473.0}, {\"column\": \"title\", \"confidence\": 0.85, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 473.0}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"juice\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"still\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"orange\"]}]",
+      "source_rows": "[{\"attributes\": \"Flavour: orange; Made From: orange; Immune Support Ingredients: vitamin c; Juice Features: from concentrate; Juice Content: 100%; Contains Minerals: calcium, iron; Volume: 473; Carbonization: still; Pack Type: Bottle\", \"barcode\": \"100141649301\", \"brand\": \"Strike Force\", \"category\": \"Not from Concentrate 100% Juice\", \"category_path\": \"[\\\"\\\" Food\\\"\\\",\\\"\\\" Beverages\\\"\\\",\\\"\\\" Tea\\\"\\\",\\\"\\\" Iced Tea\\\"\\\"]\", \"country\": \"USA\", \"description\": \"\\\"\\\" \\n* Nutrition Facts \\n* 2.0 servings per container \\n* Serving size 1 container (473 mL) \\n* Amount per serving \\n* Calories 120 \\n* % Daily value* \\n* Total Fat0g Total Fat \\n* Saturated Fat0g Saturated Fa\", \"image_url\": \"https://i5.walmartimages.com/seo/KR-100-Orange-Juice-From-Concentrate-Original-16-fl-oz_d8956de5-5e17-4bda-b500-4a1d9fa6588b.ca3188a11602b6b6e3d9e11d9aa6995e.jpeg\", \"price\": \"3.99\", \"product_id\": \"980373567\", \"retailer\": \"Walmart\", \"title\": \"KR 100% Orange Juice From Concentrate Original 16 fl oz Packaging May Vary\", \"url\": \"https://www.walmart.com/ip/KR-100-Orange-Juice-From-Concentrate-Original-16-fl-oz-Packaging-May-Vary/15385251517?classType=undefined\"}]"
+    },
+    "before": {
+      "decision": "hard_no",
+      "reason": "Pack blocker: pack size, package type, or volume mismatch"
+    },
+    "after": {
+      "decision": "hard_no",
+      "reason": "Pack blocker: pack size, package type, or volume mismatch"
+    }
+  },
+  {
+    "name": "2020001506507:2020005439405",
+    "left": {
+      "gtin": "2020001506507",
+      "mode_brand": "all i need",
+      "dropped_redundant_ngrams": "['jasmine_sencha_sustainable_sourcing', 'sencha_sustainable_sourcing_fairtrade', 'organic_green_tea_sweetener', '50_carbonization_carbonated_naturally', 'carbonated', 'sugar']",
+      "mode_type": "tea",
+      "salient_ngrams": "['green_jasmine_sencha_sustainable']",
+      "canonical": "all i need tea carbonated sugar green_jasmine_sencha_sustainable",
+      "mode_flavor": "tea",
+      "flavor_set": [
+        "tea"
+      ],
+      "sweetening_set": [],
+      "sweetener_type_set": [
+        "sugar"
+      ],
+      "package_type_set": [
+        "bottle"
+      ],
+      "package_material_set": [
+        "glass"
+      ],
+      "pack_set": [],
+      "organic_set": [
+        "organic"
+      ],
+      "pulp_set": [],
+      "packaging_level_set": [],
+      "carbonation_set": [
+        "carbonated"
+      ],
+      "attribute_consistency_flags": [],
+      "volume_set": [
+        330.0
+      ],
+      "sweetener_set": [
+        "sugar"
+      ],
+      "pack_confidence": 0.0,
+      "volume_consistency": 1.0,
+      "pack_consistency": 1.0,
+      "volume_confidence": 0.9,
+      "n_titles": 1,
+      "description_evidence": "['Bio- tea drink based more brewed Bio- green tea leaves with fruit juices 4%, carbonated \\npledge: \\n* ONE WAY \\n[ingredients_start]\\ningredients: \\n* ingredients: infusion made from green tea ( water, senc']",
+      "breadcrumb_evidence": "['[\"\" beverages\"\",\"\" soft drinks & juices\"\",\"\" icetea & tea-based drinks\"\"]']",
+      "universe_evidence": "{\"caffeine\": [\"25-50mg\"], \"carbonization\": [\"carbonated\"], \"environmentally friendly\": [\"environmentally friendly\"], \"flavour\": [\"tea\"], \"juice content\": [\"0-2%\"], \"naturally derived\": [\"natural fragrances\"], \"pack material type\": [\"glass\"], \"pack type\": [\"bottle\"], \"sustainable sourcing\": [\"fairtrade\", \"organic\"], \"sweetener\": [\"sugar\"], \"tea type\": [\"green\", \"jasmine\", \"sencha\"]}",
+      "evidence_ledger": "[{\"column\": \"attributes\", \"confidence\": 0.9, \"field\": \"volume_ml\", \"listing\": 0, \"value\": 330.0}, {\"column\": \"description\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"carbonated\"]}, {\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"tea\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"carbonated\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"tea\"]}, {\"column\": \"title+attributes\", \"field\": \"organic\", \"listing\": 0, \"value\": [\"organic\"]}, {\"column\": \"title+attributes\", \"field\": \"sweetener\", \"listing\": 0, \"value\": [\"sugar\"]}]",
+      "source_rows": "[{\"attributes\": \"Sweetener: sugar; Volume: 330; Caffeine: 25-50 mg; Carbonization: carbonated; Naturally derived: natural fragrances; Pack Type: Bottle; Juice Content: 0-2%; Flavour: tea; Pack Material Type: Glass; Environmentally Friendly: environmentally friendly; Tea Type: green, jasmine, sencha; Sustainable Sourcing: fairtrade, organic\", \"barcode\": \"2020001506507\", \"brand\": \"all i need\", \"category\": \"Still RTD Tea\", \"category_path\": \"[\\\"\\\" beverages\\\"\\\",\\\"\\\" soft drinks & juices\\\"\\\",\\\"\\\" icetea & tea-based drinks\\\"\\\"]\", \"country\": \"Austria\", \"description\": \"Bio- tea drink based more brewed Bio- green tea leaves with fruit juices 4%, carbonated \\npledge: \\n* ONE WAY \\n[ingredients_start]\\ningredients: \\n* ingredients: infusion made from green tea ( water, senc\", \"image_url\": \"https://cdn1.interspar.at/cachableservlets/articleImage.dam/at/2020001506507/dt_sub.jpg\", \"price\": \"1.89\", \"product_id\": \"252627386\", \"retailer\": \"Spar\", \"title\": \"all i need Organic Green Tea\", \"url\": \"https://www.interspar.at/shop/lebensmittel/all-i-need-organic-green-tea/p/2020001506507\"}]"
+    },
+    "right": {
+      "gtin": "2020005439405",
+      "mode_brand": "all i need",
+      "dropped_redundant_ngrams": "['organic_green_tea_carbonization', 'still_flavour_tea_juice', 'tea_carbonization_still_flavour', 'tea_juice_content_sustainable', 'green_tea_carbonization_still', 'still']",
+      "mode_type": "tea",
+      "salient_ngrams": "['organic_green_carbonization']",
+      "canonical": "all i need tea still organic_green_carbonization",
+      "mode_flavor": "tea",
+      "flavor_set": [
+        "tea"
+      ],
+      "sweetening_set": [],
+      "sweetener_type_set": [],
+      "package_type_set": [],
+      "package_material_set": [],
+      "pack_set": [],
+      "organic_set": [
+        "organic"
+      ],
+      "pulp_set": [],
+      "packaging_level_set": [],
+      "carbonation_set": [
+        "still"
+      ],
+      "attribute_consistency_flags": [],
+      "volume_set": [],
+      "sweetener_set": [],
+      "pack_confidence": 0.0,
+      "volume_consistency": 1.0,
+      "pack_consistency": 1.0,
+      "volume_confidence": 0.0,
+      "n_titles": 1,
+      "description_evidence": "['pledge: \\n* disposable with pledge']",
+      "breadcrumb_evidence": "['[\"\" beverages\"\",\"\" soft drinks & juices\"\",\"\" icetea & tea-based drinks\"\"]']",
+      "universe_evidence": "{\"carbonization\": [\"still\"], \"flavour\": [\"tea\"], \"juice content\": [\"0-2%\"], \"sustainable sourcing\": [\"organic\"], \"tea type\": [\"green\"]}",
+      "evidence_ledger": "[{\"column\": \"title\", \"field\": \"type\", \"listing\": 0, \"value\": \"tea\"}, {\"column\": \"title+attributes\", \"field\": \"carbonation\", \"listing\": 0, \"value\": [\"still\"]}, {\"column\": \"title+attributes\", \"field\": \"flavor\", \"listing\": 0, \"value\": [\"tea\"]}, {\"column\": \"title+attributes\", \"field\": \"organic\", \"listing\": 0, \"value\": [\"organic\"]}]",
+      "source_rows": "[{\"attributes\": \"Carbonization: still; Flavour: tea; Juice Content: 0-2%; Sustainable Sourcing: organic; Tea Type: green\", \"barcode\": \"2020005439405\", \"brand\": \"all i need\", \"category\": \"Still RTD Tea\", \"category_path\": \"[\\\"\\\" beverages\\\"\\\",\\\"\\\" soft drinks & juices\\\"\\\",\\\"\\\" icetea & tea-based drinks\\\"\\\"]\", \"country\": \"Austria\", \"description\": \"pledge: \\n* disposable with pledge\", \"image_url\": \"https://cdn1.interspar.at/cachableservlets/articleImage.dam/at/2020005439405/dt_sub.jpg\", \"price\": \"1.69\", \"product_id\": \"1027703118\", \"retailer\": \"Spar\", \"title\": \"all i need Organic Green Tea\", \"url\": \"https://www.interspar.at/shop/lebensmittel/all-i-need-organic-green-tea/p/2020005439405\"}]"
+    },
+    "before": {
+      "decision": "hard_no",
+      "reason": "Pack blocker: pack size, package type, or volume mismatch"
+    },
+    "after": {
+      "decision": "fallback",
+      "reason": "Low raw volume confidence"
+    }
+  }
+]

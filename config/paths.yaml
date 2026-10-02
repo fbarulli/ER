@@ -198,6 +198,28 @@ dataset_csv_read:
   keep_default_na: true
   na_filter: true
 
+# Plausibility is per physical package, not multiplied by pack count.
+# A named bulk container can be larger; conflicting sources still need review.
+extraction:
+  volume_min_ml: 1.0
+  volume_max_ml: 10000.0
+  bulk_volume_max_ml: 25000.0
+  title_attribute_override_ratio: 10.0
+  bulk_container_terms: [bucket, barrel, drum, carboy, jerry can]
+  source_groups:
+    attributes: declared_attributes
+    title: listing_text
+    sku_url: listing_text
+    image_url: listing_text
+  pack_confidence:
+    nested: 0.95
+    multiplier: 0.90
+    pack_of: 0.90
+    count: 0.85
+    compact: 0.75
+    container: 0.90
+    attribute: 0.90
+
 # Completeness scores use product descriptors; all other mapped columns are
 # excluded. Order preserves the existing product-identity metadata contract.
 descriptor_columns:

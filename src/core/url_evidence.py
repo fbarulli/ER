@@ -37,6 +37,7 @@ treat "" as "no evidence", never as "no attributes".
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from core.text import normalize_text
 
@@ -76,21 +77,22 @@ _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{6,}", re.I
 )
 # A digit-run of any length is an article/size id, never a product token.
-_DIGIT_RUN = re.compile(r"\b\d+\b")
+_DIGIT_RUN = re.compile(r"(?<![\w.])\d+(?![\w.])")
 # A bare "NNNx" is an image-dimension spec from a media path
 # (.../small_image/220x/…). Real pack notation carries its unit — "12x355ml"
 # — so it survives the digit-run and dimension rules intact.
 _IMAGE_DIM = re.compile(r"^\d+x$")
-# SLUG-DECIMAL remap (audit 2026-10-01, zeroh "0-8l"): retailers write decimal
-# volumes in the slug with the decimal point as a hyphen ("0-8l"). The volume
-# SSOT (core.text extract_volume_match) already repairs the comma-less
-# space-decimal "0 8l" -> 0.8 l — but ONLY if the "0" survives THIS reader's
-# digit-run strip, which deletes it as an article number first. Re-fuse the
-# fragment here so the SSOT branch receives the intact decimal: "0-8" ->
-# "0.8". Lookbehind keeps digit chains ("12-12", "…4100-5604") and dots out;
-# a "0" is never a count and takes no lead-zero integer reading, so the remap
-# is unambiguous. This is sanitation hand-off, not a second volume parser.
-_SLUG_DECIMAL = re.compile(r"(?<![\d.])0-(\d)(?=[a-z])")
+# Observed slug decimals (zeroh 0-8l; Sierra 7-5oz) must survive number
+# stripping. Require the complete configured volume-unit suffix before
+# reconstructing punctuation; this is sanitation, not a conversion parser.
+@lru_cache(maxsize=1)
+def _slug_decimal_pattern():
+    # One digit on each side is an observed decimal shape. Longer count
+    # heads (24-500ml) retain list semantics; unknown suffixes are not sizes.
+    from core.text import _unit_spec
+
+    units = '|'.join(entry.pattern for entry in _unit_spec().volume)
+    return re.compile(r'(?<![\w.])(\d)-(\d)(?=(?:' + units + r')(?![a-z]))', re.I | re.X)
 _VOWELS = frozenset("aeiou")
 
 
@@ -135,7 +137,7 @@ def _is_noise(token: str) -> bool:
         return False
     if token in PATH_SCHEMA_WORDS:
         return True
-    if _DIGIT_RUN.fullmatch(token) or _IMAGE_DIM.match(token):
+    if re.fullmatch(r'\d+(?:\.\d+)?', token) or _IMAGE_DIM.match(token):
         return True
     # UNIT CHECK FIRST. Order matters and the first attempt got it wrong:
     # "250ml" is 5 characters and contains no vowel, so the no-vowel rule ate
@@ -183,7 +185,7 @@ def _has_unit_suffix(token: str, spec) -> bool:
         if not head:
             # the unit itself: kept by the UNITS check in _is_noise
             return True
-        if head.isdigit():
+        if re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)', head):
             return True
         # pack notation: every "x"-separated part must itself be a size token
         parts = head.split("x")
@@ -213,13 +215,27 @@ def url_text(url: object) -> str:
     parts = text.split("/", 1)
     slug = parts[1] if len(parts) > 1 else parts[0]
     slug = _EXTENSION.sub("", slug)
+    # Opaque image basenames may contain a short unit-looking fragment
+    # after punctuation (51AFLZI--8L._AC_US160_). Classify the basename
+    # before splitting it, so the fragment cannot invent product volume.
+    basename = slug.rsplit('/', 1)[-1]
+    stem, marker, _transform = basename.partition('._')
+    prefix = re.split(r'[-_]', stem, maxsplit=1)[0].lower()
+    spec = _spec()
+    if (
+        marker and len(stem) >= spec.bare_hash_min_length
+        and prefix[:1].isdigit() and any(char.isalpha() for char in prefix)
+        and sum(char.isdigit() for char in stem) >= spec.bare_hash_min_digits
+        and not _has_unit_suffix(prefix, spec)
+    ):
+        slug = slug[:-len(basename)]
     slug = _UUID.sub(" ", slug)
-    slug = _SLUG_DECIMAL.sub(r"0.\1", slug)
+    slug = _slug_decimal_pattern().sub(r"\1.\2", slug)
     slug = re.sub(r"[-_+]+", " ", slug)
     slug = _DIGIT_RUN.sub(" ", slug)
     tokens = [
         token
-        for token in normalize_text(slug).split()
+        for token in (part.rstrip('.') for part in normalize_text(slug).split())
         if not _is_noise(token)
     ]
     return " ".join(tokens)

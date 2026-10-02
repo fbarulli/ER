@@ -145,9 +145,9 @@ def extract_volume_from_title(title: str) -> dict:
     from core.text import extract_volume_match, _volume_entry
     from core.unit_canonicalization import canonical_volume_ml
 
-    # normalize FIRST (the old path's behavior — "23.7-ounce" only reads
-    # because normalize_text turns the hyphen into a separating space).
-    value, unit, _ambiguous, raw = extract_volume_match(normalize_text(str(title or "")))
+    # Keep fractions, nutrition context, and original spans intact. The shared
+    # reader handles separators before selecting a physical package volume.
+    value, unit, _ambiguous, raw = extract_volume_match(str(title or ""))
     # A captured value of 0 is never a volume ("0.5 l" fragments, URL slugs
     # with dimension tokens) — canonical_volume_ml rejects it, so treat it
     # the same as no mention instead of raising mid-pipeline.
@@ -172,61 +172,44 @@ def extract_volume_from_title(title: str) -> dict:
             "parse_status": entry.family}
 
 
+def extract_pack_evidence(title: str) -> list[dict]:
+    """Retain physical-unit and outer-package quantities with original spans."""
+    text = str(title or "").replace("×", "x")
+    confidence = data_cfg().extraction.pack_confidence
+    patterns = (
+        ("nested", r"\b(\d+)\s*x\s*(\d+)\s*(?:x|/)\s*\d+(?:[.,]\d+)?\s*[a-z]", "unit_count"),
+        ("multiplier", r"\b(\d+)\s*x\s*\d+(?:[.,]\d+)?\s*[a-z]", "unit_count"),
+        ("pack_of", r"\b(?:packs?|packages?)\s+of\s*(\d+)\b", "unit_count"),
+        ("pack_of", r"\bcases?\s+of\s*(\d+)\b", "unit_count"),
+        ("count", r"\b(\d+)\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
+        ("compact", r"\bpack\s*(\d+)\b", "unit_count"),
+        ("container", r"\b(\d+)\s*(?:glass\s*)?(?:bottles?|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)\b", "unit_count"),
+        ("count", r"\b(\d+)\s*cases?\b", "outer_count"),
+    )
+    evidence = []
+    occupied = []
+    for kind, pattern, role in patterns:
+        for match in re.finditer(pattern, text, re.I):
+            if any(start <= match.start() < end for start, end in occupied):
+                continue
+            count = int(match.group(1))
+            if kind == "nested":
+                count *= int(match.group(2))
+            if count <= 0:
+                continue
+            occupied.append(match.span())
+            evidence.append({"count": count, "confidence": confidence[kind],
+                             "role": role, "raw_match": match.group(0),
+                             "start": match.start(), "end": match.end(), "rule": kind})
+    return evidence
+
+
 def extract_pack_from_title(title: str) -> tuple:
-    t = normalize_text(title)
-    # Nested: "2 x 12 x 330ml"
-    m = re.search(r"(\d+)\s*x\s*(\d+)\s*x\s*\d+", t)
-    if m:
-        return int(m.group(1)) * int(m.group(2)), 0.95
-    # Simple: "24 x 330ml"
-    m = re.search(r"(\d+)\s*x\s*\d+", t)
-    if m:
-        return int(m.group(1)), 0.90
-    # "Pack of N" / "Case of N" (including parentheses)
-    m = re.search(
-        r"\(\s*(?:packs?|packages?|cases?)\s+of\s+(\d+)\s*\)",
-        t,
-        re.IGNORECASE,
-    )
-    if m:
-        return int(m.group(1)), 0.90
-    m = re.search(
-        r"\b(?:packs?|packages?|cases?)\s+of\s+(\d+)\b", t, re.IGNORECASE
-    )
-    if m:
-        return int(m.group(1)), 0.90
-    # "N pack" / "N pk" / "N ct" / "N count". ZERO-GUARD (found by the
-    # ExtractedAttributes schema, 2026-09-08): a captured 0 is never a
-    # pack COUNT — it is a percent-zero ("0% sugar ... pack") or a
-    # decimal-volume fragment ("pack 0.5 l" -> "0 5"). Those rows poisoned
-    # pack_set with an impossible 0 (nothing can overlap it except another
-    # 0). Skip zero captures and keep scanning for the real count.
-    m = re.search(
-        r"\b(\d+)\s*(?:pcs?|pieces?|packs?|packages?|pk|cases?|units?|ct|count)\b",
-        t,
-        re.IGNORECASE,
-    )
-    if m and int(m.group(1)) > 0:
-        return int(m.group(1)), 0.85
-    # Concatenated "pack23"
-    m = re.search(r"\bpack\s*(\d+)\b", t)
-    if m and int(m.group(1)) > 0:
-        return int(m.group(1)), 0.75
-    # Number followed by container words: "24 Glass Bottles", "12 cans", "6 bottles"
-    m = re.search(
-        r"(\d+)\s*(?:glass\s*)?(?:bottles?|cans?|tins?|cartons?|boxes?|packets?|sachets?|bags?)\b",
-        t,
-        re.IGNORECASE,
-    )
-    if m and int(m.group(1)) > 0:
-        return int(m.group(1)), 0.90
-    # Number followed by "count" or "ct"
-    m = re.search(r"(\d+)\s*(?:count|ct)\b", t, re.IGNORECASE)
-    if m and int(m.group(1)) > 0:
-        return int(m.group(1)), 0.85
-    # No explicit pack evidence: keep the schema-safe quantity of one, but
-    # mark it unknown.  Downstream attribute/conflict code must not turn this
-    # parser default into a fabricated ``pack_set={1}`` observation.
+    evidence = extract_pack_evidence(title)
+    units = [entry for entry in evidence if entry["role"] == "unit_count"]
+    if units:
+        return units[0]["count"], units[0]["confidence"]
+    # Outer cases do not state the number of consumer units in each case.
     return 1, 0.0
 
 
@@ -257,7 +240,7 @@ def parse_attribute_volume_pack(
         # zero-guard: same contract as extract_pack_from_title — a 0 here is
         # export noise, not a pack count (default 1 with conf 0 below)
         pack_qty = canonical_pack_count(m_pack.group(1))
-        pack_conf = 0.9
+        pack_conf = data_cfg().extraction.pack_confidence["attribute"]
     return vol_ml, vol_conf, pack_qty, pack_conf
 
 
@@ -443,28 +426,26 @@ def _product_type_matcher() -> ProductTypeMatcher:
 
 
 def fuse_confidence(claims: list[tuple[float, float, str]]) -> float:
-    """Confidence of ONE card field from its independent reader list.
+    """Fuse independent source groups; every contradictory reader caps trust.
 
-    The card's fusion ruling (2026-10-01): a value corroborated by two
-    independent columns is COLLECTIVELY more trustworthy than each —
-    noisy-OR over the readers' confidences (1 - prod(1 - conf)). A
-    disagreement caps instead of boosts: the card cannot be more sure
-    than its least-confident contradicting reader, so it falls back to
-    the weakest of the two disagreeing top claims. Empty = no evidence.
-    ``claims`` is (value, confidence, source) in the card's precedence
-    order — attributes, title, sku_url, image_url.
+    Copied title, URL, and image surfaces share the configured listing group,
+    so repetitions do not invent independent corroboration. Disagreement uses
+    every observed reader, regardless of its position in the precedence list.
     """
     if not claims:
         return 0.0
-    values = {round(value, 3) for value, _, _ in claims}
+    values = {float(value) for value, _, _ in claims}
     if len(values) == 1:
+        groups: dict[str, float] = {}
+        configured = data_cfg().extraction.source_groups
+        for _, conf, source in claims:
+            group = configured.get(source, source)
+            groups[group] = max(groups.get(group, 0.0), float(conf))
         confidence = 1.0
-        for _, conf, _ in claims:
+        for conf in groups.values():
             confidence *= (1.0 - conf)
         return min(1.0, 1.0 - confidence)
-    if len(claims) == 1:
-        return min(1.0, max(0.0, claims[0][1]))
-    return min(claims[0][1], claims[1][1])
+    return min(float(conf) for _, conf, _ in claims)
 
 
 def extract_all(sku_name: str, attribute: str, description: str = "",
@@ -476,7 +457,8 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     description, URL slug, image filename, category path, and category —
     so the gate sees every product-bearing signal before deciding.
     """
-    from core.sweetener_values import declared_sweeteners, extract_sweetening_status, title_sweetener_types
+    from core.sweetener_values import declared_sweeteners, extract_sweetening_status, title_sweetener_types, negated_sweetener_types
+    from core.text import extract_volume_evidence
     from core.url_evidence import url_text
 
     sweeteners = declared_sweeteners(attribute)
@@ -504,11 +486,33 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     critical = extract_critical_claims(sku_name, attribute)
     description_claims = extract_description_claims(description)
     consistency_flags = set(sweeteners["consistency_flags"])
+    negative_ingredients = negated_sweetener_types(sku_name, attribute, description)
+    consistency_flags.update(
+        f"sweetener_source_conflict:{ingredient}"
+        for ingredient in negative_ingredients & sweeteners["sweetener_type"]
+    )
     # Product card evidence ledger: every claim the columns yield, recorded
     # with its source at the moment of extraction (surface-one-by-one
     # ruling 2026-10-01). Rides the result dict additively, like
     # attribute_universe_evidence — schema stays extra="forbid".
     ledger: list[dict] = []
+    if negative_ingredients:
+        ledger.append({"field": "negated_sweetener_type", "column": "title+attributes+description",
+                       "value": sorted(negative_ingredients)})
+    measurement_evidence = [
+        {"column": column, **entry}
+        for column, text in (("title", str(sku_name or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
+        for entry in extract_volume_evidence(text)
+    ]
+    for entry in measurement_evidence:
+        ledger.append({"field": "measurement", "column": entry["column"], "value": entry})
+    pack_evidence = [
+        {"column": column, **entry}
+        for column, text in (("title", str(sku_name or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
+        for entry in extract_pack_evidence(text)
+    ]
+    for entry in pack_evidence:
+        ledger.append({"field": "pack_quantity", "column": entry["column"], "value": entry})
     opposing_values = {
         "carbonation": (("carbonated", "still"),),
         "sweetener": (("sugar", "no_sugar"), ("sugar", "diet")),
@@ -619,7 +623,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
                        "value": pack_img, "confidence": pack_conf_img})
     if attr_vol > 0 and title_vol > 0:
         ratio = max(attr_vol, title_vol) / min(attr_vol, title_vol)
-        if ratio >= 10.0:
+        if ratio >= data_cfg().extraction.title_attribute_override_ratio:
             volume_ml = title_vol
             volume_conf = vol_title["confidence"]
             volume_raw = vol_title["raw_match"]
@@ -635,6 +639,11 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         volume_conf = attr_vol_conf
         volume_raw = f"attribute: {attr_vol}"
         volume_status = "attribute_volume"
+    elif title_vol > 0:
+        volume_ml = title_vol
+        volume_conf = vol_title["confidence"]
+        volume_raw = vol_title["raw_match"]
+        volume_status = vol_title["parse_status"]
     elif vol_url["volume_ml"] > 0:
         volume_ml = vol_url["volume_ml"]
         volume_conf = vol_url["confidence"]
@@ -692,19 +701,24 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     ]
     volume_conf = fuse_confidence(vol_claims)
     pack_conf = fuse_confidence(pack_claims)
-    if vol_claims and len({round(value, 3) for value, _, _ in vol_claims}) > 1:
+    gate_cfg = training_cfg().gate
+    if vol_claims and any(
+        not volumes_compatible({left[0]}, {right[0]},
+                               volume_relative_tolerance=float(gate_cfg.vol_tolerance),
+                               volume_absolute_tolerance_ml=float(gate_cfg.vol_abs_tolerance))
+        for index, left in enumerate(vol_claims) for right in vol_claims[index + 1:]
+    ):
         consistency_flags.add("volume_sources_disagree")
     if pack_claims and len({value for value, _, _ in pack_claims}) > 1:
         consistency_flags.add("pack_sources_disagree")
-    # Sanity bounds (audit 2026-09-28): vendor tables swap fields and drop
-    # decimals, so an out-of-range winner is not auto-trusted blindly.
-    # Canonical distribution: p99 = 2,500ml, 27/12,621 rows above 5,000ml
-    # (bulk formats), max 25,000ml. Outside [1, 10000]ml the value is kept
-    # (no payload churn — volume_ml never changes here) but escalated to
-    # ambiguous_volume so downstream stops treating it as resolved.
-    # Multi-packs (pack_qty > 1) are excluded: their total volume is
-    # legitimate (e.g. 10 x 20L = 20000ml), not ambiguous.
-    if volume_ml > 0 and not 1.0 <= volume_ml <= 10000.0 and not (pack_qty and pack_qty > 1):
+    # Bounds apply to the selected physical-package size. A count of packages
+    # does not make an implausible per-package size legitimate; named bulk
+    # containers use the separately configured ceiling.
+    extraction_policy = data_cfg().extraction
+    bulk_terms = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in extraction_policy.bulk_container_terms)
+    bulk_container = bool(re.search(rf"\b(?:{bulk_terms})\b", f"{sku_name} {attribute}", re.I))
+    volume_max = extraction_policy.bulk_volume_max_ml if bulk_container else extraction_policy.volume_max_ml
+    if volume_ml > 0 and not extraction_policy.volume_min_ml <= volume_ml <= volume_max:
         consistency_flags.add("ambiguous_volume")
 
     # BOUNDARY CONTRACT (lib.schemas): the extracted-attribute dict is the
@@ -772,6 +786,9 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         key: sorted(values) for key, values in universe_evidence.items() if values
     }
     result["evidence_ledger"] = ledger
+    result["measurement_evidence"] = measurement_evidence
+    result["pack_evidence"] = pack_evidence
+    result["negated_sweetener_type_set"] = sorted(negative_ingredients)
     return result
 
 
@@ -814,28 +831,32 @@ def surface_card(extracted: dict) -> str:
 # ============================================================================
 # GATING
 # ============================================================================
-def _has_attribute_flag(obj: object, flag: str) -> bool:
+def _attribute_flags(obj: object) -> set[str]:
     """Read consistency flags from extracted objects or serialized canonicals."""
     if isinstance(obj, dict):
         value = obj.get("attribute_consistency_flags")
     else:
         value = getattr(obj, "attribute_consistency_flags", None)
     if value is None:
-        return False
+        return set()
     if isinstance(value, (set, frozenset, list, tuple)):
-        return flag in {str(item).strip() for item in value}
+        return {str(item).strip() for item in value}
     text = str(value).strip()
     if not text:
-        return False
+        return set()
     if text in {"set()", "frozenset()"}:
-        return False
+        return set()
     try:
         parsed = ast.literal_eval(text)
     except (SyntaxError, ValueError) as exc:
         raise ValueError(f"invalid attribute consistency flags: {value!r}") from exc
     if not isinstance(parsed, (set, frozenset, list, tuple)):
         raise ValueError(f"attribute consistency flags are not a sequence: {value!r}")
-    return flag in {str(item).strip() for item in parsed}
+    return {str(item).strip() for item in parsed}
+
+
+def _has_attribute_flag(obj: object, flag: str) -> bool:
+    return flag in _attribute_flags(obj)
 
 
 def pack_gate(
@@ -846,6 +867,7 @@ def pack_gate(
     volume_relative_tolerance: float = 0.0,
     volume_absolute_tolerance_ml: float = 0.0,
     trust_threshold: float | None = None,
+    check_categorical: bool = True,
 ) -> bool:
     """Return whether known package identity attributes are compatible.
 
@@ -869,6 +891,9 @@ def pack_gate(
     would reject a `{12, 24}` canonical against a `{12}` one that shares 12.
     """
     del score
+    veto_dimensions = frozenset(
+        training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
+    )
 
     def _value(obj: object, *names: str):
         if isinstance(obj, dict):
@@ -895,6 +920,9 @@ def pack_gate(
         the caller's own confidence lane owns that case, so it is not second
         guessed here.
         """
+        dimension = "volume" if "volume_confidence" in names else "pack"
+        if _has_attribute_flag(obj, f"{dimension}_sources_disagree"):
+            return False
         raw = _value(obj, *names)
         if raw is None or raw == "":
             return True
@@ -916,16 +944,13 @@ def pack_gate(
         and _trusted(sku_b, "pack_confidence")
     ):
         return False
-    # One side has pack evidence, the other doesn't → different pack
-    # sizes (single vs multi-pack). Empty pack_set means no pack
-    # count was extracted (single-unit product), not "unknown".
-    if (left_pack and not right_pack) or (right_pack and not left_pack):
-        return False
+    # No count on one side is unknown, not an assertion of single-unit
+    # packaging. The caller's confidence/review lane owns missing evidence.
 
     # PACKAGE TYPE: disjoint categorical evidence conflicts.
     left_type = _set(_value(sku_a, "package_type", "package_type_set"))
     right_type = _set(_value(sku_b, "package_type", "package_type_set"))
-    if left_type and right_type and not (left_type & right_type):
+    if "package_type" in veto_dimensions and left_type and right_type and not (left_type & right_type):
         return False
 
     left_volume = (
@@ -959,7 +984,9 @@ def pack_gate(
         found = extract_critical_claims(str(_value(obj, "canonical") or ""))[dimension]
         return set(found)
 
-    for dimension in ("carbonation", "sweetener", "pulp"):
+    for dimension in sorted(veto_dimensions & {"carbonation", "sweetener", "pulp"}):
+        if not check_categorical:
+            continue
         left = _claim_set(sku_a, dimension)
         right = _claim_set(sku_b, dimension)
         if left and right and categorical_conflict(
@@ -1078,11 +1105,92 @@ def three_way_gate(
         volume_relative_tolerance=float(vol_tolerance),
         volume_absolute_tolerance_ml=float(vol_abs_tolerance),
         trust_threshold=float(raw_conf_threshold),
+        check_categorical=False,
     ):
         return GateResult(
             decision="hard_no",
             reason=_r.pack_blocker,
         ).model_dump()
+    veto_dimensions = frozenset(
+        training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
+    )
+    for field, dimension, reason in (
+        ("package_type_set", "package_type", _r.package_type_mismatch),
+        ("package_material_set", "pack_material", _r.package_material_mismatch),
+        ("packaging_level_set", None, _r.packaging_level_mismatch),
+    ):
+        if dimension is not None and dimension not in veto_dimensions:
+            continue
+        left, right = set(attrs1.get(field, set())), set(attrs2.get(field, set()))
+        if left and right and not (left & right):
+            return GateResult(decision="hard_no", reason=reason).model_dump()
+
+
+    # Every explicit categorical conflict uses THE SINGLE DECISION ENGINE
+    # (owner directive: ALL attributes × ALL metrics for the ENTIRE decision
+    # process). The engine evaluates the three critical-categorical channels
+    # with the whole ordered stack (negation hard-veto, alias-folded
+    # equality, set overlaps, fuzzy surface) — so unclear spellings rescue
+    # instead of riding bare inequality, while a negation conflict stays a
+    # definite negative. Unknown stays unknown here; it is not fabricated
+    # into a conflict or an agreement.
+    from core.attribute_conflicts import (
+        CRITICAL_NAME_BY_CENSUS_KEY,
+        canonical_attribute_info,
+    )
+    from core.attribute_decision import AttributeDecisionEngine
+    from core.attribute_universe import attribute_registry
+
+    left_info, right_info = canonical_attribute_info(attrs1), canonical_attribute_info(attrs2)
+    source_flags = _attribute_flags(attrs1) | _attribute_flags(attrs2)
+    sweetener_source_conflict = any(
+        flag.startswith("sweetener_source_conflict:") for flag in source_flags
+    )
+    # Pulp has no registry key; the registry sweetener key owns ingredient
+    # identity, not sugar/no-sugar claims. Preserve these separate explicit
+    # claim predicates and report their actual dimensions.
+    claim_conflicts = sorted(
+        dimension for dimension in veto_dimensions & {"sweetener", "pulp"}
+        if categorical_conflict(dimension, left_info, right_info)
+    )
+    if claim_conflicts:
+        return GateResult(
+            decision="hard_no",
+            reason=f"{_r.categorical_mismatch} " + ",".join(claim_conflicts),
+        ).model_dump()
+    categorical_dimensions = veto_dimensions - {
+        "volume", "pack", "package_type", "pack_material"
+    }
+    # The gate consumes only configured categorical verdicts. Per-key engine
+    # evaluation is independent, so project the registry before costly raw
+    # re-parsing. The census still evaluates the complete universe separately.
+    categorical_registry = {
+        key: spec for key, spec in attribute_registry().items()
+        if CRITICAL_NAME_BY_CENSUS_KEY.get(key) in categorical_dimensions
+    }
+    categorical_conflicts = []
+    if categorical_registry:
+        evidence = AttributeDecisionEngine(
+            volume_relative_tolerance=float(vol_tolerance),
+            volume_absolute_tolerance_ml=float(vol_abs_tolerance),
+        ).evaluate(
+            left_info, right_info, left_raw=attrs1, right_raw=attrs2,
+            registry=categorical_registry,
+        )
+        categorical_conflicts = sorted(
+            CRITICAL_NAME_BY_CENSUS_KEY[key] for key in evidence.conflicts
+        )
+    if sweetener_source_conflict:
+        categorical_conflicts = [name for name in categorical_conflicts if name != "sweetener"]
+    if categorical_conflicts:
+        return GateResult(
+            decision="hard_no",
+            reason=f"{_r.categorical_mismatch} " + ",".join(categorical_conflicts),
+        ).model_dump()
+
+    if sweetener_source_conflict or source_flags & {"volume_sources_disagree", "pack_sources_disagree"}:
+        return GateResult(decision="fallback", reason=_r.source_conflict).model_dump()
+
     if _has_attribute_flag(attrs1, "ambiguous_volume") or _has_attribute_flag(
         attrs2, "ambiguous_volume"
     ):
@@ -1091,7 +1199,9 @@ def three_way_gate(
         ).model_dump()
     # raw confidence check
     if (
-        attrs1["volume_confidence"] < raw_conf_threshold
+        not attrs1["volume_set"]
+        or not attrs2["volume_set"]
+        or attrs1["volume_confidence"] < raw_conf_threshold
         or attrs2["volume_confidence"] < raw_conf_threshold
     ):
         return GateResult(
@@ -1102,7 +1212,9 @@ def three_way_gate(
     # pack_gate already treats low-confidence pack evidence as unknown.
     if attrs1["pack_set"] or attrs2["pack_set"]:
         if (
-            attrs1["pack_confidence"] < raw_conf_threshold
+            not attrs1["pack_set"]
+            or not attrs2["pack_set"]
+            or attrs1["pack_confidence"] < raw_conf_threshold
             or attrs2["pack_confidence"] < raw_conf_threshold
         ):
             return GateResult(
@@ -1138,62 +1250,6 @@ def three_way_gate(
         pack_overlap = attrs1["pack_set"] & attrs2["pack_set"]
         if not pack_overlap:
             return GateResult(decision="hard_no", reason=_r.no_pack_overlap).model_dump()
-
-    for field, reason in (
-        ("package_type_set", _r.package_type_mismatch),
-        ("package_material_set", _r.package_material_mismatch),
-        ("packaging_level_set", _r.packaging_level_mismatch),
-    ):
-        left, right = set(attrs1.get(field, set())), set(attrs2.get(field, set()))
-        if left and right and not (left & right):
-            return GateResult(decision="hard_no", reason=reason).model_dump()
-
-
-    # Every explicit categorical conflict uses THE SINGLE DECISION ENGINE
-    # (owner directive: ALL attributes × ALL metrics for the ENTIRE decision
-    # process). The engine evaluates the three critical-categorical channels
-    # with the whole ordered stack (negation hard-veto, alias-folded
-    # equality, set overlaps, fuzzy surface) — so unclear spellings rescue
-    # instead of riding bare inequality, while a negation conflict stays a
-    # definite negative. Unknown stays unknown here; it is not fabricated
-    # into a conflict or an agreement.
-    from core.attribute_conflicts import (
-        CRITICAL_NAME_BY_CENSUS_KEY,
-        canonical_attribute_info,
-        critical_attribute_evaluation,
-    )
-    from core.attribute_decision import AttributeDecisionEngine
-
-    left_info, right_info = canonical_attribute_info(attrs1), canonical_attribute_info(attrs2)
-    critical = critical_attribute_evaluation(
-        left_info,
-        right_info,
-        volume_relative_tolerance=float(vol_tolerance),
-        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
-    )
-    evidence = AttributeDecisionEngine(
-        volume_relative_tolerance=float(vol_tolerance),
-        volume_absolute_tolerance_ml=float(vol_abs_tolerance),
-    ).evaluate(left_info, right_info, left_raw=attrs1, right_raw=attrs2)
-    engine_conflicts = {
-        CRITICAL_NAME_BY_CENSUS_KEY[key]
-        for key in evidence.conflicts
-        if key in CRITICAL_NAME_BY_CENSUS_KEY
-    }
-    numeric_veto_dimensions = frozenset(
-        training_cfg().rand_matching.targeted_veto_gates.veto_dimensions
-    )
-    categorical_conflicts = sorted(
-        engine_conflicts
-        & (numeric_veto_dimensions - frozenset(
-            {"volume", "pack", "package_type", "pack_material"}
-        ))
-    )
-    if categorical_conflicts:
-        return GateResult(
-            decision="hard_no",
-            reason=f"{_r.categorical_mismatch} " + ",".join(categorical_conflicts),
-        ).model_dump()
 
     # PACKAGING LEVEL is one-sided in practice (measured 2026-09-30: 217 of
     # 13,250 records assert a level, and ZERO pairs have it populated on both
