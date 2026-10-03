@@ -8,6 +8,7 @@ import sys
 
 import pandas as pd
 
+from core.audit_guard import assert_vocabulary_overlap, self_comparison_control
 from core.common import DATA_PATH, data_cfg
 from core.manifest import sha256_file
 from core.text import normalized_attribute_text
@@ -69,6 +70,14 @@ def main():
                                   "entry_parse_status_counts": dict(date_status)},
               "wiring": wiring_inventory({})}
     assert fingerprint == sha256_file(DATA_PATH), "source changed during audit"
+    # Fail-closed guards: the registered attribute vocabulary must occur in
+    # the observed source keys, and the date reader must be deterministic on
+    # its own input — otherwise the inventory below measures nothing.
+    assert_vocabulary_overlap(registered, list(keys.keys()), label="feature-capture")
+    self_comparison_control(
+        lambda a, b: extract_date_evidence(a) == extract_date_evidence(b),
+        list(frame["sku_name_eng"].head(200)), label="feature-capture",
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps({key: report[key] for key in ("source_rows", "source_columns", "unregistered_keys", "date_attribute_keys")}))

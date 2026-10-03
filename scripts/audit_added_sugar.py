@@ -6,6 +6,11 @@ from pathlib import Path
 
 import pandas as pd
 
+from core.audit_guard import (
+    assert_not_degenerate,
+    assert_vocabulary_overlap,
+    self_comparison_control,
+)
 from core.common import DATA_PATH, data_cfg
 from core.critical_attributes import extract_critical_claims
 from core.manifest import sha256_file
@@ -26,6 +31,22 @@ def main():
                          "claims": sorted(extract_critical_claims(row["sku_name_eng"])["sweetener"]),
                          "negated_ingredients": sorted(negated_sweetener_types(row["sku_name_eng"]))})
     assert fingerprint == sha256_file(DATA_PATH), "source changed during audit"
+    # Fail-closed guards: a screen that matched nothing (0%) or everything
+    # (100%), or a vocabulary absent from the corpus, would make the counts
+    # below meaningless. Only `screened_rows` is guarded for degeneracy:
+    # no_sugar = 0 and no_added_sugar = 100% of the screen are the INTENDED
+    # outcomes of the semantic fix, so a 0%/100% check there would be a false
+    # alarm (it fired on the first run and is deliberately not applied).
+    assert_vocabulary_overlap(
+        {"no sugar added", "zero sugar added", "no sugars added"},
+        frame["sku_name_eng"], label="added-sugar",
+    )
+    assert_not_degenerate("screened_rows", len(rows), total=len(frame), label="added-sugar")
+    self_comparison_control(
+        lambda a, b: extract_critical_claims(a)["sweetener"]
+        == extract_critical_claims(b)["sweetener"],
+        [row["sku_name_eng"] for row in rows], label="added-sugar",
+    )
     report = {"scope": "Title-only semantic extraction; not full canonical or gate replay, source contradictions, or accuracy.",
               "source_sha256": fingerprint, "source_rows": len(frame), "screened_rows": len(rows),
               "no_sugar_rows": sum("no_sugar" in row["claims"] for row in rows),
