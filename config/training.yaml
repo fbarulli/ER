@@ -1021,6 +1021,20 @@ mining:
     max_per_canonical: 20     # endpoint diversity: max accepted pairs per GTIN
     max_per_brand: 100        # endpoint diversity: max accepted pairs per brand
 
+# ── negative supply lane (owner ruling 2026-10-03) ─────────────────────────
+# Which lane supplies training negatives. 'gate' is the current path and the
+# DEFAULT — flipping to 'lane' is an evidence decision, not a code decision:
+# flip only after the real-vs-minted discriminator and the stratified eval
+# (model-alone vs the gate on real-pair recall and false-merge rate, split by
+# gate decision and by differing attribute) clear. The gate stays the shadow
+# baseline until then. 'lane' requires pairs_run_tag and fails loudly at
+# config load when it is absent (never a silent fallback to the gate path).
+negative_supply:
+  mode: gate                 # gate | lane
+  real_first: true           # lane mines real partners before minting
+  mint_cap: 1.0              # max share of negatives that may be minted (0..1)
+  pairs_run_tag: null        # required for mode=lane (results/negative_supply/<tag>/pairs.csv)
+
 # Named concurrent-run selectors. They toggle methods only; all miner knobs
 # remain in mining.ann / mining.attribute_conflict / mining.cross_brand above.
 mining_profiles:

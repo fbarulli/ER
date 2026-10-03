@@ -2537,6 +2537,45 @@ class DifferentiationAuditSpec(BaseModel):
     max_between_pairs_per_brand: int = Field(ge=1)
 
 
+class NegativeSupplyModeSpec(BaseModel):
+    """training.negative_supply — which lane supplies training negatives.
+
+    Owner ruling 2026-10-03: the attribute gate leaves the decision path (it
+    is attribute-driven, so it can never be the label source nor a feature)
+    and keeps running in SHADOW mode only.
+
+    mode='gate' (default)  the deterministic gate's hard-no pairs — the
+                           current path, byte-for-byte unchanged.
+    mode='lane'            the real-partner-first negative-supply lane
+                           (src/training/negative_supply.py). Requires
+                           ``pairs_run_tag`` naming a
+                           results/negative_supply/<tag>/pairs.csv; the
+                           failure is loud at config load, never a silent
+                           fallback to the gate path.
+    real_first             the lane mines real partners before minting; kept
+                           explicit so the bridge can assert it.
+    mint_cap               max share of the emitted negatives that may be
+                           minted (0..1); excess minted rows drop
+                           deterministically.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["gate", "lane"] = "gate"
+    real_first: bool = True
+    mint_cap: float = Field(default=1.0, ge=0.0, le=1.0)
+    pairs_run_tag: str | None = None
+
+    @model_validator(mode="after")
+    def _lane_needs_pairs(self) -> "NegativeSupplyModeSpec":
+        if self.mode == "lane" and not (self.pairs_run_tag or "").strip():
+            raise ValueError(
+                "negative_supply.mode='lane' requires pairs_run_tag naming a "
+                "results/negative_supply/<tag>/pairs.csv"
+            )
+        return self
+
+
 class TrainingConfig(BaseModel):
     """config/training.yaml — the training lane's OWN config (in its dir).
 
@@ -2568,6 +2607,9 @@ class TrainingConfig(BaseModel):
     bands: BandsSpec
     mining: MiningSpec
     mining_profiles: dict[str, MiningProfileSpec] = Field(default_factory=dict)
+    negative_supply: NegativeSupplyModeSpec = Field(
+        default_factory=NegativeSupplyModeSpec
+    )
     hpo: HpoSpec
     rerank: RerankSpec
     sweep: SweepSpec
@@ -2813,6 +2855,15 @@ class TrainingStats(BaseModel):
     # emitted. The funnel itself is recorded in the run trace.
     n_cross_brand_candidates: int = Field(default=0, ge=0)
     n_cross_brand_resolved: int = Field(default=0, ge=0)
+    # ── negative-supply lane (owner ruling 2026-10-03; gate path leaves these
+    # at their defaults). mode names the active lane; the counts are the
+    # emitted negative populations; minted rows dropped by mint_cap are
+    # reported, never silent.
+    negative_supply_mode: str = "gate"
+    n_lane_base_negative: int = Field(default=0, ge=0)
+    n_lane_real_partner: int = Field(default=0, ge=0)
+    n_lane_minted: int = Field(default=0, ge=0)
+    n_lane_minted_dropped_cap: int = Field(default=0, ge=0)
 
 
 class TrainingData(BaseModel):
@@ -2835,6 +2886,17 @@ class TrainingData(BaseModel):
     )
     gtin_to_row: dict[str, int]
     stats: TrainingStats
+    # ── lane-mode provenance (owner ruling 2026-10-03) ──────────────────────
+    # payload_source tags every payload row ("sku" | "canonical" | "minted");
+    # neg_source tags every `neg` row's population; neg_minted carries minted
+    # partners that are TRAINING-ONLY — never in `neg`, so evaluation stays
+    # real-pairs-only and the augmentation stages (which read `neg`) never
+    # re-edit a record that was already minted. Empty on the gate path.
+    payload_source: list[str] = Field(default_factory=list)
+    neg_source: list[str] = Field(default_factory=list)
+    neg_minted: np.ndarray = Field(
+        default_factory=lambda: np.empty((0, 2), dtype=int)
+    )
 
     @field_validator("row_bc")
     @classmethod
@@ -2844,7 +2906,9 @@ class TrainingData(BaseModel):
             raise ValueError(f"row_bc must be 1-D, got shape {arr.shape}")
         return arr
 
-    @field_validator("pos", "neg", "targeted_attribute_neg", "cross_brand_neg")
+    @field_validator(
+        "pos", "neg", "targeted_attribute_neg", "cross_brand_neg", "neg_minted"
+    )
     @classmethod
     def _pair_matrix(cls, v: Any) -> np.ndarray:
         arr = np.asarray(v)
@@ -2884,7 +2948,9 @@ class TrainingData(BaseModel):
                     "structured_features must be a rectangular matrix, got "
                     f"row widths {sorted(widths)}"
                 )
-        for name in ("pos", "neg", "targeted_attribute_neg", "cross_brand_neg"):
+        for name in (
+            "pos", "neg", "targeted_attribute_neg", "cross_brand_neg", "neg_minted"
+        ):
             arr = getattr(self, name)
             if arr.size and int(arr.max()) >= n:
                 raise ValueError(
@@ -2893,6 +2959,15 @@ class TrainingData(BaseModel):
         bad_rows = {g: r for g, r in self.gtin_to_row.items() if r >= n or r < 0}
         if bad_rows:
             raise ValueError(f"gtin_to_row targets out of range: {bad_rows}")
+        # Lane provenance tags, when present, must be 1:1 with their arrays.
+        if self.payload_source and len(self.payload_source) != n:
+            raise ValueError(
+                f"payload_source length {len(self.payload_source)} != payload length {n}"
+            )
+        if self.neg_source and len(self.neg_source) != len(self.neg):
+            raise ValueError(
+                f"neg_source length {len(self.neg_source)} != neg length {len(self.neg)}"
+            )
         return self
 
 

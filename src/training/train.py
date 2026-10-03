@@ -784,7 +784,13 @@ def _main_inner(_mlf, _wandb) -> None:
     # The baseline resolved gate population is immutable; supplemental
     # miners append their own source label rather than collapsing into a
     # generic ``hard_negative`` bucket.
-    neg_sources = np.full(len(neg), "gate", dtype=object)
+    # Provenance per negative row. Lane mode ships its own populations
+    # (base_negative / real_partner); the gate path keeps "gate".
+    neg_sources = (
+        np.array(data["neg_source"], dtype=object)
+        if data.get("neg_source")
+        else np.full(len(neg), "gate", dtype=object)
+    )
     train_neg_sources = neg_sources.copy()
     if args.mask_frac > 0:
         from training.masking import (
@@ -1224,6 +1230,21 @@ def _main_inner(_mlf, _wandb) -> None:
         _attr_sources = np.full(len(_attr_neg), "attribute_conflict", dtype=object)
         neg_sources = np.concatenate([neg_sources, _attr_sources])
         train_neg_sources = np.concatenate([train_neg_sources, _attr_sources])
+    # Lane mode: minted partners are TRAINING-ONLY (owner ruling 2026-10-03).
+    # They append to train_neg (never to the eval `neg`), so evaluation stays
+    # real-pairs-only and the augmentation stages above — which read `neg` —
+    # never re-edit a record that was already minted.
+    neg_minted = np.asarray(
+        data.get("neg_minted", np.empty((0, 2), dtype=int)), dtype=int
+    )
+    if len(neg_minted):
+        train_neg = (
+            np.vstack([train_neg, neg_minted])
+            if len(train_neg) else neg_minted.copy()
+        )
+        train_neg_sources = np.concatenate(
+            [train_neg_sources, np.full(len(neg_minted), "minted", dtype=object)]
+        )
     if len(neg_sources) != len(neg) or len(train_neg_sources) != len(train_neg):
         raise RuntimeError(
             "negative source provenance length mismatch before fold split: "

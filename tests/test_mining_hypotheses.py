@@ -465,6 +465,9 @@ def _run_provenance_case(
     namespace: dict[str, object] = {
         "np": np,
         "SEED": 42,
+        # Gate path: the sandbox has no lane provenance, so train.py's
+        # neg_sources assignment falls back to the "gate" population.
+        "data": {},
         "df": "df-sentinel",
         "payload": ["p"] * (2 * n_pos_pairs),
         "row_bc": np.arange(2 * n_pos_pairs),

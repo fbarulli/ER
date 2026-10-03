@@ -36,6 +36,21 @@ def fingerprint(df, variant):
 
 
 def load_base_data(df, *, payload_variant='full', cache_path=None):
+    from core.common import training_cfg
+
+    # Negative-supply mode (owner ruling 2026-10-03). Default 'gate' keeps the
+    # existing path byte-for-byte; 'lane' replaces the gate-derived negatives
+    # with the real-partner-first lane and bypasses the shared-base cache (the
+    # lane's pairs.csv is not part of the cache fingerprint).
+    if training_cfg().negative_supply.mode == "lane":
+        from training.negative_supply import build_lane_training_data
+
+        spec = training_cfg().negative_supply
+        return build_lane_training_data(
+            df, payload_variant=payload_variant,
+            run_tag=spec.pairs_run_tag, mint_cap=spec.mint_cap,
+        )
+
     from pipeline import build_training_data
     requested = cache_path or os.environ.get('EUROMONITOR_SHARED_BASE_DATA')
     if not requested:

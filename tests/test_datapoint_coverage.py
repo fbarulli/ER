@@ -49,16 +49,21 @@ PRODUCER_FILES = (
     "src/training/train_prepared.py",
     "src/training/prepared_bundle.py",
     "src/training/masking.py",
+    "src/training/negative_supply.py",
     "src/core/hard_negatives.py",
     "src/pipeline.py",
 )
 
-# The three idioms that actually produce a datapoint/source tag.
+# The idioms that actually produce a datapoint/source tag.
 SOURCE_ARRAY_TAG = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*,\s*dtype=object')
 APPENDED_POPULATION_TAG = re.compile(
     r'populations\.append\(\s*"([A-Za-z_][A-Za-z0-9_]*)"'
 )
 AUDIT_SOURCE_TAG = re.compile(r'"source"\s*:\s*"([A-Za-z_][A-Za-z0-9_]*)"')
+# Negative-supply lane: the bridge appends literal source tags to neg_source.
+NEG_SOURCE_APPEND_TAG = re.compile(
+    r'neg_source\.append\(\s*"([A-Za-z_][A-Za-z0-9_]*)"'
+)
 LINEAGE_POPULATION_TAG = re.compile(r'population="([A-Za-z_][A-Za-z0-9_]*)"')
 
 # The mask-audit lineage vocabulary is a DIFFERENT domain from the
@@ -141,6 +146,7 @@ class ProducerTagInventoryTests(_CapturingVisibilityLog):
             _scan(SOURCE_ARRAY_TAG)
             | _scan(APPENDED_POPULATION_TAG)
             | _scan(AUDIT_SOURCE_TAG)
+            | _scan(NEG_SOURCE_APPEND_TAG)
         )
         registry = set(training.KNOWN_DATAPOINT_POPULATIONS)
         fallbacks = set(training.DATAPOINT_FALLBACK_TAGS)
@@ -187,7 +193,8 @@ class ProducerTagInventoryTests(_CapturingVisibilityLog):
         self.assertEqual(
             training.NEGATIVE_SOURCE_DATAPOINT_POPULATIONS,
             ("gate", "targeted_attribute_conflict", "cross_brand_conflict",
-             "counterfactual", "attribute_conflict", "random_easy"),
+             "counterfactual", "attribute_conflict", "base_negative",
+             "real_partner", "minted", "random_easy"),
         )
         for name, entry in spec.items():
             self.assertTrue(entry.get("emitter"), f"{name} has no declared emitter")

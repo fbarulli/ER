@@ -125,6 +125,39 @@ class MintSpec(SupplySpecBase):
         return self
 
 
+class DiscriminatorSpec(SupplySpecBase):
+    """Pre-scale real-vs-minted separation thresholds.
+
+    separable_auc     AUC at/above which the minted arm is detectable and
+                      the run must STOP minting (the generator has a
+                      signature).
+    borderline_auc    AUC at/above which the verdict is "borderline"
+                      (interpretation, not a stop).
+    min_arm_rows      each arm needs at least this many rows before an AUC
+                      means anything (below it the verdict is
+                      "insufficient", which is NOT a failure).
+    cv_folds          grouped-CV folds (GroupKold over the anchor GTIN).
+    max_iter          sklearn solver iterations.
+    """
+
+    separable_auc: float = Field(default=0.90, ge=0.5, le=1.0)
+    borderline_auc: float = Field(default=0.75, ge=0.5, le=1.0)
+    min_arm_rows: int = Field(default=10, ge=2)
+    cv_folds: int = Field(default=5, ge=2)
+    max_iter: int = Field(default=2000, ge=1)
+
+    @model_validator(mode="after")
+    def _ordering(self) -> "DiscriminatorSpec":
+        if self.borderline_auc > self.separable_auc:
+            raise ValueError(
+                "discriminator thresholds must be ordered: borderline_auc <= separable_auc"
+            )
+        return self
+
+
+DiscriminatorSpec.model_rebuild()
+
+
 class NegativeSupplySpec(SupplySpecBase):
     """Full lane config; env EUROMONITOR_NEGATIVE_SUPPLY_SPEC (JSON) overrides."""
 
@@ -134,6 +167,11 @@ class NegativeSupplySpec(SupplySpecBase):
     # Shadow gate comparison columns are attached to every emitted row; they
     # are informational contrast (model-alone vs gate), never labels/features.
     shadow_gate: bool = True
+    # Pre-scale discriminator (scripts/negative_supply_discriminator.py) —
+    # the run-fail thresholds its verdict reads, so tuning them is a config
+    # edit, not a script edit. The script fails with a nonzero exit when the
+    # verdict lands on SEPARABLE: fix the mint rules BEFORE minting 50k rows.
+    discriminator: DiscriminatorSpec | None = None
 
     @field_validator("seed")
     @classmethod
@@ -796,6 +834,160 @@ def gtin_group_split(frame: pd.DataFrame, *, k: int = 4, seed: int = 1337) -> pd
     for left, minted in zip(gtins, frame["population"]):
         out.append(-1 if minted == POPULATION_MINTED_PARTNER else fold_of.get(groups.find(left), -1))
     return pd.Series(out, index=frame.index, name="group_fold")
+
+
+# ── trainer bridge (config-gated; the gate path stays the default) ──────────
+def pairs_path(run_tag: str) -> Path:
+    from core.common import RESULTS
+
+    return Path(RESULTS) / "negative_supply" / run_tag / "pairs.csv"
+
+
+def load_pairs(run_tag: str) -> pd.DataFrame:
+    """The lane's emitted pairs.csv for one run tag (fail loud when absent)."""
+    path = pairs_path(run_tag)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"negative-supply pairs.csv not found for run_tag={run_tag!r}: {path}"
+        )
+    return pd.read_csv(
+        path,
+        dtype={"anchor_gtin": str, "partner_gtin": str},
+        keep_default_na=False,
+    )
+
+
+def build_lane_training_data(
+    df: pd.DataFrame, *, payload_variant: str = "full",
+    run_tag: str, mint_cap: float = 1.0,
+) -> dict:
+    """Trainer contract with negatives from the lane instead of the gate.
+
+    Reuses ``pipeline.build_training_data`` for the payload and POSITIVES
+    (positives are gate-independent — a row paired with its own canonical),
+    then REPLACES the gate-derived negatives:
+
+    * real negatives = the lane's ``base_negative`` + ``real_partner`` rows,
+      mapped by GTIN through the trainer's own ``gtin_to_row`` /
+      ``gtin_to_canon_idx`` (so a real-partner pair equals what the gate path
+      would produce for the same anchors);
+    * minted partners = appended as leaf payload rows (``row_bc``
+      ``minted:<anchor>:<idx>`` — no canonical, no neighbours) and returned in
+      ``neg_minted``, which is TRAINING-ONLY. They never enter ``neg``, so
+      evaluation stays real-pairs-only and the augmentation stages (which read
+      ``neg``) never re-edit an already-minted record.
+
+    A minted partner's text is the lane's single whitelisted move replayed on
+    the TRAINER's own payload text for that anchor (the lane's blocking text is
+    title-only; the trainer's payload carries attributes), so text format
+    matches every other payload row.
+
+    The gate-derived miners (targeted-attribute, cross-brand) are DROPPED: the
+    lane's real partners are their replacement, per the 2026-10-03 ruling.
+    """
+    from pipeline import build_training_data
+
+    base = build_training_data(df, payload_variant=payload_variant)
+    return assemble_lane_bundle(
+        base, load_pairs(run_tag), n_sku=len(df), mint_cap=mint_cap
+    )
+
+
+def assemble_lane_bundle(
+    base: Mapping, pairs: pd.DataFrame, *, n_sku: int, mint_cap: float = 1.0
+) -> dict:
+    """Pure assembler: base bundle + lane pairs -> trainer contract.
+
+    Split out from :func:`build_lane_training_data` so the negative swap, the
+    minted-leaf append and the cap are unit-testable without the live
+    canonical/gate artifacts.
+    """
+    payload = list(base["payload"])
+    row_bc = [str(value) for value in base["row_bc"]]
+    structured = [list(row) for row in base["structured_features"]]
+    gtin_to_row = dict(base["gtin_to_row"])
+    canon_gtins = row_bc[n_sku:]
+    gtin_to_canon_idx = {g: n_sku + i for i, g in enumerate(canon_gtins) if g}
+    payload_source = ["sku"] * n_sku + ["canonical"] * len(canon_gtins)
+
+    # ── real negatives (gate decision replaced by the lane) ──
+    neg_rows: list[tuple[int, int]] = []
+    neg_source: list[str] = []
+    real_populations = (POPULATION_BASE_NEGATIVE, POPULATION_REAL_PARTNER)
+    for pair in pairs.itertuples(index=False):
+        population = str(pair.population)
+        if int(pair.label) != 0 or population not in real_populations:
+            continue
+        anchor = gtin_to_row.get(str(pair.anchor_gtin).strip())
+        target = gtin_to_canon_idx.get(str(pair.partner_gtin).strip())
+        if anchor is None or target is None:
+            continue
+        neg_rows.append((int(anchor), int(target)))
+        # Literal tags (not the constant) so the coverage-registry scan
+        # (tests/test_datapoint_coverage.py) sees the producers.
+        if population == POPULATION_BASE_NEGATIVE:
+            neg_source.append("base_negative")
+        else:
+            neg_source.append("real_partner")
+
+    # ── minted partners: leaf rows, TRAINING-ONLY, capped by mint_cap ──
+    minted = pairs[pairs["population"] == POPULATION_MINTED_PARTNER].sort_values(
+        "anchor_row", kind="stable"
+    )
+    n_real = len(neg_rows)
+    if mint_cap >= 1.0:
+        allowed_minted = len(minted)
+    else:
+        allowed_minted = (
+            int((mint_cap * n_real) / (1.0 - mint_cap)) if mint_cap > 0 else 0
+        )
+    allowed_minted = min(allowed_minted, len(minted))
+    dropped_cap = len(minted) - allowed_minted
+    neg_minted_rows: list[tuple[int, int]] = []
+    width = len(structured[0]) if structured else 0
+    for pair in list(minted.itertuples(index=False))[:allowed_minted]:
+        anchor = int(pair.anchor_row)
+        if not (0 <= anchor < n_sku):
+            continue
+        outcome = token_move(
+            payload[anchor], str(pair.edit_field),
+            {str(pair.edit_from): str(pair.edit_to)},
+        )
+        if outcome is None:
+            # The trainer's text carries no surface for the lane's move.
+            continue
+        payload.append(outcome[0])
+        row_bc.append(f"minted:{anchor}:{len(payload) - 1}")
+        structured.append([0.0] * width)
+        payload_source.append("minted")
+        neg_minted_rows.append((anchor, len(payload) - 1))
+
+    stats = dict(base["stats"])
+    stats.update({
+        "negative_supply_mode": "lane",
+        "n_lane_base_negative": neg_source.count("base_negative"),
+        "n_lane_real_partner": neg_source.count("real_partner"),
+        "n_lane_minted": len(neg_minted_rows),
+        "n_lane_minted_dropped_cap": dropped_cap,
+    })
+
+    from core.schemas import TrainingData as _TrainingData
+
+    bundle = _TrainingData(
+        payload=payload,
+        structured_features=structured,
+        row_bc=np.array(row_bc),
+        pos=np.asarray(base["pos"], dtype=int).reshape(-1, 2),
+        neg=np.array(neg_rows, dtype=int).reshape(-1, 2),
+        targeted_attribute_neg=np.empty((0, 2), dtype=int),
+        cross_brand_neg=np.empty((0, 2), dtype=int),
+        gtin_to_row=gtin_to_row,
+        stats=stats,
+        payload_source=payload_source,
+        neg_source=neg_source,
+        neg_minted=np.array(neg_minted_rows, dtype=int).reshape(-1, 2),
+    )
+    return bundle.model_dump()
 
 
 def main() -> None:

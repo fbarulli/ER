@@ -178,6 +178,25 @@ DATAPOINT_POPULATION_SPEC: dict[str, dict[str, object]] = {
         "role": "negative_source",
         "dynamic": True,
     },
+    # Negative-supply lane (owner ruling 2026-10-03). Emitted by
+    # training.negative_supply (base_negative, real_partner) and appended
+    # TRAINING-ONLY by train.py (minted); the lane never enters the eval pool,
+    # so the coverage audit sees these populations only in training.
+    "base_negative": {
+        "emitter": "training.negative_supply.build_lane_training_data (neg_source)",
+        "role": "negative_source",
+        "dynamic": False,
+    },
+    "real_partner": {
+        "emitter": "training.negative_supply.mine_real_partners (neg_source)",
+        "role": "negative_source",
+        "dynamic": False,
+    },
+    "minted": {
+        "emitter": "training.train: np.full(len(neg_minted), 'minted')",
+        "role": "negative_source",
+        "dynamic": False,
+    },
     "random_easy": {
         "emitter": "training.training._mix_random_easy_training_negatives",
         "role": "negative_source",

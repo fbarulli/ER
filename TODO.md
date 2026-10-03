@@ -64,6 +64,23 @@ Remaining items:
   and provide a DVC fallback where needed; oversized Git transports currently
   fail explicitly.
 
+- [ ] Negative-supply lane (owner ruling 2026-10-03): the gate has left the
+      decision path in DESIGN — `src/training/negative_supply.py` emits
+      real-partner-first + minted negatives, and the trainer consumes them
+      behind `training.negative_supply.mode` (default `gate`, config-owned).
+      Do NOT flip the default on "the code is in": flip only after the
+      real-vs-minted discriminator (`scripts/negative_supply_discriminator.py`)
+      clears AND the stratified eval shows model-alone >= the gate on
+      real-pair recall and false-merge rate, split by gate decision and by
+      differing attribute. The gate stays the SHADOW baseline until then.
+      This flag measures nothing on its own — the open questions below do not
+      go away: (a) anchors-with-real-partner count / coverage share; (b) the
+      entity-level definition (`gtin` vs `sku`); (c) the flavor/material
+      audit. Carry them here so the default is flipped on evidence, not on
+      code being present. Minted partners are TRAINING-ONLY (`neg_minted`);
+      the gate-derived miners (targeted-attribute, cross-brand) are dropped in
+      lane mode and the lane's real partners are their replacement.
+
 Audit evidence: [text/ANN](results/audits/text_training.md),
 [GNN/hybrid](results/audits/graph_hybrid.md), and
 [exports/post-training](results/audits/exports_posttraining.md).
