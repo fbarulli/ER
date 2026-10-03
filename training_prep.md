@@ -194,3 +194,19 @@ greater than `0.001` and stops after three unsuccessful epoch evaluations.
 The plateau scheduler halves the learning rate after two unsuccessful evaluations,
 with a floor of `0.00001`. Scheduler and stopping state are checkpointed for resume;
 completion reports record the actual number of epochs.
+
+### Separate hybrid embedding job
+
+After full preparation, run `notebooks/prepare_hybrid_embeddings.ipynb` on a
+GPU runtime with the ER checkout, prepared track inputs, dependencies, and local
+MiniLM checkpoint staged. The standalone command from ER is:
+
+```bash
+PYTHONPATH=src python -m training.prepare_embeddings --device cuda
+```
+
+This creates `data/track_setup/shared_minilm__embeddings.npz` for hybrid only.
+Return that file to the prepared setup directory before running the three-track
+preflight. Existing caches are reused only after input/checkpoint/composition
+validation; stale caches fail rather than silently overwrite. Generation writes
+a temporary file and publishes it only after validation. No training is launched.
