@@ -198,8 +198,9 @@ completion reports record the actual number of epochs.
 ### Separate hybrid embedding job
 
 After full preparation, run `notebooks/prepare_hybrid_embeddings.ipynb` on a
-GPU runtime with the ER checkout, prepared track inputs, dependencies, and local
-MiniLM checkpoint staged. The standalone command from ER is:
+GPU runtime. Upload the prepared `colab_embeddings_inputs.zip` when prompted;
+the notebook extracts the checkout, prepared inputs, and frozen checkpoint and
+installs dependencies. The standalone command from ER is:
 
 ```bash
 PYTHONPATH=src python -m training.prepare_embeddings --device cuda
