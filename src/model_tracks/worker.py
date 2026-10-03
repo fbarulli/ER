@@ -54,7 +54,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     else:
         settings = yaml.safe_load((setup / f'{track}.yaml').read_text())
         settings.update(device=cfg.device, epochs=cfg.epochs, report_test=cfg.report_test,
-                        postprocess=not gpu_only)
+                        postprocess=not gpu_only,include_inputs=False)
         if cfg.dvc_enabled or gpu_only:
             # The suite publisher owns persistence; avoid a second mutable
             # local DVC snapshot while background uploads are active.
@@ -89,6 +89,34 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     events.emit('training', 'started', includes_graph_postprocess=track != 'text')
     subprocess.run(command, cwd=TRAIN_ROOT, env=os.environ.copy(), check=True)
     events.emit('training', 'completed', includes_graph_postprocess=track != 'text')
+    if gpu_only:
+        events.emit('inference_export','started',device=cfg.device)
+        if track == 'text':
+            from model_tracks.text_export import forward
+            _,selected_text_model = forward(output,setup,return_model=True)
+        else:
+            from graph_tracks.config import GraphConfig
+            from graph_tracks.infer import forward_outputs
+            from graph_tracks.artifacts import name
+            selected = list(output.rglob(name(track,'best_checkpoint.json')))
+            if len(selected) != 1:
+                raise ValueError('ambiguous selected graph checkpoint')
+            checkpoint = Path(json.loads(selected[0].read_text())['path'])
+            settings['device'] = 'cuda'
+            forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
+                output/(track+'__inference'),GraphConfig.model_validate(settings),
+                text_cache=TRAIN_ROOT/settings['text_cache'] if settings.get('text_cache') else None)
+        events.emit('inference_export','completed',device=cfg.device)
+        if cfg.post_training_ablation:
+            from model_tracks.staged_ablation import forward as forward_ablation
+            if track == 'text':
+                from training.validation_inference import resolve_best_checkpoint
+                checkpoint,_ = resolve_best_checkpoint(output)
+            events.emit('attribute_ablation_export','started',device='cuda')
+            forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None)
+            if track == 'text':
+                del selected_text_model
+            events.emit('attribute_ablation_export','completed',device='cuda')
     if track == 'text' and not gpu_only:
         from model_tracks.text_report import complete
         events.emit('postprocess', 'started', report_test=cfg.report_test)

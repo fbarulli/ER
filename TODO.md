@@ -1,4 +1,74 @@
-# TODO (updated 2026-10-02, branch main)
+# TODO (updated 2026-10-03, branch main)
+
+## Current training dataflow checkpoint — 2026-10-03
+
+This section supersedes the earlier wave status below. Required sequence:
+fixed preparation on local CPU → baseline encoding, training, inference and
+ablations in one Colab GPU session → verified result collection and shutdown →
+local metrics, ANN indexes, gate/JEV comparisons and dashboard reports.
+
+Implemented and checked locally:
+
+- [x] Checkpoint-native token policy shared across embeddings, text training and
+  hybrid; native prompt/formatting binding, zero truncation, overflow rejection,
+  strict token dtypes and complete row-count validation.
+- [x] Population metadata excluded from model text inputs; contrastive feature
+  column repaired; configured loss-specific sampler preserves all presentations.
+- [x] Fixed training tokens and deterministic objective/split/calibration/sampler
+  plans prepared locally; GPU entrypoint consumes frozen plans. Live ANN refresh
+  follows config; unsupported noncontrastive live refresh fails explicitly.
+- [x] Full local graph preparation: 27,820 listings, 28 configured query batches,
+  train-only vocabulary/support; float32 features and int64 indices validated.
+- [x] Portable hybrid input provenance, saved GPU inference for local reports,
+  strict vector dtype and checkpoint/composition validation.
+- [x] Prepared ablation templates bind selected weights on GPU; saved-result
+  reporting runs locally without reopening GPU. Thresholds must match the saved
+  baseline calibration and selected checkpoint.
+- [x] Ablation temporary-path and interrupted-publication defects repaired;
+  GPU shutdown precedes local retrieval reporting; current encoding logs retained.
+- [x] Suite inputs use the existing Git publisher and cloned tar.gz transport,
+  including recovery inputs; no direct suite input upload to Colab.
+- [x] Repeated composition/config copying reduced with output-parity checks;
+  shared token and graph preparation helpers avoid parallel implementations.
+- [x] Active lineage reconstructed for 11,569 graph pairs only after exact
+  source/catalog/split/pair agreement. Reconstruction is explicitly identified.
+
+Remaining items:
+
+- [ ] Generate final production CPU text-export requests, pending-baseline
+  token archives and all attribute-ablation templates against the final source
+  and input-manifest hashes; verify the complete prepared package and save its
+  immutable tar.gz through GitHub. Code exists; these production artifacts have
+  not yet all been generated.
+- [ ] Resolve the current MNRL diet gate using evidence from the actual loss and
+  batch construction, without silently relaxing it: current full bundle has
+  neg_aug_frac 0.2592 versus minimum 0.3000 and surviving pos/neg ratio 2.9821
+  versus maximum 1.5000. This still blocks the training suite.
+- [ ] Run the end-to-end Colab GPU smoke: generate the missing production
+  baseline cache, train, export inference and ablations in the same session,
+  verify/persist results, close the session, then complete local analysis.
+  The new GPU workflow has not been executed end to end.
+- [ ] Verify real selected-checkpoint/full-catalog ANN ablation results and
+  dashboard restoration from a clean clone of the saved artifacts.
+- [ ] Complete graph baseline/candidate vector reuse in ablations; selected text
+  vector reuse is implemented, but graph reuse remains a performance gap.
+- [ ] Extend live ANN refresh to noncontrastive objectives if required; currently
+  only contrastive supports it and unsupported requests fail explicitly.
+- [ ] Populate difficulty, masking and generated-data axes from genuine source
+  lineage where available. Current graph source labels contain only GTINs and
+  the label; missing axes stay unknown, and graph augmentation is explicitly
+  not applicable. Do not invent historical evidence.
+- [ ] Evaluate shared graph support storage between training checkpoints;
+  self-contained support remains duplicated for deployment compatibility.
+- [ ] Verify large input/recovery transports against GitHub's file-size limit
+  and provide a DVC fallback where needed; oversized Git transports currently
+  fail explicitly.
+
+Audit evidence: [text/ANN](results/audits/text_training.md),
+[GNN/hybrid](results/audits/graph_hybrid.md), and
+[exports/post-training](results/audits/exports_posttraining.md).
+
+## Earlier wave notes (historical; current status above takes precedence)
 
 ## OPEN GAPS — 2026-10-03 (ablation/embedding wave follow-ups)
 

@@ -1,0 +1,124 @@
+"""Selected-weight binding keeps local plans and restored provenance intact."""
+import json
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+import pytest
+import torch
+from model_tracks import ablation, staged_ablation, text_export
+
+
+def test_staged_graph_binding_rejects_changed_support_before_forward(tmp_path,monkeypatch):
+    setup = tmp_path/'setup'
+    template = setup/'ablation_templates/gnn_only';template.mkdir(parents=True)
+    request = {'graph_binding':ablation.digest({'vocabulary':{},'support_records':[]})}
+    (template/'request.json').write_text(json.dumps(request))
+    checkpoint = tmp_path/'run/gnn_only/checkpoint.pt';checkpoint.parent.mkdir(parents=True)
+    torch.save({'vocabulary':{},'support_records':[{'sku_id':'unexpected'}],
+                'manifest':{'track':'gnn_only'}},checkpoint)
+    monkeypatch.setattr(staged_ablation,'encode',lambda *args,**kwargs:pytest.fail('must reject before forward'))
+    with pytest.raises(ValueError,match='support/vocabulary'):
+        staged_ablation.forward(checkpoint.parent,setup,'gnn_only',checkpoint)
+
+
+def test_bound_request_preserves_prepared_tensor_hash_and_relative_checkpoint(tmp_path,monkeypatch):
+    setup = tmp_path/'setup';template = setup/'ablation_templates/gnn_only';template.mkdir(parents=True)
+    checkpoint = tmp_path/'run/gnn_only/checkpoint.pt';checkpoint.parent.mkdir(parents=True)
+    payload = {'vocabulary':{},'support_records':[],'manifest':{'track':'gnn_only'}}
+    torch.save(payload,checkpoint)
+    tensors = template/'prepared_inputs.npz';tensors.write_bytes(b'frozen local topology')
+    request = {'checkpoint':'@setup/template.pt','graph_binding':ablation.digest({'vocabulary':{},'support_records':[]}),
+               'sources':{'@setup/template.pt':'placeholder'},'settings':{'retrieval_catalog':'full'},'prepared_inputs':{'sha256':ablation.file_hash(tensors)}}
+    (template/'request.json').write_text(json.dumps(request))
+    calls = []
+    monkeypatch.setattr(staged_ablation,'encode',lambda *args,**kwargs:calls.append((args,kwargs)))
+    path = staged_ablation.forward(checkpoint.parent,setup,'gnn_only',checkpoint)
+    bound = json.loads(path.read_text())
+    assert bound['checkpoint'] == '@suite/gnn_only/checkpoint.pt'
+    assert bound['sources'] == {bound['checkpoint']:ablation.file_hash(checkpoint)}
+    assert bound['prepared_inputs'] == request['prepared_inputs']
+    assert (path.parent/'prepared_inputs.npz').read_bytes() == tensors.read_bytes()
+    assert len(calls) == 1 and calls[0][1]['device'] == 'cuda'
+
+
+def test_portable_sources_resolve_after_restoring_suite_and_inputs(tmp_path,monkeypatch):
+    suite = tmp_path/'restored/run'
+    request_path = suite/'text/ablation/request.json';request_path.parent.mkdir(parents=True)
+    setup = suite/'local_inputs/data/model_tracks/shared';setup.mkdir(parents=True)
+    catalog = setup/'eligible_catalog.csv';catalog.write_bytes(b'original catalog')
+    checkpoint = suite/'text/checkpoint/weights';checkpoint.parent.mkdir(parents=True);checkpoint.write_bytes(b'selected')
+    request = {'portable_setup':'data/model_tracks/shared',
+               'sources':{'@setup/eligible_catalog.csv':ablation.file_hash(catalog),
+                          '@suite/text/checkpoint/weights':ablation.file_hash(checkpoint)},
+               'composition':'composer','implementation_sha256':ablation.file_hash(Path(ablation.__file__))}
+    request_path.write_text(json.dumps(request))
+    monkeypatch.setattr(ablation,'composition_fingerprint',lambda:'composer')
+    with ablation.request_context(request_path):
+        ablation.validate_sources(request)
+        assert ablation.resolve('@suite/text/checkpoint/weights') == checkpoint
+        with pytest.raises(ValueError,match='unsafe'):
+            ablation.resolve('@setup/../../../../outside')
+    catalog.write_bytes(b'changed')
+    with ablation.request_context(request_path),pytest.raises(ValueError,match='source changed'):
+        ablation.validate_sources(request)
+
+
+def test_text_report_has_no_model_forward_and_requires_saved_gpu_export(tmp_path,monkeypatch):
+    from model_tracks import text_report
+    from graph_tracks import text_cache
+    from training import validation_inference
+    monkeypatch.setattr(text_cache,'create_cache',lambda *args,**kwargs:pytest.fail('local model forward forbidden'))
+    monkeypatch.setattr(validation_inference,'resolve_best_checkpoint',lambda output:(tmp_path/'checkpoint',{}))
+    # Missing fixed prepared population fails before any cache generation.
+    with pytest.raises(FileNotFoundError):
+        text_report.complete(tmp_path,tmp_path,device='cpu',report_test=False)
+
+
+def test_gpu_worker_exports_vectors_and_ablations_before_completion(tmp_path,monkeypatch):
+    from model_tracks import worker,resume
+    from core import common
+    from training import prepared_bundle,validation_inference
+    setup = tmp_path/'setup';setup.mkdir()
+    (setup/'setup_manifest.json').write_text('{}')
+    output = tmp_path/'run/text'
+    monkeypatch.setenv('EUROMONITOR_RESULTS_DIR',str(output))
+    monkeypatch.setenv('ER_GPU_TRAINING_ONLY','1')
+    monkeypatch.setenv('ER_TRACK_BARRIER',str(tmp_path/'barrier'))
+    monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
+    cfg = SimpleNamespace(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
+                          device='cuda',report_test=False,post_training_ablation=True)
+    monkeypatch.setattr(worker,'load_config',lambda _:cfg)
+    monkeypatch.setattr(prepared_bundle,'load_prepared_bundle',lambda _: (SimpleNamespace(payload_variant='full'),{}))
+    monkeypatch.setattr(worker,'wait_for_start',lambda *args:None)
+    order = []
+    monkeypatch.setattr(worker.subprocess,'run',lambda *args,**kwargs:order.append('train'))
+    monkeypatch.setattr(text_export,'forward',lambda *args,**kwargs:(order.append('vectors'),object()))
+    monkeypatch.setattr(staged_ablation,'forward',lambda *args,**kwargs:order.append('ablations'))
+    monkeypatch.setattr(validation_inference,'resolve_best_checkpoint',lambda _:(output/'checkpoint',{}))
+    monkeypatch.setattr(resume,'record_completion',lambda *args,**kwargs:order.append('complete'))
+    events = SimpleNamespace(emit=lambda *args,**kwargs:None)
+    worker._run(tmp_path/'suite.yaml','text','run-text',resume=False,events=events)
+    assert order == ['train','vectors','ablations','complete']
+
+
+def test_pending_baseline_validates_native_tokens_without_cache_or_model(tmp_path,monkeypatch):
+    from model_tracks import baseline_export
+    setup = tmp_path/'setup';setup.mkdir()
+    tokens = setup/'prepared_text.npz'
+    np.savez(tokens,**{'text/0/input_ids':np.asarray([[1,2]],dtype=np.int64),
+                      'text/0/attention_mask':np.ones((1,2),dtype=np.int64)})
+    request = {'schema':'er-embedding-request-v2','ids':['a'],'texts':['fixed'],
+        'metadata':{'checkpoint_sha256':'frozen','text_sha256':baseline_export.texts_hash(['fixed'])},
+        'prepared_text':{'sha256':ablation.file_hash(tokens),'truncated_inputs':0,
+            'tokenization':{'input_token_limit':512},'token_batches':[
+                {'prefix':'text/0','keys':['input_ids','attention_mask'],'constants':{},'start':0,'count':1}]}}
+    (setup/'embedding_inputs.json').write_text(json.dumps(request))
+    monkeypatch.setattr(baseline_export,'input_identity',lambda *args:{'checkpoint_sha256':'frozen'})
+    monkeypatch.setattr(baseline_export,'load_records',lambda *args:[{'sku_id':'a'}])
+    from core import encoding_inputs
+    monkeypatch.setattr(encoding_inputs,'tokenization_policy',lambda _:request['prepared_text']['tokenization'])
+    assert not (setup/'shared_minilm__embeddings.npz').exists()
+    assert baseline_export.validate_pending(setup,tmp_path/'checkpoint',native_model=object())['status'] == 'prepared GPU pending'
+    tokens.write_bytes(b'corrupt')
+    with pytest.raises(ValueError,match='tokens changed'):
+        baseline_export.validate_pending(setup,tmp_path/'checkpoint',native_model=object())

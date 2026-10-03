@@ -788,10 +788,19 @@ training:
   # composition; default HF sampling is used when disabled.
   batch_sampler:
     enabled: true
+    # Relative weights are scaled to the runtime batch size. Absent groups
+    # are reported and their slots redistributed; every row is presented.
     composition:
       gate_positive: 4
       masked_positive: 4
       hard_negative: 8
+    compositions_by_loss:
+      mnrl:
+        base: 8
+        masked: 4
+        twin: 4
+      triplet:
+        triplet: 1
     seed: 42
 
 # ── pair-selection thresholds (owner's label semantics) ─────────────────────

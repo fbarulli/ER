@@ -109,25 +109,42 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                      for split, (_, labels) in pairs.items()}, None if vectors is None else vectors.shape)
         logger.info("[graph-phase] features start graph_enabled=%s hidden_dim=%d output_dim=%d",
                     cfg.graph_enabled, cfg.hidden_dim, cfg.output_dim)
-        vocabulary = fit_vocabulary(records)
+        from graph_tracks.prepared_inputs import PLAN, load_plan, load_batch
+        prepared_plan, prepared_arrays = None, None
+        if (resolve(cfg.listings).parent / PLAN).is_file():
+            prepared_plan, prepared_arrays = load_plan(resolve(cfg.listings), resolve(cfg.pairs))
+            if prepared_plan['ids'] != [r['sku_id'] for r in records]:
+                raise ValueError('prepared graph ID order mismatch')
+        elif cfg.device == 'cuda':
+            raise ValueError('CUDA training requires locally prepared graph tensors; run graph_tracks.prepared_inputs locally')
+        vocabulary = prepared_plan['vocabulary'] if prepared_plan else fit_vocabulary(records)
         support_indices = [i for i, r in enumerate(records) if r["split"] == "train"]
         support_records = [records[i] for i in support_indices]
         dev_indices = [i for i, record in enumerate(records) if record['split'] == 'dev']
         dev_records = [records[i] for i in dev_indices]
-        support = tensorize(support_records, vocabulary, cfg.device)
-        dev_batch = tensorize(dev_records, vocabulary, cfg.device)
+        support = (load_batch(prepared_arrays, 'train', cfg.device, vocabulary) if prepared_plan
+                   else tensorize(support_records, vocabulary, cfg.device))
+        dev_batch = (load_batch(prepared_arrays, 'dev', cfg.device, vocabulary) if prepared_plan
+                     else tensorize(dev_records, vocabulary, cfg.device))
         # Query encoding is independent per listing against training-only context.
         # Encode only supervised/evaluated populations, rather than every holdout.
-        train_local = {global_id: local_id for local_id, global_id in enumerate(support_indices)}
-        dev_local = {global_id: local_id for local_id, global_id in enumerate(dev_indices)}
-        train_pair_indices = np.asarray([[train_local[int(a)], train_local[int(b)]]
-                                        for a, b in pairs['train'][0]], dtype=np.int64)
-        dev_pair_indices = np.asarray([[dev_local[int(a)], dev_local[int(b)]]
-                                      for a, b in pairs['dev'][0]], dtype=np.int64)
-        text = None if vectors is None else torch.tensor(vectors, device=cfg.device)
+        if prepared_plan:
+            if prepared_plan['populations']['train'] != support_indices or prepared_plan['populations']['dev'] != dev_indices:
+                raise ValueError('prepared graph split population mismatch')
+            train_pair_indices = prepared_arrays['train/pairs']
+            dev_pair_indices = prepared_arrays['dev/pairs']
+        else:
+            train_local = {global_id: local_id for local_id, global_id in enumerate(support_indices)}
+            dev_local = {global_id: local_id for local_id, global_id in enumerate(dev_indices)}
+            train_pair_indices = np.asarray([[train_local[int(a)], train_local[int(b)]]
+                                            for a, b in pairs['train'][0]], dtype=np.int64)
+            dev_pair_indices = np.asarray([[dev_local[int(a)], dev_local[int(b)]]
+                                          for a, b in pairs['dev'][0]], dtype=np.int64)
+        # Only support/dev text is needed on device during optimization.
+        text_dim = 0 if vectors is None else vectors.shape[1]
         model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,
-                             0 if text is None else text.shape[1], cfg.graph_enabled).to(cfg.device)
-        scorer = PairScorer(text is not None).to(cfg.device)
+                             text_dim, cfg.graph_enabled).to(cfg.device)
+        scorer = PairScorer(bool(text_dim)).to(cfg.device)
         optimizer = torch.optim.AdamW(list(model.parameters()) + list(scorer.parameters()),
                                       lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
         scheduler = (torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -149,6 +166,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     "pairs_sha256": file_hash(resolve(cfg.pairs)),
                     "text_cache_sha256": file_hash(resolve(cfg.text_cache)) if cfg.text_cache else None,
                     "text_metadata": text_metadata, "graph_context": "training-listings-only",
+                    "augmentation": {"masking": False, "gendata": False,
+                                     "hybrid_text": "frozen baseline checkpoint" if cfg.track == 'hybrid' else None},
                     "selection_metric": "dev_pr_auc", "torch_version": str(torch.__version__),
                     "implementation_sha256": {p.name: file_hash(p) for p in sorted(Path(__file__).parent.glob("*.py"))},
                     "resume_checkpoint_sha256": file_hash(resume) if resume else None}
@@ -214,23 +233,44 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 if getattr(cfg, key):
                     target = input_dir / name(cfg.track, stem)
                     source = resolve(getattr(cfg, key))
+                    if key == 'text_cache' and cfg.input_manifest:
+                        # Preserve the manifest-relative provenance contract used
+                        # by the shared cache validator after relocation.
+                        provenance = input_dir / 'text_provenance'
+                        provenance.mkdir(exist_ok=True)
+                        target = provenance / source.name
+                        for relative in ('embedding_inputs.json', 'eligible_catalog.csv',
+                                         'prepared/input_manifest.json', 'prepared/listings.json'):
+                            origin = source.parent / relative
+                            copied = provenance / relative
+                            copied.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(origin, copied)
                     if target.resolve() != source:
                         shutil.copy2(source, target)
                     input_artifacts[key] = str(target.relative_to(output))
             from graph_tracks.report_attributes import FILENAME
             report_source = resolve(cfg.listings).parent / FILENAME
             if report_source.is_file():
-                target = input_dir / name(cfg.track, FILENAME)
-                shutil.copy2(report_source, target)
+                target = input_dir / FILENAME
+                if target.resolve() != report_source.resolve():
+                    shutil.copy2(report_source, target)
                 input_artifacts['report_attributes'] = str(target.relative_to(output))
             manifest["input_artifacts"] = input_artifacts
+            from graph_tracks.prepared_inputs import ARRAYS
+            for filename in (PLAN, ARRAYS, 'pair_lineage.json'):
+                source = resolve(cfg.listings).parent / filename
+                target = input_dir / filename
+                if source.is_file() and source.resolve() != target.resolve():
+                    shutil.copy2(source, target)
         write_json(output / name(cfg.track, "run_manifest.json"), manifest)
         write_json(output / name(cfg.track, "graph_census.json"), census(records, vocabulary))
         train_pairs = torch.tensor(train_pair_indices, device=cfg.device)
         train_labels = torch.tensor(pairs["train"][1], device=cfg.device)
         dev_pairs = torch.tensor(dev_pair_indices, device=cfg.device)
-        support_text = None if text is None else text[support_indices]
-        dev_text = None if text is None else text[dev_indices]
+        support_text = None if vectors is None else torch.as_tensor(vectors[support_indices], device=cfg.device)
+        dev_text = None if vectors is None else torch.as_tensor(vectors[dev_indices], device=cfg.device)
+        if prepared_arrays is not None:
+            prepared_arrays.close()
         logger.info("[graph-performance] encode_population train=%d dev=%d full=%d reason=independent_queries_against_training_only_context",
                     len(support_records), len(dev_records), len(records))
         trained_endpoints = set(pairs["train"][0].reshape(-1).tolist())
@@ -254,8 +294,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 model.train()
                 scorer.train()
                 optimizer.zero_grad(set_to_none=True)
-                states = profiler.call('graph/train_context',model.context,support,support_text)
-                embeddings = profiler.call('graph/train_encode',model.encode,support,states,support_text)
+                initial = profiler.call('graph/train_initial', model.initial, support, support_text)
+                states = profiler.call('graph/train_context', model.context, support, support_text, initial=initial)
+                embeddings = profiler.call('graph/train_encode', model.encode, support, states, support_text, initial=initial)
                 logits = profiler.call('graph/pair_score',scorer,embeddings,train_pairs,support_text)
                 classification = F.binary_cross_entropy_with_logits(logits, train_labels)
                 a, b = train_pairs.unbind(1)

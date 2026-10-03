@@ -29,9 +29,9 @@ def test_gpu_worker_encodes_exact_local_texts_without_composition(tmp_path, monk
     from core import encoding_inputs
     monkeypatch.setattr(encoding_inputs,'tokenization_policy',lambda model:{'truncation':False})
     tokenfile = tmp_path/'prepared_text.npz'
-    np.savez(tokenfile,**{'text/0/input_ids':np.arange(len(request['ids'])).reshape(-1,1)})
+    np.savez(tokenfile,**{'text/0/input_ids':np.arange(len(request['ids']),dtype=np.int64).reshape(-1,1), 'text/0/attention_mask':np.ones((len(request['ids']),1),dtype=np.int64)})
     request['prepared_text'] = {'sha256':hashlib.sha256(tokenfile.read_bytes()).hexdigest(), 'tokenization':{'truncation':False},
-        'token_batches':[{'prefix':'text/0','keys':['input_ids'],'constants':{}}]}
+        'token_batches':[{'prefix':'text/0','keys':['input_ids','attention_mask'],'constants':{},'count':len(request['ids'])}]}
     source = tmp_path / 'request.json'
     source.write_text(json.dumps(request))
     output = tmp_path / 'vectors.npz'
@@ -72,9 +72,9 @@ def test_explicit_cpu_smoke_encodes_without_cuda(tmp_path, monkeypatch):
     from core import encoding_inputs
     monkeypatch.setattr(encoding_inputs,'tokenization_policy',lambda model:{'truncation':False})
     tokenfile = tmp_path/'prepared_text.npz'
-    np.savez(tokenfile,**{'text/0/input_ids':np.arange(len(request['ids'])).reshape(-1,1)})
+    np.savez(tokenfile,**{'text/0/input_ids':np.arange(len(request['ids']),dtype=np.int64).reshape(-1,1), 'text/0/attention_mask':np.ones((len(request['ids']),1),dtype=np.int64)})
     request['prepared_text'] = {'sha256':hashlib.sha256(tokenfile.read_bytes()).hexdigest(), 'tokenization':{'truncation':False},
-        'token_batches':[{'prefix':'text/0','keys':['input_ids'],'constants':{}}]}
+        'token_batches':[{'prefix':'text/0','keys':['input_ids','attention_mask'],'constants':{},'count':len(request['ids'])}]}
     source = tmp_path / 'request.json'
     source.write_text(json.dumps(request))
     output = tmp_path / 'vectors.npz'

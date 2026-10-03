@@ -6,6 +6,13 @@ import pytest
 from model_tracks import ablation as a
 
 
+def save_vectors(path,**arrays):
+    for key in ('vectors','scores','candidate_vectors'):
+        if key in arrays:
+            arrays[key] = np.asarray(arrays[key],dtype=np.float32)
+    np.savez(path,**arrays)
+
+
 def test_stratified_sample_retains_joint_axes():
     cfg = a.Settings(sample_pairs=4, slice_columns=['difficulty_slice','masking_profile'])
     frame = pd.DataFrame([dict(sku_id1=str(i),sku_id2='b',label=str(i%2),split='dev',
@@ -49,29 +56,30 @@ def test_sources_fail_closed(tmp_path,monkeypatch):
 def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypatch):
     monkeypatch.setattr(a,'validate_sources',lambda request:None)
     monkeypatch.setattr(a,'settings',lambda config=None:a.Settings(report_path=str(tmp_path/'report.json')))
-    frozen = tmp_path/'baseline.json'; frozen.write_text('{"threshold": 0.5}')
+    ckpt = tmp_path/'text-checkpoint'; ckpt.write_bytes(b'weights')
+    frozen = tmp_path/'baseline.json'; frozen.write_text(json.dumps({'threshold':.5,'track':'text','checkpoint_sha256':a.file_hash(ckpt)}))
     pair = {'sku_id1':'a','sku_id2':'b','label':'1','difficulty_slice':'hard','masking_profile':None}
     request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
         {'attribute':None,'channel':'baseline','changed_listings':0},
         {'attribute':'volume','channel':'text','changed_listings':1},
         {'attribute':'coffee type','channel':'text','changed_listings':0}],
-        'settings':a.Settings().model_dump(),'track':'text','sources':{},'composition':'x',
+        'settings':a.Settings().model_dump(),'track':'text','checkpoint':str(ckpt),'sources':{str(ckpt):a.file_hash(ckpt)},'composition':'x',
         'implementation_sha256':'x','intervention':'declaration only','retrieval_scope':'sampled',
         'missing_axes':['masking_profile']}
     path = tmp_path/'request.json'; a.write(path,request)
     base = np.array([[1.,0.],[.8,.6],[0.,1.]])
     altered = np.array([[1.,0.],[0.,1.],[.8,.6]])
     output = tmp_path/'vectors.npz'
-    np.savez(output,vectors=np.stack([base,altered,base]),scores=[[.8],[.1],[.8]],request_sha256=a.file_hash(path))
+    save_vectors(output,vectors=np.stack([base,altered,base]),scores=[[.8],[.1],[.8]],request_sha256=a.file_hash(path))
     report = json.loads(a.report(path,output,.5,threshold_source=str(frozen)).read_text())
     row = report['rows'][0]
     assert row['decision_flip']
     assert row['score_delta'] == pytest.approx(-.7)
-    assert row['baseline_ranks'][0] == 1 and row['ablated_ranks'][0] == 2
+    assert row['baseline_ranks'][0] == 1 and row['ablated_ranks'][0] == 1
     assert row['masking_profile'] is None
     assert report['threshold'] == .5
     assert report['rows'][1]['decision_flip'] is False
-    np.savez(output,vectors=np.stack([base,altered,base]),scores=[[.8],[.1],[.8]],request_sha256='stale')
+    save_vectors(output,vectors=np.stack([base,altered,base]),scores=[[.8],[.1],[.8]],request_sha256='stale')
     with pytest.raises(ValueError,match='another request'):
         a.report(path,output,.5,threshold_source=str(frozen))
 
@@ -93,7 +101,7 @@ def test_threshold_binds_to_attested_track_and_checkpoint(tmp_path,monkeypatch):
     path = tmp_path/'request.json'; a.write(path,request)
     vectors = np.array([[1.,0.],[.8,.6],[0.,1.]])
     output = tmp_path/'vectors.npz'
-    np.savez(output,vectors=np.stack([vectors,vectors]),scores=[[.8],[.8]],request_sha256=a.file_hash(path))
+    save_vectors(output,vectors=np.stack([vectors,vectors]),scores=[[.8],[.8]],request_sha256=a.file_hash(path))
     report = json.loads(a.report(path,output,.5,threshold_source=str(src)).read_text())
     assert report['threshold_provenance']['track'] == 'hybrid'
     assert report['threshold_provenance']['checkpoint'] == 'hybrid__graph_model.pt'
@@ -128,7 +136,7 @@ def test_threshold_manifest_binds_absolute_checkpoint(tmp_path,monkeypatch):
     path = tmp_path/'request.json'; a.write(path,request)
     vectors = np.array([[1.,0.],[.8,.6],[0.,1.]])
     output = tmp_path/'vectors.npz'
-    np.savez(output,vectors=np.stack([vectors,vectors]),scores=[[.8],[.8]],request_sha256=a.file_hash(path))
+    save_vectors(output,vectors=np.stack([vectors,vectors]),scores=[[.8],[.8]],request_sha256=a.file_hash(path))
     report = json.loads(a.report(path,output,.5,threshold_source=str(manifest)).read_text())
     assert report['threshold_provenance']['checkpoint'] == str(ckpt)
     ckpt.write_bytes(b'rotated')
@@ -139,20 +147,21 @@ def test_threshold_manifest_binds_absolute_checkpoint(tmp_path,monkeypatch):
 def test_report_evidence_omits_null_key_for_attribute_less_variants(tmp_path,monkeypatch):
     monkeypatch.setattr(a,'validate_sources',lambda request:None)
     monkeypatch.setattr(a,'settings',lambda config=None:a.Settings(report_path=str(tmp_path/'report.json')))
-    frozen = tmp_path/'baseline.json'; frozen.write_text('{"threshold": 0.5}')
+    ckpt = tmp_path/'text-checkpoint'; ckpt.write_bytes(b'weights')
+    frozen = tmp_path/'baseline.json'; frozen.write_text(json.dumps({'threshold':.5,'track':'text','checkpoint_sha256':a.file_hash(ckpt)}))
     pair = {'sku_id1':'a','sku_id2':'b','label':'1','difficulty_slice':'hard','masking_profile':None,
             'current_attribute_evidence':{'volume':{'exact_match':True}}}
     request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
         {'attribute':None,'channel':'baseline','changed_listings':0},
         {'attribute':None,'channel':'baseline-replica','changed_listings':0},
         {'attribute':'volume','channel':'text','changed_listings':1}],
-        'settings':a.Settings().model_dump(),'track':'text','sources':{},'composition':'x',
+        'settings':a.Settings().model_dump(),'track':'text','checkpoint':str(ckpt),'sources':{str(ckpt):a.file_hash(ckpt)},'composition':'x',
         'implementation_sha256':'x','intervention':'declaration only','retrieval_scope':'sampled',
         'missing_axes':['masking_profile']}
     path = tmp_path/'request.json'; a.write(path,request)
     base = np.array([[1.,0.],[.8,.6],[0.,1.]])
     output = tmp_path/'vectors.npz'
-    np.savez(output,vectors=np.stack([base,base,base]),scores=[[.8],[.8],[.8]],request_sha256=a.file_hash(path))
+    save_vectors(output,vectors=np.stack([base,base,base]),scores=[[.8],[.8],[.8]],request_sha256=a.file_hash(path))
     report = json.loads(a.report(path,output,.5,threshold_source=str(frozen)).read_text())
     replica, volume = report['rows']
     # attribute-less variants carry the pair's full evidence map, never {None: None}
@@ -162,6 +171,7 @@ def test_report_evidence_omits_null_key_for_attribute_less_variants(tmp_path,mon
 
 
 def test_worker_forbids_cpu(tmp_path):
+    (tmp_path/'request.json').write_text('{}')
     with pytest.raises(RuntimeError,match='requires CUDA'):
         a.encode(tmp_path/'request.json',tmp_path/'vectors.npz',device='cpu')
 
@@ -171,6 +181,7 @@ def test_text_worker_loads_and_encodes_once_for_all_variants(tmp_path,monkeypatc
     import types
     import torch
     calls = []
+    forwarded_rows = []
     class Model:
         def __init__(self,*args,**kwargs):
             calls.append('load')
@@ -178,13 +189,15 @@ def test_text_worker_loads_and_encodes_once_for_all_variants(tmp_path,monkeypatc
             pass
         def __call__(self,features):
             calls.append('forward')
+            forwarded_rows.append(len(features['input_ids']))
             return {'sentence_embedding':torch.eye(3)[features['input_ids'][:,0]]}
         def tokenize(self,*args):
             raise AssertionError('worker must never tokenize')
     monkeypatch.setitem(sys.modules,'sentence_transformers',types.SimpleNamespace(SentenceTransformer=Model))
     monkeypatch.setattr(torch.cuda,'is_available',lambda:True)
     monkeypatch.setattr(a,'validate_sources',lambda request:None)
-    request = {'track':'text','checkpoint':'frozen','ids':['a','b'],'texts':['A','B','removed A'],
+    checkpoint = tmp_path/'frozen';checkpoint.mkdir();(checkpoint/'weights').write_bytes(b'frozen')
+    request = {'track':'text','checkpoint':str(checkpoint),'ids':['a','b'],'texts':['A','B','removed A'],
         'pairs':[{'sku_id1':'a','sku_id2':'b'}], 'settings':a.Settings().model_dump(),
         'variants':[{'attribute':None,'channel':'baseline','changed_listings':0,'records':[],'text_indices':[0,1]},
                     {'attribute':'volume','channel':'text','changed_listings':1,'records':[],'text_indices':[2,1]},
@@ -193,6 +206,8 @@ def test_text_worker_loads_and_encodes_once_for_all_variants(tmp_path,monkeypatc
     from model_tracks.ablation_inputs import prepare_inputs
     monkeypatch.setattr(encoding_inputs,'tokenization_policy',lambda model:{'truncation':False})
     monkeypatch.setattr(encoding_inputs,'prepare_text_features',lambda model,texts,**kwargs:{'input_ids':torch.arange(len(texts)).reshape(-1,1),'attention_mask':torch.ones(len(texts),1,dtype=torch.long)})
+    request['candidate_ids'] = ['a','b']
+    request['candidate_text_indices'] = [0,1]
     request['schema'] = 'er-attribute-ablation-v2'
     request['pairs'][0]['label'] = '1'
     request['prepared_inputs'] = prepare_inputs(request,tmp_path/'prepared_inputs.npz')
@@ -207,6 +222,22 @@ def test_text_worker_loads_and_encodes_once_for_all_variants(tmp_path,monkeypatc
         assert result['vectors'].shape == (3,2,3)
         assert result['request_sha256'].item() == a.file_hash(path)
 
+
+    # A checkpoint/native-text-bound baseline seeds unchanged and catalog rows;
+    # only the one unique changed text reaches another GPU forward.
+    from core.model_input import model_input_composition
+    from graph_tracks.text_cache import texts_hash
+    saved = tmp_path/'saved_text.npz'
+    metadata = {'checkpoint_sha256':a.checkpoint_identity(checkpoint),'tokenization':{'truncation':False},
+                'composition':model_input_composition().model_dump(mode='json'),
+                'text_sha256':texts_hash(['A','B']),'embedding_dtype':'float32'}
+    np.savez(saved,ids=['a','b'],embeddings=np.eye(3,dtype=np.float32)[:2],metadata=json.dumps(metadata))
+    calls.clear();forwarded_rows.clear()
+    a.encode(path,tmp_path/'reused_result.npz',saved_text=saved)
+    assert calls == ['load','forward'] and forwarded_rows == [1]
+    with np.load(output) as original,np.load(tmp_path/'reused_result.npz') as reused:
+        assert np.array_equal(original['vectors'],reused['vectors'])
+        assert np.array_equal(original['candidate_vectors'],reused['candidate_vectors'])
 
 def test_prepare_uses_real_shared_composer_and_marks_registry_noop(tmp_path,monkeypatch):
     import sys, types, torch
@@ -264,6 +295,7 @@ def test_colab_launcher_clones_git_and_releases_on_worker_failure(tmp_path,monke
     import importlib
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'scripts'))
     launcher = importlib.import_module('run_colab_ablation')
+    monkeypatch.setattr(launcher,'verify_threshold_binding',lambda *args:{'verified':True})
     worker = tmp_path/'src/model_tracks/ablation.py'; worker.parent.mkdir(parents=True); worker.write_text('worker')
     folder = tmp_path/'results/attribute_ablation/run'; folder.mkdir(parents=True)
     request = folder/'request.json'; request.write_text('{"sources": {}}')
@@ -305,6 +337,7 @@ def test_launcher_preflights_untracked_directory_checkpoint(tmp_path,monkeypatch
     import sys, importlib
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'scripts'))
     launcher = importlib.import_module('run_colab_ablation')
+    monkeypatch.setattr(launcher,'verify_threshold_binding',lambda *args:{'verified':True})
     monkeypatch.setattr(launcher,'TRAIN_ROOT',tmp_path)
     monkeypatch.setattr(launcher,'resolve',lambda p: Path(p) if Path(p).is_absolute() else tmp_path/Path(p))
     _git_repo(tmp_path)
@@ -328,6 +361,7 @@ def test_launcher_accepts_committed_directory_checkpoint(tmp_path,monkeypatch):
     import sys, importlib
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'scripts'))
     launcher = importlib.import_module('run_colab_ablation')
+    monkeypatch.setattr(launcher,'verify_threshold_binding',lambda *args:{'verified':True})
     monkeypatch.setattr(launcher,'TRAIN_ROOT',tmp_path)
     monkeypatch.setattr(launcher,'resolve',lambda p: Path(p) if Path(p).is_absolute() else tmp_path/Path(p))
     _git_repo(tmp_path)
@@ -357,6 +391,7 @@ def test_launcher_reports_once_and_persists_validated_output(tmp_path,monkeypatc
     import sys, importlib, hashlib
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'scripts'))
     launcher = importlib.import_module('run_colab_ablation')
+    monkeypatch.setattr(launcher,'verify_threshold_binding',lambda *args:{'verified':True})
     folder = tmp_path/'results/attribute_ablation/run'; folder.mkdir(parents=True)
     request = folder/'request.json'; request.write_text('{"sources": {}}')
     (folder/'prepared_inputs.npz').write_bytes(b'prepared')
@@ -369,7 +404,11 @@ def test_launcher_reports_once_and_persists_validated_output(tmp_path,monkeypatc
     monkeypatch.setattr(launcher,'push_artifacts',lambda paths,message:None)
     validated = {'schema':'er-attribute-ablation-report-v1','rows':[],'threshold':.5}
     calls = []
+    lifecycle = []
+    monkeypatch.setattr(launcher,'validate_vectors',lambda *args:lifecycle.append('validate'))
     def fake_report(request_path,result,threshold,threshold_source,save=True):
+        assert result == folder/'vectors.npz' and result.is_file()
+        assert lifecycle == ['validate','stop']
         calls.append(save)
         return validated if not save else 'recomputed-path'
     monkeypatch.setattr(launcher,'report',fake_report)
@@ -381,6 +420,7 @@ def test_launcher_reports_once_and_persists_validated_output(tmp_path,monkeypatc
     monkeypatch.setattr(launcher,'persist_embeddings',fake_persist)
     for method in ('check_colab_cli','start_live_log','ensure_session','stop','close_live_log'):
         monkeypatch.setattr(launcher.backend,method,lambda method=method:None)
+    monkeypatch.setattr(launcher.backend,'stop',lambda:lifecycle.append('stop'))
     monkeypatch.setattr(launcher.backend,'acquire_colab_launch_lock',lambda:'lock')
     monkeypatch.setattr(launcher.backend,'release_colab_launch_lock',lambda lock:None)
     for method in ('stop_keep_alive_daemon','prepare_remote_layout','install_deps'):
@@ -402,3 +442,33 @@ def test_launcher_reports_once_and_persists_validated_output(tmp_path,monkeypatc
     assert persisted[1] == ('persist',str(folder/'vectors.npz'),'handoff-path')
     assert outcome == 'published'
     assert (folder/'vectors.npz').read_bytes() == b'vectors'
+    lifecycle.clear()
+    monkeypatch.setattr(launcher,'report',lambda *args,**kwargs:validated)
+    assert launcher.main(request,threshold=.5,threshold_source='report') == 'published'
+    assert lifecycle == []
+    assert len(persisted) == 4
+
+
+def test_threshold_requires_identity_even_if_numeric_value_matches(tmp_path):
+    source = tmp_path/'baseline.json'; source.write_text('{"threshold":0.5}')
+    checkpoint = tmp_path/'weights'; checkpoint.write_bytes(b'weights')
+    request = {'track':'text','checkpoint':str(checkpoint),'sources':{str(checkpoint):a.file_hash(checkpoint)}}
+    with pytest.raises(ValueError,match='missing'):
+        a.verify_threshold_binding(request,a.frozen_threshold(str(source),.5))
+    source.write_text('{"track":"text","threshold":0.5}')
+    with pytest.raises(ValueError,match='missing'):
+        a.verify_threshold_binding(request,a.frozen_threshold(str(source),.5))
+
+
+def test_full_catalog_has_candidates_outside_sample(tmp_path):
+    from model_tracks.ablation_retrieval import RetrievalComparison
+    vectors = np.asarray([[1.,0.],[.6,.8],[.99,np.sqrt(1-.99**2)]],dtype=np.float32)
+    request = {'track':'text','ids':['a','b'],'pairs':[{'sku_id1':'a','sku_id2':'b'}]}
+    comparison = RetrievalComparison(['a','b','extra'],vectors,request,tmp_path/'request.json',a.Settings(retrieval_ks=[1,2]))
+    try:
+        assert comparison.ranks(vectors[:2])[0][0] == 2
+        hits = comparison.ann_hits(vectors[:2])
+        assert hits[0]['1'][0] is False
+        assert hits[0]['2'][0] is True
+    finally:
+        comparison.close()

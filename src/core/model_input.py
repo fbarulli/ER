@@ -32,7 +32,7 @@ from collections.abc import Mapping, Sequence
 import pandas as pd  # frame access in build_sku_texts (consolidated loop)
 
 from core.columns import alias_names
-from core.common import load_config, row_metadata_text
+from core.common import load_config, row_metadata_text, config_section
 from core.schemas import TrainingSpec
 
 __all__ = [
@@ -56,7 +56,7 @@ _FIELD_GROUP_RE = re.compile(r"\[FIELD_([A-Z_]+)\]")
 def model_input_spec() -> TrainingSpec.ModelInputSpec:
     """The validated model-input composition settings (config SSOT)."""
     return TrainingSpec.ModelInputSpec.model_validate(
-        load_config()["training"]["model_input"]
+        config_section('training', 'model_input', loader=load_config)
     )
 
 
@@ -74,7 +74,7 @@ def model_input_composition() -> TrainingSpec.ModelInputComposition:
 
 def implicit_pack_qty() -> float:
     """The configured implicit pack count for an unobserved pack (SSOT)."""
-    return float(load_config()["training"]["structured_features"]["implicit_pack_qty"])
+    return float(config_section('training', 'structured_features', 'implicit_pack_qty', loader=load_config))
 
 
 def token_budget_report(
@@ -127,7 +127,7 @@ def _structured_text_enabled() -> bool:
     Owned here so the three call sites stop recomputing the same
     ``enabled and append_to_text`` pair from their own config reads.
     """
-    cfg = load_config()["training"]["structured_features"]
+    cfg = config_section('training', 'structured_features', loader=load_config)
     return bool(cfg["enabled"]) and bool(cfg["append_to_text"])
 
 

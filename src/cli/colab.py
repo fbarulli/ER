@@ -4478,6 +4478,7 @@ def main() -> None:
 
     suite_archive = None
     suite_run_tag = None
+    suite_git_inputs = None
     if args.what == 'tracks' or args.tracks_config is not None:
         if args.what not in {'tracks','train','smoke'}:
             raise ValueError('--tracks-config applies to train/tracks/smoke only')
@@ -4504,6 +4505,12 @@ def main() -> None:
             verify_suite_package(suite_archive)
         else:
             suite_archive = suite_package(suite_config, suite_archive)
+        # Finish immutable input publication before allocating an accelerator.
+        # prepare_remote_layout clones the same Git branch below.
+        from model_tracks.colab import prepare_git_inputs
+        suite_recovery = RESULTS/'model_tracks'/f'{suite_run_tag}.recovery.zip'
+        suite_git_inputs = prepare_git_inputs(suite_archive,suite_run_tag,
+            resume_archive=suite_recovery if args.resume_run and suite_recovery.is_file() else None)
         args.what = 'tracks'
 
     if args.what == 'smoke' and suite_archive is None:
@@ -4661,7 +4668,7 @@ def main() -> None:
         # for a lane that only needs the configured zero-shot scoring.
         if args.what == 'tracks':
             from model_tracks.colab import run as run_suite
-            run_suite(suite_archive, suite_run_tag, resume=bool(args.resume_run))
+            run_suite(suite_archive, suite_run_tag, resume=bool(args.resume_run),git_inputs=suite_git_inputs)
         elif args.what == "sims":
             run_sims()
         elif args.what == "mixed":

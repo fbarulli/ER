@@ -10,7 +10,7 @@ import pandas as pd
 from model_tracks.config import load_config
 
 
-def preflight(config: Path) -> dict:
+def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) -> dict:
     from core.common import F, SEED, TRAIN_ROOT, resolve_model, training_cfg
     from graph_tracks.preflight import preflight as graph_preflight
     from graph_tracks.text_cache import checkpoint_hash
@@ -29,9 +29,37 @@ def preflight(config: Path) -> dict:
     model = Path(resolve_model(cfg.text_model))
     if checkpoint_hash(model) != setup['text_checkpoint_sha256']:
         raise ValueError('text baseline differs from frozen hybrid checkpoint')
-    checks = {track: graph_preflight(root / f'{track}.yaml', check_device=False)
-              for track in ('gnn_only', 'hybrid')}
+    checks = {'gnn_only':graph_preflight(root/'gnn_only.yaml',check_device=False)}
+    if allow_gpu_pending and not (root/'shared_minilm__embeddings.npz').exists():
+        from model_tracks.baseline_export import validate_pending
+        from graph_tracks.config import load_config as graph_config
+        pending = validate_pending(root,model,native_model=native_token_model)
+        graph = graph_config(root/'gnn_only.yaml')
+        hybrid = graph_config(root/'hybrid.yaml')
+        for key in ('listings','pairs','input_manifest'):
+            if getattr(graph,key) != getattr(hybrid,key):
+                raise ValueError('GPU-pending hybrid must use shared manifested '+key)
+        if hybrid.allow_unmanifested_inputs or not hybrid.input_manifest or not hybrid.text_cache:
+            raise ValueError('GPU-pending hybrid requires manifested frozen text inputs')
+        if hybrid.text_checkpoint_sha256 != pending['checkpoint_sha256']:
+            raise ValueError('GPU-pending hybrid checkpoint differs from prepared baseline')
+        checks['hybrid'] = {**checks['gnn_only'],'track':'hybrid','text_dimension':None,
+                            'text_prerequisite':pending}
+    else:
+        checks['hybrid'] = graph_preflight(root/'hybrid.yaml',check_device=False)
     manifest, bundle = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
+    from training.run_plan import validate_run_plan
+    from training.token_inputs import validate_training_tokens
+    if 'training_tokens' not in bundle or 'training_plan' not in bundle:
+        raise ValueError('text bundle lacks fixed native tokens/training row plan; rebuild locally')
+    validate_training_tokens(bundle['training_tokens'])
+    export_request = json.loads((root/'text_export_request.json').read_text())
+    if bundle['training_tokens']['policy'] != export_request['plan']['tokenization']:
+        raise ValueError('training native tokenizer differs from prepared suite export')
+    payload_digest = hashlib.sha256(json.dumps(list(bundle['payload']),ensure_ascii=False).encode()).hexdigest()
+    if bundle['training_tokens']['payload_sha256'] != payload_digest or not set(bundle['payload']).issubset(bundle['training_tokens']['texts']):
+        raise ValueError('training native tokens differ from frozen payload')
+    validate_run_plan(bundle,bundle['training_plan'],loss=training_cfg().loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
     from core.schemas import DataTuple
     DataTuple(n_df=len(bundle['df']), **{key: bundle[key] for key in
               ('payload', 'structured_features', 'row_bc', 'country', 'pos', 'hp_pairs', 'emb0')})

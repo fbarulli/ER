@@ -24,7 +24,7 @@ def composition_fingerprint():
     return digest.hexdigest()
 
 
-def compose_texts(catalog: Path):
+def compose_texts(catalog: Path, *, composer=None):
     from core.model_input import build_sku_text, model_input_info
     from core.sku_identity import row_identity
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False, low_memory=False)
@@ -34,7 +34,8 @@ def compose_texts(catalog: Path):
     started = last_progress = time.monotonic()
     print(f'[embeddings/local] composing {len(frame):,} texts on CPU', flush=True)
     for index, (_, row) in enumerate(frame.iterrows(), 1):
-        texts.append(build_sku_text(row, model_input_info(row_identity(row).as_mapping())))
+        texts.append(composer(row.to_dict()) if composer is not None else
+                     build_sku_text(row, model_input_info(row_identity(row).as_mapping())))
         if index == len(frame) or time.monotonic() - last_progress >= 10:
             print(f'[embeddings/local] texts={index:,}/{len(frame):,} elapsed={time.monotonic()-started:.1f}s', flush=True)
             last_progress = time.monotonic()
@@ -79,10 +80,12 @@ def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64
     progress(f'encoding rows={len(texts):,} batch_size={batch_size}')
     vectors = model.encode(texts, batch_size=batch_size, convert_to_numpy=True,
                            normalize_embeddings=True, show_progress_bar=True)
+    vectors = np.asarray(vectors, dtype=np.float32)
     progress(f'encoding complete shape={vectors.shape}; writing cache')
     from core.identity_policy import POLICY_PATH
     from core.common import TRAIN_ROOT
     metadata = {'checkpoint_sha256': fingerprint,
+                'embedding_dtype': 'float32',
                 'identity_policy_sha256': file_hash(POLICY_PATH),
                 'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config' / 'identity_dimensions.yaml'),
                 'composition': model_input_composition().model_dump(mode='json'),

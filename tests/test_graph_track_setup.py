@@ -39,6 +39,19 @@ def test_setup_rejects_normalized_entity_split_conflict():
         listing_contract(catalog, pd.DataFrame(), {'train': {'1'}, 'dev': {'0001'}})
 
 
+def test_listing_pairs_preserve_optional_trace_axes_in_lineage():
+    catalog = pd.DataFrame({'sku_id':['a','b'],'gtin':['1','2']})
+    labels = pd.DataFrame({'gtin1':['1'],'gtin2':['2'],'true_label':['0'],
+                           'difficulty':['hard'],'gate evidence':['declared flavor conflict']})
+    _,_,pairs,accounting = listing_contract(catalog,labels,{'train':{'1','2'}})
+    assert list(pairs.columns) == ['sku_id1','sku_id2','label','split']
+    origin = accounting['pair_lineage'][0]['origins'][0]
+    assert origin['source_row'] == 1
+    assert origin['metadata'] == {'difficulty':'hard','gate evidence':'declared flavor conflict'}
+    assert 'difficulty' not in accounting['missing_axes']
+    assert accounting['augmentation'].startswith('not_applicable')
+
+
 def test_preflight_and_portable_package_hashes(tmp_path):
     from graph_tracks.prepare import prepare
     from graph_tracks.preflight import preflight

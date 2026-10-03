@@ -6,38 +6,10 @@ from graph_tracks.data import GraphBatch, RELATIONS, tensorize, file_hash
 from graph_tracks.pooling import topology
 
 
-def save_batch(arrays, prefix, batch, vocabulary):
-    arrays[prefix+'/numeric'] = batch.numeric.numpy()
-    for relation in RELATIONS:
-        listing, value = batch.edges[relation]
-        arrays[prefix+'/'+relation+'/listing'] = listing.numpy()
-        arrays[prefix+'/'+relation+'/value'] = value.numpy()
-        for attribute in (False, True):
-            count = len(vocabulary[relation])+1 if attribute else len(batch.numeric)
-            source, target, sizes = topology(batch, relation, attribute=attribute, count=count)
-            stem = prefix+'/'+relation+('/attribute' if attribute else '/listing_pool')
-            arrays[stem+'/source'] = source.numpy()
-            arrays[stem+'/target'] = target.numpy()
-            arrays[stem+'/sizes'] = sizes.numpy()
+from graph_tracks.prepared_inputs import save_batch, load_batch
 
 
-def load_batch(arrays, prefix, device, vocabulary):
-    numeric = torch.as_tensor(arrays[prefix+'/numeric'],device=device)
-    edges = {r:(torch.as_tensor(arrays[prefix+'/'+r+'/listing'],device=device),
-                torch.as_tensor(arrays[prefix+'/'+r+'/value'],device=device)) for r in RELATIONS}
-    batch = GraphBatch(numeric,edges)
-    batch._pool_topology = {}
-    for relation,(listing,value) in edges.items():
-        signature = (id(listing),listing._version,id(value),value._version)
-        for attribute in (False, True):
-            count = len(vocabulary[relation])+1 if attribute else len(numeric)
-            stem = prefix+'/'+relation+('/attribute' if attribute else '/listing_pool')
-            tensors = [torch.as_tensor(arrays[stem+'/'+key],device=device) for key in ('source','target','sizes')]
-            batch._pool_topology[(relation,attribute,count,torch.float32)] = (signature,*tensors,listing,value)
-    return batch
-
-
-def prepare_inputs(request, output):
+def prepare_inputs(request, output, *, token_cache=None):
     """No model forward here: CPU text tokenization and frozen-vocabulary topology."""
     from model_tracks.ablation import resolve, digest
     arrays = {}
@@ -55,13 +27,10 @@ def prepare_inputs(request, output):
         group['pair_indices'].append(n)
     batch_size = request['settings']['batch_size']
     if request['track'] != 'gnn_only':
-        from sentence_transformers import SentenceTransformer
         checkpoint = request['checkpoint'] if request['track']=='text' else request['text_checkpoint']
-        print('[ablation/local] loading tokenizer from frozen checkpoint; no encoding',flush=True)
-        model = SentenceTransformer(str(resolve(checkpoint)),device='cpu',local_files_only=True)
-        from core.encoding_inputs import prepare_token_batches
-        plan.update(prepare_token_batches(model,request['texts'],arrays,batch_size=batch_size))
-        del model
+        print('[ablation/local] using frozen native tokenizer; no encoding',flush=True)
+        from model_tracks.text_export import prepare_tokens
+        plan.update(prepare_tokens(resolve(checkpoint),request['texts'],arrays,batch_size=batch_size,cache=token_cache))
     payload = None
     if request['track'] != 'text':
         payload = torch.load(resolve(request['checkpoint']),map_location='cpu',weights_only=False)
@@ -78,6 +47,15 @@ def prepare_inputs(request, output):
         vocabulary = payload['vocabulary']
         plan['vocabulary'] = vocabulary
         save_batch(arrays,'support',tensorize(payload['support_records'],vocabulary,'cpu'),vocabulary)
+    if request.get('candidate_ids'):
+        arrays['candidate_text_indices'] = np.asarray(request['candidate_text_indices'],dtype=np.int64)
+        plan['candidate_ids'] = request['candidate_ids']
+        if payload:
+            plan['candidate_batches'] = []
+            for start in range(0,len(request['candidate_records']),batch_size):
+                prefix = f'candidate/{start}'
+                save_batch(arrays,prefix,tensorize(request['candidate_records'][start:start+batch_size],vocabulary,'cpu'),vocabulary)
+                plan['candidate_batches'].append(prefix)
     job_lookup = {}
     for variant in request['variants']:
         key = digest({'text':variant['text_indices'],'graph':variant['records']})

@@ -1,4 +1,5 @@
 {
+  "augmentation": "not_applicable: graph track uses fixed labels without generated/masked pairs",
   "catalog_sha256": "851f014e5fe600a625005dfe7b6d5076bd1e0614ad225d200ace6002bf52baaf",
   "excluded_model_inputs": [
     "gtin",
@@ -14,6 +15,17 @@
     "volume_ml",
     "pack"
   ],
+  "pair_lineage_sha256": "1c8e9d61a6e50747d3cfd6dd352944c75604d8a769dcb25301353f9c33c39534",
+  "pair_trace": {
+    "missing_axes": [
+      "difficulty",
+      "gate_evidence",
+      "gendata",
+      "masking"
+    ],
+    "source_trace_columns": [],
+    "status": "reconstructed_from_verified_source"
+  },
   "pairs_sha256": "151b7d3a07476c616e862bae735597f1b41c38b49faf25099dd9550b6f5d6bf5",
   "relations": [
     "brand",

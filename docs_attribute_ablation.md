@@ -79,3 +79,25 @@ without tokenizing again. Complete inputs are tokenized with truncation disabled
 Any sequence exceeding the checkpoint's supported positional window fails local
 preparation, and embedding-dimension truncation is also rejected. Reports bind
 the prepared archive checksum. Encoding logs explicitly record `truncated=0`.
+
+Training completion now enables `post_training_ablation` through
+`config/model_tracks.yaml`. After publishing selected inference checkpoints,
+it automatically prepares and runs one frozen-checkpoint job per track. Resume
+validates completed results and never retrains. The calibration attestation
+preserves the original saved dev report and the verified deployment lineage;
+a numeric threshold without an attested matching track and checkpoint is
+rejected before GPU allocation.
+
+`retrieval_catalog: full` prepares the complete candidate catalog once. Retrieval
+ablates query endpoints while keeping candidate vectors fixed, and reports both
+exact directional ranks and existing HNSW hits. This avoids a catalog-squared
+matrix and repeated candidate encoding. It measures query-side influence;
+rebuilding the entire candidate index under each intervention is a different
+experiment. Missing historical slice/masking/generation fields remain unknown.
+The earlier sampled-only description applies when explicitly configured with
+`retrieval_catalog: sampled`.
+
+Shared model loaders now guard bi-encoder evaluation and cross-encoder reranking.
+Complete pairs that exceed the cross-encoder window are rejected before predict.
+Fine-tuned ANN refresh enables the same bi-encoder guard even for a live model
+passed directly to the refresh function.

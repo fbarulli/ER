@@ -20,6 +20,8 @@ class SuiteConfig(BaseModel):
     publish_dvc: bool = False
     publish_git: bool = True
     profiling: bool = False
+    post_training_ablation: bool = False
+    ablation_config: str = 'config/attribute_ablation.yaml'
 
     @property
     def dvc_enabled(self) -> bool:

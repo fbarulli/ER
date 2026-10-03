@@ -1387,6 +1387,10 @@ def _main_inner(_mlf, _wandb) -> None:
             gate_results_csv=(RESULTS / F["gate_results"]).read_bytes(),
             payload_variant=args.payload,
             masking_profile=str(mask_cfg["profile"]),
+            token_checkpoint=str(args.model),
+            plan_loss=args.loss,
+            plan_train_frac=args.train_frac,
+            plan_sample=bool(args.sample),
         )
         print(
             f"[prepared-bundle] wrote {args.prepare_bundle} "

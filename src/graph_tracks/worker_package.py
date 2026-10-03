@@ -28,9 +28,19 @@ def package(config: Path, output: Path, *, device: str = 'cuda') -> Path:
             continue
         source = (TRAIN_ROOT / settings[key]).resolve()
         destination = base / f'{key}{source.suffix}'
+        if key == 'text_cache':
+            destination = base / 'text_provenance' / source.name
+            for relative in ('embedding_inputs.json', 'eligible_catalog.csv',
+                             'prepared/input_manifest.json', 'prepared/listings.json'):
+                files[(destination.parent / relative).as_posix()] = source.parent / relative
         files[destination.as_posix()] = source
         settings[key] = destination.as_posix()
     settings.update(device=device, output_dir='results/graph_tracks')
+    from graph_tracks.prepared_inputs import PLAN, ARRAYS
+    for filename in (PLAN, ARRAYS, 'pair_lineage.json'):
+        source = (TRAIN_ROOT / cfg.listings).resolve().parent / filename
+        if source.is_file():
+            files[(base / filename).as_posix()] = source
     from graph_tracks.report_attributes import FILENAME
     report_attributes = (TRAIN_ROOT / cfg.listings).resolve().parent / FILENAME
     if report_attributes.is_file():

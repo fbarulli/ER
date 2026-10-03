@@ -15,27 +15,18 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from core.common import load_config, load_local_sentence_transformer
-from core.model_input import (
-    build_sku_text,
-    model_input_info,
-    model_input_composition,
-)
-from core.structured_features import (
-    fuse_numpy,
-    sku_info as sku_structured_info,
-    vector as structured_vector,
-)
+from graph_tracks.data import file_hash, load_text_cache
+from graph_tracks.text_cache import checkpoint_hash
+import json
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True, help="fine-tuned SentenceTransformer directory")
+    parser.add_argument("--model", help="optional checkpoint directory to verify saved provenance")
+    parser.add_argument("--embeddings", required=True, type=Path, help="verified GPU-produced NPZ with IDs and frozen metadata")
     parser.add_argument("--input", required=True, type=Path, help="CSV containing SKU/product rows")
     parser.add_argument("--output-dir", type=Path, default=Path("results/atlas_embeddings"))
     parser.add_argument("--name", default="euromonitor-ann-embeddings")
-    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
-    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--sample", type=int, default=None)
     parser.add_argument("--predictions", type=Path, help="optional prediction CSV to join as metadata")
     parser.add_argument("--upload", action="store_true", help="publish the map to Nomic Atlas")
@@ -52,47 +43,16 @@ def main() -> None:
     if id_column not in frame.columns:
         raise ValueError("input must contain SKU_ID or sku_id")
 
-    cfg = load_config()["training"]["structured_features"]
-    enabled = bool(cfg["enabled"])
-    rows = frame.to_dict("records")
-    # The encoder text comes from the shared composition SSOT.  This script used
-    # to build its own copy and called the six-argument `clean_sku_text` with
-    # two, so brand/description/category/breadcrumbs silently became "" — a
-    # composition that matched neither profile.
-    infos = [
-        model_input_info(
-            sku_structured_info(
-                row.get("sku_name_eng", ""), row.get("attribute", row.get("attr", ""))
-            )
-        )
-        if enabled
-        else {"volume": set(), "pack": set()}
-        for row in rows
-    ]
-    texts = [
-        build_sku_text(pd.Series(row), info)
-        for row, info in zip(rows, infos, strict=True)
-    ]
-    model = load_local_sentence_transformer(args.model, device=args.device)
-    embeddings = model.encode(
-        texts,
-        batch_size=args.batch_size,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-        show_progress_bar=True,
-    ).astype(np.float32, copy=False)
-    if enabled and bool(cfg["feed_to_loss"]):
-        features = np.asarray([
-            structured_vector(
-                info,
-                volume_scale_ml=float(cfg["volume_scale_ml"]),
-                pack_scale=float(cfg["pack_scale"]),
-                max_set_size=int(cfg["max_set_size"]),
-            )
-            for info in infos
-        ], dtype=np.float32)
-        embeddings = fuse_numpy(embeddings, features, float(cfg["embedding_weight"]))
-
+    ids = frame[id_column].astype(str).tolist()
+    if any(not key for key in ids) or len(set(ids)) != len(ids):
+        raise ValueError('input requires unique nonempty listing IDs')
+    embeddings, provenance = load_text_cache(args.embeddings,ids)
+    if not np.allclose(np.linalg.norm(embeddings,axis=1),1,atol=1e-4):
+        raise ValueError('export vectors must be normalized')
+    if args.model and checkpoint_hash(Path(args.model)) != provenance['checkpoint_sha256']:
+        raise ValueError('embedding checkpoint differs from requested model')
+    # This diagnostic consumes the frozen vector artifact; model operations
+    # belong to the prepared Colab GPU stage.
     args.output_dir.mkdir(parents=True, exist_ok=True)
     embedding_path = args.output_dir / "embeddings.npy"
     metadata_path = args.output_dir / "metadata.csv"
@@ -101,15 +61,18 @@ def main() -> None:
     metadata.insert(0, "atlas_id", metadata[id_column].astype(str))
     # The matrix is only interpretable together with the composition that
     # produced it, so the artifact names its own input contract.
-    provenance = model_input_composition()
-    metadata.insert(1, "model_input_profile", provenance.profile)
-    metadata.insert(2, "model_input_include_evidence", provenance.include_evidence)
+    metadata.insert(1,"checkpoint_sha256",provenance['checkpoint_sha256'])
+    (args.output_dir/'embedding_provenance.json').write_text(json.dumps({
+        'source_sha256':file_hash(args.embeddings),'metadata':provenance,
+        'ids':ids,'embedding_dtype':'float32'},indent=2)+'\n')
     if args.predictions:
         predictions = pd.read_csv(args.predictions, dtype=str, keep_default_na=False)
         join_key = "SKU_ID" if "SKU_ID" in predictions.columns else "sku_id"
         if join_key in predictions.columns:
+            if predictions[join_key].duplicated().any():
+                raise ValueError('prediction rows require unique listing IDs; pair scores need explicit aggregation')
             metadata = metadata.merge(
-                predictions.drop_duplicates(join_key),
+                predictions,
                 left_on=id_column,
                 right_on=join_key,
                 how="left",

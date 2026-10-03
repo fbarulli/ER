@@ -116,6 +116,30 @@ necessary before any quality comparison.
 
 ## Train and complete
 
+Production CUDA workers consume locally prepared graph tensors. New shared
+preparation writes `graph_plan.json` and `graph_inputs.npz` beside listings;
+for existing prepared catalogs regenerate them locally before packaging:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m graph_tracks.prepared_inputs \
+  --listings data/track_setup/prepared/listings.json \
+  --pairs data/track_setup/prepared/pairs.csv
+```
+
+The plan binds listing ID order, train-only vocabulary, numeric float32 values,
+int64 edges/pairs and pooling topology to source hashes. CUDA training and
+inference fail if this local preparation is missing. CPU synthetic smoke may
+use record tensorization. Numeric features intentionally retain only min/max
+and presence; all missing/unseen categorical values use token zero without
+sharing graph context. Census records these representation reductions.
+
+`graph_tracks.infer.forward_outputs` saves normalized float32 listing vectors,
+dev/test pair scores and checkpoint/source hashes without HNSW or plots.
+`graph_tracks.report.complete(..., saved_inference=...)` validates those saved
+outputs and performs local metrics, indexing and plots without a model forward.
+New inductive catalogs can use `prepared_inputs.prepare_inference` locally with
+the selected checkpoint; their queries retain the checkpoint's training support.
+
 ```bash
 PYTHONPATH=src .venv/bin/python -m graph_tracks.train \
   --config config/graph_tracks_gnn.yaml --run-tag experiment-001

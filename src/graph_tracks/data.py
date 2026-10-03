@@ -111,12 +111,16 @@ def tensorize(records: list[dict], vocabulary: dict[str, list[str]], device: str
 def load_text_cache(path: Path, ids: list[str]) -> tuple[np.ndarray, dict]:
     with np.load(path, allow_pickle=False) as cache:
         cached_ids = cache["ids"].astype(str).tolist()
-        vectors = np.asarray(cache["embeddings"], dtype=np.float32)
+        vectors = np.asarray(cache["embeddings"])
         metadata = json.loads(str(cache["metadata"].item()))
     if len(set(cached_ids)) != len(cached_ids):
         raise ValueError("duplicate IDs in text cache")
     if vectors.ndim != 2 or vectors.shape[0] != len(cached_ids) or vectors.shape[1] == 0:
         raise ValueError("invalid text cache dimensions")
+    if vectors.dtype != np.float32:
+        raise ValueError('text cache embeddings must persist float32; silent dtype coercion is forbidden')
+    if metadata.get('embedding_dtype', 'float32') != 'float32':
+        raise ValueError('text cache embedding dtype attestation mismatch')
     if not np.isfinite(vectors).all() or np.any(np.linalg.norm(vectors, axis=1) <= 1e-12):
         raise ValueError("text cache contains nonfinite or zero vectors")
     if not metadata.get("checkpoint_sha256") or not metadata.get("composition"):
@@ -130,6 +134,14 @@ def load_text_cache(path: Path, ids: list[str]) -> tuple[np.ndarray, dict]:
 
 def census(records: list[dict], vocabulary: dict[str, list[str]]) -> dict:
     return {
+        "representation_policy": {
+            "numeric": "log1p min/max and presence; interior values omitted",
+            "categorical": "train vocabulary; missing and all unseen values share token zero; deduplicated",
+            "unknown_graph_hub": False,
+        },
+        "numeric_interior_values_omitted": {
+            field: sum(max(0, len(set(r['numeric'].get(field, []))) - 2) for r in records)
+            for field in NUMERIC},
         "listings": len(records),
         "splits": {s: sum(r["split"] == s for r in records) for s in sorted(SPLITS)},
         "relations": {rel: {

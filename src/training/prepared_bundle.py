@@ -219,6 +219,11 @@ def write_prepared_bundle(
     payload_variant: str,
     masking_profile: str,
     holdout_populations: dict[str, list[str]] | None = None,
+    token_checkpoint: str | None = None,
+    training_tokens: dict | None = None,
+    plan_loss: str | None = None,
+    plan_train_frac: float = 1.0,
+    plan_sample: bool = False,
 ) -> PreparedBundleManifest:
     """Write one compressed, self-contained, locally generated input bundle."""
 
@@ -266,8 +271,22 @@ def write_prepared_bundle(
         "payload_variant": payload_variant,
         "masking_profile": masking_profile,
     }
+    if token_checkpoint is not None:
+        from core.common import load_local_sentence_transformer
+        from training.token_inputs import prepare_training_tokens
+        token_model = load_local_sentence_transformer(str(token_checkpoint), device="cpu")
+        training_tokens = prepare_training_tokens(token_model, payload)
+        del token_model
+    if training_tokens is not None:
+        from training.token_inputs import validate_training_tokens
+        validate_training_tokens(training_tokens)
+        payload_data["training_tokens"] = training_tokens
+    _validate_bundle_arrays(payload_data)
     if holdout_populations is not None:
         payload_data['holdout_populations'] = holdout_populations
+    if token_checkpoint is not None:
+        from training.run_plan import prepare_run_plan
+        payload_data["training_plan"] = prepare_run_plan(payload_data, loss=plan_loss, train_frac=plan_train_frac, sample=plan_sample)
     with gzip.open(path, "wb", compresslevel=6) as handle:
         pickle.dump(payload_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
     manifest = PreparedBundleManifest(
@@ -321,6 +340,7 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
         data = pickle.load(handle)
     if not isinstance(data, dict):
         raise TypeError("prepared training bundle must contain a mapping")
+    _validate_bundle_arrays(data)
     required = {
         "df", "payload", "structured_features", "row_bc", "country", "pos",
         "hp_pairs", "emb0", "neg", "train_neg", "neg_sources",
@@ -404,3 +424,32 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
             flush=True,
         )
     return manifest, data
+
+
+def _validate_bundle_arrays(data):
+    """Reject malformed CPU inputs before casts or GPU compute hide defects."""
+    required = {"payload", "row_bc", "country", "structured_features", "pos", "hp_pairs", "neg", "train_neg", "emb0", "neg_sources", "train_neg_sources"}
+    if not required <= set(data):
+        raise ValueError(f"prepared bundle missing array fields: {sorted(required - set(data))}")
+    size = len(data["payload"])
+    for key in ("row_bc", "country"):
+        if np.asarray(data[key]).ndim != 1 or len(data[key]) != size:
+            raise ValueError(f"prepared bundle {key} must cover every payload row")
+    features = np.asarray(data["structured_features"])
+    if features.ndim != 2 or len(features) != size or features.dtype.kind != "f" or not np.isfinite(features).all():
+        raise ValueError("prepared structured features need finite float rows for every payload")
+    for key in ("pos", "hp_pairs", "neg", "train_neg"):
+        pairs = np.asarray(data[key])
+        if pairs.ndim != 2 or pairs.shape[1] != 2 or pairs.dtype.kind not in "iu":
+            raise ValueError(f"prepared {key} needs integer (n,2) pairs")
+        if np.any(pairs < 0) or np.any(pairs >= size):
+            raise ValueError(f"prepared {key} contains out-of-bounds payload indices")
+    for key, pairs in (("neg_sources", "neg"), ("train_neg_sources", "train_neg")):
+        if np.asarray(data[key]).ndim != 1 or len(data[key]) != len(data[pairs]):
+            raise ValueError(f"prepared {key} must align with {pairs}")
+    embeddings = np.asarray(data["emb0"])
+    if embeddings.ndim != 2 or (embeddings.size and len(embeddings) != size) or not np.isfinite(embeddings).all():
+        raise ValueError("prepared initial embeddings need finite aligned rows or an empty matrix")
+    if "training_tokens" in data:
+        from training.token_inputs import validate_training_tokens
+        validate_training_tokens(data["training_tokens"])

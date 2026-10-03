@@ -40,9 +40,9 @@ def main():
     model = SentenceTransformer(str(args.checkpoint), device=args.device, local_files_only=True)
     model.eval()
     try:
-        from encoding_inputs import tokenization_policy
+        from encoding_inputs import tokenization_policy, load_token_features
     except ImportError:
-        from core.encoding_inputs import tokenization_policy
+        from core.encoding_inputs import tokenization_policy, load_token_features
     plan = request.get('prepared_text')
     tokens = args.request.parent/'prepared_text.npz'
     if not plan or hashlib.sha256(tokens.read_bytes()).hexdigest() != plan['sha256']:
@@ -53,15 +53,14 @@ def main():
     chunks = []
     with np.load(tokens,allow_pickle=False) as data, torch.no_grad():
         for n,batch in enumerate(plan['token_batches'],1):
-            features = {key:torch.as_tensor(data[batch['prefix']+'/'+key],device=args.device) for key in batch['keys']}
-            features.update(batch['constants'])
+            features = load_token_features(data,batch,args.device)
             vector = model(features)['sentence_embedding']
-            chunks.append(torch.nn.functional.normalize(vector,p=2,dim=1).cpu().numpy())
+            chunks.append(torch.nn.functional.normalize(vector,p=2,dim=1).cpu().numpy().astype(np.float32))
             print(f'[embeddings/{args.device}] batch={n}/{len(plan["token_batches"])}',flush=True)
     vectors = np.concatenate(chunks)
     if len(vectors) != len(request['ids']):
         raise ValueError('Prepared token population differs from request IDs')
-    metadata = {**request['metadata'], 'request_sha256': hashlib.sha256(raw).hexdigest()}
+    metadata = {**request['metadata'], 'request_sha256': hashlib.sha256(raw).hexdigest(), 'embedding_dtype':'float32'}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open('wb') as handle:
         np.savez_compressed(handle, ids=np.asarray(request['ids'], dtype=str),

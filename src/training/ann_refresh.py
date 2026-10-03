@@ -26,6 +26,8 @@ def encode_finetuned_embeddings(
     max_seq_length: int,
 ) -> np.ndarray:
     """Encode the supplied payload with the live fine-tuned model exactly once."""
+    from core.encoding_inputs import enable_zero_truncation
+    enable_zero_truncation(model)
     model.max_seq_length = max_seq_length
     emb = model.encode(
         payload,
@@ -111,47 +113,56 @@ def refresh_finetuned_ann(
             f"fine-tuned ANN embeddings cover {emb.shape[0]} rows; need {len(df)}"
         )
 
+    # Search only training entities; heldout rows cannot consume top-k slots,
+    # diversity quotas or calibration samples. Keep original payload indices.
+    source_rows = np.arange(len(df), dtype=int)
+    eligible = pairs_in_set(np.column_stack((source_rows, source_rows)), row_gtins, set(train_gtins))
+    selected_rows = source_rows[eligible]
+    candidate_df = df.iloc[selected_rows].reset_index(drop=True)
+    candidate_pairs, candidate_scores = mine_hard_negatives(
+        candidate_df, emb[selected_rows], n_target=max(len(selected_rows) * int(k), 1),
+        cosine_lo=-1.0, cosine_hi=1.0, k=k,
+        exclude_conflicting=exclude_conflicting,
+        max_per_canonical=max(len(selected_rows) * int(k), 1),
+        max_per_brand=max(len(selected_rows) * int(k), 1),
+    )
+    candidate_pairs = selected_rows[candidate_pairs]
+    existing_keys = {(min(int(a), int(b)), max(int(a), int(b)))
+                     for a, b in (existing if existing is not None else [])}
+    novel = np.asarray([(min(int(a), int(b)), max(int(a), int(b))) not in existing_keys
+                        for a, b in candidate_pairs], dtype=bool)
+    rejected_existing = int((~novel).sum())
+    candidate_pairs, candidate_scores = candidate_pairs[novel], candidate_scores[novel]
     broad_target = max(int(target), 1) * max(int(candidate_multiplier), 1)
-    broad_pairs, broad_scores = mine_hard_negatives(
-        df,
-        emb,
-        n_target=broad_target,
-        cosine_lo=-1.0,
-        cosine_hi=1.0,
-        k=k,
-        exclude_conflicting=exclude_conflicting,
-        max_per_canonical=max(len(df), 1),
-        max_per_brand=max(len(df), 1),
-    )
     band_lo, band_hi, band_stats = calibrated_ann_band(
-        broad_scores, configured_band, score_quantiles, band_mode
+        candidate_scores[:broad_target], configured_band, score_quantiles, band_mode
     )
-    refreshed, refreshed_scores = mine_hard_negatives(
-        df,
-        emb,
-        n_target=target,
-        cosine_lo=band_lo,
-        cosine_hi=band_hi,
-        k=k,
-        exclude_conflicting=exclude_conflicting,
-        max_per_canonical=max_per_canonical,
-        max_per_brand=max_per_brand,
-    )
-    if len(refreshed):
-        keep = pairs_in_set(refreshed, row_gtins, set(train_gtins))
-        existing_keys = {
-            (min(int(a), int(b)), max(int(a), int(b)))
-            for a, b in (existing if existing is not None else [])
-        }
-        keep &= np.asarray(
-            [
-                (min(int(a), int(b)), max(int(a), int(b))) not in existing_keys
-                for a, b in refreshed.tolist()
-            ],
-            dtype=bool,
-        )
-        refreshed = refreshed[keep]
-        refreshed_scores = refreshed_scores[keep]
+    from collections import Counter
+    canonical_counts, brand_counts = Counter(), Counter()
+    gtins = df["gtin"].fillna("").astype(str).to_numpy()
+    brands = df["brand"].fillna("").astype(str).str.strip().str.lower().to_numpy()
+    rows_out, scores_out = [], []
+    for (a, b), score in zip(candidate_pairs, candidate_scores, strict=True):
+        if not band_lo <= score <= band_hi:
+            continue
+        endpoint_gtins, endpoint_brands = (gtins[a], gtins[b]), (brands[a], brands[b])
+        if any(value and canonical_counts[value] >= max_per_canonical for value in endpoint_gtins):
+            continue
+        if any(value and brand_counts[value] >= max_per_brand for value in endpoint_brands):
+            continue
+        rows_out.append((int(a), int(b)))
+        scores_out.append(float(score))
+        canonical_counts.update(value for value in endpoint_gtins if value)
+        brand_counts.update(value for value in endpoint_brands if value)
+        if len(rows_out) >= target:
+            break
+    refreshed = np.asarray(rows_out, dtype=int).reshape(-1, 2)
+    refreshed_scores = np.asarray(scores_out, dtype=np.float32)
+    band_stats.update(eligible_source_rows=int(len(selected_rows)),
+                      rejected_existing=rejected_existing,
+                      eligible_candidate_count=int(len(candidate_pairs)),
+                      requested_count=int(target),
+                      shortfall_count=int(max(target - len(refreshed), 0)))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
@@ -172,7 +183,8 @@ def refresh_finetuned_ann(
                 "source": "ann_finetuned",
             }
         )
-    pd.DataFrame(rows).to_csv(output_path, index=False, mode="w")
+    pd.DataFrame(rows, columns=["step", "epoch", "row_a", "row_b", "gtin_a", "gtin_b", "cosine",
+                                "band_lo", "band_hi", "band_mode", "source"]).to_csv(output_path, index=False, mode="w")
     return refreshed, {
         **band_stats,
         "status": "ok",

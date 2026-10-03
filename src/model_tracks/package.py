@@ -25,8 +25,45 @@ def runtime_snapshot_files():
 def package(config: Path, output: Path):
     from core.common import F, TRAIN_ROOT
     cfg = load_config(config)
-    checks = preflight(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
+    # All tensors and native tokenizer features are fixed on local CPU before
+    # provisioning; selected weights are bound only by the GPU exporter.
+    from graph_tracks.prepared_inputs import prepare_training
+    from graph_tracks.config import GraphConfig
+    track_settings = [yaml.safe_load((setup/(track+'.yaml')).read_text()) for track in ('gnn_only','hybrid')]
+    default_batch = GraphConfig.model_fields['inference_batch_size'].default
+    sizes = {settings.get('inference_batch_size',default_batch) for settings in track_settings}
+    if len(sizes) != 1:
+        raise ValueError('shared prepared graph inference batch sizes must agree')
+    cache = setup/'shared_minilm__embeddings.npz'
+    prepare_training(setup/'prepared/listings.json',setup/'prepared/pairs.csv',batch_size=sizes.pop())
+    from model_tracks.text_export import prepare as prepare_text_export
+    from core.common import resolve_model
+    from core.common import runtime
+    from core.model_input import model_input_composition,build_sku_text,model_input_info
+    from core.sku_identity import row_identity
+    from graph_tracks.text_cache import composition_fingerprint
+    from model_tracks.ablation import digest
+    import pandas as pd
+    # This cache lasts for one verified local preparation only. Exact raw rows
+    # and the frozen composition contract key both baseline and interventions.
+    composition_contract = {'spec':model_input_composition().model_dump(mode='json'),
+                            'implementation':composition_fingerprint()}
+    composed,token_cache = {},{}
+    def compose(row):
+        key = digest({'row':row,'composition':composition_contract})
+        if key not in composed:
+            series = pd.Series(row)
+            composed[key] = build_sku_text(series,model_input_info(row_identity(series).as_mapping()))
+        return composed[key]
+    prepare_text_export(setup,Path(resolve_model(cfg.text_model)),batch_size=runtime('batch_size_embed'),composer=compose,token_cache=token_cache)
+    if cfg.post_training_ablation:
+        from model_tracks.staged_ablation import prepare_suite
+        prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache)
+    from model_tracks.baseline_export import prepare as prepare_baseline
+    prepare_baseline(setup,Path(resolve_model(cfg.text_model)),composer=compose)
+    native_model = next(value for key,value in token_cache.items() if key[0] == 'model')
+    checks = preflight(config,allow_gpu_pending=True,native_token_model=native_model)
     target = Path('data/model_tracks/shared')
     files = {str(target / p.relative_to(setup)):p for p in setup.rglob('*') if p.is_file()
              and p.name not in {'gnn_only.yaml','hybrid.yaml'} and p.suffix not in {'.zip'}

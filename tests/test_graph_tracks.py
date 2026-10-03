@@ -89,8 +89,11 @@ def test_cache_alignment_and_zero_guard(tmp_path):
     np.testing.assert_array_equal(vectors, np.eye(2)[::-1])
     with pytest.raises(ValueError, match='missing'):
         load_text_cache(path, ['unknown'])
-    np.savez(path, ids=['a'], embeddings=np.zeros((1, 2)), metadata=metadata)
+    np.savez(path, ids=['a'], embeddings=np.zeros((1, 2), dtype='float32'), metadata=metadata)
     with pytest.raises(ValueError, match='zero'):
+        load_text_cache(path, ['a'])
+    np.savez(path, ids=['a'], embeddings=np.ones((1, 2), dtype='float64'), metadata=metadata)
+    with pytest.raises(ValueError, match='float32'):
         load_text_cache(path, ['a'])
 
 

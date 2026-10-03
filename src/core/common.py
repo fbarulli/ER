@@ -227,6 +227,19 @@ def load_config() -> dict:
     return copy.deepcopy(_load_config_cached())
 
 
+_DEFAULT_CONFIG_LOADER = load_config
+
+
+def config_section(*keys, loader=None):
+    """Copy one requested section while preserving cache and override semantics."""
+    selected_loader = load_config if loader is None else loader
+    source = (_load_config_cached() if selected_loader is _DEFAULT_CONFIG_LOADER
+              else selected_loader())
+    for key in keys:
+        source = source[key]
+    return copy.deepcopy(source)
+
+
 # ── validated singletons (read once at import; the merge order above) ───────
 _CFG = load_config()
 _DATA_CFG = DataConfig.model_validate(_read_yaml(CONFIG_PATH))
@@ -899,7 +912,8 @@ def load_local_cross_encoder(
     from sentence_transformers import CrossEncoder
 
     resolved = resolve_model(key_or_path)
-    return CrossEncoder(resolved, device=device, **kwargs)
+    from core.encoding_inputs import enable_cross_encoder_zero_truncation
+    return enable_cross_encoder_zero_truncation(CrossEncoder(resolved, device=device, **kwargs))
 
 
 # ── visibility-log writes (owner directive 2026-09-07) ─────────────────────

@@ -7,6 +7,10 @@ accelerator: T4
 attributes: []  # Empty selects the shared attribute registry.
 output_dir: results/attribute_ablation
 report_path: results/attribute_ablation/report.json
+retrieval_catalog: full
+hnsw_m: 16
+hnsw_ef_construction: 200
+hnsw_ef_search: 100
 retrieval_ks: [1, 5, 10]
 # Relation names follow graph_schema(); unsupported attributes are explicit no-ops.
 graph_fields:

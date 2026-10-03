@@ -153,7 +153,7 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
                                sha256='test', n_df=1, n_payload=1,
                                model_dump=lambda: {})
     pairs = np.empty((0, 2), dtype=int)
-    bundle = dict(df=pd.DataFrame({'gtin': ['1']}), payload=['item'],
+    bundle = dict(training_plan={'holdout': {'train': {'1'}, 'dev': set(), 'test': {'test'}}}, training_tokens={'test_fixture': True}, df=pd.DataFrame({'gtin': ['1']}), payload=['item'],
                   structured_features=np.zeros((1, 2)), row_bc=np.array(['1']),
                   country=np.array(['US']), pos=pairs, hp_pairs=pairs,
                   emb0=np.empty((0, 2)), neg=pairs, train_neg=pairs,
@@ -161,7 +161,7 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
                   hard_negative_mask_audit=[], labeled_pairs_csv=b'',
                   canonical_records_csv=b'', gate_results_csv=b'')
     monkeypatch.setattr(trainer, 'load_prepared_bundle', lambda _: (manifest, bundle))
-    monkeypatch.setattr(trainer, 'prepared_holdout', lambda *_, **__: ({'1'}, set(), {'test'}))
+    monkeypatch.setattr('training.run_plan.validate_run_plan', lambda bundle, plan, **kwargs: plan)
     monkeypatch.setattr(trainer, 'masking_cfg', lambda _: dict(mask_hard_negatives=False,
                         hard_negative_frac=0, hard_negative_mask_prob=None,
                         hard_negative_mask_lo=0, hard_negative_mask_hi=0))

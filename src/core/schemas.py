@@ -1731,14 +1731,22 @@ class TrainingSpec(BaseModel):
 
         When enabled, the ControlledBatchSampler constructs each batch
         from the exact per-population counts below instead of the default
-        HF sampler.  All counts must be positive and sum to the batch size.
+        HF sampler. Counts are positive relative weights scaled to batch size.
         """
 
         model_config = ConfigDict(extra="forbid")
 
         enabled: bool = False
         composition: dict[str, int] = Field(default_factory=dict, min_length=1)
+        compositions_by_loss: dict[str, dict[str, int]] = Field(default_factory=dict)
         seed: int = 0
+
+        @model_validator(mode='after')
+        def positive_compositions(self):
+            for composition in [self.composition,*self.compositions_by_loss.values()]:
+                if any(count < 1 for count in composition.values()):
+                    raise ValueError('batch population weights must be positive')
+            return self
 
     batch_sampler: BatchSamplerSpec = Field(
         default_factory=lambda: TrainingSpec.BatchSamplerSpec()

@@ -68,7 +68,6 @@ from core.critical_attributes import (
 # alias-expanded signature, and a bare import of the same name would recurse
 # into itself (caught by the acceptance run, not by review).
 from core.critical_attributes import categorical_conflict as _ssot_categorical_conflict
-from core.gtin import gtin_validity
 from core.record_linkage import strip_pack_multiplicity
 from core.product_dimensions import DimensionEvidence, row_dimensions, evaluate_dimensions, evaluate_columns
 from pipeline import normalize_text
@@ -367,15 +366,12 @@ def identity_tokens_set(attributes: object) -> frozenset[str]:
 
 def _gtin_facts(gtin: object) -> tuple[bool, str]:
     """(trusted, normalized key) using structural validation and review policy."""
-    import pandas as pd
+    from core.gtin import normalize_gtin_value
+    from core.identity_policy import held_keys
 
-    from core.gtin import normalize_and_validate_gtin
-
-    series = pd.Series([gtin], dtype="string")
-    facts = normalize_and_validate_gtin(series)
-    if not bool(gtin_validity(series).iloc[0]):
+    key, valid = normalize_gtin_value(gtin)
+    if not valid or key.zfill(14) in held_keys():
         return False, ""
-    key = facts["gtin_clean"].iloc[0]
     return True, "" if key is None else str(key)
 
 

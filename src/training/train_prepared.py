@@ -93,6 +93,10 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
             f"but CLI profile={args.masking_profile!r}"
         )
     model_id = resolve_model(args.model)
+    if "training_tokens" not in bundle:
+        raise ValueError("prepared bundle lacks local training tokens; rebuild locally before GPU training")
+    if args.loss != "contrastive" and bool(cfg["mining"]["ann"]["refresh_enabled"]):
+        raise ValueError("live ANN refresh is currently supported only for contrastive training")
     profile = masking_cfg(manifest.masking_profile)
     df = bundle["df"]
     payload = bundle["payload"]
@@ -129,7 +133,12 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
 
     if args.split != "holdout":
         raise ValueError("prepared GPU training currently supports the SSOT holdout split only")
-    train_bc, dev_bc, test_bc = prepared_holdout(bundle, cfg["split"], seed=SEED)
+    from training.run_plan import validate_run_plan
+    if "training_plan" not in bundle:
+        raise ValueError("prepared bundle lacks local training row plan; rebuild locally before GPU training")
+    plan = validate_run_plan(bundle, bundle["training_plan"], loss=args.loss,
+                             train_frac=args.train_frac, sample=bool(args.sample), seed=SEED)
+    train_bc, dev_bc, test_bc = (plan["holdout"][key] for key in ("train", "dev", "test"))
     print(
         f"[prepared-bundle] loaded {args.bundle} "
         f"sha256={manifest.sha256} profile={manifest.masking_profile} "
@@ -143,38 +152,8 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         flush=True,
     )
 
-    cfg_train = {
-        "architecture": runtime("architecture"),
-        "epochs": args.epochs,
-        "lr": args.lr,
-        "warmup_ratio": runtime("warmup_ratio"),
-        "weight_decay": runtime("weight_decay"),
-        "projection_dropout": runtime("projection_dropout"),
-        "label_smoothing": runtime("label_smoothing"),
-        "random_easy_enabled": bool(runtime("random_easy_negatives")["enabled"]),
-        "random_easy_ratio_to_hard": float(
-            runtime("random_easy_negatives")["ratio_to_hard"]
-        ),
-        "random_easy_candidate_pool_size": int(
-            runtime("random_easy_negatives")["candidate_pool_size"]
-        ),
-        "lr_scheduler": runtime("lr_scheduler"),
-        "max_grad_norm": runtime("max_grad_norm"),
-        "patience": ES_PATIENCE,
-        "es_threshold": ES_THRESHOLD,
-        "uniformity_weight": (
-            float(cfg["training"]["uniformity_regularization"]["weight"])
-            if bool(cfg["training"]["uniformity_regularization"]["enabled"])
-            else 0.0
-        ),
-        "late_epoch_decay_enabled": bool(cfg["training"]["late_epoch_lr_decay"]["enabled"]),
-        "late_epoch_decay_start_fraction": float(
-            cfg["training"]["late_epoch_lr_decay"]["start_epoch_fraction"]
-        ),
-        "late_epoch_decay_multiplier": float(
-            cfg["training"]["late_epoch_lr_decay"]["multiplier"]
-        ),
-    }
+    from training.run_plan import training_config
+    cfg_train = training_config(epochs=args.epochs, lr=args.lr)
     data = (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0)
     rows = train_one_config(
         cfg_train,
@@ -204,8 +183,10 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         dynamic_mask_hi=float(profile["hard_negative_mask_hi"]),
         mask_audit=mask_audit,
         hard_negative_mask_audit=hard_negative_mask_audit,
-        ann_refresh_enabled=False,
-        attribute_conflict_refresh_enabled=False,
+        ann_refresh_enabled=bool(cfg["mining"]["ann"]["refresh_enabled"]),
+        attribute_conflict_refresh_enabled=(args.loss == "contrastive" and bool(cfg["mining"]["attribute_conflict"]["enabled"])),
+        prepared_tokens=bundle["training_tokens"],
+        prepared_plan=plan,
         train_frac=args.train_frac if args.train_frac < 1.0 else None,
         run_tag=args.run_tag,
         sample=bool(args.sample),

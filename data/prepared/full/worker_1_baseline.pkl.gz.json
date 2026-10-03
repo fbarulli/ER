@@ -17,7 +17,7 @@
   "n_labeled_pairs_bytes": 23570,
   "n_canonical_records_bytes": 73323280,
   "n_gate_results_bytes": 29692886,
-  "sha256": "8f29abb656926339e4144a3817a1fc5312c1ad771e397fa7162ed38daf6dcb10",
+  "sha256": "e679d176a767a129b5da74f95b1d99cd37c793684a39473d3f86bd91cefbb3bb",
   "masking_config": {
     "enabled": true,
     "profile": "baseline",

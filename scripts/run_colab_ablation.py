@@ -10,7 +10,7 @@ from pathlib import Path
 from cli import colab as backend
 from core.common import TRAIN_ROOT
 from graph_tracks.data import file_hash
-from model_tracks.ablation import resolve, validate_sources, report, save_report, frozen_threshold, Settings, load_prepared
+from model_tracks.ablation import resolve, validate_sources, report, save_report, frozen_threshold, Settings, load_prepared, verify_threshold_binding, validate_vectors
 from model_tracks.publish import push_artifacts
 from model_tracks.package import runtime_snapshot_files
 from run_colab_embeddings import persist_embeddings
@@ -21,7 +21,7 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
     request = json.loads(request_path.read_text())
     validate_sources(request)
     load_prepared(request_path,request).close()
-    frozen_threshold(threshold_source, threshold)
+    verify_threshold_binding(request,frozen_threshold(threshold_source, threshold))
     # Every source and the worker must be available from the existing clone.
     for name in request['sources']:
         if Path(name).is_absolute() or '..' in Path(name).parts:
@@ -69,7 +69,10 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
     job = backend.REMOTE_ROOT+'/prepared_training/ablation_'+uuid.uuid4().hex
     result = folder/'vectors.npz'
     if result.exists():
-        raise FileExistsError('Existing result must be reported explicitly; never silently reused')
+        # A retry after download or publication must finish persistence without
+        # allocating another accelerator. Full reporting verifies provenance.
+        validated = report(request_path,result,threshold,threshold_source=threshold_source,save=False)
+        return persist_result(request_path,result,validated,threshold_source,publisher=publish)
     accelerator = Settings.model_validate(request.get('settings', {})).accelerator
     if accelerator.upper() == 'CPU':
         raise ValueError('ablation requires a GPU accelerator')
@@ -101,7 +104,7 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
                 raise ValueError('ablation download checksum mismatch')
             validate_sources(request)
             # Validate full shape/provenance before installing the downloaded result.
-            validated = report(request_path,downloaded,threshold,threshold_source=threshold_source,save=False)
+            validate_vectors(request_path,downloaded)
             downloaded.replace(result)
     finally:
         backend.stop()
@@ -112,9 +115,14 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
     (folder/'encoding.log').write_text(log)
     # Persist the already-validated report once: the installed result is
     # the hash-checked download, so recomputing it would duplicate work.
+    validated = report(request_path,result,threshold,threshold_source=threshold_source,save=False)
+    return persist_result(request_path,result,validated,threshold_source,publisher=publish)
+
+
+def persist_result(request_path,result,validated,threshold_source,*,publisher=None):
     handoff = save_report(request_path, validated)
-    return persist_embeddings(result,handoff,publisher=publish,
-        additional_files={'request.json':request_path,'prepared_inputs.npz':folder/'prepared_inputs.npz','report.json':handoff,
+    return persist_embeddings(result,handoff,publisher=publisher,
+        additional_files={'request.json':request_path,'prepared_inputs.npz':request_path.parent/'prepared_inputs.npz','report.json':request_path.parent/'report.json',
                           'baseline_threshold_report'+resolve(threshold_source).suffix:resolve(threshold_source)},
         namespace='attribute_ablation',prefix='ablation')
 

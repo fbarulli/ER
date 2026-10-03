@@ -1,0 +1,98 @@
+"""Prepared-only frozen baseline prerequisite for the single suite GPU session."""
+import hashlib
+import json
+from pathlib import Path
+import numpy as np
+from graph_tracks.data import file_hash,load_records
+from graph_tracks.text_cache import compose_texts,texts_hash
+from training.prepare_embeddings import input_identity,validate_result
+
+
+def prepare(setup,checkpoint,*,composer=None):
+    metadata = input_identity(setup,checkpoint)
+    ids,texts = compose_texts(setup/'eligible_catalog.csv',composer=composer)
+    export = json.loads((setup/'text_export_request.json').read_text())
+    if ids != export['ids'] or texts_hash(texts) != export['text_sha256']:
+        raise ValueError('baseline and selected text export population differ')
+    request = {'schema':'er-embedding-request-v2','ids':ids,'texts':texts,
+        'metadata':{**metadata,'text_sha256':texts_hash(texts)},
+        'prepared_text':{**export['plan'],'sha256':export['tokens_sha256']}}
+    path = setup/'embedding_inputs.json'
+    raw = json.dumps(request,ensure_ascii=False,sort_keys=True)
+    cache = setup/'shared_minilm__embeddings.npz'
+    if cache.exists():
+        validate_result(cache,request,request_sha256=hashlib.sha256(raw.encode()).hexdigest())
+    path.write_text(raw)
+    return path
+
+
+def validate_pending(setup,checkpoint,*,native_model=None):
+    from core.encoding_inputs import load_token_features,tokenization_policy
+    if native_model is None:
+        from sentence_transformers import SentenceTransformer
+        native_model = SentenceTransformer(str(checkpoint),device='cpu',local_files_only=True)
+    path = setup/'embedding_inputs.json'
+    request = json.loads(path.read_text())
+    expected = input_identity(setup,checkpoint)
+    if request.get('schema') != 'er-embedding-request-v2' or request.get('metadata',{}).get('text_sha256') != texts_hash(request['texts']):
+        raise ValueError('pending baseline request corrupt')
+    for key,value in expected.items():
+        if request['metadata'].get(key) != value:
+            raise ValueError('pending baseline source changed: '+key)
+    if len(request['ids']) != len(request['texts']) or len(set(request['ids'])) != len(request['ids']):
+        raise ValueError('pending baseline ID/text alignment differs')
+    if set(request['ids']) != {r['sku_id'] for r in load_records(setup/'prepared/listings.json')}:
+        raise ValueError('pending baseline listing population differs')
+    tokens = setup/'prepared_text.npz'
+    plan = request['prepared_text']
+    if tokenization_policy(native_model) != plan['tokenization']:
+        raise ValueError('pending baseline tokenizer differs from configured native checkpoint')
+    if file_hash(tokens) != plan['sha256'] or plan.get('truncated_inputs') != 0:
+        raise ValueError('pending baseline native tokens changed')
+    count = 0
+    with np.load(tokens,allow_pickle=False) as arrays:
+        for batch in plan['token_batches']:
+            if batch['start'] != count:
+                raise ValueError('pending baseline token row order differs')
+            features = load_token_features(arrays,batch,'cpu')
+            if (features['attention_mask'].sum(-1) > plan['tokenization']['input_token_limit']).any():
+                raise ValueError('pending baseline exceeds native token limit')
+            count += batch['count']
+    if count != len(request['ids']):
+        raise ValueError('pending baseline token population differs')
+    return {'status':'prepared GPU pending','rows':count,'checkpoint_sha256':expected['checkpoint_sha256'],
+        'request_sha256':file_hash(path),'token_sha256':file_hash(tokens)}
+
+
+def forward(setup,checkpoint):
+    """GPU supervisor runs once before hybrid workers train; no CPU composition."""
+    import torch
+    from sentence_transformers import SentenceTransformer
+    from core.encoding_inputs import tokenization_policy,load_token_features
+    request_path = setup/'embedding_inputs.json'
+    request = json.loads(request_path.read_text())
+    output = setup/'shared_minilm__embeddings.npz'
+    validate_pending(setup,checkpoint)
+    if output.exists():
+        validate_result(output,request,request_sha256=file_hash(request_path))
+        return output
+    if not torch.cuda.is_available():
+        raise RuntimeError('frozen suite baseline requires CUDA')
+    model = SentenceTransformer(str(checkpoint),device='cuda',local_files_only=True)
+    model.eval()
+    plan = request['prepared_text']
+    if tokenization_policy(model) != plan['tokenization']:
+        raise ValueError('GPU baseline tokenizer differs from native local preparation')
+    chunks = []
+    with np.load(setup/'prepared_text.npz',allow_pickle=False) as arrays,torch.no_grad():
+        for batch in plan['token_batches']:
+            vector = model(load_token_features(arrays,batch,'cuda'))['sentence_embedding']
+            chunks.append(torch.nn.functional.normalize(vector,p=2,dim=1).cpu().numpy().astype(np.float32))
+    metadata = {**request['metadata'],'request_sha256':file_hash(request_path),
+        'embedding_dtype':'float32','tokenization':plan['tokenization']}
+    candidate = output.with_suffix('.npz.partial')
+    with candidate.open('wb') as handle:
+        np.savez_compressed(handle,ids=np.asarray(request['ids'],dtype=str),embeddings=np.concatenate(chunks),metadata=json.dumps(metadata,sort_keys=True))
+    validate_result(candidate,request,request_sha256=file_hash(request_path))
+    candidate.replace(output)
+    return output

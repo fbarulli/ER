@@ -143,6 +143,8 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
               else bundle['emb0']),**arrays,neg_sources=np.asarray(bundle['neg_sources'])[masks['neg']],
         train_neg_sources=np.asarray(bundle['train_neg_sources'])[masks['train_neg']],**audits,
         **{key:bundle[key] for key in ('labeled_pairs_csv','canonical_records_csv','gate_results_csv','payload_variant','masking_profile')},
+        plan_sample=True,
+        token_checkpoint=str(json.loads((setup/'setup_manifest.json').read_text())['text_checkpoint']),
         holdout_populations={s:sorted(values) for s,values in zip(('train','dev','test'),populations)})
     manifest=json.loads((setup/'setup_manifest.json').read_text())
     manifest.update(smoke=True,source_listing_count=sample,parent_setup_sha256=file_hash(setup/'setup_manifest.json'))

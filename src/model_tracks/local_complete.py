@@ -13,6 +13,9 @@ def _publish(final, settings, run_tag):
     if settings.publish_git:
         from model_tracks.publish import materialize
         materialize(final, run_tag, push=True)
+    if settings.post_training_ablation:
+        from model_tracks.post_training_ablation import run
+        run(final,run_tag,settings)
     return final
 
 
@@ -39,6 +42,26 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
         existing = verify_archive(final, 'suite_bundle_manifest.json')
         if existing.get('training_archive_sha256') != file_hash(training_archive) or existing.get('input_archive_sha256') != file_hash(input_archive):
             raise ValueError('existing completion archive has different inputs/checkpoints')
+        # A durable final archive is sufficient to reconstruct reports; prepared
+        # inputs come from the verified original input archive, never a cache.
+        if not destination.exists():
+            destination.mkdir()
+            with zipfile.ZipFile(final) as archive:
+                for relative in existing['files']:
+                    archive.extract(relative,destination)
+            (destination/'local_source.json').write_text(json.dumps({
+                'training_archive_sha256':file_hash(training_archive),
+                'input_archive_sha256':file_hash(input_archive)}))
+        restored_inputs = destination/'local_inputs'
+        with zipfile.ZipFile(input_archive) as archive:
+            for relative in inputs['files']:
+                if relative.startswith('data/model_tracks/'):
+                    target = restored_inputs/relative
+                    target.parent.mkdir(parents=True,exist_ok=True)
+                    data = archive.read(relative)
+                    if target.exists() and target.read_bytes() != data:
+                        raise ValueError('restored prepared input changed: '+relative)
+                    target.write_bytes(data)
         return _publish(final, settings, run_tag)
     marker = destination / 'local_source.json'
     identity = {'training_archive_sha256': file_hash(training_archive),
@@ -66,6 +89,18 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
                 target.write_bytes(data)
         settings = SuiteConfig.model_validate(yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
     setup = prepared / settings.setup_dir
+    baseline = destination/'baseline/shared_minilm__embeddings.npz'
+    if baseline.is_file():
+        from training.prepare_embeddings import validate_result
+        request_path = setup/'embedding_inputs.json'
+        request = json.loads(request_path.read_text())
+        validate_result(baseline,request,request_sha256=file_hash(request_path))
+        import shutil
+        cache = setup/'shared_minilm__embeddings.npz'
+        if cache.exists() and file_hash(cache) != file_hash(baseline):
+            raise ValueError('restored frozen baseline differs from suite GPU export')
+        if not cache.exists():
+            shutil.copy2(baseline,cache)
     suite = json.loads((destination / 'suite_manifest.json').read_text())
     if suite.get('inputs') != inputs['preflight']:
         raise ValueError('training suite did not use the verified prepared inputs')
@@ -86,6 +121,8 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
             # _checkpoints/** and are not matched by this glob.
             import time
             for path in sorted(output.glob('text__*')):
+                if path.name == 'text__vectors.npz':
+                    continue
                 path.rename(path.with_name(f'interrupted-{time.time_ns()}-{path.name}'))
             text_complete(output, setup, device='cpu', report_test=settings.report_test)
         else:
@@ -114,9 +151,13 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
             report.mkdir()
             graph_complete(checkpoints[0], Path(config['listings']), Path(config['pairs']),
                            report, GraphConfig.model_validate(config),
-                           text_cache=Path(config['text_cache']) if config.get('text_cache') else None)
+                           text_cache=Path(config['text_cache']) if config.get('text_cache') else None,
+                           saved_inference=output/(track+'__inference'))
         record_completion(output, track)
         print(f'[local-postprocess/{track}] complete', flush=True)
+    if settings.post_training_ablation:
+        from model_tracks.post_training_ablation import complete_saved
+        complete_saved(destination,settings)
     suite['postprocess_location'] = 'local CPU'
     (destination / 'suite_manifest.json').write_text(json.dumps(suite, indent=2))
     files = {p.relative_to(destination).as_posix(): p for p in destination.rglob('*')

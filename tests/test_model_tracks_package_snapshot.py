@@ -18,6 +18,7 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     for track in ('gnn_only', 'hybrid'):
         (setup / f'{track}.yaml').write_text(yaml.safe_dump({'listings': 'prepared/listings.csv'}))
     (setup / 'listings.csv').write_text('sku_id\na\n')
+    (setup/'shared_minilm__embeddings.npz').write_bytes(b'preflight validates this mocked cache')
     bundle = setup / 'text_prepared.pkl.gz'
     bundle.write_bytes(b'prepared snapshot')
     bundle.with_suffix('.gz.json').write_text('{}')
@@ -43,14 +44,28 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
         path.write_bytes(snapshots[f'data/{key}.csv'])
         inputs[key] = path
     settings = dict(setup_dir='prepared', text_bundle='prepared/text_prepared.pkl.gz',
-                    device='cpu', report_test=False)
+                    device='cpu', report_test=False,text_model='minilm_l6',post_training_ablation=False)
     cfg = SimpleNamespace(**settings, model_dump=lambda: settings.copy())
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', inputs)
     monkeypatch.setattr(packaging, 'load_config', lambda _: cfg)
-    monkeypatch.setattr(packaging, 'preflight', lambda _: {'status': 'ok'})
+    monkeypatch.setattr(packaging, 'preflight', lambda _,**kwargs: {'status': 'ok'})
+    monkeypatch.setattr(core.common,'resolve_model',lambda _:str(tmp_path/'baseline'))
+    from graph_tracks import prepared_inputs
+    from model_tracks import text_export
+    from graph_tracks import text_cache
+    monkeypatch.setattr(text_cache,'composition_fingerprint',lambda:'frozen implementation')
+    preparations = []
+    monkeypatch.setattr(prepared_inputs,'prepare_training',lambda *args,**kwargs:preparations.append('graph'))
+    def prepare_text(*args,**kwargs):
+        kwargs['token_cache'][('model','native')] = object()
+        preparations.append('text')
+    monkeypatch.setattr(text_export,'prepare',prepare_text)
+    from model_tracks import baseline_export
+    monkeypatch.setattr(baseline_export,'prepare',lambda *args,**kwargs:preparations.append('baseline'))
     monkeypatch.setattr(packaging.subprocess, 'run', lambda *_, **__: SimpleNamespace(stdout='revision\n'))
     output = packaging.package(Path('suite.yaml'), tmp_path / 'package.zip')
+    assert preparations == ['graph','text','baseline']
     metadata = packaging.verify(output)
     with zipfile.ZipFile(output) as archive:
         for name, content in snapshots.items():
@@ -107,7 +122,7 @@ def test_manifested_hybrid_requires_active_text_composition(tmp_path, monkeypatc
     monkeypatch.setattr(checks, 'load_records', lambda _: [{'sku_id': 'a'}])
     monkeypatch.setattr(checks, 'load_pairs', lambda *_: {})
     monkeypatch.setattr(checks, 'load_text_cache', lambda *_: (np.zeros((1, 2)), metadata))
-    cfg = SimpleNamespace(input_manifest='manifest.json', allow_unmanifested_inputs=False,
+    cfg = SimpleNamespace(device='cpu',input_manifest='manifest.json', allow_unmanifested_inputs=False,
                           listings='listings.csv', pairs='pairs.csv', text_cache='cache.npz',
                           text_checkpoint_sha256='checkpoint')
     if changed_composition:

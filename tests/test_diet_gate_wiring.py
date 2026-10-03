@@ -58,7 +58,7 @@ def _write_bundle(path: Path, *, pos, train_neg, hard_negative_mask_audit):
         emb0=np.zeros((len(payload), 4), dtype=np.float32),
         neg=np.asarray(train_neg, dtype=int),
         train_neg=np.asarray(train_neg, dtype=int),
-        neg_sources=np.empty(0, dtype=object),
+        neg_sources=np.asarray(["gate"] * len(train_neg), dtype=object),
         train_neg_sources=np.asarray(["gate"] * len(train_neg), dtype=object),
         mask_audit=[],
         hard_negative_mask_audit=hard_negative_mask_audit,

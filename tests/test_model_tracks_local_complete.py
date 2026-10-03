@@ -109,3 +109,29 @@ def test_interrupted_text_report_preserves_future_artifacts(tmp_path, monkeypatc
     assert any(name.endswith('text__training_report.md') for name in preserved)
     assert (text_dir / 'text__future_artifact.json').read_text() == 'attempt 2'
     assert (text_dir / 'text__training_report.md').read_text() == 'attempt 2'
+
+
+def test_completion_runs_configured_post_training_ablation(tmp_path,monkeypatch):
+    from model_tracks import local_complete, post_training_ablation
+    from model_tracks.config import SuiteConfig
+    calls = []
+    monkeypatch.setattr(post_training_ablation,'run',lambda *args:calls.append(args))
+    cfg = SuiteConfig(setup_dir='setup',text_bundle='bundle',publish_git=False,publish_dvc=False,post_training_ablation=True)
+    artifact = tmp_path/'completed.zip'
+    assert local_complete._publish(artifact,cfg,'run') == artifact
+    assert calls == [(artifact,'run',cfg)]
+
+
+def test_completed_archive_restores_inputs_and_reports_before_publish(tmp_path,monkeypatch):
+    import shutil
+    from model_tracks import local_complete
+    training_zip,input_zip,calls,_ = suite(tmp_path,monkeypatch)
+    final = complete(training_zip,input_zip,'run')
+    shutil.rmtree(tmp_path/'run')
+    def publish(archive,settings,run_tag):
+        assert (tmp_path/'run/text/text__training_report.md').is_file()
+        assert (tmp_path/'run/local_inputs/data/model_tracks/suite.yaml').is_file()
+        return archive
+    monkeypatch.setattr(local_complete,'_publish',publish)
+    assert complete(training_zip,input_zip,'run') == final
+    assert calls == ['text','gnn_only','hybrid']

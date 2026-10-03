@@ -16,12 +16,17 @@ def complete_local_handoff(local, request):
     from model_tracks.preflight import preflight
     validate_result(local, request)
     print('[embeddings/local] checking text, GNN and hybrid handoff', flush=True)
-    checks = preflight(TRAIN_ROOT / 'config/model_tracks.yaml')
+    try:
+        checks = preflight(TRAIN_ROOT / 'config/model_tracks.yaml')
+        status = 'complete'
+    except (ValueError,FileNotFoundError,RuntimeError) as exc:
+        checks = {'error':str(exc),'type':type(exc).__name__}
+        status = 'blocked'
     report = TRAIN_ROOT / 'results/embedding_job/local_handoff.json'
     report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps({'status': 'complete', 'cache': str(local),
+    report.write_text(json.dumps({'status': status, 'cache': str(local),
                                  'sha256': file_hash(local), 'preflight': checks}, indent=2) + '\n')
-    print(f'[embeddings/local] handoff verified: {report}', flush=True)
+    print(f'[embeddings/local] handoff {status}: {report}', flush=True)
     return report
 
 
@@ -131,10 +136,13 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
     saved.with_suffix('.tmp').write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
     saved.with_suffix('.tmp').replace(saved)
     if local.exists():
-        validate_result(local, request)  # Legacy/stale results fail closed.
+        import hashlib
+        validate_result(local, request, request_sha256=hashlib.sha256(saved.read_bytes()).hexdigest())  # Legacy/stale results fail closed.
         print('[embeddings/local] current cache verified against freshly composed texts', flush=True)
         handoff = complete_local_handoff(local, request)
-        persist_embeddings(local, handoff)
+        persist_embeddings(local, handoff,publisher=publisher)
+        if json.loads(handoff.read_text())['status'] != 'complete':
+            raise RuntimeError('Embedding result saved; local training handoff is blocked: '+json.loads(handoff.read_text())['preflight']['error'])
         return
     backend.GPU = 'CPU' if device == 'cpu' else 'T4'
     os.environ['EUROMONITOR_KEEP_ALIVE_ALLOWED'] = '1'
@@ -207,18 +215,20 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
         backend.stop()
         backend.close_live_log()
         backend.release_colab_launch_lock(lock)
+    import re
+    log = backend.LIVE_LOG_PATH.read_text() if backend.LIVE_LOG_PATH.is_file() else ''
+    log = re.sub(r'(?i)(colab-runtime-proxy-token[= :]+)[^\s&\"\']+',r'\1[REDACTED]',log)
+    (local.parent / 'encoding.log').write_text(log)
     if smoke_size is not None:
         handoff = local.parent / 'smoke_report.json'
-        import re
-        log = backend.LIVE_LOG_PATH.read_text() if backend.LIVE_LOG_PATH.is_file() else ''
-        log = re.sub(r'(?i)(colab-runtime-proxy-token[= :]+)[^\s&\"\']+',r'\1[REDACTED]',log)
-        (local.parent / 'encoding.log').write_text(log)
         handoff.write_text(json.dumps({'status':'passed','scope':'smoke','device':device,
             'sample_size':smoke_size,'shape':validate_result(local,request), 'sha256':file_hash(local)},indent=2))
         persist_embeddings(local,handoff,publisher=publisher)
     else:
         handoff = complete_local_handoff(local, request)
-        persist_embeddings(local, handoff)
+        persist_embeddings(local, handoff,publisher=publisher)
+        if json.loads(handoff.read_text())['status'] != 'complete':
+            raise RuntimeError('Embedding result saved; local training handoff is blocked: '+json.loads(handoff.read_text())['preflight']['error'])
 
 
 if __name__ == '__main__':

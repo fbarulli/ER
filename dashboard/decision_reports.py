@@ -415,19 +415,22 @@ def _controlled_report(path, attribute=''):
     if not path.is_file():
         return {'status':'not measured', 'rows':[], 'meaning':'Frozen-checkpoint ablation measures changes from removing declared inputs; it is not an intrinsic attribute weight'}
     try:
-        from model_tracks.ablation import validate_sources, resolve, load_prepared
+        from model_tracks.ablation import validate_sources, resolve, load_prepared, verify_threshold_binding, request_context
         payload = json_file(path)
         if payload.get('schema') != 'er-attribute-ablation-report-v1':
             raise ValueError('unsupported ablation report')
         request_path = resolve(payload['request_path'])
         request = json_file(request_path)
-        validate_sources(request)
-        load_prepared(request_path,request).close()
-        if file_hash(request_path) != payload['request_sha256'] or file_hash(resolve(payload['result_path'])) != payload['result_sha256']:
-            raise ValueError('ablation request/result changed')
-        threshold = payload['threshold_provenance']
-        if file_hash(resolve(threshold['path'])) != threshold['sha256']:
-            raise ValueError('saved baseline threshold report changed')
+        with request_context(request_path):
+            validate_sources(request)
+            load_prepared(request_path,request).close()
+            if file_hash(request_path) != payload['request_sha256'] or file_hash(resolve(payload['result_path'])) != payload['result_sha256']:
+                raise ValueError('ablation request/result changed')
+            if verify_threshold_binding(request,payload['threshold_provenance']) != payload.get('threshold_binding'):
+                raise ValueError('threshold checkpoint binding missing or invalid')
+            threshold = payload['threshold_provenance']
+            if file_hash(resolve(threshold['path'])) != threshold['sha256']:
+                raise ValueError('saved baseline threshold report changed')
         rows = [r for r in payload['rows'] if not attribute or r['attribute'] == attribute]
         return {**payload, 'status':'verified frozen-checkpoint intervention', 'rows':rows,
                 'meaning':payload['intervention']+'; '+payload['retrieval_scope']}
@@ -439,6 +442,7 @@ def _controlled_report(path, attribute=''):
 def controlled_influence(attribute=''):
     pointer = F['decision_ablation_report']
     paths = sorted(pointer.parent.glob('*/report.json')) if pointer.parent.is_dir() else []
+    paths.extend(sorted((TRAIN_ROOT/'results/model_tracks').glob('*/*/ablation/report.json')))
     if pointer.is_file():
         paths.append(pointer)
     if not paths:
@@ -458,7 +462,7 @@ def controlled_influence(attribute=''):
                     for row in report['rows'])
     return {'status':'verified frozen-checkpoint intervention' if reports else 'invalid or stale controlled ablation',
             'rows':rows,'reports':reports,'invalid_reports':invalid,
-            'meaning':'Declared-input interventions at frozen checkpoints and thresholds; fixed sampled retrieval catalog. Missing axes remain unknown'}
+            'meaning':'Declared-input interventions at frozen checkpoints and thresholds; fixed candidate catalog with query-only interventions. Missing axes remain unknown'}
 
 
 def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=50, attribute=''):

@@ -86,6 +86,29 @@ def _canonicalize_gtin(x: str | float | None) -> str | float | None:
     return x
 
 
+def _longest_digit_run(raw: str) -> str:
+    candidates = re.findall(r'\d+', raw)
+    return max(candidates, key=len) if candidates else ''
+
+
+def normalize_gtin_value(raw: object) -> tuple[str | None, bool]:
+    """Scalar form of the shared structural facts, without singleton pandas work.
+
+    Preserves longest-run/earliest-tie extraction, zero placeholders, UPC
+    canonicalization, plausible lengths and shared GS1 checksum semantics.
+    Policy eligibility remains the caller's separate, current-policy check.
+    """
+    if pd.isna(raw):
+        return None, False
+    cleaned = _longest_digit_run(str(raw))
+    if not cleaned or re.fullmatch(r'0+', cleaned):
+        return None, False
+    cleaned = _canonicalize_gtin(cleaned)
+    if len(cleaned) not in {8, 12, 13, 14}:
+        return None, False
+    return cleaned, is_valid_gtin_checksum(cleaned)
+
+
 def normalize_and_validate_gtin(series: pd.Series) -> pd.DataFrame:
     """Clean raw gtin strings and validate GTIN structure.
 
@@ -108,12 +131,8 @@ def normalize_and_validate_gtin(series: pd.Series) -> pd.DataFrame:
     present_loc = series.notna().to_numpy()
     cleaned_vals = np.full(len(series), None, dtype=object)
 
-    def _longest(raw: str) -> str:
-        candidates = re.findall(r"\d+", raw)
-        return max(candidates, key=len) if candidates else ""
-
     if present_loc.any():
-        winners = series.loc[present_loc].astype(str).map(_longest)
+        winners = series.loc[present_loc].astype(str).map(_longest_digit_run)
         cleaned_vals[present_loc] = winners.to_numpy()
     cleaned = pd.Series(cleaned_vals, index=series.index, dtype="object")
 

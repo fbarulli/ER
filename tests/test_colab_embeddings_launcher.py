@@ -113,3 +113,20 @@ def test_embedding_save_reuses_existing_git_artifact_flow(tmp_path):
          patch('model_tracks.publish.push_artifacts', side_effect=existing_publisher):
         module.persist_embeddings(setup / 'shared_minilm__embeddings.npz', handoff)
     assert len(captured) == 1
+
+
+def test_valid_embeddings_preserve_failed_training_handoff_evidence(tmp_path,monkeypatch):
+    module,_ = launcher()
+    monkeypatch.setattr(module,'TRAIN_ROOT',tmp_path)
+    monkeypatch.setattr(module,'validate_result',lambda *args,**kwargs:None)
+    monkeypatch.setattr(module,'file_hash',lambda *args:'verified')
+    cache = tmp_path/'vectors.npz'; cache.write_bytes(b'vectors')
+    from model_tracks import preflight
+    def blocked(*args):
+        raise ValueError('diet coverage gate failed')
+    monkeypatch.setattr(preflight,'preflight',blocked)
+    result = module.complete_local_handoff(cache,{})
+    document = json.loads(result.read_text())
+    assert document['status'] == 'blocked'
+    assert document['sha256'] == 'verified'
+    assert document['preflight']['error'] == 'diet coverage gate failed'

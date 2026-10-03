@@ -9,7 +9,7 @@ import yaml
 
 
 def complete(output: Path, setup: Path, *, device: str, report_test: bool):
-    from graph_tracks.text_cache import create_cache
+    from model_tracks.text_export import validate as validate_export
     from graph_tracks.data import file_hash, load_records, load_text_cache
     from graph_tracks.report import dev_threshold, pair_metrics, retrieval_report
     from graph_tracks.train import load_pairs
@@ -31,8 +31,8 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     cache_started = time.monotonic()
     print(f"[text-phase] vector_export start catalog={setup / 'eligible_catalog.csv'} checkpoint={checkpoint} "
           f"output={output / 'text__vectors.npz'}", flush=True)
-    cache = create_cache(setup / 'eligible_catalog.csv', checkpoint, output / 'text__vectors.npz', device=device)
-    vectors, metadata = load_text_cache(cache, [r['sku_id'] for r in records])
+    cache = output / 'text__vectors.npz'
+    vectors, metadata = validate_export(cache, checkpoint, setup)
     print(f"[text-phase] vector_export complete path={cache} shape={vectors.shape} "
           f"seconds={time.monotonic() - cache_started:.3f}", flush=True)
     settings = yaml.safe_load((setup / 'gnn_only.yaml').read_text())

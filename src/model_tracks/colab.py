@@ -2,10 +2,56 @@
 import json
 from pathlib import Path
 import zipfile
+import tarfile
+import hashlib
 
 from core.portable_archive import verify_archive
 from graph_tracks.data import file_hash
 from model_tracks.package import verify
+
+
+def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publisher=None):
+    """Save immutable inputs through the existing Git artifact publisher."""
+    from core.common import TRAIN_ROOT
+    from model_tracks.publish import push_artifacts
+    verify(archive)
+    files = {'inputs.zip':archive}
+    if resume_archive is not None:
+        recovery = verify_archive(resume_archive,'suite_recovery_manifest.json')
+        if recovery.get('run_tag') != run_tag:
+            raise ValueError('recovery suite run mismatch')
+        original = recovery.get('input_package')
+        metadata = verify(archive)
+        if not isinstance(original,dict) or any(original.get(key) != metadata.get(key)
+                                               for key in ('revision','files')):
+            raise ValueError('resume package differs from interrupted suite sources or inputs')
+        files['recovery.zip'] = resume_archive
+    inventory = {name:{'sha256':file_hash(path),'size':path.stat().st_size}
+                 for name,path in files.items()}
+    identity = hashlib.sha256(json.dumps(inventory,sort_keys=True).encode()).hexdigest()
+    folder = TRAIN_ROOT/'results/model_tracks/inputs'
+    folder.mkdir(parents=True,exist_ok=True)
+    transport = folder/f'{identity}.tar.gz'
+    if not transport.exists():
+        partial = transport.with_suffix('.partial')
+        with tarfile.open(partial,'w:gz') as package:
+            for name,path in files.items():
+                package.add(path,arcname=name,recursive=False)
+        partial.replace(transport)
+    with tarfile.open(transport,'r:gz') as package:
+        if set(package.getnames()) != set(files):
+            raise ValueError('Git input transport inventory mismatch')
+        for name,expected in inventory.items():
+            member = package.getmember(name)
+            if not member.isfile() or member.size != expected['size']:
+                raise ValueError('Git input transport member mismatch')
+            with package.extractfile(member) as source:
+                if hashlib.file_digest(source,'sha256').hexdigest() != expected['sha256']:
+                    raise ValueError('Git input transport checksum mismatch')
+    if transport.stat().st_size >= 100*1024**2:
+        raise ValueError('Suite input transport exceeds GitHub regular-file limit; use the configured DVC artifact flow')
+    (publisher or push_artifacts)([transport],f'tracks: save immutable GPU inputs {identity[:24]}')
+    return transport
 
 
 def _collect_failure_logs(backend, remote_output: str, run_tag: str):
@@ -36,9 +82,10 @@ print(json.dumps({{name: hashlib.sha256((root/name).read_bytes()).hexdigest()
         print('No remote suite log files were available for collection', flush=True)
 
 
-def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Path | None = None):
+def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Path | None = None,
+        git_inputs: Path | None = None):
     from cli import colab as backend
-    from core.common import RESULTS
+    from core.common import RESULTS, TRAIN_ROOT
     metadata = verify(archive)
     with zipfile.ZipFile(archive) as source:
         import yaml
@@ -58,10 +105,8 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
         resume_archive = recovery_local
     remote_recovery = f'{backend.REMOTE_ROOT}/prepared_training/{run_tag}__recovery.zip'
     remote_zip = f'{backend.REMOTE_ROOT}/prepared_training/{run_tag}__all_tracks.zip'
-    backend.run_colab_exec_stream(backend.SESSION,
-        f'import pathlib\npathlib.Path({remote_zip!r}).parent.mkdir(parents=True,exist_ok=True)\n',
-        timeout=120,log_name='tracks_upload_directory',retry_safe=True)
-    backend._upload_with_retries(archive,remote_zip,timeout=backend._RESULT_DOWNLOAD_TIMEOUT_SECONDS)
+    git_inputs = git_inputs or prepare_git_inputs(archive,run_tag,resume_archive=resume_archive)
+    remote_inputs = backend.REMOTE_ROOT+'/'+git_inputs.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
     if resume_archive is not None:
         recovery = verify_archive(resume_archive, 'suite_recovery_manifest.json')
         if recovery.get('run_tag') != run_tag:
@@ -70,17 +115,32 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
         if not isinstance(original, dict) or any(original.get(key) != metadata.get(key)
                                                for key in ('revision', 'files')):
             raise ValueError('resume package differs from interrupted suite sources or inputs')
-        backend._upload_with_retries(resume_archive, remote_recovery,
-                                     timeout=backend._RESULT_DOWNLOAD_TIMEOUT_SECONDS)
     remote_output = f'{backend.REMOTE_ROOT}/results/model_tracks/{run_tag}'
     needs_dvc = False  # CPU postprocessing and publication run locally after download.
     auth = backend._remote_auth_env_script(include_wandb=True, force_dvc=needs_dvc)
     script = backend._BOOTSTRAP + auth + f'''
-import hashlib, json, os, pathlib, subprocess, sys, zipfile
+import hashlib, json, os, pathlib, subprocess, sys, zipfile, tarfile
 root=pathlib.Path({backend.REMOTE_ROOT!r})
 archive_path=pathlib.Path({remote_zip!r})
+transport=pathlib.Path({remote_inputs!r})
+if hashlib.sha256(transport.read_bytes()).hexdigest() != {file_hash(git_inputs)!r}:
+    raise ValueError("cloned Git input transport mismatch")
+archive_path.parent.mkdir(parents=True,exist_ok=True)
+with tarfile.open(transport,'r:gz') as package:
+    expected_members={{'inputs.zip'}} | ({{'recovery.zip'}} if {resume_archive is not None!r} else set())
+    if set(package.getnames()) != expected_members:
+        raise ValueError("cloned Git input inventory mismatch")
+    for member_name,destination in [('inputs.zip',archive_path),('recovery.zip',pathlib.Path({remote_recovery!r}))]:
+        if member_name not in expected_members:
+            continue
+        member=package.getmember(member_name)
+        if not member.isfile():
+            raise ValueError("unsafe Git input member")
+        with package.extractfile(member) as source,destination.open('wb') as target:
+            import shutil
+            shutil.copyfileobj(source,target)
 if hashlib.sha256(archive_path.read_bytes()).hexdigest() != {file_hash(archive)!r}:
-    raise ValueError("prepared all-track upload mismatch")
+    raise ValueError("prepared all-track Git input mismatch")
 subprocess.run(["git","fetch",{backend.GIT_REMOTE_NAME!r},{backend.BRANCH!r}],cwd=root,check=True)
 subprocess.run(["git","checkout","--detach",{metadata['revision']!r}],cwd=root,check=True)
 with zipfile.ZipFile(archive_path) as archive:

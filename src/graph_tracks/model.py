@@ -49,8 +49,10 @@ class AttributeGNN(nn.Module):
             features.append(F.normalize(text, dim=-1))
         return F.relu(self.norm(self.input(torch.cat(features, dim=-1))))
 
-    def context(self, support: GraphBatch, text: torch.Tensor | None = None) -> dict:
-        h = self.initial(support, text)
+    def context(self, support: GraphBatch, text: torch.Tensor | None = None, *, initial=None) -> dict:
+        if not self.graph_enabled:
+            return {}
+        h = self.initial(support, text) if initial is None else initial
         states = {}
         for relation in RELATIONS:
             listing, value, sizes = topology(
@@ -64,8 +66,8 @@ class AttributeGNN(nn.Module):
         return states
 
     def encode(self, batch: GraphBatch, states: dict,
-               text: torch.Tensor | None = None) -> torch.Tensor:
-        h = self.initial(batch, text)
+               text: torch.Tensor | None = None, *, initial=None) -> torch.Tensor:
+        h = self.initial(batch, text) if initial is None else initial
         messages = []
         for relation in RELATIONS if self.graph_enabled else ():
             value, listing, sizes = topology(batch, relation, dtype=h.dtype)

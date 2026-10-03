@@ -46,17 +46,32 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
     records = load_records(listing_path)
     load_pairs(pairs, records)
     (output / 'pairs.csv').write_bytes(pairs.read_bytes())
+    lineage_source = pairs.parent / 'pair_lineage.json'
+    lineage = None
+    if lineage_source.is_file():
+        lineage = json.loads(lineage_source.read_text())
+        if lineage.get('schema') != 'er-graph-pair-lineage-v1' or lineage.get('listing_pairs_sha256') != file_hash(pairs):
+            raise ValueError('pair lineage does not bind the prepared pair source')
+        (output / 'pair_lineage.json').write_bytes(lineage_source.read_bytes())
     write_json(output / 'input_manifest.json', {
         'schema': 'er-graph-inputs-v1', 'catalog_sha256': file_hash(catalog),
         'identity_policy_sha256': file_hash(POLICY_PATH),
         'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config' / 'identity_dimensions.yaml'),
         'splits_sha256': file_hash(splits), 'pairs_sha256': file_hash(pairs),
+        'pair_lineage_sha256': file_hash(output / 'pair_lineage.json') if lineage_source.is_file() else None,
+        'pair_trace': {'status':'source_bound' if lineage else 'unknown: no source lineage supplied',
+                       'source_trace_columns':lineage.get('source_trace_columns', []) if lineage else [],
+                       'missing_axes':lineage.get('missing_axes', []) if lineage else
+                           ['difficulty','gate_evidence','gendata','masking']},
+        'augmentation': 'not_applicable: fixed graph pairs; no masking/gendata pipeline',
         'listings_sha256': file_hash(listing_path), 'identity_extractor': 'core.sku_identity.row_identity',
         'report_attributes_sha256': file_hash(output / FILENAME),
         'relations': list(RELATIONS), 'numeric': list(NUMERIC),
         'feature_scope': 'derived from core.sku_identity.graph_schema; every extractor descriptor is a model input',
         'excluded_model_inputs': ['gtin', 'verified identity edges', 'raw text'],
     })
+    from graph_tracks.prepared_inputs import prepare_training
+    prepare_training(listing_path, output / 'pairs.csv')
     return listing_path
 
 

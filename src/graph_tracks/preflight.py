@@ -38,6 +38,17 @@ def load_inputs(cfg):
                 '(relations/numeric derive from core.sku_identity.graph_schema); '
                 're-run local graph setup before launch')
     records = load_records(resolve(cfg.listings))
+    if manifest is not None and manifest.get('pair_lineage_sha256'):
+        if file_hash(resolve(cfg.listings).parent / 'pair_lineage.json') != manifest['pair_lineage_sha256']:
+            raise ValueError('prepared pair lineage mismatch')
+    from graph_tracks.prepared_inputs import PLAN, load_plan
+    if (resolve(cfg.listings).parent / PLAN).is_file():
+        plan, arrays = load_plan(resolve(cfg.listings), resolve(cfg.pairs))
+        arrays.close()
+        if plan['ids'] != [r['sku_id'] for r in records]:
+            raise ValueError('prepared graph ID order mismatch')
+    elif cfg.device == 'cuda':
+        raise ValueError('CUDA training requires locally prepared graph tensors')
     if manifest is not None and manifest.get('report_attributes_sha256'):
         from graph_tracks.report_attributes import FILENAME, load_inputs as load_report_inputs
         if file_hash(resolve(cfg.listings).parent / FILENAME) != manifest['report_attributes_sha256']:

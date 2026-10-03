@@ -48,8 +48,10 @@ class GraphEncoder:
             raise ValueError('batch_size must be positive')
         if not records:
             raise ValueError('empty inference population')
-        batches = [tensorize(records[start:start + batch_size], self.vocabulary, self.device)
-                   for start in range(0, len(records), batch_size)]
+        if self.device == 'cuda':
+            raise ValueError('CUDA inference requires locally prepared graph batches')
+        batches = (tensorize(records[start:start + batch_size], self.vocabulary, self.device)
+                   for start in range(0, len(records), batch_size))
         return self.encode_prepared(batches, text)
 
     def encode_prepared(self, batches, text=None):
@@ -70,22 +72,54 @@ class GraphEncoder:
 
 
 def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
-           pairs=None, build_index=False, device='cpu', batch_size=1024):
+           pairs=None, build_index=False, device='cpu', batch_size=1024,
+           encoder=None, prepared_plan=None, prepared_arrays=None):
     if output.exists():
         raise FileExistsError(output)
     records = load_records(listings, require_training=False)
     ids = [r['sku_id'] for r in records]
-    encoder = GraphEncoder(checkpoint, device)
+    from graph_tracks.prepared_inputs import PLAN, load_plan, load_batch
+    owned_arrays = None
+    if prepared_plan is None and (listings.parent / PLAN).is_file():
+        prepared_plan, prepared_arrays = load_plan(listings)
+        owned_arrays = prepared_arrays
+    if prepared_plan is not None:
+        if prepared_plan['ids'] != ids or prepared_plan['listings_sha256'] != file_hash(listings):
+            raise ValueError('prepared inference population mismatch')
+        support = load_batch(prepared_arrays, 'train', device, prepared_plan['vocabulary'])
+    else:
+        support = None
+        if device == 'cuda':
+            raise ValueError('CUDA inference requires locally prepared graph tensors')
+    encoder = encoder or GraphEncoder(checkpoint, device, prepared_support=support)
+    if prepared_plan is not None and prepared_plan['vocabulary'] != encoder.vocabulary:
+        raise ValueError('prepared inference vocabulary differs from checkpoint')
+    if prepared_plan is not None and prepared_plan.get('support_listings_sha256', prepared_plan['listings_sha256']) != encoder.manifest['listings_sha256']:
+        raise ValueError('prepared training support differs from checkpoint')
+    if prepared_plan is not None and prepared_plan.get('checkpoint_sha256', file_hash(checkpoint)) != file_hash(checkpoint):
+        raise ValueError('prepared query checkpoint mismatch')
     text, metadata = None, None
     hybrid = encoder.manifest['track'] == 'hybrid'
     if hybrid != bool(text_cache):
         raise ValueError('hybrid requires text cache; gnn_only forbids it')
     if text_cache:
         text, metadata = load_text_cache(text_cache, ids)
-        for key in ('checkpoint_sha256', 'composition', 'identity_policy_sha256', 'identity_dimensions_sha256'):
+        keys = ('checkpoint_sha256', 'composition', 'identity_policy_sha256', 'identity_dimensions_sha256',
+                'composition_implementation_sha256')
+        for key in keys:
             if metadata.get(key) != encoder.manifest['text_metadata'].get(key):
                 raise ValueError(f'inference text cache mismatch: {key}')
-    vectors = encoder.encode(records, text, batch_size)
+        if not encoder.manifest['config'].get('allow_unmanifested_inputs', False):
+            if any(not metadata.get(key) for key in keys):
+                raise ValueError('inference text cache lacks complete composition provenance')
+    if prepared_plan is not None:
+        batches = (load_batch(prepared_arrays, prefix, device, encoder.vocabulary)
+                   for prefix in prepared_plan['query_batches'])
+        vectors = encoder.encode_prepared(batches, text)
+    else:
+        vectors = encoder.encode(records, text, batch_size)
+    if owned_arrays is not None:
+        owned_arrays.close()
     track = encoder.manifest['track']
     output.mkdir(parents=True)
     np.savez_compressed(output / name(track, 'vectors.npz'), ids=np.asarray(ids), embeddings=vectors)
@@ -118,8 +152,74 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         'track': encoder.manifest['track'], 'graph_context': 'training-listings-only',
         'vector_kind': 'graph-informed', 'ann_reproduces_pair_scorer': False,
         'count': len(ids), 'dimension': vectors.shape[1], 'index_built': build_index,
+        'embedding_dtype': str(vectors.dtype),
         'id_kind': 'listing_sku_id'})
     return output
+
+
+def forward_outputs(checkpoint, listings, pair_path, output, cfg, *, text_cache=None,
+                    prepared_plan=None, prepared_arrays=None):
+    """Save GPU forward results for CPU-only analysis after session teardown."""
+    from graph_tracks.train import load_pairs
+    from graph_tracks.prepared_inputs import load_plan, PLAN
+    records = load_records(listings)
+    owned_arrays = None
+    if prepared_plan is None and (listings.parent / PLAN).is_file():
+        prepared_plan, prepared_arrays = load_plan(listings, pair_path)
+        owned_arrays = prepared_arrays
+    if prepared_plan is not None:
+        if prepared_plan.get('pairs_sha256') != file_hash(pair_path):
+            raise ValueError('prepared forward pair source mismatch')
+        # Prepared local endpoint indices map to catalog vectors without CSV
+        # parsing or building a new endpoint lookup in the GPU worker.
+        pair_data = {}
+        for split in ('dev', 'test'):
+            indices = prepared_arrays[split+'/catalog_pairs']
+            if indices.dtype != np.int64 or indices.ndim != 2 or indices.shape[1] != 2:
+                raise ValueError('prepared catalog pair dtype/shape mismatch')
+            pair_data[split] = (indices, None)
+    elif cfg.device == 'cuda':
+        raise ValueError('CUDA forward export requires locally prepared pair indices')
+    else:
+        pair_data = load_pairs(pair_path, records)
+    checkpoint_track(checkpoint)
+    payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
+    for key, path in [('listings_sha256', listings), ('pairs_sha256', pair_path)]:
+        if payload['manifest'].get(key) != file_hash(path):
+            raise ValueError(f'forward export must use checkpoint-bound inputs: {key}')
+    # The export owns graph support. Retain only scorer weights here rather
+    # than another catalog-sized support/text copy during its forward pass.
+    scorer_state, text_dim = payload['scorer'], payload['text_dim']
+    del payload
+    inference = export(checkpoint, listings, output, text_cache=text_cache,
+                       device=cfg.device, batch_size=cfg.inference_batch_size,
+                       prepared_plan=prepared_plan, prepared_arrays=prepared_arrays)
+    if owned_arrays is not None:
+        owned_arrays.close()
+    track = checkpoint_track(checkpoint)
+    # Scoring needs weights, not graph context; do not reconstruct it.
+    scorer = PairScorer(bool(text_dim)).to(cfg.device).eval()
+    scorer.load_state_dict(scorer_state)
+    del scorer_state
+    with np.load(inference / name(track, 'vectors.npz'), allow_pickle=False) as cache:
+        vectors = torch.as_tensor(cache['embeddings'], device=cfg.device)
+    text = None if text_cache is None else torch.as_tensor(
+        load_text_cache(text_cache, [r['sku_id'] for r in records])[0], device=cfg.device)
+    scores = {}
+    with torch.no_grad():
+        for split in ('dev', 'test'):
+            if split == 'test' and not cfg.report_test:
+                continue
+            indices = pair_data[split][0]
+            scores[split] = scorer(vectors, torch.as_tensor(indices, device=cfg.device), text).sigmoid().cpu().numpy()
+    score_path = inference / name(track, 'split_scores.npz')
+    np.savez_compressed(score_path, **scores)
+    manifest_path = inference / name(track, 'export_manifest.json')
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update(pairs_sha256=file_hash(pair_path), split_scores_sha256=file_hash(score_path),
+                    report_test=cfg.report_test, forward_only=True)
+    write_json(manifest_path, manifest)
+    return inference
 
 
 def main():

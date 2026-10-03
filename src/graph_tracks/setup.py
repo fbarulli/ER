@@ -40,9 +40,10 @@ def listing_contract(catalog, labels, populations):
     groups = {}
     for key, listing in zip(keys, frame.sku_id):
         groups.setdefault(key, []).append(listing)
-    pair_map, skipped = {}, Counter()
+    pair_map, skipped, lineage = {}, Counter(), {}
+    source_axes = [c for c in labels.columns if c not in {'gtin1', 'gtin2', 'true_label'}]
 
-    def add(a, b, label, split):
+    def add(a, b, label, split, origin):
         key = tuple(sorted((a, b)))
         if a == b:
             if label == 0:
@@ -53,6 +54,7 @@ def listing_contract(catalog, labels, populations):
         if key in pair_map and pair_map[key] != value:
             raise ValueError('conflicting listing-pair supervision')
         pair_map[key] = value
+        lineage.setdefault(key, []).append(origin)
 
     from core.gtin import gtin_validity
     trusted = frame.loc[gtin_validity(frame.gtin)].sku_id
@@ -61,8 +63,9 @@ def listing_contract(catalog, labels, populations):
         eligible = [listing for listing in listings if listing in trusted_ids]
         skipped['untrusted_identity_chain_listings'] += len(listings) - len(eligible)
         for a, b in zip(eligible, eligible[1:]):
-            add(a, b, 1, roles[key])
-    for row in labels.itertuples(index=False):
+            add(a, b, 1, roles[key], {'kind': 'trusted_same_entity_chain', 'gtin': key,
+                                    'augmentation': 'not_applicable'})
+    for source_row, row in enumerate(labels.itertuples(index=False), 1):
         a, b = normalize_gtin(row.gtin1), normalize_gtin(row.gtin2)
         label = int(row.true_label)
         if label not in (0, 1):
@@ -75,13 +78,24 @@ def listing_contract(catalog, labels, populations):
                 raise ValueError('positive label crosses shared split')
             skipped['cross_split_negative'] += 1
             continue
-        add(groups[a][0], groups[b][0], label, roles[a])
+        # Read metadata by the original column names, not namedtuple's renamed
+        # fields, so arbitrary source trace-axis names survive unchanged.
+        metadata = labels.iloc[source_row - 1][source_axes].to_dict()
+        add(groups[a][0], groups[b][0], label, roles[a],
+            {'kind': 'source_entity_label', 'source_row': source_row,
+             'gtin1': str(row.gtin1), 'gtin2': str(row.gtin2), 'metadata': metadata})
     pairs = pd.DataFrame([
         {'sku_id1': a, 'sku_id2': b, 'label': label, 'split': split}
         for (a, b), (label, split) in sorted(pair_map.items())
     ], columns=['sku_id1', 'sku_id2', 'label', 'split'])
     return frame, assignments, pairs, {'excluded_unassigned_listings': excluded,
-                                      'skipped_labels': dict(skipped)}
+                                      'skipped_labels': dict(skipped),
+                                      'source_trace_columns': source_axes,
+                                      'missing_axes': sorted({'difficulty', 'masking', 'gendata', 'gate_evidence'} - set(source_axes)),
+                                      'augmentation': 'not_applicable: graph track uses fixed labels without generated/masked pairs',
+                                      'pair_lineage': [{'sku_id1':a,'sku_id2':b,'label':pair_map[(a,b)][0],
+                                                        'split':pair_map[(a,b)][1],'origins':origins}
+                                                       for (a,b),origins in sorted(lineage.items())]}
 
 
 def setup(output: Path, checkpoint: Path) -> Path:
@@ -109,6 +123,11 @@ def setup(output: Path, checkpoint: Path) -> Path:
     frame.to_csv(output / 'eligible_catalog.csv', index=False)
     assignments.to_csv(output / 'listing_splits.csv', index=False)
     pairs.to_csv(output / 'listing_pairs.csv', index=False)
+    write_json(output / 'pair_lineage.json', {'schema':'er-graph-pair-lineage-v1',
+               'pairs':accounting.pop('pair_lineage'), 'source_trace_columns':accounting['source_trace_columns'],
+               'missing_axes':accounting['missing_axes'], 'augmentation':accounting['augmentation'],
+               'listing_pairs_sha256':file_hash(output / 'listing_pairs.csv'),
+               'source_labels_sha256':file_hash(F['labeled_pairs'])})
     load_pairs(output / 'listing_pairs.csv', load_pairs_from)
     listings = prepare(output / 'eligible_catalog.csv', output / 'listing_splits.csv',
                        output / 'listing_pairs.csv', output / 'prepared')

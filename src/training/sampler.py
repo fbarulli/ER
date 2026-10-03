@@ -15,15 +15,11 @@ Config (``config/training.yaml`` ``training.batch_sampler``):
     seed: 42                     # optional, defaults to SEED
     drop_last: false
 
-Each batch = sum(composition.values()) rows.  Within each epoch each
-population's indices are drawn in order, then drawn in template
-order until one group runs out.
-
-Text-level deduplication: before a row is placed in a batch, its text
-content is checked against rows already in that batch.  Duplicate texts
-are deferred to later batches (or dropped when a group is exhausted).
-This prevents the same product appearing as both anchor and negative in
-one batch — critical for MNRL's in-batch ranking loss.
+Each batch follows relative population weights while groups have eligible
+rows. Exhausted groups and duplicate texts produce smaller batches; every
+index is presented once when drop_last=False. Duplicate texts are deferred.
+Deduplication reads frozen untransformed text only: runtime masking and ANN
+replacement are explicitly outside this fixed-text batching guarantee.
 
 Why this exists (rationale, EXP-03 / TODO TIER 0):
     - MNRL is an in-batch loss: every other row is a negative for each
@@ -41,25 +37,17 @@ Why this exists (rationale, EXP-03 / TODO TIER 0):
 
 from __future__ import annotations
 
-import hashlib
-from collections import defaultdict
-from typing import Iterable, Iterator
+from collections import defaultdict, deque
+from typing import Iterator
 
 import numpy as np
 
 
-def _row_text_hash(dataset, idx: int) -> str:
-    """Hash the text content of one row for duplicate detection.
-
-    Checks all string columns; non-string values are stringified.
-    """
-    hasher = hashlib.sha256()
-    for col in dataset.column_names:
-        val = dataset[idx][col]
-        if isinstance(val, (list, tuple)):
-            val = str(val)
-        hasher.update(str(val).encode())
-    return hasher.hexdigest()
+def _row_text_hash(dataset, idx: int) -> frozenset[str]:
+    """Native text values only; telemetry must not defeat deduplication."""
+    columns = {"sentence1", "sentence2", "anchor", "positive", "negative"}
+    row = dataset[idx]
+    return frozenset(str(row[col]) for col in dataset.column_names if col in columns)
 
 
 class ControlledBatchSampler:
@@ -105,6 +93,7 @@ class ControlledBatchSampler:
         self.seed = seed
         self.drop_last = drop_last
         # Accept either column name (MNRL uses "population").
+        dataset = dataset.with_format(None)
         populations = None
         for col in (population_column, "population"):
             if col in dataset.column_names:
@@ -140,53 +129,91 @@ class ControlledBatchSampler:
         for pop, count in composition.items():
             self._template.extend([pop] * count)
         self._epoch = 0
+        self._packed_epoch = None
+        self._packed_batches = None
         # Pre-compute text hashes for duplicate detection.
         self._text_hashes = [_row_text_hash(dataset, i) for i in range(len(dataset))]
 
     def set_epoch(self, epoch: int) -> None:
         self._epoch = epoch
 
-    def __iter__(self) -> Iterator[list[int]]:
+    def _pack(self) -> list[list[int]]:
+        batches = []
         rng = np.random.default_rng(self.seed + self._epoch)
-        queues: dict[str, list[int]] = {
-            pop: list(indices)
-            for pop, indices in self.groups.items()
-        }
-        while all(queues.values()):
-            batch: list[int] = []
-            batch_hashes: set[str] = set()
+        queues = {pop: deque(rng.permutation(indices)) for pop, indices in self.groups.items()}
+        while any(queues.values()):
+            batch = []
+            texts = set()
             for pop in self._template:
-                # Draw from this population's queue, skipping duplicates.
-                drawn = False
-                while queues[pop]:
-                    candidate = queues[pop].pop()
-                    h = self._text_hashes[candidate]
-                    if h in batch_hashes:
-                        continue  # duplicate text — defer to later batch
-                    batch.append(candidate)
-                    batch_hashes.add(h)
-                    drawn = True
+                queue = queues[pop]
+                for _ in range(len(queue)):
+                    index = queue.popleft()
+                    if self._text_hashes[index] & texts:
+                        queue.append(index)
+                        continue
+                    batch.append(index)
+                    texts.update(self._text_hashes[index])
                     break
-                if not drawn:
-                    # This population's queue is exhausted (all remaining
-                    # texts are duplicates already in the batch).
-                    # Yield what we have so far if drop_last=False,
-                    # then stop the epoch.
-                    if batch and not self.drop_last:
-                        yield batch
-                    return
-            yield batch
-        # Exhausted at least one group — epoch done.
+            # A duplicate may prevent full composition. It stays in its queue
+            # for a later batch; every index is eventually presented once.
+            if not batch:
+                raise RuntimeError("controlled sampler could not make progress")
+            if len(batch) == self.batch_size or not self.drop_last:
+                batches.append(batch)
+        return batches
+
+    def __iter__(self):
+        if self._packed_epoch != self._epoch:
+            self._packed_batches = self._pack()
+            self._packed_epoch = self._epoch
+        return iter(self._packed_batches)
 
     def __len__(self) -> int:
-        complete = min(
-            len(q) // self.composition[pop]
-            for pop, q in self.groups.items()
-        )
-        if self.drop_last:
-            return complete
-        has_remainder = any(
-            len(q) % self.composition[pop] > 0
-            for pop, q in self.groups.items()
-        )
-        return complete + (1 if has_remainder else 0)
+        # Deduplication changes packing; derive the exact deterministic count.
+        if self._packed_epoch != self._epoch:
+            self._packed_batches = self._pack()
+            self._packed_epoch = self._epoch
+        return len(self._packed_batches)
+
+
+def resolve_composition(weights, populations, batch_size):
+    """Scale relative template weights over present populations, without loss."""
+    from collections import Counter
+    present = set(populations)
+    missing = present - set(weights)
+    if missing:
+        raise ValueError(f"sampler template misses observed populations: {sorted(missing)}")
+    active = {key: int(value) for key, value in weights.items() if key in present}
+    if not active or any(value < 1 for value in active.values()):
+        raise ValueError("sampler requires positive weights for present populations")
+    if batch_size < len(active):
+        raise ValueError("batch size cannot represent every sampler population")
+    # Give every active group one slot, distribute the rest proportionally.
+    total = sum(active.values())
+    quotas = {key: batch_size * value / total for key, value in active.items()}
+    counts = {key: max(1, int(value)) for key, value in quotas.items()}
+    while sum(counts.values()) > batch_size:
+        key = max((key for key in counts if counts[key] > 1), key=lambda key: counts[key] - quotas[key])
+        counts[key] -= 1
+    while sum(counts.values()) < batch_size:
+        key = max(counts, key=lambda key: quotas[key] - counts[key])
+        counts[key] += 1
+    absent = set(weights) - present
+    if absent:
+        print(f"[sampler] absent populations={sorted(absent)}; redistributed template={counts}", flush=True)
+    return counts
+
+
+class FrozenBatchSampler:
+    """GPU worker presentation order prepared locally for every epoch."""
+    def __init__(self, epochs):
+        self.epochs = epochs
+        self.epoch = 0
+    def set_epoch(self, epoch):
+        if epoch < 0 or epoch >= len(self.epochs):
+            raise ValueError('training epoch absent from local presentation plan')
+        self.epoch = epoch
+    def __iter__(self):
+        return iter(self.epochs[self.epoch])
+    def __len__(self):
+        return len(self.epochs[self.epoch])

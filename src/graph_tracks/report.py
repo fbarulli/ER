@@ -95,39 +95,53 @@ def retrieval_report(records, vectors, pairs, output, track, cfg):
     return summary
 
 
-def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cfg, *, text_cache=None):
-    from graph_tracks.infer import GraphEncoder, export
+def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cfg, *, text_cache=None, saved_inference=None):
     from graph_tracks.train import load_pairs, write_json
     records = load_records(listings)
     pairs = load_pairs(pair_path, records)
-    encoder = GraphEncoder(checkpoint, cfg.device)
-    track = encoder.manifest['track']
+    from graph_tracks.artifacts import checkpoint_track
+    track = checkpoint_track(checkpoint)
     def progress(phase, **details):
         print(f'[postprocess/{track}] ' + json.dumps({'phase': phase, **details}, default=str), flush=True)
-    if file_hash(listings) != encoder.manifest['listings_sha256'] or file_hash(pair_path) != encoder.manifest['pairs_sha256']:
-        raise ValueError('post-training report must use checkpoint-bound listing/pair inputs')
-    progress('inputs_validated', listings=len(records), checkpoint=str(checkpoint),
-             pairs={split: len(values[0]) for split, values in pairs.items()})
-    progress('vector_export_started', build_index=cfg.build_index, batch_size=cfg.inference_batch_size)
-    inference = export(checkpoint, listings, output / name(track, 'inference'), text_cache=text_cache,
-                       build_index=cfg.build_index, device=cfg.device, batch_size=cfg.inference_batch_size)
-    cache = np.load(inference / name(track, 'vectors.npz'), allow_pickle=False)
-    vectors = cache['embeddings']
-    progress('vector_export_complete', shape=list(vectors.shape), output=str(inference))
-    text = None if text_cache is None else load_text_cache(text_cache, [r['sku_id'] for r in records])[0]
+    if saved_inference is None:
+        from graph_tracks.infer import forward_outputs
+        inference = forward_outputs(checkpoint, listings, pair_path,
+            output / name(track, 'inference'), cfg, text_cache=text_cache)
+    else:
+        inference = Path(saved_inference)
+    manifest = json.loads((inference / name(track, 'export_manifest.json')).read_text())
+    if manifest.get('track') != track or not manifest.get('forward_only'):
+        raise ValueError('saved graph inference track/forward contract mismatch')
+    for key, path in [('checkpoint_sha256', checkpoint), ('listings_sha256', listings),
+                      ('pairs_sha256', pair_path), ('vectors_sha256', inference / name(track, 'vectors.npz')),
+                      ('split_scores_sha256', inference / name(track, 'split_scores.npz'))]:
+        if manifest.get(key) != file_hash(path):
+            raise ValueError(f'saved graph inference mismatch: {key}')
+    with np.load(inference / name(track, 'vectors.npz'), allow_pickle=False) as cache:
+        if cache['ids'].astype(str).tolist() != [r['sku_id'] for r in records]:
+            raise ValueError('saved graph inference ID order mismatch')
+        vectors = cache['embeddings']
+    if vectors.dtype != np.float32 or not np.isfinite(vectors).all() or not np.allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-4):
+        raise ValueError('saved graph inference vector dtype/norm mismatch')
     scores = {}
-    with torch.no_grad():
-        embeddings = torch.as_tensor(vectors, device=cfg.device)
-        text_tensor = None if text is None else torch.as_tensor(text, device=cfg.device)
+    with np.load(inference / name(track, 'split_scores.npz'), allow_pickle=False) as cache:
         for split in ('dev', 'test'):
             if split == 'test' and not cfg.report_test:
-                progress('evaluation_skipped', split=split, reason='report_test disabled')
                 continue
-            indices = pairs[split][0]
-            if len(indices):
-                scores[split] = encoder.scorer(embeddings, torch.as_tensor(indices, device=cfg.device),
-                                               text_tensor).sigmoid().cpu().numpy()
-                progress('pair_scoring_complete', split=split, pairs=len(indices))
+            if len(pairs[split][0]):
+                if split not in cache or cache[split].shape != (len(pairs[split][0]),):
+                    raise ValueError('saved graph pair score population mismatch')
+                scores[split] = cache[split]
+                if scores[split].dtype != np.float32 or not np.isfinite(scores[split]).all() or np.any(scores[split] < 0) or np.any(scores[split] > 1):
+                    raise ValueError('saved graph pair score dtype/finite mismatch')
+    if cfg.build_index:
+        from training.hnsw_index import PersistentHnswIndex
+        index_path = output / name(track, 'index')
+        index = PersistentHnswIndex(index_path, ef_construction=cfg.hnsw_ef_construction,
+            M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
+        index.build(vectors, [r['sku_id'] for r in records], checkpoint=checkpoint,
+                    model_name=track, preprocessing_fingerprint=file_hash(listings))
+    progress('saved_forward_validated', shape=list(vectors.shape), inference=str(inference))
     threshold = dev_threshold(pairs['dev'][1], scores['dev'])
     progress('threshold_selected', source='dev_youden', threshold=float(threshold), test_used=False)
     summary, scored_rows = [], []

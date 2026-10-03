@@ -2878,6 +2878,7 @@ def _dynamic_mask_negative_transform(
     presentation_counts: dict[tuple, int] | None = None,
     mask_audit: list[dict] | None = None,
     fold: int | None = None,
+    token_lookup=None,
 ):
     """Freshly mask selected label-0 anchors whenever a batch is materialized."""
     from training.masking import mask_text
@@ -2932,6 +2933,8 @@ def _dynamic_mask_negative_transform(
             hi=mask_hi,
         )
         transformed["sentence1"][i] = masked
+        if token_lookup is not None:
+            token_lookup.register_generated(masked)
         augmentation = "dynamic_mask"
         epoch_stats["masked_count"] += 1.0
         epoch_stats["extent_sum"] += float(_extent)
@@ -3090,85 +3093,99 @@ def _evaluation_negative_mask(pairs: np.ndarray, n_source: int, copy_ids: set[in
     return source_rows & ~np.isin(pairs, list(copy_ids)).any(axis=1)
 
 
-def train_one_config(
-    cfg: dict,
-    *,
-    loss: str,
-    model_id: str,
-    use_hp: bool,
-    band: tuple[float, float],
-    data,
-    seed: int,
-    on_cuda: bool,
-    cv_folds: int | None = None,
-    run_tag: str = "main",
-    folds_override: list[set[str]] | set[str] | None = None,
-    dev_fraction: float | None = None,
-    # dev_override: explicit dev gtin set (component-aware splits pass it;
-    # when set, the rng carve is skipped — the caller owns the boundary)
-    dev_override: set[str] | None = None,
-    # neg_pairs: (N,2) row pairs used as EXPLICIT negatives — appended to the
-    # mined dev/test eval pools and, for MNRL, the 3rd dataset column (the
-    # gate hard-negatives: same-brand, text-similar, different size/pack)
-    neg_pairs: np.ndarray | None = None,
-    # training-only negative population; may include masked label-0 copies.
-    # neg_pairs remains the immutable dev/test evaluation population.
-    train_neg_pairs: np.ndarray | None = None,
-    # Source provenance aligned row-for-row with the negative arrays. These
-    # labels must travel with the pairs through the component fold boundary.
-    neg_pair_sources: np.ndarray | None = None,
-    train_neg_pair_sources: np.ndarray | None = None,
-    # dynamic hard-negative masking: each training dataset presentation gets
-    # a fresh masked anchor; no static negative copies are added.
-    dynamic_mask_hard_negatives: bool = False,
-    dynamic_mask_frac: float = 0.0,
-    dynamic_mask_prob: float | None = None,
-    dynamic_mask_lo: float | None = None,
-    dynamic_mask_hi: float | None = None,
-    mask_audit: list[dict] | None = None,
-    hard_negative_mask_audit: list[dict] | None = None,
-    ann_refresh_enabled: bool = False,
-    attribute_conflict_refresh_enabled: bool = False,
-    # 07d data-scaling: keep only this fraction of TRAIN pairs (dev/test
-    # pools untouched). Subsampled AFTER the split, seeded per fold.
-    train_frac: float | None = None,
-    # sample run (chain validation): visibility dumps write into the
-    # run-tag dir but never move the shared latest-pointer (same
-    # discipline as the fold-metrics pointer in train.py)
-    sample: bool = False,
-    resume: bool = False,
-    # selection mode (test-leak fix, 2026-09-12): HPO/grid lanes in
-    # HOLDOUT split call with True — the fold trains on q0+q1, early-stops
-    # and is SELECTED on calibration metrics from dev (q2), and the test quarter's
-    # eval block (pair_auc/PR-AUC/Youden/pair dump) is SKIPPED entirely:
-    # the test quarter is read exactly once, by the main train lane, so
-    # hyperparameters can never be fitted on it. Skipped rows carry
-    # test_eval="skipped_selection_mode" — loud, never a silent NaN.
-    selection_mode: bool = False,
-    # Explicit callers can withhold test evaluation independently of HPO settings.
-    skip_test_eval: bool = False,
-    wandb_ctx=None,
-) -> list[dict]:
-    """Train cfg across the group-aware folds. Returns fold metric rows
-    (failures included, with traceback)."""
-    import torch
-    if dynamic_mask_lo is None or dynamic_mask_hi is None:
-        raise ValueError(
-            "dynamic hard-negative masking requires its configured extent band"
-        )
-    dynamic_mask_lo = float(dynamic_mask_lo)
-    dynamic_mask_hi = float(dynamic_mask_hi)
-    # BOUNDARY CONTRACT (lib.schemas.TrainConfig): the optimizer/early-stop
-    # dict — every key validated (epochs >= 1, lr > 0, warmup in [0,1]...)
-    # before a single fold runs. A missing/illegal knob dies HERE with the
-    # field named, not inside the HF Trainer mid-epoch.
-    from core.schemas import TrainConfig as _TrainConfig
+def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr_negs,
+                            tr_neg_sources, hp_pairs, row_bc, tr_bc, use_hp,
+                            mask_audit, hard_negative_mask_audit, hard_train, seed, fold_i):
+    """Freeze objective rows and deterministic epoch presentation indices locally."""
+    from datasets import Dataset
+    from training.sampler import ControlledBatchSampler, resolve_composition
+    hp_tracking = hp_pairs[pairs_in_set(hp_pairs, row_bc, tr_bc)] if use_hp and hp_pairs is not None and len(hp_pairs) else None
+    objective = {}
+    if loss == "contrastive":
+        if not len(tr_negs):
+            raise ValueError("contrastive loss needs labeled training negatives")
+        populations = _training_pair_populations(train_all, tr_negs, train_neg_sources=tr_neg_sources,
+                                                  hp_in_train=hp_tracking, mask_audit=mask_audit)
+        all_pairs = list(train_all) + list(tr_negs)
+        dataset = {
+            "sentence1": [payload[int(a)] for a, b in all_pairs],
+            "sentence2": [payload[int(b)] for a, b in all_pairs],
+            "label": [1] * len(train_all) + [0] * len(tr_negs),
+            "pair_id": list(range(len(all_pairs))), "pair_population": populations,
+            "structured_features": [[structured_features[int(a)].tolist(), structured_features[int(b)].tolist()]
+                                     for a, b in all_pairs],
+        }
+        sampler_populations = ["masked_positive" if pop == "masked_positive" else
+                               ("gate_positive" if label else "hard_negative")
+                               for pop, label in zip(populations, dataset["label"], strict=True)]
+    elif loss == "mnrl":
+        triples = _build_mnrl_training_triples(train_all, tr_negs, mask_audit=mask_audit,
+                                              hard_negative_mask_audit=hard_negative_mask_audit)
+        if not triples:
+            raise ValueError("MNRL needs anchor-positive-negative training triples")
+        populations = _build_mnrl_triple_populations(train_all, tr_negs, mask_audit=mask_audit,
+                                                    hard_negative_mask_audit=hard_negative_mask_audit)
+        dataset = {"anchor": [payload[a] for a, b, c in triples],
+                   "positive": [payload[b] for a, b, c in triples],
+                   "negative": [payload[c] for a, b, c in triples],
+                   "pair_id": list(range(len(triples))), "population": populations}
+        objective["triples"] = triples
+        objective["shared_gtin_rows"] = _mnrl_shared_positive_gtin_rows(triples, row_bc)
+        sampler_populations = populations
+    else:
+        from core.hard_negatives import build_triplets
+        examples = build_triplets(train_all, hard_train, payload, seed=seed + fold_i, max_triples=MAX_TRIPLES)
+        if not examples:
+            raise ValueError("triplet training needs checkpoint-dependent mined negative inputs")
+        dataset = {"anchor": [example.texts[0] for example in examples],
+                   "positive": [example.texts[1] for example in examples],
+                   "negative": [example.texts[2] for example in examples],
+                   "pair_population": ["triplet"] * len(examples)}
+        sampler_populations = dataset["pair_population"]
+    objective["dataset"] = dataset
+    bs_cfg = load_config()["training"]["batch_sampler"]
+    ds = Dataset.from_dict(dataset)
+    epochs = int(load_config()["training"]["epochs"])
+    packed = {}
+    for device, batch_size in (("cpu", BATCH_SIZE_CPU), ("cuda", BATCH_SIZE_CUDA)):
+        if bs_cfg["enabled"]:
+            weights = bs_cfg.get("compositions_by_loss", {}).get(loss, bs_cfg["composition"])
+            composition = resolve_composition(weights, sampler_populations, batch_size)
+            grouped_ds = ds.add_column("sampler_population", sampler_populations)
+            sampler = ControlledBatchSampler(grouped_ds, batch_size, composition, seed=int(bs_cfg["seed"]),
+                                              population_column="sampler_population")
+        else:
+            import torch
+            from sentence_transformers.base.sampler import NoDuplicatesBatchSampler, DefaultBatchSampler
+            generator = torch.Generator().manual_seed(seed + fold_i)
+            if loss == "mnrl":
+                sampler = NoDuplicatesBatchSampler(ds, batch_size=batch_size, drop_last=False,
+                                                   valid_label_columns=["label"], generator=generator, seed=seed+fold_i)
+            else:
+                sampler = DefaultBatchSampler(torch.utils.data.RandomSampler(ds, generator=generator),
+                                                batch_size=batch_size, drop_last=False)
+        epoch_batches = []
+        for epoch in range(epochs):
+            if hasattr(sampler, "set_epoch"):
+                sampler.set_epoch(epoch)
+            batches = [list(map(int, batch)) for batch in sampler]
+            if sorted(index for batch in batches for index in batch) != list(range(len(ds))):
+                raise ValueError("local objective plan sampler did not account for every training row")
+            epoch_batches.append(batches)
+        packed[device] = {"batch_size": batch_size, "epochs": epoch_batches}
+    objective["sampler"] = packed
+    return {"objective": objective}
 
-    _TrainConfig.model_validate(cfg)
-    if cfg["architecture"] != "two_tower":  # schema keeps this exhaustive
-        raise ValueError(f"unsupported training architecture: {cfg['architecture']}")
+
+def prepare_fixed_training_inputs(
+    cfg, *, loss, model_id, use_hp, band, data, seed, cv_folds=None,
+    folds_override=None, dev_fraction=None, dev_override=None,
+    neg_pairs=None, train_neg_pairs=None, neg_pair_sources=None,
+    train_neg_pair_sources=None, mask_audit=None, hard_negative_mask_audit=None,
+    train_frac=None, sample=False, selection_mode=False
+):
+    """The single CPU implementation for fixed fold inputs and objective rows."""
     calibration_config = load_config()
-
     _train_neg_source = (
         train_neg_pairs if train_neg_pairs is not None else neg_pairs
     )
@@ -3403,6 +3420,7 @@ def train_one_config(
     )
 
     rows: list[dict] = []
+    fold_plans = []
     for fold_i, test_bc in enumerate(folds):
         try:
             t_fold = time.perf_counter()
@@ -3675,6 +3693,195 @@ def train_one_config(
                 )
                 continue
 
+            fixed = {
+                'fold_i': fold_i,
+                'test_bc': test_bc,
+                'tr_bc': tr_bc,
+                'test_pos': test_pos,
+                'train_pos': train_pos,
+                'dev_pos': dev_pos,
+                'hard_train': hard_train,
+                'hard_dev': hard_dev,
+                'hard_test': hard_test,
+                'tr_negs': tr_negs,
+                'tr_neg_sources': tr_neg_sources,
+                'n_train_hard_neg': n_train_hard_neg,
+                'random_easy_unique_candidates': random_easy_unique_candidates,
+                'n_train_random_easy_neg': n_train_random_easy_neg,
+                'train_neg_source_counts': train_neg_source_counts,
+                'calibration_pos': calibration_pos,
+                'calibration_neg': calibration_neg,
+                'train_all': train_all,
+                'n_gate_kept': n_gate_kept,
+                'static_masked_pos': static_masked_pos,
+                'static_positive_pct': static_positive_pct,
+                'dev_pairs': dev_pairs,
+                'dev_neg_pairs': dev_neg_pairs,
+                'dev_structured': dev_structured,
+                '_fold_canonical_rows': _fold_canonical_rows,
+            }
+            fixed.update(_prepare_objective_plan(
+                loss=loss, payload=payload, structured_features=structured_features,
+                train_all=train_all, tr_negs=tr_negs, tr_neg_sources=tr_neg_sources,
+                hp_pairs=hp_pairs, row_bc=row_bc, tr_bc=tr_bc, use_hp=use_hp,
+                mask_audit=mask_audit, hard_negative_mask_audit=hard_negative_mask_audit,
+                hard_train=hard_train, seed=seed, fold_i=fold_i,
+            ))
+            fixed["random_neg_pairs"] = _split_safe_random_negative_pairs(
+                df, row_bc, set(test_bc), seed=SEED + fold_i + 1000,
+                n_neg=int(load_config()["pairs"]["n_neg"]),
+            )
+            retrieval_ks = tuple(load_config()["evaluation"]["retrieval_ks"])
+            fixed["retrieval_pool"] = build_evaluation_pool(
+                test_pos, np.asarray([str(df["sku_id"].iloc[int(i)]) for i in test_pos[:, 0]], dtype=str),
+                competitor_rows=_fold_canonical_rows, row_component=_retrieval_row_component,
+                row_bc=row_bc, n_competitors=competitors_per_query(retrieval_ks),
+                seed=seed + fold_i * 1009 + 340346, ks=retrieval_ks,
+                priority_pairs=hard_test, excluded_gtin_pairs=_retrieval_true_match_pairs,
+            )
+            fold_plans.append(fixed)
+        except Exception:
+            rows.append({"fold": fold_i, "status": "failed", "traceback": traceback.format_exc()})
+    return {"shared": {
+        'payload_metadata': payload_metadata,
+        'gate_lookup': gate_lookup,
+        '_retrieval_row_component': _retrieval_row_component,
+        '_retrieval_true_match_pairs': _retrieval_true_match_pairs,
+        '_train_neg_source': _train_neg_source,
+        'country': country,
+    }, "folds": fold_plans, "skipped": rows}
+
+
+def train_one_config(
+    cfg: dict,
+    *,
+    loss: str,
+    model_id: str,
+    use_hp: bool,
+    band: tuple[float, float],
+    data,
+    seed: int,
+    on_cuda: bool,
+    cv_folds: int | None = None,
+    run_tag: str = "main",
+    folds_override: list[set[str]] | set[str] | None = None,
+    dev_fraction: float | None = None,
+    # dev_override: explicit dev gtin set (component-aware splits pass it;
+    # when set, the rng carve is skipped — the caller owns the boundary)
+    dev_override: set[str] | None = None,
+    # neg_pairs: (N,2) row pairs used as EXPLICIT negatives — appended to the
+    # mined dev/test eval pools and, for MNRL, the 3rd dataset column (the
+    # gate hard-negatives: same-brand, text-similar, different size/pack)
+    neg_pairs: np.ndarray | None = None,
+    # training-only negative population; may include masked label-0 copies.
+    # neg_pairs remains the immutable dev/test evaluation population.
+    train_neg_pairs: np.ndarray | None = None,
+    # Source provenance aligned row-for-row with the negative arrays. These
+    # labels must travel with the pairs through the component fold boundary.
+    neg_pair_sources: np.ndarray | None = None,
+    train_neg_pair_sources: np.ndarray | None = None,
+    # dynamic hard-negative masking: each training dataset presentation gets
+    # a fresh masked anchor; no static negative copies are added.
+    dynamic_mask_hard_negatives: bool = False,
+    dynamic_mask_frac: float = 0.0,
+    dynamic_mask_prob: float | None = None,
+    dynamic_mask_lo: float | None = None,
+    dynamic_mask_hi: float | None = None,
+    mask_audit: list[dict] | None = None,
+    hard_negative_mask_audit: list[dict] | None = None,
+    prepared_tokens: dict | None = None,
+    prepared_plan: dict | None = None,
+    ann_refresh_enabled: bool = False,
+    attribute_conflict_refresh_enabled: bool = False,
+    # 07d data-scaling: keep only this fraction of TRAIN pairs (dev/test
+    # pools untouched). Subsampled AFTER the split, seeded per fold.
+    train_frac: float | None = None,
+    # sample run (chain validation): visibility dumps write into the
+    # run-tag dir but never move the shared latest-pointer (same
+    # discipline as the fold-metrics pointer in train.py)
+    sample: bool = False,
+    resume: bool = False,
+    # selection mode (test-leak fix, 2026-09-12): HPO/grid lanes in
+    # HOLDOUT split call with True — the fold trains on q0+q1, early-stops
+    # and is SELECTED on calibration metrics from dev (q2), and the test quarter's
+    # eval block (pair_auc/PR-AUC/Youden/pair dump) is SKIPPED entirely:
+    # the test quarter is read exactly once, by the main train lane, so
+    # hyperparameters can never be fitted on it. Skipped rows carry
+    # test_eval="skipped_selection_mode" — loud, never a silent NaN.
+    selection_mode: bool = False,
+    # Explicit callers can withhold test evaluation independently of HPO settings.
+    skip_test_eval: bool = False,
+    wandb_ctx=None,
+) -> list[dict]:
+    """Train cfg across the group-aware folds. Returns fold metric rows
+    (failures included, with traceback)."""
+    import torch
+    if dynamic_mask_lo is None or dynamic_mask_hi is None:
+        raise ValueError(
+            "dynamic hard-negative masking requires its configured extent band"
+        )
+    dynamic_mask_lo = float(dynamic_mask_lo)
+    dynamic_mask_hi = float(dynamic_mask_hi)
+    # BOUNDARY CONTRACT (lib.schemas.TrainConfig): the optimizer/early-stop
+    # dict — every key validated (epochs >= 1, lr > 0, warmup in [0,1]...)
+    # before a single fold runs. A missing/illegal knob dies HERE with the
+    # field named, not inside the HF Trainer mid-epoch.
+    from core.schemas import TrainConfig as _TrainConfig
+
+    _TrainConfig.model_validate(cfg)
+    if cfg["architecture"] != "two_tower":  # schema keeps this exhaustive
+        raise ValueError(f"unsupported training architecture: {cfg['architecture']}")
+    calibration_config = load_config()
+
+    df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0 = data
+    if prepared_plan is None:
+        fixed_inputs = prepare_fixed_training_inputs(
+            cfg, loss=loss, model_id=model_id, use_hp=use_hp, band=band, data=data,
+            seed=seed, cv_folds=cv_folds, folds_override=folds_override,
+            dev_fraction=dev_fraction, dev_override=dev_override,
+            neg_pairs=neg_pairs, train_neg_pairs=train_neg_pairs,
+            neg_pair_sources=neg_pair_sources, train_neg_pair_sources=train_neg_pair_sources,
+            mask_audit=mask_audit, hard_negative_mask_audit=hard_negative_mask_audit,
+            train_frac=train_frac, sample=sample, selection_mode=selection_mode,
+        )
+    else:
+        fixed_inputs = prepared_plan["inputs"]
+    payload_metadata = fixed_inputs["shared"]['payload_metadata']
+    gate_lookup = fixed_inputs["shared"]['gate_lookup']
+    _retrieval_row_component = fixed_inputs["shared"]['_retrieval_row_component']
+    _retrieval_true_match_pairs = fixed_inputs["shared"]['_retrieval_true_match_pairs']
+    _train_neg_source = fixed_inputs["shared"]['_train_neg_source']
+    country = fixed_inputs["shared"]['country']
+    rows = list(fixed_inputs["skipped"])
+    for fold_inputs in fixed_inputs["folds"]:
+        fold_i = fold_inputs["fold_i"]
+        try:
+            t_fold = time.perf_counter()
+            test_bc = fold_inputs['test_bc']
+            tr_bc = fold_inputs['tr_bc']
+            test_pos = fold_inputs['test_pos']
+            train_pos = fold_inputs['train_pos']
+            dev_pos = fold_inputs['dev_pos']
+            hard_train = fold_inputs['hard_train']
+            hard_dev = fold_inputs['hard_dev']
+            hard_test = fold_inputs['hard_test']
+            tr_negs = fold_inputs['tr_negs']
+            tr_neg_sources = fold_inputs['tr_neg_sources']
+            n_train_hard_neg = fold_inputs['n_train_hard_neg']
+            random_easy_unique_candidates = fold_inputs['random_easy_unique_candidates']
+            n_train_random_easy_neg = fold_inputs['n_train_random_easy_neg']
+            train_neg_source_counts = fold_inputs['train_neg_source_counts']
+            calibration_pos = fold_inputs['calibration_pos']
+            calibration_neg = fold_inputs['calibration_neg']
+            train_all = fold_inputs['train_all']
+            n_gate_kept = fold_inputs['n_gate_kept']
+            static_masked_pos = fold_inputs['static_masked_pos']
+            static_positive_pct = fold_inputs['static_positive_pct']
+            dev_pairs = fold_inputs['dev_pairs']
+            dev_neg_pairs = fold_inputs['dev_neg_pairs']
+            dev_structured = fold_inputs['dev_structured']
+            _fold_canonical_rows = fold_inputs['_fold_canonical_rows']
+            objective_plan = fold_inputs["objective"]
             checkpoint_dir = artifact(
                 "checkpoint_repo",
                 {
@@ -3721,6 +3928,10 @@ def train_one_config(
             model.max_seq_length = runtime("max_seq_length")  # SSOT, no literal
             from core.encoding_inputs import enable_zero_truncation
             enable_zero_truncation(model)
+            token_lookup = None
+            if prepared_tokens is not None:
+                from training.token_inputs import PreparedTokenLookup
+                token_lookup = PreparedTokenLookup(model, prepared_tokens, payload)
 
             # ── build the training dataset FIRST (steps derive from it) ──
             from datasets import Dataset
@@ -3756,43 +3967,18 @@ def train_one_config(
                         }
                     )
                     continue
-                s1 = [payload[a] for a, b in train_all] + [
-                    payload[a] for a, b in tr_negs
-                ]
-                s2 = [payload[b] for a, b in train_all] + [
-                    payload[b] for a, b in tr_negs
-                ]
-                lab = [1] * len(train_all) + [0] * len(tr_negs)
-                hp_train_for_tracking = (
-                    hp_pairs[pairs_in_set(hp_pairs, row_bc, tr_bc)]
-                    if use_hp and hp_pairs is not None and len(hp_pairs)
-                    else None
-                )
-                pair_populations = _training_pair_populations(
-                    train_all,
-                    tr_negs,
-                    train_neg_sources=tr_neg_sources,
-                    hp_in_train=hp_train_for_tracking,
-                    mask_audit=mask_audit,
-                )
+                fixed_dataset = objective_plan["dataset"]
+                s1, s2, lab = (fixed_dataset[key] for key in ("sentence1", "sentence2", "label"))
+                pair_populations = fixed_dataset["pair_population"]
                 presentation_counts: dict[tuple, int] = {}
-                train_ds = Dataset.from_dict(
-                    {
-                        "sentence1": s1,
-                        "sentence2": s2,
-                        "label": lab,
-                        "pair_id": list(range(len(s1))),
-                        "pair_population": pair_populations,
-                        "structured_features": [
-                        ],
-                    }
-                )
+                train_ds = Dataset.from_dict(fixed_dataset)
                 dynamic_mask_counts: dict[int, int] = {}
                 dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
                 dynamic_epoch_ref = {"epoch": 0}
                 if (
                     (dynamic_mask_hard_negatives and dynamic_mask_frac > 0)
                     or ann_refresh_enabled
+                    or attribute_conflict_refresh_enabled
                     or TRACK_DATAPOINT_USAGE
                 ):
                     import random as _random
@@ -3803,7 +3989,7 @@ def train_one_config(
                         partial(
                             _dynamic_mask_negative_transform,
                             rng=_mask_rng,
-                            frac=dynamic_mask_frac,
+                            frac=dynamic_mask_frac if dynamic_mask_hard_negatives else 0.0,
                             mask_prob=dynamic_mask_prob,
                             mask_lo=dynamic_mask_lo,
                             mask_hi=dynamic_mask_hi,
@@ -3825,6 +4011,7 @@ def train_one_config(
                             ),
                             mask_audit=hard_negative_mask_audit,
                             fold=fold_i,
+                            token_lookup=token_lookup,
                         )
                     )
                 # ── TRAIN VISIBILITY (owner directive 2026-09-07): the
@@ -3859,12 +4046,7 @@ def train_one_config(
                 # every source-side hard negative to its source's positive
                 # canonical pair. The loss also continues to use the other
                 # positives in a batch as in-batch negatives.
-                triples = _build_mnrl_training_triples(
-                    train_all,
-                    tr_negs,
-                    mask_audit=mask_audit,
-                    hard_negative_mask_audit=hard_negative_mask_audit,
-                )
+                triples = objective_plan["triples"]
                 if not triples:
                     rows.append(
                         {
@@ -3875,9 +4057,7 @@ def train_one_config(
                         }
                     )
                     continue
-                shared_gtin_rows = _mnrl_shared_positive_gtin_rows(
-                    triples, row_bc
-                )
+                shared_gtin_rows = objective_plan["shared_gtin_rows"]
                 # Twin exposure (point A watch-item): counterfactual copies
                 # share 90%+ tokens with their source positive, so their
                 # denominator pressure is the sharpest in the batch. Report
@@ -3905,72 +4085,22 @@ def train_one_config(
                 # loss per population. pair_id is the triple index threaded
                 # through PairIdDataCollator to the loss; both columns are
                 # stripped before tokenization and never affect the loss value.
-                triple_populations = _build_mnrl_triple_populations(
-                    train_all,
-                    tr_negs,
-                    mask_audit=mask_audit,
-                    hard_negative_mask_audit=hard_negative_mask_audit,
-                )
-                train_ds = Dataset.from_dict(
-                    {
-                        "anchor": [payload[a] for a, _, _ in triples],
-                        "positive": [payload[b] for _, b, _ in triples],
-                        "negative": [payload[c] for _, _, c in triples],
-                        "pair_id": list(range(len(triples))),
-                        "population": triple_populations,
-                    }
-                )
+                triple_populations = objective_plan["dataset"]["population"]
+                train_ds = Dataset.from_dict(objective_plan["dataset"])
             else:
-                from core.hard_negatives import build_triplets
+                train_ds = Dataset.from_dict(objective_plan["dataset"])
+                examples = list(range(len(train_ds)))
 
-                examples = build_triplets(
-                    train_all,
-                    hard_train,
-                    payload,
-                    seed=seed + fold_i,
-                    max_triples=MAX_TRIPLES,
-                )
-                if not examples:
-                    # Triplet is the ANN-mined lane: it needs hard negatives
-                    # mined from real embeddings. On the initial fold emb0 is
-                    # empty (no checkpoint yet) and when ANN mining is off the
-                    # mined pool is empty by construction, so no triples can be
-                    # built. Skip the fold with a clear status rather than
-                    # hard-crashing (mirrors the contrastive/MNRL skip path).
-                    rows.append(
-                        {
-                            "fold": fold_i,
-                            "status": "skipped",
-                            "reason": "triplet loss needs ANN-mined hard negatives; "
-                            "none were available (ANN mining off or no checkpoint "
-                            "embeddings on the initial fold)",
-                        }
-                    )
-                    continue
-                train_ds = Dataset.from_dict(
-                    {
-                        "anchor": [ex.texts[0] for ex in examples],
-                        "positive": [ex.texts[1] for ex in examples],
-                         "negative": [ex.texts[2] for ex in examples],
-                         "pair_population": ["triplet"] * len(examples),
-                     }
-                 )
-
-            batch_size = BATCH_SIZE_CUDA if on_cuda else BATCH_SIZE_CPU
-            n_steps_per_epoch = max(1, len(train_ds) // batch_size)
-            warmup_steps = int(n_steps_per_epoch * cfg["epochs"] * cfg["warmup_ratio"])
+            from training.sampler import FrozenBatchSampler
+            device_key = "cuda" if on_cuda else "cpu"
+            fixed_sampler = objective_plan["sampler"][device_key]
+            if cfg["epochs"] > len(fixed_sampler["epochs"]):
+                raise ValueError("requested training epochs exceed locally prepared presentation plan; rebuild locally")
+            batch_size = fixed_sampler["batch_size"]
+            controlled_sampler = FrozenBatchSampler(fixed_sampler["epochs"])
+            n_steps_per_epoch = max(1, len(controlled_sampler))
+            warmup_steps = int(sum(len(batches) for batches in fixed_sampler["epochs"][:cfg["epochs"]]) * cfg["warmup_ratio"])
             eval_steps = max(1, n_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
-            bs_cfg = cfg.get("training", {}).get("batch_sampler", {})
-            controlled_sampler = (
-                ControlledBatchSampler(
-                    train_ds,
-                    batch_size=batch_size,
-                    composition=bs_cfg["composition"],
-                    seed=bs_cfg.get("seed", seed + fold_i),
-                )
-                if bs_cfg.get("enabled", False)
-                else None
-            )
 
             # dev evaluator: pos pairs vs hard negatives, binary AUC-style
             from sentence_transformers.evaluation import BinaryClassificationEvaluator
@@ -4086,9 +4216,6 @@ def train_one_config(
             # and load_best_model_at_end restores the best epoch. Unique subdir
             # per run_tag so parallel trials never collide.
             from sentence_transformers import SentenceTransformerTrainer
-            from sentence_transformers.sentence_transformer.data_collator import (
-                SentenceTransformerDataCollator,
-            )
             from sentence_transformers import (
                 SentenceTransformerTrainingArguments as STArgs,
             )
@@ -4097,36 +4224,15 @@ def train_one_config(
             )
             from training.sampler import ControlledBatchSampler
 
-            class PairIdDataCollator(SentenceTransformerDataCollator):
-                """Keep telemetry and structured features out of tokenization."""
-
-                def __call__(self, features):
-                    text_features = [
-                        {
-                            key: value
-                            for key, value in row.items()
-                            if key not in {"pair_id", "structured_features"}
-                        }
-                        for row in features
-                    ]
-                    batch = super().__call__(text_features)
-                    # Training rows carry pair_id; evaluator rows do not.
-                    # Detect the field structurally rather than treating a
-                    # list of optional values as a valid batch. If a training
-                    # row is malformed, direct indexing raises loudly.
-                    if features and "pair_id" in features[0]:
-                        batch["pair_id"] = torch.tensor(
-                            [row["pair_id"] for row in features], dtype=torch.long
-                        )
-                    if features and "structured_features" in features[0]:
-                        batch["structured_features"] = torch.tensor(
-                            [row["structured_features"] for row in features],
-                            dtype=torch.float32,
-                        )
-                    return batch
+            from training.token_inputs import ObjectiveDataCollator as PairIdDataCollator
 
             class ResumableSentenceTransformerTrainer(SentenceTransformerTrainer):
                 """HF Trainer plus an explicit manifest of all resume state."""
+
+                def get_batch_sampler(self, dataset, batch_size, drop_last, **kwargs):
+                    if "pair_id" in dataset.column_names or loss == "triplet":
+                        return FrozenBatchSampler(fixed_sampler["epochs"])
+                    return super().get_batch_sampler(dataset, batch_size, drop_last, **kwargs)
 
                 def compute_loss(
                     self,
@@ -4210,13 +4316,9 @@ def train_one_config(
                 # determines composition; default HF sampling is
                 # used when batch_sampler.enabled is false.
                 batch_sampler=(
-                    controlled_sampler
-                    if controlled_sampler is not None
-                    else (
-                        BatchSamplers.NO_DUPLICATES
-                        if loss == "mnrl"
-                        else BatchSamplers.BATCH_SAMPLER
-                    )
+                    BatchSamplers.NO_DUPLICATES
+                    if loss == "mnrl"
+                    else BatchSamplers.BATCH_SAMPLER
                 ),
             )
             # discriminative LRs: bottom layers hold pretrained knowledge ->
@@ -4974,13 +5076,7 @@ def train_one_config(
             # Split-safe random/easy negatives: construct from TEST rows only,
             # score with this fine-tuned model, and keep the population label
             # separate from the gate-mined hard-negative dump.
-            random_neg_pairs = _split_safe_random_negative_pairs(
-                df,
-                row_bc,
-                set(test_bc),
-                seed=SEED + fold_i + 1000,
-                n_neg=int(load_config()["pairs"]["n_neg"]),
-            )
+            random_neg_pairs = fold_inputs["random_neg_pairs"]
             random_easy_s = np.empty(0, dtype=float)
             random_easy_score_path = RESULTS / (
                 f"train_{model_tag}_{run_tag}_fold{fold_i}_random_easy_scores.csv"
@@ -5149,23 +5245,7 @@ def train_one_config(
             # (hits_at_1 / precision_at_k / recall_at_k) now carries these
             # corrected values.
             _n_competitors = competitors_per_query(_ks)
-            _retrieval_pool = build_evaluation_pool(
-                test_pos,
-                np.asarray(
-                    [str(df["sku_id"].iloc[int(i)]) for i in test_pos[:, 0]],
-                    dtype=str,
-                ),
-                competitor_rows=_fold_canonical_rows,
-                row_component=_retrieval_row_component,
-                row_bc=row_bc,
-                n_competitors=_n_competitors,
-                seed=seed + fold_i * 1009 + 340346,
-                ks=_ks,
-                # the fold's mined hard negatives are seated FIRST so the
-                # hardest distractors stay inside the ranking comparison
-                priority_pairs=hard_test,
-                excluded_gtin_pairs=_retrieval_true_match_pairs,
-            )
+            _retrieval_pool = fold_inputs["retrieval_pool"]
             _t_pool = time.perf_counter()
             _pool_rows = np.unique(_retrieval_pool.pairs.ravel())
             # Pool rows are payload indices encoded through the SAME fused

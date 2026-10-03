@@ -86,9 +86,9 @@ def review_mask(gtins: pd.Series) -> pd.Series:
 
 
 def review_reason(gtin: object) -> str:
-    from core.gtin import normalize_and_validate_gtin
-    key = normalize_and_validate_gtin(pd.Series([gtin])).gtin_clean.iat[0]
-    if pd.isna(key):
+    from core.gtin import normalize_gtin_value
+    key, _ = normalize_gtin_value(gtin)
+    if key is None:
         return ''
     return next((hold.reason for raw, hold in review_policy().quarantined_gtins.items()
                  if raw.zfill(14) == str(key).zfill(14)), '')
@@ -98,9 +98,9 @@ def listing_review_reason(sku_id: object, gtin: object) -> str:
     hold = review_policy().quarantined_listings.get(str(sku_id))
     if hold is None:
         return ''
-    from core.gtin import normalize_and_validate_gtin
-    key = normalize_and_validate_gtin(pd.Series([gtin])).gtin_clean.iat[0]
-    return hold.reason if pd.notna(key) and str(key).zfill(14) == hold.expected_gtin.zfill(14) else ''
+    from core.gtin import normalize_gtin_value
+    key, _ = normalize_gtin_value(gtin)
+    return hold.reason if key is not None and key.zfill(14) == hold.expected_gtin.zfill(14) else ''
 
 
 def reviewed_row_mask(frame: pd.DataFrame, *, column: str | None = None) -> pd.Series:
