@@ -11,7 +11,7 @@ from graph_tracks.data import file_hash, load_records, load_text_cache
 from graph_tracks.text_cache import checkpoint_hash, create_cache
 
 
-def prepare(setup: Path, checkpoint: Path, *, device='cuda', batch_size=64) -> dict:
+def prepare(setup: Path, checkpoint: Path, *, device='cuda', batch_size=256) -> dict:
     import torch
     from core.common import TRAIN_ROOT
     from core.identity_policy import POLICY_PATH
@@ -73,7 +73,7 @@ def main(argv=None):
     parser.add_argument('--setup-dir', type=Path, default=Path('data/track_setup'))
     parser.add_argument('--checkpoint', type=Path)
     parser.add_argument('--device', choices=['cuda', 'cpu'], default='cuda')
-    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--batch-size', type=int, default=256)
     args = parser.parse_args(argv)
     prepare(args.setup_dir, args.checkpoint or Path(resolve_model('minilm_l6')),
             device=args.device, batch_size=args.batch_size)
