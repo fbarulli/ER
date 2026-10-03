@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
 from itertools import combinations
 import re
 
 import numpy as np
 import pandas as pd
+from pydantic import BaseModel
 
 from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
 
@@ -91,8 +91,7 @@ def flavor_variant_product_name(name: object) -> str:
     )
 
 
-@dataclass
-class MiningFunnelBase:
+class MiningFunnelBase(BaseModel):
     """The readback contract every hard-negative miner's funnel implements.
 
     WHY A SHARED BASE (cross-brand round): two lanes now mine negatives and
@@ -199,7 +198,6 @@ class MiningFunnelBase:
         }
 
 
-@dataclass
 class MiningFunnel(MiningFunnelBase):
     """Step-by-step accounting of one targeted-attribute mining pass.
 
@@ -244,8 +242,8 @@ class MiningFunnel(MiningFunnelBase):
     dropped_candidates_name: int = 0
     dropped_candidates_no_conflict: int = 0
     flavor_variant_candidates: int = 0
-    conflict_dimension_census: dict[str, int] = field(default_factory=dict)
-    name_blocked_conflict_dimension_census: dict[str, int] = field(default_factory=dict)
+    conflict_dimension_census: dict[str, int] = {}
+    name_blocked_conflict_dimension_census: dict[str, int] = {}
 
     def _candidate_drops(self) -> list[tuple[str, int, str]]:
         return [
@@ -333,7 +331,6 @@ class MiningFunnel(MiningFunnelBase):
         }
 
 
-@dataclass
 class CrossBrandMiningFunnel(MiningFunnelBase):
     """Accounting of one cross-brand hard-negative mining pass.
 
@@ -376,7 +373,7 @@ class CrossBrandMiningFunnel(MiningFunnelBase):
     dropped_candidates_endpoint_cap: int = 0
     dropped_candidates_target_cap: int = 0
     accepted_candidates: int = 0
-    conflict_dimension_census: dict[str, int] = field(default_factory=dict)
+    conflict_dimension_census: dict[str, int] = {}
 
     def generation_steps(self) -> list[tuple[str, int, int, str]]:
         required = ", ".join(self.require_agreement) or "none"

@@ -80,11 +80,12 @@ No semantic knowledge is re-implemented here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
-from typing import Callable, Mapping
+from typing import Callable, ClassVar, Literal, Mapping
 
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import dataclasses as pyd_dataclasses
 
 # ── registry kinds ──────────────────────────────────────────────────────────
 # SET_NUMERIC     plain numeric tokens (2000 ml / 12) — numeric channel
@@ -139,9 +140,27 @@ def _canonical_band(token: str) -> str:
     return token.strip().lower()
 
 
-@dataclass(frozen=True)
+# Pydantic, strict: a misspelled kind/parser/conflict is a construction-time
+# ValidationError (ValueError subclass), not a silent string.
+FIELD_KINDS = (
+    "SET_NUMERIC", "SET_CATEGORICAL", "SET_ENUM", "CONSTANT", "NUMERIC_BAND",
+)
+FIELD_PARSERS = (
+    "tokens", "bands", "enum", "delegate_flavor", "delegate_sweeteners",
+    "delegate_volume",
+)
+FIELD_CONFLICTS = (
+    "set_inequality", "volume_compatible", "flavor_overlap",
+    "raw_ingredient_sets",
+)
+_FIELD_KIND = Literal[FIELD_KINDS]  # type: ignore[misc]
+_FIELD_PARSER = Literal[FIELD_PARSERS]  # type: ignore[misc]
+_FIELD_CONFLICT = Literal[FIELD_CONFLICTS]  # type: ignore[misc]
+
+
+@pyd_dataclasses.dataclass(frozen=True, config=ConfigDict(str_min_length=1))
 class FieldSpec:
-    """One registered attribute key.
+    """One registered attribute key (pydantic dataclass: validated + frozen).
 
     kind     one of the *_KINDS kinds above
     parser   'tokens' | 'bands' | 'enum' | 'delegate_flavor' |
@@ -151,26 +170,10 @@ class FieldSpec:
     note     measured provenance for a non-obvious ruling
     """
 
-    kind: str
-    parser: str
-    conflict: str
+    kind: _FIELD_KIND
+    parser: _FIELD_PARSER
+    conflict: _FIELD_CONFLICT
     note: str = ""
-
-    def __post_init__(self) -> None:
-        if self.kind not in {
-            "SET_NUMERIC", "SET_CATEGORICAL", "SET_ENUM", "CONSTANT", "NUMERIC_BAND",
-        }:
-            raise ValueError(f"unknown field kind: {self.kind!r}")
-        if self.parser not in {
-            "tokens", "bands", "enum", "delegate_flavor", "delegate_sweeteners",
-            "delegate_volume",
-        }:
-            raise ValueError(f"unknown parser: {self.parser!r}")
-        if self.conflict not in {
-            "set_inequality", "volume_compatible", "flavor_overlap",
-            "raw_ingredient_sets",
-        }:
-            raise ValueError(f"unknown conflict predicate: {self.conflict!r}")
 
 
 def _registry() -> dict[str, FieldSpec]:
@@ -290,7 +293,7 @@ def _count_sets(sets) -> dict[frozenset, int]:
     return counts
 
 
-class AttributeUniverse:
+class AttributeUniverse(BaseModel):
     """Parse + census the full 37-key attribute universe over an explicit frame.
 
     Instantiation is deliberate and side-effect free: pass a frame with the
@@ -298,9 +301,30 @@ class AttributeUniverse:
     core.common.load_dataset(). Nothing reads YAML; the only config read is
     the validated evaluation.attribute_separation.min_value_support SSOT when
     datagen_budget() runs.
+
+    Pydantic model: the frame (column contract) and registry (FieldSpec
+    population) are validated fields, and the first positional argument is
+    accepted for API continuity with the historical
+    ``AttributeUniverse(frame)`` construction.
     """
 
-    def __init__(self, frame, *, registry: Mapping[str, FieldSpec] | None = None):
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    frame: pd.DataFrame = Field(repr=False, exclude=True)
+    registry: dict[str, FieldSpec] = Field(
+        default_factory=attribute_registry, repr=False, exclude=True
+    )
+
+    def __init__(self, frame: object = None, **kwargs) -> None:
+        if frame is not None:
+            if "frame" in kwargs:
+                raise TypeError("frame given both positionally and by name")
+            kwargs["frame"] = frame
+        super().__init__(**kwargs)
+
+    @field_validator("frame")
+    @classmethod
+    def _validated_frame(cls, frame: pd.DataFrame) -> pd.DataFrame:
         import pandas as pd
 
         if not isinstance(frame, pd.DataFrame):
@@ -310,8 +334,14 @@ class AttributeUniverse:
             raise ValueError(
                 f"frame is missing required canonical column(s): {missing}"
             )
-        self._frame = frame
-        self._registry = dict(registry) if registry is not None else attribute_registry()
+        return frame
+
+    @field_validator("registry", mode="before")
+    @classmethod
+    def _copied_registry(cls, registry: object) -> dict[str, FieldSpec]:
+        if registry is None:
+            return attribute_registry()
+        return dict(registry)
 
     # ── parse ─────────────────────────────────────────────────────────────────
     def parse(self, cell: object) -> dict[str, object]:
@@ -341,7 +371,7 @@ class AttributeUniverse:
             )
             if not tokens:
                 continue
-            spec = self._registry.get(key)
+            spec = self.registry.get(key)
             if spec is None:
                 unclassified.add(key)
                 continue
@@ -407,13 +437,13 @@ class AttributeUniverse:
         from core.gtin import gtin_validity, normalize_and_validate_gtin
         from core.text import normalized_attribute_text
 
-        frame = self._frame
+        frame = self.frame
         gtins = frame["gtin"].fillna("").astype(str)
         valid = gtin_validity(gtins)
         gtin_keys = normalize_and_validate_gtin(gtins)["gtin_clean"].astype("string")
 
-        fields = {name: {} for name in self._registry}
-        raw_strings: dict[str, dict[str, int]] = {name: {} for name in self._registry}
+        fields = {name: {} for name in self.registry}
+        raw_strings: dict[str, dict[str, int]] = {name: {} for name in self.registry}
         unclassified_atoms: dict[str, dict[str, frozenset]] = {}
         conflict_predicate = self._conflict_predicates()
         for idx, cell in frame["attribute"].fillna("").items():
@@ -440,7 +470,7 @@ class AttributeUniverse:
             groups.setdefault(str(gkey), []).append(idx)
 
         report: dict[str, dict] = {}
-        for key in sorted(self._registry):
+        for key in sorted(self.registry):
             values = fields[key]
             sets = list(values.values())
             pair_both = pair_conflict = 0
@@ -491,7 +521,7 @@ class AttributeUniverse:
         )
         if not tokens:
             return None
-        spec = self._registry.get(key)
+        spec = self.registry.get(key)
         if spec is None:
             return frozenset(tokens)
         return self._apply(spec, key, tokens, raw_value)
@@ -529,7 +559,7 @@ class AttributeUniverse:
             "flavor_overlap": flavor_overlap,
             "raw_ingredient_sets": raw_ingredient_sets,
         }
-        return {key: lookup[spec.conflict] for key, spec in self._registry.items()}
+        return {key: lookup[spec.conflict] for key, spec in self.registry.items()}
 
     # ── budget ───────────────────────────────────────────────────────────────
     def datagen_budget(
@@ -566,7 +596,7 @@ class AttributeUniverse:
 
         budget: dict[str, dict] = {}
         for key, stats in sorted(census["keys"].items()):
-            spec = self._registry.get(key)
+            spec = self.registry.get(key)
             rows = int(stats["rows_populated"])
             rate = float(stats["conflict_rate"])
             distinct = int(stats["distinct_value_sets"])
@@ -655,7 +685,7 @@ class AttributeUniverse:
         return out
 
     # ── verify ────────────────────────────────────────────────────────────────
-    TOLERANCE = 0.01
+    TOLERANCE: ClassVar[float] = 0.01
 
     def verify_census(
         self,
