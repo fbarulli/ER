@@ -68,10 +68,10 @@ def main() -> None:
             raise ValueError("--sample must be positive")
         skus = skus.sample(n=min(args.sample, len(skus)), random_state=42).reset_index(drop=True)
     status(f"loaded SKU input rows={len(skus):,} device={args.device} batch_size={args.batch_size}")
-    if "SKU_ID" not in skus.columns and "product_id" in skus.columns:
-        skus = skus.rename(columns={"product_id": "SKU_ID"})
+    if "SKU_ID" not in skus.columns and "sku_id" in skus.columns:
+        skus = skus.rename(columns={"sku_id": "SKU_ID"})
     if "SKU_ID" not in skus.columns:
-        raise ValueError("Input data must contain SKU_ID or product_id")
+        raise ValueError("Input data must contain SKU_ID or sku_id")
 
     status("loading canonical map")
     canonical = load_canonical_map()
@@ -176,7 +176,7 @@ def main() -> None:
 
     unmatched_prefix = rand_matching_cfg()["unmatched_prefix"]
     predictions = []
-    gtins = skus.get("barcode", pd.Series([""] * len(skus))).astype(str)
+    gtins = skus.get("gtin", pd.Series([""] * len(skus))).astype(str)
     for sku_id, gtin, hits in zip(skus["SKU_ID"].astype(str), gtins, nearest, strict=True):
         hit = hits[0]
         nearest_item_id = str(item_ids[hit["corpus_id"]])

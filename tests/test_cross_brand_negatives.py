@@ -90,21 +90,21 @@ def _world() -> tuple[pd.DataFrame, pd.DataFrame, dict, dict]:
     ]
     canon = pd.DataFrame(records)
     # One source row per GTIN, titles deliberately DIFFERENT (a same-title pair
-    # would be the conflicting-barcode label error the guard exists for).
+    # would be the conflicting-gtin label error the guard exists for).
     df = pd.DataFrame(
         {
-            "barcode": [
+            "gtin": [
                 GTINS["acme_330"], GTINS["acme_surface"], GTINS["bolt_330"],
                 GTINS["crisp_330"], GTINS["delta_500"],
             ],
-            "title": [
+            "sku_name_eng": [
                 "Acme Cola 330ml can", "Acme Cola Co 330ml can",
                 "Bolt Cola 330ml can", "Crisp Cola 330ml can",
                 "Acme Cola 500ml can",
             ],
         }
     )
-    gtin_to_row = {g: i for i, g in enumerate(df["barcode"].astype(str))}
+    gtin_to_row = {g: i for i, g in enumerate(df["gtin"].astype(str))}
     # canonical block starts after the df rows, in sorted-GTIN order
     gtin_to_canon_idx = {
         g: len(df) + i for i, g in enumerate(sorted(canon["gtin"].astype(str)))
@@ -135,9 +135,9 @@ def _brands(world) -> dict[str, str]:
 
 def _endpoints(world, pairs):
     df, _, _, _ = world
-    barcodes = [str(g) for g in df["barcode"]]
+    gtins = [str(g) for g in df["gtin"]]
     gtins = sorted(str(g) for g in world[1]["gtin"])
-    row_bc = barcodes + gtins
+    row_bc = gtins + gtins
     return [(row_bc[int(a)], row_bc[int(b)]) for a, b in pairs]
 
 
@@ -174,9 +174,9 @@ def test_same_canonical_true_matches_are_never_emitted() -> None:
     ]
     canon = pd.DataFrame(records)
     df = pd.DataFrame(
-        {"barcode": [r["gtin"] for r in records], "title": ["a", "b"]}
+        {"gtin": [r["gtin"] for r in records], "sku_name_eng": ["a", "b"]}
     )
-    gtin_to_row = {g: i for i, g in enumerate(df["barcode"])}
+    gtin_to_row = {g: i for i, g in enumerate(df["gtin"])}
     gtin_to_canon_idx = {
         g: len(df) + i for i, g in enumerate(sorted(canon["gtin"].astype(str)))
     }
@@ -192,7 +192,7 @@ def test_same_canonical_true_matches_are_never_emitted() -> None:
 
 
 def test_label_error_pairs_are_excluded_and_counted() -> None:
-    """Same title + conflicting barcode = known label error, never label 0."""
+    """Same title + conflicting gtin = known label error, never label 0."""
     records = [
         _canonical(GTINS["acme_330"], "Acme"),
         _canonical(GTINS["bolt_330"], "Bolt"),
@@ -200,11 +200,11 @@ def test_label_error_pairs_are_excluded_and_counted() -> None:
     canon = pd.DataFrame(records)
     df = pd.DataFrame(
         {
-            "barcode": [r["gtin"] for r in records],
-            "title": ["Cola 330ml can", "Cola 330ml can"],
+            "gtin": [r["gtin"] for r in records],
+            "sku_name_eng": ["Cola 330ml can", "Cola 330ml can"],
         }
     )
-    gtin_to_row = {g: i for i, g in enumerate(df["barcode"])}
+    gtin_to_row = {g: i for i, g in enumerate(df["gtin"])}
     gtin_to_canon_idx = {
         g: len(df) + i for i, g in enumerate(sorted(canon["gtin"].astype(str)))
     }
@@ -242,8 +242,8 @@ def test_attribute_conflict_candidates_are_dropped_with_a_census() -> None:
         _canonical(GTINS["bolt_330"], "Bolt", flavor="lemon"),
     ]
     canon = pd.DataFrame(records)
-    df = pd.DataFrame({"barcode": [r["gtin"] for r in records], "title": ["a", "b"]})
-    gtin_to_row = {g: i for i, g in enumerate(df["barcode"])}
+    df = pd.DataFrame({"gtin": [r["gtin"] for r in records], "sku_name_eng": ["a", "b"]})
+    gtin_to_row = {g: i for i, g in enumerate(df["gtin"])}
     gtin_to_canon_idx = {
         g: len(df) + i for i, g in enumerate(sorted(canon["gtin"].astype(str)))
     }
@@ -372,8 +372,8 @@ def test_require_agreement_without_evidence_generates_no_candidate() -> None:
         _canonical(GTINS["bolt_330"], "Bolt", package_type=""),
     ]
     canon = pd.DataFrame(records)
-    df = pd.DataFrame({"barcode": [r["gtin"] for r in records], "title": ["a", "b"]})
-    gtin_to_row = {g: i for i, g in enumerate(df["barcode"])}
+    df = pd.DataFrame({"gtin": [r["gtin"] for r in records], "sku_name_eng": ["a", "b"]})
+    gtin_to_row = {g: i for i, g in enumerate(df["gtin"])}
     gtin_to_canon_idx = {
         g: len(df) + i for i, g in enumerate(sorted(canon["gtin"].astype(str)))
     }
@@ -435,9 +435,9 @@ def test_mined_pairs_are_fold_local_when_both_endpoints_share_a_fold() -> None:
     world = _world()
     pairs, _scores = _mine(world)
     df, canon, _, _ = world
-    barcodes = [str(g) for g in df["barcode"]]
+    gtins = [str(g) for g in df["gtin"]]
     gtins = sorted(str(g) for g in canon["gtin"])
-    row_bc = np.asarray(barcodes + gtins)
+    row_bc = np.asarray(gtins + gtins)
     positives = np.asarray([[0, 1]], dtype=int)  # links the two "Acme" GTINs
     folds = component_folds(positives, row_bc, 2, 42)
     train, dev = folds[0], folds[1]
@@ -462,9 +462,9 @@ def test_holdout_split_keeps_mined_pairs_on_one_side() -> None:
     world = _world()
     pairs, _scores = _mine(world)
     df, canon, _, _ = world
-    barcodes = [str(g) for g in df["barcode"]]
+    gtins = [str(g) for g in df["gtin"]]
     gtins = sorted(str(g) for g in canon["gtin"])
-    row_bc = np.asarray(barcodes + gtins)
+    row_bc = np.asarray(gtins + gtins)
     # positives link the two "Acme" GTINs so the component graph is not empty
     positives = np.asarray(
         [[0, int(np.flatnonzero(row_bc == GTINS["acme_surface"])[0])]], dtype=int

@@ -15,7 +15,7 @@ from core.schemas import check_cross_country_pair_frame
 def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
     """Cross-country GOLD+ pairs (second04 manifest) whose canonical volume agrees.
 
-    These are the verified translation-tax pairs: same barcode, different
+    These are the verified translation-tax pairs: same gtin, different
     country, same physical volume — hard positives by construction.
     Returns (N, 2) row-index pairs into df.
     """
@@ -41,7 +41,7 @@ def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
     )
     check_cross_country_pair_frame(manifest)
 
-    pid_to_idx = {str(pid): i for i, pid in enumerate(df["product_id"].astype(str))}
+    pid_to_idx = {str(pid): i for i, pid in enumerate(df["sku_id"].astype(str))}
     a_idx = manifest["sku_id_a"].map(pid_to_idx)
     b_idx = manifest["sku_id_b"].map(pid_to_idx)
     ok = a_idx.notna() & b_idx.notna()
@@ -62,7 +62,7 @@ def volume_verified_cross_country(df: pd.DataFrame) -> np.ndarray:
     pairs = np.array(list(zip(a_idx[ok], b_idx[ok], strict=True)), dtype=int).reshape(-1, 2)
 
     # volume agreement filter (canonical_volume: '330ml' and '0,33 l' collapse)
-    vol = canonical_volume(df["title"])["canonical_volume_ml"]
+    vol = canonical_volume(df["sku_name_eng"])["canonical_volume_ml"]
     vol = vol.fillna(-1).to_numpy()
     agrees = (
         (vol[pairs[:, 0]] > 0)

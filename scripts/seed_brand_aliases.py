@@ -9,9 +9,9 @@ an EXPLICIT reviewed pair list in config — never edit-distance fuzzy matching.
 Reproduced on the current corpus (71,623 rows): 71 checksum-valid GTIN groups
 carry 2+ distinct non-empty normalized brand strings (65 two-brand + 6
 three-brand, 341 rows), and 49 distinct within-group brand-string pairs fire
-core.product_identity.brand_conflict at current HEAD. The reconciled owner/HEAD
+core.sku_identity.brand_conflict at current HEAD. The reconciled owner/HEAD
 figure (49 veto-firing pair GTINs) is the alias population this map addresses
-plus genuinely mixed barcodes, which stay vetoed by design.
+plus genuinely mixed gtins, which stay vetoed by design.
 
 Fold semantics (veto-asymmetry doctrine, conservative):
 - Only tokens ALREADY present on a brand side are ADDED; nothing is dropped,
@@ -50,7 +50,7 @@ sys.path.insert(0, str(TRAIN_ROOT / "src"))
 from core.common import DATA_PATH, load_dataset, _read_vocabulary, VOCABULARY_CONFIG_PATH
 from core.gtin import normalize_and_validate_gtin
 from core.manifest import sha256_file
-from core.product_identity import brand_conflict, normalize_brand
+from core.sku_identity import brand_conflict, normalize_brand
 from core.text import normalized_attribute_text
 
 VOCAB_PATH = VOCABULARY_CONFIG_PATH
@@ -59,7 +59,7 @@ VOCAB_PATH = VOCABULARY_CONFIG_PATH
 # key: the family's canonical fold token — every family member's token set
 # ends up containing it. sources: the distinct normalized brand strings of
 # the family inside the within-GTIN census. gtins: the checksum-valid
-# barcodes whose rows EVIDENCE the pair (dashboard/evidence/identity/
+# gtins whose rows EVIDENCE the pair (dashboard/evidence/identity/
 # 03_measurement_and_packaging_context.json brand_variation_groups; titles
 # verified as one brand written two ways, never two competing brands).
 FAMILIES: tuple[dict[str, object], ...] = (
@@ -75,7 +75,7 @@ FAMILIES: tuple[dict[str, object], ...] = (
         ),
         "note": (
             "A SHOC -> Adrenaline Shoc -> Accelerator: one product line's "
-            "rebrand chain, retailers still file the same barcode under all "
+            "rebrand chain, retailers still file the same gtin under all "
             "three names (14 distinct within-group pairs, all spurious "
             "brand vetoes before seeding)"
         ),
@@ -107,7 +107,7 @@ FAMILIES: tuple[dict[str, object], ...] = (
         "gtins": ("0857886006004", "0857886006424"),
         "note": (
             "LIFEAID Bev Co files its FITAID recovery drink under either "
-            "brand; titles carry both strings on one barcode (sister brands)"
+            "brand; titles carry both strings on one gtin (sister brands)"
         ),
     },
     {
@@ -118,7 +118,7 @@ FAMILIES: tuple[dict[str, object], ...] = (
             "6419806053204",
         ),
         "note": (
-            "Olvi owns KevytOlo; the same barcode is filed under either name "
+            "Olvi owns KevytOlo; the same gtin is filed under either name "
             "(parent company, 4 GTINs)"
         ),
     },
@@ -130,13 +130,13 @@ FAMILIES: tuple[dict[str, object], ...] = (
     },
 )
 # Whole-group DECLINES (no fold granted): the group mixes genuinely distinct
-# brands on one barcode (whole-barcode review holds, not alias pairs), the
+# brands on one gtin (whole-gtin review holds, not alias pairs), the
 # family is unverifiable (hierarchy/identity unresolved), or — for families
 # granted but with a key token lost to the rarity audit — the fold key would
 # be a common word whose territory escapes the family.
 DECLINED_REASONS: dict[str, str] = {
     "0850010701257": (
-        "goat fuel vs sioux city over one barcode; energy-drink and root-beer "
+        "goat fuel vs sioux city over one gtin; energy-drink and root-beer "
         "titles differ — distinct pairs, not a rebrand"
     ),
     "0865891000184": (
@@ -153,7 +153,7 @@ DECLINED_REASONS: dict[str, str] = {
     ),
     "11982760": "reviewed mixed-GTIN junk group (Mat Smart; held lineage)",
     "3301591000040": (
-        "coteaux nantais vs planet bio on one barcode; distinct juice brands"
+        "coteaux nantais vs planet bio on one gtin; distinct juice brands"
     ),
     "5010889010040": (
         "KA vs 'K A': the family's only fold keys are 'k'/'a', whose "
@@ -161,13 +161,13 @@ DECLINED_REASONS: dict[str, str] = {
         "'a' also marks 'a shoc'). Rarity audit refuses them; the 2-GTIN "
         "veto stays until the owner rules on a two-token key schema"
     ),
-    "8410055000009": "distinct Spanish water brands share one barcode",
-    "8410128270070": "distinct brands share one barcode (bifrutas/pascual)",
-    "8410128776718": "distinct brands share one barcode (bifrutas/pascual)",
+    "8410055000009": "distinct Spanish water brands share one gtin",
+    "8410128270070": "distinct brands share one gtin (bifrutas/pascual)",
+    "8410128776718": "distinct brands share one gtin (bifrutas/pascual)",
     "8410171000006": (
         "alcampo rows mixing; 'via nature' is a separate brand line"
     ),
-    "8410749000001": "distinct brands share one barcode (lambda/mondariz)",
+    "8410749000001": "distinct brands share one gtin (lambda/mondariz)",
     "8414100000013": (
         "WHOLE-BARCODE multi-brand group (la casera / may tea / sunny "
         "delight): an alias would fold real competitors — conflicts stay"
@@ -176,7 +176,7 @@ DECLINED_REASONS: dict[str, str] = {
         "eco+ vs int-salim: folding 'eco' would also fold ecomil/ecor/"
         "ecosana (measured terrace of 5+ 'eco'-prefixed strings) — unsafe"
     ),
-    "8429359000004": "distinct brands share one barcode (primavera/tampico)",
+    "8429359000004": "distinct brands share one gtin (primavera/tampico)",
     "8433963000008": (
         "WHOLE-BARCODE multi-brand group (aquabona / nordic mist / royal "
         "bliss): conflicts stay live"
@@ -207,7 +207,7 @@ DECLINED_REASONS: dict[str, str] = {
 def _measurement(df) -> dict[str, list[str]]:
     """Checksum-valid GTIN groups carrying 2+ distinct non-empty normalized
     brand strings (the raw string level the owner adjudicated on)."""
-    facts = normalize_and_validate_gtin(df["barcode"])
+    facts = normalize_and_validate_gtin(df["gtin"])
     mask = facts["gtin_structurally_valid"].to_numpy()
     valid = df[mask].assign(_g=facts["gtin_clean"][mask].to_numpy())
     groups = valid.groupby("_g")["brand"].apply(
@@ -224,7 +224,7 @@ def _pre_seed_veto_census(variant: dict[str, list[str]]) -> int:
     vocabulary() and clears the lru_cache, folding through normalize_brand
     exactly as the brand-fresh world did. Restored after counting.
     """
-    import core.product_identity as pi
+    import core.sku_identity as pi
 
     original_vocabulary = pi.vocabulary
 
@@ -306,7 +306,7 @@ def main() -> None:
 
     # Post-seed check with the WRITTEN map live: every granted family pair
     # must be conflict-free now (the dissolved count is hard provenance).
-    import core.product_identity as pi
+    import core.sku_identity as pi
 
     original_vocabulary = pi.vocabulary
     pi.vocabulary = lambda: _read_vocabulary(VOCAB_PATH)
@@ -347,7 +347,7 @@ def main() -> None:
         "measured_at_commit": "0452692",
         "current_corpus_at_head": "5001027",
         "measurement": (
-            "within-GTIN brand-variant census: checksum-valid barcodes with "
+            "within-GTIN brand-variant census: checksum-valid gtins with "
             "2+ distinct non-empty normalized brand names. Owner-ruled "
             "2026-09-29 as 62 groups; reproduction on the current corpus: "
             f"{len(variant)} groups ({n_two} two-brand / {n_three} "
@@ -369,7 +369,7 @@ def main() -> None:
             "keys and drops nothing, so a fold can only make two brand token "
             "sets share a token or nest — never disjoint. Key tokens are "
             "corpus-rare (audited against all brand strings before write); "
-            "whole-barcode multi-brand groups are NOT seeded and their brand "
+            "whole-gtin multi-brand groups are NOT seeded and their brand "
             "conflicts stay live. No edit-distance fuzzy matching anywhere."
         ),
         "families": [

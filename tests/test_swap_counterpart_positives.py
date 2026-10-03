@@ -21,7 +21,7 @@ The invariants pinned here:
    real donor row it was borrowed from.
 3. Counterparts are neither byte-identical to the source positive nor to the
    swap copy (both would be degenerate positives), and each inherits the
-   source positive's barcode.
+   source positive's gtin.
 4. THE POINT OF THE CHANGE: on real triples, ``swap_values`` rows produce
    ZERO MNRL triples before counterparts exist and exactly one per minted
    counterpart after — the rows were dead and now train.
@@ -57,7 +57,7 @@ def real_bundle() -> dict:
 
 @pytest.fixture(scope="module")
 def real_swaps(real_bundle) -> dict:
-    """Real payload / barcodes / positives / training negatives / swap rows."""
+    """Real payload / gtins / positives / training negatives / swap rows."""
     audit = [
         row
         for row in real_bundle["hard_negative_mask_audit"]
@@ -168,7 +168,7 @@ def test_counterpart_value_comes_from_the_real_donor_row(real_swaps):
         )
 
 
-def test_counterparts_are_not_degenerate_and_inherit_source_barcode(real_swaps):
+def test_counterparts_are_not_degenerate_and_inherit_source_gtin(real_swaps):
     """Invariant 3 — no self-referential or unchanged positives."""
     real = real_swaps
     (_pairs, new_payload, new_bc, new_audit) = _mint(real)
@@ -183,7 +183,7 @@ def test_counterparts_are_not_degenerate_and_inherit_source_barcode(real_swaps):
         )
     assert len(new_bc) == len(new_audit)
     # A counterpart is a copy of the SOURCE POSITIVE, so it inherits that
-    # row's barcode (not the hard-negative's).
+    # row's gtin (not the hard-negative's).
     for idx, row in enumerate(new_audit):
         assert new_bc[idx] == str(real["row_bc"][int(row["anchor_payload_idx"])])
 

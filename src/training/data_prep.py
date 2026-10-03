@@ -10,7 +10,7 @@ The two-stage flow this file is half of:
              (gtin / sku_name_eng / attribute)  -> canonical_records.csv,
                                                    gate_results.csv, trace
     stage 2  training.data_prep.build (train)  CANONICAL columns
-             (barcode / title / attributes)     -> training pairs, trace
+             (gtin / title / attributes)     -> training pairs, trace
 Stage 2 does NOT consume stage 1's dataframe — it reloads the deduped dataset
 (core.common.load_dataset_deduped) and only MEETS stage 1 at the two artifacts
 above. That handoff is pinned in the trace by each stage's column-contract row.
@@ -102,7 +102,7 @@ def _dp_manifest_accounting(df, pairs, canon) -> dict:
     dropped + collapsed.
     """
 
-    from core.gtin import barcode_validity
+    from core.gtin import gtin_validity
 
     from core.identity_policy import apply_identity_links
     df = apply_identity_links(df)
@@ -111,7 +111,7 @@ def _dp_manifest_accounting(df, pairs, canon) -> dict:
         & (df["gtin"].astype(str).str.strip() != "")
         & (df["gtin"].astype(str).str.lower() != "nan")
     )
-    bc_valid = barcode_validity(df["gtin"].fillna("").astype(str).str.strip())
+    bc_valid = gtin_validity(df["gtin"].fillna("").astype(str).str.strip())
     bc_valid.index = df.index
     n_missing_gtin = int((~gtin_valid).sum())
     from core.identity_policy import reviewed_row_mask

@@ -171,7 +171,7 @@ class BundleCacheTests(unittest.TestCase):
     def _fixture(self, temporary: str):
         root = Path(temporary)
         dataset = root / "dataset.csv"
-        dataset.write_text("product_id\n1\n")
+        dataset.write_text("sku_id\n1\n")
         manifest = mock.Mock(
             n_df=58_529, n_payload=94_124, n_pos=44_690, n_neg=20_860,
             sha256="a" * 64,
@@ -263,7 +263,7 @@ class BundleCacheTests(unittest.TestCase):
                 first = colab._build_local_training_bundles(
                     profiles=["baseline"], model=None, sample=None
                 )
-            dataset.write_text("product_id\n2\n")
+            dataset.write_text("sku_id\n2\n")
             with mock.patch.object(colab, "RESULTS", root / "results"), \
                  mock.patch.object(colab, "_validation_input_path", return_value=dataset), \
                  mock.patch.object(colab.subprocess, "run", side_effect=fake_build) as build, \
@@ -365,7 +365,7 @@ class ValidationUploadPrewarmTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             dataset = Path(temporary) / "dataset.csv"
-            dataset.write_text("product_id\n1\n")
+            dataset.write_text("sku_id\n1\n")
             with mock.patch.object(colab, "_legacy_validation_sources", return_value={key: dataset for key in ("source", "training", "sample")}), \
                  mock.patch.object(colab, "_perform_validation_upload", spy), \
                  mock.patch.object(
@@ -729,7 +729,7 @@ class BundlePrewarmTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             dataset = Path(temporary) / "dataset.csv"
-            dataset.write_text("product_id\n1\n")
+            dataset.write_text("sku_id\n1\n")
             with mock.patch.object(colab, "RESULTS", Path(temporary)), \
                  mock.patch.object(
                      colab, "_validation_input_path", return_value=dataset

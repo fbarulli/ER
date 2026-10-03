@@ -3,13 +3,13 @@ import json
 import pytest
 from pipeline import extract_all, generate_canonical,NgramIDF,three_way_gate
 
-@pytest.mark.parametrize('column,argument',[('title','sku_name'),('attributes','attribute'),
-                                          ('description','description'),('category_path','category_path'),
+@pytest.mark.parametrize('column,argument',[('sku_name_eng','sku_name_eng'),('attribute','attribute'),
+                                          ('description_short_eng','description_short_eng'),('breadcrumbs_eng','breadcrumbs_eng'),
                                           ('category','category')])
 def test_all_text_sources_retain_date_context(column,argument):
     text='Best before 2026-10-31'
-    args=dict(sku_name='Vanilla water 330ml',attribute='')
-    args[argument]=text if argument!='sku_name' else 'Vanilla water 330ml '+text
+    args=dict(sku_name_eng='Vanilla water 330ml',attribute='')
+    args[argument]=text if argument!='sku_name_eng' else 'Vanilla water 330ml '+text
     result=extract_all(**args)
     entries=[e for e in result['date_evidence'] if e['column']==column]
     assert entries and entries[0]['role']=='expiry'

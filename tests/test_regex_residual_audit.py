@@ -18,9 +18,9 @@ from scripts.regex_miss_evidence import capture_class, description_support, sour
 
 def test_unique_tokens_keep_first_stem_across_fields() -> None:
     seen: set[str] = set()
-    title, _ = residual("electrolytes water", field="title", round_name="unique_tokens", seen_tokens=seen)
+    title, _ = residual("electrolytes water", field="sku_name_eng", round_name="unique_tokens", seen_tokens=seen)
     attributes, _ = residual(
-        "electrolyte waters potassium", field="attributes", round_name="unique_tokens", seen_tokens=seen
+        "electrolyte waters potassium", field="attribute", round_name="unique_tokens", seen_tokens=seen
     )
     assert title == "electrolytes water"
     assert attributes == "potassium"
@@ -41,7 +41,7 @@ def test_numeric_attribute_capture_preserves_range_and_percent() -> None:
 
 def test_title_natural_claim_and_pack_numbers_are_captured() -> None:
     assert any(label == "natural_claim_lexical" and phrase == "100 natural"
-               for _, _, label, phrase in captures("100 natural hydration", "title"))
+               for _, _, label, phrase in captures("100 natural hydration", "sku_name_eng"))
     assert [match.group().strip() for match in NUMBER_VALUE_RE.finditer("100% Natural, Pack of 12x355ML")] == [
         "100%", "12x355ML",
     ]
@@ -49,7 +49,7 @@ def test_title_natural_claim_and_pack_numbers_are_captured() -> None:
 
 def test_attribute_pack_type_requires_declared_field() -> None:
     text = "sustainable packaging can be recycled pack material type carton pack type bottle"
-    package_hits = [phrase for _, _, label, phrase in captures(text, "attributes")
+    package_hits = [phrase for _, _, label, phrase in captures(text, "attribute")
                     if label == "package_type_lexical"]
     assert package_hits == ["bottle"]
 
@@ -57,7 +57,7 @@ def test_attribute_pack_type_requires_declared_field() -> None:
 def test_negative_sugar_variants_share_one_trusted_value() -> None:
     for phrase in ("sugar free", "Sugar-Free", "0 sugar", "0g sugar", "no dugar"):
         assert extract_critical_claims(phrase)["sweetener"] == frozenset({"no_sugar"})
-        assert any("claim" in label.split("+") for _, _, label, _ in captures(phrase.lower().replace("-", " "), "title"))
+        assert any("claim" in label.split("+") for _, _, label, _ in captures(phrase.lower().replace("-", " "), "sku_name_eng"))
     assert extract_critical_claims("0 sugar added")["sweetener"] == frozenset({"no_added_sugar"})
     assert extract_critical_claims("Made with Sugar")["sweetener"] == frozenset({"sugar"})
     for phrase in ("Real Sugar", "pure sugar syrup"):
@@ -176,16 +176,16 @@ def test_ontology_rejected_package_types_carry_reason_codes() -> None:
 
 
 def test_remaining_misses_keep_original_spans_and_distinct_meanings() -> None:
-    title = {"product_id": "1", "source": "title", "title": "Water 12 tube 1000 mg / l",
+    title = {"sku_id": "1", "source": "sku_name_eng", "sku_name_eng": "Water 12 tube 1000 mg / l",
              "candidate": "12 l"}
     column, _, start, end, surface, relation = source_span(title)
-    assert (column, surface, relation) == ("title", "12 tube 1000 mg / l", "synthetic_residual_phrase")
-    assert title["title"][start:end] == surface
-    declared = {"product_id": "2", "source": "attributes", "candidate": "sweetener: cane sugar, stevia",
-                "attributes": "Volume: 500; Sweetener: cane sugar, stevia; Pack Type: Can"}
+    assert (column, surface, relation) == ("sku_name_eng", "12 tube 1000 mg / l", "synthetic_residual_phrase")
+    assert title["sku_name_eng"][start:end] == surface
+    declared = {"sku_id": "2", "source": "attribute", "candidate": "sweetener: cane sugar, stevia",
+                "attribute": "Volume: 500; Sweetener: cane sugar, stevia; Pack Type: Can"}
     column, field, start, end, surface, relation = source_span(declared)
-    assert (column, field, surface, relation) == ("attributes", "Sweetener", "cane sugar, stevia", "exact_candidate")
-    assert declared["attributes"][start:end] == surface
+    assert (column, field, surface, relation) == ("attribute", "Sweetener", "cane sugar, stevia", "exact_candidate")
+    assert declared["attribute"][start:end] == surface
     assert capture_class({"reason": "ingredient_outside_claim_classes", "candidate": "sweetener: unsweetened, sugar"}) == (
         "unsweetened_declaration", ["unsweetened", "sugar"], "separate_unsweetened_claim"
     )
@@ -203,8 +203,8 @@ def test_description_support_distinguishes_claim_from_product_style() -> None:
 def test_payload_review_keeps_actual_model_text_separate_from_audit_dedup() -> None:
     review = model_payload_review({
         "brand": "Maple 3",
-        "title": "Maple 3 100% Natural Water",
-        "attributes": "Juice Content: 0-2%; Caffeine: 0-15 mg; Flavour: maple",
+        "sku_name_eng": "Maple 3 100% Natural Water",
+        "attribute": "Juice Content: 0-2%; Caffeine: 0-15 mg; Flavour: maple",
     })
     assert review["composition"]["profile"] == "cleaned"
     assert "pct100" in review["payload"]

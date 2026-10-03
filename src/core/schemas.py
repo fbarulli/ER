@@ -479,11 +479,11 @@ class DatasetCsvReadSpec(BaseModel):
 
 
 class DedupeAdjudicationSpec(BaseModel):
-    """Reviewed identity decision for one malformed-barcode retailer group."""
+    """Reviewed identity decision for one malformed-gtin retailer group."""
 
     model_config = ConfigDict(extra="forbid")
     retailer: str = Field(min_length=1)
-    barcode: str = Field(pattern=r"^[0-9]+$")
+    gtin: str = Field(pattern=r"^[0-9]+$")
     decision: Literal["collapse", "keep"]
     reason: str = Field(min_length=1)
 
@@ -509,8 +509,8 @@ class ExtractionPolicySpec(BaseModel):
         required = {"nested", "multiplier", "pack_of", "count", "compact", "container", "attribute"}
         if set(self.pack_confidence) != required:
             raise ValueError(f"pack_confidence requires exactly {sorted(required)}")
-        if set(self.source_groups) != {"attributes", "title", "sku_url", "image_url", "description"}:
-            raise ValueError("source_groups requires attributes, title, sku_url, image_url, description")
+        if set(self.source_groups) != {"attribute", "sku_name_eng", "sku_url", "image_url", "description_short_eng"}:
+            raise ValueError("source_groups requires attribute, sku_name_eng, sku_url, image_url, description_short_eng")
         if any(not value.strip() for value in self.source_groups.values()):
             raise ValueError("source_groups names cannot be blank")
         if any(not term.strip() for term in self.bulk_container_terms):
@@ -583,9 +583,9 @@ class DataConfig(BaseModel):
         unknown_descriptors = sorted(set(v.descriptor_columns) - canonical)
         if unknown_descriptors:
             raise ValueError(f"descriptor_columns names non-canonical columns {unknown_descriptors}")
-        adjudication_keys = [(row.retailer, row.barcode) for row in v.dedupe_adjudications]
+        adjudication_keys = [(row.retailer, row.gtin) for row in v.dedupe_adjudications]
         if len(adjudication_keys) != len(set(adjudication_keys)):
-            raise ValueError("dedupe_adjudications contains duplicate retailer/barcode decisions")
+            raise ValueError("dedupe_adjudications contains duplicate retailer/gtin decisions")
         other_aliases: dict[str, str] = {}
         for name, spec in sorted(v.column_evidence.items()):
             if spec.column not in canonical:
@@ -722,7 +722,7 @@ class SplitSpec(BaseModel):
     holds APPROXIMATELY — never exactly — 1.0 / holdout_component_folds of the
     graph: the deal is per component and components differ in size (measured
     on real data, the four quarter shares are 0.2500/0.2500/0.2499/0.2499 of
-    barcodes and 0.2488/0.2513/0.2498/0.2502 of positive pairs). What this
+    gtins and 0.2488/0.2513/0.2498/0.2502 of positive pairs). What this
     model pins exactly is the DECLARED quarter, and only when mode is
     "holdout": dev_fraction and test_fraction must each be within 1e-9 of
     1.0 / holdout_component_folds (4 -> 0.25/0.25), so a knob the lane cannot
@@ -2884,7 +2884,7 @@ class MaskAuditEntry(BaseModel):
     anchor_payload_idx: int = Field(ge=0)
     copy_payload_idx: int = Field(ge=0)
     pair_payload_idx: int = Field(ge=0)
-    barcode: str
+    gtin: str
     realized_extent: float = Field(ge=0.0, le=1.0)
     configured_mask_lo: float | None = Field(default=None, ge=0.0, le=1.0)
     configured_mask_hi: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -3091,9 +3091,9 @@ class TrainConfig(BaseModel):
 
 
 class FoldSets(BaseModel):
-    """component_folds output — k disjoint barcode sets covering the
+    """component_folds output — k disjoint gtin sets covering the
     pair-graph components. Disjointness is the anti-leak guarantee; a
-    straddling barcode would put one product in two folds."""
+    straddling gtin would put one product in two folds."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -3106,7 +3106,7 @@ class FoldSets(BaseModel):
             overlap = seen & fold
             if overlap:
                 raise ValueError(
-                    f"folds[{i}] leaks {len(overlap)} barcodes seen in earlier "
+                    f"folds[{i}] leaks {len(overlap)} gtins seen in earlier "
                     f"folds (e.g. {sorted(overlap)[:3]})"
                 )
             seen |= fold
@@ -3124,7 +3124,7 @@ class CalibrationPartition(BaseModel):
     same way): the populations are conserved, and no identity crosses the
     calibration boundary. The boundary is stated two ways because the two
     pools are not the same shape of graph — a positive pair sits inside ONE
-    component (both endpoints share its barcode), so its barcodes must be
+    component (both endpoints share its gtin), so its gtins must be
     disjoint across the halves, while a negative pair BY CONSTRUCTION links
     two different components, so the same guarantee can only hold at the
     granularity of the unordered identity pair: both endpoints of a negative
@@ -3138,7 +3138,7 @@ class CalibrationPartition(BaseModel):
     positive_reserved: np.ndarray
     negative_fit: np.ndarray
     negative_reserved: np.ndarray
-    # the barcode vector the boundary contract is stated over (not payload)
+    # the gtin vector the boundary contract is stated over (not payload)
     row_bc: np.ndarray = Field(exclude=True, repr=False)
     n_positive_pairs: int = Field(ge=0)
     n_negative_pairs: int = Field(ge=0)
@@ -3157,7 +3157,7 @@ class CalibrationPartition(BaseModel):
         return str(self.row_bc[int(row)]).strip()
 
     def identities(self, pool: np.ndarray) -> set[str]:
-        """Barcode identities touched by one pool."""
+        """GTIN identities touched by one pool."""
         return {self._identity(row) for row in pool.ravel()}
 
     def identity_pairs(self, pool: np.ndarray) -> set[frozenset[str]]:

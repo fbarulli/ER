@@ -115,8 +115,8 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
 
-    columns = ("product_id", "source", "dimension", "reason", "candidate", "parser_value",
-               "fuzzy_flavor_suggestion", "title", "attributes", "live_residual")
+    columns = ("sku_id", "source", "dimension", "reason", "candidate", "parser_value",
+               "fuzzy_flavor_suggestion", "sku_name_eng", "attribute", "live_residual")
     counts: Counter[tuple[str, str, str, str]] = Counter()
     reason_totals: Counter[str] = Counter()
     examples: dict[tuple[str, str, str, str], list[str]] = defaultdict(list)
@@ -133,22 +133,22 @@ def main() -> None:
         "w", newline="", encoding="utf-8"
     ) as destination:
         reader = csv.DictReader(source)
-        required = {"product_id", "title", "attributes", "live_regex_title", "live_regex_attributes"}
+        required = {"sku_id", "sku_name_eng", "attribute", "live_regex_title", "live_regex_attributes"}
         if not required.issubset(reader.fieldnames or []):
             raise ValueError(f"missing audit columns: {sorted(required - set(reader.fieldnames or []))}")
         candidates = list(reader)
-        wanted_ids = {row["product_id"] for row in candidates}
+        wanted_ids = {row["sku_id"] for row in candidates}
         descriptions: dict[str, str] = {}
         with F["dataset_deduped"].open(newline="", encoding="utf-8") as dataset:
             for item in csv.DictReader(dataset):
-                if item["product_id"] in wanted_ids:
-                    descriptions[item["product_id"]] = item.get("description", "") or ""
+                if item["sku_id"] in wanted_ids:
+                    descriptions[item["sku_id"]] = item.get("description_short_eng", "") or ""
         writer = csv.DictWriter(destination, fieldnames=columns)
         writer.writeheader()
         for row in candidates:
             rows_seen += 1
-            title = row["title"]
-            attributes = row["attributes"]
+            title = row["sku_name_eng"]
+            attributes = row["attribute"]
             title_residual = row["live_regex_title"]
             attribute_residual = row["live_regex_attributes"]
             title_hits = title_signals(title_residual)
@@ -165,7 +165,7 @@ def main() -> None:
                         if key in FIELD_DIMENSIONS and value]
             if not title_hits and not relevant:
                 continue
-            description = descriptions.get(row["product_id"], "")
+            description = descriptions.get(row["sku_id"], "")
             info = sku_attribute_info(title, attributes, description)
             sweeteners = declared_sweeteners(attributes)
             contradictions += bool(sweeteners["consistency_flags"])
@@ -176,15 +176,15 @@ def main() -> None:
                 key = (source_name, dimension, reason, candidate)
                 counts[key] += 1
                 reason_totals[reason] += 1
-                product_id = row["product_id"]
-                flagged_rows.add(product_id)
-                if product_id not in examples[key] and len(examples[key]) < 5:
-                    examples[key].append(product_id)
+                sku_id = row["sku_id"]
+                flagged_rows.add(sku_id)
+                if sku_id not in examples[key] and len(examples[key]) < 5:
+                    examples[key].append(sku_id)
                 writer.writerow({
-                    "product_id": product_id, "source": source_name, "dimension": dimension,
+                    "sku_id": sku_id, "source": source_name, "dimension": dimension,
                     "reason": reason, "candidate": candidate, "parser_value": parsed,
                     "fuzzy_flavor_suggestion": flavor_suggestion(candidate) if dimension == "flavor" else "",
-                    "title": title, "attributes": attributes, "live_residual": residual_text,
+                    "sku_name_eng": title, "attribute": attributes, "live_residual": residual_text,
                 })
 
             missing_title_dimensions = set()
@@ -202,7 +202,7 @@ def main() -> None:
                 if present:
                     resolved_by_parser[dimension] += 1
                 else:
-                    emit("title", dimension, "regex_residual_parser_empty", phrase, title_residual)
+                    emit("sku_name_eng", dimension, "regex_residual_parser_empty", phrase, title_residual)
                     missing_title_dimensions.add(dimension)
             words = re.findall(r"[a-z]+", title.casefold())
             for dimension in missing_title_dimensions:
@@ -220,7 +220,7 @@ def main() -> None:
                         candidate_tokens = {FLAVOR_ALIASES.get(token, token) for token in candidate.split()}
                         parsed_flavors = set(info.get("flavor_set") or set())
                         if candidate not in parsed_flavors and not candidate_tokens & parsed_flavors:
-                            emit("attributes", dimension, "declared_flavor_unrecognized", candidate, attribute_residual)
+                            emit("attribute", dimension, "declared_flavor_unrecognized", candidate, attribute_residual)
                 elif dimension == "sweetener":
                     # Check every value against its actual field. A recognized
                     # claim must not conceal an unknown ingredient in the same row.
@@ -234,7 +234,7 @@ def main() -> None:
                         elif candidate in SWEETENER_CLAIMS and info.get("sweetener"):
                             assigned_declarations["sweetener_claim"] += 1
                         elif candidate:
-                            emit("attributes", dimension, "unrecognized_sweetener_value", f"{field_name}: {candidate}", attribute_residual)
+                            emit("attribute", dimension, "unrecognized_sweetener_value", f"{field_name}: {candidate}", attribute_residual)
                 elif not info.get(dimension):
                     if dimension == "package_type":
                         code = REJECTED_PACKAGE_TYPES.get(
@@ -244,7 +244,7 @@ def main() -> None:
                             rejected_by_ontology[code] += 1
                             continue
                     reason = "declared_field_parser_empty"
-                    emit("attributes", dimension, reason, f"{field_name}: {value}", attribute_residual)
+                    emit("attribute", dimension, reason, f"{field_name}: {value}", attribute_residual)
 
     ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     summary = {
@@ -263,7 +263,7 @@ def main() -> None:
                                 for dimension, counts in sorted(title_ngrams.items())},
         "groups": [
             {"source": key[0], "dimension": key[1], "reason": key[2], "candidate": key[3],
-             "count": count, "example_product_ids": examples[key]}
+             "count": count, "example_sku_ids": examples[key]}
             for key, count in ranked
         ],
     }
@@ -273,7 +273,7 @@ def main() -> None:
     args.summary.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"rows={rows_seen:,} candidates={sum(counts.values()):,} detail={args.out} summary={args.summary}")
     for item in summary["groups"][:25]:
-        print(f"{item['count']:>6,}  {item['source']:<10} {item['dimension']:<13} {item['candidate']:<45} ids={','.join(item['example_product_ids'])}")
+        print(f"{item['count']:>6,}  {item['source']:<10} {item['dimension']:<13} {item['candidate']:<45} ids={','.join(item['example_sku_ids'])}")
 
 
 if __name__ == "__main__":

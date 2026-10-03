@@ -252,19 +252,19 @@ def sku_attribute_info(
     description: object = "",
     url: object = "",
     image_url: object = "",
-    category_path: object = "",
+    breadcrumbs_eng: object = "",
     category: object = "",
 ) -> dict[str, object]:
     """Extract SKU-side attributes using the same parser as the data lane.
 
     Accepts the same evidence columns extract_all does — url, image_url,
-    category_path, category — so SKU-side reads see what the canonical
+    breadcrumbs_eng, category — so SKU-side reads see what the canonical
     lane sees. All default to "" for backward compatibility.
     """
     from pipeline import extract_all
 
     columns = []
-    for value in (description, url, image_url, category_path, category):
+    for value in (description, url, image_url, breadcrumbs_eng, category):
         if value is None or (isinstance(value, float) and value != value):
             value = ""
         columns.append(str(value))
@@ -478,7 +478,7 @@ def conflict_columns(
 #
 # Prohibitios held here (measured origin):
 #   * absence on either side is UNKNOWN, never agreement and never veto
-#     (product_identity doctrine 2; pinned by test_full_attribute_decisions);
+#     (sku_identity doctrine 2; pinned by test_full_attribute_decisions);
 #   * a value that fails its band/enum grammar stays in evidence but reports
 #     `unknown_parse` instead of pretending a set inequality is measured.
 
@@ -504,7 +504,7 @@ def _universe_parser():
     from core.attribute_universe import AttributeUniverse
 
     frame = pd.DataFrame(
-        {"attributes": pd.Series([], dtype=object), "barcode": pd.Series([], dtype=object)}
+        {"attribute": pd.Series([], dtype=object), "gtin": pd.Series([], dtype=object)}
     )
     return AttributeUniverse(frame)
 

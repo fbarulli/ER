@@ -108,16 +108,16 @@ def _text_info(conflict_info: dict[str, object]) -> dict[str, object]:
 
 
 def _pair_graph(frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-    """Positive-pair edges between row indices sharing a barcode (singletons: none)."""
-    barcodes = frame["barcode"].fillna("").astype(str).to_numpy()
+    """Positive-pair edges between row indices sharing a gtin (singletons: none)."""
+    gtins = frame["gtin"].fillna("").astype(str).to_numpy()
     edges: list[list[int]] = []
-    for barcode in sorted(set(barcodes)):
-        if not barcode:
+    for gtin in sorted(set(gtins)):
+        if not gtin:
             continue
-        rows = np.flatnonzero(barcodes == barcode)[: _MAX_EDGES_PER_BARCODE + 1]
+        rows = np.flatnonzero(gtins == gtin)[: _MAX_EDGES_PER_BARCODE + 1]
         edges.extend([ [int(rows[i]), int(rows[i + 1])] for i in range(len(rows) - 1)])
     pos = np.asarray(edges, dtype=int).reshape(-1, 2) if edges else np.zeros((0, 2), dtype=int)
-    return pos, np.asarray(barcodes, dtype=str)
+    return pos, np.asarray(gtins, dtype=str)
 
 
 def _load_sku_frame(sample: int, sku_csv: str | None) -> pd.DataFrame:
@@ -162,15 +162,15 @@ def main(argv: list[str] | None = None) -> int:
     if not canon_path.exists():
         return _fail(f"canonical records missing: {canon_path}")
     canon = pd.read_csv(canon_path, dtype=str, keep_default_na=False)
-    if "gtin" not in canon.columns or "barcode" not in sku.columns:
-        return _fail("expected 'gtin' in canonical_records.csv and 'barcode' in the SKU frame")
+    if "gtin" not in canon.columns or "gtin" not in sku.columns:
+        return _fail("expected 'gtin' in canonical_records.csv and 'gtin' in the SKU frame")
 
     # ---- split: component-aware, full-graph when available -----------------
     try:
-        full_barcodes = pd.read_csv(
-            F["dataset_deduped"], dtype=str, usecols=["barcode"]
+        full_gtins = pd.read_csv(
+            F["dataset_deduped"], dtype=str, usecols=["gtin"]
         )
-        graph_pos, graph_bc = _pair_graph(full_barcodes)
+        graph_pos, graph_bc = _pair_graph(full_gtins)
         graph_source = "dataset_deduped.csv"
     except (FileNotFoundError, ValueError):
         graph_pos, graph_bc = _pair_graph(sku)
@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(f"holdout split rejected by the split contract — {exc}")
     print(
         f"[split] graph={graph_source} train={len(train_bc):,} "
-        f"dev={len(dev_bc):,} test={len(test_bc):,} barcodes",
+        f"dev={len(dev_bc):,} test={len(test_bc):,} gtins",
         flush=True,
     )
 
@@ -198,14 +198,14 @@ def main(argv: list[str] | None = None) -> int:
     gtin_to_idx = {gtin: i for i, gtin in enumerate(canon_gtins)}
 
     sku_infos = [
-        sku_attribute_info(str(row.get("title", "")), str(row.get("attributes", "")))
+        sku_attribute_info(str(row.get("sku_name_eng", "")), str(row.get("attribute", "")))
         for _, row in sku.iterrows()
     ]
     sku_texts = [
         build_sku_text(row, _text_info(info))
         for (_, row), info in zip(sku.iterrows(), sku_infos)
     ]
-    sku_barcodes = sku["barcode"].fillna("").astype(str).tolist()
+    sku_gtins = sku["gtin"].fillna("").astype(str).tolist()
 
     # ---- frozen encode (zero_shot_sims.py pattern; no fallback) ------------
     try:
@@ -258,11 +258,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- pairs: true (same GTIN) vs volume/pack-conflict --------------------
     true_rows = [
-        i for i, barcode in enumerate(sku_barcodes)
-        if barcode and barcode in gtin_to_idx
+        i for i, gtin in enumerate(sku_gtins)
+        if gtin and gtin in gtin_to_idx
     ][: int(args.max_pairs)]
     if not true_rows:
-        return _fail("no sample SKU barcode matches a canonical GTIN — zero true pairs")
+        return _fail("no sample SKU gtin matches a canonical GTIN — zero true pairs")
     rng = np.random.default_rng(int(SEED))
     order = np.arange(len(canon_gtins))
     conflict_pairs: list[tuple[int, int]] = []
@@ -271,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
             break
         shuffled = rng.permutation(order)[: int(args.conflict_pool)]
         for cand in (int(c) for c in shuffled):
-            if canon_gtins[cand] == sku_barcodes[sku_row]:
+            if canon_gtins[cand] == sku_gtins[sku_row]:
                 continue
             conflicts = attribute_conflict_types(sku_infos[sku_row], canon_infos[cand])
             if "volume" in conflicts or "pack" in conflicts:
@@ -281,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(
             "no volume/pack-conflict pair mined — widen --conflict-pool or --max-pairs"
         )
-    true_pairs = [(i, gtin_to_idx[sku_barcodes[i]]) for i in true_rows]
+    true_pairs = [(i, gtin_to_idx[sku_gtins[i]]) for i in true_rows]
 
     def _cosine(pairs: list[tuple[int, int]]) -> np.ndarray:
         a = sku_emb[np.asarray([p[0] for p in pairs])]

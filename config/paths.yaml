@@ -207,11 +207,11 @@ extraction:
   title_attribute_override_ratio: 10.0
   bulk_container_terms: [bucket, barrel, drum, carboy, jerry can]
   source_groups:
-    attributes: declared_attributes
-    title: listing_text
+    attribute: declared_attributes
+    sku_name_eng: listing_text
     sku_url: listing_text
     image_url: listing_text
-    description: listing_text
+    description_short_eng: listing_text
   pack_confidence:
     nested: 0.95
     multiplier: 0.90
@@ -224,41 +224,41 @@ extraction:
 # Completeness scores use product descriptors; all other mapped columns are
 # excluded. Order preserves the existing product-identity metadata contract.
 descriptor_columns:
-  - title
+  - sku_name_eng
   - brand
   - category
-  - category_path
-  - attributes
-  - description
+  - breadcrumbs_eng
+  - attribute
+  - description_short_eng
 
 # Owner-reviewed malformed-barcode groups. Repeated keys are rejected even
 # when they carry the same verdict, so keep/collapse can never overlap.
 dedupe_adjudications:
-  - {retailer: amazon, barcode: "41755098003", decision: collapse, reason: "L&A cranberry juice: no-sugar-added qualifier describes the shared product"}
-  - {retailer: amazon, barcode: "72392329915", decision: collapse, reason: "Orange Crush sugar-free singles: listing spam describes the shared product"}
-  - {retailer: Wholefoods, barcode: "99482464950", decision: keep, reason: "Nutrient water versus zero-calorie lemonade"}
-  - {retailer: amazon, barcode: "22592446530", decision: keep, reason: "Ozarka sparkling water: lemon versus lime"}
-  - {retailer: amazon, barcode: "53721632036", decision: keep, reason: "Cool Brew concentrate: French Roast versus vanilla"}
-  - {retailer: amazon, barcode: "56918000304", decision: keep, reason: "Montellier mineral water: lemon versus lime"}
-  - {retailer: amazon, barcode: "71573024687", decision: keep, reason: "Pennsylvania Dutch birch beer: regular versus diet"}
-  - {retailer: amazon, barcode: "73430910713", decision: keep, reason: "Zephyrhills: lemon versus lime versus spring"}
-  - {retailer: amazon, barcode: "98794313048", decision: keep, reason: "Stewart's root beer: original versus diet"}
-  - {retailer: amazon, barcode: "99429158133", decision: keep, reason: "Cranberry: Hormel versus Thick & Easy brands"}
+  - {retailer: amazon, gtin: "41755098003", decision: collapse, reason: "L&A cranberry juice: no-sugar-added qualifier describes the shared product"}
+  - {retailer: amazon, gtin: "72392329915", decision: collapse, reason: "Orange Crush sugar-free singles: listing spam describes the shared product"}
+  - {retailer: Wholefoods, gtin: "99482464950", decision: keep, reason: "Nutrient water versus zero-calorie lemonade"}
+  - {retailer: amazon, gtin: "22592446530", decision: keep, reason: "Ozarka sparkling water: lemon versus lime"}
+  - {retailer: amazon, gtin: "53721632036", decision: keep, reason: "Cool Brew concentrate: French Roast versus vanilla"}
+  - {retailer: amazon, gtin: "56918000304", decision: keep, reason: "Montellier mineral water: lemon versus lime"}
+  - {retailer: amazon, gtin: "71573024687", decision: keep, reason: "Pennsylvania Dutch birch beer: regular versus diet"}
+  - {retailer: amazon, gtin: "73430910713", decision: keep, reason: "Zephyrhills: lemon versus lime versus spring"}
+  - {retailer: amazon, gtin: "98794313048", decision: keep, reason: "Stewart's root beer: original versus diet"}
+  - {retailer: amazon, gtin: "99429158133", decision: keep, reason: "Cranberry: Hormel versus Thick & Easy brands"}
 
 column_mapping:
-  sku_id: product_id
+  sku_id: sku_id
   retailer: retailer
   country: country
-  sku_name_eng: title
-  description_short_eng: description
-  breadcrumbs_eng: category_path
-  sku_url: url
+  sku_name_eng: sku_name_eng
+  description_short_eng: description_short_eng
+  breadcrumbs_eng: breadcrumbs_eng
+  sku_url: sku_url
   image_url: image_url
-  sku_last_price: price
-  gtin: barcode
+  sku_last_price: sku_last_price
+  gtin: gtin
   brand: brand
   category: category
-  attribute: attributes
+  attribute: attribute
 
 # ── per-column evidence ruling (canonical_records.source_rows) ───────────────
 # EVERY mapped column is declared here, exactly once, with the ruling on
@@ -274,29 +274,29 @@ column_mapping:
 #
 # capture: true  — the column can corroborate or refute a product-attribute
 #   claim, or is an identity confounder the gate must be able to see.
-# capture: false — the column cannot bear on WHICH product a title describes.
-#     url / image_url  listing IDENTIFIERS: they differ per retailer for one
-#                      and the same trade item, so they carry no product
-#                      semantics.
-#     price            commercial, varying by retailer, stock and time.
-#     product_id       a listing key; the GTIN supersedes it for identity.
-#     barcode          identity, not description — already carried as `gtin`,
-#                      and an identity match is decided before any of this.
+# capture: false — the column cannot bear on WHICH product a sku_name_eng describes.
+#     sku_url / image_url  listing IDENTIFIERS: they differ per retailer for one
+#                            and the same trade item, so they carry no product
+#                            semantics.
+#     sku_last_price       commercial, varying by retailer, stock and time.
+#     sku_id               a listing key; the GTIN supersedes it for identity.
+#     gtin                 identity, not description — the identity match is
+#                          decided before any of this.
 column_evidence:
-  title:
-    column: title
+  sku_name_eng:
+    column: sku_name_eng
     capture: true
     reason: primary stage-7 evidence; the string every attribute claim is read from
-  attributes:
-    column: attributes
+  attribute:
+    column: attribute
     capture: true
     reason: the declared attribute cell; 71,623/71,623 rows populated, the densest evidence
-  description:
-    column: description
+  description_short_eng:
+    column: description_short_eng
     capture: true
     reason: prose claims (carbonation/sweetener/pulp) and sweetener status
-  category_path:
-    column: category_path
+  breadcrumbs_eng:
+    column: breadcrumbs_eng
     capture: true
     reason: category context for flavor/type disambiguation
   category:
@@ -315,16 +315,16 @@ column_evidence:
     column: country
     capture: true
     reason: identity CONFOUNDER — same trade item across markets
-  barcode:
-    column: barcode
+  gtin:
+    column: gtin
     capture: true
     reason: identity evidence — an equal GTIN is the same product, decisive before parsing
-  product_id:
-    column: product_id
+  sku_id:
+    column: sku_id
     capture: true
     reason: retailer listing key; corroborates identity within one retailer
-  url:
-    column: url
+  sku_url:
+    column: sku_url
     capture: true
     reason: >-
       the PATH SLUG carries product tokens: measured
@@ -339,8 +339,8 @@ column_evidence:
       PARTIALLY evidentiary: walmartimages.com/seo/Concord-Foods-Smoothie-Banana-Drink-Mix-2-oz
       carries product tokens while hashed paths (riteaid .../9df78eab.../0) do not.
       Captured; the reader gains nothing from a hash and must not pretend to.
-  price:
-    column: price
+  sku_last_price:
+    column: sku_last_price
     capture: true
     reason: >-
       commercial column, captured for completeness of the row. Its value is a
@@ -354,10 +354,24 @@ column_evidence:
 # is a second declaration of a fact this file already owns, and one that drifts
 # the moment a rename happens. core.columns.resolve_aliases() serves them.
 column_aliases:
-  attributes:
+  attribute:
     - attr
-  product_id:
+    - attributes
+  sku_id:
     - SKU_ID
+    - product_id
+  sku_name_eng:
+    - title
+  description_short_eng:
+    - description
+  breadcrumbs_eng:
+    - category_path
+  sku_url:
+    - url
+  sku_last_price:
+    - price
+  gtin:
+    - barcode
 
 # Columns the data-prep lane cannot run without (subset of column_mapping).
 # The raw-export load guard and the canonical-dataset guard both read this.

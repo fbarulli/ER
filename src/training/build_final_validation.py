@@ -24,7 +24,7 @@ the leak guarantee, asserted below before anything is written.
 
 A NEGATIVE pair is a mined *similarity* relation, not an identity claim, so
 its two endpoints are usually in DIFFERENT components, and one of them is
-frequently a barcode the model trained on. A single ``fold`` column would have
+frequently a gtin the model trained on. A single ``fold`` column would have
 to silently mean "the fold of gtin1" and hide the other side. So the pair's
 both sides are carried explicitly, and ``endpoint_in_train`` marks a negative
 whose other side leaked in. Those rows are KEPT (the P0 spec treats
@@ -313,7 +313,7 @@ def build(
     # internally, so these are the identical objects it split on.
     comp_of = component_ids(merged_pos, graph_bc)
     # train = every quarter except the last two; dev/test are the LAST two
-    # quarters, so validation is "neither side is a training barcode".
+    # quarters, so validation is "neither side is a training gtin".
     fold_of: dict[str, int] = {}
     for bc in train_bc:
         fold_of[bc] = 0
@@ -324,7 +324,7 @@ def build(
 
     # A labeled gtin has to be resolved to the spelling the graph actually
     # uses, and the two are not the same string: the fold sets are keys of the
-    # RAW row_bc, while normalize_gtin left-pads a 13-digit barcode to 14. A
+    # RAW row_bc, while normalize_gtin left-pads a 13-digit gtin to 14. A
     # 13-digit gtin therefore misses a raw fold set under a normalized lookup
     # and is silently dropped -- which is how an earlier run of this script
     # emitted 3 rows out of 8,889. Try the raw spelling first, then the

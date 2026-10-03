@@ -64,7 +64,7 @@ are necessary to distinguish products and support unseen or isolated listings.
   GNN use requires an adapter because this entry point wraps `RandMatcher`.
 - `src/training/ann_refresh.py`: text-embedding refresh workflow to extend or
   mirror for graph artifacts.
-- `src/core/product_identity.py`: shared structured identity descriptors and
+- `src/core/sku_identity.py`: shared structured identity descriptors and
   conflicts; reuse their extraction rather than introducing another parser.
 - `src/training/folds.py`: shared split derivation through `derive_holdout`.
 - `src/training/build_final_validation.py` and `evaluate_models.py`: final
@@ -177,7 +177,7 @@ edges may be added to C only as a separately reported ablation.
 
 ### Leakage and new-listing behavior
 
-- Start with attribute relations available at inference; exclude barcode
+- Start with attribute relations available at inference; exclude gtin
   features, GTIN equality edges, and verified match labels from model inputs.
 - Labels used to split or supervise pairs must not be visible as scored
   identity edges. Do not union listings into one model node using hidden truth.
@@ -270,7 +270,7 @@ retrieval-to-decision evaluation to measure practical matching quality.
 
 The existing pair CSV alone is insufficient for recall@k: define held-out
 queries, eligible catalog targets, and known relevant matches from identity
-truth. Mask barcode information from blind inference. Document incomplete
+truth. Mask gtin information from blind inference. Document incomplete
 truth and catalog coverage instead of treating unlabeled pairs as negatives.
 
 Choose the primary deployment objective and minimum useful improvement before

@@ -126,7 +126,7 @@ SOURCE_ROW_FIELD_NAMES: tuple[str, ...] = tuple(
 # exclusion list.
 #
 # NOTE: there is deliberately NO descriptor/non-descriptor list here. That
-# concept belongs to core.product_identity (DESCRIPTOR_COLUMNS), which already
+# concept belongs to core.sku_identity (DESCRIPTOR_COLUMNS), which already
 # declares it; restating it in a second module is precisely the duplication
 # this file exists to remove, and a test cross-checking the two copies would
 # only make the duplication look justified.
@@ -147,8 +147,8 @@ COLUMN_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
 def alias_names(canonical: str) -> tuple[str, ...]:
     """Every name a column answers to, canonical first.
 
-    A read path that accepts "either name" — ("attributes", "attr"),
-    ("description", "description_short_eng"), {"title": "sku_name_eng"} — was
+    A read path that accepts "either name" — ("attribute", "attr"),
+    ("description_short_eng", "description_short_eng"), {"sku_name_eng": "sku_name_eng"} — was
     hardcoding a fact column_mapping and column_aliases already declare. Those
     literals are a second declaration that drifts on rename, and the drift is
     silent: the reader simply stops finding the column.

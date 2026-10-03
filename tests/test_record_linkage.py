@@ -1,12 +1,12 @@
 import pandas as pd
 
-from core.record_linkage import link_barcode_less, strip_pack_multiplicity
+from core.record_linkage import link_gtin_less, strip_pack_multiplicity
 
 
 def _frame(rows):
     return pd.DataFrame(
         rows,
-        columns=["product_id", "title", "brand", "barcode", "retailer"],
+        columns=["sku_id", "sku_name_eng", "brand", "gtin", "retailer"],
         index=[f"row-{i}" for i in range(len(rows))],
     )
 
@@ -18,11 +18,11 @@ def test_links_pack_variants_across_retailers_but_keeps_flavors_separate():
         ("c", "Acme Latte 6 pack", "Acme", "", "Shop C"),
     ])
 
-    clusters, census = link_barcode_less(df)
+    clusters, census = link_gtin_less(df)
 
     assert clusters["row-0"] == clusters["row-1"]
     assert clusters["row-2"] != clusters["row-0"]
-    assert census["barcode_less_rows"] == 3
+    assert census["gtin_less_rows"] == 3
     assert census["exact_title_pairs_linked"] == 1
 
 
@@ -33,12 +33,12 @@ def test_only_valid_gtins_are_excluded_and_same_retailer_does_not_link():
         ("bad-b", "Acme Mocha", "Acme", "", "Shop A"),
     ])
 
-    clusters, census = link_barcode_less(df)
+    clusters, census = link_gtin_less(df)
 
     assert set(clusters) == {"row-1", "row-2"}
     assert clusters["row-1"] != clusters["row-2"]
     assert census["exact_title_pairs_linked"] == 0
-    assert census["barcode_less_rows"] == 2
+    assert census["gtin_less_rows"] == 2
 
 
 def test_exact_title_pair_links_across_retailers():
@@ -47,7 +47,7 @@ def test_exact_title_pair_links_across_retailers():
         ("b", "Acme Mocha", "Acme", "", "Shop B"),
     ])
 
-    clusters, census = link_barcode_less(df)
+    clusters, census = link_gtin_less(df)
 
     assert clusters["row-0"] == clusters["row-1"]
     assert census["exact_title_pairs_linked"] == 1
@@ -61,7 +61,7 @@ def test_missing_brand_or_title_stays_singleton():
         ("d", "Acme Mocha", None, "", "Shop B"),
     ])
 
-    clusters, census = link_barcode_less(df)
+    clusters, census = link_gtin_less(df)
 
     assert len(set(clusters.values())) == 4
     assert census["num_multirow_clusters"] == 0

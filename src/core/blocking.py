@@ -4,9 +4,9 @@ Single source for the blocking A/B measurement (per-feature utility + greedy
 key selection): true-pair construction and the recall/candidates evaluator.
 No regexes here — those stay in src/core/text.py + pipeline.py.
 
-Barcodes assert identity only when GS1-checksum VALID (owner ruling) — both
+GTINs assert identity only when GS1-checksum VALID (owner ruling) — both
 populations (positives here, negatives in build_pairs) exclude checksum-fail
-barcodes exactly like missing ones.
+gtins exactly like missing ones.
 """
 
 from collections import defaultdict
@@ -15,7 +15,7 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 
-from core.gtin import barcode_validity
+from core.gtin import gtin_validity
 from core.manifest import count_drop
 from core.text import normalize_retailer
 
@@ -27,7 +27,7 @@ def _retailer_identity(df: pd.DataFrame, col: str) -> pd.Series:
     Publix, El Corte Ingles/Inglés) — grouping on the raw string counts
     those as multi-retailer and feeds fake cross-source positives into
     the ground truth. Measured on the 61,529-row export: exactly one
-    barcode group (8432425093657) is fake under raw grouping.
+    gtin group (8432425093657) is fake under raw grouping.
     """
     return df[col].map(normalize_retailer)
 
@@ -37,45 +37,45 @@ def build_pairs(
     seed: int,
     max_pos_per_group: int,
     n_neg: int,
-    barcode_col: str = "barcode",
+    gtin_col: str = "gtin",
     retailer_col: str = "retailer",
-    title_col: str = "title",
+    title_col: str = "sku_name_eng",
     neg_oversample: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Ground-truth evaluation pairs, 0..n-1 row-indexed.
 
-    positives: title pairs inside the same multi-retailer barcode group, built
+    positives: title pairs inside the same multi-retailer gtin group, built
     from one row per unique stripped title (capped at max_pos_per_group per
     group) so trivially-identical listings don't inflate agreement. negatives:
-    cross-barcode pairs with different title text, sampled in ONE vectorized
+    cross-gtin pairs with different title text, sampled in ONE vectorized
     bulk pass (no per-attempt Python loop) — the bulk draw is n_neg *
     neg_oversample candidates, first n_neg valid kept. Returns (pos_pairs,
     neg_pairs) as (N, 2) int arrays.
 
-    Barcode trust (owner ruling): only GS1-checksum-VALID barcodes assert
-    identity, on both populations — invalid barcodes are excluded exactly
+    GTIN trust (owner ruling): only GS1-checksum-VALID gtins assert
+    identity, on both populations — invalid gtins are excluded exactly
     like missing ones.
     """
-    barcodes = df[barcode_col].fillna("").astype(str)
+    gtins = df[gtin_col].fillna("").astype(str)
     titles = df[title_col].fillna("").str.strip()
     rng = np.random.default_rng(seed)
 
-    # Barcode trust (owner ruling): only GS1-checksum-VALID barcodes assert
-    # identity. A positive needs the group barcode valid (774 multi-retailer
-    # groups were checksum-noise); a negative needs BOTH barcodes valid — a
-    # checksum-fail barcode cannot certify "known different" any more than a
+    # GTIN trust (owner ruling): only GS1-checksum-VALID gtins assert
+    # identity. A positive needs the group gtin valid (774 multi-retailer
+    # groups were checksum-noise); a negative needs BOTH gtins valid — a
+    # checksum-fail gtin cannot certify "known different" any more than a
     # missing one can. Same population rule as _hard_negatives.py.
-    bc_valid = barcode_validity(barcodes).to_numpy()
-    known = df[(barcodes.str.len() > 0).to_numpy() & bc_valid].assign(
+    bc_valid = gtin_validity(gtins).to_numpy()
+    known = df[(gtins.str.len() > 0).to_numpy() & bc_valid].assign(
         _retailer_key=lambda d: _retailer_identity(df.loc[d.index], retailer_col)
     )
-    multi = known[known.groupby(barcode_col)["_retailer_key"].transform(
+    multi = known[known.groupby(gtin_col)["_retailer_key"].transform(
         "nunique"
     ) > 1]
     pos_i: list[int] = []
     pos_j: list[int] = []
     title_drops = 0
-    for _, g in multi.groupby(barcode_col):
+    for _, g in multi.groupby(gtin_col):
         sub = g.assign(_t=titles.loc[g.index])
         titled = sub[sub["_t"] != ""]
         unique_titles = titled.drop_duplicates("_t")
@@ -106,12 +106,12 @@ def build_pairs(
 
         neg_oversample = int(training_cfg().pairs.neg_oversample)
     n = len(df)
-    bc = barcodes.to_numpy()
+    bc = gtins.to_numpy()
     tt = titles.to_numpy()
     a = rng.integers(0, n, size=n_neg * neg_oversample)
     b = rng.integers(0, n, size=n_neg * neg_oversample)
     # A negative is only a KNOWN non-match when both rows carry a non-empty
-    # (and different) barcode AND both pass the GS1 checksum; a GTIN-missing
+    # (and different) gtin AND both pass the GS1 checksum; a GTIN-missing
     # or checksum-fail row has unknown ground truth and must not enter the
     # negative population (matches _hard_negatives.py).
     mask = (
@@ -138,28 +138,28 @@ def build_pairs(
 
 def build_true_pairs(
     df: pd.DataFrame,
-    barcode_col: str = "barcode",
+    gtin_col: str = "gtin",
     retailer_col: str = "retailer",
 ) -> list[tuple[int, int]]:
-    """ALL same-barcode pairs inside multi-retailer groups (the ground truth).
+    """ALL same-gtin pairs inside multi-retailer groups (the ground truth).
 
     Keeps the ORIGINAL df index (never reset) so pair indices map straight
     into df.loc / feature Series indexed by df.index. Checksum-INVALID
-    barcodes assert no identity (owner ruling): their groups are excluded —
+    gtins assert no identity (owner ruling): their groups are excluded —
     the old monorepo version treated them as ground truth, poisoning the
     recall measurement with export noise.
     """
-    barcodes = df[barcode_col].fillna("").astype(str).str.strip()
-    bc_valid = barcode_validity(barcodes).to_numpy()
-    known = df[(barcodes.str.len() > 0).to_numpy() & bc_valid]
+    gtins = df[gtin_col].fillna("").astype(str).str.strip()
+    bc_valid = gtin_validity(gtins).to_numpy()
+    known = df[(gtins.str.len() > 0).to_numpy() & bc_valid]
     known = known.assign(
         _retailer_key=_retailer_identity(df.loc[known.index], retailer_col)
     )
-    multi = known[known.groupby(barcode_col)["_retailer_key"].transform(
+    multi = known[known.groupby(gtin_col)["_retailer_key"].transform(
         "nunique"
     ) > 1]
     pairs: list[tuple[int, int]] = []
-    for _, g in multi.groupby(barcode_col):
+    for _, g in multi.groupby(gtin_col):
         pairs.extend(combinations(g.index.tolist(), 2))
     return pairs
 

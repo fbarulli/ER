@@ -8,7 +8,7 @@ from core.schemas import DataConfig
 
 
 def test_descriptor_partition_follows_config():
-    from core.product_identity import DESCRIPTOR_COLUMNS, NON_DESCRIPTOR_COLUMNS
+    from core.sku_identity import DESCRIPTOR_COLUMNS, NON_DESCRIPTOR_COLUMNS
 
     cfg = data_cfg()
     assert DESCRIPTOR_COLUMNS == tuple(cfg.descriptor_columns)
@@ -16,7 +16,7 @@ def test_descriptor_partition_follows_config():
     assert set(DESCRIPTOR_COLUMNS) | NON_DESCRIPTOR_COLUMNS == set(cfg.column_mapping.values())
 
 
-@pytest.mark.parametrize('descriptors', [['title', 'title'], ['not_a_column']])
+@pytest.mark.parametrize('descriptors', [['sku_name_eng', 'sku_name_eng'], ['not_a_column']])
 def test_descriptor_policy_rejects_duplicate_or_unknown_columns(descriptors):
     raw = data_cfg().model_dump()
     raw['descriptor_columns'] = descriptors
@@ -28,7 +28,7 @@ def test_adjudication_policy_rejects_overlapping_verdicts():
     raw = data_cfg().model_dump()
     duplicate = {**raw['dedupe_adjudications'][0], 'decision': 'keep'}
     raw['dedupe_adjudications'].append(duplicate)
-    with pytest.raises(ValidationError, match='duplicate retailer/barcode'):
+    with pytest.raises(ValidationError, match='duplicate retailer/gtin'):
         DataConfig.model_validate(raw)
 
 

@@ -207,8 +207,8 @@ def datagen_track():
     dedupe_metrics = ''.join([
         _fmetric(ra.get('input_rows', 71_623), 'original listings in'),
         _fmetric(ra.get('output_rows', 63_079), 'deduped rows out'),
-        _fmetric(ra.get('dropped', {}).get('t1_retailer_barcode', 1_850), 'T1 collapses'),
-        _fmetric(ra.get('dropped', {}).get('t1_5_retailer_malformed_barcode_same_product', 96), 'T1.5 malformed-barcode recoveries'),
+        _fmetric(ra.get('dropped', {}).get('t1_retailer_gtin', 1_850), 'T1 collapses'),
+        _fmetric(ra.get('dropped', {}).get('t1_5_retailer_malformed_gtin_same_product', 96), 'T1.5 malformed-gtin recoveries'),
         _fmetric(ra.get('skipped_checksum_invalid', 3_867), 'checksum-invalid retained'),
         _fmetric(ra.get('unresolved_identity_review_rows', 207), 'escalated identity questions (never guessed)'),
     ])
@@ -217,7 +217,7 @@ def datagen_track():
          f"<strong>{ra.get('output_rows', 63_079):,}</strong> output rows (+116, attributed to commits 0452692..2d3ac4b — Wave-1 fixes byte-identical)",
          'PASS'),
         ('Row closure must recompose per refresh',
-         '71,623 == 63,079 + 8,544 · identity invariant holds (13,216 trusted barcodes kept)',
+         '71,623 == 63,079 + 8,544 · identity invariant holds (13,216 trusted gtins kept)',
          'PASS'),
         ('Escalations must never be guessed', f"{ra.get('unresolved_identity_review_rows', 207):,} rows escalated to review evidence", 'PASS'),
     ])
@@ -229,7 +229,7 @@ def datagen_track():
                     f"<span class='badge badge-pass'>PASS</span> closure gate {ra.get('input_rows', 71_623):,} == {ra.get('output_rows', 63_079):,} + 8,544; Wave-1 fixes changed 0 cells on this corpus.")
     # Finding 02 — GTIN capture ledger
     gtin_ledger = [
-        ('missing (NA) barcode rows', '41,545', '41,545'),
+        ('missing (NA) gtin rows', '41,545', '41,545'),
         ('checksum-invalid rows (rows survive, identity claim dies)', '3,715', '3,715'),
         ('checksum-valid rows', '26,363', '26,363'),
         ('distinct valid GTINs', '13,250', '13,250'),
@@ -248,7 +248,7 @@ def datagen_track():
     gtin_evidence = _fevidence(f'dataset.csv (sha256 {m.get("inputs", [{}])[0].get("sha256", "?")[:20]}…)',
                                'GTIN ledger re-measured on the same byte-identical export — session ledger (2026-09-30):\n'
                                + '\n'.join(f'{k}: {v:,}' for k, v in [
-                                   ('missing (NA) barcode', 41_545),
+                                   ('missing (NA) gtin', 41_545),
                                    ('checksum-invalid rows', 3_715),
                                    ('checksum-valid rows', 26_363),
                                    ('distinct valid GTINs', 13_250),
@@ -410,7 +410,7 @@ def datagen_track():
         _fmetric(dvc.get('title_token_dissimilarity_mean', 0.703), 'title token dissimilarity (median ' + escape(str(dvc.get('title_token_dissimilarity_median', 0.75))) + ')'),
         _fmetric(var.get('brand', 0.011), 'brand varies (the fingerprint stays)'),
         _fmetric(var.get('retailer', 0.914), 'of duplicates are cross-retailer'),
-        _fmetric(var.get('attributes', 1.0), 'attribute cells differ (partial declarations)'),
+        _fmetric(var.get('attribute', 1.0), 'attribute cells differ (partial declarations)'),
     ])
     dup_compare = _fcompare([
         ('Assumed variation scale: masking band U(0.20, 0.30), polite rewording',
@@ -513,9 +513,9 @@ def _gate_cards(mtime_ns: int):
 @lru_cache(maxsize=1)
 def _gate_raw(mtime_ns: int):
     frame = _gate_source_frame(mtime_ns)
-    listings = frame.barcode.value_counts()
-    resolvable = frame[frame.barcode.notna() & frame.barcode.ne('')]
-    first = resolvable.drop_duplicates('barcode', keep='first').set_index('barcode')
+    listings = frame.gtin.value_counts()
+    resolvable = frame[frame.gtin.notna() & frame.gtin.ne('')]
+    first = resolvable.drop_duplicates('gtin', keep='first').set_index('gtin')
     return first, listings
 
 @lru_cache(maxsize=1)
@@ -525,7 +525,7 @@ def _gate_results_frame(mtime_ns: int):
 @lru_cache(maxsize=1)
 def _gate_universe(mtime_ns: int):
     """AttributeUniverse built on the FULL dataset frame (SSOT constructor:
-    a pd.DataFrame carrying the canonical 'attributes' + 'barcode' columns) —
+    a pd.DataFrame carrying the canonical 'attribute' + 'gtin' columns) —
     no synthetic stub; parse() then runs on arbitrary cells."""
     from core.attribute_universe import AttributeUniverse
     return AttributeUniverse(_gate_source_frame(mtime_ns))
@@ -551,7 +551,7 @@ def _gate_route_gloss(clause: str) -> str:
 
 def _gate_side(gt: str, raw, listings) -> dict:
     row = raw.loc[gt]
-    return {orig: (gt if c == 'barcode' else str(row[c]) if pd.notna(row[c]) else '') for c, orig in _GATE_ORIGINAL_COLUMNS} | {
+    return {orig: (gt if c == 'gtin' else str(row[c]) if pd.notna(row[c]) else '') for c, orig in _GATE_ORIGINAL_COLUMNS} | {
         '_listings': f'Illustrative preview: first of {int(listings.loc[gt]):,} exported listing(s); not the aggregated decision input'}
 
 
@@ -646,7 +646,7 @@ def _gate_canonical_evidence_html(left: str, right: str, cards: dict) -> str:
 def _gate_listing_evidence_html(left: str, right: str, frame) -> str:
     blocks = []
     for side, gtin in (('left', left), ('right', right)):
-        selected = frame[frame['barcode'].eq(gtin)]
+        selected = frame[frame['gtin'].eq(gtin)]
         records = selected.where(selected.notna(), '').to_dict('records')
         cells = ''.join('<tr>' + ''.join(
             f'<td>{_gate_value_html(record.get(column))}</td>' for column, _original in _GATE_ORIGINAL_COLUMNS
@@ -665,13 +665,13 @@ def _gate_date_context_html(records: list[dict]) -> str:
              'unspecified_calendar_date': 'Date (context unclear)'}
     entries = []
     for record in records:
-        for column in ('title', 'attributes', 'description', 'category_path', 'category'):
+        for column in ('sku_name_eng', 'attribute', 'description_short_eng', 'breadcrumbs_eng', 'category'):
             for entry in extract_date_evidence(record.get(column)):
                 value = ' or '.join(entry['normalized_candidates']) or 'No definite calendar date'
                 if entry['role'] == 'shelf_life':
                     value = f"{entry['duration_value']} {entry['duration_unit']}s"
                 entries.append('<tr>' + ''.join(f'<td>{escape(str(part))}</td>' for part in (
-                    record.get('product_id', ''), column, roles[entry['role']], entry['raw_match'], value,
+                    record.get('sku_id', ''), column, roles[entry['role']], entry['raw_match'], value,
                 )) + '</tr>')
     if not entries:
         return ''
@@ -716,8 +716,8 @@ def _gate_snapshot(g, raw, listings) -> dict:
     return {decision: [
         {'gtin1': r.gtin1, 'gtin2': r.gtin2, 'gate_decision': r.gate_decision,
          'gate_reason': r.gate_reason, 'similarity': r.similarity,
-         'left': {orig: (r.gtin1 if c == 'barcode' else str(raw.loc[r.gtin1][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
-         'right': {orig: (r.gtin2 if c == 'barcode' else str(raw.loc[r.gtin2][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
+         'left': {orig: (r.gtin1 if c == 'gtin' else str(raw.loc[r.gtin1][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
+         'right': {orig: (r.gtin2 if c == 'gtin' else str(raw.loc[r.gtin2][c])) for c, orig in _GATE_ORIGINAL_COLUMNS},
          **({'fallback_reason': r.gate_reason} if decision == 'fallback' else {})}
         for r in _gate_sample(g, raw, listings, decision)[0]]
         for decision in _GATE_BUCKETS}
@@ -753,8 +753,8 @@ def gate_decisions():
                 sim = f'{float(row.similarity):.3f}'
             except Exception:
                 sim = escape(row.similarity)
-            left_title = str(raw.loc[row.gtin1]['title'])
-            right_title = str(raw.loc[row.gtin2]['title'])
+            left_title = str(raw.loc[row.gtin1]['sku_name_eng'])
+            right_title = str(raw.loc[row.gtin2]['sku_name_eng'])
             original = (f"<code>{escape(row.gtin1)}</code> · {escape(left_title)} ↔ "
                         f"<code>{escape(row.gtin2)}</code> · {escape(right_title)}")
             route = '' if decision == 'proceed' else f'{escape(_gate_route_gloss(str(row.gate_reason)))} — '
@@ -790,9 +790,9 @@ def gate_decisions():
 def gate_fallback():
     """EVERY fallback pair — the ENTIRE original entry, full strings.
 
-    Each pair renders BOTH sides with all 13 raw-export columns (product_id,
-    retailer, country, title, description, category_path, url, image_url,
-    price, barcode, brand, category, attributes), no ellipsis and no
+    Each pair renders BOTH sides with all 13 raw-export columns (sku_id,
+    retailer, country, title, description, breadcrumbs_eng, url, image_url,
+    price, gtin, brand, category, attributes), no ellipsis and no
     <details> folding anywhere — the whole entry as exported. The full
     canonical texts and the deciding clause ride along. The bucket is OPEN
     by definition (low raw volume/pack extraction confidence -> the gate
@@ -821,9 +821,9 @@ def gate_fallback():
         if gtin not in raw.index:
             return '<td><code>—</code></td>' * len(_FALLBACK_RAW_COLUMNS)
         entry = raw.loc[gtin].copy()
-        # _gate_raw drops 'barcode' into the index; resurrect it for the
+        # _gate_raw drops 'gtin' into the index; resurrect it for the
         # all-columns render (the raw-export column belongs on screen).
-        entry['barcode'] = gtin
+        entry['gtin'] = gtin
         return ''.join(
             f'<td><code>{escape(str(entry[c]))}</code></td>' for c in _FALLBACK_RAW_COLUMNS)
 

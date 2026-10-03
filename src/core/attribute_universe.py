@@ -8,8 +8,8 @@ anchors; pack type as fallback). The unparsed keys were never measured, so
 universe into data: one FieldSpec per key, one parser, one conflict predicate,
 one census, one budget. Everything below is MEASURED on dataset.csv
 (71,623 rows, `attribute` column split on ';', key before ':', comma-joined
-multi-values, GTIN grouping restricted to rows whose barcode passes
-core.gtin.barcode_validity — 26,214 valid rows; 30,182 same-GTIN pairs):
+multi-values, GTIN grouping restricted to rows whose gtin passes
+core.gtin.gtin_validity — 26,214 valid rows; 30,182 same-GTIN pairs):
 
   key                                  rows     distinct sets   session rate
   juice content                       63,117          27           11.2%
@@ -50,7 +50,7 @@ core.gtin.barcode_validity — 26,214 valid rows; 30,182 same-GTIN pairs):
   are registered and censused live; they had no session number.
 
 SEMANTICS OF THE CENSUS (this module's own definition, pinned by
-verify_census at +/-1%): a same-GTIN pair is CREATED by `barcode_validity`
+verify_census at +/-1%): a same-GTIN pair is CREATED by `gtin_validity`
 (26,214 valid rows; 30,182 same-GTIN pairs). For each key, a pair counts
 when BOTH rows are populated on that key; `conflict` is frozenset
 inequality for plain keys, EXCEPT delegated fields which reuse the
@@ -255,7 +255,7 @@ def _registry() -> dict[str, FieldSpec]:
         "roast type": FieldSpec(
             cat, "tokens", "set_inequality",
             "already folded into the flavor family by the identity lane "
-            "(core.product_identity.identity_tokens_set)",
+            "(core.sku_identity.identity_tokens_set)",
         ),
         "nutri score": FieldSpec(
             "SET_ENUM", "tokens", "set_inequality", "7 grades"),
@@ -294,7 +294,7 @@ class AttributeUniverse:
     """Parse + census the full 37-key attribute universe over an explicit frame.
 
     Instantiation is deliberate and side-effect free: pass a frame with the
-    canonical column names ('attributes', 'barcode') — e.g. the output of
+    canonical column names ('attribute', 'gtin') — e.g. the output of
     core.common.load_dataset(). Nothing reads YAML; the only config read is
     the validated evaluation.attribute_separation.min_value_support SSOT when
     datagen_budget() runs.
@@ -305,7 +305,7 @@ class AttributeUniverse:
 
         if not isinstance(frame, pd.DataFrame):
             raise ValueError("AttributeUniverse expects an explicit pd.DataFrame")
-        missing = sorted({"attributes", "barcode"} - set(frame.columns))
+        missing = sorted({"attribute", "gtin"} - set(frame.columns))
         if missing:
             raise ValueError(
                 f"frame is missing required canonical column(s): {missing}"
@@ -397,26 +397,26 @@ class AttributeUniverse:
     def census(self) -> dict:
         """Per-key populated rows / distinct sets / same-GTIN conflict stats.
 
-        Conflict comparison happens ONLY between rows whose barcode passes
-        core.gtin.barcode_validity. Set-valued evidence is returned SORTED
+        Conflict comparison happens ONLY between rows whose gtin passes
+        core.gtin.gtin_validity. Set-valued evidence is returned SORTED
         for determinism. Also parses the 'unclassified_keys' bucket for the
         review lane.
         """
         import pandas as pd
 
-        from core.gtin import barcode_validity, normalize_and_validate_gtin
+        from core.gtin import gtin_validity, normalize_and_validate_gtin
         from core.text import normalized_attribute_text
 
         frame = self._frame
-        barcodes = frame["barcode"].fillna("").astype(str)
-        valid = barcode_validity(barcodes)
-        gtin_keys = normalize_and_validate_gtin(barcodes)["gtin_clean"].astype("string")
+        gtins = frame["gtin"].fillna("").astype(str)
+        valid = gtin_validity(gtins)
+        gtin_keys = normalize_and_validate_gtin(gtins)["gtin_clean"].astype("string")
 
         fields = {name: {} for name in self._registry}
         raw_strings: dict[str, dict[str, int]] = {name: {} for name in self._registry}
         unclassified_atoms: dict[str, dict[str, frozenset]] = {}
         conflict_predicate = self._conflict_predicates()
-        for idx, cell in frame["attributes"].fillna("").items():
+        for idx, cell in frame["attribute"].fillna("").items():
             for part in str(cell).split(";"):
                 if ":" not in part:
                     continue

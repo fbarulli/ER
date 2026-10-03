@@ -58,9 +58,9 @@ def main() -> None:
     if missing:
         raise ValueError(f"pairs missing columns: {sorted(missing)}")
 
-    columns = [c for c in ("product_id", "title", "attributes", "description", "brand", "category") if c in data]
+    columns = [c for c in ("sku_id", "sku_name_eng", "attribute", "description_short_eng", "brand", "category") if c in data]
     records = {
-        str(row["product_id"]): row.to_dict()
+        str(row["sku_id"]): row.to_dict()
         for _, row in data[columns].iterrows()
     }
     if args.canonical_records:
@@ -72,7 +72,7 @@ def main() -> None:
 
     def text_for(identifier: object) -> str:
         row = records.get(str(identifier), {})
-        return " ".join(str(row.get(c, "")) for c in ("title", "canonical", "attributes", "description", "brand", "category"))
+        return " ".join(str(row.get(c, "")) for c in ("sku_name_eng", "canonical", "attribute", "description_short_eng", "brand", "category"))
 
     pairs["score"] = pd.to_numeric(pairs["score"])
     pairs["label"] = pd.to_numeric(pairs["label"]).astype(int)

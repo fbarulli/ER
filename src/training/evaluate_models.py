@@ -28,7 +28,7 @@ HOLDOUT DISCIPLINE (self-fit leak closed 2026-09-14): this lane used to
 pick its Youden threshold via roc_curve ON THE VERY LABELED SET IT THEN
 SCORED accuracy/F1 on — every zero-shot operating metric was inflated.
 Now the labeled pairs are split into DEV/TEST halves along connected
-components of the positive-pair barcode graph (src/training/folds.
+components of the positive-pair gtin graph (src/training/folds.
 component_folds; k / dev_fold / test_fold from config/training.yaml
 evaluation:), the Youden threshold is fit on DEV ONLY and applied
 verbatim to TEST, and ALL reported metrics — ROC-AUC included — are
@@ -103,7 +103,7 @@ emb_sim = pd.read_csv(EMBED_SIM_CSV, dtype={"gtin1": str, "gtin2": str})
 # canonical maps; int-read maps to NaN). dtype=str is this file's answer —
 # the keys stay byte-spelled and the join needs no GTIN rewriting: rewriting
 # keys here is deliberately NOT done because every other lane's key remains
-# the RAW barcode spelling (core.gtin module doctrine: "grouping keys stay
+# the RAW gtin spelling (core.gtin module doctrine: "grouping keys stay
 # the RAW gtin string"), and folding spellings only in this script would
 # fork the identity namespace between stages.
 canon = pd.read_csv(CANON_CSV, dtype={"gtin": str}, keep_default_na=False)

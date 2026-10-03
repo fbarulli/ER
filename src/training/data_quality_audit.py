@@ -50,7 +50,7 @@ def _audit_groups(df: pd.DataFrame) -> pd.DataFrame:
 
     rows: list[dict[str, object]] = []
     for gtin, group in valid.groupby("gtin_clean", sort=True, dropna=False):
-        titles = group["title"].map(normalize_text)
+        titles = group["sku_name_eng"].map(normalize_text)
         brands = group["brand"].map(normalize_text)
         categories = group["category"].map(normalize_text)
         volumes = group["volume_ml"].dropna().astype(float)
@@ -73,7 +73,7 @@ def _audit_groups(df: pd.DataFrame) -> pd.DataFrame:
             "rows": len(group),
             "retailers": _values(group["retailer"]),
             "countries": _values(group["country"]),
-            "titles": _values(group["title"]),
+            "titles": _values(group["sku_name_eng"]),
             "brands": _values(group["brand"]),
             "categories": _values(group["category"]),
             "volume_ml": _values(volumes),
@@ -98,10 +98,10 @@ def audit(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             f"{list(raw.columns)}"
         )
     df = raw.rename(columns=COLUMN_MAPPING).copy()
-    gtin = normalize_and_validate_gtin(df["barcode"])
+    gtin = normalize_and_validate_gtin(df["gtin"])
     df["gtin_clean"] = gtin["gtin_clean"]
     df["gtin_valid"] = gtin["gtin_structurally_valid"]
-    attrs = [extract_all(title, attribute) for title, attribute in zip(df["title"], df["attributes"], strict=True)]
+    attrs = [extract_all(title, attribute) for title, attribute in zip(df["sku_name_eng"], df["attribute"], strict=True)]
     attr_frame = pd.DataFrame(attrs, index=df.index)
     df["volume_ml"] = attr_frame["volume_ml"]
     df["pack_count"] = attr_frame["pack_qty"]
@@ -120,11 +120,11 @@ def audit(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         {"metric": "source_path", "value": str(source.resolve()), "detail": "explicit input provenance"},
         {"metric": "source_sha256", "value": _sha256(source), "detail": "input bytes fingerprint"},
         {"metric": "rows", "value": total, "detail": "no rows were filtered"},
-        {"metric": "empty_product_id_rows", "value": int(_blank(df["product_id"]).sum()), "detail": "identity-source completeness"},
-        {"metric": "duplicate_product_id_rows", "value": int(df["product_id"].duplicated(keep=False).sum()), "detail": "raw export duplication; dedupe remains a separate audited step"},
-        {"metric": "empty_title_rows", "value": int(_blank(df["title"]).sum()), "detail": "cannot provide title evidence"},
+        {"metric": "empty_sku_id_rows", "value": int(_blank(df["sku_id"]).sum()), "detail": "identity-source completeness"},
+        {"metric": "duplicate_sku_id_rows", "value": int(df["sku_id"].duplicated(keep=False).sum()), "detail": "raw export duplication; dedupe remains a separate audited step"},
+        {"metric": "empty_title_rows", "value": int(_blank(df["sku_name_eng"]).sum()), "detail": "cannot provide title evidence"},
         {"metric": "empty_brand_rows", "value": int(_blank(df["brand"]).sum()), "detail": "cannot use brand blocking"},
-        {"metric": "barcode_present_rows", "value": int((~_blank(df["barcode"])).sum()), "detail": "raw identifier availability"},
+        {"metric": "gtin_present_rows", "value": int((~_blank(df["gtin"])).sum()), "detail": "raw identifier availability"},
         {"metric": "valid_gtin_rows", "value": valid_rows, "detail": "GS1-structurally-valid only; valid is not a claim of semantic correctness"},
         {"metric": "invalid_or_missing_gtin_rows", "value": total - valid_rows, "detail": "retained in source but cannot form GTIN-derived labels"},
         {"metric": "valid_gtin_groups", "value": int(valid_groups), "detail": "provisional canonical identities"},

@@ -393,17 +393,17 @@ and keep ONE final validation CSV. Fix the gates so they are measured on a
 population the decision did not touch.
 
 ### The blocker that was found: 74.7% of current validation is contaminated
-- `row_bc` (barcodes) and `data/labeled_pairs.csv` (gtins) looked like disjoint
+- `row_bc` (gtins) and `data/labeled_pairs.csv` (gtins) looked like disjoint
   namespaces: **intersection 0/5,428**. The training-side component split was
   structurally blind to the validation set, so neither side protected the other.
 - Root cause of the apparent disjointness is missing normalization, not two
   identifier worlds. `norm(s) = strip non-digits, zfill(14)` gives:
-  - validation gtins that ARE `row_bc` barcodes: **5,428/5,428 (100%)**
+  - validation gtins that ARE `row_bc` gtins: **5,428/5,428 (100%)**
   - positive pairs with both sides resolvable: **1,414/1,414 (100%)**
   - `row_bc` matching `dataset.gtin` (normalized): 14,901/14,921
   - raw `dataset.gtin` lengths are messy (7..14 digits), which is why the
     unnormalized join returned zero.
-- Measured contamination of the CURRENT protocol (train = barcode folds 0+1):
+- Measured contamination of the CURRENT protocol (train = gtin folds 0+1):
   - POSITIVES: both gtins in train **23.3%** / one in train **51.4%** /
     clean **25.3%** -> only 358/1,414 are clean.
   - NEGATIVES: both **24.2%** / one **49.2%** / clean **26.6%**.
@@ -441,10 +441,10 @@ population the decision did not touch.
   | pulp | 2 | 1 | 0 | 2 | ~1 | n/a |
 
 - Fold balance is already adequate and needs no stratification to fix:
-  `component_folds` gives barcodes 3730/3730/3730/3730 and base positive pairs
+  `component_folds` gives gtins 3730/3730/3730/3730 and base positive pairs
   5299/5453/5249/5372 against an ideal of 5343 (within +/-4%). Stratified
   assignment is therefore OPTIONAL here, not the fix — the leak and the
-  gtin/barcode join are the real defects. Revisit only if a slice is still thin.
+  row_bc/labeled-pairs gtin join are the real defects. Revisit only if a slice is still thin.
 
 ### Gate realignment required (the "align our gates" item)
 - `build_field_slice.py` buckets by TWIN (1 bucket per field, ~34% each from
@@ -713,7 +713,7 @@ deciding metric must be measured on a population the decision did NOT touch
 - Limit test writing: guard tests only where behavior could silently regress.
 
 ### 1. Barcode-less record linkage — OPERATIONAL, residuals documented
-- src/core/record_linkage.py + scripts/build_barcode_less_linkage.py;
+- src/core/record_linkage.py + scripts/build_gtin_less_linkage.py;
   guard tests tests/test_record_linkage.py (5). Suite 561+2 green.
 - Design (final): finalized-title comparison (SSOT build_sku_texts,
   title-side — attributes blanked, mirroring the payload title_only
@@ -754,7 +754,7 @@ deciding metric must be measured on a population the decision did NOT touch
   62-group list (~30 distinct pairs) + wire into brand blocking/veto with
   veto-asymmetry doctrine.
 - Uniqueness score: implemented as measured feature (corpus token-IDF
-  mean over finalized text; CLI emits product_id,cluster_id,uniqueness).
+  mean over finalized text; CLI emits sku_id,cluster_id,uniqueness).
   Signal direction confirmed: linked rows 4.53 vs singletons 5.77 (fuzzy
   matches concentrate on generic listings). NOT gated on it yet.
 
@@ -826,13 +826,13 @@ id (deterministic, auditable).
 - 2026-10-01 - [x] TIER 1(a) — counterpart positives for swapped negatives (DONE 2026-09-29): all 2,709 real `swap_values` hard-negative copies now reach a gradient; measured on the real bundle, 100% coverage. Mechanism: an anchor-only tran...
 - 2026-10-01 - [x] TIER 1(b) — WITHDRAWN 2026-09-29: redundant, and unsafe to "fix". The 16,345/21,373 dead masked-positive measurement is REAL, but the diet gate ALREADY accounts for it: `diet_manifest.effective_pos_views` subtracts them,...
 - 2026-10-01 - [x] Swap-copy accounting for MNRL (diet): 2,709 swap copies diet-counted as augmented views but 0% MNRL-train — ead6966 implemented the exclusion for MNRL. Diet side closed; the underlying 2,709 inert rows are now TIER 1(a)....
-- 2026-10-01 - [x] T1.5 shipped (21705f9): same retailer + same checksum-invalid barcode + same product -> collapse. 108 groups collapsed, 11 escalated.
-- 2026-10-01 - [x] T3 IDENTITY LOSS FIXED (data deletion, not noise). T3 keyed its collapse on (retailer, title) ALONE. T2 explicitly DEFERS rows whose trusted barcodes disagree, and T3 then merged them anyway: 692 groups, 1,778 rows, 1,223...
-- 2026-10-01 - [x] Verified after the fix: deduped 61,414 -> 62,963 rows; trusted barcodes present 12,986 -> 13,250; canonical products orphaned 264 -> 0; 0 trusted barcodes lost their last row (new hard invariant gate); closure 71,623 == 6...
-- 2026-10-01 - [x] New hard gate: the dedupe now REFUSES to finish if any trusted barcode present in the input is absent from the output. This failure mode is silent and unrecoverable downstream, so it must never be a report.
-- 2026-10-01 - [x] `core/product_identity.py` (new SSOT): one descriptor bundle with every field a SET, so a descriptor restated across title/attribute/category collapses to one token and cannot move a comparison. `identity_conflict` is the...
+- 2026-10-01 - [x] T1.5 shipped (21705f9): same retailer + same checksum-invalid gtin + same product -> collapse. 108 groups collapsed, 11 escalated.
+- 2026-10-01 - [x] T3 IDENTITY LOSS FIXED (data deletion, not noise). T3 keyed its collapse on (retailer, title) ALONE. T2 explicitly DEFERS rows whose trusted gtins disagree, and T3 then merged them anyway: 692 groups, 1,778 rows, 1,223...
+- 2026-10-01 - [x] Verified after the fix: deduped 61,414 -> 62,963 rows; trusted gtins present 12,986 -> 13,250; canonical products orphaned 264 -> 0; 0 trusted gtins lost their last row (new hard invariant gate); closure 71,623 == 6...
+- 2026-10-01 - [x] New hard gate: the dedupe now REFUSES to finish if any trusted gtin present in the input is absent from the output. This failure mode is silent and unrecoverable downstream, so it must never be a report.
+- 2026-10-01 - [x] `core/sku_identity.py` (new SSOT): one descriptor bundle with every field a SET, so a descriptor restated across title/attribute/category collapses to one token and cannot move a comparison. `identity_conflict` is the...
 - 2026-10-01 - [x] price / url / image_url removed from identity: `price` is a seller attribute, not a product description. T2 no longer keys on it, and representative choice uses DESCRIPTOR completeness (`descriptor_completeness`) instead...
-- 2026-10-01 - [x] `results/training/dedupe_conflicts.csv` (new): the durable review queue. Anything the descriptor bundle cannot settle is ESCALATED, not guessed — 68 proven splits + 11 unresolved across 3,504 malformed-barcode groups. "Th...
+- 2026-10-01 - [x] `results/training/dedupe_conflicts.csv` (new): the durable review queue. Anything the descriptor bundle cannot settle is ESCALATED, not guessed — 68 proven splits + 11 unresolved across 3,504 malformed-gtin groups. "Th...
 - 2026-10-01 - [x] Fixed a silently DEAD dimension: `package_material` used the regex `pack\s*material`, which compiles to `pack\s*material\s*:` and never matches the real corpus key `Pack Material Type:` — it read empty across all 35,571 n...
 - 2026-10-01 - [x] 17 new regression tests in `tests/test_dedupe_identity.py` pinning the identity partition, the T1.5 verdict table, completeness independence from price/urls, and absence-is-not-contradiction. Full suite: 586 passed, 2 ski...
 - 2026-10-01 - [x] Consolidated the per-row model composition loop (sku_info -> model_input_info -> build_sku_text) into ONE source: core.model_input.build_sku_texts(frame, structured_enabled=...) -> (texts, infos). Refactored call sites: p...

@@ -1,7 +1,7 @@
 {
   "excluded_unassigned_listings": 35119,
-  "git_revision": "50e2d5d0101b27f0dcea345ddbe5706e01742854",
-  "identity_policy_sha256": "084952a02c58ffc1bdd7e681ce4d25c4ca6fcbae3d696f325b9206d1f4821021",
+  "git_revision": "29317e5d3913b6bcac193ca8dd70ae77d566b06b",
+  "identity_policy_sha256": "0c176f054d0e66ad957f9238605d05cb7ef7ed717cfaecbcefd114b2ce52f62c",
   "labeled_pairs_sha256": "5f75706dcbcfb7c495938e638957fe86bc95f77d5e8189e54d27975228dfc25d",
   "negative_policy": "same-split labeled negatives only",
   "pair_counts": {
@@ -25,9 +25,9 @@
     "cross_split_negative": 379,
     "untrusted_identity_chain_listings": 3459
   },
-  "source_catalog_sha256": "ceb7f2d846c51c59581d495784101ffb8df56f1ebce1705ad1be971840dd4463",
+  "source_catalog_sha256": "8b2cf874879a5bf7cde51a046cd5db627f3f3874f50d8ad91271a8f083d2e74e",
   "split_protocol": "training.folds.derive_holdout",
-  "text_checkpoint": "/home/opc/ONE/ER/artifacts/models/all-MiniLM-L6-v2",
+  "text_checkpoint": "/tmp/opencode/er-rename/artifacts/models/all-MiniLM-L6-v2",
   "text_checkpoint_sha256": "a3f36d62c73027de84a628b90e8c4ae133dafb21fe4b7ede7740923b1c99ccab",
   "text_checkpoint_status": "local baseline; fine-tuning history not inferred"
 }

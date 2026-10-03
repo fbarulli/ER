@@ -37,7 +37,7 @@ def test_primed_graph_compiles_without_topology_graph_breaks():
     from graph_tracks.data import RELATIONS, tensorize
     from graph_tracks.model import AttributeGNN
     vocabulary = {r: ['a'] for r in RELATIONS}
-    batch = tensorize([{'attributes': {r: ['a'] for r in RELATIONS},
+    batch = tensorize([{'attribute': {r: ['a'] for r in RELATIONS},
                         'numeric': {}}], vocabulary, 'cpu')
     model = AttributeGNN(vocabulary, hidden=8, output=8)
     expected = model.encode(batch, model.context(batch))

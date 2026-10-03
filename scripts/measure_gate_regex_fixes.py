@@ -62,11 +62,11 @@ def snapshot(target: Path, *, label: str, chunk_rows: int) -> dict:
         for chunk in chunks:
             rows = chunk.rename(columns=mapping).fillna("").to_dict("records")
             for row in rows:
-                record = {"row_index": count, "product_id": row["product_id"]}
+                record = {"row_index": count, "sku_id": row["sku_id"]}
                 try:
                     record["extraction"] = json_ready(extract_all(
-                        row["title"], row["attributes"], row["description"], row["url"],
-                        row["image_url"], row["category_path"], row["category"]))
+                        row["sku_name_eng"], row["attribute"], row["description_short_eng"], row["sku_url"],
+                        row["image_url"], row["breadcrumbs_eng"], row["category"]))
                 except Exception as exc:
                     record["error"] = {"type": type(exc).__name__, "message": str(exc)}
                     errors[type(exc).__name__] += 1
@@ -95,7 +95,7 @@ def compare(before_path: Path, after_path: Path, target: Path) -> dict:
             raise ValueError("snapshots describe different raw source datasets")
         for old_line, new_line in zip(before, after, strict=True):
             old, new = json.loads(old_line), json.loads(new_line)
-            if (old["row_index"], old["product_id"]) != (new["row_index"], new["product_id"]):
+            if (old["row_index"], old["sku_id"]) != (new["row_index"], new["sku_id"]):
                 raise ValueError("snapshot rows are misaligned")
             checked += 1
             _extraction_census(old, before_counts, threshold)
@@ -116,12 +116,12 @@ def compare(before_path: Path, after_path: Path, target: Path) -> dict:
                 new_fields.update(key for key in moved if key not in left)
                 existing_changes += any(key in left for key in moved)
                 numeric_changes += any(key in moved for key in ("volume_ml", "pack_qty"))
-                result = {"row_index": old["row_index"], "product_id": old["product_id"],
+                result = {"row_index": old["row_index"], "sku_id": old["sku_id"],
                           "changed_fields": moved, "before": old, "after": new}
                 changes.write(json.dumps(result, ensure_ascii=False) + "\n")
                 for field in moved:
                     if len(examples.setdefault(field, [])) < 5:
-                        examples[field].append({"product_id": old["product_id"], "row_index": old["row_index"],
+                        examples[field].append({"sku_id": old["sku_id"], "row_index": old["row_index"],
                                                 "before": left.get(field), "after": right.get(field)})
     report = {"schema_version": "er.raw_extraction_delta.v1",
               "scope": "Full raw-source extraction delta. Not a frozen-gate replay or fresh canonical/gate census; changed regex fields require canonical rebuild before gate impact can be measured.",
@@ -157,8 +157,8 @@ def regression_report(fixture_path: Path, target: Path) -> dict:
     samples = []
     for sample in fixture["listings"]:
         row, expected = sample["source_row"], sample["expected_corrected"]
-        actual = json_ready(extract_all(row["title"], row["attributes"], row["description"], row["url"],
-                                       row["image_url"], row["category_path"], row["category"]))
+        actual = json_ready(extract_all(row["sku_name_eng"], row["attribute"], row["description_short_eng"], row["sku_url"],
+                                       row["image_url"], row["breadcrumbs_eng"], row["category"]))
         failed = []
         if "volume_ml" in expected and abs(actual["volume_ml"] - expected["volume_ml"]) > expected["volume_absolute_tolerance_ml"]:
             failed.append("volume_ml")
@@ -201,7 +201,7 @@ def regression_report(fixture_path: Path, target: Path) -> dict:
     target.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     lines = ["# Tracked gate/regex correction samples", "", report["scope"], "",
              "| Product ID | Status | Before volume | Current volume | Before pack | Current pack | Failed expectations |", "|---|---|---:|---:|---:|---:|---|"]
-    lines.extend(f"| {sample['product_id']} | {sample['status']} | {sample['baseline_extraction']['volume_ml']} | {sample['current_extraction']['volume_ml']} | "
+    lines.extend(f"| {sample['sku_id']} | {sample['status']} | {sample['baseline_extraction']['volume_ml']} | {sample['current_extraction']['volume_ml']} | "
                  f"{sample['baseline_extraction']['pack_qty']} | {sample['current_extraction']['pack_qty']} | {','.join(sample['failed_expectations'])} |"
                  for sample in samples)
     lines += ["", "## Frozen canonical gate regression", "", "```json", json.dumps(pairs, indent=2, ensure_ascii=False), "```", ""]

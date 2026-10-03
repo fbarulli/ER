@@ -55,9 +55,9 @@ class TrainingRegularizationTests(unittest.TestCase):
         sources = np.asarray(["gate", "gate", "attribute_conflict"], dtype=object)
         row_bc = np.asarray(["a", "b", "c", "d", "e"], dtype=object)
         kwargs = {
-            "df": pd.DataFrame({"barcode": row_bc}),
+            "df": pd.DataFrame({"gtin": row_bc}),
             "row_bc": row_bc,
-            "train_barcodes": set(row_bc),
+            "train_gtins": set(row_bc),
             "seed": 17,
             "enabled": True,
             "ratio_to_hard": 1.0,
@@ -200,9 +200,9 @@ class ValueSwapAugmentationTests(unittest.TestCase):
         self.assertAlmostEqual(float(cfg["hard_negative_swap_value_frac"]), 0.20)
         self.assertAlmostEqual(float(cfg["counterfactual_frac"]), 0.10)
 
-    def test_donor_sharing_a_barcode_is_refused(self) -> None:
+    def test_donor_sharing_a_gtin_is_refused(self) -> None:
         # The only donor with a different value is a duplicate record of the
-        # same entity (same barcode): no transplant may happen.
+        # same entity (same gtin): no transplant may happen.
         pairs = np.asarray([[0, 1], [2, 3]], dtype=int)
         out, _, _, n_added, audit = augment_value_swaps(
             pairs, self._payload(), np.asarray(["g1", "g1", "g1", "g1"], dtype=object),
@@ -312,7 +312,7 @@ class CounterfactualTwinTests(unittest.TestCase):
         train_neg = np.asarray([[2, 3], [4, 1]], dtype=int)
         hard_audit = [{
             "anchor_payload_idx": 0, "copy_payload_idx": 4,
-            "pair_payload_idx": 1, "barcode": "g1",
+            "pair_payload_idx": 1, "gtin": "g1",
             "realized_extent": 0.1, "configured_mask_lo": None,
             "configured_mask_hi": None, "mask_prob": None,
             "anchor_text": "a", "masked_text": "a-prime",
@@ -482,7 +482,7 @@ class BundleProvenanceTests(unittest.TestCase):
 
         return write_prepared_bundle(
             path,
-            df=pd.DataFrame({"product_id": ["p1", "p2"]}),
+            df=pd.DataFrame({"sku_id": ["p1", "p2"]}),
             payload=["cola water", "cola aqua", "cola canon"],
             structured_features=np.zeros((3, 4), dtype=np.float32),
             row_bc=np.asarray(["g1", "g1", "g1"], dtype=object),
@@ -622,9 +622,9 @@ class BundleProvenanceTests(unittest.TestCase):
                     _, _ = load_prepared_bundle(path)
         self.assertIn("bundle-drift", captured.getvalue())
         self.assertIn("random_easy_negatives", captured.getvalue())
-    """Transitive-closure entity IDs: pairs + shared barcodes, one cluster."""
+    """Transitive-closure entity IDs: pairs + shared gtins, one cluster."""
 
-    def test_closure_links_pairs_and_barcode_groups(self) -> None:
+    def test_closure_links_pairs_and_gtin_groups(self) -> None:
         import pandas as pd
 
         from training.masking import build_entity_cluster_map
@@ -635,10 +635,10 @@ class BundleProvenanceTests(unittest.TestCase):
         })
         pool = pd.DataFrame({
             "record_id": ["r0", "r1", "r2", "r3", "r4"],
-            "barcode": ["A", "A", "B", "C", ""],
+            "gtin": ["A", "A", "B", "C", ""],
         })
-        # r0-r1 share barcode A AND a truth pair; r2-r3 share only a truth
-        # pair; r3's barcode C is a singleton; r4's barcode is empty.
+        # r0-r1 share gtin A AND a truth pair; r2-r3 share only a truth
+        # pair; r3's gtin C is a singleton; r4's gtin is empty.
         # Extra link: r1-r2 truth pair merges everything except r4.
         truth = pd.concat(
             [truth, pd.DataFrame({"anchor_id": ["r1"], "pair_id": ["r2"]})],
@@ -679,14 +679,14 @@ class BundleProvenanceTests(unittest.TestCase):
         })
         pool = pd.DataFrame({
             "record_id": ["a", "b", "z"],
-            "barcode": ["X", "X", "Y"],
+            "gtin": ["X", "X", "Y"],
         })
         first = build_entity_cluster_map(truth, pool)
         second = build_entity_cluster_map(truth, pool)
         self.assertEqual(first, second)
 
-    def test_same_entity_different_barcodes_refuses_donation(self) -> None:
-        # Donor pair carries other barcodes but a truth pair links it into
+    def test_same_entity_different_gtins_refuses_donation(self) -> None:
+        # Donor pair carries other gtins but a truth pair links it into
         # the anchor's cluster: multi-hop duplicate, no transplant allowed.
         import pandas as pd
 
@@ -707,7 +707,7 @@ class BundleProvenanceTests(unittest.TestCase):
         })
         pool = pd.DataFrame({
             "record_id": records,
-            "barcode": ["A", "A", "B", "B"],
+            "gtin": ["A", "A", "B", "B"],
         })
         clusters = build_entity_cluster_map(truth, pool)
         self.assertEqual(len(set(clusters.values())), 1)

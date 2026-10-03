@@ -25,14 +25,14 @@ def test_explicit_retail_quantities_preserve_counts_and_source_spans(title, coun
     assert all(title[e['start']:e['end']] == e['raw_match'] for e in extract_pack_evidence(title))
 
 
-@pytest.mark.parametrize('title', [
+@pytest.mark.parametrize('sku_name_eng', [
     'Vitamin B6x daily supplement 50mg',
     '6x daily dose of vitamin 50mg',
     'Unit Count 202.80 Fl Oz',
     'Set of 6 flavors to choose from, 600ml bottle',
 ])
-def test_doses_and_option_lists_do_not_invent_packs(title):
-    assert extract_pack_from_title(title) == (1, 0.)
+def test_doses_and_option_lists_do_not_invent_packs(sku_name_eng):
+    assert extract_pack_from_title(sku_name_eng) == (1, 0.)
 
 
 def test_description_only_pack_quantity_and_cross_surface_conflict():

@@ -15,9 +15,9 @@
   "n_neg": 10923,
   "n_train_neg": 10923,
   "n_labeled_pairs_bytes": 23570,
-  "n_canonical_records_bytes": 71597231,
+  "n_canonical_records_bytes": 73323280,
   "n_gate_results_bytes": 29692886,
-  "sha256": "c039049ae8824351277fbd87362a3365cfec600d9a6df3e6ac35e5937c0318d6",
+  "sha256": "8f29abb656926339e4144a3817a1fc5312c1ad771e397fa7162ed38daf6dcb10",
   "masking_config": {
     "enabled": true,
     "profile": "baseline",

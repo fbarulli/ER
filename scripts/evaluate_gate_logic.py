@@ -44,10 +44,10 @@ def endpoint_evidence(record: dict, *, listing_limit: int) -> dict:
     extracted = []
     for index, row in enumerate(rows[:listing_limit]):
         live = extract_all(
-            str(row.get("title", "")), str(row.get("attributes", "")),
-            description=str(row.get("description", "")),
-            url=str(row.get("url", "")), image_url=str(row.get("image_url", "")),
-            category_path=str(row.get("category_path", "")),
+            str(row.get("sku_name_eng", "")), str(row.get("attribute", "")),
+            description_short_eng=str(row.get("description_short_eng", "")),
+            sku_url=str(row.get("sku_url", "")), image_url=str(row.get("image_url", "")),
+            breadcrumbs_eng=str(row.get("breadcrumbs_eng", "")),
             category=str(row.get("category", "")),
         )
         extracted.append({"listing_index": index, "current_extraction": json_ready(live)})
@@ -178,19 +178,19 @@ def wiring_inventory(endpoints: dict) -> dict:
 
     cfg = data_cfg()
     consumers = {
-        "title": "extract_all; canonical text; engine original-column reparse",
-        "attributes": "extract_all; all registered dimension parsers; engine original-column reparse",
-        "description": "extract_all; engine original-column reparse",
-        "url": "extract_all URL volume/pack/variant evidence; identity-link scope",
+        "sku_name_eng": "extract_all; canonical text; engine original-column reparse",
+        "attribute": "extract_all; all registered dimension parsers; engine original-column reparse",
+        "description_short_eng": "extract_all; engine original-column reparse",
+        "sku_url": "extract_all URL volume/pack/variant evidence; identity-link scope",
         "image_url": "extract_all image-filename evidence (not image pixels)",
-        "category_path": "extract_all category-path variant evidence",
+        "breadcrumbs_eng": "extract_all category-path variant evidence",
         "category": "extract_all category evidence",
         "brand": "canonical mode_brand and within-brand candidate grouping",
-        "barcode": "GTIN trust, identity grouping, review policy, endpoint lookup",
-        "product_id": "reviewed identity/field correction scope and listing provenance",
+        "gtin": "GTIN trust, identity grouping, review policy, endpoint lookup",
+        "sku_id": "reviewed identity/field correction scope and listing provenance",
         "retailer": "listing provenance; not a three_way_gate comparison",
         "country": "listing provenance; not a three_way_gate comparison",
-        "price": "captured commercial context; not read as gate attribute evidence",
+        "sku_last_price": "captured commercial context; not read as gate attribute evidence",
     }
     columns = []
     for key, spec in cfg.column_evidence.items():
@@ -283,8 +283,8 @@ def markdown_report(report: dict) -> str:
                                              "confidence": endpoint["confidence_and_consistency"]}, indent=2), "```", "",
                       f"All {endpoint['source_listing_count']} persisted source listings follow; live extraction evaluated {endpoint['live_extraction_listing_count']}.", ""]
             for row in endpoint["source_rows"]:
-                lines += [f"- Listing {row.get('product_id', '')} ({row.get('retailer', '')}): {row.get('title', '')}",
-                          f"  Attributes: {row.get('attributes', '')}"]
+                lines += [f"- Listing {row.get('sku_id', '')} ({row.get('retailer', '')}): {row.get('sku_name_eng', '')}",
+                          f"  Attributes: {row.get('attribute', '')}"]
             lines += ["", "```json", json.dumps({"persisted_evidence_ledger": endpoint["persisted_evidence_ledger"],
                                                    "live_listing_extractions": endpoint["live_listing_extractions"]}, indent=2), "```"]
     lines += ["", "## Source fingerprints", "", "```json", json.dumps(report.get("source_fingerprints", {}), indent=2), "```", ""]

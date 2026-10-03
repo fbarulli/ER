@@ -92,7 +92,7 @@ def main() -> None:
 
     df = load_dataset_deduped()
     payload = (
-        df["title"].fillna("")
+        df["sku_name_eng"].fillna("")
         + " | "
         + df["brand"].fillna("")
         + " | "
@@ -190,7 +190,7 @@ def main() -> None:
 
     # ---- 7. four-population score distribution (fine-tuned, if CSV exists) ----
     # 01h's "cross-country proxy" (silver, brand+category) is NOT the same as
-    # 07b's "cross-country positives" (true same-barcode ground truth); keep the
+    # 07b's "cross-country positives" (true same-gtin ground truth); keep the
     # two population names distinct so the artifacts are not confused.
     four = F["four_pop_scores"]  # SSOT name (audit round 2 F05)
     if four.exists():
@@ -241,10 +241,10 @@ def _shared_frames(df, pos):
     brand = df["brand"].fillna("").astype(str).to_numpy()
     cat = df["category"].fillna("").astype(str).to_numpy()
     macro = df["category"].fillna("").map(lambda c: MACRO_MAP.get(c, "?")).to_numpy()
-    vol = df["title"].fillna("").map(extract_volume_ml).map(lambda t: t[0]).to_numpy()
-    title_len = df["title"].fillna("").astype(str).str.len().to_numpy()
+    vol = df["sku_name_eng"].fillna("").map(extract_volume_ml).map(lambda t: t[0]).to_numpy()
+    title_len = df["sku_name_eng"].fillna("").astype(str).str.len().to_numpy()
     country = df["country"].fillna("").astype(str).to_numpy()
-    bc_arr = df["barcode"].fillna("").astype(str).to_numpy()
+    bc_arr = df["gtin"].fillna("").astype(str).to_numpy()
     return brand, cat, macro, vol, title_len, country, bc_arr
 
 
@@ -335,8 +335,8 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
     brand = df["brand"].fillna("").astype(str).to_numpy()
     cat = df["category"].fillna("").astype(str).to_numpy()
     macro = df["category"].fillna("").map(lambda c: MACRO_MAP.get(c, "?")).to_numpy()
-    vol = df["title"].fillna("").map(extract_volume_ml).map(lambda t: t[0]).to_numpy()
-    title_len = df["title"].fillna("").astype(str).str.len().to_numpy()
+    vol = df["sku_name_eng"].fillna("").map(extract_volume_ml).map(lambda t: t[0]).to_numpy()
+    title_len = df["sku_name_eng"].fillna("").astype(str).str.len().to_numpy()
     country = df["country"].fillna("").astype(str).to_numpy()
 
     def shares(pairs, mask):
@@ -435,7 +435,7 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
             }
         )
 
-    # Country slice of the positive/FN side only: cross-barcode negatives are not
+    # Country slice of the positive/FN side only: cross-gtin negatives are not
     # country-defined (a negative is two DIFFERENT products), so there is no
     # in-country vs cross-country split for the FP side — state that explicitly.
     a, b = pos[:, 0], pos[:, 1]
@@ -445,12 +445,12 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
         "pos: in-country": both_country & (ca == cb),
         "pos: cross-country": both_country & (ca != cb),
     }
-    # Entity-level n: pairs inside one barcode group are correlated, so the
-    # stable unit is the DISTINCT barcode (product), not the pair count. This is
+    # Entity-level n: pairs inside one gtin group are correlated, so the
+    # stable unit is the DISTINCT gtin (product), not the pair count. This is
     # the same few-hundred-group cross-country population as the earlier census
-    # (01g/07e: 349 multi-country barcode groups in the raw export; 292 in the
+    # (01g/07e: 349 multi-country gtin groups in the raw export; 292 in the
     # deduped frame this step consumes).
-    bc_arr = df["barcode"].fillna("").astype(str).to_numpy()
+    bc_arr = df["gtin"].fillna("").astype(str).to_numpy()
 
     def n_groups(mask):
         return int(np.unique(bc_arr[pos[mask][:, 0]]).size)
@@ -462,12 +462,12 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
             return ci.low, ci.high
         return float("nan"), float("nan")
 
-    bcs = df["barcode"].fillna("").astype(str)
+    bcs = df["gtin"].fillna("").astype(str)
     known = df[bcs.str.len() > 0]
-    multi = known[known.groupby("barcode")["retailer"].transform("nunique") > 1]
-    n_cross_groups_full = int((multi.groupby("barcode")["country"].nunique() > 1).sum())
+    multi = known[known.groupby("gtin")["retailer"].transform("nunique") > 1]
+    n_cross_groups_full = int((multi.groupby("gtin")["country"].nunique() > 1).sum())
     print(
-        "country slice (positive/FN side only; cross-barcode negatives carry no country label):",
+        "country slice (positive/FN side only; cross-gtin negatives carry no country label):",
         flush=True,
     )
     slice_fn_rates: dict[str, float] = {}
@@ -524,7 +524,7 @@ def _per_model_block(df, mkey, emb, pos, neg, shared) -> None:
         fisher_p = float("nan")
     ratio = cc["rate"] / ic["rate"] if ic["rate"] else float("nan")
     print(
-        f"  n: cross-country FN = {cc_fn_pairs} pairs on {cc['fn_groups']} barcode groups "
+        f"  n: cross-country FN = {cc_fn_pairs} pairs on {cc['fn_groups']} gtin groups "
         f"(sampled {cc['groups']} / {n_cross_groups_full} deduped multi-country groups); "
         f"in-country FN = {ic['fn_groups']} groups of {ic['groups']:,}.",
         flush=True,

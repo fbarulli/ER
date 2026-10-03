@@ -131,12 +131,12 @@ def run_grid(
         assert folds_override is not None and dev_override is not None, (
             "[hpo-grid] holdout split requires the component split's "
             "folds_override (test quarter) + dev_override (dev quarter) — "
-            "rebuilding folds over all barcodes leaks test into the sweep"
+            "rebuilding folds over all gtins leaks test into the sweep"
         )
         folds = [set(folds_override)] if isinstance(folds_override, (set, frozenset)) else list(folds_override)
         print(
             f"[hpo-grid] holdout selection: {len(folds)} test fold(s), "
-            f"dev_override={len(dev_override):,} barcodes — per-config "
+            f"dev_override={len(dev_override):,} gtins — per-config "
             f"test eval SKIPPED (test read exactly once)",
             flush=True,
         )
@@ -312,7 +312,7 @@ def run_tpe(
 
     Holdout split (test-leak fix, 2026-09-12): the component split's
     boundary (folds_override=test quarter, dev_override=q2) replaces the
-    old all-barcode CV folds + per-fold rng carve — trials train q0+q1,
+    old all-gtin CV folds + per-fold rng carve — trials train q0+q1,
     rank on calibration Rand, never see a test-side metric.
 
     Masking: applied ONCE by the entry lane BEFORE the zero-shot encode
@@ -332,24 +332,24 @@ def run_tpe(
     _holdout = getattr(args, "split", None) == "holdout"
     if _holdout:
         # NO FALLBACK (owner Q27): holdout without the explicit boundary is
-        # a wiring error — defaulting to all-barcode CV folds would put the
-        # test quarter's barcodes in the trials' train/dev sides (the leak
+        # a wiring error — defaulting to all-gtin CV folds would put the
+        # test quarter's gtins in the trials' train/dev sides (the leak
         # this fix closes).
         assert folds_override is not None and dev_override is not None, (
             "[hpo-tpe] holdout split requires the component split's "
             "folds_override (test quarter) + dev_override (dev quarter) — "
-            "rebuilding folds over all barcodes leaks test into the sweep"
+            "rebuilding folds over all gtins leaks test into the sweep"
         )
         folds = [set(folds_override)] if isinstance(folds_override, (set, frozenset)) else list(folds_override)
         print(
             f"[hpo-tpe] holdout selection: {len(folds)} test fold(s), "
-            f"dev_override={len(dev_override):,} barcodes — per-trial "
+            f"dev_override={len(dev_override):,} gtins — per-trial "
             f"test eval SKIPPED (test read exactly once)",
             flush=True,
         )
     else:
         # cv: the component fold list from the main lane (masking appends
-        # same-barcode payload entries, so the passed boundary stays valid)
+        # same-gtin payload entries, so the passed boundary stays valid)
         folds = folds_override
     # masking provenance (same discipline as run_grid): the entry lane
     # applied the augmentation once, pre-encode; no re-augment here.
@@ -363,7 +363,7 @@ def run_tpe(
     # component folds (dev_override=None there -> the same per-fold rng
     # carve the main cv lane uses). run_hpo ->
     # train_one_config(folds_override=None) would rebuild folds over ALL
-    # barcodes — q3 included — and the sweep would train on the test
+    # gtins — q3 included — and the sweep would train on the test
     # quarter; the assert above is what keeps that from happening quietly.
     run_hpo(
         args,

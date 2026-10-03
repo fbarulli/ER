@@ -6,11 +6,11 @@ A brand string in isolation does not establish the correct brand.  This script
 therefore corroborates each side's claimed brand from independent features
 before it classifies anything:
 
-* **GTIN co-listing brands** — every dataset listing sharing the side's barcode,
+* **GTIN co-listing brands** — every dataset listing sharing the side's gtin,
   and the distribution of brand fields across them.  A retailer's brand field
-  disagreeing with every other listing for the same barcode is evidence that
+  disagreeing with every other listing for the same gtin is evidence that
   field is wrong.
-* **GTIN identity between the two sides** — when the source barcode equals the
+* **GTIN identity between the two sides** — when the source gtin equals the
   target GTIN the two sides are the same product, so disagreeing brand fields
   are a defect by construction.
 * **The product name** — whether the claimed brand actually appears in the
@@ -505,7 +505,7 @@ def classify_pair(
     if verifier.surface_variant_only(source.claim, target.claim):
         return BrandClass.SAME_BRAND_SURFACE_VARIANT, "token order / corporate form only"
 
-    # Same barcode on both sides means the same product; disagreeing brand
+    # Same gtin on both sides means the same product; disagreeing brand
     # fields would then be a defect.  Measured zero times in this population,
     # so the branch is kept as the invariant it is rather than assumed away.
     if source_gtin and source_gtin == target_gtin:
@@ -603,25 +603,25 @@ def resolve_thresholds() -> tuple[dict[str, float], list[ThresholdOrigin], bool]
 def build_gtin_index(source: pd.DataFrame) -> tuple[dict[str, Counter], dict[str, int]]:
     """Brand distribution per GTIN, and corpus support per brand key.
 
-    The barcode column holds missing values as NaN, so ``metadata_text`` reads
+    The gtin column holds missing values as NaN, so ``metadata_text`` reads
     it the same way the composition does rather than stringifying NaN into a
-    fake barcode.
+    fake gtin.
     """
     frame = source.assign(
-        __barcode=source["barcode"].map(metadata_text),
+        __gtin=source["gtin"].map(metadata_text),
         __brand_key=source["brand"].map(compact_brand_key),
     )
-    with_barcode = frame[frame["__barcode"] != ""]
+    with_gtin = frame[frame["__gtin"] != ""]
     groups = {
         str(gtin): Counter(group["brand"].map(metadata_text))
-        for gtin, group in with_barcode.groupby("__barcode")
+        for gtin, group in with_gtin.groupby("__gtin")
     }
     return groups, frame["__brand_key"].value_counts().to_dict()
 
 
 def brand_token_doc_fraction(source: pd.DataFrame) -> dict[str, float]:
     """Share of corpus product names containing each token (generic-word test)."""
-    token_sets = [set(normalized_attribute_text(title).split()) for title in source["title"]]
+    token_sets = [set(normalized_attribute_text(title).split()) for title in source["sku_name_eng"]]
     total = len(token_sets) or 1
     counts: Counter = Counter()
     for tokens in token_sets:
@@ -755,7 +755,7 @@ def main() -> None:
     review["NEAREST_ITEM_ID"] = review["NEAREST_ITEM_ID"].astype(str)
 
     source = load_dataset()
-    source_by_id = source.drop_duplicates("product_id").set_index("product_id")
+    source_by_id = source.drop_duplicates("sku_id").set_index("sku_id")
     records = canonical_records_frame()
     records["gtin"] = records["gtin"].astype(str)
     indexed = records.set_index("gtin")
@@ -783,7 +783,7 @@ def main() -> None:
         target_record = target_records[index]
         source_claim = metadata_text(source_row["brand"])
         target_claim = metadata_text(target_record.get("mode_brand"))
-        source_gtin = metadata_text(source_row["barcode"])
+        source_gtin = metadata_text(source_row["gtin"])
         target_gtin = str(row["NEAREST_ITEM_ID"])
 
         # Independence, stated rather than assumed:
@@ -794,7 +794,7 @@ def main() -> None:
         #    nor the title check can independently falsify it.
         source_ev = verifier.verify(
             side=Side.SOURCE, claim=source_claim, gtin=source_gtin,
-            name_text=metadata_text(source_row["title"]),
+            name_text=metadata_text(source_row["sku_name_eng"]),
             gtin_check_independent=True, title_check_independent=True,
         )
         target_ev = verifier.verify(

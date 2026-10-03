@@ -52,7 +52,7 @@ def sweetener_type_evidence(raw: str) -> list[dict[str, object]]:
                 continue
             start = item.start(2) + part.start() + len(part.group()) - len(part.group().lstrip())
             observations.append({
-                "source_column": "attributes",
+                "source_column": "attribute",
                 "source_field": "sweetener",
                 "raw_span": [start, start + len(part.group().strip())],
                 "surface": part.group().strip(),
@@ -79,7 +79,7 @@ def declared_flavor_evidence(raw: str) -> list[dict[str, object]]:
             value = " ".join(FLAVOR_ALIASES.get(token, token) for token in value.split())
             start = item.start(2) + part.start() + len(part.group()) - len(part.group().lstrip())
             observations.append({
-                "source_column": "attributes",
+                "source_column": "attribute",
                 "source_field": "flavor",
                 "raw_span": [start, start + len(surface)],
                 "surface": surface,
@@ -133,7 +133,7 @@ def semantic_profile(title: str, attributes: str, numeric_captures: list[dict[st
         unit_match = re.search(r"(%|mg|ml|g|l)\s*$", surface, re.IGNORECASE)
         field_key = str(item["attribute_field"]).casefold()
         observations.append({
-            "source_column": "attributes",
+            "source_column": "attribute",
             "source_field": field_key,
             "raw_span": [item["start"], item["end"]],
             "surface": surface,
@@ -165,7 +165,7 @@ def semantic_profile(title: str, attributes: str, numeric_captures: list[dict[st
         "typed_evidence": [*sweetener_evidence, *flavor_evidence],
         "numeric_observations": observations,
         "lexical_only_claims": [
-            {"source_column": "title", "surface": item["matched_text"],
+            {"source_column": "sku_name_eng", "surface": item["matched_text"],
              "normalized_span": [item["start"], item["end"]],
              "candidate_slot": "natural_claim", "status": "lexical_only",
              "swap_eligible": False}
@@ -177,7 +177,7 @@ def semantic_profile(title: str, attributes: str, numeric_captures: list[dict[st
 
 def model_payload_review(row: dict[str, str]) -> dict[str, object]:
     """Build the exact active SKU payload and compare it to audit-only dedup."""
-    info = model_input_info(sku_info(row["title"], row["attributes"]))
+    info = model_input_info(sku_info(row["sku_name_eng"], row["attribute"]))
     payload = build_sku_text(pd.Series(row), info)
     plain = [token for token in payload.split() if "_" not in token and not token.startswith("[FIELD_")]
     repeated = {token: count for token, count in Counter(plain).items() if count > 1}
@@ -228,7 +228,7 @@ def main() -> None:
     parser.add_argument("--inspect-product-id", help="Write a small per-product attribute capture JSON")
     parser.add_argument("--inspect-out", type=Path, help="Destination for --inspect-product-id")
     args = parser.parse_args()
-    if bool(args.inspect_product_id) != bool(args.inspect_out):
+    if bool(args.inspect_sku_id) != bool(args.inspect_out):
         parser.error("--inspect-product-id and --inspect-out must be provided together")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
@@ -244,11 +244,11 @@ def main() -> None:
         "w", newline="", encoding="utf-8"
     ) as destination:
         reader = csv.DictReader(source)
-        required = {"product_id", *FIELDS}
+        required = {"sku_id", *FIELDS}
         if not required.issubset(reader.fieldnames or []):
             raise ValueError(f"missing SKU input columns: {sorted(required - set(reader.fieldnames or []))}")
         writer = csv.DictWriter(destination, fieldnames=(
-            "product_id", "source_column", "capture_type", "matched_text", "start", "end",
+            "sku_id", "source_column", "capture_type", "matched_text", "start", "end",
             "original_text", "span_basis", "capture_origin", "integration_status",
         ))
         writer.writeheader()
@@ -258,9 +258,9 @@ def main() -> None:
                 original = row[field]
                 text = normalize_text(original)
                 field_captures = captures(text, field)
-                if field == "title" and row["product_id"] == args.inspect_product_id:
+                if field == "sku_name_eng" and row["sku_id"] == args.inspect_sku_id:
                     inspected = {
-                        "product_id": row["product_id"],
+                        "sku_id": row["sku_id"],
                         "title_original": original,
                         "title_normalized": text,
                         "title_lexical_regex_captures": [
@@ -274,9 +274,9 @@ def main() -> None:
                             for number in NUMBER_VALUE_RE.finditer(original)
                         ],
                     }
-                if field == "attributes" and row["product_id"] == args.inspect_product_id:
+                if field == "attribute" and row["sku_id"] == args.inspect_sku_id:
                     if inspected is None:
-                        inspected = {"product_id": row["product_id"]}
+                        inspected = {"sku_id": row["sku_id"]}
                     inspected.update({
                         "attributes_original": original,
                         "attributes_normalized": text,
@@ -289,7 +289,7 @@ def main() -> None:
                         "note": "Lexical and numeric spans are evidence, not necessarily accepted structured parser values. Raw numeric spans preserve units and percent signs lost during normalize_text.",
                     })
                     inspected["semantic_profile"] = semantic_profile(
-                        row["title"], original, inspected["raw_numeric_captures"],
+                        row["sku_name_eng"], original, inspected["raw_numeric_captures"],
                         inspected.get("title_lexical_regex_captures", []),
                     )
                     inspected["model_payload_review"] = model_payload_review(row)
@@ -297,11 +297,11 @@ def main() -> None:
                     key = (field, label, phrase)
                     counts[key] += 1
                     field_counts[field] += 1
-                    product_id = row["product_id"]
-                    if product_id not in examples[key] and len(examples[key]) < 5:
-                        examples[key].append(product_id)
+                    sku_id = row["sku_id"]
+                    if sku_id not in examples[key] and len(examples[key]) < 5:
+                        examples[key].append(sku_id)
                     writer.writerow({
-                        "product_id": product_id, "source_column": field,
+                        "sku_id": sku_id, "source_column": field,
                         "capture_type": label, "matched_text": phrase,
                         "start": start, "end": end, "original_text": original,
                         "span_basis": "normalized", "capture_origin": "live_regex",
@@ -313,9 +313,9 @@ def main() -> None:
                 for item in csv.DictReader(review_source):
                     start, end = int(item["raw_start"]), int(item["raw_end"])
                     if item["original_text"][start:end] != item["surface"]:
-                        raise ValueError(f"invalid review source span: {item['product_id']}")
+                        raise ValueError(f"invalid review source span: {item['sku_id']}")
                     writer.writerow({
-                        "product_id": item["product_id"],
+                        "sku_id": item["sku_id"],
                         "source_column": item["source_column"],
                         "capture_type": f"candidate_{item['capture_class']}",
                         "matched_text": item["surface"], "start": start, "end": end,
@@ -343,7 +343,7 @@ def main() -> None:
         "groups_by_field": {
             field: [
                 {"capture_type": category, "matched_text": phrase, "count": count,
-                 "example_product_ids": examples[(source_col, category, phrase)]}
+                 "example_sku_ids": examples[(source_col, category, phrase)]}
                 for (source_col, category, phrase), count in sorted(
                     ((key, value) for key, value in counts.items() if key[0] == field),
                     key=lambda item: (-item[1], item[0]),
@@ -357,21 +357,21 @@ def main() -> None:
     args.attributes_summary.parent.mkdir(parents=True, exist_ok=True)
     args.attributes_summary.write_text(json.dumps({
         "rows_scanned": rows,
-        "capture_spans": field_counts["attributes"],
-        "distinct_groups": len(summary["groups_by_field"]["attributes"]),
-        "groups": summary["groups_by_field"]["attributes"],
+        "capture_spans": field_counts["attribute"],
+        "distinct_groups": len(summary["groups_by_field"]["attribute"]),
+        "groups": summary["groups_by_field"]["attribute"],
     }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     args.summary.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if args.inspect_out:
         if inspected is None:
-            raise ValueError(f"product_id not found: {args.inspect_product_id}")
+            raise ValueError(f"sku_id not found: {args.inspect_sku_id}")
         args.inspect_out.parent.mkdir(parents=True, exist_ok=True)
         args.inspect_out.write_text(json.dumps(inspected, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"rows={rows:,} detail={args.out} summary={args.summary}")
     for field in FIELDS:
         print(f"\n{field}: {field_counts[field]:,} nonoverlapping captured spans")
         for item in summary["groups_by_field"][field][:15]:
-            print(f"{item['count']:>7,}  {item['capture_type']:<25} {item['matched_text']:<35} ids={','.join(item['example_product_ids'][:3])}")
+            print(f"{item['count']:>7,}  {item['capture_type']:<25} {item['matched_text']:<35} ids={','.join(item['example_sku_ids'][:3])}")
 
 
 if __name__ == "__main__":

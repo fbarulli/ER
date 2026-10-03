@@ -1,14 +1,14 @@
 """record_linkage.py — reusable entity clustering for rows with no valid GTIN.
 
-Barcodes assert identity only when GS1-checksum VALID (owner ruling, shared
-with core.blocking). Rows with no usable barcode are invisible to the GTIN
+GTINs assert identity only when GS1-checksum VALID (owner ruling, shared
+with core.blocking). Rows with no usable gtin are invisible to the GTIN
 identity model; this module links them into entity clusters using brand +
 normalized-title blocking, so the same product listed by different retailers
-can be grouped without a shared barcode.
+can be grouped without a shared gtin.
 
 Match rule (high-precision, cross-source only):
-  - consider only rows without a valid GS1 barcode (missing, malformed, or
-    checksum-invalid barcodes all have unknown identity),
+  - consider only rows without a valid GS1 gtin (missing, malformed, or
+    checksum-invalid gtins all have unknown identity),
   - block by normalized brand (core.text.normalize_retailer handles the
     retailer identity; brand blocks use the same case/accent fold),
   - link two rows ONLY when they come from DIFFERENT retailers (a same-
@@ -30,7 +30,7 @@ The fuzzy weighting is block-local IDF over the SSOT word-set Jaccard
 (pipeline.jaccard_similarity's set logic, reweighted) — no duplicate
 similarity definition lives elsewhere.
 
-Reusable: the linkage logic (link_barcode_less) is importable so other
+Reusable: the linkage logic (link_gtin_less) is importable so other
 lanes/scripts can consume the same rule without re-implementing it.
 """
 
@@ -43,7 +43,7 @@ from collections import Counter, defaultdict
 import pandas as pd
 
 from core.columns import alias_names
-from core.gtin import barcode_validity
+from core.gtin import gtin_validity
 from core.text import normalize_retailer
 from pipeline import normalize_text
 
@@ -82,7 +82,7 @@ def strip_pack_multiplicity(text: str) -> str:
 
     Returns the text with unambiguous pack-count markers removed so the
     remaining string captures product identity (brand, flavor, size) without
-    pack-size noise. Used by link_barcode_less before similarity so pack
+    pack-size noise. Used by link_gtin_less before similarity so pack
     variants of the same product link while distinct flavors stay separate.
     """
     out = _PACK_MULTI_RE.sub(" ", text)
@@ -148,8 +148,8 @@ def finalized_texts(
     if not include_attributes:
         frame = df.copy()
         for column in (
-            *alias_names("attributes"),
-            *alias_names("description"),
+            *alias_names("attribute"),
+            *alias_names("description_short_eng"),
         ):
             if column in frame.columns:
                 frame[column] = ""
@@ -173,7 +173,7 @@ def corpus_idf_from_finalized(finalized: pd.Series) -> tuple[dict[str, float], f
 
 
 def corpus_idf(
-    df: pd.DataFrame, title_col: str = "title", *, finalized: pd.Series | None = None
+    df: pd.DataFrame, title_col: str = "sku_name_eng", *, finalized: pd.Series | None = None
 ) -> tuple[dict[str, float], float]:
     """Corpus-level token IDF over every row's finalized text.
 
@@ -195,7 +195,7 @@ def item_uniqueness_from_tokens(
 
 
 def item_uniqueness(
-    df: pd.DataFrame, title_col: str = "title", *, finalized: pd.Series | None = None
+    df: pd.DataFrame, title_col: str = "sku_name_eng", *, finalized: pd.Series | None = None
 ) -> dict[int, float]:
     """Per-row uniqueness score (corpus token-IDF mean) for EVERY row.
 
@@ -244,7 +244,7 @@ def _brand_family_key(series: pd.Series) -> pd.Series:
     pre-alias block key for every alias-free cell, so plain ("Goat Fuel" vs
     "Goa Fuel") blocking is unchanged.
 
-    ONE SSOT call (`core.product_identity.normalize_brand`) plus a blank
+    ONE SSOT call (`core.sku_identity.normalize_brand`) plus a blank
     guard, no new normalization: rows with no brand at all must still stay
     OUT of every block (the candidates filter empties on `_nb`, and an empty
     fold must never collapse them into one shared block), so the pre-fold
@@ -257,13 +257,13 @@ def _brand_family_key(series: pd.Series) -> pd.Series:
     candidate pairs — and the link rule (different retailer + IDF-weighted
     Jaccard + average-linkage) still has to pass; blocking asserts nothing.
 
-    Imported INSIDE the closure: `core.product_identity` imports this
+    Imported INSIDE the closure: `core.sku_identity` imports this
     module's ``strip_pack_multiplicity`` at module level, so a module-level
     import here would make the two modules mutually unimportable no matter
-    which module the entry import reaches first. `product_identity`'s own
-    import bar (``_barcode_facts``) is a deferral for exactly this shape.
+    which module the entry import reaches first. `sku_identity`'s own
+    import bar (``_gtin_facts``) is a deferral for exactly this shape.
     """
-    from core.product_identity import brand_aliases, normalize_brand
+    from core.sku_identity import brand_aliases, normalize_brand
 
     family_tokens = frozenset(brand_aliases().values())
 
@@ -283,37 +283,37 @@ def _norm_retailer(series: pd.Series) -> pd.Series:
     return series.where(series.notna(), "").map(normalize_retailer)
 
 
-def link_barcode_less(
+def link_gtin_less(
     df: pd.DataFrame,
     *,
     jaccard_threshold: float = DEFAULT_JACCARD_THRESHOLD,
-    title_col: str = "title",
+    title_col: str = "sku_name_eng",
     brand_col: str = "brand",
-    barcode_col: str = "barcode",
+    gtin_col: str = "gtin",
     retailer_col: str = "retailer",
     finalized: pd.Series | None = None,
 ) -> tuple[dict[int, str], dict]:
     """Return (row_index -> cluster_id, census) for rows without valid GTINs.
 
     The returned map is keyed by the ORIGINAL row index so callers can join
-    back onto the source frame. Rows with a checksum-valid barcode are
-    excluded; missing, malformed, and checksum-invalid barcode rows are
+    back onto the source frame. Rows with a checksum-valid gtin are
+    excluded; missing, malformed, and checksum-invalid gtin rows are
     clustered. Every such row lands in a cluster (single rows form
     singleton clusters).
     """
     if not 0.0 <= jaccard_threshold <= 1.0:
         raise ValueError("jaccard_threshold must be between 0 and 1")
     missing = [
-        c for c in (title_col, brand_col, barcode_col, retailer_col) if c not in df
+        c for c in (title_col, brand_col, gtin_col, retailer_col) if c not in df
     ]
     if missing:
         raise KeyError(f"missing required linkage columns: {', '.join(missing)}")
     if not df.index.is_unique:
-        raise ValueError("link_barcode_less requires a unique dataframe index")
+        raise ValueError("link_gtin_less requires a unique dataframe index")
 
-    barcodes = df[barcode_col].fillna("").astype(str).str.strip()
-    valid_barcode = barcode_validity(barcodes)
-    no_bc = df[~valid_barcode].copy()
+    gtins = df[gtin_col].fillna("").astype(str).str.strip()
+    valid_gtin = gtin_validity(gtins)
+    no_bc = df[~valid_gtin].copy()
     if no_bc.empty:
         return {}, _empty_census(0, jaccard_threshold)
     # Finalized model-input text (SSOT core.model_input.build_sku_texts) with
@@ -322,7 +322,7 @@ def link_barcode_less(
     if finalized is None:
         finalized = finalized_texts(df)
     no_bc["_nts"] = finalized.loc[no_bc.index].map(strip_pack_multiplicity)
-    # Brand blocks run on the product_identity SSOT alias-family key (see
+    # Brand blocks run on the sku_identity SSOT alias-family key (see
     # `_brand_block_key`), so alias siblings ("A SHOC"/"Accelerator") land in
     # ONE block and stay reachable for candidate generation.
     no_bc["_nb"] = _brand_family_key(no_bc[brand_col])
@@ -521,7 +521,7 @@ def link_barcode_less(
         return sum(values) / len(values) if values else 0.0
 
     census = {
-        "barcode_less_rows": int(len(no_bc)),
+        "gtin_less_rows": int(len(no_bc)),
         "clustered_rows": int(len(cluster_id)),
         "unclustered_single_rows": int(
             sum(1 for v in clusters.values() if len(v) == 1)
@@ -553,7 +553,7 @@ def link_barcode_less(
 
 def _empty_census(n_rows: int, jaccard_threshold: float) -> dict:
     return {
-        "barcode_less_rows": int(n_rows),
+        "gtin_less_rows": int(n_rows),
         "clustered_rows": 0,
         "unclustered_single_rows": 0,
         "num_clusters": 0,

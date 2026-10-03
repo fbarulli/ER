@@ -48,11 +48,11 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 
 
 class Fixture:
-    """A tiny payload with ONE genuinely multi-barcode component.
+    """A tiny payload with ONE genuinely multi-gtin component.
 
     Layout mirrors the real one: source rows first, then one canonical per
     GTIN.  ``g000``/``g001`` are linked by positive-pair edges in BOTH
-    directions so they share a component; every other barcode is a singleton.
+    directions so they share a component; every other gtin is a singleton.
     The candidate universe (190 canonicals) is wider than the query set, so a
     full ``competitors_per_query((1, 5, 10)) == 99`` pool fits.
     """
@@ -70,7 +70,7 @@ class Fixture:
         self.row_bc = np.asarray(self.row_bc, dtype=object)
         canon = np.arange(n_source, 2 * n_source, dtype=int)
         pairs = [[i, int(canon[i])] for i in range(n_source)]
-        # link g000 <-> g001 into ONE two-barcode component
+        # link g000 <-> g001 into ONE two-gtin component
         pairs.append([0, int(canon[1])])
         pairs.append([1, int(canon[0])])
         self.pos = np.asarray(pairs, dtype=int)
@@ -151,7 +151,7 @@ class PoolContractTests(unittest.TestCase):
     def test_competitors_never_come_from_the_query_own_component(self) -> None:
         """FOLD SAFETY: the component is the unit the split deals out."""
         fixture = Fixture()
-        # g000 and g001 share a two-barcode component; query both of them plus
+        # g000 and g001 share a two-gtin component; query both of them plus
         # singletons, and let every canonical be a candidate.
         rows = list(range(12))
         pool = pool_for(fixture, rows, n=20)
@@ -168,7 +168,7 @@ class PoolContractTests(unittest.TestCase):
             "a competitor shares the query's component — the pool is not "
             "fold-safe and a positive relationship could cross it",
         )
-        # and the component really is wider than one barcode, or the assertion
+        # and the component really is wider than one gtin, or the assertion
         # above would be vacuous
         self.assertEqual(int(np.unique(fixture.component[:2]).size), 1)
         self.assertNotEqual(int(fixture.component[0]), int(fixture.component[2]))
@@ -188,10 +188,10 @@ class PoolContractTests(unittest.TestCase):
         excluded = frozenset(
             {("g002", "x000"), ("x000", "g002")}
         )
-        pool = pool_for(fixture, rows, n=15, excluded_barcode_pairs=excluded)
-        barcodes = [str(b) for b in fixture.row_bc]
+        pool = pool_for(fixture, rows, n=15, excluded_gtin_pairs=excluded)
+        gtins = [str(b) for b in fixture.row_bc]
         pairs = {
-            (barcodes[int(a)], barcodes[int(b)])
+            (gtins[int(a)], gtins[int(b)])
             for (a, b), label in zip(pool.pairs, pool.labels, strict=True)
             if label == 0
         }
@@ -204,10 +204,10 @@ class PoolContractTests(unittest.TestCase):
         """The LIVE shape: every positive is (row, its OWN canonical).
 
         ``pipeline.build_training_data`` emits positives that link a row to the
-        canonical of its own barcode, so on real data the positive-pair graph
-        has no cross-barcode edge at all and every component is a singleton.
+        canonical of its own gtin, so on real data the positive-pair graph
+        has no cross-gtin edge at all and every component is a singleton.
         The own-component rule must still exclude the query's own canonical
-        (it shares the barcode) and every query must still get N competitors.
+        (it shares the gtin) and every query must still get N competitors.
         """
         n = 40
         row_bc = np.asarray(
@@ -390,7 +390,7 @@ class PoolDeterminismTests(unittest.TestCase):
                 competitor_rows=np.arange(n, 2 * n + 20, dtype=int),
                 row_component=component, row_bc=row_bc,
                 n_competitors=12, seed=17, ks=(1, 5, 10),
-                excluded_barcode_pairs={("g002", "x000"), ("x000", "g002")},
+                excluded_gtin_pairs={("g002", "x000"), ("x000", "g002")},
             )
             digest = hashlib.sha256()
             digest.update(pool.pairs.tobytes())
@@ -420,7 +420,7 @@ class PoolDeterminismTests(unittest.TestCase):
         fixture = Fixture()
         first = component_index(fixture.pos, fixture.row_bc)
         shuffled = component_index(fixture.pos[::-1], fixture.row_bc)
-        # labels are ids of the smallest barcode in each component: stable
+        # labels are ids of the smallest gtin in each component: stable
         np.testing.assert_array_equal(first, shuffled)
         np.testing.assert_array_equal(
             first, component_index(fixture.pos, list(fixture.row_bc))
@@ -430,7 +430,7 @@ class PoolDeterminismTests(unittest.TestCase):
         self.assertNotEqual(first[0], first[2])
         self.assertEqual(int(np.unique(first[:2]).size), 1)
 
-    def test_component_index_ignores_blank_barcodes(self) -> None:
+    def test_component_index_ignores_blank_gtins(self) -> None:
         row_bc = np.asarray(["g1", "", "g1"], dtype=object)
         pos = np.asarray([[0, 2]], dtype=int)
         ids = component_index(pos, row_bc)

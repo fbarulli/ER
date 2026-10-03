@@ -12,10 +12,10 @@ from cli import colab
 def fixture_setup(tmp_path, *, overlapping=False):
     setup = tmp_path / 'setup'
     (setup / 'prepared').mkdir(parents=True)
-    catalog = pd.DataFrame({'product_id': ['a', 'b', 'c'],
-                            'barcode': ['111', '111' if overlapping else '222', '333']})
+    catalog = pd.DataFrame({'sku_id': ['a', 'b', 'c'],
+                            'gtin': ['111', '111' if overlapping else '222', '333']})
     catalog.to_csv(setup / 'eligible_catalog.csv', index=False)
-    pd.DataFrame({'product_id': ['a', 'b', 'c'],
+    pd.DataFrame({'sku_id': ['a', 'b', 'c'],
                   'split': ['train', 'dev', 'test']}).to_csv(setup / 'listing_splits.csv', index=False)
     digest = hashlib.sha256((setup / 'eligible_catalog.csv').read_bytes()).hexdigest()
     (setup / 'prepared/input_manifest.json').write_text(json.dumps({'catalog_sha256': digest}))
@@ -29,9 +29,9 @@ def test_materialized_holdout_contains_only_shared_dev_test(tmp_path):
          patch('model_tracks.preflight.preflight', return_value={}), \
          patch('core.identity_policy.reviewed_row_mask', side_effect=lambda df: pd.Series(False, index=df.index)):
         sources = colab._legacy_validation_sources()
-    assert set(pd.read_csv(sources['training']).product_id) == {'a'}
-    assert set(pd.read_csv(sources['sample']).product_id) == {'b', 'c'}
-    assert set(pd.read_csv(sources['source']).product_id) == {'a', 'b', 'c'}
+    assert set(pd.read_csv(sources['training']).sku_id) == {'a'}
+    assert set(pd.read_csv(sources['sample']).sku_id) == {'b', 'c'}
+    assert set(pd.read_csv(sources['source']).sku_id) == {'a', 'b', 'c'}
 
 
 def test_component_entity_overlap_fails_before_materialization(tmp_path):
@@ -69,5 +69,5 @@ def test_parallel_materializers_use_independent_temporary_files(tmp_path):
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = list(executor.map(lambda _: colab._legacy_validation_sources(), range(2)))
     assert results[0] == results[1]
-    assert set(pd.read_csv(results[0]['sample']).product_id) == {'b', 'c'}
+    assert set(pd.read_csv(results[0]['sample']).sku_id) == {'b', 'c'}
     assert not list((tmp_path / 'results').rglob('*.tmp'))

@@ -105,16 +105,16 @@ def test_source_structured_pack_defaults_to_singleton_when_count_is_unknown() ->
 
 
 @pytest.mark.parametrize(
-    ("title", "attributes", "expected_pack"),
+    ("sku_name_eng", "attribute", "expected_pack"),
     [
         ("Sparkling water 12-pack", "", 12.0),
         ("Sparkling water", "Count per Unit: 6", 6.0),
     ],
 )
 def test_source_structured_pack_preserves_explicit_counts(
-    title: str, attributes: str, expected_pack: float
+    sku_name_eng: str, attribute: str, expected_pack: float
 ) -> None:
-    assert sku_info(title, attributes)["pack"] == {expected_pack}
+    assert sku_info(sku_name_eng, attribute)["pack"] == {expected_pack}
 
 
 def test_structured_tokens_are_canonical_before_encoder_input() -> None:
@@ -206,7 +206,7 @@ def test_structured_field_markers_are_grouped_and_deterministic() -> None:
 
 
 @pytest.mark.parametrize(
-    ("title", "expected_volume_ml", "expected_pack", "expected_package_type"),
+    ("sku_name_eng", "expected_volume_ml", "expected_pack", "expected_package_type"),
     [
         ("Cock n Bull Ginger Beer 12 Pack 12oz Soda Cans", 355.0, 12, "can"),
         ("Cock n Bull Ginger Beer 12 Pack 12oz Soda Bottles", 355.0, 12, "bottle"),
@@ -217,12 +217,12 @@ def test_structured_field_markers_are_grouped_and_deterministic() -> None:
     ],
 )
 def test_fold_zero_title_attributes_reach_structured_scoring(
-    title: str,
+    sku_name_eng: str,
     expected_volume_ml: float,
     expected_pack: int,
     expected_package_type: str | None,
 ) -> None:
-    extracted = extract_all(title, "")
+    extracted = extract_all(sku_name_eng, "")
     assert extracted["volume_ml"] == expected_volume_ml
     assert extracted["pack_qty"] == expected_pack
     if expected_pack == 1:

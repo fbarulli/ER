@@ -54,9 +54,9 @@ def preflight(config: Path) -> dict:
     roles = {normalize_gtin(key): split for split, values in
              [('train', train), ('dev', dev), ('test', test)] for key in values}
     catalog = pd.read_csv(root / 'eligible_catalog.csv', dtype=str, keep_default_na=False, low_memory=False)
-    splits = pd.read_csv(root / 'listing_splits.csv', dtype=str).set_index('product_id').split
+    splits = pd.read_csv(root / 'listing_splits.csv', dtype=str).set_index('sku_id').split
     for row in catalog.itertuples(index=False):
-        if roles.get(normalize_gtin(row.barcode)) != splits[row.product_id]:
+        if roles.get(normalize_gtin(row.gtin)) != splits[row.sku_id]:
             raise ValueError('text/graph prepared split mismatch')
     from core.identity_policy import reviewed_row_mask
     if reviewed_row_mask(bundle['df']).any():

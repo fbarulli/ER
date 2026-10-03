@@ -1,22 +1,22 @@
 """folds.py — connected-component folds over the positive-pair graph
 The problem with random splitting
-If you just randomly assign each pair to training or testing, the same product (same barcode) might end up in both sets (data leakage).
+If you just randomly assign each pair to training or testing, the same product (same gtin) might end up in both sets (data leakage).
 
-The problem with splitting by barcode
-If you split by barcode, those two barcodes could land in different folds, and the pair gets broken — you lose training/testing examples.
+The problem with splitting by gtin
+If you split by gtin, those two gtins could land in different folds, and the pair gets broken — you lose training/testing examples.
 
 The connected‑component solution
-Imagine drawing a line (edge) between two barcodes every time they appear together in a positive pair. Some barcodes link directly, and through a chain of links they
+Imagine drawing a line (edge) between two gtins every time they appear together in a positive pair. Some gtins link directly, and through a chain of links they
 form a cluster (called a connected component). For example:
 
 A is paired with B
 B is paired with C
 So A, B, C are all in one connected component.
 
-Now, instead of splitting individual pairs or barcodes, we split these clusters. All barcodes in one cluster go into the same fold. That means:
+Now, instead of splitting individual pairs or gtins, we split these clusters. All gtins in one cluster go into the same fold. That means:
 Every positive pair stays entirely inside one fold → no pairs are lost.
-No barcode appears in more than one fold → no leakage.
-Any barcode that never appears in a positive pair becomes its own little cluster of one.
+No gtin appears in more than one fold → no leakage.
+Any gtin that never appears in a positive pair becomes its own little cluster of one.
 
 Why this is good
 Fair testing: the model cannot cheat by seeing the same product in training and testing.
@@ -44,7 +44,7 @@ def normalize_gtin(raw: object) -> str:
 
     P0 measured the old validation protocol as 73.7% contaminated, and
     ``data/labeled_pairs.csv`` (gtins) looked like a namespace disjoint from
-    the training graph's barcodes. This function is the one place the two are
+    the training graph's gtins. This function is the one place the two are
     reconciled, used by ``merged_component_graph`` for EDGE RESOLUTION only.
 
     Rule: drop a float ``.0`` artifact, keep ASCII digits only, then
@@ -68,7 +68,7 @@ def normalize_gtin(raw: object) -> str:
     cosmetic: ``"4006381333931.0"`` scrubbed naively leaves
     ``40063813339310`` -- a THIRTEEN-digit string that pads to
     ``040063813339310``, a completely different key. Scrub-then-strip would
-    fabricate a phantom entity for every float-round-tripped barcode, which is
+    fabricate a phantom entity for every float-round-tripped gtin, which is
     the very bug this function exists to prevent.
 
     Anything with no digits is returned as an explicit empty string, never
@@ -78,10 +78,10 @@ def normalize_gtin(raw: object) -> str:
     SCOPE, deliberately narrow. This function must NOT be applied to a
     ``row_bc`` array that is used as the node key set of a split that
     downstream code filters against with raw strings: it changes 8,559 of
-    14,981 barcodes, and a normalized key never equals its raw spelling, so
+    14,981 gtins, and a normalized key never equals its raw spelling, so
     those filters would return empty with no error raised. And it buys nothing
     on this dataset for identity purposes -- the deduped data holds 14,981 raw
-    barcodes and 14,981 distinct normalized keys, i.e. zero duplicate
+    gtins and 14,981 distinct normalized keys, i.e. zero duplicate
     spellings -- while retaining the ability to merge two genuinely different
     malformed codes. Use it to join two namespaces. Do not use it to relabel
     one.
@@ -89,7 +89,7 @@ def normalize_gtin(raw: object) -> str:
     text = str(raw).strip()
     # Drop a float round-trip artifact (".0") BEFORE the digit scrub, else
     # "4006381333931.0" scrubs to 40063813339310 and pads to a DIFFERENT
-    # barcode. See the table above.
+    # gtin. See the table above.
     if text.endswith(".0"):
         text = text[:-2]
     elif text.endswith("."):
@@ -107,18 +107,18 @@ def merged_positive_graph(
     """Union two positive-pair graphs into ONE component graph.
 
     This is the P0 leak fix. Leakage travels along positive edges, so any
-    barcode reachable from a training barcode via a positive pair is the same
+    gtin reachable from a training gtin via a positive pair is the same
     entity as far as the split is concerned. ``evaluate_models.py`` was
     building its graph from the validation universe ALONE, so validation
-    barcodes that chain onto a training barcode (or onto each other) were
+    gtins that chain onto a training gtin (or onto each other) were
     invisible to it and the two sides derived DIFFERENT components from the
     same data — measured 23.3% of validation positives with BOTH endpoints in
     the training fold.
 
     Both inputs are normalized first and the edge sets are unioned, so
-    ``row_bc`` is disjoint (every barcode has exactly one index) and
-    ``pos`` indexes into it consistently. Barcodes present in only one input
-    become their own component, which is correct: an unlinked barcode cannot
+    ``row_bc`` is disjoint (every gtin has exactly one index) and
+    ``pos`` indexes into it consistently. GTINs present in only one input
+    become their own component, which is correct: an unlinked gtin cannot
     leak through a positive edge that does not exist.
 
     Returns ``(pos, row_bc, stats)``. ``stats`` is for the transparency
@@ -140,7 +140,7 @@ def merged_positive_graph(
         seen.update(norm(b) for b in row_arr if norm(b))
 
     # ``seen`` is the union over BOTH inputs. It has to be accumulated
-    # separately from the loop above: a barcode that appears in the extra
+    # separately from the loop above: a gtin that appears in the extra
     # universe but in none of its positive edges (a validation-only negative
     # endpoint) is still a node, and it must be a node in the SAME index
     # space as the training nodes or the two halves cannot be compared.
@@ -214,7 +214,7 @@ def labeled_positive_edges(
     the leak. Negatives are still allowed to STRADDLE folds for that reason.
 
     Both endpoints must resolve to a row in ``row_bc``. An unresolved positive
-    is a census/barcode disagreement, so it is counted and reported rather
+    is a census/gtin disagreement, so it is counted and reported rather
     than dropped in silence: a silent partial merge is indistinguishable from
     a leak that came back.
     """
@@ -285,12 +285,12 @@ def merged_component_graph(
     census and ``row_bc`` are two namespaces; :func:`normalize_gtin` bridges
     them for EDGE RESOLUTION ONLY. Normalizing the returned array would be a
     silent, total breakage: every downstream filter matches raw ``row_bc``
-    against the returned sets, and 8,559 of 14,981 barcodes are 13-digit, so
+    against the returned sets, and 8,559 of 14,981 gtins are 13-digit, so
     a normalized key (`02000000944753`) never matches its raw spelling
     (`2000000944753`) and every pair built from it is quietly dropped --
     with no error, only a smaller training set. Note also that normalizing the
     graph is not merely unnecessary here, it is mildly harmful: the deduped
-    data holds 14,981 raw barcodes and 14,981 distinct normalized keys (no
+    data holds 14,981 raw gtins and 14,981 distinct normalized keys (no
     duplicate spellings at all), so normalization changes nothing while being
     able to collapse two genuinely different malformed codes into one
     component. TODO.md's "0/5,428 intersection / missing normalization" root
@@ -325,20 +325,20 @@ def component_folds(
 ) -> list[set[str]]:
     """K folds over CONNECTED COMPONENTS of the positive-pair graph.
 
-    Pipeline positives link two DIFFERENT barcodes, so barcode-level folds
+    Pipeline positives link two DIFFERENT gtins, so gtin-level folds
     straddle pairs (one endpoint per side) and pairs_in_set silently drops
     them — measured 7,489 positives → ~1,500 straddling per fold boundary,
     test sets shrinking to ~130 pairs. Union-find over the pair edges groups
-    transitively-linked barcodes into components; components are shuffled
+    transitively-linked gtins into components; components are shuffled
     (seeded) and dealt to k folds. Every positive pair sits inside ONE
     component → inside ONE fold: no straddle, no silent loss, no leak
     (leakage travels exactly along the edges we split on).
 
-    Unlinked barcodes become singleton components — still fold members so
+    Unlinked gtins become singleton components — still fold members so
     their mined negatives split group-aware.
 
     BOUNDARY CONTRACT (lib.schemas.FoldSets): the returned folds are
-    pairwise DISJOINT — a barcode in two folds would put one product in
+    pairwise DISJOINT — a gtin in two folds would put one product in
     train and test at once. Validated on return.
     """
     parent: dict[str, str] = {}
@@ -356,7 +356,7 @@ def component_folds(
         if ra != rb:
             parent[rb] = ra
 
-    # every barcode in the dataset is a node (singletons included)
+    # every gtin in the dataset is a node (singletons included)
     for bc in row_bc:
         if bc and bc not in parent:
             parent[bc] = bc
@@ -382,18 +382,18 @@ def component_folds(
 def component_ids(
     pos: np.ndarray, row_bc: np.ndarray
 ) -> dict[str, int]:
-    """Stable component id per barcode over the positive-pair graph.
+    """Stable component id per gtin over the positive-pair graph.
 
     Same union-find and same node set as :func:`component_folds`, but returns
     the id instead of the fold. Needed because ``component_folds`` answers
-    "which fold" and cannot answer "are these two barcodes the same product" —
+    "which fold" and cannot answer "are these two gtins the same product" —
     which is the question a leak regression test actually asks.
 
     Ids are assigned by sorted member list, so they are deterministic for a
     given (pos, row_bc) and stable across runs. The single largest component
     is returned as id 0 by construction only when it sorts first; no code
     should depend on a particular id's magnitude, only on ids being equal
-    for barcodes that are linked and different for barcodes that are not.
+    for gtins that are linked and different for gtins that are not.
     """
     parent: dict[str, str] = {}
 
@@ -434,7 +434,7 @@ def holdout_split(
     dev_fraction: float,
     test_fraction: float,
 ) -> tuple[set[str], set[str], set[str]]:
-    """The SINGLE derivation of the holdout split: (train, dev, test) barcodes.
+    """The SINGLE derivation of the holdout split: (train, dev, test) gtins.
 
     Roles come from ``n_folds``, not from hardcoded indices: ``test =
     quarters[-1]``, ``dev = quarters[-2]``, ``train = the remaining
@@ -463,7 +463,7 @@ def holdout_split(
     train = set().union(*quarters[:-2])
     if not train:
         raise ValueError(
-            "holdout split produced an empty train barcode set; "
+            "holdout split produced an empty train gtin set; "
             f"n_folds={n_folds} has insufficient component coverage"
         )
     return train, quarters[-2], quarters[-1]
@@ -500,10 +500,10 @@ def derive_holdout(
     ``evaluate_models.py`` build a validation-only graph and disagree with
     training in the first place.
 
-    The returned barcode sets are keys of the caller's own ``row_bc``, NOT
+    The returned gtin sets are keys of the caller's own ``row_bc``, NOT
     normalized ones -- callers filter payload rows against them directly (see
     ``core.hard_negatives.pairs_in_set``), so normalizing here would silently
-    empty those filters for the 8,559 13-digit barcodes.
+    empty those filters for the 8,559 13-digit gtins.
     """
     merged_pos, graph_bc, stats = merged_component_graph(
         pos,
@@ -651,14 +651,14 @@ def partition_component_pairs(
         ],
         dtype=int,
     )
-    # the identity a barcode is matched by is the STRIPPED one on both the
-    # component side and the mask side (a padded barcode used to build a
+    # the identity a gtin is matched by is the STRIPPED one on both the
+    # component side and the mask side (a padded gtin used to build a
     # component it could never be reserved by)
-    local_barcodes = np.asarray(
+    local_gtins = np.asarray(
         [str(row_bc[int(row)]).strip() for row in pair_rows], dtype=str
     )
     n_folds = max(2, int(np.ceil(1.0 / fraction)))
-    component_groups = component_folds(local_pairs, local_barcodes, n_folds, seed)
+    component_groups = component_folds(local_pairs, local_gtins, n_folds, seed)
     n_reserved = min(max(1, int(round(n_folds * fraction))), n_folds - 1)
     selected_group_indices = list(range(n_reserved))
     if ensure_different_gtin:
@@ -710,7 +710,7 @@ def partition_component_pairs(
         # component_folds is seeded and ``combinations`` is lexicographic, so
         # first feasible is an explicit deterministic reservation rule.
         selected_group_indices = list(feasible[0])
-    selected_barcodes = set().union(
+    selected_gtins = set().union(
         *(component_groups[index] for index in selected_group_indices)
     )
 
@@ -724,13 +724,13 @@ def partition_component_pairs(
             dtype=bool,
         )
 
-    all_positive_barcodes = {
+    all_positive_gtins = {
         str(row_bc[int(row)]).strip() for row in positive_pairs.ravel()
     }
-    fit_barcodes = all_positive_barcodes - selected_barcodes
-    positive_mask = mask_inside(positive_pairs, selected_barcodes)
-    negative_reserved_mask = mask_inside(negative_pairs, selected_barcodes)
-    negative_fit_mask = mask_inside(negative_pairs, fit_barcodes)
+    fit_gtins = all_positive_gtins - selected_gtins
+    positive_mask = mask_inside(positive_pairs, selected_gtins)
+    negative_reserved_mask = mask_inside(negative_pairs, selected_gtins)
+    negative_fit_mask = mask_inside(negative_pairs, fit_gtins)
     crossing_negative_count = int(
         len(negative_pairs)
         - negative_reserved_mask.sum()

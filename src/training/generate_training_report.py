@@ -146,7 +146,7 @@ def _add_attribute_conflicts(
         return pairs
     data = pd.read_csv(data_path, dtype=str).fillna("")
     canon = pd.read_csv(canonical_path, dtype=str).fillna("")
-    sku_lookup = data.set_index("product_id").to_dict("index")
+    sku_lookup = data.set_index("sku_id").to_dict("index")
     canon_lookup = canon.set_index("gtin").to_dict("index")
     from core.attribute_conflicts import (
         canonical_attribute_info,
@@ -171,16 +171,16 @@ def _add_attribute_conflicts(
             except (TypeError, ValueError):
                 return str(value)
             if index < len(data):
-                return str(data.iloc[index]["product_id"])
+                return str(data.iloc[index]["sku_id"])
             canon_index = index - len(data)
             if 0 <= canon_index < len(canonical_gtins):
                 return f"canon#{canonical_gtins[canon_index]}"
-            barcode_col = f"barcode_{side}"
-            if barcode_col in row.index and str(row[barcode_col]).strip():
-                return f"canon#{str(row[barcode_col]).strip()}"
+            gtin_col = f"gtin_{side}"
+            if gtin_col in row.index and str(row[gtin_col]).strip():
+                return f"canon#{str(row[gtin_col]).strip()}"
             raise ValueError(
                 f"legacy pair endpoint index {index} is outside the payload "
-                f"and has no {barcode_col} fallback"
+                f"and has no {gtin_col} fallback"
             )
         raise ValueError(
             f"pair dump lacks an endpoint column for side {side!r}; "
@@ -201,7 +201,7 @@ def _add_attribute_conflicts(
             record = sku_lookup.get(key)
             if record is None:
                 raise KeyError(f"pair endpoint references unknown SKU {key!r}")
-            info = sku_attribute_info(record.get("title", ""), record.get("attributes", ""))
+            info = sku_attribute_info(record.get("sku_name_eng", ""), record.get("attribute", ""))
         cache[key] = info
         return info
 
@@ -222,7 +222,7 @@ def _add_pair_metadata(
     """Attach endpoint GTIN/brand/category fields for robust slicing."""
     data = pd.read_csv(data_path, dtype=str, keep_default_na=False).fillna("")
     canon = pd.read_csv(canonical_path, dtype=str, keep_default_na=False).fillna("")
-    sku_lookup = data.set_index("product_id").to_dict("index")
+    sku_lookup = data.set_index("sku_id").to_dict("index")
     canon_lookup = canon.set_index("gtin").to_dict("index")
     canonical_gtins = sorted(str(gtin) for gtin in canon["gtin"])
 
@@ -239,13 +239,13 @@ def _add_pair_metadata(
             except (TypeError, ValueError):
                 return _text(value)
             if index < len(data):
-                return str(data.iloc[index]["product_id"])
+                return str(data.iloc[index]["sku_id"])
             canon_index = index - len(data)
             if 0 <= canon_index < len(canonical_gtins):
                 return f"canon#{canonical_gtins[canon_index]}"
-            barcode_col = f"barcode_{side}"
-            if barcode_col in row.index and _text(row[barcode_col]):
-                return f"canon#{_text(row[barcode_col])}"
+            gtin_col = f"gtin_{side}"
+            if gtin_col in row.index and _text(row[gtin_col]):
+                return f"canon#{_text(row[gtin_col])}"
         raise ValueError(
             f"pair dump lacks a resolvable endpoint for side {side!r}; "
             f"columns={list(row.index)}"
@@ -261,8 +261,8 @@ def _add_pair_metadata(
                 "gtin": "",
                 "brand": "",
                 "category": "",
-                "title": f"[{ref}: source metadata unavailable]",
-                "attributes": "",
+                "sku_name_eng": f"[{ref}: source metadata unavailable]",
+                "attribute": "",
                 "retailer": "",
                 "country": "",
                 "canonical": "",
@@ -276,8 +276,8 @@ def _add_pair_metadata(
                 "gtin": gtin,
                 "brand": _text(record.get("mode_brand", record.get("brand", ""))),
                 "category": _text(record.get("mode_type", record.get("category", ""))),
-                "title": _text(record.get("canonical", "")),
-                "attributes": json.dumps(
+                "sku_name_eng": _text(record.get("canonical", "")),
+                "attribute": json.dumps(
                     {
                         key: _text(record.get(key, ""))
                         for key in (
@@ -296,11 +296,11 @@ def _add_pair_metadata(
         if record is None:
             raise KeyError(f"unknown SKU endpoint {ref!r}")
         return {
-            "gtin": _text(record.get("barcode", "")),
+            "gtin": _text(record.get("gtin", "")),
             "brand": _text(record.get("brand", "")),
-            "category": _text(record.get("category", record.get("category_path", ""))),
-            "title": _text(record.get("title", "")),
-            "attributes": _text(record.get("attributes", "")),
+            "category": _text(record.get("category", record.get("breadcrumbs_eng", ""))),
+            "sku_name_eng": _text(record.get("sku_name_eng", "")),
+            "attribute": _text(record.get("attribute", "")),
             "retailer": _text(record.get("retailer", "")),
             "country": _text(record.get("country", "")),
             "canonical": "",

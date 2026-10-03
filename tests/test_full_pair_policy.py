@@ -43,7 +43,7 @@ def test_quantity_agreement_without_identity_proof_is_review():
     assert policy['review'] == ['positive_identity_missing']
 
 
-def test_product_identity_compounds_are_part_of_similarity():
+def test_sku_identity_compounds_are_part_of_similarity():
     assert identity_similarity('lohilo carbonated pink_beach_bcaa_drink',
                                'lohilo carbonated glow_2022_collagen_containing') < .5
     assert identity_similarity('acme cream_soda', 'acme cream soda') == 1.
@@ -65,8 +65,8 @@ def test_cached_original_source_parse_preserves_every_dimension_verdict():
     from core.attribute_decision import _RAW_EVIDENCE_CACHE
     engine = AttributeDecisionEngine(volume_relative_tolerance=.05)
     a, b = info(flavor_set=set()), info(flavor_set=set())
-    left = {'source_rows': json.dumps([{'title':'Vanilla water 330ml', 'attributes':'Water Type: Mineral'}])}
-    right = {'source_rows': json.dumps([{'title':'Orange water 330ml', 'attributes':'Water Type: Spring'}])}
+    left = {'source_rows': json.dumps([{'sku_name_eng':'Vanilla water 330ml', 'attribute':'Water Type: Mineral'}])}
+    right = {'source_rows': json.dumps([{'sku_name_eng':'Orange water 330ml', 'attribute':'Water Type: Spring'}])}
     _RAW_EVIDENCE_CACHE.clear()
     initial = engine.evaluate(a, b, left_raw=left, right_raw=right)
     assert len(_RAW_EVIDENCE_CACHE) == 2

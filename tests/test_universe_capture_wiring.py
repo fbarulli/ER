@@ -220,7 +220,7 @@ def test_capture_keys_match_the_attribute_universe_registry():
     assert set(ATTRIBUTE_UNIVERSE_CAPTURE_KEYS) <= set(attribute_registry())
 
     universe = AttributeUniverse(
-        pd.DataFrame({"attributes": [CELL], "barcode": ["8715600246377"]})
+        pd.DataFrame({"attribute": [CELL], "gtin": ["8715600246377"]})
     )
     parsed = universe.parse(CELL)
     captured = capture_universe_attributes(CELL)

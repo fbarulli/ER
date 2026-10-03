@@ -123,18 +123,18 @@ def sku_info(
     description: object = "",
     url: object = "",
     image_url: object = "",
-    category_path: object = "",
+    breadcrumbs_eng: object = "",
     category: object = "",
 ) -> dict[str, set[float] | set[str]]:
     """Parse one source SKU using the pipeline's existing extractor.
 
     Accepts the same evidence columns extract_all does — url, image_url,
-    category_path, category — defaulting to "" for backward compatibility.
+    breadcrumbs_eng, category — defaulting to "" for backward compatibility.
     """
     from pipeline import extract_all
 
     values = []
-    for value in (description, url, image_url, category_path, category):
+    for value in (description, url, image_url, breadcrumbs_eng, category):
         if value is None or (isinstance(value, float) and np.isnan(value)):
             value = ""
         values.append(str(value))

@@ -29,16 +29,16 @@ def listing_contract(catalog, labels, populations):
                 raise ValueError('entity assigned to multiple splits')
             roles[key] = split
     frame = catalog.fillna('').copy()
-    if frame.product_id.duplicated().any() or (frame.product_id == '').any():
-        raise ValueError('catalog requires unique nonempty product_id')
-    keys = frame.barcode.map(normalize_gtin)
+    if frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
+        raise ValueError('catalog requires unique nonempty sku_id')
+    keys = frame.gtin.map(normalize_gtin)
     retained = keys.isin(roles) & keys.ne('')
     excluded = int((~retained).sum())
-    frame = frame.loc[retained].sort_values('product_id').reset_index(drop=True)
-    keys = frame.barcode.map(normalize_gtin)
-    assignments = pd.DataFrame({'product_id': frame.product_id, 'split': keys.map(roles)})
+    frame = frame.loc[retained].sort_values('sku_id').reset_index(drop=True)
+    keys = frame.gtin.map(normalize_gtin)
+    assignments = pd.DataFrame({'sku_id': frame.sku_id, 'split': keys.map(roles)})
     groups = {}
-    for key, listing in zip(keys, frame.product_id):
+    for key, listing in zip(keys, frame.sku_id):
         groups.setdefault(key, []).append(listing)
     pair_map, skipped = {}, Counter()
 
@@ -54,8 +54,8 @@ def listing_contract(catalog, labels, populations):
             raise ValueError('conflicting listing-pair supervision')
         pair_map[key] = value
 
-    from core.gtin import barcode_validity
-    trusted = frame.loc[barcode_validity(frame.barcode)].product_id
+    from core.gtin import gtin_validity
+    trusted = frame.loc[gtin_validity(frame.gtin)].sku_id
     trusted_ids = set(trusted)
     for key, listings in groups.items():
         eligible = [listing for listing in listings if listing in trusted_ids]
@@ -77,9 +77,9 @@ def listing_contract(catalog, labels, populations):
             continue
         add(groups[a][0], groups[b][0], label, roles[a])
     pairs = pd.DataFrame([
-        {'product_id1': a, 'product_id2': b, 'label': label, 'split': split}
+        {'sku_id1': a, 'sku_id2': b, 'label': label, 'split': split}
         for (a, b), (label, split) in sorted(pair_map.items())
-    ], columns=['product_id1', 'product_id2', 'label', 'split'])
+    ], columns=['sku_id1', 'sku_id2', 'label', 'split'])
     return frame, assignments, pairs, {'excluded_unassigned_listings': excluded,
                                       'skipped_labels': dict(skipped)}
 
@@ -103,7 +103,7 @@ def setup(output: Path, checkpoint: Path) -> Path:
         catalog, labels, {'train': train, 'dev': dev, 'test': test})
     # Validate before publishing any setup artifacts.
     from graph_tracks.train import load_pairs
-    load_pairs_from = [{'product_id': r.product_id, 'split': r.split}
+    load_pairs_from = [{'sku_id': r.sku_id, 'split': r.split}
                        for r in assignments.itertuples(index=False)]
     output.mkdir(parents=True)
     frame.to_csv(output / 'eligible_catalog.csv', index=False)

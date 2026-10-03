@@ -1,8 +1,8 @@
 """Explicit input contract and train-only graph vocabulary.
 
-Input JSON deliberately excludes barcodes, identity links, and raw text.
+Input JSON deliberately excludes gtins, identity links, and raw text.
 The relation/numeric schema is derived from the shared extractor contract
-(core.product_identity.graph_schema) rather than a hand-maintained subset,
+(core.sku_identity.graph_schema) rather than a hand-maintained subset,
 so it stays aligned with the data the text track trains on. Splits are
 supplied by the caller, never randomly generated here.
 """
@@ -16,10 +16,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from core.product_identity import ProductIdentity, graph_schema
+from core.sku_identity import ProductIdentity, graph_schema
 
 # DERIVED, never pinned: the graph carries whatever the shared extractor
-# (`core.product_identity.row_identity`) yields — string descriptor fields are
+# (`core.sku_identity.row_identity`) yields — string descriptor fields are
 # typed relations, float fields numeric features (see ProductIdentity
 # .graph_schema). An update to the extractor's descriptor set moves this
 # automatically; staleness of previously prepared listings is caught at load
@@ -41,19 +41,19 @@ def load_records(path: Path, *, require_training: bool = True) -> list[dict]:
         raise ValueError("empty listings")
     ids = []
     for record in records:
-        if set(record) != {"product_id", "split", "attributes", "numeric"}:
-            raise ValueError("listing keys must be product_id, split, attributes, numeric")
-        if not isinstance(record["product_id"], str) or not record["product_id"]:
-            raise ValueError("product_id must be a nonempty string")
-        ids.append(record["product_id"])
+        if set(record) != {"sku_id", "split", "attribute", "numeric"}:
+            raise ValueError("listing keys must be sku_id, split, attributes, numeric")
+        if not isinstance(record["sku_id"], str) or not record["sku_id"]:
+            raise ValueError("sku_id must be a nonempty string")
+        ids.append(record["sku_id"])
         allowed_splits = SPLITS if require_training else SPLITS | {"inference"}
         if record["split"] not in allowed_splits:
             raise ValueError("split must be train/dev/test (inference is allowed for encoding only)")
-        if set(record["attributes"]) - set(RELATIONS):
+        if set(record["attribute"]) - set(RELATIONS):
             raise ValueError("unsupported attribute relation")
         if set(record["numeric"]) - set(NUMERIC):
             raise ValueError("unsupported numeric feature")
-        for values in record["attributes"].values():
+        for values in record["attribute"].values():
             if not isinstance(values, list) or any(not isinstance(v, str) or not v for v in values):
                 raise ValueError("attributes must contain lists of nonempty strings")
         for values in record["numeric"].values():
@@ -63,7 +63,7 @@ def load_records(path: Path, *, require_training: bool = True) -> list[dict]:
             ):
                 raise ValueError("numeric fields must be lists of finite nonnegative numbers")
     if len(set(ids)) != len(ids):
-        raise ValueError("duplicate product_id")
+        raise ValueError("duplicate sku_id")
     if require_training and not any(r["split"] == "train" for r in records):
         raise ValueError("at least one training listing is required")
     return records
@@ -71,7 +71,7 @@ def load_records(path: Path, *, require_training: bool = True) -> list[dict]:
 
 def fit_vocabulary(records: list[dict]) -> dict[str, list[str]]:
     return {relation: sorted({v for r in records if r["split"] == "train"
-                             for v in r["attributes"].get(relation, [])})
+                             for v in r["attribute"].get(relation, [])})
             for relation in RELATIONS}
 
 
@@ -97,7 +97,7 @@ def tensorize(records: list[dict], vocabulary: dict[str, list[str]], device: str
         lookup = {v: i + 1 for i, v in enumerate(vocabulary[relation])}
         source, target = [], []
         for i, record in enumerate(records):
-            values = sorted(set(record["attributes"].get(relation, [])))
+            values = sorted(set(record["attribute"].get(relation, [])))
             # Missing and unseen values use the feature encoder's unknown token,
             # but NEVER share graph context through an unknown-value hub.
             indices = sorted({lookup.get(v, 0) for v in values}) or [0]
@@ -134,9 +134,9 @@ def census(records: list[dict], vocabulary: dict[str, list[str]]) -> dict:
         "splits": {s: sum(r["split"] == s for r in records) for s in sorted(SPLITS)},
         "relations": {rel: {
             "train_values": len(vocabulary[rel]),
-            "membership_edges": sum(len(set(r["attributes"].get(rel, []))) for r in records),
-            "missing_listings": sum(not r["attributes"].get(rel) for r in records),
+            "membership_edges": sum(len(set(r["attribute"].get(rel, []))) for r in records),
+            "missing_listings": sum(not r["attribute"].get(rel) for r in records),
             "unseen_values": len({v for r in records if r["split"] != "train"
-                                  for v in r["attributes"].get(rel, [])} - set(vocabulary[rel])),
+                                  for v in r["attribute"].get(rel, [])} - set(vocabulary[rel])),
         } for rel in RELATIONS},
     }

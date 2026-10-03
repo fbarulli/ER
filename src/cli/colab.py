@@ -230,19 +230,19 @@ def _legacy_validation_sources() -> dict[str, Path]:
         raise ValueError('eligible catalog differs from prepared graph inputs')
     catalog = pd.read_csv(catalog_path, dtype=str, keep_default_na=False)
     splits = pd.read_csv(setup / 'listing_splits.csv', dtype=str, keep_default_na=False)
-    if catalog.product_id.duplicated().any() or splits.product_id.duplicated().any():
+    if catalog.sku_id.duplicated().any() or splits.sku_id.duplicated().any():
         raise ValueError('component listing IDs must be unique')
-    if set(catalog.product_id) != set(splits.product_id):
+    if set(catalog.sku_id) != set(splits.sku_id):
         raise ValueError('component split must cover the eligible catalog exactly')
     if not set(splits.split) <= {'train', 'dev', 'test'}:
         raise ValueError('unknown component split role')
-    roles = splits.set_index('product_id').split
-    assignments = catalog.product_id.map(roles)
+    roles = splits.set_index('sku_id').split
+    assignments = catalog.sku_id.map(roles)
     training = catalog.loc[assignments.eq('train')]
     holdout = catalog.loc[assignments.isin(['dev', 'test'])]
     from training.folds import normalize_gtin
-    train_entities = set(training.barcode.map(normalize_gtin))
-    held_entities = set(holdout.barcode.map(normalize_gtin))
+    train_entities = set(training.gtin.map(normalize_gtin))
+    held_entities = set(holdout.gtin.map(normalize_gtin))
     if train_entities & held_entities:
         raise ValueError('component train entities overlap inference holdout')
     if training.empty or holdout.empty:
@@ -274,14 +274,14 @@ def _validate_legacy_bundle_partitions(bundles: list[Path]) -> None:
     suite = load_suite(TRAIN_ROOT / 'config/model_tracks.yaml')
     setup = TRAIN_ROOT / suite.setup_dir
     catalog = pd.read_csv(setup / 'eligible_catalog.csv', dtype=str, keep_default_na=False)
-    assignments = pd.read_csv(setup / 'listing_splits.csv', dtype=str).set_index('product_id').split
+    assignments = pd.read_csv(setup / 'listing_splits.csv', dtype=str).set_index('sku_id').split
     for path in bundles:
         _, data = load_prepared_bundle(path)
         populations = prepared_holdout(data, dict(training_cfg().split), seed=SEED)
         roles = {normalize_gtin(value): role for role, values in
                  zip(('train', 'dev', 'test'), populations) for value in values}
         for row in catalog.itertuples(index=False):
-            if roles.get(normalize_gtin(row.barcode)) != assignments[row.product_id]:
+            if roles.get(normalize_gtin(row.gtin)) != assignments[row.sku_id]:
                 raise ValueError(
                     'legacy prepared bundle differs from the shared component split; '
                     'use --tracks-config results/model_tracks/smoke_20261001_128/suite.yaml '

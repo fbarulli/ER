@@ -254,18 +254,18 @@ def _emit_four_pop(bi, payload, df, row_bc, test_pos, test_neg, pos, neg) -> Non
 
     country = df["country"].fillna("").astype(str).to_numpy()
     if len(row_bc) > len(country):
-        by_barcode: dict[str, list[str]] = {}
-        for barcode, value in zip(
-            df["barcode"].fillna("").astype(str), country, strict=True
+        by_gtin: dict[str, list[str]] = {}
+        for gtin, value in zip(
+            df["gtin"].fillna("").astype(str), country, strict=True
         ):
-            if barcode:
-                by_barcode.setdefault(barcode, []).append(value)
+            if gtin:
+                by_gtin.setdefault(gtin, []).append(value)
         mode_country = {
-            barcode: max(set(values), key=values.count)
-            for barcode, values in by_barcode.items()
+            gtin: max(set(values), key=values.count)
+            for gtin, values in by_gtin.items()
         }
         padded = np.asarray(
-            [mode_country.get(str(barcode), "") for barcode in row_bc[len(country):]],
+            [mode_country.get(str(gtin), "") for gtin in row_bc[len(country):]],
             dtype=object,
         )
         country = np.concatenate([country.astype(object), padded])
@@ -299,7 +299,7 @@ def _emit_four_pop(bi, payload, df, row_bc, test_pos, test_neg, pos, neg) -> Non
         + [("cross_country_pos", s) for s in pos_s[cross]]
         + [("hard_neg", s) for s in pop_scores(test_neg, "neg")]
     )
-    # random negatives: barcode-known-different sample (build_pairs SSOT).
+    # random negatives: gtin-known-different sample (build_pairs SSOT).
     # Caps read from the SSOT pairs block (config/training.yaml
     # pairs.max_pos_per_group / pairs.n_neg) — were hardcoded 4 / 2_000
     # inline, a second declaration the config could not steer.

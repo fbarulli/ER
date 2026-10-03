@@ -8,7 +8,7 @@ audit measures EVERY candidate key the same way:
   blocking recall = share of true (same-product) pairs sharing a block
   candidates      = pairwise classifier cost, sum of n*(n-1)/2 per block
 
-Ground truth = build_true_pairs: same VALID barcode (GS1 checksum — owner
+Ground truth = build_true_pairs: same VALID gtin (GS1 checksum — owner
 ruling), multi-retailer groups, ALL pairs (uncapped). Cross-retailer by
 construction, so RETAILER-as-key is the sanity control (must score ~0).
 
@@ -82,11 +82,11 @@ def main() -> None:
     RESULTS.mkdir(parents=True, exist_ok=True)
     df = load_dataset_deduped()
     pairs = build_true_pairs(df)
-    print(f"true pairs (valid-barcode, multi-retailer): {len(pairs):,}")
+    print(f"true pairs (valid-gtin, multi-retailer): {len(pairs):,}")
 
     # ---- feature columns ----------------------------------------------------
-    vol_ml = df["title"].fillna("").map(lambda s: extract_volume_ml(s)[0])
-    price = pd.to_numeric(df["price"], errors="coerce")
+    vol_ml = df["sku_name_eng"].fillna("").map(lambda s: extract_volume_ml(s)[0])
+    price = pd.to_numeric(df["sku_last_price"], errors="coerce")
     # rank(method="min"): ties must land in the SAME bucket — method="first"
     # breaks ties by row order (row-order noise, not a price difference).
     price_bucket = pd.qcut(price.rank(method="min"), 20, labels=False).astype(float)
@@ -98,7 +98,7 @@ def main() -> None:
         "volume_ml": vol_ml.fillna("NO_VOL").astype(str),
         "price_bucket": price_bucket.fillna("NO_PRICE").astype(str),
         "country": df["country"].fillna("NO_COUNTRY"),
-        "pack_count": df["title"].fillna("").map(
+        "pack_count": df["sku_name_eng"].fillna("").map(
             lambda s: str(sorted(extract_pack_counts(s))) if extract_pack_counts(s) else "NO_PACK"
         ),
         "retailer": df["retailer"].fillna("NO_RETAILER"),  # control
@@ -110,7 +110,7 @@ def main() -> None:
         "volume_ml": vol_ml,
         "price_bucket": price_bucket,
         "country": df["country"].fillna(""),
-        "pack_count": df["title"].fillna("").map(
+        "pack_count": df["sku_name_eng"].fillna("").map(
             lambda s: str(sorted(extract_pack_counts(s))) if extract_pack_counts(s) else np.nan
         ),
         "retailer": df["retailer"].fillna(""),

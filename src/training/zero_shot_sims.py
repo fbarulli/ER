@@ -90,13 +90,13 @@ def _json_text(value: object) -> str:
 
 def _source_trace_map(source: pd.DataFrame) -> dict[str, list[dict[str, str]]]:
     """Index every raw source row by GTIN without collapsing its metadata."""
-    required = {"barcode", "product_id"}
+    required = {"gtin", "sku_id"}
     missing = sorted(required - set(source.columns))
     if missing:
         raise ValueError(f"source dataset missing trace columns: {missing}")
     indexed: dict[str, list[dict[str, str]]] = {}
     for source_row_id, row in source.reset_index(drop=True).iterrows():
-        gtin = _json_text(row["barcode"]).strip()
+        gtin = _json_text(row["gtin"]).strip()
         if not gtin:
             continue
         indexed.setdefault(gtin, []).append(
@@ -222,8 +222,8 @@ def _build_trace_frame(
                 "model_input_text2": str(m2["model_input"]),
                 "source_row_ids1": json.dumps([x["source_row_id"] for x in source1], separators=(",", ":")),
                 "source_row_ids2": json.dumps([x["source_row_id"] for x in source2], separators=(",", ":")),
-                "source_sku_ids1": json.dumps([x["product_id"] for x in source1], separators=(",", ":")),
-                "source_sku_ids2": json.dumps([x["product_id"] for x in source2], separators=(",", ":")),
+                "source_sku_ids1": json.dumps([x["sku_id"] for x in source1], separators=(",", ":")),
+                "source_sku_ids2": json.dumps([x["sku_id"] for x in source2], separators=(",", ":")),
                 "source_metadata1": json.dumps(source1, sort_keys=True, separators=(",", ":")),
                 "source_metadata2": json.dumps(source2, sort_keys=True, separators=(",", ":")),
                 "canonical_metadata1": json.dumps(c1, sort_keys=True, default=str, separators=(",", ":")),

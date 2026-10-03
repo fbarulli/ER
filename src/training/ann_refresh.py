@@ -58,10 +58,10 @@ def refresh_finetuned_ann(
     model,
     df: pd.DataFrame,
     payload: list[str],
-    row_barcodes: np.ndarray,
+    row_gtins: np.ndarray,
     structured_features: np.ndarray | None = None,
     *,
-    train_barcodes: set[str],
+    train_gtins: set[str],
     existing: np.ndarray | None,
     step: int,
     epoch: float,
@@ -138,7 +138,7 @@ def refresh_finetuned_ann(
         max_per_brand=max_per_brand,
     )
     if len(refreshed):
-        keep = pairs_in_set(refreshed, row_barcodes, set(train_barcodes))
+        keep = pairs_in_set(refreshed, row_gtins, set(train_gtins))
         existing_keys = {
             (min(int(a), int(b)), max(int(a), int(b)))
             for a, b in (existing if existing is not None else [])
@@ -163,8 +163,8 @@ def refresh_finetuned_ann(
                 "epoch": float(epoch),
                 "row_a": a,
                 "row_b": b,
-                "barcode_a": str(row_barcodes[a]),
-                "barcode_b": str(row_barcodes[b]),
+                "gtin_a": str(row_gtins[a]),
+                "gtin_b": str(row_gtins[b]),
                 "cosine": float(score),
                 "band_lo": float(band_lo),
                 "band_hi": float(band_hi),

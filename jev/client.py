@@ -22,12 +22,12 @@ ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
 ADAPTERS = {
     "zen": {
-        "url": "https://opencode.ai/zen/v1/systemone",
+        "sku_url": "https://opencode.ai/zen/v1/systemone",
         "key_var": "OPENCODE_API_KEY",
         "model": "jev-1.13",
     },
     "openrouter": {
-        "url": "https://openrouter.ai/api/v1/systemone",
+        "sku_url": "https://openrouter.ai/api/v1/systemone",
         "key_var": "OPENROUTER_API_KEY",
         "model": "typesafe/jev-1.13",
     },
@@ -117,7 +117,7 @@ class JevClient:
         }
         last_error: Exception | None = None
         for attempt in range(MAX_RETRIES + 1):
-            req = urllib.request.Request(self.cfg["url"], data=payload, headers=headers, method="POST")
+            req = urllib.request.Request(self.cfg["sku_url"], data=payload, headers=headers, method="POST")
             try:
                 with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
                     self.last_raw = json.loads(resp.read().decode())
@@ -153,7 +153,7 @@ class MockJevClient:
         def toks(s: str) -> set[str]:
             return set(self._re.findall(r"[a-z0-9]+", (s or "").lower()))
 
-        ta, tb = toks(a.get("title")), toks(b.get("title"))
+        ta, tb = toks(a.get("sku_name_eng")), toks(b.get("sku_name_eng"))
         jacc = len(ta & tb) / max(len(ta | tb), 1)
         same_brand = bool(a.get("brand")) and a.get("brand", "").lower() == b.get("brand", "").lower()
 
@@ -169,7 +169,7 @@ class MockJevClient:
                 v *= 29.57
             return round(v)
 
-        va, vb = vol(a.get("title")), vol(b.get("title"))
+        va, vb = vol(a.get("sku_name_eng")), vol(b.get("sku_name_eng"))
         size_ok = va is None or vb is None or va == vb
 
         score = jacc + (0.35 if same_brand else 0.0) + (0.15 if size_ok else -0.3)

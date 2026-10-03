@@ -48,7 +48,7 @@ def _write_bundle(path: Path, *, pos, train_neg, hard_negative_mask_audit):
     ]
     return write_prepared_bundle(
         path,
-        df=pd.DataFrame({"product_id": ["p1", "p2"]}),
+        df=pd.DataFrame({"sku_id": ["p1", "p2"]}),
         payload=payload,
         structured_features=np.zeros((len(payload), 4), dtype=np.float32),
         row_bc=np.asarray(["g1"] * len(payload), dtype=object),

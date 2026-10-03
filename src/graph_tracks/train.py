@@ -30,17 +30,17 @@ from graph_tracks.model import AttributeGNN, PairScorer
 
 def load_pairs(path: Path, records: list[dict]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    if set(frame.columns) != {"product_id1", "product_id2", "label", "split"}:
-        raise ValueError("pairs columns must be product_id1, product_id2, label, split")
-    ids = {r["product_id"]: i for i, r in enumerate(records)}
+    if set(frame.columns) != {"sku_id1", "sku_id2", "label", "split"}:
+        raise ValueError("pairs columns must be sku_id1, sku_id2, label, split")
+    ids = {r["sku_id"]: i for i, r in enumerate(records)}
     seen = set()
     rows = {s: ([], []) for s in ("train", "dev", "test")}
     for row in frame.itertuples(index=False):
         if row.label not in {"0", "1"} or row.split not in rows:
             raise ValueError("invalid pair label/split")
-        if row.product_id1 not in ids or row.product_id2 not in ids:
+        if row.sku_id1 not in ids or row.sku_id2 not in ids:
             raise ValueError("pair endpoint absent from listings")
-        i, j = ids[row.product_id1], ids[row.product_id2]
+        i, j = ids[row.sku_id1], ids[row.sku_id2]
         if i == j:
             raise ValueError("self-pairs are not a matching benchmark")
         if records[i]["split"] != row.split or records[j]["split"] != row.split:
@@ -235,7 +235,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     len(support_records), len(dev_records), len(records))
         trained_endpoints = set(pairs["train"][0].reshape(-1).tolist())
         support_ids = set(support_indices)
-        pd.DataFrame([{"product_id": r["product_id"], "split": r["split"],
+        pd.DataFrame([{"sku_id": r["sku_id"], "split": r["split"],
                        "supervised_endpoint": i in trained_endpoints,
                        "training_graph_support": i in support_ids}
                       for i, r in enumerate(records)]).to_csv(output / name(cfg.track, "listing_usage.csv"), index=False)

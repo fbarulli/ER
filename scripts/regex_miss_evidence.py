@@ -57,8 +57,8 @@ ATTRIBUTE_CUES = {
 def source_span(row: dict[str, str]) -> tuple[str, str, int, int, str, str]:
     """Locate a candidate in the original title or declared attribute value."""
     candidate = row["candidate"]
-    if row["source"] == "title":
-        title = row["title"]
+    if row["source"] == "sku_name_eng":
+        title = row["sku_name_eng"]
         words = normalized_attribute_text(candidate).split()
         pattern = re.compile(
             r"(?<!\w)" + r"[\W_]*".join(map(re.escape, words)) + r"(?!\w)",
@@ -96,28 +96,28 @@ def source_span(row: dict[str, str]) -> tuple[str, str, int, int, str, str]:
                                 best = (start, end)
                             break
             if best is not None:
-                return "title", "", *best, title[best[0]:best[1]], "synthetic_residual_phrase"
+                return "sku_name_eng", "", *best, title[best[0]:best[1]], "synthetic_residual_phrase"
         if match is None:
-            raise ValueError(f"title candidate has no raw span: {row['product_id']} {candidate!r}")
-        return "title", "", match.start(), match.end(), match.group(), relation
+            raise ValueError(f"title candidate has no raw span: {row['sku_id']} {candidate!r}")
+        return "sku_name_eng", "", match.start(), match.end(), match.group(), relation
 
-    if row["source"] == "attributes":
+    if row["source"] == "attribute":
         field_name, separator, value = candidate.partition(":")
         if not separator:
-            raise ValueError(f"declared candidate lacks field: {row['product_id']} {candidate!r}")
-        for item in ATTRIBUTE_ITEM_RE.finditer(row["attributes"]):
+            raise ValueError(f"declared candidate lacks field: {row['sku_id']} {candidate!r}")
+        for item in ATTRIBUTE_ITEM_RE.finditer(row["attribute"]):
             if (normalized_attribute_text(item.group(1)) == normalized_attribute_text(field_name)
                     and normalized_attribute_text(item.group(2)) == normalized_attribute_text(value)):
                 surface = item.group(2).strip()
                 start = item.start(2) + len(item.group(2)) - len(item.group(2).lstrip())
-                return "attributes", item.group(1).strip(), start, start + len(surface), surface, "exact_candidate"
+                return "attribute", item.group(1).strip(), start, start + len(surface), surface, "exact_candidate"
             if normalized_attribute_text(item.group(1)) == normalized_attribute_text(field_name):
                 for part in re.finditer(r"[^,/&]+", item.group(2)):
                     if normalized_attribute_text(part.group()) == normalized_attribute_text(value):
                         surface = part.group().strip()
                         start = item.start(2) + part.start() + len(part.group()) - len(part.group().lstrip())
-                        return "attributes", item.group(1).strip(), start, start + len(surface), surface, "exact_candidate"
-        raise ValueError(f"declared candidate has no raw span: {row['product_id']} {candidate!r}")
+                        return "attribute", item.group(1).strip(), start, start + len(surface), surface, "exact_candidate"
+        raise ValueError(f"declared candidate has no raw span: {row['sku_id']} {candidate!r}")
     raise ValueError(f"unsupported source column: {row['source']!r}")
 
 
@@ -181,7 +181,7 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
     columns = (
-        "product_id", "reason", "dimension", "candidate", "source_column",
+        "sku_id", "reason", "dimension", "candidate", "source_column",
         "source_field", "raw_start", "raw_end", "surface", "original_text",
         "span_relation", "capture_class",
         "canonical_values", "integration_status", "description_status", "description_cues",
@@ -193,12 +193,12 @@ def main() -> None:
     rows = 0
     with args.input.open(newline="", encoding="utf-8") as source:
         misses = list(csv.DictReader(source))
-    wanted_ids = {row["product_id"] for row in misses if row["source"] == "title"}
+    wanted_ids = {row["sku_id"] for row in misses if row["source"] == "sku_name_eng"}
     descriptions: dict[str, str] = {}
     with args.dataset.open(newline="", encoding="utf-8") as source:
         for row in csv.DictReader(source):
-            if row["product_id"] in wanted_ids:
-                descriptions[row["product_id"]] = row["description"]
+            if row["sku_id"] in wanted_ids:
+                descriptions[row["sku_id"]] = row["description_short_eng"]
     if wanted_ids - descriptions.keys():
         raise ValueError(f"title rows absent from dataset: {sorted(wanted_ids - descriptions.keys())[:5]}")
     with args.out.open("w", newline="", encoding="utf-8") as destination:
@@ -207,14 +207,14 @@ def main() -> None:
         for row in misses:
             column, field, start, end, surface, relation = source_span(row)
             if row[column][start:end] != surface:
-                raise AssertionError(f"source span mismatch: {row['product_id']}")
+                raise AssertionError(f"source span mismatch: {row['sku_id']}")
             category, values, status = capture_class(row)
             description_status, description_cues = (
-                description_support(row["dimension"], descriptions[row["product_id"]])
-                if column == "title" else ("not_needed_for_declared_field", [])
+                description_support(row["dimension"], descriptions[row["sku_id"]])
+                if column == "sku_name_eng" else ("not_needed_for_declared_field", [])
             )
             writer.writerow({
-                "product_id": row["product_id"], "reason": row["reason"],
+                "sku_id": row["sku_id"], "reason": row["reason"],
                 "dimension": row["dimension"], "candidate": row["candidate"],
                 "source_column": column, "source_field": field,
                 "raw_start": start, "raw_end": end, "surface": surface,
@@ -231,8 +231,8 @@ def main() -> None:
             counts[key] += 1
             span_counts[relation] += 1
             description_counts[description_status] += 1
-            if row["product_id"] not in examples[key] and len(examples[key]) < 5:
-                examples[key].append(row["product_id"])
+            if row["sku_id"] not in examples[key] and len(examples[key]) < 5:
+                examples[key].append(row["sku_id"])
     summary = {
         "input": str(args.input), "detail_csv": str(args.out),
         "candidate_mentions": rows, "captured_mentions": sum(counts.values()),
@@ -241,7 +241,7 @@ def main() -> None:
         "description_statuses": dict(description_counts),
         "groups": [
             {"capture_class": category, "integration_status": status,
-             "count": count, "example_product_ids": examples[(category, status)]}
+             "count": count, "example_sku_ids": examples[(category, status)]}
             for (category, status), count in sorted(counts.items())
         ],
         "note": "All spans refer to original source text. Capture status does not grant matcher or training eligibility.",

@@ -46,11 +46,11 @@ PYTHONPATH=src .venv/bin/python -m graph_tracks.preflight --config data/track_se
 ```
 
 Entity labels select the lexically first listing per normalized entity.
-Additional listings sharing a checksum-valid, unheld barcode form positive chains. Only labeled same-split
+Additional listings sharing a checksum-valid, unheld gtin form positive chains. Only labeled same-split
 negatives are retained; cross-split negatives and labels without listing
 endpoints are counted in `setup_manifest.json`. These pair semantics must be
 used by a future text comparison too; the existing entity-level text report is
-not automatically comparable. Unassigned/empty-barcode listings are excluded
+not automatically comparable. Unassigned/empty-gtin listings are excluded
 and counted rather than assigned an invented split. The recorded local text
 checkpoint is a baseline reference; this does not establish its training history.
 
@@ -81,9 +81,9 @@ summaries, included in the downloaded result archive.
 Use the eligible canonical catalog after the shared identity corrections and
 exclusions. Preparation rejects quarantined GTINs and scoped held listings. It does not correct a raw
 catalog or invent identities/splits. The listing split CSV must contain exactly
-`product_id,split`, cover the retained catalog exactly, and come from the shared
+`sku_id,split`, cover the retained catalog exactly, and come from the shared
 component-safe process. Pair CSV must contain exactly
-`product_id1,product_id2,label,split`; both endpoints must belong to that split.
+`sku_id1,sku_id2,label,split`; both endpoints must belong to that split.
 Train and dev require both positive and negative pairs.
 
 ```bash
@@ -96,7 +96,7 @@ PYTHONPATH=src .venv/bin/python -m graph_tracks.text_cache \
   --output data/graph_tracks/shared_minilm__embeddings.npz
 ```
 
-The exporter uses `core.product_identity.row_identity`; there is no second
+The exporter uses `core.sku_identity.row_identity`; there is no second
 identity parser. Barcodes and verified-match edges are excluded from graph
 features. Catalog/split/pair/listing, identity-policy and dimension-policy hashes
 are recorded. Workers require the prepared manifest and reject stale inputs or
@@ -245,12 +245,12 @@ PYTHONPATH=src .venv/bin/python -m graph_tracks.report \
 ```
 
 Hybrid inference additionally needs `--text-cache`. Optional `--pairs` contains
-exactly `product_id1,product_id2`, without labels. New queries may use
+exactly `sku_id1,sku_id2`, without labels. New queries may use
 `split: inference`, rejected by training. Query batches cannot communicate;
 their graph context is frozen from training support stored in the checkpoint.
 
 ANN cosine search does not reproduce the learned pair scorer, especially the
-hybrid's direct text path. Exported vector/index IDs are listing `product_id`s,
+hybrid's direct text path. Exported vector/index IDs are listing `sku_id`s,
 not GTINs. HNSW settings and candidate budgets are configurable. Index metadata
 contains source paths; after relocation regenerate indexes through inference
 instead of treating old absolute paths as valid.
@@ -278,7 +278,7 @@ both CPU workers, real W&B offline runs, complete inference/reports, and DVC
 push/independent clean pull to a temporary local remote. Its listings and labels
 are synthetic; perfect metrics there are not quality evidence.
 
-Focused guards cover split/label leakage, forbidden barcode features, train-only
+Focused guards cover split/label leakage, forbidden gtin features, train-only
 vocabularies, unknown-value isolation, query batching, cache alignment, stale
 manifests, checkpoint track/hash identity, moved-tree and same-run resume,
 portable input/bundle restore, secret exclusion, and real W&B/DVC lifecycle.

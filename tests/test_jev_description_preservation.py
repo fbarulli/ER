@@ -14,7 +14,7 @@ def test_legacy_loader_preserves_identity_evidence_after_300_characters(tmp_path
         writer = csv.DictWriter(stream, fieldnames=['gtin', 'source_rows'])
         writer.writeheader()
         writer.writerow({'gtin': '123', 'source_rows': json.dumps([
-            {'title': 'Juice', 'description': description}
+            {'sku_name_eng': 'Juice', 'description_short_eng': description}
         ])})
     listing = state.load_record_index(path)['123']
-    assert state.listing_state('123', listing)['description'] == description
+    assert state.listing_state('123', listing)['description_short_eng'] == description

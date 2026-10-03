@@ -62,7 +62,7 @@ def test_drops_storefront_scaffolding(token: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "url",
+    "sku_url",
     [
         # riteaid: all scaffolding + one long content hash -> nothing left
         "https://www.riteaid.com/shop/media/catalog/product/cache/1/small_image"
@@ -71,10 +71,10 @@ def test_drops_storefront_scaffolding(token: str) -> None:
         "https://i5.peapod.com/c/K6/K6RMM.jpg",
     ],
 )
-def test_hash_only_url_yields_nothing_not_noise(url: str) -> None:
+def test_hash_only_url_yields_nothing_not_noise(sku_url: str) -> None:
     """Empty is the correct answer. A surviving hash is worse than no column."""
-    assert url_text(url) == ""
-    assert not is_evidentiary(url)
+    assert url_text(sku_url) == ""
+    assert not is_evidentiary(sku_url)
 
 
 @pytest.mark.parametrize(

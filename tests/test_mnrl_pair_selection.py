@@ -8,7 +8,7 @@ from sentence_transformers.base.sampler import NoDuplicatesBatchSampler
 
 from training.training import (
     _build_mnrl_training_triples,
-    _mnrl_shared_positive_barcode_rows,
+    _mnrl_shared_positive_gtin_rows,
 )
 
 
@@ -28,7 +28,7 @@ def test_augmented_negative_keeps_its_copy_as_anchor_and_source_positive() -> No
 
     assert triples == [(1, 2, 3), (20, 2, 3), (21, 2, 4)]
     # Both augmentation types survive once; missing source positives and
-    # self-negatives stay excluded, rather than acquiring a barcode proxy.
+    # self-negatives stay excluded, rather than acquiring a gtin proxy.
 
 
 def test_augmented_negative_lineage_is_tied_to_its_target() -> None:
@@ -92,7 +92,7 @@ def test_symmetric_swap_requires_source_and_generated_positive_edges_in_fold() -
 def test_semantic_false_negative_exposure_counts_repeated_positive_gtins() -> None:
     row_bc = np.array(["unused", "A", "A", "B", "A", "C", "C"])
     triples = [(1, 2, 3), (4, 2, 5), (6, 5, 3)]
-    assert _mnrl_shared_positive_barcode_rows(triples, row_bc) == 2
+    assert _mnrl_shared_positive_gtin_rows(triples, row_bc) == 2
 
 
 def test_no_duplicates_sampler_keeps_same_text_copies_apart() -> None:

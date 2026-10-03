@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         values: set[str] = set()
         misses: list[tuple[int, str]] = []  # (raw_len, sku_id/title snippet)
         for _, row in sku.iterrows():
-            info = sku_attribute_info(str(row.get("title", "")), str(row.get("attributes", "")))
+            info = sku_attribute_info(str(row.get("sku_name_eng", "")), str(row.get("attribute", "")))
             got = info.get("flavor_set") if dim == "flavor" else info.get(dim)
             if dim == "flavor":
                 got = set(info.get("flavor_set") or set()) | (
@@ -70,8 +70,8 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     values.add(str(got))
             else:
-                misses.append((_raw_len(row.get("title"), row.get("attributes")),
-                               f"{row.get('product_id', '?')}: {str(row.get('title', ''))[:90]}"))
+                misses.append((_raw_len(row.get("sku_name_eng"), row.get("attribute")),
+                               f"{row.get('sku_id', '?')}: {str(row.get('sku_name_eng', ''))[:90]}"))
         misses.sort(reverse=True)
         canon_hits = 0
         canon_values: set[str] = set()

@@ -18,8 +18,8 @@ Rewrite of the training path with everything the 07-series left out:
                   bf16 (on CUDA), checkpoints + save_total_limit, seeded
                   everything, save_best_model, per-fold dev/test split.
 
-Group-aware splits throughout: barcode-level (no product straddles a fold),
-and within each fold the train barcodes are split again into train/dev for
+Group-aware splits throughout: gtin-level (no product straddles a fold),
+and within each fold the train gtins are split again into train/dev for
 early stopping (dev NEVER touches test).
 
 Device: CPU here, CUDA on the Colab VM unchanged — the pipeline reads
@@ -61,7 +61,7 @@ from core.common import (
     SEED,
     artifact,
     ensure_parent,
-    kfold_barcodes,
+    kfold_gtins,
     load_config,
     load_local_sentence_transformer,
     metadata_text,
@@ -521,14 +521,14 @@ _cos = pair_similarity
 def _split_safe_random_negative_pairs(
     df: pd.DataFrame,
     row_bc: np.ndarray,
-    split_barcodes: set[str],
+    split_gtins: set[str],
     *,
     seed: int,
     n_neg: int,
 ) -> np.ndarray:
     """Build known-different random negatives using only one split.
 
-    ``build_pairs`` owns the barcode validity/title-difference rules. This
+    ``build_pairs`` owns the gtin validity/title-difference rules. This
     wrapper restricts its input to the requested split first, then maps the
     returned local row indices back to the training payload indices.
     """
@@ -536,7 +536,7 @@ def _split_safe_random_negative_pairs(
     from core.common import training_cfg
 
     split_rows = np.flatnonzero(
-        np.isin(row_bc[: len(df)], np.asarray(sorted(split_barcodes), dtype=str))
+        np.isin(row_bc[: len(df)], np.asarray(sorted(split_gtins), dtype=str))
     )
     if len(split_rows) < 2 or n_neg <= 0:
         if n_neg > 0:
@@ -580,7 +580,7 @@ def _mix_random_easy_training_negatives(
     *,
     df: pd.DataFrame,
     row_bc: np.ndarray,
-    train_barcodes: set[str],
+    train_gtins: set[str],
     seed: int,
     enabled: bool,
     ratio_to_hard: float,
@@ -608,13 +608,13 @@ def _mix_random_easy_training_negatives(
     candidates = _split_safe_random_negative_pairs(
         df,
         row_bc,
-        train_barcodes,
+        train_gtins,
         seed=seed,
         n_neg=min(target, int(candidate_pool_size)),
     )
     if not len(candidates):
         return hard_pairs, hard_sources, 0
-    if not pairs_in_set(candidates, row_bc, train_barcodes).all():
+    if not pairs_in_set(candidates, row_bc, train_gtins).all():
         raise RuntimeError("random/easy training negatives crossed the train split")
 
     normalized_hard = {tuple(pair) for pair in np.sort(hard_pairs, axis=1)}
@@ -659,7 +659,7 @@ def _mnrl_training_triples_with_populations(
     Masked/swapped copies have new payload indices; audit rows identify the
     original anchor. Keep the *copy* as the MNRL anchor. Positive copies use
     one of their source's explicit negatives, if available. Never infer a
-    positive or negative from a barcode alone: that can silently mislabel.
+    positive or negative from a gtin alone: that can silently mislabel.
 
     Each triple is paired with its training population so train-time
     per-subset loss monitoring can attribute loss to the population that
@@ -835,7 +835,7 @@ def _build_mnrl_triple_populations(
     ]
 
 
-def _mnrl_shared_positive_barcode_rows(
+def _mnrl_shared_positive_gtin_rows(
     triples: list[tuple[int, int, int]], row_bc: np.ndarray
 ) -> int:
     """Count triple rows whose positive GTIN occurs in another triple.
@@ -846,9 +846,9 @@ def _mnrl_shared_positive_barcode_rows(
     """
     from collections import Counter
 
-    barcodes = [str(row_bc[positive]) for _, positive, _ in triples]
-    counts = Counter(barcodes)
-    return sum(counts[barcode] > 1 for barcode in barcodes)
+    gtins = [str(row_bc[positive]) for _, positive, _ in triples]
+    counts = Counter(gtins)
+    return sum(counts[gtin] > 1 for gtin in gtins)
 
 
 def select_balanced_negatives(
@@ -1562,9 +1562,9 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         *,
         df,
         payload,
-        row_barcodes,
+        row_gtins,
         structured_features,
-        train_barcodes,
+        train_gtins,
         existing,
         ann_state,
         slot_ids,
@@ -1577,9 +1577,9 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
     ):
         self.df = df
         self.payload = payload
-        self.row_barcodes = row_barcodes
+        self.row_gtins = row_gtins
         self.structured_features = structured_features
-        self.train_barcodes = train_barcodes
+        self.train_gtins = train_gtins
         self.existing = existing
         self.ann_state = ann_state
         self.slot_ids = list(slot_ids)
@@ -1635,9 +1635,9 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
                 model,
                 self.df,
                 self.payload,
-                self.row_barcodes,
+                self.row_gtins,
                 structured_features=self.structured_features,
-                train_barcodes=self.train_barcodes,
+                train_gtins=self.train_gtins,
                 existing=self.existing,
                 step=int(state.global_step),
                 epoch=epoch,
@@ -1669,7 +1669,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             audit_path.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(
                 columns=[
-                    "step", "epoch", "row_a", "row_b", "barcode_a", "barcode_b",
+                    "step", "epoch", "row_a", "row_b", "gtin_a", "gtin_b",
                     "cosine", "band_lo", "band_hi", "band_mode", "source",
                 ]
             ).to_csv(audit_path, index=False, mode="w")
@@ -1680,7 +1680,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             attr_pairs, attr_scores = mine_attribute_conflict_negatives(
                 self.df,
                 self.payload,
-                self.row_barcodes,
+                self.row_gtins,
                 fine_tuned_emb,
                 existing=self.existing,
                 n_target=int(attr_cfg["target"]),
@@ -1692,7 +1692,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             attr_scores = np.empty((0,), dtype=float)
         if len(attr_pairs):
             attr_keep = pairs_in_set(
-                attr_pairs, self.row_barcodes, set(self.train_barcodes)
+                attr_pairs, self.row_gtins, set(self.train_gtins)
             )
             attr_pairs, attr_scores = attr_pairs[attr_keep], attr_scores[attr_keep]
 
@@ -1783,8 +1783,8 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
                     "epoch": float(epoch),
                     "row_a": int(a),
                     "row_b": int(b),
-                    "barcode_a": str(self.row_barcodes[a]),
-                    "barcode_b": str(self.row_barcodes[b]),
+                    "gtin_a": str(self.row_gtins[a]),
+                    "gtin_b": str(self.row_gtins[b]),
                     "cosine": float(score),
                     "source": source,
                 }
@@ -1792,7 +1792,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
                 if source == "attribute_conflict"
             ],
             columns=[
-                "step", "epoch", "row_a", "row_b", "barcode_a", "barcode_b",
+                "step", "epoch", "row_a", "row_b", "gtin_a", "gtin_b",
                 "cosine", "source",
             ],
         ).to_csv(attr_audit_path, index=False, mode="w")
@@ -2008,25 +2008,25 @@ def _load_canonical_metadata() -> dict[str, dict]:
     }
 
 
-def _sku_payload_metadata(index: int, row, barcode: str, text: str) -> dict:
+def _sku_payload_metadata(index: int, row, gtin: str, text: str) -> dict:
     from core.attribute_conflicts import sku_attribute_info
 
-    attributes = row_metadata_text(row, "attributes", "attr")
+    attributes = row_metadata_text(row, "attribute", "attr")
     info = sku_attribute_info(
-        row_metadata_text(row, "title"), attributes,
-        row_metadata_text(row, "description_short_eng", "description"),
+        row_metadata_text(row, "sku_name_eng"), attributes,
+        row_metadata_text(row, "description_short_eng", "description_short_eng"),
     )
     return {
         "payload_idx": index,
         "point_kind": "sku",
         "source_payload_idx": index,
-        "sku_id": row_metadata_text(row, "product_id", "SKU_ID"),
-        "gtin": barcode,
+        "sku_id": row_metadata_text(row, "sku_id", "SKU_ID"),
+        "gtin": gtin,
         "brand": row_metadata_text(row, "brand"),
-        "title": row_metadata_text(row, "title"),
-        "attributes": attributes,
+        "sku_name_eng": row_metadata_text(row, "sku_name_eng"),
+        "attribute": attributes,
         "country": row_metadata_text(row, "country"),
-        "category": row_metadata_text(row, "category", "category_path"),
+        "category": row_metadata_text(row, "category", "breadcrumbs_eng"),
         "volume": sorted(info["volume"]),
         "pack": sorted(info["pack"]),
         "package_type": sorted(info["package_type"]),
@@ -2041,7 +2041,7 @@ def _sku_payload_metadata(index: int, row, barcode: str, text: str) -> dict:
 
 
 def _canonical_payload_metadata(
-    index: int, record: dict, barcode: str, text: str
+    index: int, record: dict, gtin: str, text: str
 ) -> dict:
     from core.attribute_conflicts import canonical_attribute_info
 
@@ -2051,10 +2051,10 @@ def _canonical_payload_metadata(
         "point_kind": "canonical",
         "source_payload_idx": index,
         "sku_id": "",
-        "gtin": barcode,
+        "gtin": gtin,
         "brand": metadata_text(record["mode_brand"]),
-        "title": metadata_text(record["canonical"]),
-        "attributes": "",
+        "sku_name_eng": metadata_text(record["canonical"]),
+        "attribute": "",
         "country": "",
         "category": metadata_text(record["mode_type"]),
         "volume": sorted(info["volume"]),
@@ -2121,7 +2121,7 @@ def _build_payload_metadata(
             )
     metadata: list[dict] = []
     for index, value in enumerate(row_bc):
-        barcode = str(value)
+        gtin = str(value)
         source_index = copy_sources.get(index)
         if source_index is not None:
             source = dict(metadata[source_index])
@@ -2134,19 +2134,19 @@ def _build_payload_metadata(
             metadata.append(source)
         elif index < len(df):
             metadata.append(
-                _sku_payload_metadata(index, df.iloc[index], barcode, str(payload[index]))
+                _sku_payload_metadata(index, df.iloc[index], gtin, str(payload[index]))
             )
         else:
-            if barcode not in canonical_map:
+            if gtin not in canonical_map:
                 raise ValueError(
                     "payload canonical has no canonical metadata: "
-                    f"{barcode}"
+                    f"{gtin}"
                 )
             metadata.append(
                 _canonical_payload_metadata(
                     index,
-                    canonical_map[barcode],
-                    barcode,
+                    canonical_map[gtin],
+                    gtin,
                     str(payload[index]),
                 )
             )
@@ -2173,8 +2173,8 @@ def _pair_metadata(
             "sku_id",
             "gtin",
             "brand",
-            "title",
-            "attributes",
+            "sku_name_eng",
+            "attribute",
             "country",
             "category",
             "volume",
@@ -2224,7 +2224,7 @@ def _dump_train_visibility(
     sample=False,
 ) -> None:
     """EXACT train-row dump (owner directive 2026-09-07): every row the
-    model ingests for this fold — literal texts, labels, barcodes, and
+    model ingests for this fold — literal texts, labels, gtins, and
     provenance (gate-pos / hard-positive / hard-negative). Rewritten per
     run at results/logs/{run_tag}/train_rows_fold{N}.csv (+ latest pointer
     for non-sample runs)."""
@@ -2250,8 +2250,8 @@ def _dump_train_visibility(
                 "sentence2": t2,
                 "label": l,
                 "provenance": prov(k),
-                "barcode_a": row_bc[a],
-                "barcode_b": row_bc[b],
+                "gtin_a": row_bc[a],
+                "gtin_b": row_bc[b],
                 **_pair_metadata(a, b, payload_metadata, gate_lookup),
             }
         )
@@ -3104,7 +3104,7 @@ def train_one_config(
     run_tag: str = "main",
     folds_override: list[set[str]] | set[str] | None = None,
     dev_fraction: float | None = None,
-    # dev_override: explicit dev barcode set (component-aware splits pass it;
+    # dev_override: explicit dev gtin set (component-aware splits pass it;
     # when set, the rng carve is skipped — the caller owns the boundary)
     dev_override: set[str] | None = None,
     # neg_pairs: (N,2) row pairs used as EXPLICIT negatives — appended to the
@@ -3213,9 +3213,9 @@ def train_one_config(
         hard_negative_mask_audit=hard_negative_mask_audit,
     )
     # Masked positive copies are augmentation for training only.  Splits are
-    # barcode-based, so passing the augmented array directly into dev/test
+    # gtin-based, so passing the augmented array directly into dev/test
     # would silently put those copies into evaluation even though they carry
-    # the same barcode as the original SKU.  Keep the augmented ``pos`` for
+    # the same gtin as the original SKU.  Keep the augmented ``pos`` for
     # train-side selection, but remove copy endpoints from evaluation pools.
     _masked_copy_ids = {
         int(row["copy_payload_idx"])
@@ -3247,7 +3247,7 @@ def train_one_config(
         row_bc=row_bc,
         n_source_rows=len(df),
     )
-    all_barcode_set = set(row_bc.tolist())
+    all_gtin_set = set(row_bc.tolist())
 
     # country must cover every payload entry (canonicals + masked copies
     # appended after the sku rows); pad with "" so the cross-country mask
@@ -3276,8 +3276,8 @@ def train_one_config(
     )
 
     if folds_override is not None:
-        # folds_override contract: EITHER one barcode-set (holdout mode: that
-        # set is the single test fold; train = every other barcode) OR a list
+        # folds_override contract: EITHER one gtin-set (holdout mode: that
+        # set is the single test fold; train = every other gtin) OR a list
         # of sets (explicit CV folds — second11's connected-component split;
         # each set is one fold, train = union of the others).
         if isinstance(folds_override, (set, frozenset)):
@@ -3288,11 +3288,11 @@ def train_one_config(
         # AUDIT FIX (round 2 F10, round 3): --folds N now builds N folds.
         # The old code ALWAYS dealt CV_FOLDS (5) and sliced [:n_folds], so
         # --folds 8 silently trained 5 — a cap no one asked for. Behavior
-        # for n_folds <= CV_FOLDS is IDENTICAL: kfold_barcodes deals the
+        # for n_folds <= CV_FOLDS is IDENTICAL: kfold_gtins deals the
         # same strided permutation split, and the --quick prefix slice is
         # unchanged.
         n_folds = cv_folds if cv_folds is not None else CV_FOLDS
-        all_folds = kfold_barcodes(df, n_folds, SEED)
+        all_folds = kfold_gtins(df, n_folds, SEED)
         # --quick trains on the first n_folds of the SAME split (folds stay comparable)
         folds = all_folds[:n_folds]
 
@@ -3342,7 +3342,7 @@ def train_one_config(
     # SAME fold provably shares no positive-pair chain with the query.
     _retrieval_row_component = component_index(pos, row_bc)
 
-    def _holdout_true_match_barcode_pairs() -> frozenset[tuple[str, str]]:
+    def _holdout_true_match_gtin_pairs() -> frozenset[tuple[str, str]]:
         """Known same-product relations — never a competing candidate.
 
         A competitor that the lane's own evidence says IS the query's product
@@ -3393,10 +3393,10 @@ def train_one_config(
 
     from training.prepared_bundle import canonical_payload_rows
     _retrieval_canonical_rows = canonical_payload_rows(len(df), payload, row_bc)
-    _retrieval_true_match_pairs = _holdout_true_match_barcode_pairs()
+    _retrieval_true_match_pairs = _holdout_true_match_gtin_pairs()
     print(
         f"[retrieval-pool] canonical competitor universe={len(_retrieval_canonical_rows):,} "
-        f"payload rows | known true-match barcode pairs excluded="
+        f"payload rows | known true-match gtin pairs excluded="
         f"{len(_retrieval_true_match_pairs) // 2:,} (labeled positives + gate "
         f"proceed + identical canonical identity)",
         flush=True,
@@ -3409,13 +3409,13 @@ def train_one_config(
             if len(folds) > 1:
                 train_bc = set().union(*[f for j, f in enumerate(folds) if j != fold_i])
             else:
-                # single holdout fold: train side = every barcode NOT in the
+                # single holdout fold: train side = every gtin NOT in the
                 # test fold (dev_override carves dev out of this below)
-                train_bc = all_barcode_set - folds[0]
+                train_bc = all_gtin_set - folds[0]
 
-            # split train barcodes into train/dev (early stopping target).
+            # split train gtins into train/dev (early stopping target).
             # dev_override: caller-supplied component-aware dev boundary
-            # (skips the rng carve — a barcode-level carve SPLITS positive
+            # (skips the rng carve — a gtin-level carve SPLITS positive
             # pairs between train and dev, silently dropping them from both:
             # measured 7,808 of 37,445 pair-uses in 5-fold CV).
             if dev_override is not None:
@@ -3434,8 +3434,8 @@ def train_one_config(
             # In selection mode the fold's job is to RANK hyperparameters,
             # and the ranking signal must come from DEV only. Hard asserts
             # (fold dies loudly — FAILED row + traceback, never a silent
-            # leak) when the boundary is wrong: test barcodes in
-            # train/dev, or dev barcodes in the test fold, would leak the
+            # leak) when the boundary is wrong: test gtins in
+            # train/dev, or dev gtins in the test fold, would leak the
             # holdout into the very signal that picks the config.
             if selection_mode:
                 assert dev_override is not None, (
@@ -3446,14 +3446,14 @@ def train_one_config(
                 _dev_o = set(dev_override)
                 _dev_in_test = _dev_o & test_bc
                 assert not _dev_in_test, (
-                    f"[hpo] LEAK: {len(_dev_in_test)} dev_override barcodes "
+                    f"[hpo] LEAK: {len(_dev_in_test)} dev_override gtins "
                     f"are in the test fold (e.g. {sorted(_dev_in_test)[:3]}) "
                     "— they would be silently dropped from dev while the "
                     "split claims to be clean"
                 )
                 _leak = test_bc & (tr_bc | dev_bc)
                 assert not _leak, (
-                    f"[hpo] LEAK: {len(_leak)} test barcodes in train/dev "
+                    f"[hpo] LEAK: {len(_leak)} test gtins in train/dev "
                     f"(e.g. {sorted(_leak)[:3]})"
                 )
                 assert dev_bc, (
@@ -3465,7 +3465,7 @@ def train_one_config(
                 print(
                     f"[hpo] objective={HPO_OBJECTIVE_HOLDOUT} | "
                     f"train={len(tr_bc):,} dev={len(dev_bc):,} "
-                    f"test={len(test_bc):,} barcodes | test quarter "
+                    f"test={len(test_bc):,} gtins | test quarter "
                     f"excluded from training+selection",
                     flush=True,
                 )
@@ -3498,7 +3498,7 @@ def train_one_config(
                 "be fold-safe"
             )
             # Competitor universe for THIS fold: canonical payload rows whose
-            # barcode belongs to the test fold, so every query's ranking task
+            # gtin belongs to the test fold, so every query's ranking task
             # stays inside the fold it is scored on.
             _fold_canonical_rows = _retrieval_canonical_rows[
                 _bc_in_test[_retrieval_canonical_rows]
@@ -3538,7 +3538,7 @@ def train_one_config(
                         tr_neg_sources,
                         df=df,
                         row_bc=row_bc,
-                        train_barcodes=tr_bc,
+                        train_gtins=tr_bc,
                         seed=seed + fold_i + 20_003,
                         enabled=bool(cfg["random_easy_enabled"]),
                         ratio_to_hard=float(cfg["random_easy_ratio_to_hard"]),
@@ -3649,10 +3649,10 @@ def train_one_config(
             # training dataset. Keep their per-fold denominator beside the
             # dynamic hard-negative mask telemetry so masking percentages are
             # interpretable rather than just raw counts.
-            train_barcodes = set(row_bc[train_all[:, 0]].tolist()) if len(train_all) else set()
+            train_gtins = set(row_bc[train_all[:, 0]].tolist()) if len(train_all) else set()
             static_masked_pos = sum(
                 1 for item in (mask_audit or [])
-                if str(item.get("barcode", "")) in train_barcodes
+                if str(item.get("gtin", "")) in train_gtins
             )
             static_positive_pct = (
                 static_masked_pos / len(train_all) if len(train_all) else 0.0
@@ -3740,7 +3740,7 @@ def train_one_config(
                 # (sentence1, sentence2, label) rows. POSITIVES = train_all
                 # (sku, own canonical); NEGATIVES = the gate hard-no pairs —
                 # text-similar, gate-proven different size/pack/flavor —
-                # restricted to TRAIN barcodes (component boundary holds:
+                # restricted to TRAIN gtins (component boundary holds:
                 # pairs_in_set filters by tr_bc). The loss itself then picks
                 # the hard subset per batch (farthest positives, closest
                 # negatives) — hard-pair training at both layers.
@@ -3827,7 +3827,7 @@ def train_one_config(
                     )
                 # ── TRAIN VISIBILITY (owner directive 2026-09-07): the
                 # EXACT rows the model ingests for this fold — sentence1,
-                # sentence2, label, both barcodes, pos/hp/neg provenance.
+                # sentence2, label, both gtins, pos/hp/neg provenance.
                 # Rewritten per fold (last fold wins; fold metrics CSV
                 # keeps per-fold counts).
                 _dump_train_visibility(
@@ -3873,7 +3873,7 @@ def train_one_config(
                         }
                     )
                     continue
-                shared_barcode_rows = _mnrl_shared_positive_barcode_rows(
+                shared_gtin_rows = _mnrl_shared_positive_gtin_rows(
                     triples, row_bc
                 )
                 # Twin exposure (point A watch-item): counterfactual copies
@@ -3894,7 +3894,7 @@ def train_one_config(
                     f"    [mnrl-pairs] triples={len(triples):,} | "
                     f"twin_negatives={twin_triples:,} "
                     f"({twin_triples / max(len(triples), 1):.1%}) | "
-                    f"positive-GTIN repeat exposure={shared_barcode_rows:,} "
+                    f"positive-GTIN repeat exposure={shared_gtin_rows:,} "
                     "(different texts may still share product identity)",
                     flush=True,
                 )
@@ -4326,9 +4326,9 @@ def train_one_config(
                     FineTunedAnnRefreshCallback(
                         df=df,
                         payload=payload,
-                        row_barcodes=row_bc,
+                        row_gtins=row_bc,
                         structured_features=structured_features,
-                        train_barcodes=set(tr_bc),
+                        train_gtins=set(tr_bc),
                         existing=tr_negs,
                         ann_state=ann_refresh_state,
                         slot_ids=range(len(train_all), len(train_all) + len(tr_negs)),
@@ -5095,8 +5095,8 @@ def train_one_config(
             # ══════════════════════════════════════════════════════════════
             # OLD PROTOCOL (retained, renamed, and PROVEN degenerate by its own
             # coverage record below): the pool was np.vstack([test_pos,
-            # hard_test]) grouped by source product_id.  Negatives are anchored
-            # only at the single representative row per barcode, so 5,292 of
+            # hard_test]) grouped by source sku_id.  Negatives are anchored
+            # only at the single representative row per gtin, so 5,292 of
             # 5,847 holdout queries saw EXACTLY their own positive and no query
             # ever saw more than 6 candidates (< max(ks)=10).  With the positive
             # first in a stable sort, a perfect oracle and a constant scorer
@@ -5106,7 +5106,7 @@ def train_one_config(
             _ks = tuple(_lc()["evaluation"]["retrieval_ks"])
             _eval_pairs = np.vstack([test_pos, hard_test])
             _query_ids = np.asarray(
-                [str(df["product_id"].iloc[int(i)]) for i in _eval_pairs[:, 0]],
+                [str(df["sku_id"].iloc[int(i)]) for i in _eval_pairs[:, 0]],
                 dtype=str,
             )
             _old_protocol = {
@@ -5138,7 +5138,7 @@ def train_one_config(
             _retrieval_pool = build_evaluation_pool(
                 test_pos,
                 np.asarray(
-                    [str(df["product_id"].iloc[int(i)]) for i in test_pos[:, 0]],
+                    [str(df["sku_id"].iloc[int(i)]) for i in test_pos[:, 0]],
                     dtype=str,
                 ),
                 competitor_rows=_fold_canonical_rows,
@@ -5150,7 +5150,7 @@ def train_one_config(
                 # the fold's mined hard negatives are seated FIRST so the
                 # hardest distractors stay inside the ranking comparison
                 priority_pairs=hard_test,
-                excluded_barcode_pairs=_retrieval_true_match_pairs,
+                excluded_gtin_pairs=_retrieval_true_match_pairs,
             )
             _t_pool = time.perf_counter()
             _pool_rows = np.unique(_retrieval_pool.pairs.ravel())
@@ -5297,7 +5297,7 @@ def train_one_config(
                 # train_frac<1 (measured -426 on the frac0.25 run).
                 "n_train_hp": int(len(train_all) - n_gate_kept),
                 # contrastive: labeled negatives = gate hard-no pairs in
-                # train barcodes (the label=0 half of the dataset); mnrl:
+                # train gtins (the label=0 half of the dataset); mnrl:
                 # in-batch only (counted separately below); triplet: mined
                 "n_train_neg": (
                     len(tr_negs)
@@ -5429,7 +5429,7 @@ def train_one_config(
                     return _attribute_cache[index]
                 if index < len(df):
                     info = sku_attribute_info(
-                        df["title"].iloc[index], df["attributes"].iloc[index],
+                        df["sku_name_eng"].iloc[index], df["attribute"].iloc[index],
                         df["description_short_eng"].iloc[index]
                         if "description_short_eng" in df else "",
                     )
@@ -5437,7 +5437,7 @@ def train_one_config(
                     gtin = str(row_bc[index])
                     if gtin not in _canon_attrs:
                         raise KeyError(
-                            f"payload endpoint {index} has barcode {gtin!r} "
+                            f"payload endpoint {index} has gtin {gtin!r} "
                             "but no canonical attribute record"
                         )
                     info = _canon_attrs[gtin]
@@ -5460,8 +5460,8 @@ def train_one_config(
                     # mislabeled. Label by what the entry actually is.
                     def _sku_id(i, _n_canon=n_canon_entries):
                         if i < len(df):
-                            return str(df["product_id"].iloc[i])
-                        # canonical entries carry the GTIN as their barcode
+                            return str(df["sku_id"].iloc[i])
+                        # canonical entries carry the GTIN as their gtin
                         bc_i = str(row_bc[i]) if i < len(row_bc) else ""
                         if i < len(df) + _n_canon:
                             return f"canon#{bc_i or i}"

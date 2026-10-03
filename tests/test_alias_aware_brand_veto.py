@@ -1,6 +1,6 @@
 """Alias-aware brand gates: the seeded fold holds at every consumption site.
 
-One mechanism (``core.product_identity.normalize_brand``: config-vocabulary
+One mechanism (``core.sku_identity.normalize_brand``: config-vocabulary
 "brand_aliases", owner ruling 2026-09-29/30, seeded from the within-GTIN
 brand-variant census — 71 variant groups, 49 distinct within-group brand
 vetoes, 27 dissolved by the 8 reviewed entries) feeds FOUR consumers, and each
@@ -36,7 +36,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from core.product_identity import (
+from core.sku_identity import (
     brand_aliases,
     brand_conflict,
     normalize_brand,
@@ -180,7 +180,7 @@ def test_missing_brand_stays_unknown_not_conflict() -> None:
 
 
 def test_exact_gtin_bypass_unchanged_by_the_fold() -> None:
-    """preserve_exact_gtin stays the top of the gate: a trusted barcode is the
+    """preserve_exact_gtin stays the top of the gate: a trusted gtin is the
     answer and no text comparison (with or without an alias) is consulted."""
     from training.rand_matching import targeted_veto_gate
 
@@ -255,17 +255,17 @@ def test_alias_siblings_link_across_retailers_end_to_end() -> None:
     difference is the alias family land in one block and LINK when the same
     pack-stripped title passes the match rule. The link rule (the verifier)
     still has to pass — blocking asserts nothing."""
-    from core.record_linkage import link_barcode_less
+    from core.record_linkage import link_gtin_less
 
     df = pd.DataFrame(
         [
             ("a", "shoc energy drink", "A SHOC", "", "Shop A"),
             ("b", "shoc energy drink", "Accelerator", "", "Shop B"),
         ],
-        columns=["product_id", "title", "brand", "barcode", "retailer"],
+        columns=["sku_id", "sku_name_eng", "brand", "gtin", "retailer"],
         index=["r0", "r1"],
     )
-    clusters, census = link_barcode_less(df)
+    clusters, census = link_gtin_less(df)
     assert clusters["r0"] == clusters["r1"]
     assert census["exact_title_pairs_linked"] == 1
 
@@ -276,17 +276,17 @@ def test_alias_sibling_block_does_not_weaken_the_verifier() -> None:
     (different retailers, IDF-weighted Jaccard below the 0.7 threshold).
     The candidate census (pair_checks) shows the pair was generated; the
     verifier's no is the final word."""
-    from core.record_linkage import link_barcode_less
+    from core.record_linkage import link_gtin_less
 
     df = pd.DataFrame(
         [
             ("a", "shoc orange soda", "A SHOC", "", "Shop A"),
             ("b", "shoc grape water", "Accelerator", "", "Shop B"),
         ],
-        columns=["product_id", "title", "brand", "barcode", "retailer"],
+        columns=["sku_id", "sku_name_eng", "brand", "gtin", "retailer"],
         index=["r0", "r1"],
     )
-    clusters, census = link_barcode_less(df)
+    clusters, census = link_gtin_less(df)
     assert clusters["r0"] != clusters["r1"]
     assert census["pair_checks"] == 1
     assert census["fuzzy_title_pairs_linked"] == 0
@@ -367,12 +367,12 @@ def test_alias_member_and_its_canonical_are_not_mineable_negatives() -> None:
     df = pd.DataFrame(
         {
             # Deliberately DIFFERENT titles: a same-title pair would be the
-            # conflicting-barcode label error the miner excludes.
-            "barcode": [gtins["a_shoc"], gtins["accelerator"], gtins["bolt"], gtins["crisp"]],
-            "title": ["A SHOC cola can", "Accelerator cola can", "Bolt cola can", "Crisp cola can"],
+            # conflicting-gtin label error the miner excludes.
+            "gtin": [gtins["a_shoc"], gtins["accelerator"], gtins["bolt"], gtins["crisp"]],
+            "sku_name_eng": ["A SHOC cola can", "Accelerator cola can", "Bolt cola can", "Crisp cola can"],
         }
     )
-    gtin_to_row = {g: i for i, g in enumerate(df["barcode"].astype(str))}
+    gtin_to_row = {g: i for i, g in enumerate(df["gtin"].astype(str))}
     gtin_to_canon_idx = {
         g: len(df) + i for i, g in enumerate(sorted(canon["gtin"].astype(str)))
     }
@@ -385,15 +385,15 @@ def test_alias_member_and_its_canonical_are_not_mineable_negatives() -> None:
     # Pairs are (source-sku ROW index, other-canonical PAYLOAD index) — the
     # canonical side lives OUTSIDE df, so its coordinate resolves through the
     # sorted-GTIN construction of gtin_to_canon_idx, never df.iat.
-    row_barcodes = [str(b) for b in df["barcode"]]
-    canon_idx_barcodes = {
+    row_gtins = [str(b) for b in df["gtin"]]
+    canon_idx_gtins = {
         len(df) + i: g for i, g in enumerate(sorted(canon["gtin"].astype(str)))
     }
     endpoints = {
         frozenset(
             (
-                row_barcodes[int(source)],
-                canon_idx_barcodes[int(other_canonical)],
+                row_gtins[int(source)],
+                canon_idx_gtins[int(other_canonical)],
             )
         )
         for source, other_canonical in pairs

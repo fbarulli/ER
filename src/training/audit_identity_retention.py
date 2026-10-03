@@ -1,4 +1,4 @@
-"""Account for rows excluded from barcode grouping, without assigning identity.
+"""Account for rows excluded from gtin grouping, without assigning identity.
 
 Run: PYTHONPATH=src python -m training.audit_identity_retention
 """
@@ -8,30 +8,30 @@ import json
 import pandas as pd
 
 from core.common import F, load_raw_export, load_dataset_deduped
-from core.gtin import barcode_validity
+from core.gtin import gtin_validity
 from core.identity_policy import apply_identity_links, reviewed_row_mask
 
 
 def main():
     raw = apply_identity_links(load_raw_export()).reset_index(drop=True)
-    barcode = raw.gtin.fillna('').astype(str).str.strip()
-    missing = barcode.str.lower().isin(['', 'nan', 'none', 'null'])
+    gtin = raw.gtin.fillna('').astype(str).str.strip()
+    missing = gtin.str.lower().isin(['', 'nan', 'none', 'null'])
     reviewed = reviewed_row_mask(raw)
-    valid = barcode_validity(barcode)
+    valid = gtin_validity(gtin)
     excluded = missing | ~valid | reviewed
     retained = pd.read_csv(F['dataset_deduped'], dtype=str, keep_default_na=False)
     mapping = pd.read_csv(F['sku_to_rep'], dtype=str, keep_default_na=False)
-    if mapping.product_id.duplicated().any():
+    if mapping.sku_id.duplicated().any():
         raise ValueError('duplicate source IDs in representative map')
-    # rep_id is a CSV row position, not a product_id.
+    # rep_id is a CSV row position, not a sku_id.
     positions = pd.to_numeric(mapping.rep_id, errors='raise').astype(int)
     if ((positions < 0) | (positions >= len(retained))).any():
         raise ValueError('representative map points outside the retained dataset')
     representatives = dict(zip(
-        mapping.product_id, retained.product_id.iloc[positions].tolist(), strict=True
+        mapping.sku_id, retained.sku_id.iloc[positions].tolist(), strict=True
     ))
-    retained_ids = set(retained.product_id)
-    eligible_ids = set(load_dataset_deduped().product_id.astype(str))
+    retained_ids = set(retained.sku_id)
+    eligible_ids = set(load_dataset_deduped().sku_id.astype(str))
     rows = raw.loc[excluded].copy()
     rows['exclusion_reason'] = [
         'identity_review' if reviewed.at[i] else

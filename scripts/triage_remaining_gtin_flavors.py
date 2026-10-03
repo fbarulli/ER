@@ -61,7 +61,7 @@ def main():
     original = frame.to_dict('records')
     facts = normalize_and_validate_gtin(frame.gtin)
     valid = facts.gtin_structurally_valid.tolist()
-    dims = [row_dimensions({'attributes':r['attribute']}).attributes for r in original]
+    dims = [row_dimensions({'attribute':r['attribute']}).attributes for r in original]
     gt_indices = defaultdict(list)
     url_indices = defaultdict(list)
     brand_indices = defaultdict(list)
@@ -89,7 +89,7 @@ def main():
         anchors=[]
         for i in indices:
             peers=[original[j] for j in url_indices[original[i]['sku_url']] if j!=i]
-            if peers:anchors.append({'sku_id':original[i]['sku_id'],'url':original[i]['sku_url'],'peer_rows':peers,
+            if peers:anchors.append({'sku_id':original[i]['sku_id'],'sku_url':original[i]['sku_url'],'peer_rows':peers,
                                     'note':'Same source URL anchors listing continuity, not formulation/pack equality without other fields.'})
         entries.append({'gtin':gt,'classification':classification,'rationale':reason,
                         'already_held':gt in holds,'source_sku_ids':[r['sku_id'] for r in rows],
@@ -143,7 +143,7 @@ def main():
         for retailer, peers in by_retailer.items():
             gtins = sorted({original[i]['gtin'] for i in peers})
             if len(gtins) > 1:
-                ambiguous_urls.append({'retailer':retailer,'url':url,'distinct_valid_raw_gtins':gtins,
+                ambiguous_urls.append({'retailer':retailer,'sku_url':url,'distinct_valid_raw_gtins':gtins,
                                        'source_sku_ids':[original[i]['sku_id'] for i in peers],
                                        'titles':[original[i]['sku_name_eng'] for i in peers],
                                        'outcome':'URL is shared by multiple valid-numbered listings; require item-specific variant evidence before scoped reattachment or collapse.'})

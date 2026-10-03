@@ -70,7 +70,7 @@ def test_mask_is_capped_and_never_negative() -> None:
 
 
 def test_candidate_score_uses_mask_but_keeps_raw_score() -> None:
-    row = pd.Series({"SKU_ID": "sku-1", "barcode": "", "title": "water"})
+    row = pd.Series({"SKU_ID": "sku-1", "gtin": "", "sku_name_eng": "water"})
     result = candidate_gate_fields(
         row,
         _info(),
@@ -113,7 +113,7 @@ def test_flavor_overlap_penalty_accepts_normalized_shared_flavor() -> None:
 
 def test_flavor_penalty_preserves_exact_gtin_score() -> None:
     row = pd.Series(
-        {"SKU_ID": "sku-exact", "barcode": "4006381333931", "title": "lime"}
+        {"SKU_ID": "sku-exact", "gtin": "4006381333931", "sku_name_eng": "lime"}
     )
     result = candidate_gate_fields(
         row,
@@ -169,8 +169,8 @@ def test_all_none_zero_failures_are_retained_by_exact_candidate_rescue() -> None
             pd.Series(
                 {
                     "SKU_ID": f"sku-{source_row}",
-                    "barcode": gtin,
-                    "title": title,
+                    "gtin": gtin,
+                    "sku_name_eng": title,
                 }
             ),
             _info(),

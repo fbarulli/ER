@@ -4,7 +4,7 @@ This is the only parser/evaluator of the full attribute-key registry. Existing
 specialized extractors remain adapters for title and canonical evidence.
 All raw fields are compared, but feed differences are not automatic identity
 links or vetoes. Exact IDs and established structured conflicts retain their
-separate authority in core.product_identity.
+separate authority in core.sku_identity.
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def row_dimensions(row: Mapping[str, object], *, policy: DimensionPolicy | None 
     registry = {normalized_attribute_text(k): k for k in policy.attributes}
     attributes: dict[str, set[str]] = {}
     unknown, malformed = set(), []
-    for part in str(row.get("attributes", "") or "").split(";"):
+    for part in str(row.get("attribute", "") or "").split(";"):
         if not part.strip():
             continue
         if ":" not in part:
@@ -77,7 +77,7 @@ def row_dimensions(row: Mapping[str, object], *, policy: DimensionPolicy | None 
                 continue
             normalized = rule.aliases.get(normalized, normalized) if rule else normalized
             attributes.setdefault(name, set()).add(normalized)
-    columns = {str(k): str(v or "").strip() for k, v in row.items() if k != "attributes"}
+    columns = {str(k): str(v or "").strip() for k, v in row.items() if k != "attribute"}
     from core.product_context import resolve_context
     frozen_attributes = {k: frozenset(v) for k, v in attributes.items()}
     return DimensionEvidence(frozen_attributes, columns, tuple(sorted(unknown)), tuple(malformed),
@@ -153,5 +153,5 @@ def evaluate_columns(left: DimensionEvidence, right: DimensionEvidence,
 
 def evaluate_rows(left: Mapping[str, object], right: Mapping[str, object]) -> dict:
     """Full identity evidence; use established identity authority once per pair."""
-    from core.product_identity import evaluate_product_identity, row_identity
-    return evaluate_product_identity(row_identity(left), row_identity(right))
+    from core.sku_identity import evaluate_sku_identity, row_identity
+    return evaluate_sku_identity(row_identity(left), row_identity(right))

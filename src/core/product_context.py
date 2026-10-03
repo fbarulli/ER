@@ -27,16 +27,16 @@ def title_quantities(title: str):
 
 
 def resolve_context(row: Mapping, attributes: Mapping) -> dict:
-    title = str(row.get('title', '') or '')
-    description = str(row.get('description', '') or '')
+    title = str(row.get('sku_name_eng', '') or '')
+    description = str(row.get('description_short_eng', '') or '')
     volume, count = title_quantities(title)
     unit_ml = volume['volume_ml'] or None
     inner = sorted({m[0].casefold().rstrip('s') for m in _CONTAINER.finditer(title)})
     context = {
-        'unit_volume': {'value': unit_ml, 'unit': 'ml', 'source': 'title', 'evidence': volume.get('raw_match', '')},
+        'unit_volume': {'value': unit_ml, 'unit': 'ml', 'source': 'sku_name_eng', 'evidence': volume.get('raw_match', '')},
         'prepared_volume': {'value': None, 'unit': 'ml', 'source': 'unknown', 'evidence': ''},
-        'pack_count': {'value': count, 'source': 'title', 'evidence': title if count else ''},
-        'inner_packaging': {'types': inner, 'materials': [], 'source': 'title' if inner else 'unknown'},
+        'pack_count': {'value': count, 'source': 'sku_name_eng', 'evidence': title if count else ''},
+        'inner_packaging': {'types': inner, 'materials': [], 'source': 'sku_name_eng' if inner else 'unknown'},
         'outer_packaging': {'types': [], 'materials': [], 'source': 'unknown'},
         'unscoped_packaging': {'types': sorted(attributes.get('Pack Type', ())),
                               'materials': sorted(attributes.get('Pack Material Type', ())), 'source': 'raw attributes'},
@@ -48,7 +48,7 @@ def resolve_context(row: Mapping, attributes: Mapping) -> dict:
     if len(inner) == 1 and raw_types == set(inner) and len(raw_materials) == 1:
         context['inner_packaging']['materials'] = raw_materials
         context['inner_packaging']['source'] = 'explicit title container + consistent raw packaging'
-    for source, text in (('title', title), ('description', description)):
+    for source, text in (('sku_name_eng', title), ('description_short_eng', description)):
         for match in _CAFFEINE.finditer(text):
             mg = float(match['mg'])
             basis_ml = canonical_volume_ml(match['volume'], match['unit']) if match['volume'] and float(match['volume']) > 0 else None
@@ -64,12 +64,12 @@ def resolve_context(row: Mapping, attributes: Mapping) -> dict:
             context['caffeine']['claims'].append({'mg': mg, 'basis': container or 'explicit_volume',
                 'basis_ml': basis_ml, 'mg_per_100ml': mg / basis_ml * 100 if basis_ml else None,
                 'source': source, 'evidence': match[0]})
-    sku = str(row.get('product_id', '') or '')
+    sku = str(row.get('sku_id', '') or '')
     reviewed = review_policy().listing_context.get(sku)
     if reviewed:
         from core.gtin import normalize_and_validate_gtin
         import pandas as pd
-        actual = normalize_and_validate_gtin(pd.Series([row.get('barcode', '')])).gtin_clean.iat[0]
+        actual = normalize_and_validate_gtin(pd.Series([row.get('gtin', '')])).gtin_clean.iat[0]
         if pd.notna(actual) and str(actual).zfill(14) == reviewed.gtin.zfill(14):
             if reviewed.inner_type or reviewed.inner_material:
                 context['inner_packaging'] = {'types': [reviewed.inner_type] if reviewed.inner_type else [],

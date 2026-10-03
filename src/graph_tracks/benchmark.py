@@ -42,7 +42,7 @@ def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
     support = tensorize([records[i] for i in support_indices], vocabulary, 'cuda')
     text = None
     if cfg.text_cache:
-        vectors, _ = load_text_cache(resolve(cfg.text_cache), [r['product_id'] for r in records])
+        vectors, _ = load_text_cache(resolve(cfg.text_cache), [r['sku_id'] for r in records])
         text = torch.tensor(vectors, device='cuda')
     support_text = None if text is None else text[support_indices]
     model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,

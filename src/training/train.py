@@ -534,9 +534,9 @@ def _main_inner(_mlf, _wandb) -> None:
     # Entity keys for donor-disjointness (one per ORIGINAL payload row;
     # augmentation copies inherit via audit lineage, so this never grows).
     # Transitive-closure clusters over ground-truth positive pairs plus
-    # shared barcodes: multi-hop duplicates (retailer-feed variants, GTIN
+    # shared gtins: multi-hop duplicates (retailer-feed variants, GTIN
     # length fragments) land in one CLUSTER_xxxxxx even when no single
-    # barcode matches. Unmapped/isolated rows get unique per-row keys and
+    # gtin matches. Unmapped/isolated rows get unique per-row keys and
     # never block each other.
     import pandas as _pd
 
@@ -547,18 +547,18 @@ def _main_inner(_mlf, _wandb) -> None:
 
     _n_df_rows = len(df)
     _record_ids = [
-        str(df["product_id"].iloc[idx])
-        if idx < _n_df_rows and "product_id" in df.columns
+        str(df["sku_id"].iloc[idx])
+        if idx < _n_df_rows and "sku_id" in df.columns
         else str(row_bc[idx]).strip()
         for idx in range(len(payload))
     ]
-    _pool_barcodes = [
+    _pool_gtins = [
         _entity_key(str(row_bc[idx]).strip() if idx < len(row_bc) else "", "")
         for idx in range(len(payload))
     ]
     _donor_pool = _pd.DataFrame({
         "record_id": _record_ids,
-        "barcode": _pool_barcodes,
+        "gtin": _pool_gtins,
     })
     _truth_pairs = _pd.DataFrame({
         "anchor_id": [_record_ids[int(a)] for a, _b in np.asarray(pos, dtype=int)],
@@ -702,7 +702,7 @@ def _main_inner(_mlf, _wandb) -> None:
     if len(pos) == 0:
         raise SystemExit(
             "no positives resolved — check canonical_records.csv GTINs "
-            "vs dataset_deduped.csv barcodes"
+            "vs dataset_deduped.csv gtins"
         )
 
     # ── masking augmentation (src/training/masking.py, config-driven) ──
@@ -716,7 +716,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # pair semantics, noised anchor). Hard negatives get the same two views
     # and stay label 0: the masked/swapped anchor remains paired with its
     # different-product target. Masked/swapped texts are NEW payload entries
-    # (row_bc = same barcode), so folds/components are unaffected.
+    # (row_bc = same gtin), so folds/components are unaffected.
     mask_audit: list[dict] = []
     hard_negative_mask_audit: list[dict] = []
     # Augmented hard-negative copies join BOTH the eval (neg) and training
@@ -1029,11 +1029,11 @@ def _main_inner(_mlf, _wandb) -> None:
 
     # ── COMPONENT-AWARE SPLITS ──────────────────────────────────────────────
     # UNEXPECTED-BEHAVIOR FIX: pipeline positives connect TWO DIFFERENT
-    # barcodes, so barcode-level folds straddle pairs (one endpoint per
+    # gtins, so gtin-level folds straddle pairs (one endpoint per
     # side) and pairs_in_set silently drops them — measured 7,489
     # positives → ~1,500 straddling per fold boundary, test sets at ~130
     # pairs. The split unit is the CONNECTED COMPONENT of the positive-pair
-    # graph; the dev boundary must ALSO be component-aligned (a barcode-level
+    # graph; the dev boundary must ALSO be component-aligned (a gtin-level
     # rng carve splits 7,808 of 37,445 train-side pair-uses between train/dev).
     # holdout = ONE component-aware split, derived by folds.derive_holdout:
     # test = the LAST component group, dev = the one before it, train = the
@@ -1053,7 +1053,7 @@ def _main_inner(_mlf, _wandb) -> None:
         print(
             f"[holdout {1.0 - dev_share - test_share:.0%}/{dev_share:.0%}/"
             f"{test_share:.0%}] train≈{n_tr:,} / dev {len(dev_bc):,} / "
-            f"test {len(test_bc):,} barcodes | train_pos {tr_pos:,} (component-aware)",
+            f"test {len(test_bc):,} gtins | train_pos {tr_pos:,} (component-aware)",
             flush=True,
         )
     else:
@@ -1280,7 +1280,7 @@ def _main_inner(_mlf, _wandb) -> None:
     # df made cross_mask ≈ 'sku side has a country' — 85% of positives
     # flagged cross-country and auc_cross ≈ auc. The canonical block gets
     # the REAL country of its GTIN's df rows (mode over the rows that map
-    # to it); masked copies inherit the ANCHOR's country via their barcode.
+    # to it); masked copies inherit the ANCHOR's country via their gtin.
     if len(country) < len(payload):
         import collections as _coll
 
@@ -1302,7 +1302,7 @@ def _main_inner(_mlf, _wandb) -> None:
         print(
             f"[country-pad] {_resolved:,}/{len(_pad):,} extended-payload "
             f"entries resolved to a real country "
-            f"(canonicals by their GTIN's rows; masked copies by barcode)",
+            f"(canonicals by their GTIN's rows; masked copies by gtin)",
             flush=True,
         )
 
@@ -1350,7 +1350,7 @@ def _main_inner(_mlf, _wandb) -> None:
         # the test quarter (folds_override) + dev quarter (dev_override)
         # so the sweep trains q0+q1 and selects on q2; cv mode passes the
         # fold list. Never let a sweep rebuild its own folds over ALL
-        # barcodes: that put the dev/test quarters into the sweep's train
+        # gtins: that put the dev/test quarters into the sweep's train
         # side — the leak the previous fix closed (asserts in hpo.py).
         # MASKING: the entry already augmented (pre-encode, emb0-aligned);
         # the sweep lanes inherit it — len(mask_audit) is the applied
@@ -1572,7 +1572,7 @@ def _main_inner(_mlf, _wandb) -> None:
                     "masked_minus_unmasked": (
                         _masked_sims - _unmasked_sims
                     ).round(4),
-                    "barcode": [m["barcode"] for m in mask_audit],
+                    "gtin": [m["gtin"] for m in mask_audit],
                     "anchor_text": _unmasked_texts,
                     "masked_text": _texts,
                 }

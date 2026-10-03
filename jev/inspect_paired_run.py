@@ -29,16 +29,16 @@ def main():
         records=[]
         for gtin in key:
             processed=states['gate_data'][gtin]
-            records.append({'gtin':gtin,'titles':[x.get('title','') for x in states['original_data'][gtin]['listings']], 'processed':{k:processed.get(k) for k in ('canonical','mode_type','flavor_set','volume_set','pack_set','package_type_set','package_material_set','carbonation_set','pulp_set','sweetener_set','attribute_consistency_flags','universe_evidence')}})
+            records.append({'gtin':gtin,'titles':[x.get('sku_name_eng','') for x in states['original_data'][gtin]['listings']], 'processed':{k:processed.get(k) for k in ('canonical','mode_type','flavor_set','volume_set','pack_set','package_type_set','package_material_set','carbonation_set','pulp_set','sweetener_set','attribute_consistency_flags','universe_evidence')}})
         changed.append({**pair,'finding':category,'observation':observation,'next_step':next_step,'confidence':confidence,'records':records})
     contamination=[]
     for gtin in ('856472002055','8711900018874','860002364179'):
         for row in states['original_data'][gtin]['listings']:
-            kwargs={k:row.get(column,'') for k,column in [('sku_name','title'),('attribute','attributes'),('description','description'),('url','url'),('image_url','image_url'),('category_path','category_path'),('category','category')]}
+            kwargs={k:row.get(column,'') for k,column in [('sku_name','sku_name_eng'),('attribute','attribute'),('description_short_eng','description_short_eng'),('sku_url','sku_url'),('image_url','image_url'),('breadcrumbs_eng','breadcrumbs_eng'),('category','category')]}
             full=extract_all(**kwargs)
-            without=extract_all(**{**kwargs,'category_path':'','category':''})
+            without=extract_all(**{**kwargs,'breadcrumbs_eng':'','category':''})
             added=sorted(set(full['flavor_set'])-set(without['flavor_set']))
-            if added:contamination.append({'gtin':gtin,'title':row.get('title',''),'category':row.get('category',''),'category_path':row.get('category_path',''),'full_flavors':sorted(full['flavor_set']),'without_category_flavors':sorted(without['flavor_set']),'added_by_category':added})
+            if added:contamination.append({'gtin':gtin,'sku_name_eng':row.get('sku_name_eng',''),'category':row.get('category',''),'breadcrumbs_eng':row.get('breadcrumbs_eng',''),'full_flavors':sorted(full['flavor_set']),'without_category_flavors':sorted(without['flavor_set']),'added_by_category':added})
     both_low=[p for p in paired['pairs'] if p['gate']=='proceed' and all(p[scope]['bucket']=='low' for scope in ('gate_data','original_data'))]
     count=Counter()
     for p in both_low:

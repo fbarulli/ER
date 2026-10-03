@@ -9,14 +9,14 @@ from core.deduplication import collapse_representatives
 def test_selection_matches_stable_keep_first_with_missing_keys():
     frame = pd.DataFrame({
         "retailer": ["a", "a", "a", "a", "b", "b"],
-        "title": ["juice", "juice", None, np.nan, "water", "water"],
+        "sku_name_eng": ["juice", "juice", None, np.nan, "water", "water"],
         "rank": [1, 2, 4, 4, np.nan, 0],
     }, index=[9, 3, 17, 25, 41, 6])
     parent = {i: i for i in frame.index}
     kept, dropped = collapse_representatives(
-        frame, ["retailer", "title"], ["rank"], [False], parent=parent
+        frame, ["retailer", "sku_name_eng"], ["rank"], [False], parent=parent
     )
-    expected = frame.sort_values("rank", ascending=False, na_position="last", kind="stable").drop_duplicates(["retailer", "title"])
+    expected = frame.sort_values("rank", ascending=False, na_position="last", kind="stable").drop_duplicates(["retailer", "sku_name_eng"])
     pd.testing.assert_frame_equal(kept, expected)
     assert parent == {9: 3, 3: 3, 17: 17, 25: 17, 41: 6, 6: 6}
     assert set(dropped) == {9, 25, 41}
@@ -37,9 +37,9 @@ def test_nonunique_source_indices_rejected():
 
 def test_missing_title_protection_survives_shared_collapse():
     from training.dedupe import _protect_missing_titles
-    frame = pd.DataFrame({"retailer": ["a", "a"], "title": [None, None], "_ident": ["", ""], "rank": [1, 2]})
+    frame = pd.DataFrame({"retailer": ["a", "a"], "sku_name_eng": [None, None], "_ident": ["", ""], "rank": [1, 2]})
     kept, dropped = collapse_representatives(
-        _protect_missing_titles(frame), ["retailer", "title", "_ident"], ["rank"], [False], parent={}
+        _protect_missing_titles(frame), ["retailer", "sku_name_eng", "_ident"], ["rank"], [False], parent={}
     )
     assert len(kept) == 2 and dropped.empty
 
@@ -49,7 +49,7 @@ def test_reviewed_adjudication_reads_config(monkeypatch, decision, expected):
     from types import SimpleNamespace
     from training import dedupe
     spec = SimpleNamespace(dedupe_adjudications=[SimpleNamespace(
-        retailer='retailer', barcode='123', decision=decision
+        retailer='retailer', gtin='123', decision=decision
     )])
     monkeypatch.setattr(dedupe, 'data_cfg', lambda: spec)
     # Overrides settle the pair before any descriptor parsing is needed.

@@ -57,16 +57,16 @@ def build(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if missing:
         raise ValueError(f"raw export missing mapped columns {missing}; available: {list(raw.columns)}")
     df = raw.rename(columns=COLUMN_MAPPING)
-    product_ids = df["product_id"].fillna("").astype(str).str.strip()
-    if product_ids.eq("").any():
+    sku_ids = df["sku_id"].fillna("").astype(str).str.strip()
+    if sku_ids.eq("").any():
         raise ValueError(
-            f"{int(product_ids.eq('').sum())} rows have an empty product_id; "
+            f"{int(sku_ids.eq('').sum())} rows have an empty sku_id; "
             "the evidence sidecar requires a one-to-one source key"
         )
-    if product_ids.duplicated().any():
+    if sku_ids.duplicated().any():
         raise ValueError(
-            f"{int(product_ids.duplicated(keep=False).sum())} rows share a "
-            "product_id; resolve source-key duplication before building a "
+            f"{int(sku_ids.duplicated(keep=False).sum())} rows share a "
+            "sku_id; resolve source-key duplication before building a "
             "one-row-per-product evidence sidecar"
         )
     rows: list[dict[str, object]] = []
@@ -76,7 +76,7 @@ def build(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     no_brand_span = 0
     for row in df.itertuples(index=False):
         data = row._asdict()
-        title = str(data["title"]).strip()
+        title = str(data["sku_name_eng"]).strip()
         cleaned_title = clean_sku_text(title)
         original_words = _word_count(title)
         cleaned_words = _word_count(cleaned_title)
@@ -85,7 +85,7 @@ def build(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         parsed = extract_title_attributes(title)
         brand_candidate = find_brand_span(title, brand)
         candidates = [
-            Candidate(entity["start"], entity["end"], entity["label"], None, "title")
+            Candidate(entity["start"], entity["end"], entity["label"], None, "sku_name_eng")
             for entity in parsed["entities"]
         ]
         if brand_candidate is not None:
@@ -96,20 +96,20 @@ def build(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             if not (0 <= start < end <= len(title)):
                 raise ValueError(
                     f"invalid {entity['label']} span ({start}, {end}) for "
-                    f"product_id={data['product_id']!r}"
+                    f"sku_id={data['sku_id']!r}"
                 )
         label_counts.update(entity["label"] for entity in entities)
-        attribute = parse_attribute_details(data["attributes"])
+        attribute = parse_attribute_details(data["attribute"])
         if not title:
             no_title += 1
         if brand_candidate is None:
             no_brand_span += 1
         rows.append({
-            "product_id": data["product_id"],
+            "sku_id": data["sku_id"],
             "retailer": data["retailer"],
             "country": data["country"],
-            "gtin_raw": data["barcode"],
-            "title": title,
+            "gtin_raw": data["gtin"],
+            "sku_name_eng": title,
             "cleaned_title": cleaned_title,
             "original_word_count": original_words,
             "cleaned_word_count": cleaned_words,

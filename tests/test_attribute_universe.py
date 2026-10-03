@@ -21,7 +21,7 @@ from core.attribute_universe import (
 
 _UNCLASSIFIED_KEY = "unclassified_keys"
 
-# Checksum-valid corpus barcodes (same fixtures test_dedupe_identity.py uses,
+# Checksum-valid corpus gtins (same fixtures test_dedupe_identity.py uses,
 # extended with a programmatic family so a synthetic frame can afford pair
 # groups without hand-carrying check digits).
 _KNOWN_VALID = ("8715600246377", "8715600248098")
@@ -39,8 +39,8 @@ def _valid_gtin(index: int) -> str:
 
 def _frame(rows: list[tuple[str, str]]) -> pd.DataFrame:
     return pd.DataFrame(
-        [{"attributes": attributes, "barcode": barcode} for barcode, attributes in rows] or
-        {"attributes": pd.Series(dtype=str), "barcode": pd.Series(dtype=str)}
+        [{"attribute": attributes, "gtin": gtin} for gtin, attributes in rows] or
+        {"attribute": pd.Series(dtype=str), "gtin": pd.Series(dtype=str)}
     )
 
 
@@ -55,7 +55,7 @@ def test_census_matches_hand_computed_counts():
     ]))
     census = u.census()
     juice = census["keys"]["juice content"]
-    # 6 populated rows, 4 distinct sets, 2 same-GTIN pairs (invalid-barcode
+    # 6 populated rows, 4 distinct sets, 2 same-GTIN pairs (invalid-gtin
     # rows contribute none), 1 conflict ("0-2%" vs "0-2%, 100%") -> rate 0.5.
     assert juice["rows_populated"] == 6
     assert juice["distinct_value_sets"] == 4

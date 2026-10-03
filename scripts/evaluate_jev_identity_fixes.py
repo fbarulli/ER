@@ -24,7 +24,7 @@ def main():
                if row['status'] == 'ok' and row['copy'] == 'a_order'}
     records = canonical_records_from_csv()
     source = {gtin: json.loads(record['source_rows']) for gtin, record in records.items()}
-    groups = {gtin: [(row.get('title', ''), row.get('attributes', '')) for row in rows]
+    groups = {gtin: [(row.get('sku_name_eng', ''), row.get('attribute', '')) for row in rows]
               for gtin, rows in source.items()}
     idf = NgramIDF(groups)
     required = {row[field] for row in sample for field in ('gtin1', 'gtin2')}
@@ -32,10 +32,10 @@ def main():
     for i, gtin in enumerate(sorted(required), 1):
         rows = source[gtin]
         record = generate_canonical(gtin, records[gtin]['mode_brand'], groups[gtin], idf, None,
-                                    descriptions=[r.get('description', '') for r in rows],
-                                    urls=[r.get('url', '') for r in rows],
+                                    descriptions=[r.get('description_short_eng', '') for r in rows],
+                                    urls=[r.get('sku_url', '') for r in rows],
                                     image_urls=[r.get('image_url', '') for r in rows],
-                                    category_paths=[r.get('category_path', '') for r in rows],
+                                    breadcrumbs_engs=[r.get('breadcrumbs_eng', '') for r in rows],
                                     categories=[r.get('category', '') for r in rows])
         record['source_rows'] = records[gtin]['source_rows']
         record['description_evidence'] = records[gtin].get('description_evidence', [])

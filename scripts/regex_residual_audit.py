@@ -72,7 +72,7 @@ ATTRIBUTE_CAFFEINE_RE = re.compile(r"\bcaffeine\s+\d+(?:\s+\d+)?(?:\s+mg)?\b")
 ATTRIBUTE_JUICE_CONTENT_RE = re.compile(r"\bjuice content\s+\d+(?:\s+\d+)?\b")
 NATURAL_CLAIM_RE = re.compile(r"\b(?:100\s+(?:percent\s+)?natural|all\s+natural|naturally\s+derived\s+natural)\b")
 TOKEN_RE = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?")
-FIELDS = ("brand", "title", "attributes")
+FIELDS = ("brand", "sku_name_eng", "attribute")
 ROUNDS = ("live_regex", "volume_pack_cleanup", "model_stopwords", "candidate_phrases", "unique_tokens")
 STEMMER = SnowballStemmer("english")
 # Diagnostic candidates suggested by the earlier residual n-grams. These are
@@ -140,7 +140,7 @@ def drop_nearby_repeats(text: str, *, window: int, min_words: int) -> tuple[str,
 
 def live_patterns(field: str):
     """Yield the lexical patterns audited for a working SKU input field."""
-    if field in {"title", "brand"}:
+    if field in {"sku_name_eng", "brand"}:
         for pattern in (VOLUME_RE,):
             yield "volume", pattern
         yield "weight", WEIGHT_RE
@@ -151,7 +151,7 @@ def live_patterns(field: str):
         yield "package_material", PACKAGE_MATERIAL_RE
         for pattern in PRODUCT_TYPE_PATTERNS:
             yield "product_type", pattern
-    elif field == "attributes":
+    elif field == "attribute":
         yield "attribute_volume", ATTRIBUTE_VOLUME_RE
         yield "attribute_pack", ATTRIBUTE_PACK_RE
         yield "attribute_caffeine", ATTRIBUTE_CAFFEINE_RE
@@ -182,14 +182,14 @@ def residual(text: str, *, field: str, round_name: str,
     elif round_name == "volume_pack_cleanup":
         collect("model_volume_pack_cleanup", _VOLUME_PACK_RE)
     elif round_name == "model_stopwords":
-        stopwords = MINIMAL_STOPWORDS | (_MODEL_STOP if field == "attributes" else set())
+        stopwords = MINIMAL_STOPWORDS | (_MODEL_STOP if field == "attribute" else set())
         kept = [token for token in text.split() if token not in stopwords and len(token) > 1]
         removed = len(text.split()) - len(kept)
         if removed:
             hits["model_stopwords"] = removed
         return " ".join(kept), hits
     elif round_name == "candidate_phrases":
-        collect("candidate_phrase", CANDIDATE_ATTRIBUTES_RE if field == "attributes" else CANDIDATE_TITLE_RE)
+        collect("candidate_phrase", CANDIDATE_ATTRIBUTES_RE if field == "attribute" else CANDIDATE_TITLE_RE)
     elif round_name == "unique_tokens":
         if seen_tokens is None:
             raise ValueError("unique_tokens requires a per-product seen set")
@@ -240,7 +240,7 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
     with input_path.open(newline="", encoding="utf-8") as source, destination_context as destination:
         reader = csv.DictReader(source)
         writer = csv.DictWriter(destination, fieldnames=(
-            "product_id", *FIELDS,
+            "sku_id", *FIELDS,
             *(f"{name}_{field}" for name in ROUNDS for field in FIELDS),
             "unique_description",
         )) if destination else None
@@ -248,7 +248,7 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
             writer.writeheader()
         for row in reader:
             totals["rows"] += 1
-            output = {"product_id": row.get("product_id", ""),
+            output = {"sku_id": row.get("sku_id", ""),
                       **{field: row.get(field, "") for field in FIELDS}}
             seen_tokens: set[str] = set()
             for field in FIELDS:
@@ -276,7 +276,7 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
                     for n in (2, 3, 4):
                         grams[round_name][field][n].update(" ".join(tokens[i:i+n]) for i in range(len(tokens) - n + 1))
                     if current:
-                        item = {"product_id": output["product_id"], "length": len(current),
+                        item = {"sku_id": output["sku_id"], "length": len(current),
                                 "residual": current, "original": output[source_col]}
                         heap = longest[round_name][field]
                         entry = (len(current), totals["rows"], item)
@@ -292,8 +292,8 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
                 description_grams[n].update(" ".join(description_tokens[i:i+n])
                                             for i in range(len(description_tokens) - n + 1))
             if description:
-                item = {"product_id": output["product_id"], "length": len(description),
-                        "description": description}
+                item = {"sku_id": output["sku_id"], "length": len(description),
+                        "description_short_eng": description}
                 entry = (len(description), totals["rows"], item)
                 if len(description_longest) < top:
                     heapq.heappush(description_longest, entry)
@@ -311,7 +311,7 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
         "counts": dict(totals),
         "rounds": {
             name: {
-                "longest": {field: [entry[2] for entry in sorted(items, key=lambda entry: (-entry[0], entry[2]["product_id"]))]
+                "longest": {field: [entry[2] for entry in sorted(items, key=lambda entry: (-entry[0], entry[2]["sku_id"]))]
                             for field, items in longest[name].items()},
                 "ngrams": {field: {str(n): [{"text": phrase, "count": count} for phrase, count in grams[name][field][n].most_common(top)]
                                     for n in (2, 3, 4)} for field in grams[name]},
@@ -319,7 +319,7 @@ def audit(input_path: Path, rows_path: Path | None, *, top: int,
         },
         "unique_descriptions": {
             "longest": [entry[2] for entry in sorted(description_longest,
-                                                     key=lambda entry: (-entry[0], entry[2]["product_id"]))],
+                                                     key=lambda entry: (-entry[0], entry[2]["sku_id"]))],
             "ngrams": {str(n): [{"text": phrase, "count": count}
                                  for phrase, count in description_grams[n].most_common(top)]
                        for n in (2, 3, 4)},
@@ -338,12 +338,12 @@ def print_report(report: dict[str, object]) -> None:
             final = round_name == ROUNDS[-1]
             for item in report["rounds"][round_name]["longest"][field][:5 if final else 3]:
                 value = str(item["residual"]) if final else str(item["residual"])[:160]
-                print(f"    longest {item['length']:>4} {item['product_id']}: {value}")
+                print(f"    longest {item['length']:>4} {item['sku_id']}: {value}")
             for n in (2, 3, 4):
                 print(f"    {n}-grams: " + ", ".join(f"{g['text']} ({g['count']:,})" for g in report["rounds"][round_name]["ngrams"][field][str(n)][:10 if final else 5]))
     print(f"\nunique descriptions: {totals['unique_description_tokens']:,} tokens")
     for item in report["unique_descriptions"]["longest"][:5]:
-        print(f"  longest {item['length']:>4} {item['product_id']}: {item['description']}")
+        print(f"  longest {item['length']:>4} {item['sku_id']}: {item['description_short_eng']}")
     for n in (2, 3, 4):
         print(f"  {n}-grams: " + ", ".join(f"{g['text']} ({g['count']:,})"
                                        for g in report["unique_descriptions"]["ngrams"][str(n)][:10]))
@@ -385,7 +385,7 @@ def main() -> None:
                 print(f"  {field}: baseline={before:,} repeat_reduced={after:,} delta={after-before:+,}")
                 for label, scenario in (("before", baseline), ("after", reduced)):
                     for item in scenario["rounds"][round_name]["longest"][field][:3]:
-                        print(f"    {label} longest {item['length']:>4} {item['product_id']}: {item['residual'][:220]}")
+                        print(f"    {label} longest {item['length']:>4} {item['sku_id']}: {item['residual'][:220]}")
                     for n in (2, 3, 4):
                         values = scenario["rounds"][round_name]["ngrams"][field][str(n)][:10]
                         print(f"    {label} {n}-grams: " + ", ".join(f"{g['text']} ({g['count']:,})" for g in values))

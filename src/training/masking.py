@@ -11,7 +11,7 @@ For a chosen fraction of positive pairs, the ANCHOR text gets random token
 masking (each token replaced with the mask token at mask_prob). The masked
 anchor is appended to the payload and paired with the ORIGINAL positive —
 same pair semantics, noised anchor. Masked texts are new payload entries
-carrying the anchor's barcode, so components/folds are unaffected.
+carrying the anchor's gtin, so components/folds are unaffected.
 """
 
 from __future__ import annotations
@@ -298,7 +298,7 @@ def augment_pairs(
                 "anchor_payload_idx": a,
                 "copy_payload_idx": copy_idx,
                 "pair_payload_idx": b,
-                "barcode": str(row_bc[a]),
+                "gtin": str(row_bc[a]),
                 "realized_extent": round(extent, 4),
                 "configured_mask_lo": effective_lo,
                 "configured_mask_hi": effective_hi,
@@ -422,7 +422,7 @@ def augment_declaration_dropout(
             "anchor_payload_idx": a,
             "copy_payload_idx": copy_idx,
             "pair_payload_idx": b,
-            "barcode": str(row_bc[a]),
+            "gtin": str(row_bc[a]),
             "realized_extent": extent,
             "configured_mask_lo": None,
             "configured_mask_hi": None,
@@ -504,12 +504,12 @@ def build_entity_cluster_map(
     anchor_col: str = "anchor_id",
     pair_col: str = "pair_id",
     record_col: str = "record_id",
-    barcode_col: str = "barcode",
+    gtin_col: str = "gtin",
 ) -> dict:
     """Deterministic cluster-ID map via transitive closure.
 
     Nodes are record IDs; edges come from ground-truth positive pairs plus
-    shared non-null barcodes (chained within each barcode group, so N rows
+    shared non-null gtins (chained within each gtin group, so N rows
     cost N-1 edges). Connected components become CLUSTER_xxxxxx IDs. Only
     connected records are mapped — isolated records are absent, and the
     caller must give them unique fallback keys (never a shared blank key).
@@ -524,9 +524,9 @@ def build_entity_cluster_map(
     for _, row in positive_pairs_df.iterrows():
         graph.add_edge(row[anchor_col], row[pair_col])
     pool = donor_pool_df[
-        donor_pool_df[barcode_col].notna() & (donor_pool_df[barcode_col] != "")
+        donor_pool_df[gtin_col].notna() & (donor_pool_df[gtin_col] != "")
     ]
-    for _, group in pool.groupby(barcode_col, sort=True):
+    for _, group in pool.groupby(gtin_col, sort=True):
         node_ids = group[record_col].tolist()
         for index in range(len(node_ids) - 1):
             graph.add_edge(node_ids[index], node_ids[index + 1])
@@ -547,7 +547,7 @@ def check_cluster_sizes(
 ) -> dict[str, object]:
     """Circuit breaker over entity-cluster topology (fail loud, not silent).
 
-    A single bad edge (shared placeholder barcode, feed corruption) merges
+    A single bad edge (shared placeholder gtin, feed corruption) merges
     two large clusters under union-find with no un-merge short of a full
     rebuild. This check runs at build time in data prep: components are
     tiny by construction (measured max 13 over 38,952 covered rows), so a
@@ -584,7 +584,7 @@ def check_cluster_sizes(
         raise ValueError(
             "entity-cluster circuit breaker: component "
             f"{biggest} has {biggest_size} rows > max {max_component_size} "
-            "(suspect shared placeholder barcode or feed corruption — "
+            "(suspect shared placeholder gtin or feed corruption — "
             "audit before merging)"
         )
     min_population_for_ratio = int(1 / max_giant_ratio + 0.999999)
@@ -604,7 +604,7 @@ def normalize_entity_key(value: object, fallback: str) -> str:
     missing values): strip surrounding whitespace and leading zeros so
     length-variants of one GTIN share a key. Empty/missing values get the
     caller-supplied unique fallback (never the shared "" — one blank key
-    would refuse every barcode-less donor at once).
+    would refuse every gtin-less donor at once).
     """
     text = str(value or "").strip()
     if not text:
@@ -618,7 +618,7 @@ def _resolve_entity_keys(
     pairs: np.ndarray,
     pool: int,
 ) -> list[str] | None:
-    """Entity keys for donor-disjointness guards, or None for barcodes.
+    """Entity keys for donor-disjointness guards, or None for gtins.
 
     ``pool`` counts sampled pair rows, not payload rows. Validate every
     endpoint that can be selected so a sparse/high payload index cannot
@@ -772,8 +772,8 @@ def augment_value_swaps(
     new_payload = list(payload)
     new_bc = [str(x) for x in row_bc]
     _entity_list = _resolve_entity_keys(row_bc, entity_keys, pairs, pool)
-    _barcodes = [str(x) for x in np.asarray(row_bc)]
-    entities = _entity_list if _entity_list is not None else _barcodes
+    _gtins = [str(x) for x in np.asarray(row_bc)]
+    entities = _entity_list if _entity_list is not None else _gtins
     from collections import Counter
 
     used_fields: Counter[str] = Counter()
@@ -899,7 +899,7 @@ def augment_value_swaps(
                 "anchor_payload_idx": a,
                 "copy_payload_idx": copy_idx,
                 "pair_payload_idx": b,
-                "barcode": str(row_bc[a]),
+                "gtin": str(row_bc[a]),
                 "realized_extent": extent,
                 "configured_mask_lo": None,
                 "configured_mask_hi": None,
@@ -944,7 +944,7 @@ def mint_swap_counterpart_positives(
     donor tokens come from the recorded donor payload row, so the counterpart
     only ever carries a value that exists elsewhere in the bundle.
 
-    Returns the new positive pairs, their payload rows/barcodes, and audit
+    Returns the new positive pairs, their payload rows/gtins, and audit
     entries whose ``copy_payload_idx`` is the NEW counterpart row and whose
     ``anchor_payload_idx`` is the source positive, so
     ``extend_augmented_features`` derives counterpart features from the right
@@ -1005,7 +1005,7 @@ def mint_swap_counterpart_positives(
                 "copy_payload_idx": counterpart_idx,
                 "pair_payload_idx": copy_i,
                 "copy_pair_payload_idx": None,
-                "barcode": str(row_bc[source_i]),
+                "gtin": str(row_bc[source_i]),
                 "realized_extent": row.get("realized_extent"),
                 "configured_mask_lo": None,
                 "configured_mask_hi": None,
@@ -1099,8 +1099,8 @@ def augment_counterfactual_twins(
     new_payload = list(payload)
     new_bc = [str(x) for x in row_bc]
     _entity_list = _resolve_entity_keys(row_bc, entity_keys, pairs, pool)
-    _barcodes = [str(x) for x in np.asarray(row_bc)]
-    entities = _entity_list if _entity_list is not None else _barcodes
+    _gtins = [str(x) for x in np.asarray(row_bc)]
+    entities = _entity_list if _entity_list is not None else _gtins
     from collections import Counter
 
     used_fields: Counter[str] = Counter()
@@ -1204,7 +1204,7 @@ def augment_counterfactual_twins(
                 "anchor_payload_idx": a,
                 "copy_payload_idx": copy_idx,
                 "pair_payload_idx": b,
-                "barcode": str(row_bc[a]),
+                "gtin": str(row_bc[a]),
                 "realized_extent": extent,
                 "configured_mask_lo": None,
                 "configured_mask_hi": None,

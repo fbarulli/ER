@@ -2,14 +2,14 @@
 
 Defect this pins (owner ruling 2026-10-01). The project's raw export and
 canonical dataset name the SAME thirteen columns differently (`sku_name_eng`
-vs `title`, `gtin` vs `barcode`, `attribute` vs `attributes`, …), and
+vs `title`, `gtin` vs `gtin`, `attribute` vs `attributes`, …), and
 config/paths.yaml already declared every one of those names as a verified
 bijection in `column_mapping`. Three other places nonetheless retyped column
 lists by hand:
 
     * `RAW_EXPORT_REQUIRED_COLUMNS` in src/pipeline.py
     * `CANONICAL_DATASET_REQUIRED_COLUMNS` in src/pipeline.py (which held
-      `("barcode", "title", "attributes")` — a THIRD, different answer to
+      `("gtin", "sku_name_eng", "attribute")` — a THIRD, different answer to
       "what does the canonical lane require", silently narrower than the raw
       requirement it is supposed to be the rename of)
     * the per-title evidence-capture field list in `_source_rows_for`
@@ -75,7 +75,7 @@ from core.schemas import (
 # /ip/Concord-Foods-Smoothie-Banana-Drink-Mixes-2-oz-Shelf-Stable carries the
 # product name verbatim, so they are captured. This list is the SPOT CHECK
 # that the reversal is actually declared, not merely implied.
-WAS_WRONGLY_EXCLUDED = ("url", "image_url", "price", "product_id", "barcode")
+WAS_WRONGLY_EXCLUDED = ("sku_url", "image_url", "sku_last_price", "sku_id", "gtin")
 EXCLUDED = frozenset(EXCLUDED_SOURCE_ROW_FIELDS)
 
 
@@ -91,15 +91,15 @@ def test_canonical_requirement_is_the_renamed_raw_requirement() -> None:
     """The canonical lane requires the raw requirement, renamed.
 
     Not a hand-written answer: it must be EXACTLY the image of the raw list
-    across the mapping. This is what the old `("barcode", "title",
-    "attributes")` literal failed.
+    across the mapping. This is what the old `("gtin", "sku_name_eng",
+    "attribute")` literal failed.
     """
     assert set(CANONICAL_DATASET_REQUIRED_COLUMNS) == {
         COLUMN_MAPPING[raw] for raw in DATA_PREP_REQUIRED_COLUMNS
     }
     # and it must not be narrower than the raw requirement it renames
     assert set(DATA_PREP_REQUIRED_COLUMNS) <= set(RAW_EXPORT_COLUMNS)
-    assert {"barcode", "title", "attributes"} <= set(
+    assert {"gtin", "sku_name_eng", "attribute"} <= set(
         CANONICAL_DATASET_REQUIRED_COLUMNS
     )
 
@@ -166,9 +166,9 @@ def test_guards_name_the_missing_column() -> None:
     with pytest.raises(ValueError, match="gtin"):
         require_raw_columns(incomplete)
     canonical_incomplete = pd.DataFrame(
-        columns=[c for c in CANONICAL_COLUMNS if c != "title"]
+        columns=[c for c in CANONICAL_COLUMNS if c != "sku_name_eng"]
     )
-    with pytest.raises(ValueError, match="title"):
+    with pytest.raises(ValueError, match="sku_name_eng"):
         require_canonical_columns(canonical_incomplete)
 
 
@@ -216,7 +216,7 @@ def test_price_is_captured_but_not_claimed_as_attribute_evidence() -> None:
     """
     from core.common import data_cfg
 
-    reason = data_cfg().column_evidence["price"].reason.lower()
+    reason = data_cfg().column_evidence["sku_last_price"].reason.lower()
     assert "not read as attribute evidence" in reason
 
 
@@ -235,7 +235,7 @@ def test_captured_and_excluded_partition_the_mapped_columns() -> None:
 
 
 def test_capture_keeps_evidence_bearing_columns() -> None:
-    for kept in ("title", "attributes", "description", "brand", "category_path"):
+    for kept in ("sku_name_eng", "attribute", "description_short_eng", "brand", "breadcrumbs_eng"):
         assert kept in SOURCE_ROW_FIELD_NAMES
 
 
@@ -271,7 +271,7 @@ def test_capture_preserves_every_source_title_and_every_column() -> None:
     )
     capture = json.loads(pipeline_source_rows(frame))
     assert len(capture) == 2, "per-title multiplicity must survive"
-    assert {entry["title"] for entry in capture} == {
+    assert {entry["sku_name_eng"] for entry in capture} == {
         "Cola 330ml",
         "Cola Zero 330ml",
     }
@@ -282,14 +282,14 @@ def test_capture_preserves_every_source_title_and_every_column() -> None:
 def test_capture_keys_are_canonical_never_raw() -> None:
     """A raw key would be unreadable downstream; the mapping owns the rename."""
     capture = json.loads(pipeline_source_rows(pd.DataFrame([_raw_row()])))[0]
-    assert capture["title"] == "Cola 330ml"
-    assert capture["attributes"] == "type sparkling water"
-    assert capture["url"] == "http://x/1"
-    assert capture["price"] == "1.20"
-    # the raw names that differ from canonical must not appear as keys
-    for raw_only in ("sku_name_eng", "attribute", "gtin", "sku_id", "sku_url",
-                     "sku_last_price", "breadcrumbs_eng", "description_short_eng"):
-        assert raw_only not in capture
+    assert capture["sku_name_eng"] == "Cola 330ml"
+    assert capture["attribute"] == "type sparkling water"
+    assert capture["sku_url"] == "http://x/1"
+    assert capture["sku_last_price"] == "1.20"
+    # the transitional alias names must not appear as keys
+    for alias_only in ("title", "attributes", "barcode", "product_id", "url",
+                       "price", "category_path", "description"):
+        assert alias_only not in capture
 
 
 def pipeline_source_rows(frame: pd.DataFrame) -> str:
@@ -315,7 +315,7 @@ def _canonical_record(**overrides: object) -> dict:
                    "volume_consistency", "pack_consistency"):
         row[column] = 1.0
     row["n_titles"] = 1
-    row["source_rows"] = '[{"title": "Cola 330ml", "attributes": "type cola"}]'
+    row["source_rows"] = '[{"sku_name_eng": "Cola 330ml", "attribute": "type cola"}]'
     row.update(overrides)
     # The contract is order-exact, so build in contract order rather than
     # trusting dict insertion order.
@@ -356,8 +356,8 @@ def test_frame_validator_accepts_a_well_formed_capture() -> None:
         "",
         "   ",
         "not json",
-        '{"title": "x"}',
-        '[{"title": "x", "not_a_column": "y"}]',
+        '{"sku_name_eng": "x"}',
+        '[{"sku_name_eng": "x", "not_a_column": "y"}]',
         "[null]",
         '["string entry"]',
     ],
@@ -428,7 +428,7 @@ def _canonical_with_titles(*titles: str) -> dict:
         "volume_set": {355.0},
         "flavor_set": {"cola"},
         "source_rows": json.dumps(
-            [{"title": title, "attributes": ""} for title in titles]
+            [{"sku_name_eng": title, "attribute": ""} for title in titles]
         ),
     }
 
@@ -488,11 +488,11 @@ def test_stage7_will_not_verdict_on_one_sided_evidence() -> None:
 
 
 def test_columns_module_does_not_restate_the_descriptor_split() -> None:
-    """That concept belongs to core.product_identity; a second copy is the defect.
+    """That concept belongs to core.sku_identity; a second copy is the defect.
 
     This test exists to FAIL if anyone re-adds a descriptor list here.
     """
-    from core.product_identity import DESCRIPTOR_COLUMNS
+    from core.sku_identity import DESCRIPTOR_COLUMNS
 
     assert not hasattr(colssot, "DESCRIPTOR_COLUMNS")
     assert not hasattr(colssot, "NON_DESCRIPTOR_COLUMNS")
@@ -508,17 +508,17 @@ def test_aliases_are_unique_and_resolve_to_real_columns() -> None:
             assert alias not in COLUMN_MAPPING.values(), alias
             assert alias not in seen, f"{alias} claimed twice"
             seen[alias] = column
-    assert alias_names("attributes")[:2] == ("attributes", "attribute")
-    assert "attr" in alias_names("attributes")
+    assert alias_names("attribute")[:2] == ("attribute", "attr")
+    assert "attr" in alias_names("attribute")
 
 
-def test_read_column_prefers_canonical_then_raw_then_alias() -> None:
-    assert read_column({"title": "A", "sku_name_eng": "B"}, "title") == "A"
-    assert read_column({"sku_name_eng": "B"}, "title") == "B"
-    assert read_column({"attr": "type cola"}, "attributes") == "type cola"
-    assert read_column({}, "title", default="fallback") == "fallback"
+def test_read_column_prefers_canonical_then_alias() -> None:
+    assert read_column({"sku_name_eng": "A", "title": "B"}, "sku_name_eng") == "A"
+    assert read_column({"title": "B"}, "sku_name_eng") == "B"
+    assert read_column({"attr": "type cola"}, "attribute") == "type cola"
+    assert read_column({}, "sku_name_eng", default="fallback") == "fallback"
     # a blank value must not shadow a later name that has content
-    assert read_column({"title": "   ", "sku_name_eng": "B"}, "title") == "B"
+    assert read_column({"sku_name_eng": "   ", "title": "B"}, "sku_name_eng") == "B"
 
 
 def test_pipeline_uses_the_shared_alias_resolver() -> None:
@@ -529,6 +529,6 @@ def test_pipeline_uses_the_shared_alias_resolver() -> None:
 
     for module in (attribute_decision, model_input, record_linkage):
         source = inspect.getsource(module)
-        for pair in ('"attributes", "attr"', '"description", "description_short_eng"',
-                     '"title": "sku_name_eng"', '"attributes": "attribute"'):
+        for pair in ('"attribute", "attr"', '"description_short_eng", "description_short_eng"',
+                     '"sku_name_eng": "sku_name_eng"', '"attribute": "attribute"'):
             assert pair not in source, f"{module.__name__} re-declares {pair}"

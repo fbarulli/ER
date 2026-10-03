@@ -6,7 +6,7 @@ from training.prepared_bundle import _portable_dataframe
 
 
 def test_prepared_dataframe_preserves_values_without_string_dtype_metadata():
-    source = pd.DataFrame({'title': pd.array(['a', None], dtype='string'), 'count': [1, 2]})
+    source = pd.DataFrame({'sku_name_eng': pd.array(['a', None], dtype='string'), 'count': [1, 2]})
     source.columns = pd.Index(source.columns, dtype='string')
     source.index = pd.Index(['first', 'second'], dtype='string')
     restored = pickle.loads(pickle.dumps(_portable_dataframe(source)))
@@ -14,7 +14,7 @@ def test_prepared_dataframe_preserves_values_without_string_dtype_metadata():
     assert restored.columns.dtype == object
     assert restored.index.dtype == object
     pd.testing.assert_frame_equal(restored, source.astype(object).rename_axis(None), check_dtype=False, check_index_type=False, check_column_type=False)
-    assert isinstance(source['title'].dtype, pd.StringDtype)
+    assert isinstance(source['sku_name_eng'].dtype, pd.StringDtype)
 
 
 def test_native_canonical_layout_rejects_projected_reference_block(monkeypatch):

@@ -36,7 +36,7 @@ def audit(frame: pd.DataFrame) -> dict:
     examples = defaultdict(list)
     groups = defaultdict(list)
     for i, row in enumerate(tracked(frame.to_dict('records'), 'identity context', len(frame))):
-        attributes = row_dimensions({'attributes': row['attribute']}).attributes
+        attributes = row_dimensions({'attribute': row['attribute']}).attributes
         text = row['sku_name_eng'] + '\n' + row['description_short_eng']
         claims = []
         for match in MG.finditer(text):
@@ -68,7 +68,7 @@ def audit(frame: pd.DataFrame) -> dict:
             counts['can_with_nonmetal_material_rows'] += 1
             flags.append('can_nonmetal_material_review')
         record = {'sku_id': row['sku_id'], 'gtin': row['gtin'], 'retailer': row['retailer'],
-                  'title': row['sku_name_eng'], 'raw_attributes': row['attribute'],
+                  'sku_name_eng': row['sku_name_eng'], 'raw_attributes': row['attribute'],
                   'caffeine_claims': claims, 'multipack_title_match': pack_match[0] if pack_match else None}
         for flag in flags:
             if len(examples[flag]) < 8:

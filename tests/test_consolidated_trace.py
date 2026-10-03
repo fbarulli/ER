@@ -26,7 +26,7 @@ import pytest
 
 import core.common as common
 import pipeline
-from core.gtin import barcode_validity
+from core.gtin import gtin_validity
 from core.tracing import (
     ENTITY_ROW_CAP,
     ENTITY_SAMPLE_PER_REASON,
@@ -54,21 +54,21 @@ def _rows(frame: pd.DataFrame) -> dict[str, pd.Series]:
     return {str(row["step"]): row for _, row in frame.iterrows()}
 
 
-def _flip_check_digit(barcode: str) -> str:
-    """Return the same barcode with a check digit that must fail GS1."""
-    body, last = barcode[:-1], int(barcode[-1])
+def _flip_check_digit(gtin: str) -> str:
+    """Return the same gtin with a check digit that must fail GS1."""
+    body, last = gtin[:-1], int(gtin[-1])
     for candidate in range(10):
         if candidate == last:
             continue
         mutated = f"{body}{candidate}"
-        if not bool(barcode_validity(pd.Series([mutated])).iloc[0]):
+        if not bool(gtin_validity(pd.Series([mutated])).iloc[0]):
             return mutated
-    raise AssertionError(f"no invalid mutation found for {barcode}")
+    raise AssertionError(f"no invalid mutation found for {gtin}")
 
 
 @pytest.fixture(scope="module")
 def live_slice() -> pd.DataFrame:
-    """A small, REAL slice of the raw export: two brands, valid barcodes.
+    """A small, REAL slice of the raw export: two brands, valid gtins.
 
     Plus deliberately crafted populations so the row identity is non-trivial —
     a repeated gtin (collapses into a canonical), a missing gtin and a failed
@@ -81,7 +81,7 @@ def live_slice() -> pd.DataFrame:
         & (raw["gtin"].astype(str).str.lower() != "nan")
     )
     raw = raw[valid]
-    raw = raw[barcode_validity(raw["gtin"].fillna("").astype(str).str.strip())]
+    raw = raw[gtin_validity(raw["gtin"].fillna("").astype(str).str.strip())]
     per_brand = raw.groupby("brand")["gtin"].nunique().sort_values(ascending=False)
     brands = list(per_brand[per_brand >= 4].index[:2])
     assert len(brands) == 2, f"need two multi-gtin brands, got {brands}"
@@ -355,7 +355,7 @@ def test_two_stage_live_run_covers_every_row_and_every_pair(
     """Both stages on real data; the identity is recomputed FROM THE FILE."""
     raw = live_slice
     canon_df = raw.rename(columns=common.COLUMN_MAPPING)
-    canon_df["product_id"] = raw["sku_id"]
+    canon_df["sku_id"] = raw["sku_id"]
 
     pairs, canon = pipeline.run_within_brand_pipeline(raw)
     bundle = pipeline.build_training_data(canon_df)
@@ -444,7 +444,7 @@ def test_two_stage_live_run_covers_every_row_and_every_pair(
     assert "gtin" in by_stage["data_prep"]["columns"]
     assert "sku_name_eng" in by_stage["data_prep"]["columns"]
     assert by_stage["pairs"]["missing_required"] == []
-    assert "barcode" in by_stage["pairs"]["columns"]
+    assert "gtin" in by_stage["pairs"]["columns"]
     assert "gtin" not in by_stage["pairs"]["columns"]  # a DIFFERENT contract
 
 
@@ -454,7 +454,7 @@ def test_identity_rejects_a_trace_with_an_unaccounted_row(
     """The identity is not vacuous: removing a destiny bucket breaks it."""
     raw = live_slice
     canon_df = raw.rename(columns=common.COLUMN_MAPPING)
-    canon_df["product_id"] = raw["sku_id"]
+    canon_df["sku_id"] = raw["sku_id"]
     pairs, _ = pipeline.run_within_brand_pipeline(raw)
     pipeline.build_training_data(canon_df)
 

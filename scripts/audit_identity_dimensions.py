@@ -32,9 +32,9 @@ def main() -> None:
     if args.pairs_per_group < 1 or (args.limit is not None and args.limit < 1):
         parser.error("limits must be positive")
     frame = pd.read_csv(args.dataset, dtype=str, keep_default_na=False, nrows=args.limit)
-    if not {"product_id", "barcode", "attributes", "retailer", "title"} <= set(frame.columns):
+    if not {"sku_id", "gtin", "attribute", "retailer", "sku_name_eng"} <= set(frame.columns):
         raise ValueError("catalog missing required identity columns")
-    if frame.product_id.duplicated().any():
+    if frame.sku_id.duplicated().any():
         raise ValueError("duplicate listing IDs")
     policy = dimension_policy()
     records = frame.to_dict("records")
@@ -45,12 +45,12 @@ def main() -> None:
         for key, members in record.attributes.items():
             coverage[key] += 1
             values[key].update(members)
-    facts = normalize_and_validate_gtin(frame.barcode)
+    facts = normalize_and_validate_gtin(frame.gtin)
     positive_groups, negative_groups = defaultdict(list), defaultdict(list)
     for i, (row, valid, gtin) in enumerate(zip(records, facts.gtin_structurally_valid, facts.gtin_clean)):
         if valid:
             positive_groups[str(gtin)].append(i)
-            negative_groups[(normalize_retailer(row["retailer"]), normalized_attribute_text(row["title"]))].append(i)
+            negative_groups[(normalize_retailer(row["retailer"]), normalized_attribute_text(row["sku_name_eng"]))].append(i)
     counts, examples, population = defaultdict(Counter), [], Counter()
 
     def collect(label: str, i: int, j: int) -> None:
@@ -60,8 +60,8 @@ def main() -> None:
             counts[(label, name)][result["status"]] += 1
             if result["review"] and sum(e["population"] == label and e["dimension"] == name for e in examples) < 3:
                 examples.append({"population": label, "dimension": name,
-                    "product_id1": records[i]["product_id"], "product_id2": records[j]["product_id"],
-                    "title1": records[i]["title"], "title2": records[j]["title"], **result})
+                    "sku_id1": records[i]["sku_id"], "sku_id2": records[j]["sku_id"],
+                    "title1": records[i]["sku_name_eng"], "title2": records[j]["sku_name_eng"], **result})
 
     for members in tracked(list(positive_groups.values()), "same-GTIN evidence", len(positive_groups)):
         candidates = ((i, j) for i, j in combinations(members, 2)

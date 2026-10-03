@@ -27,7 +27,7 @@ def main():
         columns=data_cfg().column_mapping).fillna("")
     registered = attribute_registry()
     keys, date_keys = Counter(), Counter()
-    for cell in frame["attributes"]:
+    for cell in frame["attribute"]:
         row_keys = set()
         for part in cell.split(";"):
             if ":" in part:
@@ -43,15 +43,15 @@ def main():
     screens = {}
     for label, pattern in patterns.items():
         counts, examples = {}, []
-        for column in ("title", "attributes", "description", "category_path", "category"):
+        for column in ("sku_name_eng", "attribute", "description_short_eng", "breadcrumbs_eng", "category"):
             selected = frame[frame[column].str.contains(pattern, case=False, regex=True)]
             counts[column] = len(selected)
-            examples.extend({"product_id": row.product_id, "column": column,
+            examples.extend({"sku_id": row.sku_id, "column": column,
                              "source": getattr(row, column)}
                             for row in selected.head(10).itertuples())
         screens[label] = {"rows_per_column": counts, "examples": examples}
     date_roles, date_status, date_rows = Counter(), Counter(), set()
-    for column in ("title", "attributes", "description", "category_path", "category"):
+    for column in ("sku_name_eng", "attribute", "description_short_eng", "breadcrumbs_eng", "category"):
         for row_index, text in enumerate(frame[column]):
             entries = extract_date_evidence(text)
             if entries:

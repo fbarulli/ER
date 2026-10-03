@@ -50,10 +50,10 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
 
     setup = tmp_path / 'setup'
     setup.mkdir()
-    catalog = pd.DataFrame({'product_id': ['a', 'b', 'c'], 'barcode': ['1', '2', '3']})
+    catalog = pd.DataFrame({'sku_id': ['a', 'b', 'c'], 'gtin': ['1', '2', '3']})
     catalog.to_csv(setup / 'eligible_catalog.csv', index=False)
-    pd.DataFrame({'product_id': ['a', 'b', 'c'], 'split': ['train'] * 3}).to_csv(setup / 'listing_splits.csv', index=False)
-    pd.DataFrame(columns=['product_id1', 'product_id2', 'split', 'label']).to_csv(setup / 'listing_pairs.csv', index=False)
+    pd.DataFrame({'sku_id': ['a', 'b', 'c'], 'split': ['train'] * 3}).to_csv(setup / 'listing_splits.csv', index=False)
+    pd.DataFrame(columns=['sku_id1', 'sku_id2', 'split', 'label']).to_csv(setup / 'listing_pairs.csv', index=False)
     checkpoint = tmp_path / 'checkpoint'
     (setup / 'setup_manifest.json').write_text(json.dumps(
         {'text_checkpoint': str(checkpoint), 'text_checkpoint_sha256': 'baseline'}))
@@ -99,7 +99,7 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
     if parent_cache == 'absent':
         assert cache_calls == [((output / 'eligible_catalog.csv', checkpoint,
                                  output / 'shared_minilm__embeddings.npz'), {'device': 'cpu'})]
-        assert pd.read_csv(cache_calls[0][0][0]).product_id.tolist() == ['a', 'b']
+        assert pd.read_csv(cache_calls[0][0][0]).sku_id.tolist() == ['a', 'b']
     else:
         assert cache_calls == []
     assert captured['payload'] == ['a', 'b', 'A', 'B', 'C']
@@ -145,7 +145,7 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
                                sha256='test', n_df=1, n_payload=1,
                                model_dump=lambda: {})
     pairs = np.empty((0, 2), dtype=int)
-    bundle = dict(df=pd.DataFrame({'barcode': ['1']}), payload=['item'],
+    bundle = dict(df=pd.DataFrame({'gtin': ['1']}), payload=['item'],
                   structured_features=np.zeros((1, 2)), row_bc=np.array(['1']),
                   country=np.array(['US']), pos=pairs, hp_pairs=pairs,
                   emb0=np.empty((0, 2)), neg=pairs, train_neg=pairs,
@@ -190,7 +190,7 @@ def test_suite_preflight_rejects_changed_source_catalog_before_launch(tmp_path, 
     setup.mkdir()
     (setup / 'setup_manifest.json').write_text(json.dumps({'source_catalog_sha256': 'old'}))
     source = tmp_path / 'catalog.csv'
-    source.write_text('product_id\nnew\n')
+    source.write_text('sku_id\nnew\n')
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', {'dataset_deduped': source})
     monkeypatch.setattr(checks, 'load_config', lambda _: SimpleNamespace(setup_dir='setup'))
@@ -206,10 +206,10 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
 
     setup = tmp_path / 'setup'
     setup.mkdir()
-    catalog = pd.DataFrame({'product_id': ['a', 'b', 'c', 'd'], 'barcode': ['1', '2', '3', '4']})
+    catalog = pd.DataFrame({'sku_id': ['a', 'b', 'c', 'd'], 'gtin': ['1', '2', '3', '4']})
     catalog.to_csv(setup / 'eligible_catalog.csv', index=False)
-    catalog.assign(split='train')[['product_id', 'split']].to_csv(setup / 'listing_splits.csv', index=False)
-    pd.DataFrame(columns=['product_id1', 'product_id2', 'split', 'label']).to_csv(setup / 'listing_pairs.csv', index=False)
+    catalog.assign(split='train')[['sku_id', 'split']].to_csv(setup / 'listing_splits.csv', index=False)
+    pd.DataFrame(columns=['sku_id1', 'sku_id2', 'split', 'label']).to_csv(setup / 'listing_pairs.csv', index=False)
     (setup / 'setup_manifest.json').write_text('{}')
     (setup / 'shared_minilm__embeddings.npz').write_bytes(b'mocked cache')
     for track in ('gnn_only', 'hybrid'):
@@ -237,7 +237,7 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     monkeypatch.setattr(graph_tracks.data, 'load_text_cache', lambda *_: (np.zeros((2, 2)), {}))
     monkeypatch.setattr(graph_tracks.data, 'file_hash', lambda _: 'hash')
     prepare_smoke(setup, tmp_path / 'smoke', sample=2)
-    assert captured['df'].product_id.tolist() == ['a', 'b']
+    assert captured['df'].sku_id.tolist() == ['a', 'b']
     assert captured['payload'] == ['a', 'b', 'A', 'B', 'C', 'D', 'negative copy', 'positive counterpart']
     assert captured['mask_audit'] == [{'anchor_payload_idx': 6, 'pair_payload_idx': 2, 'copy_payload_idx': 7}]
     assert captured['hard_negative_mask_audit'] == [{'anchor_payload_idx': 0, 'pair_payload_idx': 3, 'copy_payload_idx': 6}]

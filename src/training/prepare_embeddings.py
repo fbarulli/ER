@@ -42,7 +42,7 @@ def prepare_request(setup: Path, checkpoint: Path) -> dict:
     """Always compose actual text locally; no persistent text-cache shortcut."""
     expected = input_identity(setup, checkpoint)
     ids, texts = compose_texts(setup / 'eligible_catalog.csv')
-    listing_ids = [row['product_id'] for row in load_records(setup / 'prepared/listings.json')]
+    listing_ids = [row['sku_id'] for row in load_records(setup / 'prepared/listings.json')]
     if set(ids) != set(listing_ids) or len(ids) != len(listing_ids):
         raise ValueError('Catalog and prepared listings do not have identical IDs')
     if input_identity(setup, checkpoint) != expected:

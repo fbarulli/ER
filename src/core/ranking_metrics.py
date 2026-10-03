@@ -318,12 +318,12 @@ def pd_unique(values: np.ndarray) -> np.ndarray:
 def component_index(pos_pairs: np.ndarray, row_bc: np.ndarray) -> np.ndarray:
     """Connected-component id per payload row, deterministic and hash-free.
 
-    Union-find over the barcode graph induced by ``pos_pairs`` — the SAME
+    Union-find over the gtin graph induced by ``pos_pairs`` — the SAME
     relation ``training.folds.component_folds`` splits on, so a component is
     the transitive closure of "positive-pair linked".  The id of a row is
-    derived from the lexicographically smallest barcode in its component and
+    derived from the lexicographically smallest gtin in its component and
     from a sorted id table, so the result never depends on dict/set iteration
-    order or on ``PYTHONHASHSEED``.  Rows with an empty barcode get ``-1``
+    order or on ``PYTHONHASHSEED``.  Rows with an empty gtin get ``-1``
     (``folds.component_folds`` likewise never makes them graph nodes).
     """
     pos_pairs = np.asarray(pos_pairs, dtype=int).reshape(-1, 2)
@@ -355,7 +355,7 @@ def component_index(pos_pairs: np.ndarray, row_bc: np.ndarray) -> np.ndarray:
     for node, root in roots.items():
         if root not in smallest or node < smallest[root]:
             smallest[root] = node
-    # ids are handed out in the order of each component's SMALLEST barcode, so
+    # ids are handed out in the order of each component's SMALLEST gtin, so
     # the numbering itself is order- and hash-independent; the table is keyed
     # by ROOT (the id of a component is looked up by root, not by member).
     ids = {
@@ -401,7 +401,7 @@ def build_evaluation_pool(
     seed: int,
     ks: Sequence[int],
     priority_pairs: np.ndarray | None = None,
-    excluded_barcode_pairs: Iterable[tuple[str, str]] = (),
+    excluded_gtin_pairs: Iterable[tuple[str, str]] = (),
     max_probes: int | None = None,
 ) -> EvaluationPool:
     """Build the fold-safe per-query competitor pool for retrieval metrics.
@@ -410,13 +410,13 @@ def build_evaluation_pool(
     up to ``n_competitors`` competing canonicals drawn from the same fold.
     Competitors are fold-safe by construction:
 
-    * a competitor whose barcode shares the query's COMPONENT is excluded
+    * a competitor whose gtin shares the query's COMPONENT is excluded
       (the component is the unit the holdout split deals out, so a
       competitor from another component can never be linked to the query by
       any chain of positive pairs — the query's positive stays the only
       relevant candidate in its own pool);
     * a competitor that is a KNOWN TRUE MATCH of the query
-      (``excluded_barcode_pairs``: labeled positives, gate-proceed matches,
+      (``excluded_gtin_pairs``: labeled positives, gate-proceed matches,
       identical canonical identity) is excluded, because scoring it as a
       non-relevant candidate would silently count a correct ranking as a
       miss.
@@ -474,7 +474,7 @@ def build_evaluation_pool(
         raise ValueError("competitor_rows is empty: no candidate universe")
 
     forbidden: dict[str, set[str]] = {}
-    for left, right in excluded_barcode_pairs:
+    for left, right in excluded_gtin_pairs:
         a, b = str(left).strip(), str(right).strip()
         if not a or not b or a == b:
             continue
@@ -491,11 +491,11 @@ def build_evaluation_pool(
     for row, candidates in priority.items():
         priority[row] = sorted(set(candidates))
 
-    barcode_of_row = np.asarray([str(bc).strip() for bc in row_bc], dtype=object)
+    gtin_of_row = np.asarray([str(bc).strip() for bc in row_bc], dtype=object)
     universe_members = {int(row) for row in universe}
 
     def eligible(query_row: int, candidate_row: int) -> bool:
-        if candidate_row < 0 or candidate_row >= len(barcode_of_row):
+        if candidate_row < 0 or candidate_row >= len(gtin_of_row):
             return False
         # a priority pair must still be a member of the fold's candidate
         # universe — otherwise it would smuggle a non-fold candidate in
@@ -503,8 +503,8 @@ def build_evaluation_pool(
             return False
         if row_component[candidate_row] == row_component[query_row]:
             return False
-        query_bc = barcode_of_row[query_row]
-        candidate_bc = barcode_of_row[candidate_row]
+        query_bc = gtin_of_row[query_row]
+        candidate_bc = gtin_of_row[candidate_row]
         if not query_bc or not candidate_bc:
             return False
         return candidate_bc not in forbidden.get(query_bc, ())
@@ -533,7 +533,7 @@ def build_evaluation_pool(
     for index in sorted(range(len(queries)), key=lambda i: (keys[i], i)):
         query_row = int(queries[index, 0])
         positive_row = int(queries[index, 1])
-        if positive_row < 0 or positive_row >= len(barcode_of_row):
+        if positive_row < 0 or positive_row >= len(gtin_of_row):
             n_missing_positive += 1
             continue
         chosen: list[int] = []

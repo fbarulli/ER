@@ -758,9 +758,9 @@ class AttributeDecisionEngine:
             # which is precisely how it stayed inert.
             from core.columns import alias_names
 
-            attribute_names = alias_names("attributes")
-            description_names = alias_names("description")
-            title_names = alias_names("title")
+            attribute_names = alias_names("attribute")
+            description_names = alias_names("description_short_eng")
+            title_names = alias_names("sku_name_eng")
             # url is CAPTURED per title (config column_evidence capture=true):
             # the listing slug carries real product words ("sparkling" 70x,
             # "strawberry" 48x in 8,000 sampled sku_url slugs — see the
@@ -771,7 +771,7 @@ class AttributeDecisionEngine:
             # ruling extends this.
             from core.url_evidence import url_text
 
-            url_names = alias_names("url")
+            url_names = alias_names("sku_url")
             from core.attribute_conflicts import VETO_CENSUS_KEY_BY_DIMENSION
             from core.sweetener_values import (
                 declared_sweeteners, title_sweetener_types, negated_sweetener_types,

@@ -179,12 +179,12 @@ def normalize_retailer(name: str) -> str:
     and whitespace collapse.
 
     SSOT for every surface that compares retailer strings as identity
-    (blocking multi-retailer grouping, kfold_barcodes, record-linkage
+    (blocking multi-retailer grouping, kfold_gtins, record-linkage
     cross-retailer rule). Measured on the 61,529-row deduped export
     (280 distinct raw spellings reviewed): exactly three alias groups
     collapse under this fold — Voila/Voilà (1,533 rows), publix/Publix
     (938), El Corte Ingles/El Corte Inglés — and raw-string grouping
-    counts one barcode (8432425093657) as multi-retailer on spelling
+    counts one gtin (8432425093657) as multi-retailer on spelling
     alone, feeding a fake cross-source positive into eval pairs and
     k-folds. No semantic aliases (e.g. amazon/amazon.com) exist in the
     data; if one ever appears, add an explicit alias map to

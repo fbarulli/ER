@@ -21,10 +21,10 @@ def main():
         columns=data_cfg().column_mapping).fillna("")
     rows = []
     for row in frame.to_dict("records"):
-        if re.search(r"\b(?:no|zero|0|without)\s+sugars?\s+added\b", row["title"], re.I):
-            rows.append({"product_id": str(row["product_id"]), "title": row["title"],
-                         "claims": sorted(extract_critical_claims(row["title"])["sweetener"]),
-                         "negated_ingredients": sorted(negated_sweetener_types(row["title"]))})
+        if re.search(r"\b(?:no|zero|0|without)\s+sugars?\s+added\b", row["sku_name_eng"], re.I):
+            rows.append({"sku_id": str(row["sku_id"]), "sku_name_eng": row["sku_name_eng"],
+                         "claims": sorted(extract_critical_claims(row["sku_name_eng"])["sweetener"]),
+                         "negated_ingredients": sorted(negated_sweetener_types(row["sku_name_eng"]))})
     assert fingerprint == sha256_file(DATA_PATH), "source changed during audit"
     report = {"scope": "Title-only semantic extraction; not full canonical or gate replay, source contradictions, or accuracy.",
               "source_sha256": fingerprint, "source_rows": len(frame), "screened_rows": len(rows),

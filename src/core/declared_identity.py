@@ -130,7 +130,7 @@ def _captured_identity(captured: str) -> dict[str, frozenset[str]]:
             continue
         def text(role):
             return ' '.join(str(row.get(name) or '') for name in alias_names(role))
-        for dimension, values in listing_identity(text('title'), text('attributes'), text('description')).items():
+        for dimension, values in listing_identity(text('sku_name_eng'), text('attribute'), text('description_short_eng')).items():
             facts[dimension].update(values)
     return {dimension: frozenset(values) for dimension, values in facts.items()}
 

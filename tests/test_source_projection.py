@@ -15,10 +15,10 @@ def source_export(tmp_path, monkeypatch):
     path = tmp_path / "source.csv"
     values = {column: ["", "", ""] for column in COLUMN_MAPPING}
     values.update({
-        raw_of("product_id"): ["001", "002", "003"],
-        raw_of("barcode"): ["00012345678905", "NA", ""],
+        raw_of("sku_id"): ["001", "002", "003"],
+        raw_of("gtin"): ["00012345678905", "NA", ""],
         raw_of("brand"): ["Brand", "None", ""],
-        raw_of("title"): ["Tea", "Coffee", "Water"],
+        raw_of("sku_name_eng"): ["Tea", "Coffee", "Water"],
     })
     pd.DataFrame(values).to_csv(path, index=False)
     audit = SimpleNamespace(source_export_expected_rows=3,
@@ -32,18 +32,18 @@ def source_export(tmp_path, monkeypatch):
 @pytest.mark.parametrize("raw", [False, True])
 def test_projected_source_matches_full(source_export, raw):
     loader = common.load_raw_export if raw else common.load_dataset
-    columns = ["product_id", "barcode", "brand"]
+    columns = ["sku_id", "gtin", "brand"]
     if raw:
         columns = [raw_of(column) for column in columns]
     full = loader()
     projected = loader(columns=columns)
     pd.testing.assert_frame_equal(projected, full.loc[:, full.columns.isin(columns)])
-    id_column = raw_of("product_id") if raw else "product_id"
-    barcode_column = raw_of("barcode") if raw else "barcode"
+    id_column = raw_of("sku_id") if raw else "sku_id"
+    gtin_column = raw_of("gtin") if raw else "gtin"
     brand_column = raw_of("brand") if raw else "brand"
     assert projected[id_column].tolist() == ["001", "002", "003"]
-    assert projected[barcode_column].iloc[0] == "00012345678905"
-    assert projected[barcode_column].iloc[1:].isna().all()
+    assert projected[gtin_column].iloc[0] == "00012345678905"
+    assert projected[gtin_column].iloc[1:].isna().all()
     assert projected[brand_column].iloc[1:].isna().all()
 
 
@@ -55,7 +55,7 @@ def test_projection_keeps_source_guard(source_export, raw, drift):
         frame = frame.iloc[:2]
     else:
         # Even an unselected field change must invalidate the source digest.
-        frame.loc[0, raw_of("title")] = "Changed title"
+        frame.loc[0, raw_of("sku_name_eng")] = "Changed title"
     frame.to_csv(source_export, index=False)
     loader = common.load_raw_export if raw else common.load_dataset
     columns = [raw_of("brand")] if raw else ["brand"]
@@ -126,10 +126,10 @@ def test_all_dataset_lanes_obey_configured_na_policy(source_export, monkeypatch,
     raw.rename(columns=COLUMN_MAPPING).to_csv(catalog, index=False)
     monkeypatch.setitem(common.F, "dataset_deduped", catalog)
     if lane == "raw":
-        frame, column = common.load_raw_export(), raw_of("barcode")
+        frame, column = common.load_raw_export(), raw_of("gtin")
     elif lane == "canonical":
-        frame, column = common.load_dataset(), "barcode"
+        frame, column = common.load_dataset(), "gtin"
     else:
         frame = common.load_dataset_deduped(catalog if lane == "override" else None)
-        column = "barcode"
+        column = "gtin"
     assert frame[column].tolist() == ["00012345678905", "NA", ""]

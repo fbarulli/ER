@@ -14,12 +14,12 @@ def inputs(tmp_path, monkeypatch):
     setup = tmp_path / 'setup'
     (setup / 'prepared').mkdir(parents=True)
     catalog = setup / 'eligible_catalog.csv'
-    catalog.write_text('product_id\na\nb\n')
+    catalog.write_text('sku_id\na\nb\n')
     checkpoint = tmp_path / 'model'
     checkpoint.mkdir()
     (checkpoint / 'weights').write_bytes(b'frozen')
     listings = setup / 'prepared/listings.json'
-    listings.write_text(json.dumps([{'product_id': 'a'}, {'product_id': 'b'}]))
+    listings.write_text(json.dumps([{'sku_id': 'a'}, {'sku_id': 'b'}]))
     expected = {'listings_sha256': job.file_hash(listings), 'catalog_sha256': job.file_hash(catalog),
                 'identity_policy_sha256': job.file_hash(POLICY_PATH),
                 'identity_dimensions_sha256': job.file_hash(TRAIN_ROOT / 'config/identity_dimensions.yaml'),
@@ -27,7 +27,7 @@ def inputs(tmp_path, monkeypatch):
                 'composition': model_input_composition().model_dump(mode='json')}
     (setup / 'prepared/input_manifest.json').write_text(json.dumps(expected))
     (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint_sha256': expected['checkpoint_sha256']}))
-    monkeypatch.setattr(job, 'load_records', lambda _: [{'product_id': 'a'}, {'product_id': 'b'}])
+    monkeypatch.setattr(job, 'load_records', lambda _: [{'sku_id': 'a'}, {'sku_id': 'b'}])
     monkeypatch.setattr(job, 'compose_texts', lambda _: (['a', 'b'], ['text a', 'text b']))
     calls = []
 

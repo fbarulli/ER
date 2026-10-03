@@ -2,11 +2,11 @@
 import pytest
 from pipeline import NgramIDF, generate_canonical, three_way_gate
 
-@pytest.mark.parametrize('negative_column', ['title','description'])
+@pytest.mark.parametrize('negative_column', ['sku_name_eng','description_short_eng'])
 def test_cross_listing_ingredient_negation_is_review(negative_column):
-    rows=[('Vanilla water 330 ml no sucralose' if negative_column == 'title' else 'Vanilla water 330 ml',''),
+    rows=[('Vanilla water 330 ml no sucralose' if negative_column == 'sku_name_eng' else 'Vanilla water 330 ml',''),
           ('Vanilla water 330 ml', 'Sweetener: sucralose')]
-    descriptions=['No sucralose' if negative_column == 'description' else '', '']
+    descriptions=['No sucralose' if negative_column == 'description_short_eng' else '', '']
     record=generate_canonical('1234567890123','Example',rows,
                               NgramIDF({'1234567890123':rows}),None,
                               descriptions=descriptions)

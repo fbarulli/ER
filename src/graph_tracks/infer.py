@@ -66,7 +66,7 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
     if output.exists():
         raise FileExistsError(output)
     records = load_records(listings, require_training=False)
-    ids = [r['product_id'] for r in records]
+    ids = [r['sku_id'] for r in records]
     encoder = GraphEncoder(checkpoint, device)
     text, metadata = None, None
     hybrid = encoder.manifest['track'] == 'hybrid'
@@ -83,13 +83,13 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
     np.savez_compressed(output / name(track, 'vectors.npz'), ids=np.asarray(ids), embeddings=vectors)
     if pairs:
         frame = pd.read_csv(pairs, dtype=str, keep_default_na=False)
-        if set(frame.columns) != {'product_id1', 'product_id2'}:
-            raise ValueError('inference pairs require exactly product_id1,product_id2; labels are excluded')
+        if set(frame.columns) != {'sku_id1', 'sku_id2'}:
+            raise ValueError('inference pairs require exactly sku_id1,sku_id2; labels are excluded')
         lookup = {key: i for i, key in enumerate(ids)}
-        if any(key not in lookup for key in list(frame.product_id1) + list(frame.product_id2)):
+        if any(key not in lookup for key in list(frame.sku_id1) + list(frame.sku_id2)):
             raise ValueError('unknown inference pair endpoint')
         indices = np.asarray([(lookup[a], lookup[b]) for a, b in
-                              zip(frame.product_id1, frame.product_id2)], dtype=np.int64).reshape(-1, 2)
+                              zip(frame.sku_id1, frame.sku_id2)], dtype=np.int64).reshape(-1, 2)
         with torch.no_grad():
             scores = encoder.scorer(torch.as_tensor(vectors, device=device),
                 torch.as_tensor(indices, device=device),
@@ -110,7 +110,7 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         'track': encoder.manifest['track'], 'graph_context': 'training-listings-only',
         'vector_kind': 'graph-informed', 'ann_reproduces_pair_scorer': False,
         'count': len(ids), 'dimension': vectors.shape[1], 'index_built': build_index,
-        'id_kind': 'listing_product_id'})
+        'id_kind': 'listing_sku_id'})
     return output
 
 

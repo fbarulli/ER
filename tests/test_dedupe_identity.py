@@ -2,11 +2,11 @@
 
 The regression these lock down is a real, measured data-loss bug: T3 keyed its
 collapse on (retailer, title) ALONE, so whenever one retailer listed the same
-title string under two different checksum-valid barcodes, two distinct products
+title string under two different checksum-valid gtins, two distinct products
 were merged and one lost its only row. Measured 2026-09-30 on the 71.6k-row
 corpus: 692 groups, 1,086 product-listings deleted, 264 products erased from the
 matching input entirely (present in canonical_records.csv, absent from the
-deduped output, represented by a sibling's barcode).
+deduped output, represented by a sibling's gtin).
 
 These tests pin the DECISIONS (what may and may not collapse together), not the
 whole pipeline — main() writes real corpus outputs and is exercised by the
@@ -17,8 +17,8 @@ regress.
 import pandas as pd
 import pytest
 
-from core.gtin import barcode_validity
-from core.product_identity import (
+from core.gtin import gtin_validity
+from core.sku_identity import (
     completeness,
     identity_conflict,
     row_identity,
@@ -26,7 +26,7 @@ from core.product_identity import (
 from training.dedupe import _same_product_by_title
 
 
-# Two real, checksum-valid, SAME-RETAILER, SAME-TITLE-STRING barcodes from the
+# Two real, checksum-valid, SAME-RETAILER, SAME-TITLE-STRING gtins from the
 # corpus group "Sisi Mango no bubbles zero sugar" (Albert Heijn). Using real
 # values keeps the test honest: synthetic 13-digit strings mostly fail the GS1
 # checksum and would silently exercise the malformed path instead.
@@ -36,14 +36,14 @@ _DISTINCT_BARCODES = ("8715600246377", "8715600248098")
 def _frame(rows):
     return pd.DataFrame(
         rows,
-        columns=["retailer", "title", "brand", "attributes", "price", "barcode"],
+        columns=["retailer", "sku_name_eng", "brand", "attribute", "sku_last_price", "gtin"],
         index=[f"row-{i}" for i in range(len(rows))],
     )
 
 
 # ── T3 identity partition ───────────────────────────────────────────────────
 
-def test_same_title_different_valid_barcodes_get_distinct_identity_keys():
+def test_same_title_different_valid_gtins_get_distinct_identity_keys():
     """The T3 partition must separate two products sharing a title string."""
     df = _frame([
         ("Shop A", "Sisi Mango no bubbles zero sugar", "Sisi",
@@ -52,19 +52,19 @@ def test_same_title_different_valid_barcodes_get_distinct_identity_keys():
          "Flavour: Mango", 1.29, _DISTINCT_BARCODES[1]),
     ])
 
-    bc = df["barcode"].astype(str)
-    assert barcode_validity(bc).all(), "fixture barcodes must be checksum-valid"
+    bc = df["gtin"].astype(str)
+    assert gtin_validity(bc).all(), "fixture gtins must be checksum-valid"
 
-    keys = {row_identity(r).barcode_key for r in df.to_dict("records")}
+    keys = {row_identity(r).gtin_key for r in df.to_dict("records")}
 
     assert keys == set(_DISTINCT_BARCODES), (
-        "distinct trusted barcodes must produce distinct identity keys, "
+        "distinct trusted gtins must produce distinct identity keys, "
         "otherwise T3 collapses two different products"
     )
 
 
 def test_identity_conflict_proves_the_pair_different_even_when_text_agrees():
-    """Barcode is the arbiter when the text cannot tell two rows apart."""
+    """GTIN is the arbiter when the text cannot tell two rows apart."""
     left, right = (
         row_identity(r) for r in _frame([
             ("Shop A", "Sisi Mango no bubbles zero sugar", "Sisi",
@@ -76,26 +76,26 @@ def test_identity_conflict_proves_the_pair_different_even_when_text_agrees():
 
     reasons = identity_conflict(left, right)
 
-    assert "barcode" in reasons, (
+    assert "gtin" in reasons, (
         "identical descriptor text must NOT license a merge when the trusted "
-        "barcodes disagree — the text predicate is a veto, not authority"
+        "gtins disagree — the text predicate is a veto, not authority"
     )
 
 
-def test_barcode_less_rows_still_share_one_identity_partition():
-    """Price aggregation must still work where there is no barcode to key on."""
+def test_gtin_less_rows_still_share_one_identity_partition():
+    """Price aggregation must still work where there is no gtin to key on."""
     df = _frame([
         ("Shop A", "Acme Cola 6 pack", "Acme", "", 6.00, ""),
         ("Shop A", "Acme Cola 6 pack", "Acme", "", 7.00, ""),
     ])
 
-    keys = {row_identity(r).barcode_key for r in df.to_dict("records")}
+    keys = {row_identity(r).gtin_key for r in df.to_dict("records")}
 
-    assert keys == {""}, "rows with no trusted barcode share the '' partition"
+    assert keys == {""}, "rows with no trusted gtin share the '' partition"
 
 
-def test_invalid_barcode_is_never_a_trusted_identity_key():
-    """A checksum-failing barcode is export noise, not identity."""
+def test_invalid_gtin_is_never_a_trusted_identity_key():
+    """A checksum-failing gtin is export noise, not identity."""
     left, right = (
         row_identity(r) for r in _frame([
             ("Shop A", "Acme Cola", "Acme", "", 6.00, "123456789013"),
@@ -103,14 +103,14 @@ def test_invalid_barcode_is_never_a_trusted_identity_key():
         ]).to_dict("records")
     )
 
-    assert left.barcode_key == "" and right.barcode_key == ""
-    assert not left.barcode_trusted and not right.barcode_trusted
+    assert left.gtin_key == "" and right.gtin_key == ""
+    assert not left.gtin_trusted and not right.gtin_trusted
 
 
 # ── T1.5 decision ───────────────────────────────────────────────────────────
 
-def test_malformed_barcode_group_with_conflicting_roast_is_kept_apart():
-    """The Cool Brew case: one retailer, one malformed barcode, two roasts."""
+def test_malformed_gtin_group_with_conflicting_roast_is_kept_apart():
+    """The Cool Brew case: one retailer, one malformed gtin, two roasts."""
     sub = _frame([
         ("amazon", "Cold Brew Concentrate", "Cool Brew",
          "Roast Type: French Roast", 12.0, "53721632036"),
@@ -123,7 +123,7 @@ def test_malformed_barcode_group_with_conflicting_roast_is_kept_apart():
     )
 
 
-def test_malformed_barcode_group_with_mixed_diet_claim_is_kept_apart():
+def test_malformed_gtin_group_with_mixed_diet_claim_is_kept_apart():
     sub = _frame([
         ("amazon", "Stewart's Root Beer", "Stewart's", "", 6.0, "98794313048"),
         ("amazon", "Stewart's Diet Root Beer", "Stewart's", "", 6.0, "98794313048"),
@@ -132,7 +132,7 @@ def test_malformed_barcode_group_with_mixed_diet_claim_is_kept_apart():
     assert not _same_product_by_title(sub, "amazon", "98794313048")
 
 
-def test_malformed_barcode_group_with_a_diet_claim_in_every_row_collapses():
+def test_malformed_gtin_group_with_a_diet_claim_in_every_row_collapses():
     """A qualifier present in EVERY row is a shared trait, not a split."""
     sub = _frame([
         ("amazon", "Orange Crush Sugar Free", "Orange Crush", "", 6.0, "72392329915"),
@@ -164,15 +164,15 @@ def test_completeness_counts_descriptors_not_price_or_urls():
     product purely on `df.notna().sum()`.
     """
     bare = {
-        "title": "Acme Cola", "brand": "Acme", "category": "Soda",
-        "category_path": "Beverages > Soda", "attributes": "Flavour: Cola",
-        "description": "A cola.", "price": 9.99, "url": "https://x/1",
+        "sku_name_eng": "Acme Cola", "brand": "Acme", "category": "Soda",
+        "breadcrumbs_eng": "Beverages > Soda", "attribute": "Flavour: Cola",
+        "description_short_eng": "A cola.", "sku_last_price": 9.99, "sku_url": "https://x/1",
         "image_url": "https://x/1.jpg",
     }
     described = {
-        "title": "Acme Cola", "brand": "Acme", "category": "Soda",
-        "category_path": "Beverages > Soda", "attributes": "Flavour: Cola",
-        "description": "A cola.", "price": 1.99, "url": "",
+        "sku_name_eng": "Acme Cola", "brand": "Acme", "category": "Soda",
+        "breadcrumbs_eng": "Beverages > Soda", "attribute": "Flavour: Cola",
+        "description_short_eng": "A cola.", "sku_last_price": 1.99, "sku_url": "",
         "image_url": "",
     }
 
@@ -184,12 +184,12 @@ def test_completeness_counts_descriptors_not_price_or_urls():
 
 def test_completeness_ignores_price_and_url_variation_but_counts_descriptors():
     rows = pd.DataFrame([
-        {"title": "Acme Cola", "brand": "Acme", "category": "Soda",
-         "category_path": "B > S", "attributes": "Flavour: Cola",
-         "description": "x", "price": 1.0, "url": "", "image_url": ""},
-        {"title": "Acme Cola", "brand": "Acme", "category": "Soda",
-         "category_path": "B > S", "attributes": "Flavour: Cola",
-         "description": "x", "price": 999.0, "url": "u", "image_url": "u2"},
+        {"sku_name_eng": "Acme Cola", "brand": "Acme", "category": "Soda",
+         "breadcrumbs_eng": "B > S", "attribute": "Flavour: Cola",
+         "description_short_eng": "x", "sku_last_price": 1.0, "sku_url": "", "image_url": ""},
+        {"sku_name_eng": "Acme Cola", "brand": "Acme", "category": "Soda",
+         "breadcrumbs_eng": "B > S", "attribute": "Flavour: Cola",
+         "description_short_eng": "x", "sku_last_price": 999.0, "sku_url": "u", "image_url": "u2"},
     ])
 
     scores = [completeness(r) for r in rows.to_dict("records")]
@@ -240,10 +240,10 @@ def test_positive_splits_are_detected(left_attr, right_attr, expected):
 def test_package_material_is_actually_extracted():
     """Guard the dead-dimension bug directly: the value must be non-empty."""
     identity = row_identity({
-        "title": "Acme Juice", "brand": "Acme", "category": "Juice",
-        "category_path": "B > J", "attributes": "Pack Material Type: Glass",
-        "description": "Juice.", "price": 3.0, "barcode": "",
-        "url": "", "image_url": "",
+        "sku_name_eng": "Acme Juice", "brand": "Acme", "category": "Juice",
+        "breadcrumbs_eng": "B > J", "attribute": "Pack Material Type: Glass",
+        "description_short_eng": "Juice.", "sku_last_price": 3.0, "gtin": "",
+        "sku_url": "", "image_url": "",
     })
 
     assert identity.package_material == frozenset({"glass"}), (

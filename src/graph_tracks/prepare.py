@@ -1,8 +1,8 @@
 """Export graph inputs from shared identity extraction and explicit listing splits.
 
-No splits are invented and no barcode/label edges enter the model. The
+No splits are invented and no gtin/label edges enter the model. The
 listing schema is DERIVED from the shared extractor contract
-(core.product_identity.graph_schema) and its manifest records what was
+(core.sku_identity.graph_schema) and its manifest records what was
 derived at prepare time; a loader that sees a different schema refuses the
 inputs as stale.
 """
@@ -15,7 +15,7 @@ from graph_tracks.data import RELATIONS, NUMERIC, file_hash, load_records
 
 
 def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
-    from core.product_identity import row_identity
+    from core.sku_identity import row_identity
     from graph_tracks.train import load_pairs, write_json
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False, low_memory=False)
     from core.identity_policy import reviewed_row_mask, POLICY_PATH
@@ -23,21 +23,21 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
     if reviewed_row_mask(frame).any():
         raise ValueError("catalog contains quarantined identity groups/listings; apply reviewed exclusions before preparing splits")
     assignment = pd.read_csv(splits, dtype=str, keep_default_na=False)
-    if 'product_id' not in frame or set(assignment.columns) != {'product_id', 'split'}:
-        raise ValueError('catalog needs product_id; split CSV needs exactly product_id,split')
-    if frame.product_id.duplicated().any() or assignment.product_id.duplicated().any():
+    if 'sku_id' not in frame or set(assignment.columns) != {'sku_id', 'split'}:
+        raise ValueError('catalog needs sku_id; split CSV needs exactly sku_id,split')
+    if frame.sku_id.duplicated().any() or assignment.sku_id.duplicated().any():
         raise ValueError('listing IDs and split assignments must be unique')
-    if set(frame.product_id) != set(assignment.product_id):
+    if set(frame.sku_id) != set(assignment.sku_id):
         raise ValueError('split map must cover exactly the retained catalog')
-    lookup = assignment.set_index('product_id').split.to_dict()
+    lookup = assignment.set_index('sku_id').split.to_dict()
     records = []
     from graph_tracks.report_attributes import FILENAME, identity_attributes, write_inputs
     report_rows = []
     for _, row in frame.iterrows():
         identity = row_identity(row)
-        report_rows.append({'product_id': row.product_id, 'attributes': identity_attributes(identity)})
-        records.append({'product_id': row.product_id, 'split': lookup[row.product_id],
-                        'attributes': {key: sorted(getattr(identity, key)) for key in RELATIONS},
+        report_rows.append({'sku_id': row.sku_id, 'attribute': identity_attributes(identity)})
+        records.append({'sku_id': row.sku_id, 'split': lookup[row.sku_id],
+                        'attribute': {key: sorted(getattr(identity, key)) for key in RELATIONS},
                         'numeric': {key: sorted(getattr(identity, key)) for key in NUMERIC}})
     output.mkdir(parents=True, exist_ok=False)
     listing_path = output / 'listings.json'
@@ -51,11 +51,11 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
         'identity_policy_sha256': file_hash(POLICY_PATH),
         'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config' / 'identity_dimensions.yaml'),
         'splits_sha256': file_hash(splits), 'pairs_sha256': file_hash(pairs),
-        'listings_sha256': file_hash(listing_path), 'identity_extractor': 'core.product_identity.row_identity',
+        'listings_sha256': file_hash(listing_path), 'identity_extractor': 'core.sku_identity.row_identity',
         'report_attributes_sha256': file_hash(output / FILENAME),
         'relations': list(RELATIONS), 'numeric': list(NUMERIC),
-        'feature_scope': 'derived from core.product_identity.graph_schema; every extractor descriptor is a model input',
-        'excluded_model_inputs': ['barcode', 'verified identity edges', 'raw text'],
+        'feature_scope': 'derived from core.sku_identity.graph_schema; every extractor descriptor is a model input',
+        'excluded_model_inputs': ['gtin', 'verified identity edges', 'raw text'],
     })
     return listing_path
 

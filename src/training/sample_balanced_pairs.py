@@ -148,9 +148,9 @@ def _sku_count_bucket(count: int) -> str:
 
 def _detect_schema(frame: pd.DataFrame) -> dict[str, str | None]:
     choices = {
-        "gtin": ("barcode", "gtin"),
-        "sku": ("product_id", "sku_id"),
-        "attribute": ("attributes", "attribute"),
+        "gtin": ("gtin", "gtin"),
+        "sku": ("sku_id", "sku_id"),
+        "attribute": ("attribute", "attribute"),
         "retailer": ("retailer",),
         "country": ("country",),
         "category": ("category",),

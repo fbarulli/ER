@@ -35,7 +35,7 @@ def load_inputs(cfg):
         if list(prepared_schema[0]) != list(RELATIONS) or list(prepared_schema[1]) != list(NUMERIC):
             raise ValueError(
                 'prepared listings schema is stale: the extractor graph schema moved '
-                '(relations/numeric derive from core.product_identity.graph_schema); '
+                '(relations/numeric derive from core.sku_identity.graph_schema); '
                 're-run local graph setup before launch')
     records = load_records(resolve(cfg.listings))
     if manifest is not None and manifest.get('report_attributes_sha256'):
@@ -46,7 +46,7 @@ def load_inputs(cfg):
     pairs = load_pairs(resolve(cfg.pairs), records)
     vectors, metadata = None, None
     if cfg.text_cache:
-        vectors, metadata = load_text_cache(resolve(cfg.text_cache), [r['product_id'] for r in records])
+        vectors, metadata = load_text_cache(resolve(cfg.text_cache), [r['sku_id'] for r in records])
         if manifest is not None:
             from core.model_input import model_input_composition
             if metadata.get('composition') != model_input_composition().model_dump(mode='json'):

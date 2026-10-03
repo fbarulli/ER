@@ -4,19 +4,19 @@
 match on price — so ~9,080 same-title rows at one retailer are DISTINCT
 marketplace offers (Gittigidiyor-style sellers), not scrape glitches.
 Collapsing them is PRICE-AGGREGATION, not noise-removal, so the representative
-is chosen deliberately using barcode presence and descriptor completeness;
+is chosen deliberately using gtin presence and descriptor completeness;
 price does not rank representatives.
 
 Tiers (each operates on the rows surviving the previous tier):
-  T1  retailer+barcode      same product at one retailer -> 1 row (barcode is
+  T1  retailer+gtin      same product at one retailer -> 1 row (gtin is
                            ground truth, highest confidence).
-  T1.5 retailer+malformed   same retailer + same CHECKSUM-INVALID barcode +
-      barcode               same product -> 1 row. Identity decided by the
-                           descriptor bundle (core.product_identity), never by
+  T1.5 retailer+malformed   same retailer + same CHECKSUM-INVALID gtin +
+      gtin               same product -> 1 row. Identity decided by the
+                           descriptor bundle (core.sku_identity), never by
                            price or URL.
   T2  retailer+title+       matching identity partition -> 1 row. Price is
       identity partition    NOT part of the key (it is a seller attribute);
-                           same retailer+title+barcode at two prices is the
+                           same retailer+title+gtin at two prices is the
                            same product offered twice, which is T3's
                            price-aggregation and is flagged, not silent.
   T3  retailer+title +      varying price -> one deliberate representative per
@@ -26,22 +26,22 @@ Tiers (each operates on the rows surviving the previous tier):
 The identity partition in T3 is load-bearing, not cosmetic (measured
 2026-09-30): keying the collapse on (retailer,title) ALONE merged two distinct
 checksum-valid products whenever one retailer listed the same title string
-under two barcodes. 692 groups, 1,086 product-listings deleted, and 264
+under two gtins. 692 groups, 1,086 product-listings deleted, and 264
 products lost their ONLY row in the corpus — present in canonical_records.csv,
 absent from the deduped output, with a representative carrying a sibling's
-barcode. T2 already detects exactly this hazard and deferred to T3; T3 then
+gtin. T2 already detects exactly this hazard and deferred to T3; T3 then
 merged them anyway. The partition closes it: rows carrying DIFFERENT trusted
-barcodes never collapse together. Rows without a barcode may share a populated
+gtins never collapse together. Rows without a gtin may share a populated
 title for price aggregation; rows with missing titles stay separate in T2/T3.
 
-Identity is decided by `core.product_identity` (the SSOT) and by nothing else.
+Identity is decided by `core.sku_identity` (the SSOT) and by nothing else.
 Representative choice deliberately ignores `price`, `url` and `image_url`:
 price moves with the seller, and the URL columns are export noise — the
 completeness score counts DESCRIPTOR fields only.
 
 Writes:
   data/dataset_deduped.csv             deduped dataset (pipeline input)
-  data/sku_to_rep.csv                  raw SKU (product_id) -> rep_id
+  data/sku_to_rep.csv                  raw SKU (sku_id) -> rep_id
   results/06_dedupe_summary.csv        per-tier counts
   results/06_ambiguous_offer_groups.csv  retailer+title >1 price
   results/06_dedupe_removals.csv       one review row per removed raw SKU
@@ -62,9 +62,9 @@ import pandas as pd
 from core.common import DATA_PATH, SEED, F, ensure_parent, load_dataset, data_cfg
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 from core.deduplication import collapse_representatives
-from core.product_identity import (
+from core.sku_identity import (
     completeness_frame,
-    evaluate_product_identity,
+    evaluate_sku_identity,
     identity_conflict,
     row_identity,
 )
@@ -86,45 +86,45 @@ HELPERS = ["_price", "_complete", "_has_bc", "_t2_bc", "_bc_valid", "_ident"]
 # on their ORIGINAL (unnormalized) data — full title, attributes, brand,
 # category, price. 8 are genuine product splits (keep separate), 2 are
 # same-product where a listing qualified a shared trait (collapse). Keyed by
-# (retailer, barcode) in config/paths.yaml dedupe_adjudications so the T1.5
+# (retailer, gtin) in config/paths.yaml dedupe_adjudications so the T1.5
 # loop can look up the reviewed verdict directly.
 #
 # This table is the reason the text predicate is allowed to decide T1.5 at
-# all: measured on barcode-labeled ground truth (2026-09-30) the descriptor
+# all: measured on gtin-labeled ground truth (2026-09-30) the descriptor
 # predicate alone merges 59.0% of provably-different pairs, because a
 # missing descriptor reads as agreement. Absence of a conflict is therefore
-# NOT sufficient — a byte-identical malformed barcode at one retailer plus a
+# NOT sufficient — a byte-identical malformed gtin at one retailer plus a
 # descriptor verdict is, and anything the verdict cannot settle is escalated
 # here rather than merged.
 
 
-def _same_product_by_title(sub: pd.DataFrame, retailer: str, barcode: str) -> bool:
-    """Two-step product-identity decision for a (retailer, barcode) group.
+def _same_product_by_title(sub: pd.DataFrame, retailer: str, gtin: str) -> bool:
+    """Two-step product-identity decision for a (retailer, gtin) group.
 
     STEP 0 — config-owned adjudicated overrides win outright.
     STEP 1 — the descriptor bundle decides: no dimension may PROVE the rows are
-      different products. `core.product_identity` owns that comparison, so the
+      different products. `core.sku_identity` owns that comparison, so the
       dedupe, the gate and the vetoes cannot drift apart. Category is
       deliberately not a veto: it is as noisy as the attribute cell on these
       rows (Reconstituted vs Not-from-Conjugate juice are the same product).
     STEP 2 — a group the bundle cannot settle is NOT merged. The absence of a
       conflict is not evidence of identity (measured 59.0% false-merge rate on
-      barcode-labeled hard negatives), so the safe answer is to keep the rows
+      gtin-labeled hard negatives), so the safe answer is to keep the rows
       apart and let the link lane adjudicate.
 
     `sub` must contain the descriptor columns. Returns True when the group is
     the same product and should collapse.
     """
-    key = (retailer, barcode)
+    key = (retailer, gtin)
     for reviewed in data_cfg().dedupe_adjudications:
-        if key == (reviewed.retailer, reviewed.barcode):
+        if key == (reviewed.retailer, reviewed.gtin):
             return reviewed.decision == "collapse"
 
     identities = [row_identity(row) for row in sub.to_dict("records")]
     # Compatibility is not transitive: A={lemon,lime} can overlap B={lemon}
     # and C={lime} while B conflicts with C. Check every pair before collapse.
     from itertools import combinations
-    return all(evaluate_product_identity(left, right)["decision"] in {
+    return all(evaluate_sku_identity(left, right)["decision"] in {
         "same", "compatible_unverified"
     } for left, right in combinations(identities, 2))
 
@@ -132,12 +132,12 @@ def _same_product_by_title(sub: pd.DataFrame, retailer: str, barcode: str) -> bo
 def _protect_missing_titles(frame: pd.DataFrame) -> pd.DataFrame:
     """Give untitled listings separate partitions before title-based collapse.
 
-    T1 has already consumed trustworthy retailer/barcode identity. An absent
+    T1 has already consumed trustworthy retailer/gtin identity. An absent
     title cannot prove identity for the remaining T2/T3 rows, even when both
-    also lack a barcode. Use row positions rather than a possibly missing or
+    also lack a gtin. Use row positions rather than a possibly missing or
     repeated listing ID, preserving every such source row independently.
     """
-    missing = frame["title"].fillna("").astype(str).str.strip().eq("")
+    missing = frame["sku_name_eng"].fillna("").astype(str).str.strip().eq("")
     if not missing.any():
         return frame
     frame = frame.copy()
@@ -160,20 +160,20 @@ def main() -> None:
     df = apply_identity_links(load_dataset())
     n0 = len(df)
     work = df.assign(
-        _price=pd.to_numeric(df["price"], errors="coerce"),
+        _price=pd.to_numeric(df["sku_last_price"], errors="coerce"),
         # Descriptor completeness, NOT `df.notna().sum()`: the old score
         # counted `url` and `image_url`, so a listing survived on the strength
         # of two export-noise columns while a complete title with no image lost
         # (measured 2026-09-30). price is excluded too — it is a seller
         # attribute, not a description of the product.
         _complete=completeness_frame(df),
-        _has_bc=(df["barcode"].fillna("").str.len() > 0).astype(int),
+        _has_bc=(df["gtin"].fillna("").str.len() > 0).astype(int),
     )
 
     # The ambiguous-offer audit is computed from the RAW frame, before any tier
     # can consume the rows. It used to be derived from whatever survived to T3,
     # so a group T2 collapsed first silently vanished from the audit trail.
-    pv = work.groupby(["retailer", "title"])["_price"].agg(
+    pv = work.groupby(["retailer", "sku_name_eng"])["_price"].agg(
         ["size", "nunique", "min", "max"]).rename(columns={"size": "count"})
     ambiguous = pv[(pv["count"] > 1) & (pv["nunique"] > 1)]
 
@@ -184,49 +184,49 @@ def main() -> None:
 
     summary = []
 
-    # T1: retailer+barcode -> one row (ground-truth identity), ONLY for rows
-    # that actually have a barcode. Rows with a MISSING barcode are NOT
-    # collapsed ("no barcode" is not "same barcode"). And only for rows
-    # whose barcode PASSES the GS1 checksum (owner ruling, src/core/gtin.py):
-    # an invalid barcode is export noise, not identity — 103 retailer+
-    # barcode groups carried >1 distinct title on a checksum-fail barcode
-    # and would silently merge different products. Invalid-barcode rows
+    # T1: retailer+gtin -> one row (ground-truth identity), ONLY for rows
+    # that actually have a gtin. Rows with a MISSING gtin are NOT
+    # collapsed ("no gtin" is not "same gtin"). And only for rows
+    # whose gtin PASSES the GS1 checksum (owner ruling, src/core/gtin.py):
+    # an invalid gtin is export noise, not identity — 103 retailer+
+    # gtin groups carried >1 distinct title on a checksum-fail gtin
+    # and would silently merge different products. Invalid-gtin rows
     # are not dropped: they fall through to T2/T3 title-based tiers.
-    from core.gtin import barcode_validity
+    from core.gtin import gtin_validity
 
-    bc_stripped = work["barcode"].fillna("").astype(str).str.strip()
-    before_valid_barcodes = set(bc_stripped[barcode_validity(bc_stripped)]) - {""}
+    bc_stripped = work["gtin"].fillna("").astype(str).str.strip()
+    before_valid_gtins = set(bc_stripped[gtin_validity(bc_stripped)]) - {""}
     work = work.assign(
-        _bc_valid=(barcode_validity(bc_stripped) & ~reviewed_row_mask(work)).to_numpy()
+        _bc_valid=(gtin_validity(bc_stripped) & ~reviewed_row_mask(work)).to_numpy()
     )
-    # The identity partition: a row's TRUSTED barcode, or "" when it has none.
+    # The identity partition: a row's TRUSTED gtin, or "" when it has none.
     # T1 collapses within a partition by construction; T3 reuses it so two
     # different products sharing a title string can never collapse together.
     work = work.assign(
         _ident=np.where(work["_bc_valid"],
-                        work["barcode"].fillna("").astype(str).str.strip(), ""),
+                        work["gtin"].fillna("").astype(str).str.strip(), ""),
     )
     held = reviewed_row_mask(work)
-    work.loc[held, "_ident"] = "review:" + work.loc[held, "product_id"].astype(str)
+    work.loc[held, "_ident"] = "review:" + work.loc[held, "sku_id"].astype(str)
     with_bc = work[(work["_has_bc"] == 1) & (work["_bc_valid"])]
     t1_bc_invalid = work[(work["_has_bc"] == 1) & (~work["_bc_valid"])]
     no_bc = work[work["_has_bc"] == 0]
     n_t1_skipped = len(t1_bc_invalid)
-    t1, dropped1 = collapse_representatives(with_bc, ["retailer", "barcode"],
+    t1, dropped1 = collapse_representatives(with_bc, ["retailer", "gtin"],
                             ["_complete"], [False], parent=parent)
     work = pd.concat([t1, t1_bc_invalid, no_bc])
-    summary.append({"tier": "T1 retailer+barcode",
+    summary.append({"tier": "T1 retailer+gtin",
                     "dropped_rows": len(dropped1),
                     "skipped_checksum_invalid": n_t1_skipped})
 
-    # T1.5: same retailer + same MALFORMED (checksum-invalid) barcode + same
-    # product -> one row. T1 refuses to collapse on an invalid barcode because
-    # "invalid barcode is export noise, not identity" — but a malformed barcode
+    # T1.5: same retailer + same MALFORMED (checksum-invalid) gtin + same
+    # product -> one row. T1 refuses to collapse on an invalid gtin because
+    # "invalid gtin is export noise, not identity" — but a malformed gtin
     # that is byte-identical at one retailer is still a strong candidate, and
     # the descriptor bundle is the arbiter (`_same_product_by_title`, which
-    # delegates to core.product_identity and escalates anything it cannot
+    # delegates to core.sku_identity and escalates anything it cannot
     # settle to the owner-adjudicated table). This recovers the 97 groups
-    # measured in the dedupe invalid-barcode audit (2026-09-29) while never
+    # measured in the dedupe invalid-gtin audit (2026-09-29) while never
     # merging genuinely different products (Cool Brew French Roast vs Vanilla,
     # Montellier Lemon vs Lime, Ginseng Up vs Natural Ginger Ale, ...).
     t15_dropped = []
@@ -234,19 +234,19 @@ def main() -> None:
     t15_groups = 0
     t15_unresolved = 0
     conflict_rows = []
-    for (retailer, barcode), sub in tracked(
-        list(t1_bc_invalid.groupby(["retailer", "barcode"], sort=False)),
-        desc="T1.5 malformed-barcode groups",
+    for (retailer, gtin), sub in tracked(
+        list(t1_bc_invalid.groupby(["retailer", "gtin"], sort=False)),
+        desc="T1.5 malformed-gtin groups",
     ):
         if len(sub) <= 1:
             t15_kept.append(sub)
             continue
-        if _same_product_by_title(sub, retailer, barcode):
+        if _same_product_by_title(sub, retailer, gtin):
             # Representative: most complete descriptors, then a trusted
-            # barcode, then the most informative title. NOT price — the
+            # gtin, then the most informative title. NOT price — the
             # cheapest listing is not the most truthful one.
             order = sub.sort_values(
-                ["_complete", "_ident", "title"],
+                ["_complete", "_ident", "sku_name_eng"],
                 ascending=[False, False, True],
                 na_position="last", kind="stable",
             )
@@ -265,14 +265,14 @@ def main() -> None:
             identities = [row_identity(r) for r in sub.to_dict("records")]
             anchor = identities[0]
             for other in identities[1:]:
-                evaluation = evaluate_product_identity(anchor, other)
+                evaluation = evaluate_sku_identity(anchor, other)
                 reasons = evaluation["identity_conflicts"]
                 reviews = evaluation["review_dimensions"] + evaluation["unclassified_keys"]
                 conflict_rows.append({
-                    "tier": "T1.5", "retailer": retailer, "barcode": barcode,
+                    "tier": "T1.5", "retailer": retailer, "gtin": gtin,
                     "label": "proven_split" if reasons else "unresolved",
                     "reasons": "|".join(reasons or [f"review:{r}" for r in reviews]) or "-",
-                    "title_a": sub["title"].iat[0], "title_b": sub["title"].iat[1],
+                    "title_a": sub["sku_name_eng"].iat[0], "title_b": sub["sku_name_eng"].iat[1],
                     "brand_a": anchor.brand and " ".join(sorted(anchor.brand)) or "",
                     "brand_b": other.brand and " ".join(sorted(other.brand)) or "",
                 })
@@ -281,56 +281,56 @@ def main() -> None:
             t15_kept.append(sub)
     t15_kept = pd.concat(t15_kept)
     work = pd.concat([t1, t15_kept, no_bc])
-    summary.append({"tier": "T1.5 retailer+malformed-barcode+same-product",
+    summary.append({"tier": "T1.5 retailer+malformed-gtin+same-product",
                     "dropped_rows": len(t15_dropped),
                     "collapsed_groups": t15_groups,
                     "unresolved_groups": t15_unresolved})
 
-    # T2: retailer+title+barcode -> one row (lossless). `price` is NOT part of
+    # T2: retailer+title+gtin -> one row (lossless). `price` is NOT part of
     # the key: it is a seller attribute, and two rows at one retailer with the
-    # same title and the same product barcode but different prices are the same
+    # same title and the same product gtin but different prices are the same
     # product offered twice — that is T3's price-aggregation, and the
     # ambiguous-offer audit (computed from the raw frame above) still records
     # it. Rows with a MISSING price are not "identical everything" in the old
     # sense, but price is no longer part of identity, so they no longer need
     # their own lane.
     #
-    # "Lossless" is still ENFORCED by the barcode-agreement guard: rows
-    # collapse only when their trusted barcodes agree (same non-empty
-    # identity, or both without one). Two DIFFERENT trusted barcodes under one
+    # "Lossless" is still ENFORCED by the gtin-agreement guard: rows
+    # collapse only when their trusted gtins agree (same non-empty
+    # identity, or both without one). Two DIFFERENT trusted gtins under one
     # title are different products and must not be merged here.
     work = _protect_missing_titles(work)
     with_price = work.copy()
     with_price["_t2_bc"] = with_price["_ident"]
     no_price = work.iloc[0:0]
 
-    # Split T2 by barcode agreement WITHIN each (retailer,title) group: an
+    # Split T2 by gtin agreement WITHIN each (retailer,title) group: an
     # all-same-identity group collapses losslessly; a group with >1 distinct
-    # trusted barcode carries genuinely different products — those rows all
+    # trusted gtin carries genuinely different products — those rows all
     # flow to T3 (kept here via the conflict mask).
     bc_agrees = with_price.groupby(
-        ["retailer", "title"], sort=False, dropna=False
+        ["retailer", "sku_name_eng"], sort=False, dropna=False
     )["_t2_bc"].transform("nunique").le(1)
     t2_clean = with_price[bc_agrees]
     t2_conflict = with_price[~bc_agrees]
 
-    t2, dropped2 = collapse_representatives(t2_clean, ["retailer", "title", "_t2_bc"],
+    t2, dropped2 = collapse_representatives(t2_clean, ["retailer", "sku_name_eng", "_t2_bc"],
                             ["_complete"], [False], parent=parent)
     work = pd.concat([t2, t2_conflict.drop(columns=["_t2_bc"]), no_price])
-    summary.append({"tier": "T2 retailer+title+barcode",
+    summary.append({"tier": "T2 retailer+title+gtin",
                     "dropped_rows": len(dropped2),
                     "deferred_to_t3": len(t2_conflict)})
 
     # T3: retailer+title WITHIN AN IDENTITY PARTITION -> one deliberate
     # representative + flag. The `_ident` partition is the fix for the measured
     # identity loss: keying on (retailer,title) alone deleted 1,086
-    # product-listings carrying a valid barcode and erased 264 products from
+    # product-listings carrying a valid gtin and erased 264 products from
     # the corpus entirely (they survived in canonical_records.csv, absent from
-    # the output, represented by a sibling's barcode). Rows sharing a title
-    # with NO trusted barcode still collapse together — that is the genuine
+    # the output, represented by a sibling's gtin). Rows sharing a title
+    # with NO trusted gtin still collapse together — that is the genuine
     # price-aggregation case, and it is flagged rather than silent.
-    t3, dropped3 = collapse_representatives(work, ["retailer", "title", "_ident"],
-                            ["_has_bc", "_complete", "title"],
+    t3, dropped3 = collapse_representatives(work, ["retailer", "sku_name_eng", "_ident"],
+                            ["_has_bc", "_complete", "sku_name_eng"],
                             [False, False, True], parent=parent)
     work = t3
     summary.append({"tier": "T3 retailer+title+identity-partition (price-aggregation)",
@@ -353,7 +353,7 @@ def main() -> None:
 
     rep_pos = {idx: pos for pos, idx in enumerate(work.index)}
     sku_to_rep = pd.DataFrame({
-        "product_id": df["product_id"].to_numpy(),
+        "sku_id": df["sku_id"].to_numpy(),
         "rep_id": [rep_pos[parent[i]] for i in df.index],
     })
     atomic_write_csv(sku_to_rep, SKU_TO_REP_PATH, index=False)
@@ -362,11 +362,11 @@ def main() -> None:
     # sanity: no (retailer,title,identity-partition) duplicates may remain, and
     # every raw SKU resolves to a valid representative. The partition is part
     # of the key on PURPOSE: two genuinely different products may share a title
-    # string at one retailer, but no two rows sharing a trusted barcode can
+    # string at one retailer, but no two rows sharing a trusted gtin can
     # survive as duplicates. Checked on `work` because `deduped` drops the
     # helper columns.
     dups = int(
-        work.duplicated(subset=["retailer", "title", "_ident"]).sum()
+        work.duplicated(subset=["retailer", "sku_name_eng", "_ident"]).sum()
     )
     if dups:
         raise AssertionError(
@@ -380,35 +380,35 @@ def main() -> None:
           "SKU->rep mapping complete")
 
     # IDENTITY INVARIANT (2026-09-30): no product may lose its last row. Every
-    # trusted barcode present in the input must still be present in the output,
+    # trusted gtin present in the input must still be present in the output,
     # or a product has been erased from the matching input. Measured 264
     # products failing this before the T3 identity partition landed. This is
     # now a hard gate, not a report: the failure mode it catches is silent and
     # unrecoverable downstream, and no future tier may be allowed to reintroduce
     # it.
-    after = set(deduped["barcode"].fillna("").astype(str).str.strip())
-    lost = before_valid_barcodes - after
+    after = set(deduped["gtin"].fillna("").astype(str).str.strip())
+    lost = before_valid_gtins - after
     if lost:
         raise AssertionError(
-            f"sanity FAILED: {len(lost):,} trusted barcodes lost their last "
+            f"sanity FAILED: {len(lost):,} trusted gtins lost their last "
             f"row (e.g. {sorted(lost)[:3]}) — a product was deleted from the "
             f"matching input, not de-duplicated"
         )
-    print(f"  [PASS] identity invariant: all {len(before_valid_barcodes):,} "
-          f"trusted barcodes still have a representative")
+    print(f"  [PASS] identity invariant: all {len(before_valid_gtins):,} "
+          f"trusted gtins still have a representative")
 
     # One review row for every raw SKU deliberately collapsed by a tier.
     # Capture the tier at its direct parent update, before transitive
     # representative resolution obscures where the removal happened.
     removal_tier = {
-        **{idx: "T1 retailer+barcode" for idx in dropped1},
-        **{idx: "T1.5 retailer+malformed-barcode+same-product" for idx in t15_dropped},
-        **{idx: "T2 retailer+title+barcode" for idx in dropped2},
+        **{idx: "T1 retailer+gtin" for idx in dropped1},
+        **{idx: "T1.5 retailer+malformed-gtin+same-product" for idx in t15_dropped},
+        **{idx: "T2 retailer+title+gtin" for idx in dropped2},
         **{idx: "T3 retailer+title+identity-partition (price-aggregation)" for idx in dropped3},
     }
     removals = sku_to_rep.loc[list(removal_tier)].copy()
     removals["tier"] = [removal_tier[idx] for idx in removals.index]
-    removals = removals[["product_id", "rep_id", "tier"]].reset_index(drop=True)
+    removals = removals[["sku_id", "rep_id", "tier"]].reset_index(drop=True)
     expected_removals = n0 - len(deduped)
     if len(removals) != expected_removals:
         raise AssertionError(
@@ -432,7 +432,7 @@ def main() -> None:
 
     conflicts = pd.DataFrame(
         conflict_rows,
-        columns=["tier", "retailer", "barcode", "label", "reasons",
+        columns=["tier", "retailer", "gtin", "label", "reasons",
                  "title_a", "title_b", "brand_a", "brand_b"],
     )
     atomic_write_csv(conflicts, CSV_CONFLICTS, index=False)
@@ -450,11 +450,11 @@ def main() -> None:
     #
     # The two "deferred" populations are NOT drops and deliberately
     # excluded from `dropped`:
-    #   skipped_checksum_invalid (T1) — 3,715 checksum-fail barcode rows
+    #   skipped_checksum_invalid (T1) — 3,715 checksum-fail gtin rows
     #     are concatenated BACK into the work frame; T1.5 collapses the
     #     same-product ones (counted under dropped.t1_5_*), the rest fall
     #     through to the title tiers.
-    #   deferred_to_t3 (T2) — 465 barcode-conflicting rows likewise
+    #   deferred_to_t3 (T2) — 465 gtin-conflicting rows likewise
     #     re-enter the frame and are settled by T3's counter.
     # Recording them under their own keys (outside `dropped`) keeps the
     # audit trail complete without breaking the closure invariant.
@@ -462,9 +462,9 @@ def main() -> None:
         "input_rows": n0,
         "output_rows": len(deduped),
         "dropped": {
-            "t1_retailer_barcode": len(dropped1),
-            "t1_5_retailer_malformed_barcode_same_product": len(t15_dropped),
-            "t2_retailer_title_barcode": len(dropped2),
+            "t1_retailer_gtin": len(dropped1),
+            "t1_5_retailer_malformed_gtin_same_product": len(t15_dropped),
+            "t2_retailer_title_gtin": len(dropped2),
             "t3_retailer_title_identity_partition": len(dropped3),
         },
         "skipped_checksum_invalid": n_t1_skipped,

@@ -4,7 +4,7 @@ These findings concern identity and splitting. Runtime guards now exclude review
 identities from labeling and split inputs; source listings are preserved.
 The dashboard at http://127.0.0.1:8001 is the browsable evidence surface.
 
-## 01 — same barcode, inconsistent dimensions
+## 01 — same gtin, inconsistent dimensions
 
 In the capped cross-retailer sample of 19,123 same-valid-GTIN pairs, 5,657
 (29.6%) have at least one disjoint raw dimension. These involve 2,343 GTINs
@@ -63,7 +63,7 @@ create a negative pair. Reviewed variants can remain distinct SKUs while sharing
 a broader product family. Split construction should explicitly choose whether
 that broader family must stay together to avoid variant leakage.
 
-The shared evaluator remains `core.product_identity`; all raw-dimension parsing
+The shared evaluator remains `core.sku_identity`; all raw-dimension parsing
 and comparison remains `core.product_dimensions`. The dashboard uses those
 shared dimension routines and `core.common.COLUMN_MAPPING`, not another matcher.
 
@@ -81,7 +81,7 @@ resolve to 200 mg per 473 ml, so their contextual comparison agrees despite
 Reviewed retailer image evidence corrects Halfday SKU 897369430's inner material
 to metal and separates Kevyt Olo SKU 282677444's cans from outer shrinkwrap.
 Overrides require the original listing ID and matching GTIN; they are not brand-
-or barcode-wide inferred corrections.
+or gtin-wide inferred corrections.
 
 `config/identity_reviews.json`, validated by `core.identity_policy`, holds 21
 explicit GLNs misfiled as GTINs and the two unresolved Brew Dr groups. All 23
@@ -93,7 +93,7 @@ rebuilt from the filtered merged component graph: 6,322 pairs (596 positives
 and 5,726 negatives), zero quarantined endpoints and zero straddling positives.
 The split graph rejects stale quarantined entities, and graph preparation
 rejects such catalogs before writing inputs. Unknown true item GTINs remain
-unknown; no replacement barcodes have been invented.
+unknown; no replacement gtins have been invented.
 
 Discovery can continue with open findings. The open Cool Best mixed-flavor
 source cases in finding 06 have not been adjudicated by this resolution.
@@ -109,7 +109,7 @@ Mat Smart source listings 142547188 and 143441192 match source reference
 140880643 on exact product URL, retailer, brand, title, description, dimensions
 and 12 × 230 ml pack. The reviewed policy reattaches those two listings to
 7310050105482, with representative 140880643. This link requires original
-listing ID, source barcode and exact URL; it is not a broad substitution of
+listing ID, source gtin and exact URL; it is not a broad substitution of
 11982760, nor a mapping from a 12-pack to a single drink.
 
 A targeted catalog repair restores original listings previously merged on all

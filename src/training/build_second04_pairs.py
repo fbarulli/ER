@@ -37,16 +37,16 @@ class ExclusionCensus(BaseModel):
     input_rows: int = Field(ge=0)
     accepted_rows: int = Field(ge=0)
     excluded_rows: int = Field(ge=0)
-    missing_product_id: int = Field(ge=0)
-    missing_barcode: int = Field(ge=0)
+    missing_sku_id: int = Field(ge=0)
+    missing_gtin: int = Field(ge=0)
     missing_country: int = Field(ge=0)
     invalid_gtin: int = Field(ge=0)
 
     @model_validator(mode="after")
     def _accounting_closes(self) -> "ExclusionCensus":
         reason_total = (
-            self.missing_product_id
-            + self.missing_barcode
+            self.missing_sku_id
+            + self.missing_gtin
             + self.missing_country
             + self.invalid_gtin
         )
@@ -67,13 +67,13 @@ class ExclusionCensus(BaseModel):
 def _usable_rows_with_census(
     frame: pd.DataFrame,
 ) -> tuple[pd.DataFrame, ExclusionCensus]:
-    required = {"product_id", "barcode", "country"}
+    required = {"sku_id", "gtin", "country"}
     missing = sorted(required - set(frame.columns))
     if missing:
         raise ValueError(f"deduplicated dataset missing columns: {missing}")
     usable = frame.copy()
-    usable["product_id"] = usable["product_id"].fillna("").astype(str).str.strip()
-    usable["barcode"] = usable["barcode"].fillna("").astype(str).str.strip()
+    usable["sku_id"] = usable["sku_id"].fillna("").astype(str).str.strip()
+    usable["gtin"] = usable["gtin"].fillna("").astype(str).str.strip()
     usable["country"] = usable["country"].fillna("").astype(str).str.strip()
 
     # Apply the same filters as the former boolean mask, but retain one
@@ -82,29 +82,29 @@ def _usable_rows_with_census(
     # input_rows == accepted_rows + excluded_rows always closes.
     reason = pd.Series("accepted", index=usable.index, dtype="string")
     pending = reason.eq("accepted")
-    missing_product_id = usable["product_id"].eq("")
-    reason.loc[pending & missing_product_id] = "missing_product_id"
+    missing_sku_id = usable["sku_id"].eq("")
+    reason.loc[pending & missing_sku_id] = "missing_sku_id"
     pending = reason.eq("accepted")
-    missing_barcode = usable["barcode"].eq("")
-    reason.loc[pending & missing_barcode] = "missing_barcode"
+    missing_gtin = usable["gtin"].eq("")
+    reason.loc[pending & missing_gtin] = "missing_gtin"
     pending = reason.eq("accepted")
     missing_country = usable["country"].eq("")
     reason.loc[pending & missing_country] = "missing_country"
     pending = reason.eq("accepted")
-    invalid_gtin = usable["barcode"].map(is_valid_gtin_checksum).eq(False)
+    invalid_gtin = usable["gtin"].map(is_valid_gtin_checksum).eq(False)
     reason.loc[pending & invalid_gtin] = "invalid_gtin"
 
     census = ExclusionCensus(
         input_rows=int(len(usable)),
         accepted_rows=int(reason.eq("accepted").sum()),
         excluded_rows=int(reason.ne("accepted").sum()),
-        missing_product_id=int(reason.eq("missing_product_id").sum()),
-        missing_barcode=int(reason.eq("missing_barcode").sum()),
+        missing_sku_id=int(reason.eq("missing_sku_id").sum()),
+        missing_gtin=int(reason.eq("missing_gtin").sum()),
         missing_country=int(reason.eq("missing_country").sum()),
         invalid_gtin=int(reason.eq("invalid_gtin").sum()),
     )
     return usable.loc[reason.eq("accepted")].sort_values(
-        ["barcode", "product_id", "country"],
+        ["gtin", "sku_id", "country"],
         kind="mergesort",
     ), census
 
@@ -120,8 +120,8 @@ def _build_manifest_with_census(
 ) -> tuple[pd.DataFrame, ExclusionCensus]:
     usable, census = _usable_rows_with_census(frame)
     rows: list[dict[str, object]] = []
-    for gtin, group in usable.groupby("barcode", sort=True):
-        records = group[["product_id", "country"]].to_dict("records")
+    for gtin, group in usable.groupby("gtin", sort=True):
+        records = group[["sku_id", "country"]].to_dict("records")
         for left, right in combinations(records, 2):
             country_a = str(left["country"])
             country_b = str(right["country"])
@@ -129,8 +129,8 @@ def _build_manifest_with_census(
                 continue
             rows.append(
                 CrossCountryPairRow(
-                    sku_id_a=str(left["product_id"]),
-                    sku_id_b=str(right["product_id"]),
+                    sku_id_a=str(left["sku_id"]),
+                    sku_id_b=str(right["sku_id"]),
                     cross_country=True,
                     gtin=str(gtin),
                     country_a=country_a,

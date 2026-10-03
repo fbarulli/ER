@@ -10,11 +10,11 @@ from training.gate_replay import fired_stage
 FIXTURE = json.loads((Path(__file__).parent / "fixtures/gate_regex_regressions.json").read_text())
 
 
-@pytest.mark.parametrize("sample", FIXTURE["listings"], ids=lambda sample: sample["product_id"])
+@pytest.mark.parametrize("sample", FIXTURE["listings"], ids=lambda sample: sample["sku_id"])
 def test_corrected_source_listing(sample):
     row, expected = sample["source_row"], sample["expected_corrected"]
-    actual = extract_all(row["title"], row["attributes"], row["description"], row["url"],
-                         row["image_url"], row["category_path"], row["category"])
+    actual = extract_all(row["sku_name_eng"], row["attribute"], row["description_short_eng"], row["sku_url"],
+                         row["image_url"], row["breadcrumbs_eng"], row["category"])
     if "volume_ml" in expected:
         assert actual["volume_ml"] == pytest.approx(expected["volume_ml"], abs=expected["volume_absolute_tolerance_ml"])
     if "pack_qty" in expected:

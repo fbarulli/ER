@@ -2,19 +2,19 @@
 # evidence until a field's feed reliability and semantics have been measured.
 schema_version: 1
 columns:
-  product_id: listing_identifier
+  sku_id: listing_identifier
   retailer: offer_context
   country: offer_context
-  title: descriptor_text
-  description: descriptor_text
-  category_path: descriptor_text
-  url: offer_context
+  sku_name_eng: descriptor_text
+  description_short_eng: descriptor_text
+  breadcrumbs_eng: descriptor_text
+  sku_url: offer_context
   image_url: offer_context
-  price: offer_context
-  barcode: identity_identifier
+  sku_last_price: offer_context
+  gtin: identity_identifier
   brand: descriptor_text
   category: descriptor_text
-  attributes: attribute_container
+  attribute: attribute_container
 attributes:
   Juice Content: {kind: interval, unit: percent}
   Volume: {kind: numeric, unit: ml}

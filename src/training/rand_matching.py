@@ -52,7 +52,7 @@ from core.attribute_conflicts import (
     normalized_flavor_tokens,
     sku_attribute_info,
 )
-from core.product_identity import brand_conflict, normalize_brand as product_identity_normalize_brand
+from core.sku_identity import brand_conflict, normalize_brand as sku_identity_normalize_brand
 from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
 from core.common import (
     CONFIG_PATH,
@@ -255,10 +255,10 @@ def _brand_conflict(left: object, right: object) -> bool:
 
     SSOT comparison (veto-asymmetry doctrine, config/vocabulary.json
     "brand_aliases"): both sides fold through
-    ``core.product_identity.normalize_brand``, which tokenizes and ADDS the
+    ``core.sku_identity.normalize_brand``, which tokenizes and ADDS the
     alias target token next to the observed token (never swaps), then the
     decision is the same one the dedupe SSOT uses —
-    ``core.product_identity.brand_conflict``: absent evidence never vetoes,
+    ``core.sku_identity.brand_conflict``: absent evidence never vetoes,
     a shared token or a token-subset relation ("Kiju" vs "Kiju Organic")
     is not a conflict, and only genuinely disjoint multi-token brands veto.
 
@@ -270,8 +270,8 @@ def _brand_conflict(left: object, right: object) -> bool:
     make two token sets share a token or nest — never disjoint — so
     counting conflicts can only DECREASE when the map is enabled.
     """
-    left_fold = product_identity_normalize_brand(left)
-    right_fold = product_identity_normalize_brand(right)
+    left_fold = sku_identity_normalize_brand(left)
+    right_fold = sku_identity_normalize_brand(right)
     return brand_conflict(left_fold, right_fold)
 
 
@@ -325,13 +325,13 @@ def targeted_veto_gate(
     right_volume = set(candidate_info.get("volume") or set())
     left_package_type = set(sku_info.get("package_type") or set())
     right_package_type = set(candidate_info.get("package_type") or set())
-    # Brand comparison runs through the product_identity SSOT fold (see
+    # Brand comparison runs through the sku_identity SSOT fold (see
     # _brand_conflict): the audit columns carry the FOLDED token sets joined
     # for display, so a reviewer sees the family key (shoc) next to the
     # observed spellings.
-    left_brand = " ".join(sorted(product_identity_normalize_brand(sku_brand)))
+    left_brand = " ".join(sorted(sku_identity_normalize_brand(sku_brand)))
     right_brand = " ".join(
-        sorted(product_identity_normalize_brand(candidate_brand))
+        sorted(sku_identity_normalize_brand(candidate_brand))
     )
     relative_tolerance = float(settings["volume_relative_tolerance"])
     absolute_tolerance_ml = float(settings["volume_absolute_tolerance_ml"])
@@ -728,7 +728,7 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "sku_brand",
             "sku_country",
             "sku_category",
-            "sku_category_path",
+            "sku_breadcrumbs_eng",
             "sku_retailer",
             "sku_volume",
             "sku_pack",
@@ -742,7 +742,7 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "sku_brand_present",
             "sku_country_present",
             "sku_category_present",
-            "sku_category_path_present",
+            "sku_breadcrumbs_eng_present",
             "sku_retailer_present",
             "sku_volume_present",
             "sku_pack_present",
@@ -908,7 +908,7 @@ def candidate_gate_fields(
 ) -> dict[str, object]:
     """Build the shared candidate gate record used by all matching lanes."""
     candidate_info = canonical_attribute_info(candidate_record)
-    sku_gtin = metadata_text(row_metadata_text(row, *alias_names("barcode"))).strip()
+    sku_gtin = metadata_text(row_metadata_text(row, *alias_names("gtin"))).strip()
     status = gtin_status(sku_gtin, candidate_gtin)
     exact = int(status == "both_equal")
     targeted_gate = targeted_veto_gate(
@@ -985,7 +985,7 @@ def candidate_gate_fields(
     return {
         "SKU_ID": sku_id,
         "sku_gtin": sku_gtin,
-        "sku_gtin_present": _field_present(row, "barcode", "gtin"),
+        "sku_gtin_present": _field_present(row, "gtin", "gtin"),
         "sku_gtin_valid": int(bool(trusted_gtin(sku_gtin))),
         "candidate_gtin": candidate_gtin,
         "candidate_rank": candidate_rank,
@@ -1003,12 +1003,12 @@ def candidate_gate_fields(
         "exact_gtin": exact,
         "gtin_status": status,
         "gate_reason": gate_reason,
-        "sku_title": row_metadata_text(row, "title"),
-        "sku_attributes": row_metadata_text(row, "attributes", "attr"),
+        "sku_title": row_metadata_text(row, "sku_name_eng"),
+        "sku_attributes": row_metadata_text(row, "attribute", "attr"),
         "sku_brand": row_metadata_text(row, "brand"),
         "sku_country": row_metadata_text(row, "country"),
         "sku_category": row_metadata_text(row, "category"),
-        "sku_category_path": row_metadata_text(row, "category_path"),
+        "sku_breadcrumbs_eng": row_metadata_text(row, "breadcrumbs_eng"),
         "sku_retailer": row_metadata_text(row, "retailer"),
         "sku_volume": json.dumps(sorted(sku_info["volume"])),
         "sku_pack": json.dumps(sorted(sku_info["pack"])),
@@ -1019,12 +1019,12 @@ def candidate_gate_fields(
         "sku_carbonation": json.dumps(sorted(sku_info.get("carbonation") or set())),
         "sku_sweetener": json.dumps(sorted(sku_info.get("sweetener") or set())),
         "sku_pulp": json.dumps(sorted(sku_info.get("pulp") or set())),
-        "sku_title_present": _field_present(row, "title"),
-        "sku_attributes_present": _field_present(row, "attributes", "attr"),
+        "sku_title_present": _field_present(row, "sku_name_eng"),
+        "sku_attributes_present": _field_present(row, "attribute", "attr"),
         "sku_brand_present": _field_present(row, "brand"),
         "sku_country_present": _field_present(row, "country"),
         "sku_category_present": _field_present(row, "category"),
-        "sku_category_path_present": _field_present(row, "category_path"),
+        "sku_breadcrumbs_eng_present": _field_present(row, "breadcrumbs_eng"),
         "sku_retailer_present": _field_present(row, "retailer"),
         "sku_volume_present": int(bool(sku_info["volume"])),
         "sku_pack_present": int(bool(sku_info["pack"])),
@@ -1233,17 +1233,17 @@ class RandMatcher:
         # through, which is the 425/585-row asymmetry this fixes.)
         gate_infos = [
             sku_attribute_info(
-                row_metadata_text(row, "title"),
-                row_metadata_text(row, "attributes", "attr"),
-                row_metadata_text(row, "description_short_eng", "description"),
+                row_metadata_text(row, "sku_name_eng"),
+                row_metadata_text(row, "attribute", "attr"),
+                row_metadata_text(row, "description_short_eng", "description_short_eng"),
             )
             for _, row in frame.iterrows()
         ]
         gate_infos = [
             sku_attribute_info(
-                row_metadata_text(row, "title"),
-                row_metadata_text(row, "attributes", "attr"),
-                row_metadata_text(row, "description_short_eng", "description"),
+                row_metadata_text(row, "sku_name_eng"),
+                row_metadata_text(row, "attribute", "attr"),
+                row_metadata_text(row, "description_short_eng", "description_short_eng"),
             )
             for _, row in frame.iterrows()
         ]
@@ -1259,10 +1259,10 @@ class RandMatcher:
     @staticmethod
     def _normalise_skus(skus: pd.DataFrame) -> pd.DataFrame:
         frame = skus.copy()
-        if "SKU_ID" not in frame and "product_id" in frame:
-            frame = frame.rename(columns={"product_id": "SKU_ID"})
+        if "SKU_ID" not in frame and "sku_id" in frame:
+            frame = frame.rename(columns={"sku_id": "SKU_ID"})
         if "SKU_ID" not in frame:
-            raise ValueError("input must contain SKU_ID or product_id")
+            raise ValueError("input must contain SKU_ID or sku_id")
         frame = _ensure_source_row_identity(frame)
         frame["SKU_ID"] = frame["SKU_ID"].astype(str).str.strip()
         bad = frame.loc[
@@ -1363,7 +1363,7 @@ class RandMatcher:
 
         rows: list[dict[str, object]] = []
         for position, (_, row) in enumerate(frame.iterrows()):
-            sku_gtin = self._gtin(row_metadata_text(row, *alias_names("barcode")))
+            sku_gtin = self._gtin(row_metadata_text(row, *alias_names("gtin")))
             candidate_indexes = self._candidate_indexes(
                 hit_labels[position].tolist(), sku_gtin
             )
@@ -2264,7 +2264,7 @@ def _load_calibration_frame(
     if labels[["SKU_ID", "true_item_id", "calibration_fold"]].eq("").any().any():
         raise ValueError("calibration input contains blank identity or fold values")
     base = _ensure_source_row_identity(
-        load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
+        load_dataset_deduped().rename(columns={"sku_id": "SKU_ID"})
     )
     base["SKU_ID"] = base["SKU_ID"].astype(str)
     unknown_ids = sorted(set(labels["SKU_ID"]) - set(base["SKU_ID"]))
@@ -2301,7 +2301,7 @@ def _load_calibration_frame(
         )
     calibration["gtin_status"] = [
         matcher.gtin_status(
-            row_metadata_text(row, *alias_names("barcode")), row["true_item_id"]
+            row_metadata_text(row, *alias_names("gtin")), row["true_item_id"]
         )
         for _, row in calibration.iterrows()
     ]
@@ -2927,7 +2927,7 @@ def _evaluate_holdout(
     final_threshold: float,
 ) -> tuple[list[dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     base = _ensure_source_row_identity(
-        load_dataset_deduped().rename(columns={"product_id": "SKU_ID"})
+        load_dataset_deduped().rename(columns={"sku_id": "SKU_ID"})
     )
     base["SKU_ID"] = base["SKU_ID"].astype(str)
     unknown_ids = sorted(set(holdout_labels["SKU_ID"]) - set(base["SKU_ID"]))
@@ -2950,7 +2950,7 @@ def _evaluate_holdout(
     holdout["true_item_id"] = holdout["true_item_id"].astype(str)
     holdout["gtin_status"] = [
         matcher.gtin_status(
-            row_metadata_text(row, *alias_names("barcode")), row["true_item_id"]
+            row_metadata_text(row, *alias_names("gtin")), row["true_item_id"]
         )
         for _, row in holdout.iterrows()
     ]
@@ -3092,7 +3092,7 @@ def _write_final_submission(
     _SUBMISSION_COLUMNS_SPEC.validate_frame(submission, "submission")
     if submission.SKU_ID.duplicated().any():
         raise AssertionError("submission has duplicate SKU_ID values")
-    expected_ids = set(skus["product_id"].astype(str))
+    expected_ids = set(skus["sku_id"].astype(str))
     actual_ids = set(submission["SKU_ID"].astype(str))
     if actual_ids != expected_ids:
         raise AssertionError(

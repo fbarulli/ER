@@ -98,7 +98,7 @@ def row_metadata_text(row, primary: str, *aliases: str) -> str:
     declared once (config/paths.yaml column_mapping / column_aliases, read via
     core.columns.alias_names). This used to accept exactly one alias, so a
     caller could not hand it the real set — and the callers that hardcoded
-    ("attributes", "attr") or ("barcode", "gtin") inline were re-declaring
+    ("attribute", "attr") or ("sku_name_eng", "title") inline were re-declaring
     column_mapping. First name present wins, in the order given, so
     canonical-first ordering resolves the raw/canonical preference in config.
     """
@@ -1048,14 +1048,14 @@ def load_dataset_deduped(path: Path | None = None) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def has_barcode(df: pd.DataFrame) -> pd.Series:
-    """Boolean mask: row has a non-empty barcode (GTIN)."""
-    return df["barcode"].fillna("").astype(str).str.len() > 0
+def has_gtin(df: pd.DataFrame) -> pd.Series:
+    """Boolean mask: row has a non-empty gtin (GTIN)."""
+    return df["gtin"].fillna("").astype(str).str.len() > 0
 
 
 # multi_retailer_mask REMOVED (audit round 2 F18, round 3): defined, never
 # called — zero consumers (grep-verified). The same mask is derived inline
-# where actually needed (kfold_barcodes, report_plots' country slice).
+# where actually needed (kfold_gtins, report_plots' country slice).
 
 
 def column_profile(df: pd.DataFrame) -> pd.DataFrame:
@@ -1152,41 +1152,41 @@ def pair_similarity(emb: "_np.ndarray", pairs_idx: "_np.ndarray") -> "_np.ndarra
 
 
 
-def kfold_barcodes(df: pd.DataFrame, k: int, seed: int | None = None) -> list[set[str]]:
-    """K barcode sets over multi-retailer barcodes, shuffled and split ~evenly.
+def kfold_gtins(df: pd.DataFrame, k: int, seed: int | None = None) -> list[set[str]]:
+    """K gtin sets over multi-retailer gtins, shuffled and split ~evenly.
 
-    Splits on the barcode (entity) so no product's rows straddle a fold.
-    Prior homes: 07b.kfold_barcodes, second06.kfold_barcodes — this is the
+    Splits on the gtin (entity) so no product's rows straddle a fold.
+    Prior homes: 07b.kfold_gtins, second06.kfold_gtins — this is the
     exact strided-permutation implementation both used, so fold membership
     is unchanged for existing callers.
 
-    AUDIT 2026-09-09 (DATA DROP, now loud): only MULTI-RETAILER barcodes
-    are dealt into folds. Single-retailer barcodes appear in NO fold, so
+    AUDIT 2026-09-09 (DATA DROP, now loud): only MULTI-RETAILER gtins
+    are dealt into folds. Single-retailer gtins appear in NO fold, so
     under the CV path their positives are silently dropped from every
     test pool by pairs_in_set (measured on test data: a singleton
-    barcode's pair vanishes from all k folds). This is a KNOWN, PRINTED
+    gtin's pair vanishes from all k folds). This is a KNOWN, PRINTED
     limitation of the legacy CV mode — the production holdout lane
     (component_folds, src/training/folds.py) does NOT share it: it folds EVERY
-    barcode including singletons. Callers must treat the returned folds
+    gtin including singletons. Callers must treat the returned folds
     as test-pool keysets, not as dataset coverage.
     """
-    barcodes = df["barcode"].fillna("").astype(str)
-    known = df[barcodes.str.len() > 0]
+    gtins = df["gtin"].fillna("").astype(str)
+    known = df[gtins.str.len() > 0]
     # Retailer identity through the normalize_retailer SSOT: raw spellings
     # alias across exports and would count one alias group as multi-retailer.
     known = known.assign(_retailer_key=known["retailer"].map(normalize_retailer))
-    multi = known[known.groupby("barcode")["_retailer_key"].transform("nunique") > 1]
-    bcs = _np.array(sorted(multi["barcode"].unique()))
+    multi = known[known.groupby("gtin")["_retailer_key"].transform("nunique") > 1]
+    bcs = _np.array(sorted(multi["gtin"].unique()))
     perm = _np.random.default_rng(seed if seed is not None else SEED).permutation(
         len(bcs)
     )
     folds = [set(bcs[perm[i::k]]) for i in range(k)]
     n_single = int(
-        known.groupby("barcode")["retailer"].nunique().eq(1).sum()
+        known.groupby("gtin")["retailer"].nunique().eq(1).sum()
     )
     print(
-        f"[kfold_barcodes] {len(bcs):,} multi-retailer barcodes in {k} folds; "
-        f"{n_single:,} single-retailer barcodes are in NO fold "
+        f"[kfold_gtins] {len(bcs):,} multi-retailer gtins in {k} folds; "
+        f"{n_single:,} single-retailer gtins are in NO fold "
         f"(legacy CV semantics — use component_folds for full coverage)",
         flush=True,
     )

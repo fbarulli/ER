@@ -66,7 +66,7 @@ def retrieval_report(records, vectors, pairs, output, track, cfg):
             ef_construction=cfg.hnsw_ef_construction, M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
         # No encoder checkpoint claim: report provenance hashes are supplied separately.
         checkpoint = Path(cfg._checkpoint)
-        index.build(vectors[targets], [records[i]['product_id'] for i in targets],
+        index.build(vectors[targets], [records[i]['sku_id'] for i in targets],
                     checkpoint=checkpoint, model_name=track,
                     preprocessing_fingerprint=cfg._listings_sha256)
         query_ids = sorted(relevant)
@@ -75,7 +75,7 @@ def retrieval_report(records, vectors, pairs, output, track, cfg):
             candidates = [targets[int(label)] for label in ranking if targets[int(label)] != query]
             for k in cfg.retrieval_ks:
                 recovered = len(set(candidates[:k]) & relevant[query])
-                rows.append({'split': split, 'product_id': records[query]['product_id'], 'k': k,
+                rows.append({'split': split, 'sku_id': records[query]['sku_id'], 'k': k,
                     'eligible_catalog': len(targets) - 1, 'known_relevant': len(relevant[query]),
                     'retrieved': len(candidates[:k]), 'recovered': recovered,
                     'known_positive_recall': recovered / len(relevant[query]),
@@ -114,7 +114,7 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     cache = np.load(inference / name(track, 'vectors.npz'), allow_pickle=False)
     vectors = cache['embeddings']
     progress('vector_export_complete', shape=list(vectors.shape), output=str(inference))
-    text = None if text_cache is None else load_text_cache(text_cache, [r['product_id'] for r in records])[0]
+    text = None if text_cache is None else load_text_cache(text_cache, [r['sku_id'] for r in records])[0]
     scores = {}
     with torch.no_grad():
         embeddings = torch.as_tensor(vectors, device=cfg.device)
@@ -136,8 +136,8 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         summary.append({'model': track, 'split': split, 'threshold_source': 'dev_youden',
                         'checkpoint': checkpoint.name, **pair_metrics(labels, values, threshold, cfg.retrieval_ks)})
         for (left, right), label, score in zip(indices, labels, values):
-            scored_rows.append({'product_id1': records[left]['product_id'],
-                'product_id2': records[right]['product_id'], 'true_label': int(label),
+            scored_rows.append({'sku_id1': records[left]['sku_id'],
+                'sku_id2': records[right]['sku_id'], 'true_label': int(label),
                 'split': split, 'score': float(score), 'prediction': int(score >= threshold)})
     report_dir = output / name(track, 'reports')
     report_dir.mkdir()

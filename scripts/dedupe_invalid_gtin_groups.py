@@ -1,13 +1,13 @@
-"""Dedupe signal from MALFORMED/INVALID barcodes (T1.5 recovery sizing).
+"""Dedupe signal from MALFORMED/INVALID gtins (T1.5 recovery sizing).
 
 TODO.md dedupe audit (2026-09-29) left one signal on the table: the
-invalid-checksum barcode groups. T1 skips them (a checksum-fail barcode is
+invalid-checksum gtin groups. T1 skips them (a checksum-fail gtin is
 treated as export noise, not identity), so two rows that share the SAME
-malformed barcode at the SAME retailer are NOT collapsed — even when they
+malformed gtin at the SAME retailer are NOT collapsed — even when they
 are the same product. This script sizes the safe T1.5 recovery precisely.
 
 Lesson learned (this audit): the raw `attribute` field on these malformed-
-barcode rows is UNRELIABLE — its structured conflicts (pack material, juice
+gtin rows is UNRELIABLE — its structured conflicts (pack material, juice
 content, sweetener, carbonization) are correlated export noise. Of 34
 structured-conflict groups, 28 were the same product (false vetoes) and only
 6 were genuine product splits. The ground truth is the record-linkage SSOT
@@ -16,16 +16,16 @@ a differing descriptor token (Cool Brew French Roast vs Vanilla, Montellier
 Lemon vs Lime, Ozarka/Zephyrhills Lemon vs Lime, Ginseng Up vs Natural Ginger
 Ale) proves a genuine split even when fuzzy similarity is high.
 
-Method: start from the malformed/invalid barcode rows, group by
-(retailer, raw malformed barcode), and for every multi-row group decide
+Method: start from the malformed/invalid gtin rows, group by
+(retailer, raw malformed gtin), and for every multi-row group decide
 same-product using `training.dedupe._same_product_by_title` (the EXACT logic
 the T1.5 tier in dedupe.py runs). We report the raw structured verdict AND
 the corrected same-product verdict side by side so the owner sees how many
 structured conflicts were false vetoes.
 
 Writes:
-  results/training/dedupe_invalid_barcode_groups.csv   per-group table
-  results/training/dedupe_invalid_barcode_recovery.csv recovery-vs-fuzzy-floor
+  results/training/dedupe_invalid_gtin_groups.csv   per-group table
+  results/training/dedupe_invalid_gtin_recovery.csv recovery-vs-fuzzy-floor
 """
 
 from __future__ import annotations
@@ -37,19 +37,19 @@ from pathlib import Path
 import pandas as pd
 
 from core.common import load_raw_export
-from core.gtin import barcode_validity
+from core.gtin import gtin_validity
 
 # The T1.5 product-identity decision is the SSOT — import it from dedupe so
 # this audit and the tier it sizes can never drift apart.
 from training.dedupe import _same_product_by_title  # noqa: E402
 
 RESULTS = Path(os.environ.get("EUROMONITOR_RESULTS_DIR", "results")) / "training"
-OUT_GROUPS = RESULTS / "dedupe_invalid_barcode_groups.csv"
-OUT_RECOVERY = RESULTS / "dedupe_invalid_barcode_recovery.csv"
+OUT_GROUPS = RESULTS / "dedupe_invalid_gtin_groups.csv"
+OUT_RECOVERY = RESULTS / "dedupe_invalid_gtin_recovery.csv"
 
 # Text columns that contribute fuzzy signal (title plus all free prose).
 FUZZY_TEXT_COLS = [
-    "title", "description_short_eng", "breadcrumbs_eng", "brand", "category",
+    "sku_name_eng", "description_short_eng", "breadcrumbs_eng", "brand", "category",
 ]
 
 
@@ -91,24 +91,24 @@ def main() -> None:
     OUT_GROUPS.parent.mkdir(parents=True, exist_ok=True)
 
     df = load_raw_export().rename(
-        columns={"sku_name_eng": "title", "gtin": "barcode"}
+        columns={"sku_name_eng": "sku_name_eng", "gtin": "gtin"}
     )
-    raw_bc = df["barcode"].fillna("").str.strip()
+    raw_bc = df["gtin"].fillna("").str.strip()
     has_bc = raw_bc.str.len() > 0
-    valid = barcode_validity(raw_bc).to_numpy()
+    valid = gtin_validity(raw_bc).to_numpy()
 
-    # START HERE: the malformed/invalid barcode population.
+    # START HERE: the malformed/invalid gtin population.
     malformed = df[has_bc & ~valid].copy()
-    malformed["barcode"] = raw_bc[has_bc & ~valid]
+    malformed["gtin"] = raw_bc[has_bc & ~valid]
 
     rows = []
-    for (retailer, barcode), sub in malformed.groupby(
-        ["retailer", "barcode"], sort=False
+    for (retailer, gtin), sub in malformed.groupby(
+        ["retailer", "gtin"], sort=False
     ):
         if len(sub) <= 1:
             continue
 
-        same = _same_product_by_title(sub, retailer, barcode)
+        same = _same_product_by_title(sub, retailer, gtin)
 
         # Fuzzy across ALL text cols + the attribute string, worst-pair (min)
         # and mean over the group.
@@ -130,13 +130,13 @@ def main() -> None:
 
         rows.append({
             "retailer": retailer,
-            "barcode": barcode,
+            "gtin": gtin,
             "rows": len(sub),
-            "distinct_titles": sub["title"].nunique(),
+            "distinct_titles": sub["sku_name_eng"].nunique(),
             "same_product": same,
             "min_fuzzy": round(min_fuzzy, 4),
             "mean_fuzzy": round(mean_fuzzy, 4),
-            "titles": " | ".join(sub["title"].astype(str).unique()),
+            "titles": " | ".join(sub["sku_name_eng"].astype(str).unique()),
         })
 
     groups = pd.DataFrame(rows)
@@ -169,8 +169,8 @@ def main() -> None:
     # ---- Console summary ------------------------------------------------------
     n_same = int(groups["same_product"].sum())
     n_diff = int((~groups["same_product"]).sum())
-    print(f"malformed/invalid barcode rows (source dataset.csv): {len(malformed):,}")
-    print(f"multi-row (retailer, malformed barcode) groups: {len(groups):,}")
+    print(f"malformed/invalid gtin rows (source dataset.csv): {len(malformed):,}")
+    print(f"multi-row (retailer, malformed gtin) groups: {len(groups):,}")
     print(f"  rows inside them: {int(groups['rows'].sum()):,}")
     print(f"  SAME-product groups (T1.5 collapsible): {n_same:,}")
     print(f"  DIFFERENT-product groups (kept separate): {n_diff:,}")

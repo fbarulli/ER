@@ -40,7 +40,7 @@ Committed `sku_to_rep.csv` maps Amazon products `69869228`, `80350488`,
 `466263333`, and `500150117` to representative `28003`, despite different brands
 and attributes. MatHem juice products `905519389`, `905525613`, `905561811`,
 `905632962`, and `905771390` similarly map to representative `63078`.
-The fix preserves missing-title rows in title-based tiers. Trusted-barcode T1
+The fix preserves missing-title rows in title-based tiers. Trusted-gtin T1
 continues to establish identity independently of title availability.
 Existing generated CSVs still contain the old mappings until preparation is rerun.
 
@@ -52,7 +52,7 @@ the old generated representative mappings were not rewritten here.
 ## Consolidation and configuration
 
 All three dedupe tiers use `core.deduplication.collapse_representatives` for
-stable ranking, grouping, and source-row lineage. T2 barcode agreement uses the
+stable ranking, grouping, and source-row lineage. T2 gtin agreement uses the
 built-in grouped `nunique` reduction. Batch completeness operates by descriptor
 column and avoids allocating a dictionary for every source row.
 
@@ -61,7 +61,7 @@ raw, projected, deduped, and training-override loaders. Existing string dtype
 and default NA policy are preserved. Override validation derives canonical
 columns from the column mapping rather than reading a second CSV header;
 reviewed identity filtering runs once per load. Descriptor columns and all ten
-reviewed malformed-barcode keep/collapse decisions are also YAML-owned,
+reviewed malformed-gtin keep/collapse decisions are also YAML-owned,
 with duplicate/unknown-field checks and review reasons. Product-identity
 relative volume tolerance reads the existing gate config instead of restating
 its numeric value.

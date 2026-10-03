@@ -16,11 +16,11 @@ PAIRS_CSV = ER_ROOT / "data" / "labeled_pairs.csv"
 
 @dataclass(frozen=True)
 class Listing:
-    title: str
+    sku_name_eng: str
     brand: str
-    attributes: str
+    attribute: str
     category: str
-    description: str
+    description_short_eng: str
 
 
 def load_record_index(path: Path = RECORDS_CSV) -> dict[str, Listing]:
@@ -32,11 +32,11 @@ def load_record_index(path: Path = RECORDS_CSV) -> dict[str, Listing]:
             except (ValueError, IndexError):
                 src = {}
             index[row["gtin"]] = Listing(
-                title=(src.get("title") or "").strip(),
+                sku_name_eng=(src.get("sku_name_eng") or "").strip(),
                 brand=(src.get("brand") or "").strip(),
-                attributes=(src.get("attributes") or "").strip(),
+                attribute=(src.get("attribute") or "").strip(),
                 category=(src.get("category") or "").strip(),
-                description=(src.get("description") or "").strip(),
+                description_short_eng=(src.get("description_short_eng") or "").strip(),
             )
     return index
 
@@ -52,11 +52,11 @@ def load_pairs(path: Path = PAIRS_CSV) -> list[dict]:
 def listing_state(gtin: str, listing: Listing) -> dict[str, str]:
     return {
         "gtin": gtin,
-        "title": listing.title,
+        "sku_name_eng": listing.sku_name_eng,
         "brand": listing.brand,
-        "attributes": listing.attributes,
+        "attribute": listing.attribute,
         "category": listing.category,
-        "description": listing.description,
+        "description_short_eng": listing.description_short_eng,
     }
 
 

@@ -327,14 +327,14 @@
     "142547188": {
       "source_gtin": "11982760",
       "target_gtin": "7310050105482",
-      "reference_product_id": "140880643",
+      "reference_sku_id": "140880643",
       "expected_url": "https://www.matsmart.fi/laatikollinen-luomu-kahvijuomia-caffeine-boost-12-x-230ml",
       "reason": "Reviewed exact retailer product URL, title, description and 12x230ml pack match reference listing"
     },
     "143441192": {
       "source_gtin": "11982760",
       "target_gtin": "7310050105482",
-      "reference_product_id": "140880643",
+      "reference_sku_id": "140880643",
       "expected_url": "https://www.matsmart.fi/laatikollinen-luomu-kahvijuomia-caffeine-boost-12-x-230ml",
       "reason": "Reviewed exact retailer product URL, title, description and 12x230ml pack match reference listing"
     }
@@ -386,39 +386,39 @@
     "55971544": {
       "expected_gtin": "7310860007396",
       "fields": {
-        "attributes": "Caffeine: 15-25 mg; Volume: 1000; Made From: grapefruit; Flavour: grapefruit; Juice Content: 100%; Carbonization: still; Juice Features: from concentrate, pasteurized, with pulp; Pack Type: Liquid Carton",
-        "title": "Juice red grapefruit 1l good morning"
+        "attribute": "Caffeine: 15-25 mg; Volume: 1000; Made From: grapefruit; Flavour: grapefruit; Juice Content: 100%; Carbonization: still; Juice Features: from concentrate, pasteurized, with pulp; Pack Type: Liquid Carton",
+        "sku_name_eng": "Juice red grapefruit 1l good morning"
       },
       "reason": "Original red-grapefruit description and grapefrukt/Blodgrape product naming identify grapefruit; grape is a translation error."
     },
     "176248436": {
       "expected_gtin": "7310860007396",
       "fields": {
-        "attributes": "Pack Material Type: Plastic; Juice Content: 100%; Juice Features: from concentrate, pasteurized, with pulp; Pack Type: Liquid Carton; Volume: 1000; Carbonization: still; Made From: grapefruit; Flavour: grapefruit",
-        "title": "Juice red grapefruit"
+        "attribute": "Pack Material Type: Plastic; Juice Content: 100%; Juice Features: from concentrate, pasteurized, with pulp; Pack Type: Liquid Carton; Volume: 1000; Carbonization: still; Made From: grapefruit; Flavour: grapefruit",
+        "sku_name_eng": "Juice red grapefruit"
       },
       "reason": "Original red-grapefruit description and grapefrukt/Blodgrape product naming identify grapefruit; grape is a translation error."
     },
     "59163840": {
       "expected_gtin": "7310860007396",
       "fields": {
-        "attributes": "Juice Features: from concentrate, pasteurized, with pulp; Pack Material Type: Paper / Carton; Volume: 1000; Pack Type: Liquid Carton; Made From: grapefruit; Juice Content: 100%; Caffeine: 15-25 mg",
-        "title": "good morning Blodgrapejuice"
+        "attribute": "Juice Features: from concentrate, pasteurized, with pulp; Pack Material Type: Paper / Carton; Volume: 1000; Pack Type: Liquid Carton; Made From: grapefruit; Juice Content: 100%; Caffeine: 15-25 mg",
+        "sku_name_eng": "good morning Blodgrapejuice"
       },
       "reason": "Original red-grapefruit description and grapefrukt/Blodgrape product naming identify grapefruit; grape is a translation error."
     },
     "520739801": {
       "expected_gtin": "8719214811167",
       "fields": {
-        "attributes": "Sweetener: sucralose, acesulfame potassium; Volume: 650; Pack Type: Bottle; Juice Content: 2-5%; Immune Support Ingredients: vitamin c, antioxidants; Pack Material Type: Plastic; Flavour: orange, raspberry; Health Claims: no sugar"
+        "attribute": "Sweetener: sucralose, acesulfame potassium; Volume: 650; Pack Type: Bottle; Juice Content: 2-5%; Immune Support Ingredients: vitamin c, antioxidants; Pack Material Type: Plastic; Flavour: orange, raspberry; Health Claims: no sugar"
       },
       "reason": "Original title, sinaasappel-framboos URL and description agree on orange-raspberry; lemon flavor is unsupported."
     },
     "730520510": {
       "expected_gtin": "7314720722344",
       "fields": {
-        "title": "Lemonadkoncentrat 2 dl Kiviks mustery",
-        "attributes": "Juice Features: from concentrate; Made From: lemon; Volume: 1000; Sweetener: sugar; Flavour: lemon; Caffeine: 15-25 mg; Pack Material Type: Paper / Carton; Health Claims: hydrating; Carbonization: still; Juice Content: 10-15%"
+        "sku_name_eng": "Lemonadkoncentrat 2 dl Kiviks mustery",
+        "attribute": "Juice Features: from concentrate; Made From: lemon; Volume: 1000; Sweetener: sugar; Flavour: lemon; Caffeine: 15-25 mg; Pack Material Type: Paper / Carton; Health Claims: hydrating; Carbonization: still; Juice Content: 10-15%"
       },
       "reason": "Kiviks is the brand; original lemon description matches same-GTIN peer. Kiwi ingredient/flavor is brand translation leakage."
     }

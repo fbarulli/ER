@@ -86,7 +86,7 @@ STRUCTURED_MARKERS = (
 
 #: Field groups of the cleaned composition, in emission order, so the
 #: symmetry and truncation walks use the same order the builder writes.
-CLEANED_SOURCE_GROUPS = ("brand", "title", "attributes")
+CLEANED_SOURCE_GROUPS = ("brand", "sku_name_eng", "attribute")
 STRUCTURED_GROUP = "structured"
 
 PROFILE_CLEANED = "cleaned"
@@ -234,9 +234,9 @@ def group_tokens_for_source(row, info) -> dict[str, list[str]]:
     """Per-group token lists for one cleaned source row (composition order)."""
     return {
         "brand": _normalized_tokens(row_metadata_text(row, "brand"), drop_schema_words=False),
-        "title": _normalized_tokens(row_metadata_text(row, "title"), drop_schema_words=False),
-        "attributes": _normalized_tokens(
-            row_metadata_text(row, "attributes", "attr"), drop_schema_words=True
+        "sku_name_eng": _normalized_tokens(row_metadata_text(row, "sku_name_eng"), drop_schema_words=False),
+        "attribute": _normalized_tokens(
+            row_metadata_text(row, "attribute", "attr"), drop_schema_words=True
         ),
         STRUCTURED_GROUP: text_tokens(info) if _structured_text_enabled() else [],
     }
@@ -473,15 +473,15 @@ def main() -> None:
     canonical = canonical_records_frame()
     canonical["gtin"] = canonical["gtin"].astype(str)
     # load_dataset() applies COLUMN_MAPPING (config/paths.yaml) and validates
-    # the export, so title/attributes/description/category_path are the
+    # the export, so title/attributes/description/breadcrumbs_eng are the
     # canonical names the model-input builder reads.  Reading the raw file
     # directly leaves those fields empty and silently measures brand-only text.
-    source = load_dataset().drop_duplicates("product_id").reset_index(drop=True)
+    source = load_dataset().drop_duplicates("sku_id").reset_index(drop=True)
 
     review = pd.read_csv(args.review, dtype=str, keep_default_na=False)
     review["SKU_ID"] = review["SKU_ID"].astype(str)
     review["NEAREST_ITEM_ID"] = review["NEAREST_ITEM_ID"].astype(str)
-    source_by_sku = source.set_index("product_id")
+    source_by_sku = source.set_index("sku_id")
     canonical_by_gtin = canonical.set_index("gtin")
     if not set(review["SKU_ID"]).issubset(source_by_sku.index):
         raise SystemExit("review SKU_IDs do not all resolve in the source corpus")
@@ -514,7 +514,7 @@ def main() -> None:
     )
     source_infos = [
         sku_info(
-            row_metadata_text(row, "title"), row_metadata_text(row, "attributes", "attr")
+            row_metadata_text(row, "sku_name_eng"), row_metadata_text(row, "attribute", "attr")
         )
         for _, row in source.iterrows()
     ]
@@ -522,8 +522,8 @@ def main() -> None:
         population="source_corpus",
         presence={
             **text_presence(source, (
-                "brand", "title", "attributes", "description",
-                "category_path", "barcode", "category",
+                "brand", "sku_name_eng", "attribute", "description_short_eng",
+                "breadcrumbs_eng", "gtin", "category",
             )),
             **parsed_presence(source_infos, (
                 "volume", "pack", "package_type", "flavor",
@@ -602,7 +602,7 @@ def main() -> None:
         canonical_by_gtin.loc[gtin].to_dict() for gtin in review["NEAREST_ITEM_ID"]
     ]
     review_source_infos = [
-        sku_info(row_metadata_text(row, "title"), row_metadata_text(row, "attributes", "attr"))
+        sku_info(row_metadata_text(row, "sku_name_eng"), row_metadata_text(row, "attribute", "attr"))
         for row in review_source_rows
     ]
     review_target_infos = [canonical_info(record) for record in review_target_records]
@@ -670,7 +670,7 @@ def main() -> None:
     )
 
     # ── 4. per-field symmetry on the pairs sharing one product ─────────────
-    same_product = review["SKU_ID"] == review["target_original_product_id"]
+    same_product = review["SKU_ID"] == review["target_original_sku_id"]
     symmetry_rows = []
     for index in np.flatnonzero(same_product.to_numpy()):
         source_groups = group_tokens_for_source(

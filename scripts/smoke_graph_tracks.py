@@ -25,12 +25,12 @@ def main():
     rows, assignments, labels = [], [], []
     for split in ('train', 'dev', 'test'):
         for i in range(3):
-            rows.append({'product_id': f'{split}-{i}', 'title': 'Lemon drink 330 ml' if i < 2 else 'Orange drink 500 ml',
-                         'brand': 'Example', 'attributes': 'Flavour: Lemon; Volume: 330' if i < 2 else 'Flavour: Orange; Volume: 500',
-                         'barcode': ''})
-            assignments.append({'product_id': f'{split}-{i}', 'split': split})
+            rows.append({'sku_id': f'{split}-{i}', 'sku_name_eng': 'Lemon drink 330 ml' if i < 2 else 'Orange drink 500 ml',
+                         'brand': 'Example', 'attribute': 'Flavour: Lemon; Volume: 330' if i < 2 else 'Flavour: Orange; Volume: 500',
+                         'gtin': ''})
+            assignments.append({'sku_id': f'{split}-{i}', 'split': split})
         for i in (1, 2):
-            labels.append({'product_id1': f'{split}-0', 'product_id2': f'{split}-{i}',
+            labels.append({'sku_id1': f'{split}-0', 'sku_id2': f'{split}-{i}',
                            'label': int(i == 1), 'split': split})
     pd.DataFrame(rows).to_csv(catalog, index=False)
     pd.DataFrame(assignments).to_csv(splits, index=False)

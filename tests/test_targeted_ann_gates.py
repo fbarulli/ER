@@ -690,8 +690,8 @@ def test_bottle_sku_to_can_candidate_is_rejected_end_to_end():
     row = pd.Series(
         {
             "SKU_ID": "bottle-sku",
-            "barcode": "",
-            "title": "Acme soda 6 pack 12 oz bottles",
+            "gtin": "",
+            "sku_name_eng": "Acme soda 6 pack 12 oz bottles",
             "brand": "Acme",
         }
     )
@@ -725,8 +725,8 @@ def test_exact_gtin_package_type_disagreement_uses_configured_lock():
     row = pd.Series(
         {
             "SKU_ID": "exact-bottle",
-            "barcode": gtin,
-            "title": "Acme soda 6 pack 12 oz bottles",
+            "gtin": gtin,
+            "sku_name_eng": "Acme soda 6 pack 12 oz bottles",
             "brand": "Acme",
         }
     )
@@ -868,7 +868,7 @@ def test_targeted_miner_never_emits_a_same_canonical_negative():
     from core.hard_negatives import mine_targeted_attribute_negatives
 
     df = pd.DataFrame(
-        {"title": ["Acme Cola 12 pack 355ml", "Acme Cola 12 pack 355ml"]}
+        {"sku_name_eng": ["Acme Cola 12 pack 355ml", "Acme Cola 12 pack 355ml"]}
     )
     canon_text = "acme cola still sugar"
     canonical_records = pd.DataFrame(
@@ -937,7 +937,7 @@ def test_targeted_miner_respects_the_gate_volume_tolerance():
 
     from core.hard_negatives import mine_targeted_attribute_negatives
 
-    df = pd.DataFrame({"title": ["Acme Juice 1L", "Acme Juice 1L"]})
+    df = pd.DataFrame({"sku_name_eng": ["Acme Juice 1L", "Acme Juice 1L"]})
     base = {
         "canonical": "acme juice still",
         "mode_brand": "acme",

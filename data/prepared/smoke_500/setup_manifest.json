@@ -1,17 +1,36 @@
 {
-  "git_revision": "main",
-  "identity_policy_sha256": "identity_policy",
-  "labeled_pairs_sha256": "33ef8aeba8db92f5a5f1c2766d35ec9d94402f2814a91d33f20165ec48363399",
+  "excluded_unassigned_listings": 35119,
+  "git_revision": "29317e5d3913b6bcac193ca8dd70ae77d566b06b",
+  "identity_policy_sha256": "0c176f054d0e66ad957f9238605d05cb7ef7ed717cfaecbcefd114b2ce52f62c",
+  "labeled_pairs_sha256": "5f75706dcbcfb7c495938e638957fe86bc95f77d5e8189e54d27975228dfc25d",
   "negative_policy": "same-split labeled negatives only",
+  "pair_counts": {
+    "dev": {
+      "0": 35,
+      "1": 2847
+    },
+    "test": {
+      "0": 75,
+      "1": 2929
+    },
+    "train": {
+      "0": 117,
+      "1": 5566
+    }
+  },
   "pair_protocol": "first listing per labeled entity plus same-entity positive chains",
-  "parent_setup_sha256": "994f6c827375f99686450deef12d4757b88c33a0c5b1eb4e4af6fb84d51bf0ad",
+  "parent_setup_sha256": "19780317ef89079724ecd7bc2be0a34dac9f7ad9d92237436b50c193bcf36cef",
   "schema": "er-track-setup-v1",
   "seed": 42,
+  "skipped_labels": {
+    "cross_split_negative": 379,
+    "untrusted_identity_chain_listings": 3459
+  },
   "smoke": true,
-  "source_catalog_sha256": "f9d8720996fb43166e1e4cd417c5b9226d774e79fe125c1699aedc617613b2e3",
+  "source_catalog_sha256": "8b2cf874879a5bf7cde51a046cd5db627f3f3874f50d8ad91271a8f083d2e74e",
   "source_listing_count": 500,
   "split_protocol": "training.folds.derive_holdout",
-  "text_checkpoint": "artifacts/models/all-MiniLM-L6-v2",
+  "text_checkpoint": "/tmp/opencode/er-rename/artifacts/models/all-MiniLM-L6-v2",
   "text_checkpoint_sha256": "a3f36d62c73027de84a628b90e8c4ae133dafb21fe4b7ede7740923b1c99ccab",
-  "text_checkpoint_status": "local baseline"
+  "text_checkpoint_status": "local baseline; fine-tuning history not inferred"
 }

@@ -155,13 +155,13 @@ def _candidates_from_measurements(text: str) -> list[Candidate]:
         unit = _unit_key(match.group("unit"))
         candidates.append(Candidate(
             match.start(), match.end(), "VOLUME",
-            round(_number(match.group("value")) * VOLUME_TO_ML[unit], 3), "title",
+            round(_number(match.group("value")) * VOLUME_TO_ML[unit], 3), "sku_name_eng",
         ))
     for match in WEIGHT_RE.finditer(text):
         unit = _unit_key(match.group("unit"))
         candidates.append(Candidate(
             match.start(), match.end(), "WEIGHT",
-            round(_number(match.group("value")) * WEIGHT_TO_G[unit], 3), "title",
+            round(_number(match.group("value")) * WEIGHT_TO_G[unit], 3), "sku_name_eng",
         ))
     return candidates
 
@@ -172,7 +172,7 @@ def _candidates_from_package_details(text: str) -> list[Candidate]:
         for match in pattern.finditer(text):
             start, end = match.span("count")
             candidates.append(Candidate(
-                start, end, "PACK_COUNT", int(match.group("count")), "title",
+                start, end, "PACK_COUNT", int(match.group("count")), "sku_name_eng",
             ))
     for label, pattern in (
         ("PACKAGE_TYPE", PACKAGE_TYPE_RE),
@@ -182,7 +182,7 @@ def _candidates_from_package_details(text: str) -> list[Candidate]:
         for match in pattern.finditer(text):
             normalized = _canonical_package_type(match.group()) if label == "PACKAGE_TYPE" else match.group().lower()
             candidates.append(Candidate(
-                match.start(), match.end(), label, normalized, "title",
+                match.start(), match.end(), label, normalized, "sku_name_eng",
             ))
     return candidates
 
@@ -304,7 +304,7 @@ def build_enriched_ner_records(
         attribute = parse_attribute_details(row.get("attribute", ""))
         brand = find_brand_span(text, row.get(brand_col, "")) if brand_col in dataframe else None
         candidates = [
-            Candidate(item["start"], item["end"], item["label"], None, "title")
+            Candidate(item["start"], item["end"], item["label"], None, "sku_name_eng")
             for item in parsed["entities"]
         ]
         if brand:

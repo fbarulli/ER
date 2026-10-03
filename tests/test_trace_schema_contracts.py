@@ -76,7 +76,7 @@ def trace_row(**over: object) -> dict[str, object]:
         "in_count": 100,
         "out_count": 90,
         "dropped_count": 10,
-        "reason": "rows keep identity only with a present, GS1-valid barcode",
+        "reason": "rows keep identity only with a present, GS1-valid gtin",
         "detail": '{"rows_retained": 90}',
         "source": "raw export",
         "producer": "core.tracing",
@@ -418,7 +418,7 @@ def canonical_frame(**over: object) -> pd.DataFrame:
         "breadcrumb_evidence": "[]",
         # Valid per-title capture: the contract rejects a null/empty/unparseable
         # one, because stage 7 failing open is the defect the column fixes.
-        "source_rows": '[{"title": "brand orange water", "attributes": "type water"}]',
+        "source_rows": '[{"sku_name_eng": "brand orange water", "attribute": "type water"}]',
     }
     row.update(over)
     return pd.DataFrame([row], columns=list(CANONICAL_RECORDS_COLUMNS))

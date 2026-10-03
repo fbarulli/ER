@@ -69,7 +69,7 @@ def select_unrelated_pairs(
             "uniformity payload/data alignment mismatch: "
             f"rows={len(df)} payload={len(payload)}"
         )
-    category_col = "category_path" if "category_path" in df.columns else "category"
+    category_col = "breadcrumbs_eng" if "breadcrumbs_eng" in df.columns else "category"
     brand = df["brand"].fillna("").astype(str).str.strip().str.lower().tolist()
     category = (
         df[category_col].fillna("").astype(str).str.strip().str.lower().tolist()
@@ -377,7 +377,7 @@ def run_uniformity_audit(
     )
     base_scores = np.sum(base_emb[0::2] * base_emb[1::2], axis=1)
     fine_scores = np.sum(fine_emb[0::2] * fine_emb[1::2], axis=1)
-    category_col = "category_path" if "category_path" in df.columns else "category"
+    category_col = "breadcrumbs_eng" if "breadcrumbs_eng" in df.columns else "category"
     brand = df["brand"].fillna("").astype(str).tolist()
     category = df[category_col].fillna("").astype(str).tolist()
     rows = [

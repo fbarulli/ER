@@ -48,12 +48,12 @@ def _listing_card(row: pd.Series, max_listings: int) -> dict | None:
     from pipeline import extract_all
 
     ex = extract_all(
-        str(row.get("title", "")),
-        str(row.get("attributes", "")),
-        str(row.get("description", "")),
-        url=str(row.get("url", "")),
+        str(row.get("sku_name_eng", "")),
+        str(row.get("attribute", "")),
+        str(row.get("description_short_eng", "")),
+        sku_url=str(row.get("sku_url", "")),
         image_url=str(row.get("image_url", "")),
-        category_path=str(row.get("category_path", "")),
+        breadcrumbs_eng=str(row.get("breadcrumbs_eng", "")),
         category=str(row.get("category", "")),
     )
     return ex
@@ -68,7 +68,7 @@ def within_gtin_noise(df: pd.DataFrame, knobs) -> pd.DataFrame:
       n_listings
     """
     records = []
-    for gtin, frame in df.groupby("barcode", sort=False):
+    for gtin, frame in df.groupby("gtin", sort=False):
         if frame["retailer"].nunique() < 2:
             continue
         frame = frame.head(knobs.max_listings_per_gtin)

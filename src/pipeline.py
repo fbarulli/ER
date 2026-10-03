@@ -114,7 +114,7 @@ STOPWORDS = _load_stopwords("STOPWORDS")
 
 # normalize_text now LIVES in core.text (see its docstring for why it moved).
 # Re-exported here, unaltered, because ten modules import it from this path
-# (core.product_identity, core.record_linkage, core.model_input, the training
+# (core.sku_identity, core.record_linkage, core.model_input, the training
 # lane, tests). One definition, two import paths, no cycle.
 from core.text import normalize_text  # noqa: E402,F401
 
@@ -613,13 +613,13 @@ def fuse_confidence(claims: list[tuple[float, float, str]]) -> float:
     return min(float(conf) for _, conf, _ in claims)
 
 
-def extract_all(sku_name: str, attribute: str, description: str = "",
-     url: str = "", image_url: str = "", category_path: str = "",
+def extract_all(sku_name_eng: str, attribute: str, description_short_eng: str = "",
+     sku_url: str = "", image_url: str = "", breadcrumbs_eng: str = "",
      category: str = "") -> dict:
     """Extract structured fields plus salient tokens from a single SKU row.
 
-    Evidence is drawn from ALL available columns — title, attributes,
-    description, URL slug, image filename, category path, and category —
+    Evidence is drawn from ALL available columns — sku_name_eng, attribute,
+    description_short_eng, URL slug, image filename, breadcrumbs_eng, and category —
     so the gate sees every product-bearing signal before deciding.
     """
     from core.sweetener_values import declared_sweeteners, extract_sweetening_status, title_sweetener_types, negated_sweetener_types
@@ -627,35 +627,35 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     from core.url_evidence import url_text
 
     sweeteners = declared_sweeteners(attribute)
-    sweeteners["sweetener_type"].update(title_sweetener_types(sku_name))
-    sweeteners["sweetener_type"].update(title_sweetener_types(description))
-    sweeteners["sweetening"].update(extract_sweetening_status(sku_name, attribute, description))
-    t = normalize_text(sku_name)
+    sweeteners["sweetener_type"].update(title_sweetener_types(sku_name_eng))
+    sweeteners["sweetener_type"].update(title_sweetener_types(description_short_eng))
+    sweeteners["sweetening"].update(extract_sweetening_status(sku_name_eng, attribute, description_short_eng))
+    t = normalize_text(sku_name_eng)
     # URL tokens: product-bearing prose from the listing slug.
     # Fed into volume/pack extraction when title/attributes are silent.
     # url_text is the reader for BOTH URL columns (docstring, url_evidence.py):
     # image filenames go through the same normalizer — hashes, media dims and
     # scaffolding fall out; size tokens ("250ml") survive.
-    url_tokens = url_text(url)
+    url_tokens = url_text(sku_url)
     img_tokens = url_text(image_url)
     url_norm = normalize_text(url_tokens)
     img_norm = normalize_text(img_tokens)
     sweeteners["sweetener_type"].update(title_sweetener_types(url_tokens))
     sweeteners["sweetener_type"].update(title_sweetener_types(img_tokens))
-    # Category evidence: category_path and category provide
+    # Category evidence: breadcrumbs_eng and category provide
     # product-type signals (flavor hints, carbonation clues)
     # that title/attributes may miss.
-    cat_tokens = normalize_text(category_path) + " " + normalize_text(category)
+    cat_tokens = normalize_text(breadcrumbs_eng) + " " + normalize_text(category)
     cat_tokens = cat_tokens.strip()
     # Critical categorical evidence is parsed once for the canonical, model,
     # mining, and inference lanes.  Keep the historical scalar flavor as a
     # deterministic first value for compatibility with existing CSV readers.
     from core.product_selection import selected_identity_inputs
-    identity_title, identity_attributes, selected_variant = selected_identity_inputs(sku_name, attribute)
+    identity_title, identity_attributes, selected_variant = selected_identity_inputs(sku_name_eng, attribute)
     critical = extract_critical_claims(identity_title, identity_attributes)
-    description_claims = extract_description_claims(description)
+    description_claims = extract_description_claims(description_short_eng)
     consistency_flags = set(sweeteners["consistency_flags"])
-    negative_ingredients = negated_sweetener_types(sku_name, attribute, description, url_tokens, img_tokens)
+    negative_ingredients = negated_sweetener_types(sku_name_eng, attribute, description_short_eng, url_tokens, img_tokens)
     consistency_flags.update(
         f"sweetener_source_conflict:{ingredient}"
         for ingredient in negative_ingredients & sweeteners["sweetener_type"]
@@ -666,14 +666,14 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     # attribute_universe_evidence — schema stays extra="forbid".
     ledger: list[dict] = []
     if negative_ingredients:
-        ledger.append({"field": "negated_sweetener_type", "column": "title+attributes+description",
+        ledger.append({"field": "negated_sweetener_type", "column": "sku_name_eng+attribute+description_short_eng",
                        "value": sorted(negative_ingredients)})
     from core.date_evidence import extract_date_evidence
     date_evidence = [
         {"column": column, **entry}
         for column, text in (
-            ("title", sku_name), ("attributes", attribute),
-            ("description", description), ("category_path", category_path),
+            ("sku_name_eng", sku_name_eng), ("attribute", attribute),
+            ("description_short_eng", description_short_eng), ("breadcrumbs_eng", breadcrumbs_eng),
             ("category", category),
         )
         for entry in extract_date_evidence(str(text or ""))
@@ -682,14 +682,14 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         ledger.append({"field": "source_date", "column": entry["column"], "value": entry})
     measurement_evidence = [
         {"column": column, **entry}
-        for column, text in (("title", str(sku_name or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
+        for column, text in (("sku_name_eng", str(sku_name_eng or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
         for entry in extract_volume_evidence(text)
     ]
     for entry in measurement_evidence:
         ledger.append({"field": "measurement", "column": entry["column"], "value": entry})
     pack_evidence = [
         {"column": column, **entry}
-        for column, text in (("title", str(sku_name or "")), ("description", str(description or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
+        for column, text in (("sku_name_eng", str(sku_name_eng or "")), ("description_short_eng", str(description_short_eng or "")), ("sku_url", url_tokens), ("image_url", img_tokens))
         for entry in extract_pack_evidence(text)
     ]
     if any(entry.get("hierarchy_ambiguous") for entry in pack_evidence):
@@ -728,9 +728,9 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     # Broad "Lemonade/Lime" and negated "Non-Cola" categories previously
     # invented identity agreement between distinct variants.
     from core.declared_identity import listing_identity
-    identity = listing_identity(sku_name, attribute, description)
+    identity = listing_identity(sku_name_eng, attribute, description_short_eng)
     if identity:
-        ledger.append({"field": "declared_identity", "column": "title+attributes+description",
+        ledger.append({"field": "declared_identity", "column": "sku_name_eng+attribute+description_short_eng",
                        "value": identity})
     flavor = sorted(flavor_set)[0] if flavor_set else ""
     for dimension in ("carbonation", "sweetener", "pulp", "organic"):
@@ -738,7 +738,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
             ledger.append({"field": dimension, "column": "title+attributes",
                            "value": sorted(critical[dimension])})
         if description_claims[dimension]:
-            ledger.append({"field": dimension, "column": "description",
+            ledger.append({"field": dimension, "column": "description_short_eng",
                            "value": sorted(description_claims[dimension])})
     # Product type + subtype: config SSOT (config/paths.yaml product_types),
     # read once. Title first, then the category-lane fallback; the subtype
@@ -746,9 +746,9 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     # consumes and is recorded per column like every claim.
     ptype, subtype = _product_type_matcher().match(t)
     if ptype:
-        ledger.append({"field": "type", "column": "title", "value": ptype})
+        ledger.append({"field": "type", "column": "sku_name_eng", "value": ptype})
     if subtype:
-        ledger.append({"field": "subtype", "column": "title", "value": subtype})
+        ledger.append({"field": "subtype", "column": "sku_name_eng", "value": subtype})
     # Fallback: category tokens may carry the product type
     # when the title is too generic (e.g. "Product" with no type word).
     if not ptype and cat_tokens:
@@ -761,9 +761,9 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
                 ledger.append({"field": "subtype", "column": "category", "value": cat_subtype})
 
     # Volume and pack from title
-    vol_title = extract_volume_from_title(sku_name)
-    pack_title, pack_conf_title = extract_pack_from_title(sku_name)
-    pack_description, pack_conf_description = extract_pack_from_title(description)
+    vol_title = extract_volume_from_title(sku_name_eng)
+    pack_title, pack_conf_title = extract_pack_from_title(sku_name_eng)
+    pack_description, pack_conf_description = extract_pack_from_title(description_short_eng)
 
     # Attribute parsing
     attr_vol, attr_vol_conf, attr_pack, attr_pack_conf = parse_attribute_volume_pack(
@@ -782,10 +782,10 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     # vs attribute 330ml — the title is the correct unit here).
     title_vol = float(vol_title["volume_ml"] or 0.0)
     if attr_vol > 0:
-        ledger.append({"field": "volume_ml", "column": "attributes",
+        ledger.append({"field": "volume_ml", "column": "attribute",
                        "value": attr_vol, "confidence": attr_vol_conf})
     if title_vol > 0:
-        ledger.append({"field": "volume_ml", "column": "title", "value": title_vol,
+        ledger.append({"field": "volume_ml", "column": "sku_name_eng", "value": title_vol,
                        "confidence": vol_title["confidence"]})
     if vol_url["volume_ml"] > 0:
         ledger.append({"field": "volume_ml", "column": "sku_url",
@@ -794,13 +794,13 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
         ledger.append({"field": "volume_ml", "column": "image_url",
                        "value": vol_img["volume_ml"], "confidence": vol_img["confidence"]})
     if attr_pack > 1 or attr_pack_conf > 0:
-        ledger.append({"field": "pack_qty", "column": "attributes",
+        ledger.append({"field": "pack_qty", "column": "attribute",
                        "value": attr_pack, "confidence": attr_pack_conf})
     if pack_title > 1 or pack_conf_title > 0:
-        ledger.append({"field": "pack_qty", "column": "title",
+        ledger.append({"field": "pack_qty", "column": "sku_name_eng",
                        "value": pack_title, "confidence": pack_conf_title})
     if pack_conf_description > 0:
-        ledger.append({"field": "pack_qty", "column": "description",
+        ledger.append({"field": "pack_qty", "column": "description_short_eng",
                        "value": pack_description, "confidence": pack_conf_description})
     if pack_url > 1 or pack_conf_url > 0:
         ledger.append({"field": "pack_qty", "column": "sku_url",
@@ -872,8 +872,8 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     vol_claims = [
         (value, conf, column)
         for value, conf, column in (
-            (attr_vol, attr_vol_conf, "attributes"),
-            (title_vol, vol_title["confidence"], "title"),
+            (attr_vol, attr_vol_conf, "attribute"),
+            (title_vol, vol_title["confidence"], "sku_name_eng"),
             (vol_url["volume_ml"], vol_url["confidence"], "sku_url"),
             (vol_img["volume_ml"], vol_img["confidence"], "image_url"),
         )
@@ -882,9 +882,9 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     pack_claims = [
         (value, conf, column)
         for value, conf, column in (
-            (attr_pack, attr_pack_conf, "attributes"),
-            (pack_title, pack_conf_title, "title"),
-            (pack_description, pack_conf_description, "description"),
+            (attr_pack, attr_pack_conf, "attribute"),
+            (pack_title, pack_conf_title, "sku_name_eng"),
+            (pack_description, pack_conf_description, "description_short_eng"),
             (pack_url, pack_conf_url, "sku_url"),
             (pack_img, pack_conf_img, "image_url"),
         )
@@ -907,7 +907,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     # containers use the separately configured ceiling.
     extraction_policy = data_cfg().extraction
     bulk_terms = "|".join(re.escape(term).replace(r"\ ", r"\s+") for term in extraction_policy.bulk_container_terms)
-    bulk_container = bool(re.search(rf"\b(?:{bulk_terms})\b", f"{sku_name} {attribute}", re.I))
+    bulk_container = bool(re.search(rf"\b(?:{bulk_terms})\b", f"{sku_name_eng} {attribute}", re.I))
     volume_max = extraction_policy.bulk_volume_max_ml if bulk_container else extraction_policy.volume_max_ml
     if volume_ml > 0 and not extraction_policy.volume_min_ml <= volume_ml <= volume_max:
         consistency_flags.add("ambiguous_volume")
@@ -916,7 +916,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     # input to BOTH the canonical build and the gate — validate the shape
     # once here so a confidence out of [0,1] or a pack_qty < 1 crashes at
     # the transform, not downstream in the gate's comparisons.
-    title_attributes = extract_title_attributes(sku_name)
+    title_attributes = extract_title_attributes(sku_name_eng)
     package_types = title_attributes["package_types"]
     if not package_types:
         package_types = parse_attribute_details(attribute).get("attribute_package_types", [])
@@ -924,7 +924,7 @@ def extract_all(sku_name: str, attribute: str, description: str = "",
     # packaging-level key at all (measured 2026-09-30 — `attributes` holds
     # Volume/Pack Type/Flavour/... and zero case-quantity columns), so the
     # title is the only place this claim exists.
-    packaging_levels = extract_packaging_level(sku_name)
+    packaging_levels = extract_packaging_level(sku_name_eng)
     # Structured evidence section (census script): pack material type is the
     # measured 9.64% within-GTIN conflict band, so the attribute cell is now
     # an ELIGIBLE material source: the title NER scrape keeps its exact
@@ -1835,7 +1835,7 @@ def generate_canonical(
     descriptions: list[str] | None = None,
     urls: list[str] | None = None,
     image_urls: list[str] | None = None,
-    category_paths: list[str] | None = None,
+    breadcrumbs_engs: list[str] | None = None,
     categories: list[str] | None = None,
     countries: list[str] | None = None,
     retailers: list[str] | None = None,
@@ -1845,7 +1845,7 @@ def generate_canonical(
     descriptions = descriptions or [""] * len(rows)
     urls = urls or [""] * len(rows)
     image_urls = image_urls or [""] * len(rows)
-    category_paths = category_paths or [""] * len(rows)
+    breadcrumbs_engs = breadcrumbs_engs or [""] * len(rows)
     categories = categories or [""] * len(rows)
     countries = countries or [""] * len(rows)
     retailers = retailers or [""] * len(rows)
@@ -1856,7 +1856,7 @@ def generate_canonical(
             url, img_url, cat_path, cat,
         )
         for (sku, attr), desc, url, img_url, cat_path, cat
-        in zip(rows, descriptions, urls, image_urls, category_paths, categories, strict=True)
+        in zip(rows, descriptions, urls, image_urls, breadcrumbs_engs, categories, strict=True)
     ]
 
     brand_norm = normalize_text(spell_numeric_brand(brand))
@@ -2215,7 +2215,7 @@ def load_canonical_map() -> dict[str, str]:
     record_map): an empty gtin cell becomes the plain key "" in BOTH maps,
     never the literal "nan" / float-NaN key pandas otherwise fabricates.
     Blank/whitespace gtin keys are rejected loudly — a "" canonical key
-    would silently capture every barcode-less row in the payload space.
+    would silently capture every gtin-less row in the payload space.
     """
     df = pd.read_csv(
         RESULTS / F["canonical_records"],
@@ -2478,7 +2478,7 @@ def census_texts(df: pd.DataFrame) -> list[str]:
     WITHOUT the final number-token strip, so every digit token in the corpus
     appears in the reference."""
     out = []
-    for t, a in zip(df["title"].fillna(""), df["attributes"].fillna(""), strict=True):
+    for t, a in zip(df["sku_name_eng"].fillna(""), df["attribute"].fillna(""), strict=True):
         text = normalize_text(t) + " " + normalize_text(a or "")
         text = _VOLUME_PACK_RE.sub(" ", text)
         toks = [x for x in text.split() if x not in MINIMAL_STOPWORDS and len(x) > 1]
@@ -2713,7 +2713,7 @@ def run_within_brand_pipeline(
         note=(
             "stage 2 (build_training_data) does NOT consume this frame: it "
             "reloads the deduped dataset through load_dataset_deduped(), whose "
-            "columns are the canonical ones (barcode/title/attributes) — the "
+            "columns are the canonical ones (gtin/title/attributes) — the "
             "two stages meet at canonical_records.csv + gate_results.csv"
         ),
     )
@@ -2730,15 +2730,15 @@ def run_within_brand_pipeline(
         & (df_full["gtin"].astype(str).str.strip() != "")
         & (df_full["gtin"].astype(str).str.lower() != "nan")
     )
-    # Checksum enforcement (owner ruling): 1,747 of 14,997 distinct barcodes
+    # Checksum enforcement (owner ruling): 1,747 of 14,997 distinct gtins
     # (3,715 rows) FAIL the GS1 check digit — retailer-export noise. An
-    # invalid barcode must not assert product identity: no canonical forms
+    # invalid gtin must not assert product identity: no canonical forms
     # on it, so no (sku, canonical) positive pairs and no false labels leak
     # into training/eval. The ROWS survive (corpus unchanged); only the
     # identity claim dies. Loud per lane doctrine — never silent.
-    from core.gtin import barcode_validity
+    from core.gtin import gtin_validity
 
-    bc_valid = barcode_validity(df_full["gtin"].fillna("").astype(str).str.strip())
+    bc_valid = gtin_validity(df_full["gtin"].fillna("").astype(str).str.strip())
     from core.identity_policy import reviewed_row_mask
     reviewed = reviewed_row_mask(df_full)
     bc_valid &= ~reviewed
@@ -2751,7 +2751,7 @@ def run_within_brand_pipeline(
         print(
             f"[gtin-guard] dropped {n_checksum_dropped:,} rows whose gtin "
             f"FAILS the GS1 check digit (no canonical/labels form on a "
-            f"barcode that cannot be trusted as identity)",
+            f"gtin that cannot be trusted as identity)",
             flush=True,
         )
     if n_before != len(df_full):
@@ -2768,7 +2768,7 @@ def run_within_brand_pipeline(
         "identity_claims_evaluated",
         in_count=n_before,
         out_count=len(df_full),
-        reason="rows keep identity only with a present, GS1-valid barcode",
+        reason="rows keep identity only with a present, GS1-valid gtin",
         detail={
             "gtin_missing_or_nan": int((~gtin_valid).sum()),
             "gs1_checksum_failed": n_checksum_dropped,
@@ -2789,7 +2789,7 @@ def run_within_brand_pipeline(
             descriptions=("description_short_eng", list),
             urls=("sku_url", list),
             image_urls=("image_url", list),
-            category_paths=("breadcrumbs_eng", list),
+            breadcrumbs_engs=("breadcrumbs_eng", list),
             categories=("category", list),
             countries=("country", list),
             retailers=("retailer", list),
@@ -2832,7 +2832,7 @@ def run_within_brand_pipeline(
             descriptions=row["descriptions"],
             urls=row["urls"],
             image_urls=row["image_urls"],
-            category_paths=row["category_paths"],
+            breadcrumbs_engs=row["breadcrumbs_engs"],
             categories=row["categories"],
         )
         record["description_evidence"] = row["description_evidence"]
@@ -3235,9 +3235,9 @@ def build_training_data(
     Returns dict with:
         payload : list[str]  — clean sku text per row + one canonical per GTIN
         structured_features : list[list[float]] — normalized numeric features
-        row_bc  : np.ndarray — barcode per payload entry (gtin for canonicals)
+        row_bc  : np.ndarray — gtin per payload entry (gtin for canonicals)
         pos     : np.ndarray (N,2) — (sku_row, canon_idx) for every row whose
-                  barcode has a canonical
+                  gtin has a canonical
         neg     : np.ndarray (M,2) — (rep_row(g1), canon(g2)) and mirror, for
                   every gate hard-no pair with similarity >= threshold
         stats   : dict — counts (nothing dropped silently)
@@ -3300,9 +3300,9 @@ def build_training_data(
         keep_default_na=False,
     )
 
-    bc = df["barcode"].fillna("").astype(str).str.strip()
-    title = df["title"].fillna("")
-    attrs = df["attributes"].fillna("")
+    bc = df["gtin"].fillna("").astype(str).str.strip()
+    title = df["sku_name_eng"].fillna("")
+    attrs = df["attribute"].fillna("")
 
     # ── clean sku text per row (variant: full = title+attr, title_only) ──
     # schema words (type/content/material/...) die on the MODEL side only —
@@ -3314,7 +3314,7 @@ def build_training_data(
         model_frame = df
     elif payload_variant == "title_only":
         model_frame = df.copy()
-        for column in ("attributes", "attr", "description", "description_short_eng"):
+        for column in ("attribute", "attr", "description_short_eng", "description_short_eng"):
             if column in model_frame.columns:
                 model_frame[column] = ""
     else:
@@ -3404,7 +3404,7 @@ def build_training_data(
         gtin_to_canon_idx[g] for g, s in zip(canon_gtins, canon_texts, strict=True) if not s
     }
 
-    # ── positives: every row whose barcode has a canonical ──
+    # ── positives: every row whose gtin has a canonical ──
     cand_pos = [
         (i, gtin_to_canon_idx[g]) for i, g in enumerate(bc) if g in gtin_to_canon_idx
     ]
@@ -3628,8 +3628,8 @@ def build_training_data(
                 "kind": "pos",
                 "payload_idx_a": int(i),
                 "payload_idx_b": int(j),
-                "barcode_a": row_bc[i],
-                "barcode_b": row_bc[j],
+                "gtin_a": row_bc[i],
+                "gtin_b": row_bc[j],
                 "text_a": payload[i],
                 "text_b": payload[j],
             }
@@ -3640,8 +3640,8 @@ def build_training_data(
                 "kind": "neg_hard",
                 "payload_idx_a": int(i),
                 "payload_idx_b": int(j),
-                "barcode_a": row_bc[i],
-                "barcode_b": row_bc[j],
+                "gtin_a": row_bc[i],
+                "gtin_b": row_bc[j],
                 "text_a": payload[i],
                 "text_b": payload[j],
             }
@@ -3652,8 +3652,8 @@ def build_training_data(
                 "kind": "neg_targeted_attribute",
                 "payload_idx_a": int(i),
                 "payload_idx_b": int(j),
-                "barcode_a": row_bc[i],
-                "barcode_b": row_bc[j],
+                "gtin_a": row_bc[i],
+                "gtin_b": row_bc[j],
                 "text_a": payload[i],
                 "text_b": payload[j],
             }
@@ -3664,8 +3664,8 @@ def build_training_data(
                 "kind": "neg_cross_brand",
                 "payload_idx_a": int(i),
                 "payload_idx_b": int(j),
-                "barcode_a": row_bc[i],
-                "barcode_b": row_bc[j],
+                "gtin_a": row_bc[i],
+                "gtin_b": row_bc[j],
                 "text_a": payload[i],
                 "text_b": payload[j],
             }
@@ -3933,14 +3933,14 @@ def build_training_data(
     trace.add_entities(
         "pair_payload",
         _rows,
-        key_of=lambda r: f"{r['kind']}|{r['barcode_a']}|{r['barcode_b']}",
+        key_of=lambda r: f"{r['kind']}|{r['gtin_a']}|{r['gtin_b']}",
         reason_of=lambda r: r["kind"],
         detail_of=lambda r: json.dumps(
             {
                 "payload_idx_a": r["payload_idx_a"],
                 "payload_idx_b": r["payload_idx_b"],
-                "barcode_a": r["barcode_a"],
-                "barcode_b": r["barcode_b"],
+                "gtin_a": r["gtin_a"],
+                "gtin_b": r["gtin_b"],
                 "text_a": r["text_a"],
                 "text_b": r["text_b"],
             },

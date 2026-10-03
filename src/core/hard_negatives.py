@@ -1,9 +1,9 @@
 """Hard-negative mining for euromonitor entity resolution.
 
-Mines cross-barcode pairs the bi-encoder finds confusing (the 0.45-0.80 cosine
+Mines cross-gtin pairs the bi-encoder finds confusing (the 0.45-0.80 cosine
 band) while EXCLUDING known label errors: same-title+brand rows carrying
-conflicting barcodes (the mislabeled-barcode groups). The output is auditable —
-a CSV with title/brand/barcode/cosine per pair — so a human can hand-label a
+conflicting gtins (the mislabeled-gtin groups). The output is auditable —
+a CSV with title/brand/gtin/cosine per pair — so a human can hand-label a
 sample and the exclusion is visible, never hidden.
 """
 
@@ -406,7 +406,7 @@ class CrossBrandMiningFunnel(MiningFunnelBase):
             (
                 "label_error_guard",
                 self.dropped_candidates_label_error,
-                "same title with conflicting barcodes (known label error)",
+                "same title with conflicting gtins (known label error)",
             ),
             (
                 "brand_pair_distinct",
@@ -647,8 +647,8 @@ def mine_targeted_attribute_negatives(
             if funnel is not None:
                 funnel.dropped_candidates_brand += 1
             continue
-        left_name = normalized_product_name(df.iloc[left_row].get("title", ""), left_brand)
-        right_name = normalized_product_name(df.iloc[right_row].get("title", ""), right_brand)
+        left_name = normalized_product_name(df.iloc[left_row].get("sku_name_eng", ""), left_brand)
+        right_name = normalized_product_name(df.iloc[right_row].get("sku_name_eng", ""), right_brand)
         exact_name = bool(left_name) and left_name == right_name
         evaluation: dict[str, list[str]] | None = None
         if not exact_name:
@@ -811,7 +811,7 @@ def _brand_surface_variant(left: str, right: str) -> bool:
     :func:`_brand_identity`, so only word-level nesting is left to catch.
 
     ALIAS-FAMILY GUARD SUBSET RELATION (veto-asymmetry doctrine, config the
-    ``core.product_identity.normalize_brand`` (ADDS the reviewed alias target
+    ``core.sku_identity.normalize_brand`` (ADDS the reviewed alias target
     token, drops nothing), and the subset guard runs on the FOLDED token
     sets — with the FAMILY CANONICAL as the acceptance owner. The folded
     relation is subset OR shared-family-token: an alias family member and its
@@ -835,7 +835,7 @@ def _brand_surface_variant(left: str, right: str) -> bool:
     :func:`normalize_brand`; only word-level nesting/family-sharing is left
     to catch.
     """
-    from core.product_identity import brand_aliases, normalize_brand
+    from core.sku_identity import brand_aliases, normalize_brand
 
     left_tokens = set(normalize_brand(left))
     right_tokens = set(normalize_brand(right))
@@ -993,7 +993,7 @@ def mine_cross_brand_negatives(
         )
         funnel.gate_rows = funnel.candidates_in_blocks
 
-    label_errors = conflicting_barcode_pairs(df) if exclude_conflicting else set()
+    label_errors = conflicting_gtin_pairs(df) if exclude_conflicting else set()
     existing_keys = {
         (int(left), int(right)) for left, right in (existing if existing is not None else [])
     }
@@ -1159,7 +1159,7 @@ def mine_cross_brand_negatives_with_funnel(
 def mine_attribute_conflict_negatives(
     df: pd.DataFrame,
     payload: list[str],
-    row_barcodes: np.ndarray,
+    row_gtins: np.ndarray,
     emb: np.ndarray,
     *,
     existing: np.ndarray | None = None,
@@ -1199,10 +1199,10 @@ def mine_attribute_conflict_negatives(
             **canonical_attribute_info(record),
         }
     # Canonicals occupy the first post-data block. Masked copies are appended
-    # later with the same barcode, so first-wins is the canonical-only rule.
+    # later with the same gtin, so first-wins is the canonical-only rule.
     canon_idx: dict[str, int] = {}
-    for i in range(len(df), len(row_barcodes)):
-        gtin = str(row_barcodes[i])
+    for i in range(len(df), len(row_gtins)):
+        gtin = str(row_gtins[i])
         if gtin in canon_by_gtin:
             canon_idx.setdefault(gtin, i)
     if not canon_idx:
@@ -1214,20 +1214,20 @@ def mine_attribute_conflict_negatives(
         if key[0] and key[1]:
             groups[key].append(gtin)
 
-    # Longest representative row per barcode, stable on original row order.
+    # Longest representative row per gtin, stable on original row order.
     reps: dict[str, int] = {}
-    for i, gtin in enumerate(row_barcodes[: len(df)]):
+    for i, gtin in enumerate(row_gtins[: len(df)]):
         gtin = str(gtin)
         if gtin not in canon_by_gtin:
             continue
-        title_len = len(str(df.iloc[i].get("title", "")))
+        title_len = len(str(df.iloc[i].get("sku_name_eng", "")))
         old = reps.get(gtin)
-        if old is None or title_len > len(str(df.iloc[old].get("title", ""))):
+        if old is None or title_len > len(str(df.iloc[old].get("sku_name_eng", ""))):
             reps[gtin] = i
 
     product_names = {
         gtin: normalized_product_name(
-            df.iloc[row].get("title", ""), canon_by_gtin[gtin]["brand"]
+            df.iloc[row].get("sku_name_eng", ""), canon_by_gtin[gtin]["brand"]
         )
         for gtin, row in reps.items()
     }
@@ -1282,10 +1282,10 @@ def mine_attribute_conflict_negatives(
     )
 
 
-def conflicting_barcode_pairs(df: pd.DataFrame) -> set[tuple[int, int]]:
-    """Row-index pairs with the same title but conflicting barcodes.
+def conflicting_gtin_pairs(df: pd.DataFrame) -> set[tuple[int, int]]:
+    """Row-index pairs with the same title but conflicting gtins.
 
-    These are label errors (same product, conflicting barcode): a pair like this
+    These are label errors (same product, conflicting gtin): a pair like this
     must never enter the negative pool, or training teaches the model to push
     apart titles that are actually the same product.
 
@@ -1298,25 +1298,25 @@ def conflicting_barcode_pairs(df: pd.DataFrame) -> set[tuple[int, int]]:
     ``(min, max)`` so a non-monotonic index upstream can not silently break
     the membership lookup.
     """
-    barcodes = df["barcode"].fillna("").astype(str)
+    gtins = df["gtin"].fillna("").astype(str)
     pairs: set[tuple[int, int]] = set()
-    # fast path: only titles with >1 DISTINCT non-empty barcode can produce a
+    # fast path: only titles with >1 DISTINCT non-empty gtin can produce a
     # conflicting pair; everything else is skipped without a per-group Python
     # loop (the old full groupby walked every one of ~57k title groups with a
     # pandas .loc per group — 37s; this pre-filter leaves only the handful of
     # genuinely conflicted titles)
     bc = pd.DataFrame(
-        {"title": df["title"], "barcode": barcodes, "row": np.arange(len(df))}
+        {"sku_name_eng": df["sku_name_eng"], "gtin": gtins, "row": np.arange(len(df))}
     )
-    bc = bc[bc["title"].notna() & (bc["barcode"].str.len() > 0)]
-    nuniq = bc.groupby("title")["barcode"].nunique()
+    bc = bc[bc["sku_name_eng"].notna() & (bc["gtin"].str.len() > 0)]
+    nuniq = bc.groupby("sku_name_eng")["gtin"].nunique()
     conflicted_titles = set(nuniq[nuniq > 1].index)
     if not conflicted_titles:
         return pairs
-    cbc = bc[bc["title"].isin(conflicted_titles)]
-    for title, g in cbc.groupby("title", sort=False):
+    cbc = bc[bc["sku_name_eng"].isin(conflicted_titles)]
+    for title, g in cbc.groupby("sku_name_eng", sort=False):
         idx = sorted(int(i) for i in g["row"])
-        bc_by_row = dict(zip(g["row"], g["barcode"], strict=True))
+        bc_by_row = dict(zip(g["row"], g["gtin"], strict=True))
         for a, b in combinations(idx, 2):
             if bc_by_row[a] != bc_by_row[b]:
                 pairs.add((a, b))
@@ -1324,16 +1324,16 @@ def conflicting_barcode_pairs(df: pd.DataFrame) -> set[tuple[int, int]]:
 
 
 def pairs_in_set(
-    pairs: np.ndarray, row_barcodes: np.ndarray, bc_set: set[str]
+    pairs: np.ndarray, row_gtins: np.ndarray, bc_set: set[str]
 ) -> np.ndarray:
-    """Boolean mask over pairs whose BOTH endpoints' barcode is in bc_set.
+    """Boolean mask over pairs whose BOTH endpoints' gtin is in bc_set.
 
     Held-out pair filtering: a pair is only in the split if both rows belong to
     it, so no train/test entity leaks across the boundary.
     """
     members = list(bc_set)
-    return np.isin(row_barcodes[pairs[:, 0]], members) & np.isin(
-        row_barcodes[pairs[:, 1]], members
+    return np.isin(row_gtins[pairs[:, 0]], members) & np.isin(
+        row_gtins[pairs[:, 1]], members
     )
 
 
@@ -1400,12 +1400,12 @@ def mine_hard_negatives(
     max_per_canonical: int | None = None,
     max_per_brand: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Mine hard negatives: cross-barcode, different-brand, same-macro, mid-cosine.
+    """Mine hard negatives: cross-gtin, different-brand, same-macro, mid-cosine.
 
     Uses cosine ANN within each macro-category block, then filters to the
     confusion band (cosine_lo..cosine_hi) with a DIFFERENT brand (the signature
-    of the champion's false positives), a different non-empty barcode, and no
-    conflicting-barcode label error. Returns (pairs, cosine) as an (N,2) int
+    of the champion's false positives), a different non-empty gtin, and no
+    conflicting-gtin label error. Returns (pairs, cosine) as an (N,2) int
     array and an (N,) float array, hardest-first.
 
     CONFIG SSOT: every miner parameter resolves from config/training.yaml when
@@ -1432,19 +1432,19 @@ def mine_hard_negatives(
         lo, hi = ann_cfg.band.split("-")
         cosine_lo = float(lo) if cosine_lo is None else cosine_lo
         cosine_hi = float(hi) if cosine_hi is None else cosine_hi
-    barcodes = df["barcode"].fillna("").astype(str).to_numpy()
+    gtins = df["gtin"].fillna("").astype(str).to_numpy()
     brands = df["brand"].fillna("").astype(str).to_numpy()
     # MACRO_MAP moved to config (SSOT): config/paths.yaml category_macros,
     # read via lib.common.category_macros() — no module-level copy.
     macro_map = category_macros()
     macro = df["category"].fillna("").map(lambda c: macro_map.get(c, "?")).to_numpy()
-    # Barcode trust (owner ruling, see src/core/gtin.py): a checksum-fail barcode
+    # GTIN trust (owner ruling, see src/core/gtin.py): a checksum-fail gtin
     # cannot certify "known different" any more than a missing one can —
-    # exclude from the negative population exactly like empty barcodes.
-    from core.gtin import barcode_validity
+    # exclude from the negative population exactly like empty gtins.
+    from core.gtin import gtin_validity
 
-    bc_valid = barcode_validity(df["barcode"].fillna("").astype(str)).to_numpy()
-    excluded = conflicting_barcode_pairs(df) if exclude_conflicting else set()
+    bc_valid = gtin_validity(df["gtin"].fillna("").astype(str)).to_numpy()
+    excluded = conflicting_gtin_pairs(df) if exclude_conflicting else set()
 
     found: list[tuple[int, int, float]] = []
     n_band_seen = 0  # pairs reaching all filters except exclusion (audit denominator)
@@ -1471,7 +1471,7 @@ def mine_hard_negatives(
         k_eff = min(k, len(idx))
         n = len(idx)
         # rows of this block, reindexed 0..n-1 (local), global = idx[local]
-        bc_blk = barcodes[idx]
+        bc_blk = gtins[idx]
         br_blk = brands[idx]
         bcv_blk = bc_valid[idx]
         # Gather once: advanced indexing otherwise copies the entire macro's
@@ -1496,7 +1496,7 @@ def mine_hard_negatives(
             br_a = br_blk[li[keep]]
             br_b = br_blk[lj[keep]]
             # real, distinct, and BOTH trusted (GS1 checksum) — an invalid
-            # barcode has unknown identity, not "known different"
+            # gtin has unknown identity, not "known different"
             valid = (
                 (bc_a != "")
                 & (bc_b != "")
@@ -1531,7 +1531,7 @@ def mine_hard_negatives(
         # pairs the label-error guard dropped.
         print(
             f"mining audit: {n_band_seen:,} candidate pairs in band, "
-            f"{n_excluded_in_band:,} excluded as conflicting-barcode label errors"
+            f"{n_excluded_in_band:,} excluded as conflicting-gtin label errors"
         )
 
     found.sort(key=lambda t: -t[2])  # hardest (highest cosine) first
@@ -1543,14 +1543,14 @@ def mine_hard_negatives(
     for a, b, s in found:
         if (a, b) in seen:
             continue
-        endpoint_barcodes = (str(barcodes[a]), str(barcodes[b]))
+        endpoint_gtins = (str(gtins[a]), str(gtins[b]))
         endpoint_brands = (
             str(brands[a]).strip().lower(),
             str(brands[b]).strip().lower(),
         )
         if any(
             value and canonical_counts[value] >= int(max_per_canonical)
-            for value in endpoint_barcodes
+            for value in endpoint_gtins
         ):
             continue
         if any(
@@ -1561,7 +1561,7 @@ def mine_hard_negatives(
         seen.add((a, b))
         pairs_out.append((a, b))
         cos_out.append(s)
-        for value in endpoint_barcodes:
+        for value in endpoint_gtins:
             if value:
                 canonical_counts[value] += 1
         for value in endpoint_brands:

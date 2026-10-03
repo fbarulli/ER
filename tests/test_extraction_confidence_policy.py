@@ -8,15 +8,15 @@ from pipeline import extract_all, extract_pack_evidence, extract_pack_from_title
 
 
 def test_disagreement_uses_every_reader_and_is_order_independent():
-    claims = [(330, .95, "attributes"), (330, .90, "title"), (500, .20, "sku_url")]
+    claims = [(330, .95, "attribute"), (330, .90, "sku_name_eng"), (500, .20, "sku_url")]
     assert fuse_confidence(claims) == pytest.approx(.20)
     assert fuse_confidence(list(reversed(claims))) == pytest.approx(.20)
 
 
 def test_repeated_listing_surfaces_are_not_independent_corroboration():
-    claims = [(330, .90, "title"), (330, .90, "sku_url"), (330, .90, "image_url")]
+    claims = [(330, .90, "sku_name_eng"), (330, .90, "sku_url"), (330, .90, "image_url")]
     assert fuse_confidence(claims) == pytest.approx(.90)
-    assert fuse_confidence(claims + [(330, .90, "attributes")]) == pytest.approx(.99)
+    assert fuse_confidence(claims + [(330, .90, "attribute")]) == pytest.approx(.99)
 
 
 def test_nested_counts_and_outer_inner_quantities_remain_distinct():
@@ -51,4 +51,4 @@ def test_config_rejects_bad_ranges_and_unknown_source_policy():
     with pytest.raises(ValueError, match="ordered"):
         ExtractionPolicySpec.model_validate({**raw, "volume_min_ml": raw["volume_max_ml"]})
     with pytest.raises(ValueError, match="source_groups"):
-        ExtractionPolicySpec.model_validate({**raw, "source_groups": {"title": "listing"}})
+        ExtractionPolicySpec.model_validate({**raw, "source_groups": {"sku_name_eng": "listing"}})

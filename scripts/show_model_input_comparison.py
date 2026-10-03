@@ -61,21 +61,21 @@ def main() -> None:
     raw_data = pd.read_csv(args.dataset, dtype=str, keep_default_na=False)
     data = raw_data.rename(
         columns={
-            "sku_id": "product_id",
-            "sku_name_eng": "title",
-            "description_short_eng": "description",
-            "breadcrumbs_eng": "category_path",
-            "attribute": "attributes",
+            "sku_id": "sku_id",
+            "sku_name_eng": "sku_name_eng",
+            "description_short_eng": "description_short_eng",
+            "breadcrumbs_eng": "breadcrumbs_eng",
+            "attribute": "attribute",
         }
     )
     canon = pd.read_csv(args.canonicals, dtype=str, keep_default_na=False)
-    for col in ("title", "description", "category_path", "attributes", "brand", "category"):
+    for col in ("sku_name_eng", "description_short_eng", "breadcrumbs_eng", "attribute", "brand", "category"):
         if col not in data:
             data[col] = ""
 
-    source = data.assign(__id=data["product_id"].astype(str)).set_index("__id").to_dict("index")
+    source = data.assign(__id=data["sku_id"].astype(str)).set_index("__id").to_dict("index")
     raw_source = raw_data.assign(__id=raw_data["sku_id"].astype(str)).set_index("__id").to_dict("index")
-    gtin_col = "barcode" if "barcode" in data else "gtin"
+    gtin_col = "gtin" if "gtin" in data else "gtin"
     raw_gtin_col = "gtin" if "gtin" in raw_data else gtin_col
     raw_targets = {}
     for gtin, group in raw_data.groupby(raw_gtin_col, sort=False):
@@ -94,15 +94,15 @@ def main() -> None:
         canonical_row = canonical_map.get(target_id, {})
 
         source_features = {
-            "product_id": sku_id,
+            "sku_id": sku_id,
             **{key: value for key, value in raw_source.get(sku_id, {}).items() if not key.startswith("__")},
         }
         base_source = clean_sku_text(
-            text(source_row.get("title")), text(source_row.get("attributes")), text(source_row.get("brand")),
-            text(source_row.get("description")), text(source_row.get("category")), text(source_row.get("category_path")),
+            text(source_row.get("sku_name_eng")), text(source_row.get("attribute")), text(source_row.get("brand")),
+            text(source_row.get("description_short_eng")), text(source_row.get("category")), text(source_row.get("breadcrumbs_eng")),
         )
         cleaned_source = strip_schema_words(base_source)
-        source_info = sku_structured_info(text(source_row.get("title")), text(source_row.get("attributes")))
+        source_info = sku_structured_info(text(source_row.get("sku_name_eng")), text(source_row.get("attribute")))
         # The EXACT payload the encoder receives comes from the shared builder,
         # so this audit view can never disagree with what the lanes actually
         # feed the model. The intermediate columns below document the ORIGINAL

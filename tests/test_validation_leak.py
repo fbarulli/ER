@@ -37,9 +37,9 @@ from training.folds import (
 def _fixture() -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
     """A graph where validation positives DO straddle until the fix lands.
 
-    400 barcodes. The training graph links them in chains, so folds are
+    400 gtins. The training graph links them in chains, so folds are
     balanced. The census then claims `bc00000` and `bc00399` are the same
-    product -- two barcodes that land in different folds absent the merged
+    product -- two gtins that land in different folds absent the merged
     edge, i.e. exactly the leak.
     """
     row_bc = np.array([f"bc{i:05d}" for i in range(400)], dtype=object)

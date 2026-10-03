@@ -1,19 +1,25 @@
 track: gnn_only
-listings: /home/opc/ONE/ER/data/prepared/smoke_200/prepared/listings.json
-pairs: /home/opc/ONE/ER/data/prepared/smoke_200/prepared/pairs.csv
-output_dir: .
+listings: /tmp/opencode/er-rename/data/prepared/smoke_200/prepared/listings.json
+pairs: /tmp/opencode/er-rename/data/prepared/smoke_200/prepared/pairs.csv
+output_dir: results/graph_tracks
 hidden_dim: 64
 output_dim: 128
 epochs: 1
 learning_rate: 0.001
 weight_decay: 0.0001
+early_stopping_patience: 3
+early_stopping_threshold: 0.001
+lr_scheduler: plateau
+lr_patience: 1
+lr_factor: 0.5
+min_lr: 1.0e-05
 seed: 1337
 device: cpu
 graph_enabled: true
 metric_weight: 1.0
 negative_margin: 0.3
 max_grad_norm: 1.0
-input_manifest: /home/opc/ONE/ER/data/prepared/smoke_200/prepared/input_manifest.json
+input_manifest: /tmp/opencode/er-rename/data/prepared/smoke_200/prepared/input_manifest.json
 wandb:
   project: e-r
   mode: offline
@@ -21,9 +27,9 @@ dvc:
   enabled: true
   remote: null
   push: false
-postprocess: false
+postprocess: true
 report_test: false
-build_index: false
+build_index: true
 inference_batch_size: 1024
 retrieval_ks:
 - 1

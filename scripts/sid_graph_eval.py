@@ -87,9 +87,9 @@ def main(argv: list[str] | None = None) -> int:
 
     dedup_path = F["dataset_deduped"]
     dedup = pd.read_csv(dedup_path, dtype=str, keep_default_na=False)
-    dedup["SKU_ID"] = dedup["product_id"].astype(str).str.strip()
+    dedup["SKU_ID"] = dedup["sku_id"].astype(str).str.strip()
     sku_rows = fixture.merge(dedup, on="SKU_ID", how="left", validate="many_to_one")
-    if sku_rows["title"].isna().any():
+    if sku_rows["sku_name_eng"].isna().any():
         return _fail("fixture SKU_IDs missing from deduped dataset")
     n = len(sku_rows)
 
@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     gtin_to_idx = {g: i for i, g in enumerate(canon_gtins)}
     m = len(canon_gtins)
 
-    sku_infos = [sku_attribute_info(str(r.get("title", "")), str(r.get("attributes", "")))
+    sku_infos = [sku_attribute_info(str(r.get("sku_name_eng", "")), str(r.get("attribute", "")))
                  for _, r in sku_rows.iterrows()]
     sku_texts = [build_sku_text(row, _text_info(info)) for (_, row), info in zip(sku_rows.iterrows(), sku_infos)]
     sku_brands = [_norm_brand(r.get("brand")) for _, r in sku_rows.iterrows()]
@@ -127,8 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(f"encoder bundle for {model_key!r} missing or unloadable — {exc}")
 
     # codebooks fit on train-side canonicals only (same split contract)
-    full_barcodes = pd.read_csv(F["dataset_deduped"], dtype=str, usecols=["barcode"])
-    graph_pos, graph_bc = _pair_graph(full_barcodes)
+    full_gtins = pd.read_csv(F["dataset_deduped"], dtype=str, usecols=["gtin"])
+    graph_pos, graph_bc = _pair_graph(full_gtins)
     split_cfg = cfg["split"]
     train_bc, _, _ = derive_holdout(graph_pos, graph_bc, split_cfg, seed=int(SEED))
     train_bc = set(train_bc)

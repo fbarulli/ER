@@ -30,7 +30,7 @@ def test_sweetener_values_reach_both_model_lanes_after_csv_roundtrip(tmp_path):
     assert source_info["sweetener"] == set()  # Ingredients do not assert no-sugar.
     assert canonical_attribute_info(loaded)["sweetener_type"] == {"stevia", "erythritol"}
     spec = TrainingSpec.ModelInputSpec(profile="cleaned", include_evidence=False)
-    source_text = build_sku_text(pd.Series({"title": title, "attributes": attributes, "brand": "Example"}), source_info, spec=spec)
+    source_text = build_sku_text(pd.Series({"sku_name_eng": title, "attribute": attributes, "brand": "Example"}), source_info, spec=spec)
     target_text = build_canonical_text(loaded, target_info, spec=spec)
     for token in ("sweetener_type_stevia", "sweetener_type_erythritol", "flavor_latte", "flavor_tea"):
         assert token in source_text.split()

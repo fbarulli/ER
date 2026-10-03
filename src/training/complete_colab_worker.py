@@ -63,8 +63,8 @@ def scored_validation_accounting() -> dict[str, object]:
         fold_map.loc[fold_map["fold"].isin(("2", "3")), "gtin"]
     )
     deduped = pd.read_csv(F["dataset_deduped"], dtype=str, keep_default_na=False,
-                          usecols=["barcode"])
-    validation_entity_rows = int(deduped["barcode"].isin(validation_gtins).sum())
+                          usecols=["gtin"])
+    validation_entity_rows = int(deduped["gtin"].isin(validation_gtins).sum())
     train_side_rows = deduped_rows - validation_entity_rows
     if train_side_rows + validation_entity_rows != deduped_rows:
         raise ValueError("scored-pair accounting: train side does not close")

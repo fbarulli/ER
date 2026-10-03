@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     pool = pd.read_csv(F["dataset_deduped"], dtype=str, keep_default_na=False).head(int(args.pool))
     if "brand" not in pool.columns or "category" not in pool.columns:
         return _fail("deduped frame lacks brand/category columns")
-    infos = [sku_attribute_info(str(r.get("title", "")), str(r.get("attributes", "")))
+    infos = [sku_attribute_info(str(r.get("sku_name_eng", "")), str(r.get("attribute", "")))
              for _, r in pool.iterrows()]
     sys.path.insert(0, str(TRAIN_ROOT / "scripts"))
     from sid_phase0_report import _text_info  # noqa: E402

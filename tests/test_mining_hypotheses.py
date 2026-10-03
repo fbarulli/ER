@@ -76,9 +76,9 @@ def _world(
     """Build the minimal real input set the miner consumes."""
     df = pd.DataFrame(
         {
-            "barcode": [left_gtin, right_gtin],
-            "title": [left_title, right_title],
-            "attributes": ["", ""],
+            "gtin": [left_gtin, right_gtin],
+            "sku_name_eng": [left_title, right_title],
+            "attribute": ["", ""],
         }
     )
     gates = pd.DataFrame(
@@ -150,7 +150,7 @@ def test_emitted_negative_never_reuses_the_source_gtin_canonical() -> None:
     cmap = world["canonical_map"]
     idx_to_gtin = {v: k for k, v in world["gtin_to_canon_idx"].items()}
     for anchor, target in pairs:
-        source_gtin = world["df"]["barcode"].iloc[int(anchor)]
+        source_gtin = world["df"]["gtin"].iloc[int(anchor)]
         target_gtin = idx_to_gtin[int(target)]
         assert cmap[source_gtin] != cmap[target_gtin]
 
@@ -232,7 +232,7 @@ def test_unknown_name_match_mode_fails_loudly() -> None:
 
 # ── H2b: fused pack notation leak in the name key ──────────────────────────
 @pytest.mark.parametrize(
-    ("title", "expected"),
+    ("sku_name_eng", "expected"),
     [
         ("pear soda 18x33cl", "pear soda"),
         ("soda 12x330ml", "soda"),
@@ -241,8 +241,8 @@ def test_unknown_name_match_mode_fails_loudly() -> None:
         ("acme cola 1.5 l pack of 6", "cola of 6"),  # pre-existing leftover, see report
     ],
 )
-def test_normalized_product_name_removes_fused_pack_notation(title: str, expected: str) -> None:
-    assert normalized_product_name(title, "acme") == expected
+def test_normalized_product_name_removes_fused_pack_notation(sku_name_eng: str, expected: str) -> None:
+    assert normalized_product_name(sku_name_eng, "acme") == expected
 
 
 def test_fused_pack_pair_is_reachable_by_name_equality() -> None:
@@ -338,8 +338,8 @@ def _gate_csv(path: Path, positives: int, negatives: int, reason: str) -> Path:
 def _sku_csv(path: Path, gtins: set[str]) -> Path:
     pd.DataFrame(
         {
-            "barcode": sorted(gtins),
-            "product_id": [f"sku-{g}" for g in sorted(gtins)],
+            "gtin": sorted(gtins),
+            "sku_id": [f"sku-{g}" for g in sorted(gtins)],
         }
     ).to_csv(path, index=False)
     return path
@@ -668,11 +668,11 @@ def test_live_funnel_accounting_closes() -> None:
     canonical_records = pd.read_csv(
         RESULTS / F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
     )
-    bc = df["barcode"].fillna("").astype(str).str.strip()
+    bc = df["gtin"].fillna("").astype(str).str.strip()
     best: dict[str, int] = {}
-    for index, barcode in enumerate(bc):
-        if barcode and (barcode not in best or len(df["title"].iloc[index]) > len(df["title"].iloc[best[barcode]])):
-            best[barcode] = index
+    for index, gtin in enumerate(bc):
+        if gtin and (gtin not in best or len(df["sku_name_eng"].iloc[index]) > len(df["sku_name_eng"].iloc[best[gtin]])):
+            best[gtin] = index
     gtin_to_canon_idx = {gtin: i for i, gtin in enumerate(sorted(best))}
     gtin_to_row = {gtin: row for gtin, row in best.items()}
 
@@ -740,7 +740,7 @@ def test_live_no_text_pair_carries_both_labels() -> None:
     def sku_text(index: int) -> str:
         row = df.iloc[index]
         info = model_input_info(
-            sku_structured_info(row["title"], row["attributes"])
+            sku_structured_info(row["sku_name_eng"], row["attribute"])
         ) if structured else {}
         return build_sku_text(row, info)
 
@@ -757,23 +757,23 @@ def test_live_no_text_pair_carries_both_labels() -> None:
         for gtin in canon_gtins
     }
 
-    bc = df["barcode"].fillna("").astype(str).str.strip()
-    t_len = df["title"].fillna("").astype(str).str.len().to_numpy()
+    bc = df["gtin"].fillna("").astype(str).str.strip()
+    t_len = df["sku_name_eng"].fillna("").astype(str).str.len().to_numpy()
     order = np.lexsort((np.arange(len(t_len)), -t_len))
     gtin_to_row: dict[str, int] = {}
     for index in order:
-        barcode = bc.iloc[index]
-        if barcode and barcode not in gtin_to_row:
-            gtin_to_row[barcode] = int(index)
+        gtin = bc.iloc[index]
+        if gtin and gtin not in gtin_to_row:
+            gtin_to_row[gtin] = int(index)
 
     def key(left: int, right: int) -> tuple[str, str]:
         a, b = sku_text(left), canon_text[right]
         return (a, b) if a <= b else (b, a)
 
     labelled: dict[tuple[str, str], set[int]] = {}
-    for index, barcode in enumerate(bc):
-        if barcode in gtin_to_canon_idx:
-            labelled.setdefault(key(index, canon_gtins[gtin_to_canon_idx[barcode]]), set()).add(1)
+    for index, gtin in enumerate(bc):
+        if gtin in gtin_to_canon_idx:
+            labelled.setdefault(key(index, canon_gtins[gtin_to_canon_idx[gtin]]), set()).add(1)
     same_canonical = (
         gates["gtin1"].map(canon_map).notna()
         & gates["gtin2"].map(canon_map).notna()

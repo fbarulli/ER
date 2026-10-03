@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 
 from core.common import vocabulary
-from core.product_identity import (
+from core.sku_identity import (
     brand_aliases,
     brand_conflict,
     identity_conflict,
@@ -43,7 +43,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     "biotech": ("biotech usa", "bio techusa"),
 }
 
-# Measured decline set: whole-barcode mixed groups or key-restricted families;
+# Measured decline set: whole-gtin mixed groups or key-restricted families;
 # every pair here must STILL fire a brand conflict (49 within-group vetoes, 22
 # still live — all 27 dissolved are seeded-family pairs).
 EXPECTED_CONFLICT = [
@@ -143,12 +143,12 @@ def test_brand_conflict_evaluated_when_no_alias_applies():
     the 'brand' dimension (the veto survives where no fold applies)."""
     frame_rows = [
         {
-            "title": "Whatever Root Beer", "brand": "Fonter",
-            "attributes": "Flavour: Vanilla", "volume": "", "barcode": "",
+            "sku_name_eng": "Whatever Root Beer", "brand": "Fonter",
+            "attribute": "Flavour: Vanilla", "volume": "", "gtin": "",
         },
         {
-            "title": "Whatever Root Beer", "brand": "Lanjaron",
-            "attributes": "Flavour: Vanilla", "volume": "", "barcode": "",
+            "sku_name_eng": "Whatever Root Beer", "brand": "Lanjaron",
+            "attribute": "Flavour: Vanilla", "volume": "", "gtin": "",
         },
     ]
     left, right = (row_identity(r) for r in frame_rows)
@@ -158,8 +158,8 @@ def test_brand_conflict_evaluated_when_no_alias_applies():
         "folding must remain a one-sided relaxation, not a wholesale peace"
     )
     assert "brand" not in identity_conflict(
-        row_identity({"title": "a", "brand": "A SHOC", "attributes": "", "volume": "", "barcode": ""}),
-        row_identity({"title": "b", "brand": "Accelerator", "attributes": "", "volume": "", "barcode": ""}),
+        row_identity({"sku_name_eng": "a", "brand": "A SHOC", "attribute": "", "volume": "", "gtin": ""}),
+        row_identity({"sku_name_eng": "b", "brand": "Accelerator", "attribute": "", "volume": "", "gtin": ""}),
     ), "a seeded family pair should NOT raise a brand conflict post-seed"
 
 
@@ -168,7 +168,7 @@ def test_folding_never_creates_a_conflict():
     token the base fold of x had — pair conflicts can only ever DEcrease; the
     whole map is inspected. (No dataset needed: the property holds for any
     pair of single-token brand sets before/after the fold.)"""
-    from core.product_identity import brand_aliases as aliases
+    from core.sku_identity import brand_aliases as aliases
 
     for key, target in aliases().items():
         held = frozenset({key})

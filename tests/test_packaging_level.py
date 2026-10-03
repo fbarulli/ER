@@ -43,20 +43,20 @@ NON_CASE_TITLES = [
 ]
 
 
-@pytest.mark.parametrize("title", CASE_TITLES)
-def test_case_listing_is_detected(title: str) -> None:
-    assert extract_packaging_level(title) == {"case"}
+@pytest.mark.parametrize("sku_name_eng", CASE_TITLES)
+def test_case_listing_is_detected(sku_name_eng: str) -> None:
+    assert extract_packaging_level(sku_name_eng) == {"case"}
 
 
-@pytest.mark.parametrize("title", NON_CASE_TITLES)
-def test_absent_marker_is_unknown_not_retail(title: str) -> None:
+@pytest.mark.parametrize("sku_name_eng", NON_CASE_TITLES)
+def test_absent_marker_is_unknown_not_retail(sku_name_eng: str) -> None:
     """A missing marker means NO CLAIM, never an affirmative "retail".
 
     Encoding "single" here would make every title that simply omits the word
     "case" conflict against a real case listing, splitting genuine
     duplicates. The empty set is the whole point.
     """
-    assert extract_packaging_level(title) == set()
+    assert extract_packaging_level(sku_name_eng) == set()
 
 
 def _attrs(**over: object) -> dict:

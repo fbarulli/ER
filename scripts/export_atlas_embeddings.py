@@ -48,9 +48,9 @@ def main() -> None:
         if args.sample <= 0:
             raise ValueError("--sample must be positive")
         frame = frame.head(args.sample).copy()
-    id_column = "SKU_ID" if "SKU_ID" in frame.columns else "product_id"
+    id_column = "SKU_ID" if "SKU_ID" in frame.columns else "sku_id"
     if id_column not in frame.columns:
-        raise ValueError("input must contain SKU_ID or product_id")
+        raise ValueError("input must contain SKU_ID or sku_id")
 
     cfg = load_config()["training"]["structured_features"]
     enabled = bool(cfg["enabled"])
@@ -62,7 +62,7 @@ def main() -> None:
     infos = [
         model_input_info(
             sku_structured_info(
-                row.get("title", ""), row.get("attributes", row.get("attr", ""))
+                row.get("sku_name_eng", ""), row.get("attribute", row.get("attr", ""))
             )
         )
         if enabled
@@ -106,7 +106,7 @@ def main() -> None:
     metadata.insert(2, "model_input_include_evidence", provenance.include_evidence)
     if args.predictions:
         predictions = pd.read_csv(args.predictions, dtype=str, keep_default_na=False)
-        join_key = "SKU_ID" if "SKU_ID" in predictions.columns else "product_id"
+        join_key = "SKU_ID" if "SKU_ID" in predictions.columns else "sku_id"
         if join_key in predictions.columns:
             metadata = metadata.merge(
                 predictions.drop_duplicates(join_key),

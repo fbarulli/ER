@@ -31,7 +31,7 @@ def run(apply=False):
         if path is None or not path.exists():
             continue
         frame = pd.read_csv(path, dtype=str, keep_default_na=False, low_memory=False)
-        columns = [c for c in ('gtin', 'gtin1', 'gtin2', 'barcode') if c in frame]
+        columns = [c for c in ('gtin', 'gtin1', 'gtin2', 'gtin') if c in frame]
         if not columns:
             continue
         mask = pd.Series(False, index=frame.index)

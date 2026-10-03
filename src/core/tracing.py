@@ -518,7 +518,7 @@ class TraceRun:
 
         Stage 1 consumes the raw export (``gtin``/``sku_name_eng``/
         ``attribute``); stage 2 consumes the deduped dataset
-        (``barcode``/``title``/``attributes``). Those two contracts are
+        (``gtin``/``title``/``attributes``). Those two contracts are
         different, and the handoff between them used to be invisible — a frame
         with the wrong column names produced a KeyError far from its cause.
         This row makes the contract, and any missing required column, part of

@@ -226,8 +226,8 @@ def test_parse_universe_cell_uses_the_census_device():
     reference = AttributeUniverse(
         pd.DataFrame(
             {
-                "attributes": ["Juice Content: 0-2%; Water Type: Mineral; Caffeine: 15-25 mg"],
-                "barcode": ["8715600246377"],
+                "attribute": ["Juice Content: 0-2%; Water Type: Mineral; Caffeine: 15-25 mg"],
+                "gtin": ["8715600246377"],
             }
         )
     ).parse("Juice Content: 0-2%; Water Type: Mineral; Caffeine: 15-25 mg")
@@ -407,11 +407,11 @@ def test_stage7_reparse_reads_captured_url_slug():
     specs = attribute_registry()
 
     left_raw = {
-        "title": "cola can",
+        "sku_name_eng": "cola can",
         "sku_url": "https://shop.example.com/p/diet-cola-no-added-sugar-12x355ml",
     }
     right_raw = {
-        "title": "cola can",
+        "sku_name_eng": "cola can",
         "sku_url": "https://shop.example.com/p/diet-cola-no-added-sugar-0-33l",
     }
 
@@ -430,8 +430,8 @@ def test_stage7_ignores_media_slugs_but_kept_slug_semantics_only_when_present():
 
     engine = AttributeDecisionEngine(volume_relative_tolerance=0.05, volume_absolute_tolerance_ml=5.0)
     specs = attribute_registry()
-    one = {"title": "cola can"}  # no url at all
-    two = {"title": "can of cola"}
+    one = {"sku_name_eng": "cola can"}  # no url at all
+    two = {"sku_name_eng": "can of cola"}
     verdict = engine._fallback_reparse("sweetener", {}, {}, one, two, specs)
     assert verdict is None, "no URL claim = reparse must return None (not a guess)"
 

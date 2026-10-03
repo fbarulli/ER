@@ -241,7 +241,7 @@ def main():
     if hashes != {name: digest(path) for name, path in source_paths.items()}:
         raise ValueError('source changed while sampling; rerun with a stable snapshot')
     listings = [listing for state in states['original_data'].values() for listing in state['listings']]
-    description_lengths = [len(str(listing.get('description') or '')) for listing in listings]
+    description_lengths = [len(str(listing.get('description_short_eng') or '')) for listing in listings]
     summary = {'strategy': 'positive-enriched, current-gate and similarity stratified random sampling',
                'seed': args.seed, 'requested_pairs': pair_count, 'requested_calls': args.calls,
                'positive_fraction': args.positive_fraction, 'order_check_allocations': check_allocations, 'unique_pairs': len(selected),

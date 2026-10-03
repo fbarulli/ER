@@ -20,7 +20,7 @@
         "sku_id": "12782",
         "gtin": "12000227165",
         "retailer": "Rite Aid",
-        "title": "Sierra Mist Soda, Lemon- Lime, 12 fl oz - 12 ct",
+        "sku_name_eng": "Sierra Mist Soda, Lemon- Lime, 12 fl oz - 12 ct",
         "raw_attributes": "Water Type: soda; Flavour: lemon, lime; Volume: 355; Count per Unit: 12; Juice Content: 0-2%; Free From: no caffeine; Sweetener: sugar; Pack Type: Carton/Box; Caffeine: 0-15 mg; Pack Material Type: Paper / Carton; Naturally derived: natural flavours; Carbonization: carbonated",
         "caffeine_claims": [],
         "multipack_title_match": "12 ct"
@@ -29,7 +29,7 @@
         "sku_id": "16627",
         "gtin": "18200258763",
         "retailer": "peapod",
-        "title": "Teavana Passion Tango Craft Herbal Iced Tea",
+        "sku_name_eng": "Teavana Passion Tango Craft Herbal Iced Tea",
         "raw_attributes": "Sweetener: sugar; Pack Material Type: Glass; Caffeine: 0-15 mg; Volume: 547; Pack Type: Bottle; Carbonization: still; Botanicals And Functional Ingredients: licorice; Sustainable Packaging: can be recycled; Juice Content: 0-2%; Free From: no caffeine; Water Type: herbal; Tea Type: herbal; Naturally derived: natural flavours; Flavour: tea",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -38,7 +38,7 @@
         "sku_id": "19126",
         "gtin": "NA",
         "retailer": "Ocado",
-        "title": "Brecon Carreg Still Water",
+        "sku_name_eng": "Brecon Carreg Still Water",
         "raw_attributes": "Juice Content: 0-2%; Pack Material Type: Plastic; Pack Type: Bottle; Volume: 2000; Health Claims: low salt; Sustainable Packaging: can be recycled; Caffeine: 15-25 mg; Carbonization: still; Water Type: pure; Naturally derived: natural",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -47,7 +47,7 @@
         "sku_id": "34496",
         "gtin": "75450002621",
         "retailer": "Hy-Vee",
-        "title": "Hy- Vee 100% Cranberry Juice",
+        "sku_name_eng": "Hy- Vee 100% Cranberry Juice",
         "raw_attributes": "Flavour: cranberry; Juice Features: pasteurized; Volume: 1893; Caffeine: 0-15 mg; Made From: grape, apple, cranberry; Carbonization: still; Juice Content: 100%; Health Claims: low calories; Pack Material Type: Plastic; Pack Type: Bottle; Immune Support Ingredients: vitamin c; Naturally derived: natural flavours",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -56,7 +56,7 @@
         "sku_id": "47377",
         "gtin": "75450064452",
         "retailer": "Hy-Vee",
-        "title": "Hy- Vee Strawberry Soda",
+        "sku_name_eng": "Hy- Vee Strawberry Soda",
         "raw_attributes": "Sweetener: hfcs; Carbonization: carbonated; Volume: 2000; Juice Content: 0-2%; Pack Material Type: Plastic; Free From: no caffeine; Caffeine: 0-15 mg; Pack Type: Bottle; Flavour: strawberry; Naturally derived: natural flavours; Water Type: flavoured, soda",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -65,7 +65,7 @@
         "sku_id": "53078",
         "gtin": "3468570116700",
         "retailer": "Carrefour",
-        "title": "sparkling water natural mineral rozana",
+        "sku_name_eng": "sparkling water natural mineral rozana",
         "raw_attributes": "Naturally derived: natural; Contains Minerals: magnesium; Pack Material Type: Paper / Carton; Volume: 1000; Caffeine: 0-15 mg; Nutri-Score: A; Pack Type: Bag/Packet; Health Claims: good source of minerals; Carbonization: carbonated, sparkling; Water Type: mineral; Juice Content: 0-2%",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -74,7 +74,7 @@
         "sku_id": "55603",
         "gtin": "688267000805",
         "retailer": "peapod",
-        "title": "Peapod Lime Seltzer Water",
+        "sku_name_eng": "Peapod Lime Seltzer Water",
         "raw_attributes": "Caffeine: 0-15 mg; Volume: 1000; Health Claims: no calories; Juice Content: 0-2%; Flavour: lime; Naturally derived: natural flavours; Pack Material Type: Plastic; Water Type: flavoured, seltzer; Carbonization: carbonated",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -83,7 +83,7 @@
         "sku_id": "86506",
         "gtin": "3551720039421",
         "retailer": "Carrefour",
-        "title": "organic drink green tea lemon PURE THE",
+        "sku_name_eng": "organic drink green tea lemon PURE THE",
         "raw_attributes": "Volume: 1000; Pack Type: Bottle; Juice Content: 0-2%; Sweetener: sugar; Sustainable Sourcing: organic; Pack Material Type: Plastic; Tea Type: green; Flavour: tea, lemon; Water Type: spring; Caffeine: 15-25 mg; Carbonization: still; Naturally derived: natural flavours, natural fragrances; Immune Support Ingredients: vitamin c, antioxidants",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -94,7 +94,7 @@
         "sku_id": "12782",
         "gtin": "12000227165",
         "retailer": "Rite Aid",
-        "title": "Sierra Mist Soda, Lemon- Lime, 12 fl oz - 12 ct",
+        "sku_name_eng": "Sierra Mist Soda, Lemon- Lime, 12 fl oz - 12 ct",
         "raw_attributes": "Water Type: soda; Flavour: lemon, lime; Volume: 355; Count per Unit: 12; Juice Content: 0-2%; Free From: no caffeine; Sweetener: sugar; Pack Type: Carton/Box; Caffeine: 0-15 mg; Pack Material Type: Paper / Carton; Naturally derived: natural flavours; Carbonization: carbonated",
         "caffeine_claims": [],
         "multipack_title_match": "12 ct"
@@ -103,7 +103,7 @@
         "sku_id": "54071",
         "gtin": "NA",
         "retailer": "jet.com",
-        "title": "Tropical Fantasy Premium Juice Cocktail, Pineapple, 22.5 Fl Oz ( Pack of 24)",
+        "sku_name_eng": "Tropical Fantasy Premium Juice Cocktail, Pineapple, 22.5 Fl Oz ( Pack of 24)",
         "raw_attributes": "Pack Material Type: Plastic; Made From: pineapple; Carbonization: still; Flavour: pineapple",
         "caffeine_claims": [],
         "multipack_title_match": "Pack of 24"
@@ -112,7 +112,7 @@
         "sku_id": "79033",
         "gtin": "NA",
         "retailer": "Rakuten",
-        "title": "hepar 1l ( pack of 6)",
+        "sku_name_eng": "hepar 1l ( pack of 6)",
         "raw_attributes": "Health Claims: good source of minerals, low salt; Volume: 1000; Water Type: pure; Pack Type: Bottle; Pack Material Type: Plastic; Naturally derived: natural preservatives, natural minerals, natural; Contains Minerals: calcium, magnesium; Juice Content: 0-2%",
         "caffeine_claims": [],
         "multipack_title_match": "pack of 6"
@@ -121,7 +121,7 @@
         "sku_id": "133474",
         "gtin": "NA",
         "retailer": "jet.com",
-        "title": "Dry Sparkling Soda, Rhubarb, 12 Fl Oz, 4 Ct",
+        "sku_name_eng": "Dry Sparkling Soda, Rhubarb, 12 Fl Oz, 4 Ct",
         "raw_attributes": "Flavour: rhubarb; Volume: 355; Juice Content: 0-2%; Pack Material Type: Glass; Carbonization: sparkling; Pack Type: Bottle",
         "caffeine_claims": [],
         "multipack_title_match": "4 Ct"
@@ -130,7 +130,7 @@
         "sku_id": "322301",
         "gtin": "850417005194",
         "retailer": "Sam's Club",
-        "title": "Bare Nature Peach Vitamin Iced Tea (20 oz., 12 pk.)",
+        "sku_name_eng": "Bare Nature Peach Vitamin Iced Tea (20 oz., 12 pk.)",
         "raw_attributes": "Pack Material Type: Paper / Carton; Volume: 591; Tea Type: black; Juice Content: 0-2%; Flavour: peach, tea; Health Claims: no sugar, antioxidant, good source of vitamins; No Artificial Ingredients: no gmo, no artificial flavours, no artificial colours, no artificial preservatives; Pack Type: Blister; Sweetener: fructose; Diets: kosher; Carbonization: still; Immune Support Ingredients: vitamin c, antioxidants",
         "caffeine_claims": [],
         "multipack_title_match": "12 pk"
@@ -139,7 +139,7 @@
         "sku_id": "411793",
         "gtin": "NA",
         "retailer": "jet.com",
-        "title": "Talking Rain Peach Nc Sparkling Water (8x2L)",
+        "sku_name_eng": "Talking Rain Peach Nc Sparkling Water (8x2L)",
         "raw_attributes": "Pack Material Type: Plastic; Juice Content: 0-2%; Pack Type: Bottle; Flavour: peach; Volume: 2000; Carbonization: sparkling",
         "caffeine_claims": [],
         "multipack_title_match": "8x2L"
@@ -148,7 +148,7 @@
         "sku_id": "487105",
         "gtin": "NA",
         "retailer": "jet.com",
-        "title": "Amy & Brian All Natural Coconut Water With Pulp, 17.5 Fl Oz ( Pack of 12)",
+        "sku_name_eng": "Amy & Brian All Natural Coconut Water With Pulp, 17.5 Fl Oz ( Pack of 12)",
         "raw_attributes": "Made From: coconut; Volume: 518; Juice Features: with pulp; Pack Material Type: Metal; Flavour: coconut; Carbonization: still; Naturally derived: natural; Water Type: coconut; Pack Type: Can",
         "caffeine_claims": [],
         "multipack_title_match": "Pack of 12"
@@ -157,7 +157,7 @@
         "sku_id": "532884",
         "gtin": "719283775405",
         "retailer": "meijer",
-        "title": "Meijer Fruitsations Orange Flavored Water 6 pack, 16.9 oz bottle",
+        "sku_name_eng": "Meijer Fruitsations Orange Flavored Water 6 pack, 16.9 oz bottle",
         "raw_attributes": "Volume: 500; Carbonization: still; Water Type: flavoured, spring; Flavour: orange; Pack Material Type: Plastic; Caffeine: 15-25 mg; Naturally derived: natural flavours; Juice Content: 0-2%; Sweetener: sucralose",
         "caffeine_claims": [],
         "multipack_title_match": "6 pack"
@@ -168,7 +168,7 @@
         "sku_id": "132081",
         "gtin": "49000070422",
         "retailer": "Harris Teeter",
-        "title": "Lemonade Tea",
+        "sku_name_eng": "Lemonade Tea",
         "raw_attributes": "Caffeine: 0-15 mg; Naturally derived: natural flavours; Volume: 680; Pack Material Type: Metal; Juice Content: 0-2%; No Artificial Ingredients: no artificial colours; Flavour: lemon, tea; Carbonization: still",
         "caffeine_claims": [
           {
@@ -183,7 +183,7 @@
         "sku_id": "186734",
         "gtin": "NA",
         "retailer": "Wegmans",
-        "title": "Energy Drink, Clean, Watermelon, Unsweetened",
+        "sku_name_eng": "Energy Drink, Clean, Watermelon, Unsweetened",
         "raw_attributes": "Flavour: watermelon; Water Type: purified; Volume: 355; Caffeine: 25-50 mg; Sweetener: unsweetened; Health Claims: energy boosting; Naturally derived: natural flavours, natural; Energy Source: guayusa; Pack Material Type: Metal; Carbonization: still; Juice Content: 0-2%; Sustainable Sourcing: fairtrade, usda organic, organic, fair trade usa, b-corp; No Artificial Ingredients: no artificial sweeteners, no gmo; Immune Support Ingredients: vitamin c",
         "caffeine_claims": [
           {
@@ -198,7 +198,7 @@
         "sku_id": "730994",
         "gtin": "NA",
         "retailer": "Wegmans",
-        "title": "Dunkin' Iced Coffee, French Vanilla, Creamy + Smooth",
+        "sku_name_eng": "Dunkin' Iced Coffee, French Vanilla, Creamy + Smooth",
         "raw_attributes": "Sweetener: cane sugar; Flavour: vanilla, coffee; Sustainable Packaging: can be recycled; Carbonization: still; Juice Content: 0-2%; Caffeine: 15-25 mg; Pack Type: Bottle; Naturally derived: natural flavours; Geographic Origin: france; Immune Support Ingredients: vitamin c",
         "caffeine_claims": [
           {
@@ -213,7 +213,7 @@
         "sku_id": "1110961",
         "gtin": "49000070514",
         "retailer": "Harris Teeter",
-        "title": "Sweet Lemon Tea",
+        "sku_name_eng": "Sweet Lemon Tea",
         "raw_attributes": "Volume: 680; Pack Material Type: Metal; Tea Type: herbal; Naturally derived: natural flavours; Pack Type: Can; Carbonization: still; Caffeine: 0-15 mg; No Artificial Ingredients: no artificial colours; Juice Content: 100%, 0-2%; Flavour: lemon, tea",
         "caffeine_claims": [
           {
@@ -228,7 +228,7 @@
         "sku_id": "1341989",
         "gtin": "43000006641",
         "retailer": "meijer",
-        "title": "Tang Orange LWE 1.62 oz",
+        "sku_name_eng": "Tang Orange LWE 1.62 oz",
         "raw_attributes": "Pack Type: Liquid Carton; Sweetener: sucralose, sugar, sucrose; Pack Material Type: Paper / Carton; Flavour: orange; Caffeine: 0-15 mg; Health Claims: no sugar; Juice Content: 0-2%",
         "caffeine_claims": [
           {
@@ -243,7 +243,7 @@
         "sku_id": "1391286",
         "gtin": "71817000217",
         "retailer": "Rite Aid",
-        "title": "Big Red Soda, Red - 2 lt",
+        "sku_name_eng": "Big Red Soda, Red - 2 lt",
         "raw_attributes": "Sweetener: hfcs, sugar; Volume: 2000; Caffeine: 0-15 mg; Juice Content: 0-2%; Pack Material Type: Plastic; Naturally derived: natural flavours; Pack Type: Bottle; Carbonization: carbonated",
         "caffeine_claims": [
           {
@@ -258,7 +258,7 @@
         "sku_id": "1891638",
         "gtin": "NA",
         "retailer": "Wegmans",
-        "title": "Drink, Blackberry Lemonade",
+        "sku_name_eng": "Drink, Blackberry Lemonade",
         "raw_attributes": "Sweetener: stevia, erythritol; Volume: 355; Sports Ingredients: electrolytes; Pack Material Type: Metal; Energy Source: green tea; Botanicals And Functional Ingredients: ginseng; Naturally derived: natural flavours, natural sweeteners; Juice Content: 0-2%; Health Claims: no sugar, energy boosting, hydrating; Caffeine: 25-50 mg; Flavour: lemon, blackberry; Carbonization: carbonated",
         "caffeine_claims": [
           {
@@ -273,7 +273,7 @@
         "sku_id": "2011442",
         "gtin": "78000003376",
         "retailer": "Harris Teeter",
-        "title": "2 Liter Bottle",
+        "sku_name_eng": "2 Liter Bottle",
         "raw_attributes": "Caffeine: 0-15 mg; Pack Type: Bottle; Juice Content: 0-2%; Volume: 2000; Pack Material Type: Glass; Carbonization: carbonated",
         "caffeine_claims": [
           {
@@ -290,7 +290,7 @@
         "sku_id": "3671797",
         "gtin": "43000032275",
         "retailer": "Walmart",
-        "title": "Tang Drink Powder, Orange, Vitamin C, Caffeine Free, 20 oz Jar",
+        "sku_name_eng": "Tang Drink Powder, Orange, Vitamin C, Caffeine Free, 20 oz Jar",
         "raw_attributes": "Free From: no caffeine; Flavour: orange; Caffeine: 0-15 mg; Concentrate Format: powder, vitamins; Weight: 567; Sweetener: fructose, sugar; Immune Support Ingredients: vitamin c; Pack Material Type: Plastic; Contains Minerals: calcium; Juice Content: 0-2%; Pack Type: Can; Naturally derived: natural flavours",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -299,7 +299,7 @@
         "sku_id": "12681663",
         "gtin": "NA",
         "retailer": "Pavilions",
-        "title": "Tang Drink Mix Orange - 20 Oz",
+        "sku_name_eng": "Tang Drink Mix Orange - 20 Oz",
         "raw_attributes": "Contains Minerals: calcium; Sweetener: fructose, sugar; Flavour: orange; Concentrate Format: powder, vitamins; Naturally derived: natural flavours; Pack Material Type: Plastic; Weight: 567; Caffeine: 15-25 mg; Juice Content: 0-2%; Pack Type: Can; Health Claims: good source of calcium, high/source of fibre, good source of minerals; Immune Support Ingredients: vitamin c",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -308,7 +308,7 @@
         "sku_id": "19801766",
         "gtin": "43000032275",
         "retailer": "peapod",
-        "title": "Tang Drink Mix Orange - Makes 6 Quarts",
+        "sku_name_eng": "Tang Drink Mix Orange - Makes 6 Quarts",
         "raw_attributes": "Weight: 567; Pack Type: Can; Health Claims: good source of calcium, good source of minerals; Naturally derived: natural flavours; Contains Minerals: calcium; Pack Material Type: Plastic; Immune Support Ingredients: vitamin c; Concentrate Format: powder, vitamins; Sweetener: fructose, sugar; Juice Content: 0-2%; Flavour: orange; Caffeine: 15-25 mg",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -317,7 +317,7 @@
         "sku_id": "49798569",
         "gtin": "NA",
         "retailer": "Bringmeister",
-        "title": "true fruits Triple Smoothie Green No. 1",
+        "sku_name_eng": "true fruits Triple Smoothie Green No. 1",
         "raw_attributes": "Volume: 750; Juice Features: smoothie; Pack Type: Can; Pack Material Type: Plastic; Immune Support Ingredients: ginger; Made From: ginger, banana, apple, pear, kale, spinach; Sustainable Sourcing: organic; Carbonization: still; Geographic Origin: germany; Juice Content: 100%",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -326,7 +326,7 @@
         "sku_id": "56262264",
         "gtin": "4260122390403",
         "retailer": "Mytime.de",
-        "title": "true fruits Smoothie triple purple",
+        "sku_name_eng": "true fruits Smoothie triple purple",
         "raw_attributes": "Pack Material Type: Plastic; Volume: 750; Sweetener: sugar; Free From: lactose free; Pack Type: Can; Juice Features: smoothie; Made From: banana, apple, orange, currant, blackberry, blackcurrant, redcurrant, pomegranate, blueberry, raspberry; No Artificial Ingredients: no artificial additives; Carbonization: still; Juice Content: 100%",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -335,7 +335,7 @@
         "sku_id": "56372422",
         "gtin": "8410283303552",
         "retailer": "Hipercor",
-        "title": "the landlady soda of orange zero added sugars with gas tin 33 cl",
+        "sku_name_eng": "the landlady soda of orange zero added sugars with gas tin 33 cl",
         "raw_attributes": "Volume: 330; Sweetener: sugar; Pack Material Type: Plastic; Juice Content: 0-2%; Carbonization: carbonated; Pack Type: Can; Immune Support Ingredients: vitamin c, antioxidants; Flavour: orange; Health Claims: no added sugar",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -344,7 +344,7 @@
         "sku_id": "56657458",
         "gtin": "5060559390132",
         "retailer": "Sainsbury's",
-        "title": "Sandows Cold Brew Coffee Soda, Citrus 250ml",
+        "sku_name_eng": "Sandows Cold Brew Coffee Soda, Citrus 250ml",
         "raw_attributes": "Pack Material Type: Plastic; Carbonization: sparkling; Volume: 250; Flavour: citrus, coffee; Naturally derived: natural flavours; Sweetener: cane sugar; RTD Coffee Style: cold brew; Juice Content: 0-2%; Pack Type: Can",
         "caffeine_claims": [],
         "multipack_title_match": null
@@ -353,7 +353,7 @@
         "sku_id": "68283585",
         "gtin": "NA",
         "retailer": "Loblaws",
-        "title": "President's Choice Peach Mango Liquid Water Enhancer | 48 ml",
+        "sku_name_eng": "President's Choice Peach Mango Liquid Water Enhancer | 48 ml",
         "raw_attributes": "Pack Material Type: Plastic; Health Claims: no calories, hydrating; Water Type: drinking; Pack Type: Can; Flavour: peach, mango; No Artificial Ingredients: no artificial sweeteners, no artificial flavours, no artificial colours; Volume: 48; Naturally derived: natural flavours; Sweetener: stevia; Juice Content: 0-2%",
         "caffeine_claims": [],
         "multipack_title_match": null

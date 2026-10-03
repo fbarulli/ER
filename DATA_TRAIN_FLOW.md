@@ -25,7 +25,7 @@ build_sku_texts(model_frame) → sku_texts, sku_structured
 build_canonical_text(record, info) per GTIN (sorted gtin order) → canon_texts
   ↓
 payload = sku_texts + canon_texts
-row_bc  = [sku_barcodes... | GTINs...]
+row_bc  = [sku_gtins... | GTINs...]
   ↓
 pos = (sku_row_idx, canon_start + canon_idx) for every row with resolvable canonical
       empty-text pairs dropped (counted, not silent)

@@ -8,7 +8,7 @@ from graph_tracks.data import RELATIONS,fit_vocabulary,tensorize
 from graph_tracks.model import AttributeGNN
 scope={};exec(subprocess.check_output(['git','show','5001027893ad8598e69bd2ab37693a2a981bf04e:src/graph_tracks/model.py'],text=True),scope)
 torch.set_num_threads(2);torch.manual_seed(42)
-records=[dict(product_id=str(i),split='train',numeric={'volume_ml':[330],'pack':[1]},attributes={r:[f'v{i%100}',f'v{(i+1)%100}'] for r in RELATIONS}) for i in range(1000)]
+records=[dict(sku_id=str(i),split='train',numeric={'volume_ml':[330],'pack':[1]},attributes={r:[f'v{i%100}',f'v{(i+1)%100}'] for r in RELATIONS}) for i in range(1000)]
 v=fit_vocabulary(records);batch=tensorize(records,v,'cpu');support=tensorize(records[:800],v,'cpu')
 old=scope['AttributeGNN'](v);new=AttributeGNN(v);new.load_state_dict(old.state_dict())
 def step(m):

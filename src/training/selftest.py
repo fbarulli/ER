@@ -9,13 +9,13 @@ implementation during development (left-indexed weight rule).
 
 Covers:
   1. GS1 checksum        known-valid / known-invalid GTIN-8/12/13/14
-  2. barcode_validity   empty/None/placeholder/garbage -> False (no trust)
+  2. gtin_validity   empty/None/placeholder/garbage -> False (no trust)
   3. normalize_text     NaN guard, case, x-multiply sign, punctuation
   4. soft-stop strip    strip-words die, keep-words (variant signals) live
   5. number tokens      reference verdicts: strip vs keep_brand/nutrient
   6. eval pairs         build_pairs: invalid-GTIN groups excluded from pos
-  7. mining             mine_hard_negatives: invalid barcodes not certified
-  8. folds              component_folds: no barcode straddles a boundary
+  7. mining             mine_hard_negatives: invalid gtins not certified
+  8. folds              component_folds: no gtin straddles a boundary
   9. _precision_at_recall  hand-computed 10-pair oracle + sklearn bound
   10. _append_csv       replace-by-key idempotency
 """
@@ -57,7 +57,7 @@ def skip(name: str, reason: str) -> None:
 
 
 def oracle_gtin() -> None:
-    from core.gtin import barcode_validity, is_valid_gtin_checksum
+    from core.gtin import gtin_validity, is_valid_gtin_checksum
 
     valid = {
         "4006381333931": "GS1 worked example (EAN-13)",
@@ -89,17 +89,17 @@ def oracle_gtin() -> None:
             is_valid_gtin_checksum(g) is False,
             f"got {is_valid_gtin_checksum(g)}",
         )
-    v = barcode_validity(
+    v = gtin_validity(
         pd.Series(["4006381333931", "4006381333930", "", None, "0000000000000"])
     )
     check(
-        "barcode_validity vector",
+        "gtin_validity vector",
         list(v) == [True, False, False, False, False],
         f"got {list(v)}",
     )
     check(
         "placeholder all-zeros rejected",
-        bool(barcode_validity(pd.Series(["0000000000000"])).iloc[0]) is False,
+        bool(gtin_validity(pd.Series(["0000000000000"])).iloc[0]) is False,
     )
 
 
@@ -154,8 +154,8 @@ def oracle_second04_manifest_contract() -> None:
         ).to_csv(manifest_path, index=False)
         source = pd.DataFrame(
             {
-                "product_id": ["sku-a", "sku-b"],
-                "title": ["Water 500ml", "Eau 500ml"],
+                "sku_id": ["sku-a", "sku-b"],
+                "sku_name_eng": ["Water 500ml", "Eau 500ml"],
             }
         )
         with patch(
@@ -485,16 +485,16 @@ def oracle_number_reference() -> None:
 
 
 def oracle_eval_pairs() -> None:
-    """build_pairs must exclude checksum-invalid barcode groups from the
+    """build_pairs must exclude checksum-invalid gtin groups from the
     positive population and never certify negatives on them."""
     from core.blocking import build_pairs
 
     # synthetic 8-row corpus: a valid multi-retailer group (1 pos pair), an
     # INVALID-checksum multi-retailer group (must yield NOTHING), and a
-    # valid cross-barcode negative
+    # valid cross-gtin negative
     df = pd.DataFrame(
         {
-            "barcode": [
+            "gtin": [
                 "4006381333931",  # valid, retailer A
                 "4006381333931",  # valid, retailer B -> 1 positive
                 "4006381333930",  # INVALID check digit
@@ -503,9 +503,9 @@ def oracle_eval_pairs() -> None:
                 "5012345678900",  # valid
             ],
             "retailer": ["A", "B", "A", "B", "A", "B"],
-            "title": [
+            "sku_name_eng": [
                 "same product one",
-                "same product variant uno",   # distinct text, same barcode
+                "same product variant uno",   # distinct text, same gtin
                 "different title x",
                 "different title y",
                 "distinct product p",
@@ -516,13 +516,13 @@ def oracle_eval_pairs() -> None:
     pos, neg = build_pairs(df, seed=42, max_pos_per_group=10, n_neg=10)
     bad = {"4006381333930"}
     pos_uses_bad = any(
-        df["barcode"].iloc[i] in bad or df["barcode"].iloc[j] in bad
+        df["gtin"].iloc[i] in bad or df["gtin"].iloc[j] in bad
         for i, j in pos
     )
     check("eval positives: invalid-GTIN group excluded", not pos_uses_bad and len(pos) == 1,
           f"pos={pos.tolist()}")
     neg_uses_bad = any(
-        df["barcode"].iloc[i] in bad or df["barcode"].iloc[j] in bad
+        df["gtin"].iloc[i] in bad or df["gtin"].iloc[j] in bad
         for i, j in neg
     )
     check("eval negatives: invalid-GTIN rows excluded", not neg_uses_bad,
@@ -534,10 +534,10 @@ def oracle_mining() -> None:
 
     df = pd.DataFrame(
         {
-            "barcode": ["4006381333931", "4006381333930", "5901234123457"],
+            "gtin": ["4006381333931", "4006381333930", "5901234123457"],
             "brand": ["brandx", "brandy", "brandz"],
             "category": ["beverages", "beverages", "beverages"],
-            "title": ["alpha beta gamma", "alpha beta gamma", "alpha beta gamma"],
+            "sku_name_eng": ["alpha beta gamma", "alpha beta gamma", "alpha beta gamma"],
         }
     )
     emb = np.array([[1.0, 0.0], [0.9999, 0.01], [0.0, 1.0]])
@@ -545,8 +545,8 @@ def oracle_mining() -> None:
     pairs, _cos = mine_hard_negatives(df, emb, seed=0, n_target=10)
     bad = {"4006381333930"}
     check(
-        "mining never certifies an invalid barcode",
-        all(df["barcode"].iloc[a] not in bad and df["barcode"].iloc[b] not in bad
+        "mining never certifies an invalid gtin",
+        all(df["gtin"].iloc[a] not in bad and df["gtin"].iloc[b] not in bad
             for a, b in pairs),
         f"pairs={pairs.tolist()}",
     )
@@ -555,10 +555,10 @@ def oracle_mining() -> None:
 def oracle_folds() -> None:
     from training.folds import component_folds
 
-    # pos edges over ROW indices: (0,1),(1,2) link barcodes A-B-C into ONE
+    # pos edges over ROW indices: (0,1),(1,2) link gtins A-B-C into ONE
     # component; (3,4) links D-E into a second. AUDIT 2026-09-09: the old
     # checks were tautologies — `x in "ABC"` is a substring test that is
-    # always true for single-char barcodes (so check 1 passed regardless),
+    # always true for single-char gtins (so check 1 passed regardless),
     # and check 3's disjunction `("D" in f0) != ("E" in f0)` passed even
     # when D and E were split across folds, which is exactly the
     # component-split bug this oracle exists to catch.
@@ -578,9 +578,9 @@ def oracle_folds() -> None:
         comp_de <= f0 or comp_de <= f1,
         f"f0={f0} f1={f1}",
     )
-    # every barcode is in exactly one fold (no leak, no drop)
+    # every gtin is in exactly one fold (no leak, no drop)
     check(
-        "every barcode in exactly one fold",
+        "every gtin in exactly one fold",
         f0 | f1 == {"A", "B", "C", "D", "E"} and not (f0 & f1),
         f"f0={f0} f1={f1}",
     )
@@ -679,7 +679,7 @@ def oracle_holdout_integrity() -> None:
     )
 
     check(
-        "train/dev/test barcode sets pairwise disjoint",
+        "train/dev/test gtin sets pairwise disjoint",
         not (train_bc & dev_bc) and not (train_bc & test_bc)
         and not (dev_bc & test_bc),
         f"leaks: tr∩dev={len(train_bc & dev_bc)} "
@@ -702,7 +702,7 @@ def oracle_holdout_integrity() -> None:
     train_share = 1.0 - dev_share - test_share
     n_bc = len(set(row_bc.tolist()))
     check(
-        f"split sizes {train_share:.0%}/{dev_share:.0%}/{test_share:.0%} (±2pp) over barcodes",
+        f"split sizes {train_share:.0%}/{dev_share:.0%}/{test_share:.0%} (±2pp) over gtins",
         abs(len(train_bc) / n_bc - train_share) < 0.02
         and abs(len(dev_bc) / n_bc - dev_share) < 0.02
         and abs(len(test_bc) / n_bc - test_share) < 0.02,
@@ -710,7 +710,7 @@ def oracle_holdout_integrity() -> None:
     )
     print(
         f"    [info] real split: train {len(train_bc):,} / dev {len(dev_bc):,} "
-        f"/ test {len(test_bc):,} barcodes; positives {len(pos):,}",
+        f"/ test {len(test_bc):,} gtins; positives {len(pos):,}",
     )
 
 
@@ -751,7 +751,7 @@ def oracle_holdout_validation() -> None:
     except ValueError as exc:
         check(
             "holdout rejects a degenerate empty train split",
-            "empty train barcode set" in str(exc),
+            "empty train gtin set" in str(exc),
             str(exc),
         )
     else:
@@ -1134,7 +1134,7 @@ def oracle_per_key_coverage() -> None:
     census = universe.census()
 
     per_row = []
-    for cell in frame["attributes"]:
+    for cell in frame["attribute"]:
         per_row.append(len(universe.parse(cell)))
     per_row_arr = pd.Series(per_row)
 
@@ -2225,7 +2225,7 @@ def oracle_schemas() -> None:
         n_added=1,
         audit=[{
             "anchor_payload_idx": 0, "copy_payload_idx": 2, "pair_payload_idx": 1,
-            "barcode": "1", "realized_extent": 0.2, "anchor_text": "x y z",
+            "gtin": "1", "realized_extent": 0.2, "anchor_text": "x y z",
             "masked_text": "` y z",
         }],
     )
@@ -2578,17 +2578,17 @@ def oracle_manifest() -> None:
     # (output 61,529 / T3 5,906) were ALREADY stale — the committed export held
     # 61,414 rows, so this check had been failing before the fix. T3 no longer
     # does the bulk of the collapsing (247 rows); price leaving the T2 key moved
-    # that work to T2 (6,338), and T2 now defers barcode-conflicting rows that
+    # that work to T2 (6,338), and T2 now defers gtin-conflicting rows that
     # T3 used to absorb silently.
-    # Re-pinned 2026-10-01: the T1 barcode-tier retune moved the per-tier
+    # Re-pinned 2026-10-01: the T1 gtin-tier retune moved the per-tier
     # drops (T1 1,943 -> 1,850, T1.5 132 -> 96, T2 6,338 -> 6,348, T3
     # 247 -> 250); output 62,963 -> 63,079 (+116), dropped 8,660 -> 8,544
     # (-116). Same manifest (results/manifests/dedupe.json), same input
     # rows (71,623); closure re-measured PASS on the new numbers.
     expected_dropped = {
-        "t1_retailer_barcode": 1850,
-        "t1_5_retailer_malformed_barcode_same_product": 96,
-        "t2_retailer_title_barcode": 6348,
+        "t1_retailer_gtin": 1850,
+        "t1_5_retailer_malformed_gtin_same_product": 96,
+        "t2_retailer_title_gtin": 6348,
         "t3_retailer_title_identity_partition": 250,
     }
     check(
@@ -2628,7 +2628,7 @@ def oracle_manifest() -> None:
         )
     removals_path = RESULTS / F["removals"]
     try:
-        removals = pd.read_csv(removals_path, dtype={"product_id": str})
+        removals = pd.read_csv(removals_path, dtype={"sku_id": str})
         # Derived from the manifest + the stage's own summary, NOT a pinned
         # literal. The old check hardcoded 10,094 rows and a tier list that
         # predated T1.5, so it failed for the right reason (identity rules
@@ -2651,11 +2651,11 @@ def oracle_manifest() -> None:
             "closure input==output+dropped",
             len(removals) == n_dropped
             and len(removals) == n_input - n_output
-            and list(removals.columns) == ["product_id", "rep_id", "tier"]
-            and removals["product_id"].notna().all()
+            and list(removals.columns) == ["sku_id", "rep_id", "tier"]
+            and removals["sku_id"].notna().all()
             and removals["rep_id"].notna().all()
             and removals["tier"].isin(tiers).all()
-            and {"T1 retailer+barcode"} <= tiers,
+            and {"T1 retailer+gtin"} <= tiers,
             f"got {len(removals):,} rows / expected {n_dropped:,} "
             f"(closure {n_input:,} == {n_output:,} + {n_dropped:,}) / "
             f"columns {list(removals.columns)!r} / tiers {sorted(tiers)!r}",

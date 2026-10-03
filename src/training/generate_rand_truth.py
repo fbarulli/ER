@@ -45,21 +45,21 @@ def _truth_candidates() -> pd.DataFrame:
     if canonicals["gtin"].duplicated().any():
         raise ValueError("canonical truth map contains duplicate gtin values")
     source = load_dataset_deduped().copy()
-    if "product_id" not in source or "barcode" not in source:
-        raise ValueError("deduplicated dataset must contain product_id and barcode")
-    source["SKU_ID"] = source["product_id"].astype(str).str.strip()
-    source["barcode"] = source["barcode"].astype(str).str.strip()
+    if "sku_id" not in source or "gtin" not in source:
+        raise ValueError("deduplicated dataset must contain sku_id and gtin")
+    source["SKU_ID"] = source["sku_id"].astype(str).str.strip()
+    source["gtin"] = source["gtin"].astype(str).str.strip()
     if source["SKU_ID"].eq("").any() or source["SKU_ID"].duplicated().any():
-        raise ValueError("deduplicated dataset has blank or duplicate product_id values")
+        raise ValueError("deduplicated dataset has blank or duplicate sku_id values")
     representatives = (
-        source.loc[source["barcode"].ne(""), ["SKU_ID", "barcode"]]
-        .sort_values(["barcode", "SKU_ID"], kind="stable")
-        .drop_duplicates("barcode", keep="first")
+        source.loc[source["gtin"].ne(""), ["SKU_ID", "gtin"]]
+        .sort_values(["gtin", "SKU_ID"], kind="stable")
+        .drop_duplicates("gtin", keep="first")
     )
     candidates = canonicals.merge(
         representatives,
         left_on="gtin",
-        right_on="barcode",
+        right_on="gtin",
         how="inner",
         validate="one_to_one",
     )

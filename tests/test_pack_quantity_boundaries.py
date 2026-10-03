@@ -21,12 +21,12 @@ def test_proven_unit_quantities(title,count):
     for entry in extract_pack_evidence(title):
         assert title[entry['start']:entry['end']] == entry['raw_match']
 
-@pytest.mark.parametrize('title', [
+@pytest.mark.parametrize('sku_name_eng', [
     '0 ml bottle; total 600ml','Pack -12 Fl. Oz.','$0.05 Bottle','$ 5 Bottle','0.5 bottle','1.5 bottles','0,5 bottles',
     '6 330 ml','6 330 ml (Total 1000 ml)','84 cases','sku123bottles',
 ])
-def test_unproven_or_fractional_counts_stay_unknown(title):
-    assert extract_pack_from_title(title) == (1,0.)
+def test_unproven_or_fractional_counts_stay_unknown(sku_name_eng):
+    assert extract_pack_from_title(sku_name_eng) == (1,0.)
 
 
 def test_outer_count_and_unit_count_remain_distinct():

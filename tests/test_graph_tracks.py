@@ -15,8 +15,8 @@ from graph_tracks.infer import GraphEncoder, export
 
 
 def population():
-    return [{'product_id': f'{split}-{i}', 'split': split,
-             'attributes': {'brand': ['alpha' if i < 2 else 'beta'],
+    return [{'sku_id': f'{split}-{i}', 'split': split,
+             'attribute': {'brand': ['alpha' if i < 2 else 'beta'],
                             'flavor': ['lemon' if i < 2 else 'orange']},
              'numeric': {'volume_ml': [330], 'pack': [1]}}
             for split in ('train', 'dev', 'test') for i in range(3)]
@@ -27,7 +27,7 @@ def inputs(tmp_path, hybrid=False):
     listings = tmp_path / 'listings.json'
     listings.write_text(json.dumps({'schema': 'er-graph-listings-v1', 'listings': records}))
     pairs = tmp_path / 'pairs.csv'
-    pd.DataFrame([{'product_id1': f'{s}-0', 'product_id2': f'{s}-{j}',
+    pd.DataFrame([{'sku_id1': f'{s}-0', 'sku_id2': f'{s}-{j}',
                    'label': int(j == 1), 'split': s}
                   for s in ('train', 'dev', 'test') for j in (1, 2)]).to_csv(pairs, index=False)
     cfg = {'track': 'hybrid' if hybrid else 'gnn_only', 'listings': str(listings),
@@ -37,7 +37,7 @@ def inputs(tmp_path, hybrid=False):
     cache = None
     if hybrid:
         cache = tmp_path / 'text.npz'
-        np.savez(cache, ids=np.asarray([r['product_id'] for r in records]),
+        np.savez(cache, ids=np.asarray([r['sku_id'] for r in records]),
                  embeddings=np.random.default_rng(42).normal(size=(len(records), 6)).astype('float32'),
                  metadata=json.dumps({'checkpoint_sha256': 'test-checkpoint', 'composition': {'profile': 'test'}}))
         cfg['text_cache'] = str(cache)
@@ -56,11 +56,11 @@ def test_split_and_label_guards(tmp_path):
     listings, pairs, _, _ = inputs(tmp_path)
     records = load_records(listings)
     frame = pd.read_csv(pairs)
-    frame.loc[0, 'product_id2'] = 'dev-1'
+    frame.loc[0, 'sku_id2'] = 'dev-1'
     frame.to_csv(pairs, index=False)
     with pytest.raises(ValueError, match='split boundary'):
         load_pairs(pairs, records)
-    records[0]['attributes']['barcode'] = ['123']
+    records[0]['attribute']['gtin'] = ['123']
     listings.write_text(json.dumps({'schema': 'er-graph-listings-v1', 'listings': records}))
     with pytest.raises(ValueError, match='unsupported attribute'):
         load_records(listings)
@@ -68,7 +68,7 @@ def test_split_and_label_guards(tmp_path):
 
 def test_vocabulary_and_inductive_batch_invariance():
     records = population()
-    records[-1]['attributes']['brand'] = ['held-out-only']
+    records[-1]['attribute']['brand'] = ['held-out-only']
     vocab = fit_vocabulary(records)
     assert 'held-out-only' not in vocab['brand']
     model = AttributeGNN(vocab, hidden=8, output=8).eval()
@@ -104,7 +104,7 @@ def test_worker_export_and_resume(tmp_path, monkeypatch, hybrid):
     assert json.loads((run / name(track, 'graph_worker_result.json')).read_text())['status'] == 'ok'
     assert (run / name(track, 'gradient_metrics.jsonl')).is_file()
     scoring = tmp_path / 'query_pairs.csv'
-    pd.read_csv(pairs)[['product_id1', 'product_id2']].to_csv(scoring, index=False)
+    pd.read_csv(pairs)[['sku_id1', 'sku_id2']].to_csv(scoring, index=False)
     target = export(checkpoint, listings, tmp_path / 'export', text_cache=cache,
                     pairs=scoring, build_index=True, batch_size=2)
     vectors = np.load(target / name(track, 'vectors.npz'), allow_pickle=False)['embeddings']
@@ -112,13 +112,13 @@ def test_worker_export_and_resume(tmp_path, monkeypatch, hybrid):
     assert pd.read_csv(target / name(track, 'pair_scores.csv')).score.between(0, 1).all()
     from training.hnsw_index import PersistentHnswIndex
     index = PersistentHnswIndex(target / name(track, 'index'), ef_construction=200, M=16, ef_search=100)
-    index.load(ids=[r['product_id'] for r in population()], dim=8, checkpoint=checkpoint,
+    index.load(ids=[r['sku_id'] for r in population()], dim=8, checkpoint=checkpoint,
                model_name='hybrid' if hybrid else 'gnn_only', preprocessing_fingerprint=file_hash(listings))
     labels, distances = index.query(vectors[:1], top_k=3)
     assert labels.shape == (1, 3)
     assert np.isfinite(distances).all()
     encoder = GraphEncoder(checkpoint)
-    text = None if cache is None else load_text_cache(cache, [r['product_id'] for r in population()])[0]
+    text = None if cache is None else load_text_cache(cache, [r['sku_id'] for r in population()])[0]
     np.testing.assert_allclose(vectors, encoder.encode(population(), text, 1), atol=1e-6)
     # Move the whole checkpoint tree, removing original absolute best paths.
     relocated = tmp_path / 'relocated'
@@ -145,17 +145,17 @@ def test_prepared_export_shared_identity(tmp_path):
     records = load_records(listings)
     catalog = tmp_path / 'catalog.csv'
     splits = tmp_path / 'splits.csv'
-    pd.DataFrame([{'product_id': r['product_id'], 'title': 'Lemon drink 330 ml',
-                   'brand': 'Example', 'attributes': 'Flavor: Lemon; Pack Size: 1',
-                   'barcode': '4006381333931'} for r in records]).to_csv(catalog, index=False)
-    pd.DataFrame([{'product_id': r['product_id'], 'split': r['split']} for r in records]).to_csv(splits, index=False)
+    pd.DataFrame([{'sku_id': r['sku_id'], 'sku_name_eng': 'Lemon drink 330 ml',
+                   'brand': 'Example', 'attribute': 'Flavor: Lemon; Pack Size: 1',
+                   'gtin': '4006381333931'} for r in records]).to_csv(catalog, index=False)
+    pd.DataFrame([{'sku_id': r['sku_id'], 'split': r['split']} for r in records]).to_csv(splits, index=False)
     prepared = prepare(catalog, splits, pairs, tmp_path / 'prepared')
     out = load_records(prepared)
-    assert out[0]['attributes']['brand']
-    assert 'barcode' not in prepared.read_text()
+    assert out[0]['attribute']['brand']
+    assert 'gtin' not in prepared.read_text()
     manifest = json.loads((prepared.parent / 'input_manifest.json').read_text())
-    assert manifest['identity_extractor'] == 'core.product_identity.row_identity'
-    assert manifest['feature_scope'].startswith('derived from core.product_identity.graph_schema')
+    assert manifest['identity_extractor'] == 'core.sku_identity.row_identity'
+    assert manifest['feature_scope'].startswith('derived from core.sku_identity.graph_schema')
     assert manifest['relations'] == list(RELATIONS)
     assert manifest['numeric'] == list(NUMERIC)
     # Inference-only batches do not need a dummy training node.
@@ -322,18 +322,18 @@ def test_prepare_rejects_scoped_hold_without_blocking_gtin_peers(tmp_path):
     from core.identity_policy import review_policy
     holds = review_policy().quarantined_listings
     assert holds
-    product_id, hold = next(iter(holds.items()))
+    sku_id, hold = next(iter(holds.items()))
     listings, pairs, _, _ = inputs(tmp_path)
     records = load_records(listings)
     catalog = tmp_path / 'catalog.csv'
     splits = tmp_path / 'splits.csv'
-    rows = [{'product_id': r['product_id'], 'title': 'Example drink', 'brand': 'Example',
-             'barcode': hold.expected_gtin} for r in records]
-    assignments = [{'product_id': r['product_id'], 'split': r['split']} for r in records]
+    rows = [{'sku_id': r['sku_id'], 'sku_name_eng': 'Example drink', 'brand': 'Example',
+             'gtin': hold.expected_gtin} for r in records]
+    assignments = [{'sku_id': r['sku_id'], 'split': r['split']} for r in records]
     pd.DataFrame(rows).to_csv(catalog, index=False)
     pd.DataFrame(assignments).to_csv(splits, index=False)
     assert prepare(catalog, splits, pairs, tmp_path / 'good-peers').is_file()
-    rows[0]['product_id'] = product_id
+    rows[0]['sku_id'] = sku_id
     pd.DataFrame(rows).to_csv(catalog, index=False)
     with pytest.raises(ValueError, match='quarantined identity groups/listings'):
         prepare(catalog, splits, pairs, tmp_path / 'blocked')

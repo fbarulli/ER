@@ -23,7 +23,7 @@ def main() -> None:
     if not args.evidence.is_file():
         raise FileNotFoundError(f"evidence missing: {args.evidence}; run build_title_attribute_evidence first")
     evidence = pd.read_csv(args.evidence, dtype=str, keep_default_na=False)
-    required = {"product_id", "title", "attribute_raw", "volume_ml", "pack_count"}
+    required = {"sku_id", "sku_name_eng", "attribute_raw", "volume_ml", "pack_count"}
     missing = required - set(evidence.columns)
     if missing:
         raise ValueError(f"evidence missing columns {sorted(missing)}")
@@ -32,7 +32,7 @@ def main() -> None:
         data = row._asdict()
         attribute = json.loads(data["attribute_raw"])
         raw_attribute = "; ".join(f"{key}: {value}" for key, value in attribute.items())
-        legacy = extract_all(data["title"], raw_attribute)
+        legacy = extract_all(data["sku_name_eng"], raw_attribute)
         ner_volumes = json.loads(data["volume_ml"])
         ner_packs = json.loads(data["pack_count"])
         legacy_volume = legacy["volume_ml"] if legacy["volume_ml"] > 0 else None
@@ -40,7 +40,7 @@ def main() -> None:
         pack_agrees = legacy["pack_qty"] in ner_packs if ner_packs else None
         if volume_agrees is False or pack_agrees is False:
             rows.append({
-                "product_id": data["product_id"], "title": data["title"],
+                "sku_id": data["sku_id"], "sku_name_eng": data["sku_name_eng"],
                 "legacy_volume_ml": legacy_volume, "ner_volume_ml": json.dumps(ner_volumes),
                 "legacy_pack_count": legacy["pack_qty"], "ner_pack_count": json.dumps(ner_packs),
                 "volume_agrees": volume_agrees, "pack_agrees": pack_agrees,

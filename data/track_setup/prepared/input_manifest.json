@@ -1,20 +1,20 @@
 {
-  "catalog_sha256": "97d0d72f25c137ee915fb0f81f227e8494735eac5e9936aa6439194645f3e9fb",
+  "catalog_sha256": "851f014e5fe600a625005dfe7b6d5076bd1e0614ad225d200ace6002bf52baaf",
   "excluded_model_inputs": [
-    "barcode",
+    "gtin",
     "verified identity edges",
     "raw text"
   ],
-  "feature_scope": "derived from core.product_identity.graph_schema; every extractor descriptor is a model input",
-  "identity_dimensions_sha256": "c4443ead5764b4b79fdbae033144617d769f19c748472f0fd0f14e5d8df3d203",
-  "identity_extractor": "core.product_identity.row_identity",
-  "identity_policy_sha256": "084952a02c58ffc1bdd7e681ce4d25c4ca6fcbae3d696f325b9206d1f4821021",
-  "listings_sha256": "ce817042c07a59c83636f1169f76435b53a3d4a15a2a4ded5f7beaecfe309e58",
+  "feature_scope": "derived from core.sku_identity.graph_schema; every extractor descriptor is a model input",
+  "identity_dimensions_sha256": "6cf653b52b11a1128db1867f484c0dee649cddc639863e67444eee962398aa1d",
+  "identity_extractor": "core.sku_identity.row_identity",
+  "identity_policy_sha256": "0c176f054d0e66ad957f9238605d05cb7ef7ed717cfaecbcefd114b2ce52f62c",
+  "listings_sha256": "3ebcc7f52da0b405300f7cad81dd49ae2f144842bdd0010dba271b5646977d29",
   "numeric": [
     "volume_ml",
     "pack"
   ],
-  "pairs_sha256": "ba6a11af18097362f0ece104423ae5a21eee8c13cf431ae476918b39e315ce89",
+  "pairs_sha256": "151b7d3a07476c616e862bae735597f1b41c38b49faf25099dd9550b6f5d6bf5",
   "relations": [
     "brand",
     "flavor",
@@ -26,7 +26,7 @@
     "package_type",
     "package_material"
   ],
-  "report_attributes_sha256": "a7f6d1cb65e7521050455d7380e323e85905db327f6c8946186e5fdca241008e",
+  "report_attributes_sha256": "47ce18bcd94706f5368ba063621c553ef89767f5ffd13ccf893af4b0b8a4ac61",
   "schema": "er-graph-inputs-v1",
-  "splits_sha256": "d458b792ebf8b94a191736c3daef8433e625fcd35848ceadbe98cb35226907e6"
+  "splits_sha256": "d7910672c3253a350446cf4990c99a4ba3ef7523dd9f79d1acd95f7a3459e1a4"
 }

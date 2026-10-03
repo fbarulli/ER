@@ -36,7 +36,7 @@ class ListingIdentity(BaseModel):
     model_config = ConfigDict(extra='forbid')
     source_gtin: str
     target_gtin: str
-    reference_product_id: str
+    reference_sku_id: str
     expected_url: str = Field(min_length=1)
     reason: str = Field(min_length=1)
 
@@ -70,7 +70,7 @@ def review_policy() -> ReviewPolicy:
         if link.source_gtin.zfill(14) not in held:
             raise ValueError('reviewed identity corrections require a held source identifier')
     for fix in policy.listing_fields.values():
-        if not set(fix.fields).issubset({"title", "attributes"}):
+        if not set(fix.fields).issubset({"sku_name_eng", "attribute"}):
             raise ValueError("reviewed field corrections may only change title or attributes")
     return policy
 
@@ -79,37 +79,37 @@ def held_keys() -> frozenset[str]:
     return frozenset(key.zfill(14) for key in review_policy().quarantined_gtins)
 
 
-def review_mask(barcodes: pd.Series) -> pd.Series:
+def review_mask(gtins: pd.Series) -> pd.Series:
     from core.gtin import normalize_and_validate_gtin
-    facts = normalize_and_validate_gtin(barcodes)
+    facts = normalize_and_validate_gtin(gtins)
     return facts.gtin_clean.astype('string').str.zfill(14).isin(held_keys())
 
 
-def review_reason(barcode: object) -> str:
+def review_reason(gtin: object) -> str:
     from core.gtin import normalize_and_validate_gtin
-    key = normalize_and_validate_gtin(pd.Series([barcode])).gtin_clean.iat[0]
+    key = normalize_and_validate_gtin(pd.Series([gtin])).gtin_clean.iat[0]
     if pd.isna(key):
         return ''
     return next((hold.reason for raw, hold in review_policy().quarantined_gtins.items()
                  if raw.zfill(14) == str(key).zfill(14)), '')
 
 
-def listing_review_reason(product_id: object, barcode: object) -> str:
-    hold = review_policy().quarantined_listings.get(str(product_id))
+def listing_review_reason(sku_id: object, gtin: object) -> str:
+    hold = review_policy().quarantined_listings.get(str(sku_id))
     if hold is None:
         return ''
     from core.gtin import normalize_and_validate_gtin
-    key = normalize_and_validate_gtin(pd.Series([barcode])).gtin_clean.iat[0]
+    key = normalize_and_validate_gtin(pd.Series([gtin])).gtin_clean.iat[0]
     return hold.reason if pd.notna(key) and str(key).zfill(14) == hold.expected_gtin.zfill(14) else ''
 
 
 def reviewed_row_mask(frame: pd.DataFrame, *, column: str | None = None) -> pd.Series:
     """Block reviewed source listings without rejecting their consistent GTIN peers."""
-    column = column or ('barcode' if 'barcode' in frame else 'gtin' if 'gtin' in frame else None)
+    column = column or ('gtin' if 'gtin' in frame else 'gtin' if 'gtin' in frame else None)
     if column is None:
         return pd.Series(False, index=frame.index)
     result = review_mask(frame[column])
-    id_column = 'product_id' if 'product_id' in frame else 'sku_id' if 'sku_id' in frame else None
+    id_column = 'sku_id' if 'sku_id' in frame else 'sku_id' if 'sku_id' in frame else None
     if id_column:
         from core.gtin import normalize_and_validate_gtin
         keys = normalize_and_validate_gtin(frame[column]).gtin_clean.astype('string').str.zfill(14)
@@ -119,7 +119,7 @@ def reviewed_row_mask(frame: pd.DataFrame, *, column: str | None = None) -> pd.S
 
 
 def exclude_reviewed_rows(frame: pd.DataFrame, *, column: str | None = None) -> pd.DataFrame:
-    column = column or ('barcode' if 'barcode' in frame else 'gtin' if 'gtin' in frame else None)
+    column = column or ('gtin' if 'gtin' in frame else 'gtin' if 'gtin' in frame else None)
     if column is None:
         return frame.copy()
     frame = apply_identity_links(frame)
@@ -132,10 +132,10 @@ def exclude_reviewed_rows(frame: pd.DataFrame, *, column: str | None = None) -> 
 def apply_identity_links(frame: pd.DataFrame) -> pd.DataFrame:
     """Apply explicit reviewed links to a derived view; raw export stays intact."""
     result = frame.copy()
-    id_column = 'product_id' if 'product_id' in frame else 'sku_id' if 'sku_id' in frame else None
-    barcode_column = 'barcode' if 'barcode' in frame else 'gtin' if 'gtin' in frame else None
-    url_column = 'url' if 'url' in frame else 'sku_url' if 'sku_url' in frame else None
-    if not all((id_column, barcode_column)):
+    id_column = 'sku_id' if 'sku_id' in frame else None
+    gtin_column = 'gtin' if 'gtin' in frame else None
+    url_column = 'sku_url' if 'sku_url' in frame else None
+    if not all((id_column, gtin_column)):
         return result
     for sku, link in review_policy().listing_identity.items():
         if url_column is None:
@@ -143,18 +143,18 @@ def apply_identity_links(frame: pd.DataFrame) -> pd.DataFrame:
         candidates = result[id_column].astype(str).eq(sku) & result[url_column].eq(link.expected_url)
         if candidates.any():
             from core.gtin import normalize_and_validate_gtin
-            actual = normalize_and_validate_gtin(result.loc[candidates,barcode_column]).gtin_clean.astype('string').str.zfill(14)
+            actual = normalize_and_validate_gtin(result.loc[candidates,gtin_column]).gtin_clean.astype('string').str.zfill(14)
             indices = actual.index[actual.eq(link.source_gtin.zfill(14))]
-            result.loc[indices,barcode_column] = link.target_gtin
+            result.loc[indices,gtin_column] = link.target_gtin
     for sku, fix in review_policy().listing_fields.items():
         candidates = result[id_column].astype(str).eq(sku)
         if candidates.any():
             from core.gtin import normalize_and_validate_gtin
-            actual = normalize_and_validate_gtin(result.loc[candidates, barcode_column]).gtin_clean.astype("string").str.zfill(14)
+            actual = normalize_and_validate_gtin(result.loc[candidates, gtin_column]).gtin_clean.astype("string").str.zfill(14)
             indices = actual.index[actual.eq(fix.expected_gtin.zfill(14))]
             for field, value in fix.fields.items():
                 # raw_of resolves the destination through column_mapping
-                # instead of re-declaring {"title": "sku_name_eng", …} here.
+                # instead of re-declaring {"sku_name_eng": "sku_name_eng", …} here.
                 destination = (
                     field
                     if field in result
@@ -167,18 +167,18 @@ def apply_identity_links(frame: pd.DataFrame) -> pd.DataFrame:
 
 def resolve_listing_row(row: dict) -> dict:
     """Scalar adapter to the same reviewed-link conditions."""
-    sku = str(row.get('product_id', '') or '')
+    sku = str(row.get('sku_id', '') or '')
     fix = review_policy().listing_fields.get(sku)
     if fix:
         from core.gtin import normalize_and_validate_gtin
-        key = normalize_and_validate_gtin(pd.Series([row.get("barcode", "")])).gtin_clean.iat[0]
+        key = normalize_and_validate_gtin(pd.Series([row.get("gtin", "")])).gtin_clean.iat[0]
         if pd.notna(key) and str(key).zfill(14) == fix.expected_gtin.zfill(14):
             row = {**row, **fix.fields}
     link = review_policy().listing_identity.get(sku)
-    if not link or row.get('url') != link.expected_url:
+    if not link or row.get('sku_url') != link.expected_url:
         return row
     from core.gtin import normalize_and_validate_gtin
-    actual = normalize_and_validate_gtin(pd.Series([row.get('barcode', '')])).gtin_clean.iat[0]
+    actual = normalize_and_validate_gtin(pd.Series([row.get('gtin', '')])).gtin_clean.iat[0]
     if pd.notna(actual) and str(actual).zfill(14) == link.source_gtin.zfill(14):
-        return {**row, 'barcode': link.target_gtin}
+        return {**row, 'gtin': link.target_gtin}
     return row

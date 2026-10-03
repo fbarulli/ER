@@ -43,7 +43,7 @@ class TrainingLifecyclePreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             training = root / "training.csv"
-            training.write_text("product_id\na\nb\n", encoding="utf-8")
+            training.write_text("sku_id\na\nb\n", encoding="utf-8")
             with mock.patch.object(colab, "_validation_input_path", return_value=training), \
                  mock.patch.object(colab, "_expand_worker_profiles", return_value=["baseline"]), \
                  mock.patch.object(colab, "_scored_validation_census", return_value=census):

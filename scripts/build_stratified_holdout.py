@@ -111,7 +111,7 @@ def main() -> int:
         )
     ]
     # For each blind spot, synthesize a GTIN placeholder (not in catalog).
-    # The GTIN is a synthetic key that won't collide with real barcodes.
+    # The GTIN is a synthetic key that won't collide with real gtins.
     synthetic_offset = max((int(g.replace("0", "")) for g in can.norm_gtin if g.isdigit()), default=0) + 1
     blind_ents: list[str] = []
     for c in blind:

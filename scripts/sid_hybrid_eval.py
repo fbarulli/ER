@@ -159,8 +159,8 @@ def main(argv: list[str] | None = None) -> int:
     canon = pd.read_csv(canon_path, dtype=str, keep_default_na=False)
 
     try:
-        full_barcodes = pd.read_csv(F["dataset_deduped"], dtype=str, usecols=["barcode"])
-        graph_pos, graph_bc = _pair_graph(full_barcodes)
+        full_gtins = pd.read_csv(F["dataset_deduped"], dtype=str, usecols=["gtin"])
+        graph_pos, graph_bc = _pair_graph(full_gtins)
     except (FileNotFoundError, ValueError):
         graph_pos, graph_bc = _pair_graph(sku)
     try:
@@ -177,9 +177,9 @@ def main(argv: list[str] | None = None) -> int:
     canon_gtins = [str(r["gtin"]) for r in canon_records]
     gtin_to_idx = {g: i for i, g in enumerate(canon_gtins)}
 
-    sku_infos = [sku_attribute_info(str(r.get("title", "")), str(r.get("attributes", ""))) for _, r in sku.iterrows()]
+    sku_infos = [sku_attribute_info(str(r.get("sku_name_eng", "")), str(r.get("attribute", ""))) for _, r in sku.iterrows()]
     sku_texts = [build_sku_text(row, _text_info(info)) for (_, row), info in zip(sku.iterrows(), sku_infos)]
-    sku_barcodes = sku["barcode"].fillna("").astype(str).tolist()
+    sku_gtins = sku["gtin"].fillna("").astype(str).tolist()
 
     try:
         resolve_model(model_key)
@@ -210,14 +210,14 @@ def main(argv: list[str] | None = None) -> int:
     order = np.arange(len(canon_gtins))
 
     def _build_split(rows: list[int]) -> tuple[list, list, list]:
-        true = [(i, gtin_to_idx[sku_barcodes[i]]) for i in rows
-                if sku_barcodes[i] and sku_barcodes[i] in gtin_to_idx][: int(args.max_pairs)]
+        true = [(i, gtin_to_idx[sku_gtins[i]]) for i in rows
+                if sku_gtins[i] and sku_gtins[i] in gtin_to_idx][: int(args.max_pairs)]
         conflicts: list[tuple[int, int]] = []
         for sku_row in [t[0] for t in true]:
             if len(conflicts) >= int(args.max_pairs):
                 break
             for cand in (int(c) for c in rng.permutation(order)[: int(args.conflict_pool)]):
-                if canon_gtins[cand] == sku_barcodes[sku_row]:
+                if canon_gtins[cand] == sku_gtins[sku_row]:
                     continue
                 hits = attribute_conflict_types(sku_infos[sku_row], canon_infos[cand])
                 if "volume" in hits or "pack" in hits:
@@ -227,15 +227,15 @@ def main(argv: list[str] | None = None) -> int:
         for sku_row, _ in true:
             others = rng.permutation(order)
             for cand in (int(c) for c in others):
-                if canon_gtins[int(cand)] == sku_barcodes[sku_row]:
+                if canon_gtins[int(cand)] == sku_gtins[sku_row]:
                     continue
                 easy.append((sku_row, int(cand)))
                 if len([e for e in easy if e[0] == sku_row]) >= int(args.easy_per_true):
                     break
         return true, conflicts, easy
 
-    dev_rows = [i for i, b in enumerate(sku_barcodes) if b in dev_bc]
-    test_rows = [i for i, b in enumerate(sku_barcodes) if b in test_bc]
+    dev_rows = [i for i, b in enumerate(sku_gtins) if b in dev_bc]
+    test_rows = [i for i, b in enumerate(sku_gtins) if b in test_bc]
     if not dev_rows or not test_rows:
         return _fail(f"dev/test SKU rows empty (dev={len(dev_rows)} test={len(test_rows)}) — sample too small for split")
     dev_true, dev_conf, dev_easy = _build_split(dev_rows)

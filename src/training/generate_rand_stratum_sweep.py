@@ -3,7 +3,7 @@
 Each selected canonical identity contributes multiple source SKUs.  The fixture
 therefore retains positive and negative pair signal in every GTIN stratum,
 unlike a one-SKU-per-identity truth export.  ``source_gtin`` is an evaluation
-override: callers must apply it to the source SKU barcode before scoring.
+override: callers must apply it to the source SKU gtin before scoring.
 """
 
 from __future__ import annotations
@@ -53,12 +53,12 @@ def generate_stratum_sweep(
     seed: int,
 ) -> Path:
     source = load_dataset_deduped().copy()
-    required = {"product_id", "barcode"}
+    required = {"sku_id", "gtin"}
     missing = required - set(source.columns)
     if missing:
         raise ValueError(f"deduplicated dataset missing columns: {sorted(missing)}")
-    source["SKU_ID"] = source["product_id"].astype(str).str.strip()
-    source["true_item_id"] = source["barcode"].astype(str).str.strip()
+    source["SKU_ID"] = source["sku_id"].astype(str).str.strip()
+    source["true_item_id"] = source["gtin"].astype(str).str.strip()
     if source["SKU_ID"].eq("").any() or source["SKU_ID"].duplicated().any():
         raise ValueError("deduplicated dataset has blank or duplicate product IDs")
     canonical_ids = set(canonical_records_frame()["gtin"].astype(str))

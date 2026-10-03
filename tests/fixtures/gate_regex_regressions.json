@@ -5,21 +5,21 @@
   "baseline_text_sha256": "789f7977c6dde8417d013cde3151c61d6e781647df51255fde2a528115548c12",
   "listings": [
     {
-      "product_id": "66923876",
+      "sku_id": "66923876",
       "source_row": {
-        "product_id": "66923876",
+        "sku_id": "66923876",
         "retailer": "Loblaws",
         "country": "Canada",
-        "title": "President's Choice Natural Spring Water | 18 l",
-        "description": "Stay hydrated and quench your thirst with Natural Spring Water. It's ozonated and non-carbonated for the smooth and simple taste of water, and it's a perfect size for the whole family.",
-        "category_path": "[\"\" Food\"\",\"\" Drinks\"\",\"\" Water\"\"]",
-        "url": "https://www.loblaws.ca/en/natural-spring-water/p/20313917_EA#:#storeid=1032",
+        "sku_name_eng": "President's Choice Natural Spring Water | 18 l",
+        "description_short_eng": "Stay hydrated and quench your thirst with Natural Spring Water. It's ozonated and non-carbonated for the smooth and simple taste of water, and it's a perfect size for the whole family.",
+        "breadcrumbs_eng": "[\"\" Food\"\",\"\" Drinks\"\",\"\" Water\"\"]",
+        "sku_url": "https://www.loblaws.ca/en/natural-spring-water/p/20313917_EA#:#storeid=1032",
         "image_url": "https://assets.shop.loblaws.ca/products/20313917/b1/en/front/20313917_front_a06_@2.png",
-        "price": "16.49",
-        "barcode": "60383683160",
+        "sku_last_price": "16.49",
+        "gtin": "60383683160",
         "brand": "President's Choice",
         "category": "Still Bottled Water",
-        "attributes": "Health Claims: hydrating; Juice Content: 0-2%; Water Type: spring; Volume: 100; Naturally derived: natural; Pack Type: Bucket; Pack Material Type: Plastic; Carbonization: still"
+        "attribute": "Health Claims: hydrating; Juice Content: 0-2%; Water Type: spring; Volume: 100; Naturally derived: natural; Pack Type: Bucket; Pack Material Type: Plastic; Carbonization: still"
       },
       "baseline_extraction": {
         "flavor": "",
@@ -78,25 +78,25 @@
           },
           {
             "field": "carbonation",
-            "column": "description",
+            "column": "description_short_eng",
             "value": [
               "still"
             ]
           },
           {
             "field": "type",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": "water"
           },
           {
             "field": "volume_ml",
-            "column": "attributes",
+            "column": "attribute",
             "value": 100.0,
             "confidence": 0.9
           },
           {
             "field": "volume_ml",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 18000.0,
             "confidence": 0.95
           }
@@ -111,21 +111,21 @@
       }
     },
     {
-      "product_id": "70179560",
+      "sku_id": "70179560",
       "source_row": {
-        "product_id": "70179560",
+        "sku_id": "70179560",
         "retailer": "amazon",
         "country": "USA",
-        "title": "White Rock Products Corp Soda, Orange Cream 4 Pk, 40645- Ounce ( Pack of 6)",
-        "description": "",
-        "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Tea\"\",\"\" White\"\"]",
-        "url": "https://www.amazon.com/dp/B005H91GQQ",
+        "sku_name_eng": "White Rock Products Corp Soda, Orange Cream 4 Pk, 40645- Ounce ( Pack of 6)",
+        "description_short_eng": "",
+        "breadcrumbs_eng": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Tea\"\",\"\" White\"\"]",
+        "sku_url": "https://www.amazon.com/dp/B005H91GQQ",
         "image_url": "https://m.media-amazon.com/images/I/51iBHH3dODL._AC_UL320_.jpg",
-        "price": "55",
-        "barcode": "72063012658",
+        "sku_last_price": "55",
+        "gtin": "72063012658",
         "brand": "White Rock",
         "category": "Other Non-Cola Carbonates",
-        "attributes": "Caffeine: 15-25 mg; Pack Material Type: Glass; Juice Content: 0-2%; Flavour: orange; Pack Type: Bottle"
+        "attribute": "Caffeine: 15-25 mg; Pack Material Type: Glass; Juice Content: 0-2%; Flavour: orange; Pack Type: Bottle"
       },
       "baseline_extraction": {
         "flavor": "cola",
@@ -188,18 +188,18 @@
           },
           {
             "field": "type",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": "soda"
           },
           {
             "field": "volume_ml",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 1202016.0,
             "confidence": 0.75
           },
           {
             "field": "pack_qty",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 6,
             "confidence": 0.9
           }
@@ -213,21 +213,21 @@
       }
     },
     {
-      "product_id": "71073123",
+      "sku_id": "71073123",
       "source_row": {
-        "product_id": "71073123",
+        "sku_id": "71073123",
         "retailer": "amazon",
         "country": "USA",
-        "title": "Reed's Ginger Beer Raspberry Ginger Brew ( 6X4 / 12 Oz)",
-        "description": "",
-        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soft Drinks\"\"]",
-        "url": "https://www.amazon.com/Reeds-Ginger-Beer-Raspberry-Brew/dp/B004QYHEK0/ref=sr_1_932?qid=1560953162&s=grocery&sr=1-932",
+        "sku_name_eng": "Reed's Ginger Beer Raspberry Ginger Brew ( 6X4 / 12 Oz)",
+        "description_short_eng": "",
+        "breadcrumbs_eng": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soft Drinks\"\"]",
+        "sku_url": "https://www.amazon.com/Reeds-Ginger-Beer-Raspberry-Brew/dp/B004QYHEK0/ref=sr_1_932?qid=1560953162&s=grocery&sr=1-932",
         "image_url": "https://images-na.ssl-images-amazon.com/images/I/51AFLZI--8L._AC_US160_.jpg",
-        "price": "67.36",
-        "barcode": "8274555554",
+        "sku_last_price": "67.36",
+        "gtin": "8274555554",
         "brand": "Reed's",
         "category": "Other Non-Cola Carbonates",
-        "attributes": "Pack Material Type: Glass; Volume: 355; Immune Support Ingredients: ginger; Pack Type: Bottle; Flavour: ginger, raspberry; Juice Content: 0-2%; Carbonization: still"
+        "attribute": "Pack Material Type: Glass; Volume: 355; Immune Support Ingredients: ginger; Pack Type: Bottle; Flavour: ginger, raspberry; Juice Content: 0-2%; Carbonization: still"
       },
       "baseline_extraction": {
         "flavor": "cola",
@@ -297,18 +297,18 @@
           },
           {
             "field": "type",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": "beer"
           },
           {
             "field": "volume_ml",
-            "column": "attributes",
+            "column": "attribute",
             "value": 355.0,
             "confidence": 0.9
           },
           {
             "field": "volume_ml",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 355.0,
             "confidence": 0.75
           },
@@ -320,7 +320,7 @@
           },
           {
             "field": "pack_qty",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 6,
             "confidence": 0.9
           }
@@ -333,21 +333,21 @@
       }
     },
     {
-      "product_id": "74185738",
+      "sku_id": "74185738",
       "source_row": {
-        "product_id": "74185738",
+        "sku_id": "74185738",
         "retailer": "amazon",
         "country": "USA",
-        "title": "Tang Orange Powdered Drink Mix ( Makes 22 Quarts), 72- Ounce Canister ( Pack of 2) by Tang [ Foods]",
-        "description": "100% daily value of Vitamin C\nGood source of calcium\nDelicious with breakfast",
-        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Powdered Drink Mixes & Flavorings\"\"]",
-        "url": "https://www.amazon.com/Tang-Orange-Powdered-72-Ounce-Canister/dp/B00ICT9CQE/ref=sr_1_636?_encoding=UTF8&c=ts&keywords=Powdered+Drink+Mixes+%26+Flavorings&qid=1637652720&s=grocery&sr=1-636&ts_id=15525241011",
+        "sku_name_eng": "Tang Orange Powdered Drink Mix ( Makes 22 Quarts), 72- Ounce Canister ( Pack of 2) by Tang [ Foods]",
+        "description_short_eng": "100% daily value of Vitamin C\nGood source of calcium\nDelicious with breakfast",
+        "breadcrumbs_eng": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Powdered Drink Mixes & Flavorings\"\"]",
+        "sku_url": "https://www.amazon.com/Tang-Orange-Powdered-72-Ounce-Canister/dp/B00ICT9CQE/ref=sr_1_636?_encoding=UTF8&c=ts&keywords=Powdered+Drink+Mixes+%26+Flavorings&qid=1637652720&s=grocery&sr=1-636&ts_id=15525241011",
         "image_url": "https://m.media-amazon.com/images/I/71QDYXv1nYL._AC_UL320_.jpg",
-        "price": "33.8",
-        "barcode": "",
+        "sku_last_price": "33.8",
+        "gtin": "",
         "brand": "Tang",
         "category": "Powder Concentrates",
-        "attributes": "Flavour: orange; Contains Minerals: calcium; Pack Material Type: Metal; Pack Type: Can; Health Claims: good source of calcium, good source of minerals; Weight: 2043; Immune Support Ingredients: vitamin c; Juice Content: 0-2%; Concentrate Format: powder, vitamins"
+        "attribute": "Flavour: orange; Contains Minerals: calcium; Pack Material Type: Metal; Pack Type: Can; Health Claims: good source of calcium, good source of minerals; Weight: 2043; Immune Support Ingredients: vitamin c; Juice Content: 0-2%; Concentrate Format: powder, vitamins"
       },
       "baseline_extraction": {
         "flavor": "orange",
@@ -393,18 +393,18 @@
           },
           {
             "field": "type",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": "drink_mix"
           },
           {
             "field": "volume_ml",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 20820.0,
             "confidence": 0.95
           },
           {
             "field": "pack_qty",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 2,
             "confidence": 0.9
           }
@@ -420,21 +420,21 @@
       }
     },
     {
-      "product_id": "76118049",
+      "sku_id": "76118049",
       "source_row": {
-        "product_id": "76118049",
+        "sku_id": "76118049",
         "retailer": "amazon",
         "country": "USA",
-        "title": "Sierra Lemon Lime Soda, 7.5 Fl Oz Cans, 6 Pack",
-        "description": "Light, crisp and refreshing\nThis caffeine free drink combines the great taste and bubbles of soda with the quenching refreshment of water plus delicious fruit flavor from a splash of real juice\nCrisp ",
-        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soda Soft Drinks\"\"]",
-        "url": "https://www.amazon.com/Sierra-Mist-Lemon-7-5oz-Packaging/dp/B071F77SQX/ref=sr_1_348?c=ts&keywords=Soda+Soft+Drinks&qid=1690514457&s=grocery&sr=1-348&ts_id=16318231",
+        "sku_name_eng": "Sierra Lemon Lime Soda, 7.5 Fl Oz Cans, 6 Pack",
+        "description_short_eng": "Light, crisp and refreshing\nThis caffeine free drink combines the great taste and bubbles of soda with the quenching refreshment of water plus delicious fruit flavor from a splash of real juice\nCrisp ",
+        "breadcrumbs_eng": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soda Soft Drinks\"\"]",
+        "sku_url": "https://www.amazon.com/Sierra-Mist-Lemon-7-5oz-Packaging/dp/B071F77SQX/ref=sr_1_348?c=ts&keywords=Soda+Soft+Drinks&qid=1690514457&s=grocery&sr=1-348&ts_id=16318231",
         "image_url": "https://m.media-amazon.com/images/I/71gzvrVDsAL._AC_UL320_.jpg",
-        "price": "27",
-        "barcode": "12000163197",
+        "sku_last_price": "27",
+        "gtin": "12000163197",
         "brand": "Sierra Mist",
         "category": "Other Non-Cola Carbonates",
-        "attributes": "Flavour: lemon, lime; Volume: 222; Free From: no caffeine; Pack Material Type: Paper / Carton; Caffeine: 0-15 mg; Juice Content: 0-2%"
+        "attribute": "Flavour: lemon, lime; Volume: 222; Free From: no caffeine; Pack Material Type: Paper / Carton; Caffeine: 0-15 mg; Juice Content: 0-2%"
       },
       "baseline_extraction": {
         "flavor": "cola",
@@ -501,25 +501,25 @@
           },
           {
             "field": "carbonation",
-            "column": "description",
+            "column": "description_short_eng",
             "value": [
               "carbonated"
             ]
           },
           {
             "field": "type",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": "soda"
           },
           {
             "field": "volume_ml",
-            "column": "attributes",
+            "column": "attribute",
             "value": 222.0,
             "confidence": 0.9
           },
           {
             "field": "volume_ml",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 222.0,
             "confidence": 0.85
           },
@@ -531,7 +531,7 @@
           },
           {
             "field": "pack_qty",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 6,
             "confidence": 0.85
           }
@@ -544,21 +544,21 @@
       }
     },
     {
-      "product_id": "79028934",
+      "sku_id": "79028934",
       "source_row": {
-        "product_id": "79028934",
+        "sku_id": "79028934",
         "retailer": "amazon",
         "country": "USA",
-        "title": "Cool Breeze Beverages Ready to Use Slush Mix, Hurricane, 1 / 2 gal",
-        "description": "1 / 2 gallon of cool breeze slush mix\nConcentrate\nTaste great\nCan be mixed with alcohol",
-        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Cocktail Mixers\"\"]",
-        "url": "https://www.amazon.com/Cool-Breeze-Beverages-Ready-Hurricane/dp/B01HIWHWYO/ref=sr_1_2140?c=ts&keywords=Cocktail+Mixers&qid=1651736982&s=grocery&sr=1-2140&ts_id=119342011",
+        "sku_name_eng": "Cool Breeze Beverages Ready to Use Slush Mix, Hurricane, 1 / 2 gal",
+        "description_short_eng": "1 / 2 gallon of cool breeze slush mix\nConcentrate\nTaste great\nCan be mixed with alcohol",
+        "breadcrumbs_eng": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Cocktail Mixers\"\"]",
+        "sku_url": "https://www.amazon.com/Cool-Breeze-Beverages-Ready-Hurricane/dp/B01HIWHWYO/ref=sr_1_2140?c=ts&keywords=Cocktail+Mixers&qid=1651736982&s=grocery&sr=1-2140&ts_id=119342011",
         "image_url": "https://m.media-amazon.com/images/I/71hbbg79v0L._AC_UL320_.jpg",
-        "price": "32.81",
-        "barcode": "726682784075",
+        "sku_last_price": "32.81",
+        "gtin": "726682784075",
         "brand": "Cool Breeze",
         "category": "Liquid Concentrates",
-        "attributes": "Pack Type: Bottle; Pack Material Type: Plastic; Volume: 1893; Juice Content: 0-2%"
+        "attribute": "Pack Type: Bottle; Pack Material Type: Plastic; Volume: 1893; Juice Content: 0-2%"
       },
       "baseline_extraction": {
         "flavor": "",
@@ -602,13 +602,13 @@
           },
           {
             "field": "volume_ml",
-            "column": "attributes",
+            "column": "attribute",
             "value": 1893.0,
             "confidence": 0.9
           },
           {
             "field": "volume_ml",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 7571.0,
             "confidence": 0.95
           }
@@ -623,21 +623,21 @@
       }
     },
     {
-      "product_id": "91282402",
+      "sku_id": "91282402",
       "source_row": {
-        "product_id": "91282402",
+        "sku_id": "91282402",
         "retailer": "Courses U",
         "country": "France",
-        "title": "fruit drink fresh soft California SUNNY DELIGHT, 1 ,25l",
-        "description": "## more details \n* ### usage tips \nStore in the refrigerator (max 7°). shake before tasting- To consume in 5 days after opening. \nshake before tasting \n* ### further information \n* france \n* net weigh",
-        "category_path": "[\"\" fresh products\"\",\"\" juice, cold soups\"\"]",
-        "url": "https://www.coursesu.com/p/boisson-au-jus-de-fruits-doux-california-sunny-delight---bouteille-125l/2333531.html",
+        "sku_name_eng": "fruit drink fresh soft California SUNNY DELIGHT, 1 ,25l",
+        "description_short_eng": "## more details \n* ### usage tips \nStore in the refrigerator (max 7°). shake before tasting- To consume in 5 days after opening. \nshake before tasting \n* ### further information \n* france \n* net weigh",
+        "breadcrumbs_eng": "[\"\" fresh products\"\",\"\" juice, cold soups\"\"]",
+        "sku_url": "https://www.coursesu.com/p/boisson-au-jus-de-fruits-doux-california-sunny-delight---bouteille-125l/2333531.html",
         "image_url": "https://www.coursesu.com/dw/image/v2/BBQX_PRD/on/demandware.static/-/Sites-digitalu-master-catalog/default/dw2aa72960/3661138600585_A1N1_2333531_S13.png?sw=250&sh=250&sm=fit",
-        "price": "2.14",
-        "barcode": "3661138600585",
+        "sku_last_price": "2.14",
+        "gtin": "3661138600585",
         "brand": "Sunny Delight",
         "category": "Juice Drinks (up to 24% Juice)",
-        "attributes": "Made From: orange, mandarine; Naturally derived: natural flavours; Sweetener: sugar; Pack Type: Bottle; Geographic Origin: united states; Pack Material Type: Plastic; Carbonization: still; Caffeine: 15-25 mg; Immune Support Ingredients: vitamin c; Juice Content: 5-10%"
+        "attribute": "Made From: orange, mandarine; Naturally derived: natural flavours; Sweetener: sugar; Pack Type: Bottle; Geographic Origin: united states; Pack Material Type: Plastic; Carbonization: still; Caffeine: 15-25 mg; Immune Support Ingredients: vitamin c; Juice Content: 5-10%"
       },
       "baseline_extraction": {
         "flavor": "fruit",
@@ -724,7 +724,7 @@
           },
           {
             "field": "volume_ml",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 25000.0,
             "confidence": 0.95
           },
@@ -742,21 +742,21 @@
       }
     },
     {
-      "product_id": "371312669",
+      "sku_id": "371312669",
       "source_row": {
-        "product_id": "371312669",
+        "sku_id": "371312669",
         "retailer": "amazon",
         "country": "USA",
-        "title": "Culture Pop Soda, Orange Mango & Lime, Probiotic Low Sugar Soda, Sparkling Juice Alternative, Non-GMO, Kosher, Gluten- Free, No Stevia (12pk)",
-        "description": "* Soda you can feel good about! \n* Made with real organic spices, organic fruit juice and live probiotics \n* 40 Calories per can \n* Non-GMO, Plant Based, Vegan, Gluten- Free \n, \n## Product description",
-        "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soda Soft Drinks\"\"]",
-        "url": "https://www.amazon.com/dp/B08J8GPJZY",
+        "sku_name_eng": "Culture Pop Soda, Orange Mango & Lime, Probiotic Low Sugar Soda, Sparkling Juice Alternative, Non-GMO, Kosher, Gluten- Free, No Stevia (12pk)",
+        "description_short_eng": "* Soda you can feel good about! \n* Made with real organic spices, organic fruit juice and live probiotics \n* 40 Calories per can \n* Non-GMO, Plant Based, Vegan, Gluten- Free \n, \n## Product description",
+        "breadcrumbs_eng": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soda Soft Drinks\"\"]",
+        "sku_url": "https://www.amazon.com/dp/B08J8GPJZY",
         "image_url": "https://m.media-amazon.com/images/I/81ZJoVkqYYL._AC_UL320_.jpg",
-        "price": "32.99",
-        "barcode": "",
+        "sku_last_price": "32.99",
+        "gtin": "",
         "brand": "Culture Pop",
         "category": "Orange Carbonates",
-        "attributes": "No Artificial Ingredients: no gmo; Juice Content: 0-2%; Sustainable Sourcing: organic; Volume: 355; Sweetener: stevia; Carbonization: sparkling; Pack Type: Can; Health Claims: low sugar, probiotic; Flavour: orange, lime, mango; Diets: plant-based, vegan, kosher"
+        "attribute": "No Artificial Ingredients: no gmo; Juice Content: 0-2%; Sustainable Sourcing: organic; Volume: 355; Sweetener: stevia; Carbonization: sparkling; Pack Type: Can; Health Claims: low sugar, probiotic; Flavour: orange, lime, mango; Diets: plant-based, vegan, kosher"
       },
       "baseline_extraction": {
         "flavor": "lime",
@@ -826,7 +826,7 @@
           },
           {
             "field": "carbonation",
-            "column": "description",
+            "column": "description_short_eng",
             "value": [
               "carbonated"
             ]
@@ -840,25 +840,25 @@
           },
           {
             "field": "organic",
-            "column": "description",
+            "column": "description_short_eng",
             "value": [
               "organic"
             ]
           },
           {
             "field": "type",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": "juice"
           },
           {
             "field": "volume_ml",
-            "column": "attributes",
+            "column": "attribute",
             "value": 355.0,
             "confidence": 0.9
           },
           {
             "field": "pack_qty",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 12,
             "confidence": 0.85
           }
@@ -874,21 +874,21 @@
       }
     },
     {
-      "product_id": "674512045",
+      "sku_id": "674512045",
       "source_row": {
-        "product_id": "674512045",
+        "sku_id": "674512045",
         "retailer": "amazon",
         "country": "USA",
-        "title": "Niagara Purified Drinking Water Pallet - 16.9oz Bottles - 84 Cases, 2016 Bottles - $0.05 Bottle Bill State",
-        "description": "Brand NIAGARA \nPackage Information Bottle \nNumber of Items 84 \nUnit Count 84.00 Count \nNet Content Volume 16.9 Fluid Ounces \n* * *\n# About this item \n* Niagara Purified Drinking Water is just that: wa",
-        "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Drinking Water\"\"]",
-        "url": "https://www.amazon.com/dp/B09T4GCFDC",
+        "sku_name_eng": "Niagara Purified Drinking Water Pallet - 16.9oz Bottles - 84 Cases, 2016 Bottles - $0.05 Bottle Bill State",
+        "description_short_eng": "Brand NIAGARA \nPackage Information Bottle \nNumber of Items 84 \nUnit Count 84.00 Count \nNet Content Volume 16.9 Fluid Ounces \n* * *\n# About this item \n* Niagara Purified Drinking Water is just that: wa",
+        "breadcrumbs_eng": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Drinking Water\"\"]",
+        "sku_url": "https://www.amazon.com/dp/B09T4GCFDC",
         "image_url": "https://m.media-amazon.com/images/I/51ntld8c9MS._AC_UL320_.jpg",
-        "price": "600",
-        "barcode": "",
+        "sku_last_price": "600",
+        "gtin": "",
         "brand": "Niagara",
         "category": "Still Bottled Water",
-        "attributes": "Water Type: drinking, purified; Health Claims: hydrating; Caffeine: 0-15 mg; Pack Material Type: Paper / Carton; Environmentally Friendly: environmentally friendly; Volume: 500; Juice Content: 0-2%; Sustainable Packaging: can be recycled; Carbonization: still"
+        "attribute": "Water Type: drinking, purified; Health Claims: hydrating; Caffeine: 0-15 mg; Pack Material Type: Paper / Carton; Environmentally Friendly: environmentally friendly; Volume: 500; Juice Content: 0-2%; Sustainable Packaging: can be recycled; Carbonization: still"
       },
       "baseline_extraction": {
         "flavor": "",
@@ -945,24 +945,24 @@
           },
           {
             "field": "type",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": "water"
           },
           {
             "field": "volume_ml",
-            "column": "attributes",
+            "column": "attribute",
             "value": 500.0,
             "confidence": 0.9
           },
           {
             "field": "volume_ml",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 500.0,
             "confidence": 0.75
           },
           {
             "field": "pack_qty",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 84,
             "confidence": 0.85
           }
@@ -985,21 +985,21 @@
       }
     },
     {
-      "product_id": "1052557924",
+      "sku_id": "1052557924",
       "source_row": {
-        "product_id": "1052557924",
+        "sku_id": "1052557924",
         "retailer": "amazon",
         "country": "Germany",
-        "title": "share Organic Splash Cucumber Mint - 1 kcal per 100 ml - Flavoured Water without Sugar (24 x 330 ml) - No Additives - Organic Mineral Water - Provides Water for 1 day",
-        "description": "## Product information \n# Technical Details \n##### General Information \nUnits ‎24.0 pieces \nStorage Instructions ‎ Keep away from heat and dry \nBrand ‎share \nFormat ‎ Liquid \nSpeciality ‎ Organic, No ",
-        "category_path": "[\"\" Any Category\"\",\"\" Grocery\"\",\"\" Drinks\"\",\"\" Water\"\"]",
-        "url": "https://www.amazon.de/dp/B0F2FG3GSX",
+        "sku_name_eng": "share Organic Splash Cucumber Mint - 1 kcal per 100 ml - Flavoured Water without Sugar (24 x 330 ml) - No Additives - Organic Mineral Water - Provides Water for 1 day",
+        "description_short_eng": "## Product information \n# Technical Details \n##### General Information \nUnits ‎24.0 pieces \nStorage Instructions ‎ Keep away from heat and dry \nBrand ‎share \nFormat ‎ Liquid \nSpeciality ‎ Organic, No ",
+        "breadcrumbs_eng": "[\"\" Any Category\"\",\"\" Grocery\"\",\"\" Drinks\"\",\"\" Water\"\"]",
+        "sku_url": "https://www.amazon.de/dp/B0F2FG3GSX",
         "image_url": "https://m.media-amazon.com/images/I/81jU7WqlxHL._AC_UL320_.jpg",
-        "price": "34.56",
-        "barcode": "",
+        "sku_last_price": "34.56",
+        "gtin": "",
         "brand": "Share",
         "category": "Functional Bottled Water",
-        "attributes": "Pack Type: Can; Juice Content: 0-2%; Carbonization: sparkling; Naturally derived: natural fragrances, natural; Volume: 330; Sustainable Sourcing: organic, eu organic; Free From: lactose free, no eggs; Health Claims: good source of minerals, hydrating, no sugar, low calories; Flavour: cucumber, mint; No Artificial Ingredients: no artificial colours, no artificial preservatives, no artificial additives"
+        "attribute": "Pack Type: Can; Juice Content: 0-2%; Carbonization: sparkling; Naturally derived: natural fragrances, natural; Volume: 330; Sustainable Sourcing: organic, eu organic; Free From: lactose free, no eggs; Health Claims: good source of minerals, hydrating, no sugar, low calories; Flavour: cucumber, mint; No Artificial Ingredients: no artificial colours, no artificial preservatives, no artificial additives"
       },
       "baseline_extraction": {
         "flavor": "cucumber",
@@ -1078,31 +1078,31 @@
           },
           {
             "field": "organic",
-            "column": "description",
+            "column": "description_short_eng",
             "value": [
               "organic"
             ]
           },
           {
             "field": "type",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": "water"
           },
           {
             "field": "volume_ml",
-            "column": "attributes",
+            "column": "attribute",
             "value": 330.0,
             "confidence": 0.9
           },
           {
             "field": "volume_ml",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 100.0,
             "confidence": 0.95
           },
           {
             "field": "pack_qty",
-            "column": "title",
+            "column": "sku_name_eng",
             "value": 24,
             "confidence": 0.9
           }

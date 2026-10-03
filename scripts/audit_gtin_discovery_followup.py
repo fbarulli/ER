@@ -20,7 +20,7 @@ keys = sorted({r['gtin'] for r in explicit})
 affected = frame[frame.gtin.isin(keys)]
 flavor_groups = []
 for gtin, group in frame[facts.gtin_structurally_valid].groupby('gtin'):
-    attrs = [row_dimensions({'attributes': s}).attributes.get('Flavour', frozenset()) for s in group.attribute]
+    attrs = [row_dimensions({'attribute': s}).attributes.get('Flavour', frozenset()) for s in group.attribute]
     if any(a and b and a.isdisjoint(b) for a in attrs for b in attrs):
         flavor_groups.append({'gtin': gtin, 'rows': len(group)})
 selected_keys = keys + ['8713300049748', '8713300049779', '5601607074866', '8713300449227', '8713300049786']
@@ -59,7 +59,7 @@ def table(rows, extra=None):
     for key, label in fields:
         cells.append('<tr><th>' + label + '</th>' + ''.join('<td>' + text(r[key]) + '</td>' for r in rows) + '</tr>')
     for key in ['Flavour','Volume','Pack Type','Pack Material Type']:
-        cells.append('<tr><th>' + key + '</th>' + ''.join('<td>' + text(', '.join(sorted(row_dimensions({'attributes':r['attribute']}).attributes.get(key, ())))) + '</td>' for r in rows) + '</tr>')
+        cells.append('<tr><th>' + key + '</th>' + ''.join('<td>' + text(', '.join(sorted(row_dimensions({'attribute':r['attribute']}).attributes.get(key, ())))) + '</td>' for r in rows) + '</tr>')
     if extra:
         cells.append('<tr><th>Clarifying source evidence</th>' + ''.join('<td>' + text(v) + '</td>' for v in extra) + '</tr>')
     cells.append('<tr><th>Original product</th>' + ''.join('<td><a target="_blank" rel="noopener" href="' + escape(r['sku_url'],quote=True) + '">Source listing</a> · <a href="/catalog?gtin=' + text(r['gtin']) + '">All original columns</a></td>' for r in rows) + '</tr>')
@@ -80,7 +80,7 @@ body += '<section><h2>Strawberry title attached to a Mango Dream URL and descrip
 body += '<p>Checked original titles, descriptions, URLs, GTIN validation and shared-parser flavors. Numbers and flavor distinctions shown are source facts; no listing was edited or excluded by this audit.</p>'
 (result_dir / '06_mixed_flavor_source_fields_findings.html').write_text(page('Finding 06 · Flavor title versus source context',body))
 for number, name, summary in [
-    ('05','gln_in_gtin','Do explicit GLN source labels explain product-barcode collisions?\n\n61 source listings label their filed GTIN as GLN. 21 numbers are shared by 98 Alcampo rows. Compare lemon and orange KAS, and tea versus water. The correction remains open pending enforcement.'),
+    ('05','gln_in_gtin','Do explicit GLN source labels explain product-gtin collisions?\n\n61 source listings label their filed GTIN as GLN. 21 numbers are shared by 98 Alcampo rows. Compare lemon and orange KAS, and tea versus water. The correction remains open pending enforcement.'),
     ('06','mixed_flavor_source_fields','Can another listing of the same flavor clarify a conflicting GTIN group?\n\nTwo Jan Linders Cool Best records disagree internally: Passionfruit title/orange URL, and Strawberry title/Mango Dream URL and description. Side-by-side original data includes separately numbered real flavor variants. No automatic repair is claimed.')]:
     (ROOT / f'dashboard/experiments/identity/{number}_{name}.py').write_text('"""'+summary+'\n"""\n')
 print('Wrote Findings 05/06 HTML comparisons and experiment entries.')

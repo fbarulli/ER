@@ -4,7 +4,7 @@ Two regression classes are pinned here:
 
   * the multi-run truncation fix: extraction used to keep only the FIRST
     digit run of a cell, so "1-735143004010" silently became "1" and the
-    real barcode was lost. Extraction now keeps the LONGEST digit run
+    real gtin was lost. Extraction now keeps the LONGEST digit run
     (earliest on ties). The dataset.csv census is unchanged by this — no
     current cell has first run != longest run (measured) — so the module's
     behavior only widens for cells that actually carry a describer.
@@ -52,7 +52,7 @@ def test_longest_digit_run_survives_describer_prefix():
     assert facts["gtin_structurally_valid"].iat[0]
 
 
-def test_longest_run_wins_over_noise_around_the_barcode():
+def test_longest_run_wins_over_noise_around_the_gtin():
     facts = normalize_and_validate_gtin(
         pd.Series(["pack 6, volume 500 - 735143004010"])
     )

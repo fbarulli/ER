@@ -53,6 +53,9 @@ src/ner/results/
 
 # Generated submission outputs and local checkpoints.
 submission/SKU_ITEM_submission*.csv
+# Smoke prepare provenance metadata; the committed smoke set is the
+# nine bundle/yaml/manifest files.
+data/prepared/smoke_*/embedding_inputs.json
 submission/calibration_diagnostics.csv
 submission/holdout_diagnostics.csv
 submission/holdout_metrics.csv

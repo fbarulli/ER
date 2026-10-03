@@ -26,10 +26,10 @@ def composition_fingerprint():
 
 def compose_texts(catalog: Path):
     from core.model_input import build_sku_text, model_input_info
-    from core.product_identity import row_identity
+    from core.sku_identity import row_identity
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False, low_memory=False)
-    if 'product_id' not in frame or frame.product_id.duplicated().any() or (frame.product_id == '').any():
-        raise ValueError('catalog requires unique nonempty product_id')
+    if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
+        raise ValueError('catalog requires unique nonempty sku_id')
     texts = []
     started = last_progress = time.monotonic()
     print(f'[embeddings/local] composing {len(frame):,} texts on CPU', flush=True)
@@ -38,7 +38,7 @@ def compose_texts(catalog: Path):
         if index == len(frame) or time.monotonic() - last_progress >= 10:
             print(f'[embeddings/local] texts={index:,}/{len(frame):,} elapsed={time.monotonic()-started:.1f}s', flush=True)
             last_progress = time.monotonic()
-    return frame.product_id.tolist(), texts
+    return frame.sku_id.tolist(), texts
 
 
 def texts_hash(texts):

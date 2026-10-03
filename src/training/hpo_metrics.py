@@ -497,7 +497,7 @@ def _candidate_frame(
         if target < 0 or target >= len(row_bc):
             raise ValueError(f"proxy canonical row {target} is outside row_bc")
         sku_row = df.iloc[source]
-        sku_id = row_metadata_text(sku_row, *alias_names("product_id"))
+        sku_id = row_metadata_text(sku_row, *alias_names("sku_id"))
         candidate_gtin = str(row_bc[target]).strip()
         if not sku_id:
             raise ValueError(f"empty SKU identity in proxy source row {source}")
@@ -509,8 +509,8 @@ def _candidate_frame(
                 f"canonical GTIN {candidate_gtin!r} missing from canonical_records.csv"
             )
         sku_info = sku_attribute_info(
-            row_metadata_text(sku_row, "title"),
-            row_metadata_text(sku_row, *alias_names("attributes")),
+            row_metadata_text(sku_row, "sku_name_eng"),
+            row_metadata_text(sku_row, *alias_names("attribute")),
         )
         if pair_index < n_pos:
             existing = truth.get(sku_id)
@@ -583,7 +583,7 @@ def _candidate_frame(
     ]
     statuses = [
         gtin_status(
-            row_metadata_text(df.iloc[truth_sources[sku_id]], *alias_names("barcode")),
+            row_metadata_text(df.iloc[truth_sources[sku_id]], *alias_names("gtin")),
             item_id,
         )
         for sku_id, item_id in truth.items()

@@ -8,17 +8,17 @@ from core.declared_identity import listing_identity
 from pipeline import extract_all, generate_canonical, NgramIDF, three_way_gate
 
 
-def canonical(title, attributes='', description='', category='', category_path=''):
+def canonical(title, attributes='', description='', category='', breadcrumbs_eng=''):
     rows = [(title, attributes)]
     return generate_canonical('1234567890123', 'Example', rows,
                               NgramIDF({'1234567890123': rows}), None,
                               descriptions=[description], categories=[category],
-                              category_paths=[category_path])
+                              breadcrumbs_engs=[breadcrumbs_eng])
 
 
 def test_categories_do_not_invent_declared_flavors():
     lemon = extract_all('Lemon lemonade 750ml', 'Flavour: lemon',
-                        category='Lemonade/Lime', category_path='fruit & berry drinks')
+                        category='Lemonade/Lime', breadcrumbs_eng='fruit & berry drinks')
     assert lemon['flavor_set'] == {'lemon'}
     mate = extract_all('Fritz-mate 330ml', '', category='Other Non-Cola Carbonates')
     assert mate['flavor_set'] == set()
@@ -80,8 +80,8 @@ def test_strength_is_not_inferred_from_unrelated_claims():
 
 def test_original_source_capture_reviews_stale_generic_fields():
     a, b = canonical('Water 500ml'), canonical('Water 500ml')
-    a['source_rows'] = json.dumps([{'title': 'Sparkling water slight 500ml'}])
-    b['source_rows'] = json.dumps([{'title': 'Sparkling water strong 500ml'}])
+    a['source_rows'] = json.dumps([{'sku_name_eng': 'Sparkling water slight 500ml'}])
+    b['source_rows'] = json.dumps([{'sku_name_eng': 'Sparkling water strong 500ml'}])
     assert three_way_gate(a, b)['decision'] == 'fallback'
 
 

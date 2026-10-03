@@ -32,7 +32,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     print(f"[text-phase] vector_export start catalog={setup / 'eligible_catalog.csv'} checkpoint={checkpoint} "
           f"output={output / 'text__vectors.npz'}", flush=True)
     cache = create_cache(setup / 'eligible_catalog.csv', checkpoint, output / 'text__vectors.npz', device=device)
-    vectors, metadata = load_text_cache(cache, [r['product_id'] for r in records])
+    vectors, metadata = load_text_cache(cache, [r['sku_id'] for r in records])
     print(f"[text-phase] vector_export complete path={cache} shape={vectors.shape} "
           f"seconds={time.monotonic() - cache_started:.3f}", flush=True)
     settings = yaml.safe_load((setup / 'gnn_only.yaml').read_text())
@@ -43,7 +43,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
           f"M={cfg.hnsw_m} ef_construction={cfg.hnsw_ef_construction} ef_search={cfg.hnsw_ef_search}", flush=True)
     index = PersistentHnswIndex(output / 'text__index', ef_construction=cfg.hnsw_ef_construction,
                                M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
-    index.build(vectors, [r['product_id'] for r in records], checkpoint=checkpoint,
+    index.build(vectors, [r['sku_id'] for r in records], checkpoint=checkpoint,
                 model_name='text', preprocessing_fingerprint=file_hash(listings))
     print(f"[text-phase] index_build complete path={output / 'text__index'} seconds={time.monotonic() - index_started:.3f}", flush=True)
     scores = {}
@@ -66,7 +66,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
                         **pair_metrics(labels, values, threshold, cfg.retrieval_ks)})
         print(f"[text-evaluation] complete summary={json.dumps(summary[-1], sort_keys=True)}", flush=True)
         for (a, b), label, score in zip(indices, labels, values):
-            scored.append({'product_id1':records[a]['product_id'], 'product_id2':records[b]['product_id'],
+            scored.append({'sku_id1':records[a]['sku_id'], 'sku_id2':records[b]['sku_id'],
                            'true_label':int(label), 'split':split, 'score':float(score),
                            'prediction':int(score >= threshold)})
     print(f"[text-phase] reports start directory={reports} kinds=summary,scored_pairs,plots,attributes,retrieval", flush=True)

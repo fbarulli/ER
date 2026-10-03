@@ -63,17 +63,17 @@ def main() -> None:
     canon = pd.read_csv(args.canonicals, dtype=str, keep_default_na=False)
     # Accept both the raw export schema and the deduped schema.
     data = data.rename(columns={
-        "sku_id": "product_id",
-        "sku_name_eng": "title",
-        "description_short_eng": "description",
-        "breadcrumbs_eng": "category_path",
-        "attribute": "attributes",
+        "sku_id": "sku_id",
+        "sku_name_eng": "sku_name_eng",
+        "description_short_eng": "description_short_eng",
+        "breadcrumbs_eng": "breadcrumbs_eng",
+        "attribute": "attribute",
     })
-    for column in ("title", "description", "category_path", "attributes", "brand", "category"):
+    for column in ("sku_name_eng", "description_short_eng", "breadcrumbs_eng", "attribute", "brand", "category"):
         if column not in data:
             data[column] = ""
-    data["__id"] = data["product_id"].astype(str)
-    gtin_column = "barcode" if "barcode" in data else "gtin"
+    data["__id"] = data["sku_id"].astype(str)
+    gtin_column = "gtin" if "gtin" in data else "gtin"
     data["__gtin_key"] = data[gtin_column].astype(str)
     canon["__gtin"] = canon["gtin"].astype(str)
     source = data.set_index("__id").to_dict("index")
@@ -97,9 +97,9 @@ def main() -> None:
         s = source.get(sku_id, {})
         t = target.get(target_id, {})
         t_original = target_groups.get(target_id, {})
-        source_words = words(s.get("title"), s.get("description"), s.get("attributes"), s.get("category_path"))
+        source_words = words(s.get("sku_name_eng"), s.get("description_short_eng"), s.get("attribute"), s.get("breadcrumbs_eng"))
         target_words = words(t.get("canonical"), t.get("mode_flavor"), t.get("mode_type"))
-        extracted = extract_all(s.get("title", ""), s.get("attributes", "")) if s else {}
+        extracted = extract_all(s.get("sku_name_eng", ""), s.get("attribute", "")) if s else {}
         source_volume = {str(extracted.get("volume_ml"))} if extracted.get("volume_ml", 0) else set()
         target_volume = as_set(t.get("volume_set"))
         source_pack = {str(extracted.get("pack_qty"))} if extracted.get("pack_confidence", 0) else set()
@@ -113,19 +113,19 @@ def main() -> None:
             "source_retailer": s.get("retailer", ""),
             "source_country": s.get("country", ""),
             "source_category": s.get("category", ""),
-            "source_category_path": s.get("category_path", ""),
-            "source_description": s.get("description", ""),
-            "source_attributes": s.get("attributes", ""),
-            "source_barcode": s.get("barcode", ""),
+            "source_breadcrumbs_eng": s.get("breadcrumbs_eng", ""),
+            "source_description": s.get("description_short_eng", ""),
+            "source_attributes": s.get("attribute", ""),
+            "source_gtin": s.get("gtin", ""),
             "canonical_brand": t.get("mode_brand", ""),
             "canonical_flavor": t.get("mode_flavor", ""),
             "canonical_type": t.get("mode_type", ""),
             "canonical_volume_set": t.get("volume_set", ""),
             "canonical_pack_set": t.get("pack_set", ""),
             "brand_match": bool(source_brand and target_brand and source_brand == target_brand),
-            "title_canonical_overlap": overlap(words(s.get("title")), target_words),
+            "title_canonical_overlap": overlap(words(s.get("sku_name_eng")), target_words),
             "full_text_canonical_overlap": overlap(source_words, target_words),
-            "source_title_words": " ".join(sorted(words(s.get("title")))),
+            "source_title_words": " ".join(sorted(words(s.get("sku_name_eng")))),
             "canonical_words": " ".join(sorted(target_words)),
             "source_volume_evidence": " ".join(sorted(source_volume)),
             "source_pack_evidence": " ".join(sorted(source_pack)),

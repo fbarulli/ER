@@ -17,7 +17,7 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     setup.mkdir()
     for track in ('gnn_only', 'hybrid'):
         (setup / f'{track}.yaml').write_text(yaml.safe_dump({'listings': 'prepared/listings.csv'}))
-    (setup / 'listings.csv').write_text('product_id\na\n')
+    (setup / 'listings.csv').write_text('sku_id\na\n')
     bundle = setup / 'text_prepared.pkl.gz'
     bundle.write_bytes(b'prepared snapshot')
     bundle.with_suffix('.gz.json').write_text('{}')
@@ -104,7 +104,7 @@ def test_manifested_hybrid_requires_active_text_composition(tmp_path, monkeypatc
                     composition={'outdated': True} if changed_composition else composition)
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(checks, 'file_hash', lambda _: 'same-hash')
-    monkeypatch.setattr(checks, 'load_records', lambda _: [{'product_id': 'a'}])
+    monkeypatch.setattr(checks, 'load_records', lambda _: [{'sku_id': 'a'}])
     monkeypatch.setattr(checks, 'load_pairs', lambda *_: {})
     monkeypatch.setattr(checks, 'load_text_cache', lambda *_: (np.zeros((1, 2)), metadata))
     cfg = SimpleNamespace(input_manifest='manifest.json', allow_unmanifested_inputs=False,

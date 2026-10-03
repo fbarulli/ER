@@ -22,19 +22,19 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
         raise FileExistsError(output)
     catalog=pd.read_csv(setup/'eligible_catalog.csv',dtype=str,keep_default_na=False,low_memory=False)
     splits=pd.read_csv(setup/'listing_splits.csv',dtype=str)
-    pairs=pd.read_csv(setup/'listing_pairs.csv',dtype={'product_id1':str,'product_id2':str})
+    pairs=pd.read_csv(setup/'listing_pairs.csv',dtype={'sku_id1':str,'sku_id2':str})
     _,bundle=load_prepared_bundle(setup/'text_prepared.pkl.gz')
     populations=prepared_holdout(bundle,dict(training_cfg().split),seed=SEED)
     roles={normalize_gtin(key):role for role,values in enumerate(populations) for key in values}
-    ids=set(catalog.product_id)
+    ids=set(catalog.sku_id)
     representatives={}
     for row in catalog.itertuples(index=False):
-        representatives.setdefault(normalize_gtin(row.barcode),row.product_id)
+        representatives.setdefault(normalize_gtin(row.gtin),row.sku_id)
     chosen=set()
     for split in ('train','dev','test'):
         for label in (0,1):
             for row in pairs[(pairs.split==split)&(pairs.label==label)].head(4).itertuples(index=False):
-                chosen.update((row.product_id1,row.product_id2))
+                chosen.update((row.sku_id1,row.sku_id2))
     ndf=len(bundle['df'])
     # Keep complete transplant lineage, including donors. A prefix of plain
     # negatives can omit every counterfactual/swap view and fail the real diet.
@@ -52,7 +52,7 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
                     if not key.endswith('_payload_idx') or key.startswith('copy_') or value is None:
                         continue
                     index = int(value)
-                    listing = (str(bundle['df'].iloc[index].product_id) if index < ndf
+                    listing = (str(bundle['df'].iloc[index].sku_id) if index < ndf
                                else representatives.get(normalize_gtin(bundle['row_bc'][index])))
                     if listing not in ids:
                         break
@@ -70,7 +70,7 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
             if a>=ndf:
                 continue
             ka,kb=normalize_gtin(bundle['row_bc'][a]),normalize_gtin(bundle['row_bc'][b])
-            source=str(bundle['df'].iloc[a].product_id)
+            source=str(bundle['df'].iloc[a].sku_id)
             target=representatives.get(kb)
             if roles.get(ka)==roles.get(kb)==role and source in ids and target:
                 if len(chosen | {source, target}) > sample:
@@ -81,22 +81,22 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
                     break
     if len(chosen)>sample:
         raise ValueError('sample too small for selected smoke supervision')
-    for listing in catalog.product_id:
+    for listing in catalog.sku_id:
         if len(chosen)==sample:
             break
         chosen.add(listing)
     if len(chosen)!=sample:
         raise ValueError('not enough listings for requested sample')
-    frame=catalog[catalog.product_id.isin(chosen)].copy()
-    assignment=splits[splits.product_id.isin(chosen)].copy()
-    pair_frame=pairs[pairs.product_id1.isin(chosen)&pairs.product_id2.isin(chosen)].copy()
+    frame=catalog[catalog.sku_id.isin(chosen)].copy()
+    assignment=splits[splits.sku_id.isin(chosen)].copy()
+    pair_frame=pairs[pairs.sku_id1.isin(chosen)&pairs.sku_id2.isin(chosen)].copy()
     output.mkdir(parents=True)
     frame.to_csv(output/'eligible_catalog.csv',index=False)
     assignment.to_csv(output/'listing_splits.csv',index=False)
     pair_frame.to_csv(output/'listing_pairs.csv',index=False)
     listings=prepare(output/'eligible_catalog.csv',output/'listing_splits.csv',output/'listing_pairs.csv',output/'prepared')
-    selected_keys={normalize_gtin(v) for v in frame.barcode}
-    source_indices=[i for i,p in enumerate(bundle['df'].product_id.astype(str)) if p in chosen]
+    selected_keys={normalize_gtin(v) for v in frame.gtin}
+    source_indices=[i for i,p in enumerate(bundle['df'].sku_id.astype(str)) if p in chosen]
     first_copy=min((int(r['copy_payload_idx']) for r in bundle['mask_audit']+bundle['hard_negative_mask_audit']
                     if r.get('copy_payload_idx') is not None), default=len(bundle['payload']))
     # Native retrieval reads the complete frozen canonical corpus immediately

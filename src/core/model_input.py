@@ -250,9 +250,9 @@ def _cleaned_sku_text(
 
     tokens: list[str] = []
     tokens += _normalized_tokens(row_metadata_text(row, "brand"), drop_schema_words=False)
-    tokens += _normalized_tokens(row_metadata_text(row, "title"), drop_schema_words=False)
+    tokens += _normalized_tokens(row_metadata_text(row, "sku_name_eng"), drop_schema_words=False)
     tokens += _normalized_tokens(
-        row_metadata_text(row, *alias_names("attributes")), drop_schema_words=True
+        row_metadata_text(row, *alias_names("attribute")), drop_schema_words=True
     )
     symmetric = model_input_info(info, spec=spec)
     return _reduce_redundancy(
@@ -298,12 +298,12 @@ def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
     from pipeline import clean_sku_text, strip_schema_words
 
     base = strip_schema_words(clean_sku_text(
-        row_metadata_text(row, "title"),
-        row_metadata_text(row, *alias_names("attributes")),
+        row_metadata_text(row, "sku_name_eng"),
+        row_metadata_text(row, *alias_names("attribute")),
         row_metadata_text(row, "brand"),
-        row_metadata_text(row, *alias_names("description")),
+        row_metadata_text(row, *alias_names("description_short_eng")),
         row_metadata_text(row, *alias_names("category")),
-        row_metadata_text(row, *alias_names("category_path")),
+        row_metadata_text(row, *alias_names("breadcrumbs_eng")),
     ))
     # The legacy profile is a byte-for-byte rollback contract. The active
     # cleaned profile now accepts declared Pack Type when the title has none,
@@ -313,13 +313,13 @@ def _legacy_sku_text(row, info: Mapping[str, object]) -> str:
     legacy_info.pop("sweetening", None)
     # A title-only ablation supplies a precomputed full-row ``info`` while
     # blanking attributes in the row; keep that supplied structured channel.
-    if row_metadata_text(row, *alias_names("attributes")).strip():
+    if row_metadata_text(row, *alias_names("attribute")).strip():
         legacy_info["package_type"] = set(extract_title_attributes(
-            row_metadata_text(row, "title")
+            row_metadata_text(row, "sku_name_eng")
         )["package_types"])
         legacy_info["flavor"] = set(extract_flavor_tokens(
-            row_metadata_text(row, "title"),
-            row_metadata_text(row, *alias_names("attributes")),
+            row_metadata_text(row, "sku_name_eng"),
+            row_metadata_text(row, *alias_names("attribute")),
         ))
     return append_text(base, legacy_info, enabled=_structured_text_enabled())
 
@@ -420,21 +420,23 @@ def build_sku_texts(
     """
     from core.structured_features import sku_info as sku_structured_info
 
-    title = frame["title"].fillna("") if "title" in frame else pd.Series([""] * len(frame))
-    attrs = frame["attributes"].fillna("") if "attributes" in frame else pd.Series([""] * len(frame))
-    # Description column resolved by bounded alias: the raw Euromonitor export
-    # names the column ``description_short_eng``; the deduped dataset renames
-    # it ``description`` (config/paths.yaml column_mapping). Before this
-    # resolution the renamed lane silently lost its description (sku_info saw
-    # ""), because the reader only knew the raw name. The RAW name wins when
-    # both exist so a raw-frame path can never change behavior simply because
-    # a renamed twin happened to ride along; only a NaN in the raw column is
-    # filled from the alias. The fill uses the frame's own index ( .where with
-    # a same-index series, not a positional fillna against a fresh RangeIndex
-    # series) so duplicated / non-default row indexes cannot misalign. No
-    # lane's output changes when the raw name is present and observed — the
-    # NaN cases were already coerced to "" downstream — only the previously
-    # empty rename lane regains its description.
+    title = frame["sku_name_eng"].fillna("") if "sku_name_eng" in frame else pd.Series([""] * len(frame))
+    attrs = frame["attribute"].fillna("") if "attribute" in frame else pd.Series([""] * len(frame))
+    # Description column resolved by bounded alias: the raw Euromonitor
+    # export names the column ``description_short_eng``, which is also the
+    # canonical name (config/paths.yaml column_mapping is the identity);
+    # frames from the transition may still carry the old ``description``
+    # alias. Before this resolution the renamed lane silently lost its
+    # description (sku_info saw ""), because the reader only knew one name.
+    # The canonical name wins when both exist so a canonical-frame path can
+    # never change behavior simply because an alias twin happened to ride
+    # along; only a NaN in the canonical column is filled from the alias.
+    # The fill uses the frame's own index ( .where with a same-index
+    # series, not a positional fillna against a fresh RangeIndex series)
+    # so duplicated / non-default row indexes cannot misalign. No lane's
+    # output changes when the canonical name is present and observed —
+    # the NaN cases were already coerced to "" downstream — only the
+    # previously empty alias lane regains its description.
     if "description_short_eng" in frame:
         raw = frame["description_short_eng"]
         renamed = frame["description"] if "description" in frame else pd.Series(

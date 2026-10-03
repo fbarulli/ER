@@ -49,7 +49,7 @@ def _group(name: str) -> list[dict]:
 def _pair(record: dict, spec: TrainingSpec.ModelInputSpec) -> tuple[str, str]:
     row = pd.Series(record["sku"])
     return (
-        build_sku_text(row, sku_info(row["title"], row["attributes"]), spec=spec),
+        build_sku_text(row, sku_info(row["sku_name_eng"], row["attribute"]), spec=spec),
         build_canonical_text(
             record["canonical_record"], canonical_info(record["canonical_record"]), spec=spec
         ),
@@ -104,7 +104,7 @@ def test_default_selection_is_reachable_without_any_config_argument() -> None:
     through ``load_config`` — not which values the config happens to hold.
     """
     row = pd.Series(_group("review_band_585")[0]["sku"])
-    info = sku_info(row.get("title", ""), row.get("attributes", ""))
+    info = sku_info(row.get("sku_name_eng", ""), row.get("attribute", ""))
     assert build_sku_text(row, info) == build_sku_text(row, info, spec=model_input_spec())
 
 
@@ -139,7 +139,7 @@ def test_legacy_profile_reproduces_golden_bytes() -> None:
     for record in RECORDS:
         row = pd.Series(record["sku"])
         got_sku = build_sku_text(
-            row, sku_info(row["title"], row["attributes"]), spec=LEGACY
+            row, sku_info(row["sku_name_eng"], row["attribute"]), spec=LEGACY
         )
         got_canonical = build_canonical_text(
             record["canonical_record"],
@@ -243,8 +243,8 @@ def test_cleaned_profile_excludes_the_evidence_channel() -> None:
         )
         allowed_source = set(
             _normalized_tokens(record["sku"]["brand"], drop_schema_words=False)
-            + _normalized_tokens(record["sku"]["title"], drop_schema_words=False)
-            + _normalized_tokens(record["sku"]["attributes"], drop_schema_words=True)
+            + _normalized_tokens(record["sku"]["sku_name_eng"], drop_schema_words=False)
+            + _normalized_tokens(record["sku"]["attribute"], drop_schema_words=True)
         )
         evidence_only = {
             token
@@ -255,7 +255,7 @@ def test_cleaned_profile_excludes_the_evidence_channel() -> None:
 
         raw_only = {
             token
-            for field in ("description", "category", "category_path")
+            for field in ("description_short_eng", "category", "breadcrumbs_eng")
             for token in _normalized_tokens(record["sku"][field], drop_schema_words=True)
         } - allowed_source
         assert not (raw_only & set(sku_source.split())), record["sku_id"]
@@ -276,8 +276,8 @@ def test_cleaned_profile_uses_one_normalizer_for_both_lanes() -> None:
     """Identical input text must yield identical tokens whichever lane builds it."""
     text = "bcaa_6000mg Pear CAN 100%"
     sku_row = pd.Series(
-        {"title": text, "attributes": "", "brand": "", "description": "",
-         "category": "", "category_path": ""}
+        {"sku_name_eng": text, "attribute": "", "brand": "", "description_short_eng": "",
+         "category": "", "breadcrumbs_eng": ""}
     )
     sku_tokens = build_sku_text(sku_row, {}, spec=CLEANED).split()
     canonical_tokens = build_canonical_text(
@@ -419,17 +419,17 @@ def test_title_only_payload_variant_still_blanks_attributes_and_description() ->
     record = _group("singleton_gtin")[0]
     row = pd.Series(record["sku"])
     blanked = row.copy()
-    for column in ("attributes", "attr", "description", "description_short_eng"):
+    for column in ("attribute", "attr", "description_short_eng", "description_short_eng"):
         if column in blanked.index:
             blanked[column] = ""
-    info = sku_info(row["title"], row["attributes"])
+    info = sku_info(row["sku_name_eng"], row["attribute"])
 
     # New ingredient/status fields are deliberately excluded from legacy text.
     legacy_info = {key: value for key, value in info.items()
                    if key not in {"sweetener_type", "sweetening"}}
     expected = append_text(
         strip_schema_words(clean_sku_text(
-            row["title"], "", row["brand"], "", row["category"], row["category_path"]
+            row["sku_name_eng"], "", row["brand"], "", row["category"], row["breadcrumbs_eng"]
         )), legacy_info,
     )
     assert build_sku_text(blanked, info, spec=LEGACY) == expected
@@ -464,9 +464,9 @@ def test_build_sku_texts_resolves_the_description_column_alias() -> None:
     from core.model_input import build_sku_texts
 
     renamed_only = pd.DataFrame({
-        "title": ["renamed lane product 500 ml"],
-        "attributes": [""],
-        "description": ["doc says sugar free soda, still with pulp"],
+        "sku_name_eng": ["renamed lane product 500 ml"],
+        "attribute": [""],
+        "description_short_eng": ["doc says sugar free soda, still with pulp"],
     })
     _, infos = build_sku_texts(renamed_only, structured_enabled=True)
     assert infos[0]["pulp"] == {"with_pulp"}
@@ -475,8 +475,8 @@ def test_build_sku_texts_resolves_the_description_column_alias() -> None:
     assert infos[0]["sweetening"] == set(), "no sweetening-state phrase was supplied"
 
     both = pd.DataFrame({
-        "title": ["both names product 500 ml"],
-        "attributes": [""],
+        "sku_name_eng": ["both names product 500 ml"],
+        "attribute": [""],
         "description_short_eng": ["sparkling water with pulp"],
         "description": ["doc says sugar free soda, still with pulp"],
     })
@@ -488,10 +488,10 @@ def test_build_sku_texts_resolves_the_description_column_alias() -> None:
     assert infos[0]["pulp"] == {"with_pulp"}
 
     raw_nan = pd.DataFrame({
-        "title": ["raw NaN falls back to the alias 500 ml"],
-        "attributes": [""],
+        "sku_name_eng": ["raw NaN falls back to the alias 500 ml"],
+        "attribute": [""],
         "description_short_eng": [None],
-        "description": ["doc says sugar free soda, still with pulp"],
+        "description_short_eng": ["doc says sugar free soda, still with pulp"],
     })
     _, infos = build_sku_texts(raw_nan, structured_enabled=True)
     assert infos[0]["pulp"] == {"with_pulp"}, "unobserved raw must refill from the alias"
@@ -914,7 +914,7 @@ def test_cleaned_profile_pack_token_presence_agrees_on_every_row() -> None:
     for record in RECORDS:
         row = pd.Series(record["sku"])
         source = build_sku_text(
-            row, model_input_info(sku_info(row["title"], row["attributes"]), spec=CLEANED),
+            row, model_input_info(sku_info(row["sku_name_eng"], row["attribute"]), spec=CLEANED),
             spec=CLEANED,
         )
         target = build_canonical_text(
@@ -932,7 +932,7 @@ def test_the_text_and_the_numeric_vector_cannot_disagree() -> None:
 
     record = next(r for r in RECORDS if not r["canonical_record"]["pack_set"].strip("[]"))
     row = pd.Series(record["sku"])
-    info = model_input_info(sku_info(row["title"], row["attributes"]), spec=CLEANED)
+    info = model_input_info(sku_info(row["sku_name_eng"], row["attribute"]), spec=CLEANED)
     text = build_sku_text(row, info, spec=CLEANED)
     numbers = vector(info, volume_scale_ml=10000.0, pack_scale=100.0, max_set_size=8)
     assert "[FIELD_PACK_SIZE]" in text
@@ -990,12 +990,12 @@ def test_symmetry_invariant_where_the_same_evidence_feeds_both_sides() -> None:
             ),
         ])
         mirrored_row = pd.Series({
-            "title": "",
-            "attributes": attributes,
+            "sku_name_eng": "",
+            "attribute": attributes,
             "brand": canonical_record["mode_brand"],
-            "description": "",
+            "description_short_eng": "",
             "category": "",
-            "category_path": "",
+            "breadcrumbs_eng": "",
         })
         source = build_sku_text(mirrored_row, info, spec=CLEANED)
         target = build_canonical_text(canonical_record, info, spec=CLEANED)

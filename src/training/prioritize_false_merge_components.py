@@ -99,7 +99,7 @@ def build_prioritized_component_report(
         pairs["label"].eq(0) & pairs["score"].ge(float(baseline_threshold))
     ].copy()
     source_map = {
-        str(row["product_id"]): row for row in source.to_dict(orient="records")
+        str(row["sku_id"]): row for row in source.to_dict(orient="records")
     }
     canonical_map = {
         str(row["gtin"]): row for row in canonical.to_dict(orient="records")
@@ -139,7 +139,7 @@ def build_prioritized_component_report(
             gate = candidate_gate_fields(
                 pd.Series(source_row),
                 sku_attribute_info(
-                    source_row.get("title"), source_row.get("attributes")
+                    source_row.get("sku_name_eng"), source_row.get("attribute")
                 ),
                 candidate_gtin,
                 canonical_row,

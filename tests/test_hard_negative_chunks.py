@@ -33,10 +33,10 @@ def test_mining_chunks_equal_full_block(monkeypatch, chunk_size, k):
     monkeypatch.setattr(common, "training_cfg", lambda: SimpleNamespace(
         mining=SimpleNamespace(ann=cfg)))
     monkeypatch.setattr(common, "category_macros", lambda: {"a": "A", "b": "B"})
-    monkeypatch.setattr(gtin, "barcode_validity", lambda values: values.ne(""))
+    monkeypatch.setattr(gtin, "gtin_validity", lambda values: values.ne(""))
     n = 23
     frame = pd.DataFrame({
-        "barcode": [str(i // 2) if i != 4 else "" for i in range(n)],
+        "gtin": [str(i // 2) if i != 4 else "" for i in range(n)],
         "brand": [f"brand{i % 4}" for i in range(n)],
         "category": ["a" if i % 3 else "b" for i in range(n)],
     })

@@ -108,10 +108,10 @@ def build_audit(n: int | None, seed: int) -> list[dict]:
     rows = []
     for _, r in df.iterrows():
         e = ladder(
-            r.get("title", ""), r.get("attribute", ""), r.get("brand", "")
+            r.get("sku_name_eng", ""), r.get("attribute", ""), r.get("brand", "")
         )
-        e["sku_id"] = str(r.get("product_id", ""))
-        e["barcode"] = str(r.get("barcode", ""))
+        e["sku_id"] = str(r.get("sku_id", ""))
+        e["gtin"] = str(r.get("gtin", ""))
         rows.append(e)
     return rows
 
@@ -129,12 +129,12 @@ def main() -> None:
 
     if args.gtin:
         df = load_dataset_deduped()
-        sub = df[df["barcode"].astype(str) == args.gtin]
+        sub = df[df["gtin"].astype(str) == args.gtin]
         if not len(sub):
             raise SystemExit(f"GTIN {args.gtin}: no rows in dataset_deduped")
         for _, r in sub.iterrows():
-            e = ladder(r.get("title", ""), r.get("attribute", ""), r.get("brand", ""))
-            print(f"\n=== SKU {r.get('product_id')} (GTIN {args.gtin}) ===")
+            e = ladder(r.get("sku_name_eng", ""), r.get("attribute", ""), r.get("brand", ""))
+            print(f"\n=== SKU {r.get('sku_id')} (GTIN {args.gtin}) ===")
             print(f"  s1 normalize   : {e['s1_normalize'][:100]}")
             print(f"  s3 volume/pack : {e['s3_volume_pack'][:100]}   removed: {e['removed_volume_pack']}")
             print(f"  s4 stopwords   : {e['s4_stopwords'][:100]}   removed: {e['removed_stopwords']}")
@@ -183,7 +183,7 @@ def main() -> None:
         }
         entries = []
         for e in rows:
-            c = canon_map.get(e["barcode"])
+            c = canon_map.get(e["gtin"])
             if c and e["final"]:
                 entries.append((e, c, jaccard(e["final"], c)))
         # AUDIT (SSOT move, this round): the ladder's band edges were an

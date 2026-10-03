@@ -5,15 +5,15 @@ label-forming surface imports from here, never from core.cache, so adding
 validation to a script never drags the 53MB dataset sha256.
 
 Why this module exists (owner ruling, this session): 1,747 of 14,997
-distinct barcodes (3,715 rows) FAIL the GS1 check digit — retailer-export
+distinct gtins (3,715 rows) FAIL the GS1 check digit — retailer-export
 noise. Until now raw gtin was treated as ground truth everywhere (canonical
 grouping, eval pairs, dedupe T1), silently creating false-positive labels.
 The checksum was validated by dead code (lib.cache was never imported by
 the pipeline); README claimed the validation existed. These functions are
-now the live SSOT for "this barcode may be trusted as identity".
+now the live SSOT for "this gtin may be trusted as identity".
 
 Structural validation and reviewed eligibility are distinct.
-`barcode_validity` additionally rejects reviewed GLN/formulation holds.
+`gtin_validity` additionally rejects reviewed GLN/formulation holds.
 Semantics: validation only decides TRUST; grouping keys stay the RAW gtin
 string (no UPC-12→13 rewriting of keys — that would drift every CSV).
 Leading-zero canonicalization happens inside the checksum only, where it
@@ -72,7 +72,7 @@ def is_valid_gtin_checksum(gtin: str) -> bool:
 def _canonicalize_gtin(x: str | float | None) -> str | float | None:
     """Canonicalize UPC-12 to GTIN-13 by adding a leading zero.
 
-    The input is a raw barcode cell (CSV read as dtype=str, so NaN can be a
+    The input is a raw gtin cell (CSV read as dtype=str, so NaN can be a
     float) — None/NaN passes through unchanged; the caller filters it.
     """
     if pd.isna(x):
@@ -87,7 +87,7 @@ def _canonicalize_gtin(x: str | float | None) -> str | float | None:
 
 
 def normalize_and_validate_gtin(series: pd.Series) -> pd.DataFrame:
-    """Clean raw barcode strings and validate GTIN structure.
+    """Clean raw gtin strings and validate GTIN structure.
 
     Extraction keeps the LONGEST digit run in a cell (earliest wins ties),
     so a describer prefix ("1-735143004010") no longer truncates to "1";
@@ -120,7 +120,7 @@ def normalize_and_validate_gtin(series: pd.Series) -> pd.DataFrame:
     # Empty strings -> missing.
     cleaned = cleaned.where(cleaned.ne(""))
 
-    # Remove placeholder all-zero barcodes.
+    # Remove placeholder all-zero gtins.
     cleaned = cleaned.where(~cleaned.str.fullmatch(r"0+", na=False))
 
     # UPC-12 -> GTIN-13 canonicalization (checksum-only; grouping keys
@@ -188,16 +188,16 @@ def gtin_equivalent(a: str | float | None, b: str | float | None) -> bool:
     return ka != "" and ka == _gtin_siblings_key(b)
 
 
-def barcode_validity(barcodes: pd.Series) -> pd.Series:
-    """Boolean mask: may this barcode string be trusted as product identity?
+def gtin_validity(gtins: pd.Series) -> pd.Series:
+    """Boolean mask: may this gtin string be trusted as product identity?
 
-    True only when the digit-extracted, length-plausible barcode passes the
+    True only when the digit-extracted, length-plausible gtin passes the
     GS1 check digit and is not held by the reviewed identity policy. Empty/placeholder/malformed -> False. Label surfaces
     (canonical grouping, eval pairs, dedupe T1) treat False exactly like a
-    missing barcode: the row survives in the corpus, but no identity is
+    missing gtin: the row survives in the corpus, but no identity is
     asserted from it.
     """
     from core.identity_policy import held_keys
-    facts = normalize_and_validate_gtin(barcodes)
+    facts = normalize_and_validate_gtin(gtins)
     held = facts.gtin_clean.astype("string").str.zfill(14).isin(held_keys())
     return facts["gtin_structurally_valid"] & ~held

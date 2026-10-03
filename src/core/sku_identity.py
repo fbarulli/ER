@@ -1,9 +1,9 @@
-"""src/core/product_identity.py — ONE product-identity decision, SSOT.
+"""src/core/sku_identity.py — ONE product-identity decision, SSOT.
 
 Every label-forming surface (dedupe T1.5, the gate, the vetoes) has to answer
 the same question: are these two catalog rows the SAME product? Until now each
 lane answered it with its own ad-hoc comparison, and the audit on 2026-09-30
-measured what that costs, using barcode-labeled ground truth:
+measured what that costs, using gtin-labeled ground truth:
 
   GT-POS  17,753 cross-retailer same-GTIN pairs (same product by definition)
           -> the old comparison called 3,369 of them a CONFLICT (19.0%)
@@ -32,14 +32,14 @@ Four rules fix the class, and they are the whole module:
 
 3.  PRICE AND URLS ARE NOT IDENTITY. `price` moves with the seller, and
     `url`/`image_url` are export noise (the corpus carries a "Fashion
-    Accessories" spam title under a real barcode). Neither may decide identity
+    Accessories" spam title under a real gtin). Neither may decide identity
     or rank a representative. Completeness is scored over descriptor columns
     only.
 
-4.  AN ELIGIBLE BARCODE OUTRANKS DESCRIPTORS. Reviewed identity holds remain
-    ineligible even with valid check digits. `barcode_validity` decides whether a
-    barcode may be trusted as identity at all; when both rows carry a trusted
-    barcode the barcode IS the answer and no text comparison is consulted.
+4.  AN ELIGIBLE GTIN OUTRANKS DESCRIPTORS. Reviewed identity holds remain
+    ineligible even with valid check digits. `gtin_validity` decides whether a
+    gtin may be trusted as identity at all; when both rows carry a trusted
+    gtin the gtin IS the answer and no text comparison is consulted.
 
 Aliases are data, not code: `config/vocabulary.json` (via the validated
 `core.common.vocabulary` SSOT) owns the brand map and the concept folds, and
@@ -68,7 +68,7 @@ from core.critical_attributes import (
 # alias-expanded signature, and a bare import of the same name would recurse
 # into itself (caught by the acceptance run, not by review).
 from core.critical_attributes import categorical_conflict as _ssot_categorical_conflict
-from core.gtin import barcode_validity
+from core.gtin import gtin_validity
 from core.record_linkage import strip_pack_multiplicity
 from core.product_dimensions import DimensionEvidence, row_dimensions, evaluate_dimensions, evaluate_columns
 from pipeline import normalize_text
@@ -165,8 +165,8 @@ class ProductIdentity:
     package_material: frozenset[str] = frozenset()
     diet_claim: bool = False
     sugar_claim: bool = False
-    barcode_trusted: bool = False
-    barcode_key: str = ""
+    gtin_trusted: bool = False
+    gtin_key: str = ""
     identity_review_reason: str = ""
     completeness: int = 0
     dimensions: DimensionEvidence | None = None
@@ -192,7 +192,7 @@ def graph_schema() -> tuple[tuple[str, ...], tuple[str, ...]]:
     `row_identity`) therefore enters the graph automatically, and a prepared
     listings file built with an older schema is refused at load time by
     comparing the manifest against this derivation — never silently stale.
-    Non-descriptor bookkeeping (claims flags, barcode key/review reason,
+    Non-descriptor bookkeeping (claims flags, gtin key/review reason,
     completeness, raw dimension evidence) is excluded by construction because
     it is not a set-descriptor field.
     """
@@ -260,7 +260,7 @@ def normalize_brand(raw: object) -> frozenset[str]:
             # disjoint, so brand-agreement evidence stops being spuriously
             # contradicted while real cross-brand vetoes keep firing
             # (measured: 49 within-group brand vetoes -> 22, all 27 dissolved
-            # pairs being seeded alias families on one barcode).
+            # pairs being seeded alias families on one gtin).
             folded.add(target)
     return frozenset(folded)
 
@@ -365,15 +365,15 @@ def identity_tokens_set(attributes: object) -> frozenset[str]:
     return frozenset(out)
 
 
-def _barcode_facts(barcode: object) -> tuple[bool, str]:
+def _gtin_facts(gtin: object) -> tuple[bool, str]:
     """(trusted, normalized key) using structural validation and review policy."""
     import pandas as pd
 
     from core.gtin import normalize_and_validate_gtin
 
-    series = pd.Series([barcode], dtype="string")
+    series = pd.Series([gtin], dtype="string")
     facts = normalize_and_validate_gtin(series)
-    if not bool(barcode_validity(series).iloc[0]):
+    if not bool(gtin_validity(series).iloc[0]):
         return False, ""
     key = facts["gtin_clean"].iloc[0]
     return True, "" if key is None else str(key)
@@ -392,13 +392,13 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
     get = (lambda k, d="": row.get(k, d)) if isinstance(row, Mapping) else (
         lambda k, d="": getattr(row, k, d)
     )
-    title = str(get("title", "") or "")
-    attributes = get("attributes", "")
-    description = str(get("description", "") or "")
-    url = str(get("url", "") or "")
+    title = str(get("sku_name_eng", "") or "")
+    attributes = get("attribute", "")
+    description = str(get("description_short_eng", "") or "")
+    url = str(get("sku_url", "") or "")
     image_url = str(get("image_url", "") or "")
     category_text = " ".join(
-        str(get(col, "") or "") for col in ("category", "category_path")
+        str(get(col, "") or "") for col in ("category", "breadcrumbs_eng")
     )
 
     from core.structured_features import sku_info
@@ -406,7 +406,7 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
     info = sku_info(
         title, attributes, description,
         url=url, image_url=image_url,
-        category_path=str(get("category_path", "") or ""),
+        breadcrumbs_eng=str(get("breadcrumbs_eng", "") or ""),
         category=str(get("category", "") or ""),
     )
     declared = identity_tokens_set(attributes)
@@ -418,8 +418,8 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
     flavor |= alias_fold(title_tokens & declared, qualifiers=True)
 
     from core.identity_policy import review_reason, listing_review_reason
-    held_reason = review_reason(get("barcode", "")) or listing_review_reason(get("product_id", ""), get("barcode", ""))
-    trusted, key = _barcode_facts(get("barcode", ""))
+    held_reason = review_reason(get("gtin", "")) or listing_review_reason(get("sku_id", ""), get("gtin", ""))
+    trusted, key = _gtin_facts(get("gtin", ""))
     haystack = " ".join(
         (title, str(attributes or ""), description, category_text)
     )
@@ -444,8 +444,8 @@ def row_identity(row: Mapping[str, Any] | Any) -> ProductIdentity:
         ),
         diet_claim=bool(DIET_CLAIM_RE.search(haystack)),
         sugar_claim=bool(SUGAR_CLAIM_RE.search(haystack)),
-        barcode_trusted=trusted and not held_reason,
-        barcode_key=key,
+        gtin_trusted=trusted and not held_reason,
+        gtin_key=key,
         identity_review_reason=held_reason,
         completeness=completeness(row),
         dimensions=row_dimensions(row if isinstance(row, Mapping) else {
@@ -490,12 +490,12 @@ def identity_conflict(
 
     An empty list is NOT proof of sameness — it is the absence of a conflict,
     which is exactly why a caller still needs an identity key (a trusted
-    barcode, or a reviewed adjudication) before collapsing anything.
+    gtin, or a reviewed adjudication) before collapsing anything.
 
-    Rule 4: two trusted barcodes settle it outright; the text is not consulted.
+    Rule 4: two trusted gtins settle it outright; the text is not consulted.
     """
-    if left.barcode_trusted and right.barcode_trusted:
-        return [] if left.barcode_key == right.barcode_key else ["barcode"]
+    if left.gtin_trusted and right.gtin_trusted:
+        return [] if left.gtin_key == right.gtin_key else ["gtin"]
 
     reasons: list[str] = []
     if brand_conflict(left.brand, right.brand):
@@ -528,7 +528,7 @@ def same_product(left: ProductIdentity, right: ProductIdentity) -> bool:
     return not (left.identity_review_reason or right.identity_review_reason or identity_conflict(left, right))
 
 
-def evaluate_product_identity(left: ProductIdentity, right: ProductIdentity) -> dict:
+def evaluate_sku_identity(left: ProductIdentity, right: ProductIdentity) -> dict:
     """One identity evaluation with established conflicts and ALL raw evidence.
 
     Raw feed differences require review; they do not prove different products.
@@ -553,14 +553,14 @@ def evaluate_product_identity(left: ProductIdentity, right: ProductIdentity) -> 
     if packaging.get("types", {}).get("status") == "equal" and packaging.get("materials", {}).get("status") == "equal":
         resolved.extend(["Pack Type", "Pack Material Type"])
     review = [k for k, v in attributes.items() if v["review"] and k not in resolved]
-    known = left.barcode_trusted and right.barcode_trusted
+    known = left.gtin_trusted and right.gtin_trusted
     decision = ("same" if not conflicts else "different") if known else (
         "different" if conflicts else "review" if review or unknown or malformed
         else "compatible_unverified")
     holds = sorted({r for r in (left.identity_review_reason, right.identity_review_reason) if r})
     if holds:
         decision = "review"
-    return {"decision": decision, "identity_review_reasons": holds, "context_comparison": contextual, "resolved_review_dimensions": resolved, "identity_conflicts": conflicts, "attributes": attributes,
+    return {"decision": decision, "identity_review_reasons": holds, "context_comparison": contextual, "resolved_review_dimensions": resolved, "identity_conflicts": conflicts, "attribute": attributes,
             "columns": columns, "review_dimensions": review, "unclassified_keys": unknown,
             "malformed_parts": malformed}
 
@@ -581,7 +581,7 @@ __all__ = [
     "concept_folds",
     "flavor_vocabulary",
     "identity_conflict",
-    "evaluate_product_identity",
+    "evaluate_sku_identity",
     "identity_tokens_set",
     "normalize_brand",
     "row_identity",

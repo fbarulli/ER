@@ -24,12 +24,12 @@ def test_media_dimensions_and_hashes_do_not_become_quantities():
     assert not text
 
 
-@pytest.mark.parametrize("url", ["https://example.org/shop/12x1-mineralwasser",
+@pytest.mark.parametrize("sku_url", ["https://example.org/shop/12x1-mineralwasser",
                                  "https://example.org/shop/12x1-pet-bottles",
                                  "https://example.org/shop/12x1 mineralwasser"])
-def test_url_pack_span_requires_a_recognized_unit(url):
+def test_url_pack_span_requires_a_recognized_unit(sku_url):
     from pipeline import extract_pack_evidence, extract_pack_from_title
-    text = url_text(url)
+    text = url_text(sku_url)
     evidence = extract_pack_evidence(text)
     # No multiplier may fire without a shared recognized measurement unit, and
     # no raw span may swallow the first letter of the next word ('12x1 m', '12x1 p').
