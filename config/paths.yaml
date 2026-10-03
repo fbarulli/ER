@@ -408,6 +408,7 @@ canonical_optional_columns:
   source_rows: "[]"
   evidence_ledger: "[]"
   organic_set: "[]"
+  made_from_set: "[]"
 
 # ── unit taxonomy (core.text, core.unit_canonicalization, ner features) ─────
 # THE one table for volume units and pack bounds; three module-local literals

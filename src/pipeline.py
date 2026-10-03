@@ -59,6 +59,8 @@ from core.critical_attributes import (
     categorical_conflict,
     extract_critical_claims,
     extract_description_claims,
+    extract_made_from_tokens,
+    source_consistency_flags,
     volumes_compatible,
 )
 from core.tracing import (
@@ -724,6 +726,18 @@ def extract_all(sku_name_eng: str, attribute: str, description_short_eng: str = 
     if flavor_set:
         ledger.append({"field": "flavor", "column": "title+attributes",
                        "value": sorted(flavor_set)})
+    # "Made From" base ingredients, title+attribute aware (the declared field
+    # alone misses a title that names the ingredient, e.g. "ginger-turmeric"
+    # with `Made From: lemon, ginger`). Vocabulary is config-owned.
+    made_from_set = set(extract_made_from_tokens(sku_name_eng, attribute))
+    if made_from_set:
+        ledger.append({"field": "made_from", "column": "title+attributes",
+                       "value": sorted(made_from_set)})
+    # Source contradictions / implausible declarations (measured 2026-10-03):
+    # the extractor is faithful, so these flag SOURCE defects for review.
+    consistency_flags.update(
+        source_consistency_flags(attribute, sku_name_eng, sweeteners["sweetener_type"])
+    )
     # Categories classify products; they do not declare a SKU's flavor.
     # Broad "Lemonade/Lime" and negated "Non-Cola" categories previously
     # invented identity agreement between distinct variants.
@@ -960,6 +974,7 @@ def extract_all(sku_name_eng: str, attribute: str, description_short_eng: str = 
         package_materials=package_materials,
         packaging_levels=packaging_levels,
         flavor_set=flavor_set,
+        made_from_set=made_from_set,
         carbonation_set=set(critical["carbonation"]),
         sweetener_set=set(critical["sweetener"]),
         sweetener_type_set=sweeteners["sweetener_type"],
@@ -1884,6 +1899,7 @@ def generate_canonical(
     packaging_level_set = {value for x in extracted for value in x["packaging_levels"]}
     package_material_set = {value for x in extracted for value in x["package_materials"]}
     flavor_set = {value for x in extracted for value in x["flavor_set"]}
+    made_from_set = {value for x in extracted for value in x["made_from_set"]}
     carbonation_set = {value for x in extracted for value in x["carbonation_set"]}
     sweetener_set = {value for x in extracted for value in x["sweetener_set"]}
     sweetener_type_set = {value for x in extracted for value in x["sweetener_type_set"]}
@@ -2125,6 +2141,7 @@ def generate_canonical(
         package_type_set=package_type_set,
         package_material_set=package_material_set,
         flavor_set=flavor_set,
+        made_from_set=made_from_set,
         carbonation_set=carbonation_set,
         sweetener_set=sweetener_set,
         sweetener_type_set=sweetener_type_set,
@@ -3052,6 +3069,7 @@ def run_within_brand_pipeline(
         "packaging_level_set",
         "package_material_set",
         "flavor_set",
+        "made_from_set",
         "carbonation_set",
         "sweetener_set",
         "sweetener_type_set",

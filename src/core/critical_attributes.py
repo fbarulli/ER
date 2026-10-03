@@ -7,8 +7,11 @@ absence is kept as unknown and is never converted into agreement.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
+from functools import lru_cache
+from pathlib import Path
 
 from core.text import normalized_attribute_text
 
@@ -23,69 +26,137 @@ CRITICAL_ATTRIBUTE_DIMENSIONS: tuple[str, ...] = (
     "pulp",
 )
 
+# ── vocabulary (config-owned SSOT) ─────────────────────────────────────────
+# Every attribute vocabulary below is DATA, not code: one block in
+# config/vocabulary.json (`attribute_vocabulary`) owns them, next to the
+# STOPWORDS/CONCEPT_FOLDS/brand_aliases that core.common validates. They are
+# read here WITHOUT importing core.common — this module is loaded while
+# core.common is still importing (common -> schemas -> ... ->
+# attribute_conflicts -> here), so a top-level core.common import would be
+# circular. The reader locates the repo root (config/ + pyproject.toml)
+# exactly like core.common._find_project_root and reads the same file, so the
+# config file remains the single source of truth.
+@lru_cache(maxsize=1)
+def _attribute_vocabulary() -> dict:
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "config").is_dir() and (candidate / "pyproject.toml").is_file():
+            data = json.loads(
+                (candidate / "config" / "vocabulary.json").read_text(encoding="utf-8")
+            )
+            return data.get("attribute_vocabulary") or {}
+    raise RuntimeError("Could not locate project root for config/vocabulary.json")
+
+
+_VOCAB = _attribute_vocabulary()
+# Variant -> canonical flavor. Includes plural/adjective/foreign/truncation
+# aliases, and "-ade" drink words carrying their base fruit (a "lemonade" is
+# lemon-flavored; whole-token only, so "made"/"trade"/"gatorade"/"bionade"
+# never fire). Measured 2026-10-03: 1,988 title rows gain their base flavor,
+# 0 of 855 golden records change.
 FLAVOR_ALIASES: dict[str, str] = {
-    "berries": "berry",
-    "cocoanut": "coconut",
-    # 2026-09-28 low-hanging-fruit normalization (measured on the
-    # 108,046-row payload, scripts/flip_validity_audit.py companion mining:
-    # 2,300 rows / 71 pairs carried a lexicon-missed near-flavor word).
-    # Plurals -> singular:
-    "apples": "apple", "oranges": "orange", "grapes": "grape",
-    "lemons": "lemon", "pears": "pear", "limes": "lime",
-    "grapefruits": "grapefruit", "coconuts": "coconut", "tonics": "tonic",
-    "coffees": "coffee", "roses": "rose", "mints": "mint",
-    "pineapples": "pineapple", "fruits": "fruit",
-    # adjective forms
-    "fruity": "fruit", "peachy": "peach", "lemony": "lemon",
-    # foreign-language variants
-    "tonica": "tonic", "lemoni": "lemon", "tamarindo": "tamarind",
-    # truncation artifacts seen in feed titles
-    "strawberr": "strawberry", "grapefru": "grapefruit", "chery": "cherry",
-    "rhubar": "rhubarb", "fruite": "fruit",
-    # spelling variants measured in titles (2026-10-01 lexicon audit):
-    "litchi": "lychee",
-    "cassis": "blackcurrant", "anis": "anise", "aniseed": "anise",
-    # EXCLUDED deliberately: pearl~pear (different word, 28 rows measured),
-    # sucralose~sucrose-class attribute confusions (distinct values).
+    str(key): str(value) for key, value in (_VOCAB.get("flavor_aliases") or {}).items()
 }
-FLAVOR_LEXICON: frozenset[str] = frozenset(
-    {
-        "aloe", "angelica", "anise", "blackcurrant", "exotic", "apple", "berry", "boysenberry", "buckthorn",
-        "calamansi", "cherry", "chokeberry", "chocolate", "clementine",
-        "cloudberry", "coconut", "coffee", "cola", "cranberry",
-        "citrus", "elderberry", "elderflower", "fruit",
-        "ginger", "grape", "grapefruit", "juniper", "lemon", "lime",
-        "lingonberry", "lychee", "mango", "mint", "nectarine", "orange",
-        "passion", "passionfruit", "peach", "pear", "pecan", "pineapple",
-        "pomegranate", "quince",
-        "raspberry", "rhubarb", "rose", "strawberry", "tamarind", "tonic",
-        "tropical", "vanilla", "violet", "watermelon",
-    }
+FLAVOR_LEXICON: frozenset[str] = frozenset(_VOCAB.get("flavor_lexicon") or ())
+# Field-bound: only honored inside an explicit Flavour/Flavor declaration.
+DECLARED_FLAVOR_LEXICON: frozenset[str] = frozenset(
+    _VOCAB.get("declared_flavor_lexicon") or ()
 )
-# Additional values observed in explicit Flavour/Flavor declarations. Keep
-# these field-bound: the same words can describe ingredients or product types
-# elsewhere in the SKU text.
-DECLARED_FLAVOR_LEXICON: frozenset[str] = frozenset({
-    "acai", "agave", "almond", "amaretto", "apricot", "aranciata",
-    "aronia", "artichoke", "avocado", "banana", "barley", "basil",
-    "beet", "bergamot", "bilberry", "birch", "blackberry",
-    "blackcurrant", "blueberry", "bubble gum", "burdock", "cabbage",
-    "cactus", "camellia", "camomile", "cannabis", "cappuccino",
-    "caramel", "cardamom", "carrot", "charcoal", "chestnut", "chilli",
-    "cinnamon", "cocoa", "creme brulee", "cucumber", "currant",
-    "dandelion", "eucalyptus", "fennel", "fig", "garlic", "ginseng",
-    "guarana", "guava", "hazelnut", "hibiscus", "honey", "irish cream",
-    "jasmine", "kiwi", "latte", "lavender", "lychee", "magnolia", "mandarin",
-    "maple", "marshmallow", "melon", "menthol", "mocha", "mulberry",
-    "nettle", "noni", "nut", "oat", "olive", "onion", "papaya",
-    "pea", "pepper", "peppermint", "plum", "prune", "pumpkin",
-    "raisin", "rosehip", "rosemary", "sea salt", "spearmint",
-    "tangerine", "tea", "thistle", "thyme", "toffee", "tomato",
-    "walnut",
-    # Measured declared misses (2026-10-01 lexicon audit):
-    "wild berries",
-})
+# "Made From" base-ingredient vocabulary, measured from the corpus's declared
+# `Made From:` field (116 distinct values, top-80 = 99.6%). Explicit closed
+# list so title extraction cannot invent ingredients; multi-word values match
+# as phrases.
+MADE_FROM_LEXICON: frozenset[str] = frozenset(_VOCAB.get("made_from_lexicon") or ())
+MADE_FROM_PHRASES: tuple[str, ...] = tuple(_VOCAB.get("made_from_phrases") or ())
+# Words/phrases that legitimately carry caffeine. A positive caffeine band
+# declared on a product whose TITLE names none of these is source pollution.
+CAFFEINE_SOURCES: tuple[str, ...] = tuple(_VOCAB.get("caffeine_sources") or ())
+# Sugar-as-ingredient vocabulary (the sweetener_type channel). A "no sugar"
+# claim beside one of these is an internal source contradiction.
+SUGAR_INGREDIENTS: frozenset[str] = frozenset(_VOCAB.get("sugar_ingredients") or ())
 DECLARED_FLAVOR_FIELD_RE = re.compile(r"(?:^|;)\s*flavou?r\s*:\s*([^;]*)", re.IGNORECASE)
+
+
+def _field_tokens(attribute: object, key: str) -> frozenset[str]:
+    """Lowercased comma-split tokens of one `Key:` field in the attribute cell."""
+    found: set[str] = set()
+    for part in str(attribute or "").split(";"):
+        if ":" not in part:
+            continue
+        raw_key, raw_value = part.split(":", 1)
+        if normalized_attribute_text(raw_key) != key:
+            continue
+        found.update(token.strip().lower() for token in raw_value.split(",") if token.strip())
+    return frozenset(found)
+
+
+def _caffeine_positive(values: frozenset[str]) -> bool:
+    """True when a caffeine band's lower bound is > 0 ("0-15 mg" is trace)."""
+    for value in values:
+        match = re.match(r"\s*(\d+)", value)
+        if match and int(match.group(1)) > 0:
+            return True
+    return False
+
+
+def _has_caffeine_source(*texts: object) -> bool:
+    text = normalized_attribute_text(*texts)
+    tokens = set(text.split())
+    return any(
+        (source in text) if " " in source else (source in tokens)
+        for source in CAFFEINE_SOURCES
+    )
+
+
+def _without_field(attribute: object, key: str) -> str:
+    """Attribute cell minus one `Key:` field (the `Caffeine:` key itself would
+    otherwise always satisfy a caffeine-source search)."""
+    kept = [
+        part
+        for part in str(attribute or "").split(";")
+        if not (":" in part and normalized_attribute_text(part.split(":", 1)[0]) == key)
+    ]
+    return ";".join(kept)
+
+
+def source_consistency_flags(
+    attribute: object, title: object, sweetener_type: frozenset[str] | set[str]
+) -> frozenset[str]:
+    """Internal source contradictions + implausible declarations.
+
+    Measured 2026-10-03: the extractor is faithful, so these are SOURCE defects
+    (a "no sugar" claim beside cane sugar; a caffeine band on a juice). Flagged
+    for review, never silently dropped or "corrected" (review-not-guess).
+    """
+    flags: set[str] = set()
+    free_from = _field_tokens(attribute, "free from")
+    claims = _field_tokens(attribute, "health claims")
+    no_artificial = _field_tokens(attribute, "no artificial ingredients")
+    caffeine = _field_tokens(attribute, "caffeine")
+    caff_pos = _caffeine_positive(caffeine)
+    sweeteners = set(sweetener_type)
+    if caff_pos and "no caffeine" in free_from:
+        flags.add("caffeine_source_conflict")
+    if caff_pos and not _has_caffeine_source(title, _without_field(attribute, "caffeine")):
+        flags.add("caffeine_without_source")
+    if (sweeteners & SUGAR_INGREDIENTS) and "no sugar" in claims:
+        flags.add("no_sugar_with_sugar")
+    if "aspartame" in sweeteners and "no aspartame" in no_artificial:
+        flags.add("no_aspartame_with_aspartame")
+    return frozenset(flags)
+
+
+def extract_made_from_tokens(*values: object) -> frozenset[str]:
+    """Base-ingredient evidence from any text columns (title + attribute).
+
+    Whole-token (single words) and phrase (multi-word) matches against the
+    measured MADE_FROM_LEXICON. Deliberately title+attribute aware so a
+    listing whose title says "turmeric" is captured even when the declared
+    `Made From:` field omits it.
+    """
+    text = normalized_attribute_text(*values)
+    found = {token for token in text.split() if token in MADE_FROM_LEXICON}
+    found.update(phrase for phrase in MADE_FROM_PHRASES if phrase in text)
+    return frozenset(found)
 
 
 def extract_flavor_tokens(*values: object) -> frozenset[str]:

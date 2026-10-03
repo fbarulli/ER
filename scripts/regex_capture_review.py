@@ -19,7 +19,11 @@ import pandas as pd
 
 from core.audit_json import csv_to_json
 from core.attribute_conflicts import sku_attribute_info
-from core.critical_attributes import FLAVOR_ALIASES, normalized_attribute_text
+from core.critical_attributes import (
+    FLAVOR_ALIASES,
+    SUGAR_INGREDIENTS,
+    normalized_attribute_text,
+)
 from core.model_input import build_sku_text, model_input_composition, model_input_info
 from core.structured_features import sku_info
 from core.sweetener_values import SWEETENER_TYPES, declared_sweeteners
@@ -35,9 +39,7 @@ NUMBER_VALUE_RE = re.compile(
     r"(?<![a-z0-9])(?:\d+\s*[x×]\s*\d+(?:[.,]\d+)?\s*(?:mg|ml|g|l)?|\d+(?:[.,]\d+)?(?:\s*[-–]\s*\d+(?:[.,]\d+)?)?\s*(?:%|mg|ml|g|l)?)(?![a-z0-9])",
     re.IGNORECASE,
 )
-SUGAR_INGREDIENT_TYPES = frozenset({
-    "sugar", "cane_sugar", "hfcs", "fructose", "glucose", "sucrose", "corn_syrup",
-})
+SUGAR_INGREDIENT_TYPES = SUGAR_INGREDIENTS
 
 
 def sweetener_type_evidence(raw: str) -> list[dict[str, object]]:

@@ -27,6 +27,28 @@ def test_pearl_never_maps_to_pear():
     assert extract_flavor_tokens("pearl") == frozenset()
 
 
+def test_ade_words_map_to_base_fruit():
+    # A "-ade" drink word carries its base fruit as the flavor.
+    for variant, canonical in [
+        ("lemonade", "lemon"), ("limeade", "lime"), ("orangeade", "orange"),
+        ("cherryade", "cherry"), ("grapeade", "grape"), ("gingerade", "ginger"),
+        ("raspberryade", "raspberry"), ("pineappleade", "pineapple"),
+        ("limonade", "lemon"),
+    ]:
+        assert extract_flavor_tokens(variant) == frozenset({canonical})
+
+
+def test_ade_word_and_brand_collisions_never_fire():
+    # Whole-token matching only: these all end in "-ade" but are not flavors.
+    for word in ("made", "trade", "fairtrade", "gatorade", "bionade", "grade",
+                 "lucozade", "nightshade", "cascade", "handmade", "homemade"):
+        assert extract_flavor_tokens(word) == frozenset()
+
+
+def test_raspberry_lemonade_mints_both():
+    assert extract_flavor_tokens("Raspberry Lemonade") == frozenset({"raspberry", "lemon"})
+
+
 def test_alias_that_is_lexicon_word_is_noop():
     assert FLAVOR_ALIASES.get("apple", "apple") in FLAVOR_LEXICON
     assert extract_flavor_tokens("apple juice") == frozenset({"apple"})

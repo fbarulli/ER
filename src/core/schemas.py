@@ -2664,6 +2664,7 @@ class ExtractedAttributes(BaseModel):
     package_materials: list[str] = Field(default_factory=list)
     packaging_levels: set[str] = Field(default_factory=set)
     flavor_set: set[str] = Field(default_factory=set)
+    made_from_set: set[str] = Field(default_factory=set)
     carbonation_set: set[str] = Field(default_factory=set)
     sweetener_set: set[str] = Field(default_factory=set)
     sweetener_type_set: set[str] = Field(default_factory=set)
@@ -2702,6 +2703,7 @@ class CanonicalRecord(BaseModel):
     package_material_set: set[str] = Field(default_factory=set)
     packaging_level_set: set[str] = Field(default_factory=set)
     flavor_set: set[str] = Field(default_factory=set)
+    made_from_set: set[str] = Field(default_factory=set)
     carbonation_set: set[str] = Field(default_factory=set)
     sweetener_set: set[str] = Field(default_factory=set)
     sweetener_type_set: set[str] = Field(default_factory=set)
@@ -3261,6 +3263,10 @@ CANONICAL_RECORDS_COLUMNS: tuple[str, ...] = (
     "package_material_set",
     "packaging_level_set",
     "flavor_set",
+    # Title+attribute "Made From" base-ingredient set (owner 2026-10-03,
+    # additive on purpose; contract updated deliberately, never silently).
+    # Vocabulary is config-owned (config/vocabulary.json made_from_lexicon).
+    "made_from_set",
     "carbonation_set",
     "sweetener_set",
     "sweetener_type_set",
