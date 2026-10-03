@@ -23,8 +23,9 @@ def main():
     parser.add_argument('--checkpoint', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--batch-size', type=int, default=256)
+    parser.add_argument('--device', choices=('cuda', 'cpu'), default='cuda')
     args = parser.parse_args()
-    if not torch.cuda.is_available():
+    if args.device == 'cuda' and not torch.cuda.is_available():
         raise RuntimeError('CUDA required; refusing CPU fallback')
     if args.output.exists():
         raise FileExistsError('Worker never reuses an existing output')
@@ -35,19 +36,38 @@ def main():
     # Transport integrity only: semantic validation and cache decisions are local.
     if checkpoint_hash(args.checkpoint) != request['metadata']['checkpoint_sha256']:
         raise ValueError('Uploaded checkpoint differs from local request')
-    print(f'[embeddings/gpu] loading checkpoint; prepared texts={len(request["texts"]):,}', flush=True)
-    model = SentenceTransformer(str(args.checkpoint), device='cuda', local_files_only=True)
+    print(f'[embeddings/{args.device}] loading checkpoint; prepared texts={len(request["texts"]):,}', flush=True)
+    model = SentenceTransformer(str(args.checkpoint), device=args.device, local_files_only=True)
     model.eval()
-    print(f'[embeddings/gpu] encoding batch_size={args.batch_size}', flush=True)
-    vectors = model.encode(request['texts'], batch_size=args.batch_size, convert_to_numpy=True,
-                           normalize_embeddings=True, show_progress_bar=True)
+    try:
+        from encoding_inputs import tokenization_policy
+    except ImportError:
+        from core.encoding_inputs import tokenization_policy
+    plan = request.get('prepared_text')
+    tokens = args.request.parent/'prepared_text.npz'
+    if not plan or hashlib.sha256(tokens.read_bytes()).hexdigest() != plan['sha256']:
+        raise ValueError('Locally prepared tokens required; missing or corrupt token archive')
+    if tokenization_policy(model) != plan['tokenization']:
+        raise ValueError('Worker tokenizer policy differs from local preparation')
+    print(f'[embeddings/{args.device}] encoding prepared batches; truncated=0',flush=True)
+    chunks = []
+    with np.load(tokens,allow_pickle=False) as data, torch.no_grad():
+        for n,batch in enumerate(plan['token_batches'],1):
+            features = {key:torch.as_tensor(data[batch['prefix']+'/'+key],device=args.device) for key in batch['keys']}
+            features.update(batch['constants'])
+            vector = model(features)['sentence_embedding']
+            chunks.append(torch.nn.functional.normalize(vector,p=2,dim=1).cpu().numpy())
+            print(f'[embeddings/{args.device}] batch={n}/{len(plan["token_batches"])}',flush=True)
+    vectors = np.concatenate(chunks)
+    if len(vectors) != len(request['ids']):
+        raise ValueError('Prepared token population differs from request IDs')
     metadata = {**request['metadata'], 'request_sha256': hashlib.sha256(raw).hexdigest()}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open('wb') as handle:
         np.savez_compressed(handle, ids=np.asarray(request['ids'], dtype=str),
                             embeddings=vectors, metadata=json.dumps(metadata, sort_keys=True))
     args.output.with_suffix('.sha256').write_text(hashlib.sha256(args.output.read_bytes()).hexdigest())
-    print(f'[embeddings/gpu] encoded shape={vectors.shape}', flush=True)
+    print(f'[embeddings/{args.device}] encoded shape={vectors.shape}', flush=True)
 
 
 if __name__ == '__main__':

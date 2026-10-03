@@ -1,5 +1,37 @@
 # ER discovery dashboard
 
+`/decisions` adds attribute-first decision tracking; `/api/decisions` exports
+the same evidence as JSON. Select an attribute, optionally a GTIN pair, saved
+gate decision, JEV scope or round. Gate pairs with JEV evidence appear first;
+pagination defaults to 50 pairs and is bounded at 100. Attribute comparison
+counts describe the displayed page, while saved report metrics retain their
+original population and source.
+
+The view reuses the shared attribute registry, decision engine, veto-policy
+ledger, GTIN normalizer, embedding provenance validator, graph preflight and
+the dashboard's safe training-run/archive readers. Current engine comparisons
+are labeled separately from saved gate decisions. Historical model scores
+retain their run, artifact, source line, frozen SKU→GTIN mapping and saved
+threshold/checkpoint manifest. JEV rounds, scopes and both orders remain
+separate observations. Gate-derived labels are not presented as human truth.
+
+The attribute × difficulty × masking × generated-data table reads existing
+visibility CSVs and frozen bundle headers. It preserves field hits, modes,
+donor/source payload indices, folds, epochs and presentation records when
+emitted. Missing fields remain unknown; a population label is distinguished
+from a measured difficulty grade. Entity-only lineage is not asserted to
+identify an exact pair. Bundle checksum validation is distinguished from
+current training readiness. Payload-variant ablation results are shown when
+available; they do not establish individual attribute weights.
+
+Source locations use `core.common.F` and the configured model-track suite.
+Additional masking-field aliases live in `decision_attribute_aliases` in
+`config/paths.yaml`; shared critical-dimension aliases come from the existing
+attribute-conflict registry. No GPU jobs or models execute in this view.
+Evidence is reread on each request, concurrent file changes reject the
+snapshot, and stale vectors cannot contribute cosine scores. Configuration
+changes require restarting the dashboard and are rejected until then.
+
 Copied from `../broad-way/src/broadway/reports/experiments_dashboard.py` on
 2026-09-30. The original dashboard is preserved in `vendor/`; `app.py` adds
 an ER discovery view and configures local experiment/results/observation paths.
@@ -94,3 +126,12 @@ Round 6 compares both original and processed evidence on the same 100 fresh
 pairs (400 completed calls). The JEV page defaults to this round and shows
 matched score-category changes, per-format judgments, and a downloadable
 paired comparison. Ledger call counts distinguish input format and order.
+
+Frozen-checkpoint attribute influence is read from the configured
+`decision_ablation_report` binding. The report preserves attribute, intervention
+channel, difficulty, masking and generation lineage alongside gate/JEV fields
+when supplied by the pair artifact. Missing lineage stays unknown. Request,
+result, checkpoint, source and composer hashes must still match; stale scores
+are withheld. Influence describes this intervention on this sample, rather than
+an intrinsic model weight. Retrieval ranks use the fixed sampled endpoint
+catalog, not the full production ANN index.

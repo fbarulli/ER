@@ -74,6 +74,8 @@ def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64
     progress(f'loading MiniLM device={device}')
     model = SentenceTransformer(str(checkpoint), device=device, local_files_only=True)
     model.eval()
+    from core.encoding_inputs import enable_zero_truncation
+    enable_zero_truncation(model)
     progress(f'encoding rows={len(texts):,} batch_size={batch_size}')
     vectors = model.encode(texts, batch_size=batch_size, convert_to_numpy=True,
                            normalize_embeddings=True, show_progress_bar=True)

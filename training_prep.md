@@ -219,5 +219,23 @@ and prepared embedding inputs, with no input ZIP upload:
 PYTHONPATH=src .venv/bin/python scripts/run_colab_embeddings.py
 ```
 
-It runs the embedding worker on T4 at batch size 256, verifies the downloaded
-cache checksum, and releases the runtime. Run it only when starting a new job.
+The launcher composes all texts locally before provisioning T4. It saves the exact text request and worker in GitHub. The existing
+`prepare_remote_layout` checkout flow clones these inputs and the frozen
+checkpoint; the worker checks their hashes before CUDA encoding. No input is
+uploaded directly to Colab.
+Downloads are checked locally for transfer checksum, exact ID order/population,
+finite normalized vectors, text content hash, checkpoint hash, parser/config
+fingerprint and prepared-input hashes. Inputs changed during the job fail before
+the cache is published. Legacy or stale caches fail closed; existing vectors
+are reused only after fresh local text composition and validation.
+
+The verified cache, `embedding_inputs.json`, prepared inputs and local handoff
+manifest are archived locally. The existing `model_tracks.publish.persist_results`
+publisher remains available when DVC storage is requested. The automated embedding launcher now
+saves its verified tar.gz directly to GitHub with the existing Git artifact flow,
+as requested; Archives over the regular-file limit fail before staging.
+
+Three-track Colab runs now return training-only checkpoints. The runtime is
+released before `model_tracks.local_complete` performs CPU inference, indexing,
+reports and publication locally from the verified input and training archives.
+Local retries reuse verified checkpoints and already completed tracks.

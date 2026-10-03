@@ -1,0 +1,21 @@
+# Frozen-checkpoint inference only. Preparation and reporting run locally.
+sample_pairs: 100
+seed: 1729
+split: dev
+batch_size: 256
+accelerator: T4
+attributes: []  # Empty selects the shared attribute registry.
+output_dir: results/attribute_ablation
+report_path: results/attribute_ablation/report.json
+retrieval_ks: [1, 5, 10]
+# Relation names follow graph_schema(); unsupported attributes are explicit no-ops.
+graph_fields:
+  volume: [numeric.volume_ml]
+  count per unit: [numeric.pack]
+  flavour: [attribute.flavor]
+  carbonization: [attribute.carbonation]
+  sweetener: [attribute.sweetener, attribute.sweetener_type, attribute.sweetening]
+  pack type: [attribute.package_type]
+  pack material type: [attribute.package_material]
+# Preserve supplied lineage verbatim; missing axes remain unknown.
+slice_columns: [difficulty_slice, population, masking_profile, target_mode, generation_variant, lineage_id, gate_decision, gate_reason, jev_round, jev_input_scope]

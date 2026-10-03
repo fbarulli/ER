@@ -110,3 +110,7 @@ dashboard/diagrams/
 
 # Small reference coverage table shipped with discovery evidence
 !dashboard/evidence/identity/*.csv
+
+# Local scratch space for temporary work (never committed)
+scratch/
+data/track_setup.pre_rename_stale/

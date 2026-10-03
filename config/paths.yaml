@@ -28,6 +28,10 @@
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── folder layout (relative to the repo root unless absolute) ──────────────
+decision_attribute_aliases:
+  # Masking's structured field -> the shared attribute-universe key.
+  package_material: "pack material type"
+
 paths:
   artifacts_dir: "artifacts"            # ONE root: everything lives under it
   # Versioned runtime data lives in this one repository-root directory.
@@ -47,6 +51,14 @@ paths:
 
 # ── artifact bindings (SSOT — nothing else in the tree spells these) ────────
 files:
+  decision_ledger: "repo:jev/sample_ledger.json"
+  decision_rebuild_report: "repo:jev/full_evidence/report.json"
+  decision_training_report: "repo:report.json"
+  decision_suite_config: "repo:config/model_tracks.yaml"
+  decision_embedding_request: "results:embedding_job/prepared_request.json"
+  decision_visibility: "results:logs"
+  decision_ablation_report: "results:attribute_ablation/report.json"
+  decision_attribute_census: "results:attribute_universe_census.json"
   # The inspected raw export is repository-root dataset.csv. Keep this
   # explicit rather than silently falling back when artifacts/data is absent.
   dataset: "repo:dataset.csv"

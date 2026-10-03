@@ -85,7 +85,7 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
         local.write_bytes(saved.read_bytes())
 
     backend = SimpleNamespace(REMOTE_ROOT='/remote/root', SESSION='session', GPU='CPU',
-        GIT_REMOTE_NAME='origin', _BOOTSTRAP='', _RESULT_DOWNLOAD_TIMEOUT_SECONDS=30,
+        GIT_REMOTE_NAME='origin', BRANCH='training', _BOOTSTRAP='', _RESULT_DOWNLOAD_TIMEOUT_SECONDS=30,
         _WORKER_TIMEOUT_SECONDS=30, run_colab_exec_stream=exec_remote,
         _upload_with_retries=lambda *a, **k: None, _remote_auth_env_script=lambda **k: '',
         run_detached_stage=detached, _read_remote_text=lambda _: file_hash(saved),

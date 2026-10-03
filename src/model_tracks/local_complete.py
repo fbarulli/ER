@@ -6,6 +6,15 @@ import zipfile
 from core.portable_archive import verify_archive, write_archive
 from graph_tracks.data import file_hash
 
+def _publish(final, settings, run_tag):
+    if settings.dvc_enabled:
+        from model_tracks.publish import persist_results
+        persist_results(final, run_tag)
+    if settings.publish_git:
+        from model_tracks.publish import materialize
+        materialize(final, run_tag, push=True)
+    return final
+
 
 def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
     from core.common import TRAIN_ROOT
@@ -15,6 +24,8 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
 
     training = verify_archive(training_archive, 'suite_bundle_manifest.json')
     inputs = verify_archive(input_archive, 'model_tracks_package.json')
+    with zipfile.ZipFile(input_archive) as archive:
+        settings = SuiteConfig.model_validate(yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
     if training['run_tag'] != run_tag:
         raise ValueError('local completion run mismatch')
     # The local report implementation must match the code that produced training.
@@ -28,7 +39,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
         existing = verify_archive(final, 'suite_bundle_manifest.json')
         if existing.get('training_archive_sha256') != file_hash(training_archive) or existing.get('input_archive_sha256') != file_hash(input_archive):
             raise ValueError('existing completion archive has different inputs/checkpoints')
-        return final
+        return _publish(final, settings, run_tag)
     marker = destination / 'local_source.json'
     identity = {'training_archive_sha256': file_hash(training_archive),
                 'input_archive_sha256': file_hash(input_archive)}
@@ -68,9 +79,13 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
         print(f'[local-postprocess/{track}] starting on CPU', flush=True)
         if track == 'text':
             from model_tracks.text_report import complete as text_complete
-            # Preserve interrupted reports rather than mixing attempts.
+            # Preserve interrupted reports rather than mixing attempts:
+            # rename every text__* artifact from a prior attempt (a fixed
+            # allowlist would silently miss a future text__* output and
+            # mix it into the new attempt). Checkpoints live under
+            # _checkpoints/** and are not matched by this glob.
             import time
-            for path in list(output.glob('text__*')):
+            for path in sorted(output.glob('text__*')):
                 path.rename(path.with_name(f'interrupted-{time.time_ns()}-{path.name}'))
             text_complete(output, setup, device='cpu', report_test=settings.report_test)
         else:
@@ -110,10 +125,4 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
     write_archive(final, files, manifest_name='suite_bundle_manifest.json',
                   metadata={'run_tag': run_tag, **identity, 'postprocess_location': 'local CPU'})
     final.with_suffix('.sha256').write_text(file_hash(final) + '\n')
-    if settings.dvc_enabled:
-        from model_tracks.publish import persist_results
-        persist_results(final, run_tag)
-    if settings.publish_git:
-        from model_tracks.publish import materialize
-        materialize(final, run_tag, push=True)
-    return final
+    return _publish(final, settings, run_tag)

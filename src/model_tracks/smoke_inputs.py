@@ -149,6 +149,9 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
     write_json(output/'setup_manifest.json',manifest)
     from training.prepare_embeddings import prepare_request, validate_prepared_provenance
     checkpoint = Path(manifest['text_checkpoint'])
+    from graph_tracks.text_cache import checkpoint_hash
+    if checkpoint_hash(checkpoint) != manifest['text_checkpoint_sha256']:
+        raise ValueError('smoke baseline differs from the parent checkpoint')
     request = prepare_request(output, checkpoint)
     parent_cache = setup/'shared_minilm__embeddings.npz'
     if parent_cache.exists():
@@ -165,8 +168,11 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
                             metadata=json.dumps(metadata))
         (output/'embedding_inputs.json').write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
     else:
-        from training.prepare_embeddings import prepare as prepare_embeddings
-        prepare_embeddings(output, checkpoint, device='cpu')
+        from graph_tracks.text_cache import create_cache
+        create_cache(output/'eligible_catalog.csv', checkpoint,
+                     output/'shared_minilm__embeddings.npz', device='cpu',
+                     input_metadata=request['metadata'])
+        (output/'embedding_inputs.json').write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
     for track in ('gnn_only','hybrid'):
         settings=yaml.safe_load((setup/f'{track}.yaml').read_text())
         for key in ('listings','pairs','input_manifest','text_cache'):

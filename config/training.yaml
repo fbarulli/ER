@@ -779,7 +779,7 @@ training:
   batch_size_cuda: 64         # finetune batch when on GPU
   batch_size_embed: 64        # encode batch (zero-shot, plots, eval encoders)
   batch_size_eval: 64         # post-train eval encodes
-  max_seq_length: 128         # every encoder call
+  max_seq_length: 512         # full supported encoder window; overflow is rejected, never truncated
   eval_steps_per_epoch: 4     # early-stop eval cadence
   dev_fraction: 0.15          # dev share OF THE TRAIN side (early stopping)
   max_triples: 5000           # triplet-lane cap (build_triplets reads this)

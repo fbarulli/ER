@@ -30,6 +30,8 @@ from training_reports import router as training_reports_router
 app.include_router(training_reports_router)
 from jev_reports import router as jev_reports_router
 app.include_router(jev_reports_router)
+from decision_reports import router as decision_reports_router
+app.include_router(decision_reports_router)
 
 # ── standard page chrome ─────────────────────────────────────────────────────
 # ONE consistent top bar (→ /, findings, gate, datagen, graphs, training) for
@@ -51,7 +53,7 @@ def _chrome():
             + a('/', '← home', strong=True)
             + a('/experiments', 'findings') + a('/gate', 'gate')
             + a('/datagen', 'datagen') + a('/graphs', 'graphs')
-            + a('/training', 'training') + a('/jev', 'JEV audits') + '</nav>')
+            + a('/training', 'training') + a('/jev', 'JEV audits') + a('/decisions', 'attribute tracking') + '</nav>')
 
 _CHROME = _chrome()
 
@@ -59,7 +61,7 @@ _CHROME = _chrome()
 async def _page_chrome(request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path in {"/", "/datagen", "/graphs", "/gate", "/gate/fallback", "/jev"}:
+    if path in {"/", "/datagen", "/graphs", "/gate", "/gate/fallback", "/jev", "/decisions"}:
         response.headers["Cache-Control"] = "no-store, max-age=0"
     if path.startswith("/api/"):
         return response

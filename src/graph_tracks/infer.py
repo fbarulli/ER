@@ -18,7 +18,7 @@ from graph_tracks.train import write_json
 
 
 class GraphEncoder:
-    def __init__(self, checkpoint: Path, device='cpu'):
+    def __init__(self, checkpoint: Path, device='cpu', *, prepared_support=None):
         self.checkpoint = checkpoint
         track = checkpoint_track(checkpoint)
         payload = torch.load(checkpoint, map_location=device, weights_only=False)
@@ -36,7 +36,7 @@ class GraphEncoder:
         self.scorer.load_state_dict(payload['scorer'])
         self.model.eval()
         self.scorer.eval()
-        support = tensorize(payload['support_records'], self.vocabulary, device)
+        support = prepared_support if prepared_support is not None else tensorize(payload['support_records'], self.vocabulary, device)
         support_text = payload['support_text']
         if support_text is not None:
             support_text = support_text.to(device)
@@ -48,13 +48,21 @@ class GraphEncoder:
             raise ValueError('batch_size must be positive')
         if not records:
             raise ValueError('empty inference population')
-        chunks = []
+        batches = [tensorize(records[start:start + batch_size], self.vocabulary, self.device)
+                   for start in range(0, len(records), batch_size)]
+        return self.encode_prepared(batches, text)
+
+    def encode_prepared(self, batches, text=None):
+        """Forward already tensorized batches; preparation may run locally."""
+        chunks, start = [], 0
         with torch.no_grad():
-            for start in range(0, len(records), batch_size):
-                batch = tensorize(records[start:start + batch_size], self.vocabulary, self.device)
-                vectors = None if text is None else torch.as_tensor(
-                    text[start:start + batch_size], device=self.device)
+            for batch in batches:
+                end = start + len(batch.numeric)
+                vectors = None if text is None else torch.as_tensor(text[start:end], device=self.device)
                 chunks.append(self.model.encode(batch, self.states, vectors).cpu().numpy())
+                start = end
+        if not chunks or (text is not None and start != len(text)):
+            raise ValueError('prepared graph batch population mismatch')
         vectors = np.concatenate(chunks)
         if not np.isfinite(vectors).all() or np.any(np.linalg.norm(vectors, axis=1) < 1e-12):
             raise ValueError('encoder produced invalid vectors')

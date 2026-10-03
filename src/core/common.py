@@ -884,7 +884,9 @@ def load_local_sentence_transformer(
     from sentence_transformers import SentenceTransformer
 
     resolved = resolve_model(key_or_path)
-    return SentenceTransformer(resolved, device=device, **kwargs)
+    model = SentenceTransformer(resolved, device=device, **kwargs)
+    from core.encoding_inputs import enable_zero_truncation
+    return enable_zero_truncation(model)
 
 
 def load_local_cross_encoder(

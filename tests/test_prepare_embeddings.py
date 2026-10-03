@@ -67,3 +67,69 @@ def test_cuda_job_refuses_cpu_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(torch.cuda, 'is_available', lambda: False)
     with pytest.raises(RuntimeError, match='CUDA unavailable'):
         job.prepare(tmp_path, tmp_path)
+
+
+@pytest.mark.parametrize('change', ['texts', 'implementation', 'manifest', 'listings'])
+def test_reuse_rejects_changed_provenance(tmp_path, monkeypatch, change):
+    setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
+    job.prepare(setup, checkpoint, device='cpu')
+    if change == 'texts':
+        monkeypatch.setattr(job, 'compose_texts', lambda _: (['a', 'b'], ['changed', 'text b']))
+    elif change == 'implementation':
+        monkeypatch.setattr(job, 'composition_fingerprint', lambda: 'changed-parser-code')
+    elif change == 'manifest':
+        manifest = setup / 'prepared/input_manifest.json'
+        manifest.write_text(manifest.read_text() + '\n')
+    else:
+        (setup / 'prepared/listings.json').write_text('[]')
+    with pytest.raises(ValueError, match='stale'):
+        job.prepare(setup, checkpoint, device='cpu')
+
+
+def test_consumer_rejects_tampered_prepared_texts(tmp_path, monkeypatch):
+    setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
+    job.prepare(setup, checkpoint, device='cpu')
+    cache = setup / 'shared_minilm__embeddings.npz'
+    _, metadata = job.load_text_cache(cache, ['a', 'b'])
+    manifest = json.loads((setup / 'prepared/input_manifest.json').read_text())
+    job.validate_prepared_provenance(cache, metadata, manifest)
+    request_path = setup / 'embedding_inputs.json'
+    request = json.loads(request_path.read_text())
+    request['texts'][0] = 'tampered text'
+    request_path.write_text(json.dumps(request))
+    with pytest.raises(ValueError, match='text content hash'):
+        job.validate_prepared_provenance(cache, metadata, manifest)
+
+
+@pytest.mark.parametrize('ids,vectors', [(['b', 'a'], [[1, 0], [0, 1]]),
+                                      (['a', 'b', 'extra'], [[1, 0]] * 3),
+                                      (['a', 'b'], [[0, 0], [1, 0]]),
+                                      (['a', 'b'], [[float('nan'), 0], [1, 0]]),
+                                      (['a', 'b'], [[2, 0], [1, 0]])])
+def test_invalid_gpu_result_cannot_be_accepted(tmp_path, monkeypatch, ids, vectors):
+    setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
+    request = job.prepare_request(setup, checkpoint)
+    candidate = tmp_path / 'candidate.npz'
+    np.savez(candidate, ids=ids, embeddings=np.asarray(vectors), metadata=json.dumps(request['metadata']))
+    with pytest.raises(ValueError):
+        job.validate_result(candidate, request)
+
+
+def test_request_digest_binds_result_to_exact_upload(tmp_path, monkeypatch):
+    setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
+    job.prepare(setup, checkpoint, device='cpu')
+    request = job.prepare_request(setup, checkpoint)
+    with pytest.raises(ValueError, match='request_sha256'):
+        job.validate_result(setup / 'shared_minilm__embeddings.npz', request, request_sha256='another-job')
+
+
+def test_inputs_changed_during_encoding_are_never_published(tmp_path, monkeypatch):
+    setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
+    original = job.create_cache
+    def changing(*args, **kwargs):
+        original(*args, **kwargs)
+        (setup / 'eligible_catalog.csv').write_text('sku_id\nchanged\n')
+    monkeypatch.setattr(job, 'create_cache', changing)
+    with pytest.raises(ValueError, match='stale'):
+        job.prepare(setup, checkpoint, device='cpu')
+    assert not (setup / 'shared_minilm__embeddings.npz').exists()

@@ -3719,6 +3719,8 @@ def train_one_config(
                     flush=True,
                 )
             model.max_seq_length = runtime("max_seq_length")  # SSOT, no literal
+            from core.encoding_inputs import enable_zero_truncation
+            enable_zero_truncation(model)
 
             # ── build the training dataset FIRST (steps derive from it) ──
             from datasets import Dataset
@@ -4764,6 +4766,18 @@ def train_one_config(
             dynamic_negative_masked_total = int(
                 sum(stats["masked_count"] for stats in dynamic_mask_stats_by_epoch.values())
             )
+
+            if os.environ.get('ER_GPU_TRAINING_ONLY') == '1':
+                rows.append({
+                    'fold': fold_i, 'status': 'ok',
+                    'best_model_checkpoint': trainer.state.best_model_checkpoint,
+                    'best_metric': trainer.state.best_metric,
+                    'global_step': trainer.state.global_step,
+                    'calibration_status': 'deferred_local',
+                    'test_eval': 'deferred_local',
+                })
+                print(f'[train] fold {fold_i}: GPU training complete; reporting deferred to local CPU', flush=True)
+                continue
 
             # Every lane uses the same component-safe calibration/Rand
             # computation. The holdout population below remains isolated for

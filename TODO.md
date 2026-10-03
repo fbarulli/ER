@@ -1,5 +1,137 @@
 # TODO (updated 2026-10-02, branch main)
 
+## OPEN GAPS — 2026-10-03 (ablation/embedding wave follow-ups)
+
+| Gap | What's left |
+|---|---|
+| **Prepared training inputs** | DONE 2026-10-03: rebuilt `data/track_setup` post-rename
+  (`graph_tracks.setup`): `listing_splits.csv`/`listing_pairs.csv`/
+  `prepared/pairs.csv`/`prepared/report_attributes.json` were stale
+  pre-rename copies (manifest already pinned the post-rename hashes);
+  `text_prepared.pkl.gz` was a pre-rename-columns copy (refreshed
+  from the post-rename `data/prepared/full/worker_1_baseline.pkl.gz`;
+  bundle-embeds-current-CSV + graph-manifest hash checks all pass).
+  `gnn_only` preflight now PASSES; `hybrid` fails only on the absent
+  production text cache (separate gap below). Both graph tracks train
+  + postprocess end-to-end on the 100-sample CPU smoke
+  (`results/graph_tracks/{gnn_only,hybrid}__smoke_*_20261003/`,
+  dev-Youden thresholds, retrieval + attribute-separation reports,
+  report manifests with checkpoint/listings/pairs sha256). Stale
+  tree backed up at `data/track_setup.pre_rename_stale`. BLOCKER for
+  the suite supervisor path: the diet gate fails on every current
+  bundle — see the diet blocker below. |
+| **37-attribute evaluation** | Implemented and unit-tested, but no complete Colab ablation run has finished yet. |
+| **Real trained checkpoints** | Verify prepared-token and graph-tensor inference against the existing text, GNN, and hybrid inference paths. |
+| **Slice coverage** | Confirm real inputs populate difficulty × masking × generated-data lineage. Missing fields currently remain unknown. |
+| **Full retrieval evaluation** | Current ablation ranks use sampled endpoints; full-catalog ANN effects remain unverified. |
+| **Zero truncation across every entry point** | CLOSED 2026-10-03: guard consolidated into the shared loader `load_local_sentence_transformer` (`core/common.py:886-890`) — one adoption point now covers reranking (`rerank.py:68` bi-encoder, both `bi.encode` sites), train.py mask-effect scoring (`train.py:1550`), `core/nlp.py` encoder, `predict_items.py` production inference (`predict_items.py:128`), uniformity, rand_matching, zero_shot_sims, ann_refresh, and all 11 eval scripts. Remaining direct `SentenceTransformer` loads verified safe by construction: `encode_prepared_embeddings.py`/`ablation.py` feed pre-tokenized batches (sha256 + `tokenization_policy` validated) through `model(features)` — no tokenization at encode; `run_colab_embeddings.py`/`ablation_inputs.py` use `prepare_token_batches` (raises on overflow); `text_cache.py` keeps its explicit guard; `hpo_metrics.py:611` receives the already-guarded training model (idempotent). Verified: 31 passed (encoding_inputs/prepare_embeddings/encode_prepared_embeddings/attribute_ablation) + 83 passed (rerank/predict/nlp/training/smoke subsets); functional CPU check: loader-loaded `minilm_l6` reports `_zero_truncation_enabled`, short text encodes (1,384), 802-token text rejected with `zero truncation required`. |
+| **Threshold attribution** | CLOSED 2026-10-03: `frozen_threshold` (`src/model_tracks/ablation.py`) now extracts the identity the source report attests — `model` (track) and `checkpoint` columns from CSV summaries, sibling/top-level keys from JSON manifests — with fail-closed unanimity checks, and `report()` verifies the attested track equals the request's track, the attested checkpoint name equals the ablated checkpoint's name, and (when locatable under the report's run root or via the manifest's absolute path) the checkpoint's sha256 identity equals `request['sources'][checkpoint]`. Provenance now records `track` + `checkpoint` alongside path/sha256. 2 new unit tests (CSV binding incl. track/name/identity mismatch rejection; manifest absolute-path binding). |
+| **Publication** | Smoke artifacts are on GitHub; implementation changes remain uncommitted on main. |
+
+The production embedding cache is also still absent—the smoke intentionally produced a separate cache. **BLOCKER (found 2026-10-03, pre-existing, not caused by the rename):** the diet gate (`scripts/diet_manifest.py`, wired into `model_tracks/preflight.py:64-74` unconditionally — smokes are exempt from stale-hash checks but NOT from the diet contract) fails on EVERY current bundle, so `model_tracks.run` (and any Colab suite launch) cannot start, not even a 100-sample smoke.
+
+**Diet-gate evidence (surfaced 2026-10-03, from previous JEV results and gate history):**
+
+- **Previous JEV results — labeled-pair population is structurally positive-skewed** (`jev/audit_results_{7,8,9}.jsonl`, ok/a_order rows): round 7 = 720 pos / 180 neg (**4.00:1**), round 8 = 640 pos / 188 neg (**3.40:1**), round 9 = 40 pos / 10 neg (**4.00:1**). The JEV audit design over-samples positives (strata `positive_same`/`positive_different`/`positive_uncertain` vs `old_negative`), so every bundle built from JEV-labeled pairs inherits a ~3.4–4:1 pos:neg base population.
+- **Current full bundle** (`data/prepared/full/worker_1_baseline.pkl.gz`, profile=baseline, re-measured 2026-10-03): positive views 56,162 (base 24,523 + declaration_dropout 7,283 + random 19,488 + swap_values 4,868); hard-negative audit rows 10,768 (base 7,937 + counterfactual 2,426 + random 243 + swap_values 162); MNRL survival excludes **23,589 dead masked-positive copies** (no source negative in the training pool) → surviving pos_views 32,573; `neg_aug_views` 2,831 / presentations 10,923 = **0.2592 < 0.30 FAIL**; `pos_neg_view_ratio` 32,573 / 10,923 = **2.9821 > 1.50 FAIL**. Recorded smoke ratios: smoke_200 2.6939, 100-sample smoke 2.5179 — every bundle fails the ratio ceiling.
+- **Gate history (why the floors are miscalibrated):** both thresholds landed in `018c6e1` (2026-09-27) with no recorded calibration basis; **no `DIET PASS` exists anywhere in the repo** — the 1.50 ceiling has never been satisfied by any bundle. `ead6966` (honest MNRL accounting) dropped the then-shipped bundle's `neg_aug_frac` **0.306 → 0.2122** (2,707/8,828 never-trained swap copies excluded; 13,124/17,098 masked positives dead). `e2e4cf5` (TIER 1(a) counterpart positives, 100% swap coverage: 2,216 replayed + 493 direct) projected the real bundle **0.2119 → 0.3058**, clearing 0.30 at the time. `09e2ce3` removed the phantom dynamic-mask +30% view projection (in-place replacement adds no views), making `neg_aug_frac` stricter still. The current bundle was rebuilt with a different augmentation mix (only 162 swap copies vs 2,707 then; counterfactual 2,426), landing at 0.2592.
+- **Root cause:** (1) the **1.50 ratio ceiling is unsatisfiable by construction** — the JEV population is 3.4–4:1 pos:neg and the bundle inherits it (2.98:1 even after honest survival accounting); no augmentation config can fix a base-population skew. (2) the **0.30 neg-aug floor sits 4.1pp above the realized augmentation** (2,831/10,923 = 25.92%: counterfactual 2,426 + random 243 + swap-with-counterpart 162).
+- **Owner call needed (TIER 2 floor re-derivation from the honest MNRL accounting):** either re-derive `diet_max_pos_neg_view_ratio` to ≥3.0 (the honest bundle ratio; JEV population floor 3.4) — or rebalance the labeled-pair population toward ~1.5:1 before training; and either lower `diet_min_neg_aug_frac` to ~0.25 (the realized augmentation) or raise augmentation (`hard_negative_swap_frac` / `swap_agreed_frac` / counterfactual) to clear 0.30. Then re-run the smoke through the supervisor.
+
+**Still separate or incomplete:**
+
+- Baseline embeddings and ablations have separate launchers.
+- Ablations require an explicit preparation/evaluation step; they aren't automatically scheduled after training.
+- ~~Reranking and other inference entry points haven't all adopted the shared zero-truncation guard.~~ CLOSED 2026-10-03 — guard consolidated into `load_local_sentence_transformer` (see gap table).
+- ~~Threshold selection isn't strictly bound to the exact checkpoint/track.~~ CLOSED 2026-10-03 — attested track/checkpoint extracted from the source report and bound to the request (see gap table).
+- Historical artifacts have incomplete lineage and mixed naming conventions.
+- Sampled retrieval comparisons aren't integrated with full-catalog ANN evaluation.
+- Implementation changes remain uncommitted.
+
+Additional gaps found in the 2026-10-03 dataflow audit (fix-first):
+
+- [x] `missing_axes` only flagged absent slice columns; a present-but-empty
+  column (read as `''` with `dtype=str`) silently became a
+  single-stratum grouping axis instead of being reported missing.
+  CLOSED 2026-10-03: `sample_pairs` excludes all-empty object
+  columns from the stratification axes (degenerate single stratum),
+  `prepare` normalizes all-empty axes to `None` in the chosen
+  records, and `missing_axes` treats `''` as missing
+  (`src/model_tracks/ablation.py`). New test
+  `test_prepare_reports_empty_slice_column_as_missing`.
+- [x] Ablation directory checkpoints are not shipped in the
+  input tar; the launcher validated local hashes but never
+  checked the path exists in the remote Git clone before
+  provisioning T4. CLOSED 2026-10-03:
+  `scripts/run_colab_ablation.py` now pre-flights every
+  directory source with `git ls-tree -r --name-only HEAD --
+  <path>` (cwd TRAIN_ROOT) and fails fast with an actionable
+  error when the branch tree does not carry it — the
+  publication push ships this branch, so a committed
+  directory is guaranteed present in the clone (the ablation
+  bootstrap has no `dvc pull`). 2 new tests (untracked dir
+  rejected; committed dir passes pre-flight into the launch
+  sequence).
+- [x] `scripts/run_colab_ablation.py` ran `report()` twice
+  (save=False validation + save=True) and
+  `frozen_threshold` five times per run. CLOSED
+  2026-10-03: the launcher now computes the report
+  exactly once (validation-only on the hash-checked
+  download) and persists that validated output via the
+  new `save_report` helper (`src/model_tracks/ablation.py`,
+  extracted from `report`'s save branch); frozen_threshold
+  runs 3x (1 pre-flight + 2 inside the single report,
+  the second being the intentional tamper check). New
+  test `test_launcher_reports_once_and_persists_validated_output`
+  asserts report is called once with save=False and the
+  validated dict is persisted, never recomputed.
+- [x] gpu_only fold-metrics CSV: deferred rows
+  lack auc/pr_auc/f1/etc. (NaN columns); per-row
+  `deferred_local` markers carried the reason but
+  there was no run-level statement. CLOSED
+  2026-10-03: the results pointer (suite manifest)
+  now carries a run-level `metrics_status`
+  (`deferred_local` / `partial_deferred_local` /
+  `available` / None) plus `n_folds_metrics_deferred`
+  (`src/training/train.py` `results_pointer`,
+  extracted as a pure helper). Also fixed a latent
+  crash the audit surfaced: deferred rows have
+  `status:'ok'` but no metric columns, and the
+  pointer's `mean_auc`/`mean_pr_auc` used bare
+  `r["auc"]` — a gpu_only run raised KeyError at
+  pointer-write time; both now guard with
+  `all("auc" in r ...)` like the calibration means.
+  New test `test_results_pointer_states_deferred_metrics`.
+- [x] `local_complete` interrupted-report rename was a
+  fixed 5-name allowlist (was a `text__*` glob); any
+  future `text__*` artifact would silently mix
+  attempts. CLOSED 2026-10-03: the rename now globs
+  every `text__*` path in the track output
+  (`src/model_tracks/local_complete.py`) — checkpoints
+  live under `_checkpoints/**` and are not matched.
+  New test `test_interrupted_text_report_preserves_future_artifacts`
+  (an artifact outside the old allowlist is preserved
+  with an `interrupted-` prefix on retry, never mixed).
+- [x] Staged `scripts/run_colab_embeddings.py` still
+  had `r['product_id']` (KeyError on
+  `--prepared-request` resume); the working-tree fix
+  to `sku_id` must be staged too. CLOSED
+  2026-10-03: staged the working-tree versions of
+  `scripts/run_colab_embeddings.py` AND
+  `tests/test_prepare_embeddings.py` (same
+  divergence — staged catalog header was
+  `product_id`, working tree `sku_id`); index now
+  matches the tested working tree (0 `product_id`
+  occurrences in either staged file; 22 tests pass
+  against the staged content).
+- [x] Baseline ablation rows carried `current_attribute_evidence`
+  `{None: None}` (JSON `"null"` key). CLOSED 2026-10-03:
+  attribute-less variants now carry the pair's full evidence
+  map (nothing ablated → nothing to extract); variant rows
+  keep the single ablated-attribute entry
+  (`src/model_tracks/ablation.py` `report`). New test
+  `test_report_evidence_omits_null_key_for_attribute_less_variants`.
+
 ## Continued extraction/gating investigation — 2026-10-02
 
 Two agents use separate ownership: primary owns shared measurement/sugar

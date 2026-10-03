@@ -83,6 +83,61 @@ def _write_hard_negative_mask_trace(
     )
 
 
+def results_pointer(rows, *, run_tag, args, metrics_csv_name):
+    """Run-level results pointer (owner Q21): names the latest full-run
+    artifacts and states whether fold metrics are present or deferred.
+
+    GPU-only runs (ER_GPU_TRAINING_ONLY=1) defer calibration/test
+    reporting to the local CPU lane: their fold rows carry per-row
+    deferred_local markers and no metric columns. Record the deferral
+    at run level here instead of letting the marker live only in the
+    per-fold rows, and never average over rows that lack the field."""
+    ok_rows = [r for r in rows if r.get("status") == "ok"]
+    deferred_rows = [r for r in ok_rows if r.get("calibration_status") == "deferred_local"]
+    return {
+        "run_tag": run_tag,
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "model": args.model,
+        "split": args.split,
+        "payload": args.payload,
+        "loss": args.loss,
+        "train_frac": args.train_frac,
+        "mask_frac": args.mask_frac,
+        "fold_metrics_csv": metrics_csv_name,
+        "visibility_log_dir": f"logs/{run_tag}",
+        "n_folds_ok": len(ok_rows),
+        "metrics_status": (
+            None if not ok_rows
+            else "deferred_local" if len(deferred_rows) == len(ok_rows)
+            else "partial_deferred_local" if deferred_rows
+            else "available"
+        ),
+        "n_folds_metrics_deferred": len(deferred_rows),
+        "mean_auc": (
+            float(np.mean([r["auc"] for r in ok_rows]))
+            if ok_rows and all("auc" in r for r in ok_rows)
+            else None
+        ),
+        "mean_pr_auc": (
+            float(np.mean([r["pr_auc"] for r in ok_rows]))
+            if ok_rows and all("pr_auc" in r for r in ok_rows)
+            else None
+        ),
+        "mean_calibration_rand_index": (
+            float(np.mean([r["calibration_rand_index"] for r in ok_rows]))
+            if ok_rows
+            and all("calibration_rand_index" in r for r in ok_rows)
+            else None
+        ),
+        "mean_calibration_adjusted_rand": (
+            float(np.mean([r["calibration_adjusted_rand"] for r in ok_rows]))
+            if ok_rows
+            and all("calibration_adjusted_rand" in r for r in ok_rows)
+            else None
+        ),
+    }
+
+
 def _emit_07_series(ok_rows: list[dict], args) -> None:
     """Write report aggregates using the entry point's configured dependencies."""
     from training.report_rows import emit_07_series
@@ -1705,42 +1760,7 @@ def _main_inner(_mlf, _wandb) -> None:
         pd.DataFrame(all_rows).to_csv(F["fold_metrics"], index=False)
         # results pointer (owner Q21): ONE json always naming the most
         # recent full-run artifacts — consumers never glob for "latest"
-        _ok_rows = [r for r in all_rows if r.get("status") == "ok"]
-        pointer = {
-            "run_tag": run_tag,
-            "written_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "model": args.model,
-            "split": args.split,
-            "payload": args.payload,
-            "loss": args.loss,
-            "train_frac": args.train_frac,
-            "mask_frac": args.mask_frac,
-            "fold_metrics_csv": out.name,
-            "visibility_log_dir": f"logs/{run_tag}",
-            "n_folds_ok": len(_ok_rows),
-            "mean_auc": (
-                float(np.mean([r["auc"] for r in _ok_rows]))
-                if _ok_rows
-                else None
-            ),
-            "mean_pr_auc": (
-                float(np.mean([r["pr_auc"] for r in _ok_rows]))
-                if _ok_rows
-                else None
-            ),
-            "mean_calibration_rand_index": (
-                float(np.mean([r["calibration_rand_index"] for r in _ok_rows]))
-                if _ok_rows
-                and all("calibration_rand_index" in r for r in _ok_rows)
-                else None
-            ),
-            "mean_calibration_adjusted_rand": (
-                float(np.mean([r["calibration_adjusted_rand"] for r in _ok_rows]))
-                if _ok_rows
-                and all("calibration_adjusted_rand" in r for r in _ok_rows)
-                else None
-            ),
-        }
+        pointer = results_pointer(all_rows, run_tag=run_tag, args=args, metrics_csv_name=out.name)
         F["results_pointer"].write_text(
             json.dumps(pointer, indent=2, sort_keys=True)
         )

@@ -83,7 +83,8 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         (output / 'suite_manifest.json').write_text(json.dumps({
         'run_tag':run_tag, 'config':cfg.model_dump(), 'inputs':inputs, 'hardware':hardware,
         'resume_identity': identity,
-        'worker_responsibility':'train, checkpoint, postprocess, report own track',
+        'worker_responsibility':('GPU train and checkpoint; local CPU owns postprocessing and reports'
+                                 if gpu_only else 'train, checkpoint, postprocess, report own track'),
         'supervisor_responsibility':'barrier, MPS, child lifetime, collection',
         'shared_inputs':'read-only; text bundle CSVs materialized in text worker output',
         'hybrid_text_checkpoint':'frozen prepared baseline; no dependency on concurrent text worker'
@@ -100,6 +101,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
            'ER_SUITE_ATTEMPT': events.attempt,
            'ER_INCREMENTAL_DVC':'1' if cfg.dvc_enabled and not gpu_only else '0',
            'EUROMONITOR_DISABLE_DVC_CHECKPOINTS':'1' if gpu_only else os.environ.get('EUROMONITOR_DISABLE_DVC_CHECKPOINTS', '0'),
+           'EUROMONITOR_REMOTE_TRAINING':'1' if gpu_only else os.environ.get('EUROMONITOR_REMOTE_TRAINING', '0'),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
     if not commands:
         result = {'mode': 'resume', 'workers': [], 'skipped_verified_tracks': skipped}

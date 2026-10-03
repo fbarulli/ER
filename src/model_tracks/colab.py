@@ -220,5 +220,11 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
                 raise ValueError(f'{track} missing verified training-only completion')
     # Release GPU quota before local inference, indexing, reporting or publishing.
     backend.stop()
+    if settings['publish_git'] or settings.get('publish_dvc', False):
+        import os
+        token = backend._env_value('DVC_API_KEY')
+        if not token:
+            raise RuntimeError('DVC_API_KEY is required for local suite publication')
+        os.environ['DVC_API_KEY'] = token
     from model_tracks.local_complete import complete
     return complete(local, archive, run_tag)

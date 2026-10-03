@@ -129,6 +129,15 @@ class DataFilesSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    decision_ledger: str
+    decision_rebuild_report: str
+    decision_training_report: str
+    decision_suite_config: str
+    decision_embedding_request: str
+    decision_visibility: str
+    decision_ablation_report: str
+    decision_attribute_census: str
+
     dataset: str
     dataset_deduped: str
     sku_to_rep: str
@@ -524,6 +533,8 @@ class DataConfig(BaseModel):
     Domain knobs live in their own dir: config/training.yaml."""
 
     model_config = ConfigDict(extra="forbid")
+
+    decision_attribute_aliases: dict[str, str] = Field(default_factory=dict)
 
     paths: DataPathsSpec
     files: DataFilesSpec

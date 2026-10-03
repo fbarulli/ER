@@ -1,6 +1,6 @@
 {
   "excluded_unassigned_listings": 35119,
-  "git_revision": "29317e5d3913b6bcac193ca8dd70ae77d566b06b",
+  "git_revision": "c69820091445e8561db3d7f754e8b8c6b69bfe5b",
   "identity_policy_sha256": "0c176f054d0e66ad957f9238605d05cb7ef7ed717cfaecbcefd114b2ce52f62c",
   "labeled_pairs_sha256": "5f75706dcbcfb7c495938e638957fe86bc95f77d5e8189e54d27975228dfc25d",
   "negative_policy": "same-split labeled negatives only",
@@ -27,7 +27,7 @@
   },
   "source_catalog_sha256": "8b2cf874879a5bf7cde51a046cd5db627f3f3874f50d8ad91271a8f083d2e74e",
   "split_protocol": "training.folds.derive_holdout",
-  "text_checkpoint": "/tmp/opencode/er-rename/artifacts/models/all-MiniLM-L6-v2",
+  "text_checkpoint": "/home/opc/ONE/ER/artifacts/models/all-MiniLM-L6-v2",
   "text_checkpoint_sha256": "a3f36d62c73027de84a628b90e8c4ae133dafb21fe4b7ede7740923b1c99ccab",
   "text_checkpoint_status": "local baseline; fine-tuning history not inferred"
 }

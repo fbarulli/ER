@@ -75,6 +75,14 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
     captured = {}
     monkeypatch.setattr(bundles, 'write_prepared_bundle', lambda _, **kwargs: captured.update(kwargs))
     monkeypatch.setattr(graph_tracks.prepare, 'prepare', lambda *_: None)
+    import training.prepare_embeddings as embedding_job
+    request = {'schema': 'er-embedding-request-v2', 'ids': ['a', 'b'],
+               'texts': ['a', 'b'], 'metadata': {'text_sha256': 'text-hash'}}
+    monkeypatch.setattr(embedding_job, 'prepare_request', lambda *_: request)
+    monkeypatch.setattr(embedding_job, 'validate_prepared_provenance', lambda *_: None)
+    (setup / 'embedding_inputs.json').write_text(json.dumps(request))
+    (setup / 'prepared').mkdir(exist_ok=True)
+    (setup / 'prepared/input_manifest.json').write_text('{}')
     monkeypatch.setattr(graph_tracks.data, 'load_text_cache', lambda *args: (np.zeros((2, 2)), {}))
     monkeypatch.setattr(graph_tracks.data, 'file_hash', lambda _: 'hash')
     cache_calls = []
@@ -98,7 +106,7 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
         assert settings['listings'] == str(output / 'prepared/listings.csv')
     if parent_cache == 'absent':
         assert cache_calls == [((output / 'eligible_catalog.csv', checkpoint,
-                                 output / 'shared_minilm__embeddings.npz'), {'device': 'cpu'})]
+                                 output / 'shared_minilm__embeddings.npz'), {'device': 'cpu', 'input_metadata': request['metadata']})]
         assert pd.read_csv(cache_calls[0][0][0]).sku_id.tolist() == ['a', 'b']
     else:
         assert cache_calls == []
@@ -210,7 +218,9 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     catalog.to_csv(setup / 'eligible_catalog.csv', index=False)
     catalog.assign(split='train')[['sku_id', 'split']].to_csv(setup / 'listing_splits.csv', index=False)
     pd.DataFrame(columns=['sku_id1', 'sku_id2', 'split', 'label']).to_csv(setup / 'listing_pairs.csv', index=False)
-    (setup / 'setup_manifest.json').write_text('{}')
+    import graph_tracks.text_cache
+    monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_hash', lambda _: 'baseline')
+    (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint': str(tmp_path/'checkpoint'), 'text_checkpoint_sha256': 'baseline'}))
     (setup / 'shared_minilm__embeddings.npz').write_bytes(b'mocked cache')
     for track in ('gnn_only', 'hybrid'):
         (setup / f'{track}.yaml').write_text('{}')
@@ -234,6 +244,14 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     captured = {}
     monkeypatch.setattr(bundles, 'write_prepared_bundle', lambda _, **kwargs: captured.update(kwargs))
     monkeypatch.setattr(graph_tracks.prepare, 'prepare', lambda *_: None)
+    import training.prepare_embeddings as embedding_job
+    request = {'schema': 'er-embedding-request-v2', 'ids': ['a', 'b'],
+               'texts': ['a', 'b'], 'metadata': {'text_sha256': 'text-hash'}}
+    monkeypatch.setattr(embedding_job, 'prepare_request', lambda *_: request)
+    monkeypatch.setattr(embedding_job, 'validate_prepared_provenance', lambda *_: None)
+    (setup / 'embedding_inputs.json').write_text(json.dumps(request))
+    (setup / 'prepared').mkdir(exist_ok=True)
+    (setup / 'prepared/input_manifest.json').write_text('{}')
     monkeypatch.setattr(graph_tracks.data, 'load_text_cache', lambda *_: (np.zeros((2, 2)), {}))
     monkeypatch.setattr(graph_tracks.data, 'file_hash', lambda _: 'hash')
     prepare_smoke(setup, tmp_path / 'smoke', sample=2)
@@ -247,3 +265,39 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     # Projection must leave the full parent's lineage unchanged.
     assert positive['anchor_payload_idx'] == 8
     assert unrelated['copy_payload_idx'] == 10
+
+
+def test_results_pointer_states_deferred_metrics():
+    from types import SimpleNamespace
+    from training import train as train_entry
+    args = SimpleNamespace(model='m', split='dev', payload='p', loss='mnrl',
+                         train_frac=1.0, mask_frac=0.5, sample=None)
+    # gpu_only fold rows: status ok, per-row deferred_local markers, no metric columns
+    deferred = [
+        {'fold': 0, 'status': 'ok', 'best_model_checkpoint': 'ckpt0', 'best_metric': 0.5,
+         'global_step': 100, 'calibration_status': 'deferred_local', 'test_eval': 'deferred_local'},
+        {'fold': 1, 'status': 'ok', 'best_model_checkpoint': 'ckpt1', 'best_metric': 0.6,
+         'global_step': 200, 'calibration_status': 'deferred_local', 'test_eval': 'deferred_local'},
+    ]
+    pointer = train_entry.results_pointer(deferred, run_tag='run1', args=args,
+                                        metrics_csv_name='train_m_dev_p_fold_metrics.csv')
+    assert pointer['metrics_status'] == 'deferred_local'
+    assert pointer['n_folds_metrics_deferred'] == 2
+    assert pointer['n_folds_ok'] == 2
+    assert pointer['mean_auc'] is None
+    assert pointer['mean_pr_auc'] is None
+    available = [dict(deferred[0], auc=0.8, pr_auc=0.7, calibration_status='available',
+                      calibration_rand_index=0.4, calibration_adjusted_rand=0.3)]
+    pointer = train_entry.results_pointer(available, run_tag='run1', args=args, metrics_csv_name='x.csv')
+    assert pointer['metrics_status'] == 'available'
+    assert pointer['n_folds_metrics_deferred'] == 0
+    assert pointer['mean_auc'] == 0.8
+    assert pointer['mean_calibration_rand_index'] == 0.4
+    mixed = [available[0], deferred[0]]
+    pointer = train_entry.results_pointer(mixed, run_tag='run1', args=args, metrics_csv_name='x.csv')
+    assert pointer['metrics_status'] == 'partial_deferred_local'
+    assert pointer['n_folds_metrics_deferred'] == 1
+    assert pointer['mean_auc'] is None  # one ok row lacks auc: never average
+    pointer = train_entry.results_pointer([{'fold': 0, 'status': 'failed'}], run_tag='run1', args=args, metrics_csv_name='x.csv')
+    assert pointer['metrics_status'] is None
+    assert pointer['n_folds_ok'] == 0

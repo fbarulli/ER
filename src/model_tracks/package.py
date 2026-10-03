@@ -9,6 +9,19 @@ from model_tracks.config import load_config
 from model_tracks.preflight import preflight
 
 
+def runtime_snapshot_files():
+    """Shared local source/config overlay for prepared Colab jobs."""
+    from core.common import TRAIN_ROOT
+    files = {}
+    for directory in ('src/graph_tracks','src/model_tracks','src/training','src/core'):
+        files.update({p.relative_to(TRAIN_ROOT).as_posix():p for p in (TRAIN_ROOT/directory).glob('*.py')})
+    for name in ('src/pipeline.py','scripts/diet_manifest.py'):
+        files[name] = TRAIN_ROOT/name
+    for name in ('paths.yaml','training.yaml','identity_dimensions.yaml','identity_reviews.json','vocabulary.json'):
+        files['config/'+name] = TRAIN_ROOT/'config'/name
+    return files
+
+
 def package(config: Path, output: Path):
     from core.common import F, TRAIN_ROOT
     cfg = load_config(config)
@@ -33,20 +46,11 @@ def package(config: Path, output: Path):
     settings = cfg.model_dump()
     settings.update(setup_dir=str(target),text_bundle=str(target/'text_prepared.pkl.gz'))
     inline['data/model_tracks/suite.yaml'] = yaml.safe_dump(settings,sort_keys=False)
-    # Ship one source overlay including extracted modules and shared parsers,
-    # so the prepared-input producer and remote consumer use the same code.
-    for directory in ('src/graph_tracks','src/model_tracks','src/training','src/core'):
-        files.update({str(p.relative_to(TRAIN_ROOT)):p for p in (TRAIN_ROOT/directory).glob('*.py')})
-    # Preflight on the remote host must see the same mutable input generation
-    # and pipeline implementation as the local prepared-input producer.
-    files['src/pipeline.py'] = TRAIN_ROOT / 'src/pipeline.py'
-    files['scripts/diet_manifest.py'] = TRAIN_ROOT / 'scripts/diet_manifest.py'
+    # Freeze the same shared runtime overlay used by inference-only jobs.
+    files.update(runtime_snapshot_files())
     for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
         source = Path(F[key]).resolve()
         files[source.relative_to(TRAIN_ROOT).as_posix()] = source
-    for name in ('paths.yaml', 'training.yaml', 'identity_dimensions.yaml',
-                 'identity_reviews.json', 'vocabulary.json'):
-        files[f'config/{name}'] = TRAIN_ROOT / 'config' / name
     revision = subprocess.run(['git','rev-parse','HEAD'],cwd=TRAIN_ROOT,capture_output=True,text=True,check=True).stdout.strip()
     return write_archive(output,files,inline=inline,manifest_name='model_tracks_package.json',
                          metadata={'schema':'er-model-tracks-package-v1','revision':revision,'preflight':checks})

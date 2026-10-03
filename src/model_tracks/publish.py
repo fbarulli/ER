@@ -8,6 +8,22 @@ import zipfile
 
 from core.portable_archive import verify_archive
 
+def push_artifacts(paths: list[Path], message: str) -> None:
+    """Publish only explicit artifact paths, using the existing Git save flow."""
+    from core.common import TRAIN_ROOT
+    pending = subprocess.run(['git', 'diff', '--cached', '--name-only'], cwd=TRAIN_ROOT,
+                             text=True, capture_output=True, check=True).stdout.strip()
+    if pending:
+        raise RuntimeError('artifact publication refuses to commit unrelated staged changes')
+    relatives = [str(path.resolve().relative_to(TRAIN_ROOT.resolve())) for path in paths]
+    subprocess.run(['git', 'add', '-f', '--', *relatives], cwd=TRAIN_ROOT, check=True)
+    changed = subprocess.run(['git', 'diff', '--cached', '--quiet'], cwd=TRAIN_ROOT).returncode
+    if changed == 1:
+        subprocess.run(['git', 'commit', '-m', message], cwd=TRAIN_ROOT, check=True)
+    elif changed != 0:
+        raise RuntimeError('could not inspect staged publication')
+    subprocess.run(['git', 'push', 'origin', 'HEAD'], cwd=TRAIN_ROOT, check=True)
+
 
 def persist_results(archive: Path, run_tag: str) -> Path:
     """Publish the entire immutable suite, with a verified clean DVC pull."""
@@ -104,25 +120,10 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False) -> Path:
             },indent=2)+'\n')
             staged.rename(destination)
     if push:
-        relative = destination.relative_to(TRAIN_ROOT)
-        pending = subprocess.run(['git','diff','--cached','--name-only'],cwd=TRAIN_ROOT,
-                                 text=True,capture_output=True,check=True).stdout.strip()
-        if pending:
-            raise RuntimeError('model publication refuses to commit unrelated staged changes')
         references = TRAIN_ROOT / 'dvc_refs' / run_tag / 'worker_1'
         if not references.is_dir():
             raise RuntimeError('model publication requires durable suite DVC references')
         reference_dirs = [p for p in (TRAIN_ROOT/'dvc_refs').iterdir()
                           if p.is_dir() and (p.name == run_tag or p.name.startswith(run_tag+'-'))]
-        subprocess.run(['git','add','--',str(relative)],cwd=TRAIN_ROOT,check=True)
-        # Legacy generated refs are ignored; explicitly stage only this
-        # verified suite's recovery metadata, never the whole refs tree.
-        subprocess.run(['git','add','-f','--',
-                        *(str(p.relative_to(TRAIN_ROOT)) for p in reference_dirs)],cwd=TRAIN_ROOT,check=True)
-        changed = subprocess.run(['git','diff','--cached','--quiet'],cwd=TRAIN_ROOT).returncode
-        if changed == 1:
-            subprocess.run(['git','commit','-m',f'models: publish all tracks from {run_tag}'],cwd=TRAIN_ROOT,check=True)
-        elif changed != 0:
-            raise RuntimeError('could not inspect staged publication')
-        subprocess.run(['git','push','origin','HEAD'],cwd=TRAIN_ROOT,check=True)
+        push_artifacts([destination, *reference_dirs], f'models: publish all tracks from {run_tag}')
     return destination

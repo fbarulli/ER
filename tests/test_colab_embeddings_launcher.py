@@ -15,18 +15,27 @@ def launcher():
     return module, path
 
 
+def test_cpu_requires_explicit_smoke_scope():
+    import pytest
+    module, _ = launcher()
+    with pytest.raises(ValueError,match='explicit embedding smoke'):
+        module.main(device='cpu')
+
+
 def test_remote_program_executes_without_indentation_error(tmp_path):
     _, path = launcher()
     assignment = next(node for node in ast.walk(ast.parse(path.read_text()))
                       if isinstance(node, ast.Assign) and any(
                           isinstance(target, ast.Name) and target.id == 'script'
                           for target in node.targets))
-    package = tmp_path / 'inputs.zip'
-    import zipfile
-    with zipfile.ZipFile(package, 'w') as archive:
-        archive.writestr('encode.py', '')
+    package = tmp_path / 'inputs.tar.gz'
+    import tarfile
+    source = tmp_path / 'encode.py'
+    source.write_text('')
+    with tarfile.open(package, 'w:gz') as archive:
+        archive.add(source, arcname='encode.py')
     script = eval(compile(ast.Expression(assignment.value), '<launcher>', 'eval'),
-                  {'job': str(tmp_path), 'package': package, 'file_hash': lambda _: __import__('hashlib').sha256(package.read_bytes()).hexdigest()})
+                  {'remote_package': str(package), 'remote_checkpoint': '/content/EuromonitoR/artifacts/models/all-MiniLM-L6-v2', 'job': str(tmp_path), 'package': package, 'device':'cuda', 'file_hash': lambda _: __import__('hashlib').sha256(package.read_bytes()).hexdigest()})
     with patch('subprocess.run') as run:
         exec(compile(script, '<remote>', 'exec'), {})
     args, kwargs = run.call_args
@@ -72,3 +81,35 @@ def test_stale_local_cache_blocks_handoff(tmp_path):
             module.complete_local_handoff(tmp_path / 'cache.npz', {})
     preflight.assert_not_called()
     assert not (tmp_path / 'results/embedding_job/local_handoff.json').exists()
+
+
+def test_embedding_save_reuses_existing_git_artifact_flow(tmp_path):
+    module, _ = launcher()
+    setup = tmp_path / 'setup'
+    (setup / 'prepared').mkdir(parents=True)
+    for name in ('embedding_inputs.json', 'eligible_catalog.csv', 'setup_manifest.json',
+                 'shared_minilm__embeddings.npz', 'prepared/input_manifest.json'):
+        (setup / name).write_bytes(name.encode())
+    handoff = tmp_path / 'handoff.json'
+    handoff.write_text('{}')
+    captured = []
+    def existing_publisher(paths, message):
+        archive = paths[0]
+        run_tag = archive.parent.name
+        assert message.startswith('embeddings: save verified cache ')
+        assert archive.name == module.backend._RESULT_ARCHIVE_NAME
+        assert archive.name.endswith('.tar.gz')
+        import tarfile
+        with tarfile.open(archive, 'r:gz') as result:
+            manifest = json.load(result.extractfile(module.backend._RESULT_MANIFEST_NAME))
+            assert manifest['run_id'] == run_tag
+            paths = {item['path'] for item in manifest['included']}
+            assert 'shared_minilm__embeddings.npz' in paths
+            assert 'embedding_inputs.json' in paths
+            assert 'local_handoff.json' in paths
+        captured.append(archive)
+        return archive
+    with patch.object(module, 'TRAIN_ROOT', tmp_path), \
+         patch('model_tracks.publish.push_artifacts', side_effect=existing_publisher):
+        module.persist_embeddings(setup / 'shared_minilm__embeddings.npz', handoff)
+    assert len(captured) == 1
