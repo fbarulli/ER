@@ -145,23 +145,28 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
         **{key:bundle[key] for key in ('labeled_pairs_csv','canonical_records_csv','gate_results_csv','payload_variant','masking_profile')},
         holdout_populations={s:sorted(values) for s,values in zip(('train','dev','test'),populations)})
     manifest=json.loads((setup/'setup_manifest.json').read_text())
-    parent_cache = setup/'shared_minilm__embeddings.npz'
-    if parent_cache.exists():
-        vectors,metadata=load_text_cache(parent_cache,frame.product_id.tolist())
-        metadata.update(parent_cache_sha256=file_hash(parent_cache),
-                        catalog_sha256=file_hash(output/'eligible_catalog.csv'))
-        np.savez_compressed(output/'shared_minilm__embeddings.npz',ids=frame.product_id.to_numpy(dtype=str),embeddings=vectors,metadata=json.dumps(metadata))
-    else:
-        # A small lifecycle smoke need not wait for the full catalog cache.
-        # Build its own exact baseline vectors locally under the same contract.
-        from graph_tracks.text_cache import create_cache, checkpoint_hash
-        checkpoint = Path(manifest['text_checkpoint'])
-        if checkpoint_hash(checkpoint) != manifest['text_checkpoint_sha256']:
-            raise ValueError('smoke baseline differs from the parent checkpoint')
-        create_cache(output/'eligible_catalog.csv', checkpoint,
-                     output/'shared_minilm__embeddings.npz', device='cpu')
     manifest.update(smoke=True,source_listing_count=sample,parent_setup_sha256=file_hash(setup/'setup_manifest.json'))
     write_json(output/'setup_manifest.json',manifest)
+    from training.prepare_embeddings import prepare_request, validate_prepared_provenance
+    checkpoint = Path(manifest['text_checkpoint'])
+    request = prepare_request(output, checkpoint)
+    parent_cache = setup/'shared_minilm__embeddings.npz'
+    if parent_cache.exists():
+        vectors, metadata = load_text_cache(parent_cache, request['ids'])
+        parent_manifest = json.loads((setup/'prepared/input_manifest.json').read_text())
+        validate_prepared_provenance(parent_cache, metadata, parent_manifest)
+        parent_request = json.loads((setup/'embedding_inputs.json').read_text())
+        parent_texts = dict(zip(parent_request['ids'], parent_request['texts']))
+        if any(parent_texts[key] != text for key, text in zip(request['ids'], request['texts'])):
+            raise ValueError('smoke composed texts differ from validated parent cache')
+        metadata = {**request['metadata'], 'parent_cache_sha256': file_hash(parent_cache)}
+        np.savez_compressed(output/'shared_minilm__embeddings.npz',
+                            ids=np.asarray(request['ids'], dtype=str), embeddings=vectors,
+                            metadata=json.dumps(metadata))
+        (output/'embedding_inputs.json').write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
+    else:
+        from training.prepare_embeddings import prepare as prepare_embeddings
+        prepare_embeddings(output, checkpoint, device='cpu')
     for track in ('gnn_only','hybrid'):
         settings=yaml.safe_load((setup/f'{track}.yaml').read_text())
         for key in ('listings','pairs','input_manifest','text_cache'):

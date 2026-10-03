@@ -31,6 +31,7 @@ def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
 def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     from core.common import TRAIN_ROOT
     cfg = load_config(config)
+    gpu_only = os.environ.get('ER_GPU_TRAINING_ONLY') == '1'
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     output = Path(os.environ['EUROMONITOR_RESULTS_DIR'])
     output.mkdir(parents=True, exist_ok=True)
@@ -53,8 +54,8 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     else:
         settings = yaml.safe_load((setup / f'{track}.yaml').read_text())
         settings.update(device=cfg.device, epochs=cfg.epochs, report_test=cfg.report_test,
-                        postprocess=True)
-        if cfg.dvc_enabled:
+                        postprocess=not gpu_only)
+        if cfg.dvc_enabled or gpu_only:
             # The suite publisher owns persistence; avoid a second mutable
             # local DVC snapshot while background uploads are active.
             settings['dvc'] = {**settings.get('dvc', {}), 'enabled': False}
@@ -88,7 +89,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     events.emit('training', 'started', includes_graph_postprocess=track != 'text')
     subprocess.run(command, cwd=TRAIN_ROOT, env=os.environ.copy(), check=True)
     events.emit('training', 'completed', includes_graph_postprocess=track != 'text')
-    if track == 'text':
+    if track == 'text' and not gpu_only:
         from model_tracks.text_report import complete
         events.emit('postprocess', 'started', report_test=cfg.report_test)
         complete(output, setup, device=cfg.device, report_test=cfg.report_test)
@@ -106,7 +107,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
             events.emit('publication', 'context_closed',
                         detail='publisher context finished; remote receipts are in publication metadata')
     from model_tracks.resume import record_completion
-    record_completion(output, track)
+    record_completion(output, track, postprocess_complete=not gpu_only)
     events.emit('completion', 'verified', inventory='track_inventory.json',
                 marker='track_complete.json')
 

@@ -98,6 +98,8 @@ def test_manifested_hybrid_requires_active_text_composition(tmp_path, monkeypatc
     composition = core.model_input.model_input_composition().model_dump(mode='json')
     metadata = {key: manifest[key] for key in ('catalog_sha256', 'identity_policy_sha256',
                                               'identity_dimensions_sha256')}
+    import training.prepare_embeddings
+    monkeypatch.setattr(training.prepare_embeddings, 'validate_prepared_provenance', lambda *_: None)
     metadata.update(checkpoint_sha256='checkpoint',
                     composition={'outdated': True} if changed_composition else composition)
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)

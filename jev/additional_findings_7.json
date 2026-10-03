@@ -1,0 +1,2145 @@
+{
+  "cases": [
+    {
+      "gtin1": "8437007759273",
+      "gtin2": "8437007759433",
+      "score": 0.03,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Conflicting sizes inside one identity record",
+      "evidence": "200ml versus 1l titles. The second canonical unions five 1000ml rows and one 200ml row into {200,1000}; overlap with the first canonical {200} permits approval. No source-conflict flag is set.",
+      "next_step": "Review conflicting measurements across listings before comparing records; a single agreeing outlier must not establish identity.",
+      "records": [
+        {
+          "gtin": "8437007759273",
+          "original_listings": [
+            {
+              "attributes": "Flavour: apple; Juice Content: 100%; Sustainable Sourcing: organic; Volume: 200; Made From: apple; Carbonization: still; Pack Type: Liquid Carton; Pack Material Type: Paper / Carton",
+              "barcode": "8437007759273",
+              "brand": "Naturgreen",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" organic supermarket\"\",\"\" drink\"\",\"\" juice\"\",\"\" apple juice and organic pears\"\"]",
+              "country": "France",
+              "description": "taste it apple juice organic naturgreen at any time of the day. \nA consume fresh for even more flavors.",
+              "image_url": "https://cdn.greenweez.com/products/8NATU0116_0.jpg",
+              "price": "1.5",
+              "product_id": "632140548",
+              "retailer": "Greenweez",
+              "title": "apple juice 200ml organic",
+              "url": "https://www.greenweez.com/produit/jus-de-pomme-200ml-bio/8NATU0116"
+            },
+            {
+              "attributes": "Flavour: apple; Pack Type: Liquid Carton; Carbonization: still; Made From: apple; Environmentally Friendly: environmentally friendly; Naturally derived: natural; Volume: 200; Sustainable Sourcing: organic; Juice Features: from concentrate; Juice Content: 100%; Pack Material Type: Paper / Carton",
+              "barcode": "8437007759273",
+              "brand": "Naturgreen",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" Nutrition and Supplements\"\",\"\" Drinks\"\",\"\" Waters and Juices\"\"]",
+              "country": "Germany",
+              "description": "Naturbreen's ecological apple pulp juice is developed with the best fruit from organic agriculture and sweetened with Agave Syrup.",
+              "image_url": "https://static.carethy.net/media/4/photos/products/053098/53098-8437007759273-00_1.jpg",
+              "price": "1.19",
+              "product_id": "690036519",
+              "retailer": "Carethy",
+              "title": "natural green Ecological Apple Juice 200ml",
+              "url": "https://www.carethy.de/nutrition-and-supplements/naturgreen/ecological-apple-juice-200ml?r=8437007759273&lang=en"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Naturgreen",
+            "mode_flavor": "apple",
+            "mode_type": "juice",
+            "flavor_set": [
+              "apple",
+              "pear"
+            ],
+            "volume_set": [
+              200.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [
+              "sweetened"
+            ],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "8437007759433",
+          "original_listings": [
+            {
+              "attributes": "Made From: apple; Juice Content: 100%; Flavour: apple; Sustainable Sourcing: organic; Environmentally Friendly: environmentally friendly; Pack Type: Liquid Carton; Volume: 1000; Pack Material Type: Paper / Carton; Carbonization: still; Health Claims: no sugar",
+              "barcode": "8437007759433",
+              "brand": "Naturgreen",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" eco supermarket\"\",\"\" eco food\"\",\"\" vegetable drinks and juices\"\",\"\" organic juices\"\"]",
+              "country": "Spain",
+              "description": "* principal ingredient: apple \n* intolerances: without gluten, without sugars \n* feeding - feeding type: vegetarian, vegan \napple juice based on concentrate. \ncan be consumed directly or be used as in",
+              "image_url": "https://imagesph.global.ssl.fastly.net/estaticos/imagenes/ficha/33974/33974_1_1400.jpg",
+              "price": "2.38",
+              "product_id": "213425382",
+              "retailer": "Greenweez",
+              "title": "apple juice naturgreen 1l",
+              "url": "https://www.planetahuerto.es/venta-zumo-de-manzana-naturgreen-1l_33974"
+            },
+            {
+              "attributes": "Volume: 1000; Made From: apple; Pack Material Type: Paper / Carton; Carbonization: still; Juice Content: 100%; Sustainable Sourcing: organic; Flavour: apple; Caffeine: 200+ mg; Environmentally Friendly: environmentally friendly",
+              "barcode": "8437007759433",
+              "brand": "Naturgreen",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" eco supermarket\"\",\"\" eco food\"\",\"\" organic juices\"\"]",
+              "country": "Spain",
+              "description": "apple juice based on concentrate. \ncan be consumed directly or be used as ingredient in your recipes. \nproduct with organic food certificate. \n\n[ingredients_start]\ningredients: apple juice based on co",
+              "image_url": "https://cdn2.planetahuerto.es/estaticos/imagenes/ficha/33974/33974_1.png",
+              "price": "2.38",
+              "product_id": "247393105",
+              "retailer": "Planeta Huerto",
+              "title": "apple juice Bio naturgreen",
+              "url": "https://www.planetahuerto.es/venta-zumo-de-manzana-bio-naturgreen_33974"
+            },
+            {
+              "attributes": "Environmentally Friendly: environmentally friendly; Volume: 1000; Juice Features: from concentrate; Sustainable Sourcing: organic; Juice Content: 100%; Flavour: apple; Pack Material Type: Paper / Carton; Made From: apple; Carbonization: still",
+              "barcode": "8437007759433",
+              "brand": "Naturgreen",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" Nutrition and Supplements\"\",\"\" Drinks\"\",\"\" Waters and Juices\"\"]",
+              "country": "Spain",
+              "description": "Naturbreen's ecological apple pulp juice is developed with the best fruit from organic agriculture and sweetened with Agave Syrup.",
+              "image_url": "https://static.carethy.net/media/4/photos/products/053100/53100-8437007759433-00_1.jpg",
+              "price": "2.39",
+              "product_id": "478326856",
+              "retailer": "Carethy",
+              "title": "naturgreen Ecological Apple Juice 1l",
+              "url": "https://www.carethy.es/nutrition-and-supplements/naturgreen/ecological-apple-juice-1l?r=8437007759433&lang=en"
+            },
+            {
+              "attributes": "Sustainable Sourcing: organic; Pack Type: Liquid Carton; Volume: 1000; Juice Features: from concentrate; Free From: no soy, lactose free, no eggs, no nuts; Environmentally Friendly: environmentally friendly; Flavour: apple; Pack Material Type: Paper / Carton; Diets: plant-based; Juice Content: 100%; Made From: apple; Health Claims: no added sugar; Carbonization: still",
+              "barcode": "8437007759433",
+              "brand": "Naturgreen",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" nutrition\"\",\"\" organic food BIO\"\"]",
+              "country": "Spain",
+              "description": "## details \ndelicious juice of apples from concentrate. \n100% vegetable. \nno added sugars. \nwithout gluten, soy, lactose, nuts no egg. \nlow salt content. \n[ingredients_start]\n### composition \napple ju",
+              "image_url": "https://www.mifarma.es/media/catalog/product/cache/1/image/9d6758f7fb7476b09aa51a3fa7ce618a/2/5/250919343992_.jpg",
+              "price": "2.25",
+              "product_id": "480919566",
+              "retailer": "Mifarma",
+              "title": "natur green juice organic apple 1 liter",
+              "url": "https://www.mifarma.es/naturgreen-zumo-manzana-bio-1-litro"
+            },
+            {
+              "attributes": "Pack Type: Carton/Box; Volume: 1000; Pack Material Type: Paper / Carton; Sustainable Sourcing: organic; Carbonization: still; Made From: apple; Flavour: apple; Juice Content: 100%",
+              "barcode": "8437007759433",
+              "brand": "Naturgreen",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" organic supermarket\"\",\"\" drink\"\",\"\" juice\"\",\"\" apple juice and organic pears\"\"]",
+              "country": "France",
+              "description": "taste it apple juice organic naturgreen at any time of the day. \nA consume fresh for even more flavors.",
+              "image_url": "https://cdn.greenweez.com/products/8NATU0115_0.jpg",
+              "price": "3.17",
+              "product_id": "578629413",
+              "retailer": "Greenweez",
+              "title": "apple juice 1l organic",
+              "url": "https://www.greenweez.com/produit/jus-de-pomme-1l-bio/8NATU0115"
+            },
+            {
+              "attributes": "Sustainable Sourcing: organic; Caffeine: 200+ mg; Made From: apple; Juice Content: 100%; Volume: 200; Pack Material Type: Paper / Carton; Flavour: apple; Environmentally Friendly: environmentally friendly; Carbonization: still",
+              "barcode": "8437007759433",
+              "brand": "Naturgreen",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" baby and child\"\",\"\" infant feeding\"\",\"\" juices children\"\"]",
+              "country": "Spain",
+              "description": "apple juice based on concentrate. \ncan be consumed directly or be used as ingredient in your recipes. \nproduct with organic food certificate. \n\n[ingredients_start]\ningredients: apple juice based on co",
+              "image_url": "https://cdn2.planetahuerto.es/estaticos/imagenes/ficha/33974/33974_1.png",
+              "price": "2.27",
+              "product_id": "580733718",
+              "retailer": "Planeta Huerto",
+              "title": "apple juice Bio naturgreen",
+              "url": "https://www.planetahuerto.es/venta-zumo-de-manzana-bio-naturgreen_33974/43960"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Naturgreen",
+            "mode_flavor": "apple",
+            "mode_type": "juice",
+            "flavor_set": [
+              "apple",
+              "pear"
+            ],
+            "volume_set": [
+              200.0,
+              1000.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 0.833,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [
+              "sweetened"
+            ],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "721867271111",
+      "gtin2": "721867277267",
+      "score": 0.03,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Nested retail-pack counts lost",
+      "evidence": "Titles and descriptions assert 4 x 250ml sold as pack of 2 versus pack of 4, as well as Lite versus Original. Extraction records the outer counts but selects pack_qty=4 for both, with no hierarchy flag.",
+      "next_step": "Retain pack levels/outer multiplicity or review unresolved nesting rather than selecting one agreeing inner count.",
+      "records": [
+        {
+          "gtin": "721867271111",
+          "original_listings": [
+            {
+              "attributes": "Sustainable Sourcing: organic; Volume: 250; Pack Type: Carton/Box; Juice Content: 0-2%; Carbonization: still",
+              "barcode": "721867271111",
+              "brand": "Scheckter's",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soft Drinks\"\"]",
+              "country": "USA",
+              "description": "Scheckter's Organic Lite 4 Pack 4 x 250ml ( Pack of 2)\nScheckter's Organic\n4 x 250ml (x2)\nQuantity: 2",
+              "image_url": "https://m.media-amazon.com/images/I/51kQlUZ-49L._AC_UL320_.jpg",
+              "price": "34.75",
+              "product_id": "69636652",
+              "retailer": "amazon",
+              "title": "Scheckter's Organic Lite 4 Pack 4 x 250ml ( Pack of 2)",
+              "url": "https://www.amazon.com/Scheckters-Organic-Lite-Pack-250ml/dp/B01M7TK9BP/ref=sr_1_5167?qid=1570695600&s=grocery&sr=1-5167"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Scheckter's",
+            "mode_flavor": "cola",
+            "mode_type": "water",
+            "flavor_set": [
+              "cola"
+            ],
+            "volume_set": [
+              250.0
+            ],
+            "pack_set": [
+              4
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "721867277267",
+          "original_listings": [
+            {
+              "attributes": "Pack Type: Carton/Box; Volume: 250; Carbonization: still; Sustainable Sourcing: organic; Juice Content: 0-2%",
+              "barcode": "721867277267",
+              "brand": "Scheckter's",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soft Drinks\"\"]",
+              "country": "USA",
+              "description": "Scheckter's Organic Original 4 Pack 4 x 250ml ( Pack of 4)\nScheckter's Organic\n4 x 250ml (x4)\nQuantity: 4",
+              "image_url": "https://m.media-amazon.com/images/I/51Bi6m8A5-L._AC_UL320_.jpg",
+              "price": "71.75",
+              "product_id": "74036326",
+              "retailer": "amazon",
+              "title": "Scheckter's Organic Original 4 Pack 4 x 250ml ( Pack of 4)",
+              "url": "https://www.amazon.com/Scheckters-Organic-Original-Pack-250ml/dp/B01M28JPQJ/ref=sr_1_5204?qid=1570695604&s=grocery&sr=1-5204"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Scheckter's",
+            "mode_flavor": "cola",
+            "mode_type": "water",
+            "flavor_set": [
+              "cola"
+            ],
+            "volume_set": [
+              250.0
+            ],
+            "pack_set": [
+              4
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "5060510930018",
+      "gtin2": "5060510930124",
+      "score": 0.03,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Within-record pack conflicts treated as compatible",
+      "evidence": "Pu-Erh versus Linden kombucha; one barcode has 5/6/7-pack listings and the other 5/7. Intersection permits approval despite conflicting listings and distinct named tea variants.",
+      "next_step": "Resolve identity at the retail-pack level and preserve named tea variants.",
+      "records": [
+        {
+          "gtin": "5060510930018",
+          "original_listings": [
+            {
+              "attributes": "Pack Material Type: Glass; Sustainable Sourcing: organic; Volume: 275; Geographic Origin: united kingdom; Pack Type: Bottle; Tea Type: puerh; Juice Content: 0-2%",
+              "barcode": "5060510930018",
+              "brand": "Mighty Brew",
+              "category": "Carbonated RTD Tea and Kombucha",
+              "category_path": "[\"\" Grocery\"\",\"\" Food Cupboard\"\",\"\" Instant Meals & Sides\"\"]",
+              "country": "United Kingdom",
+              "description": "Organic Kombucha Pu-erh 275ml\nGluten Free\nVegan\nOrganic\nKnown Barcodes: 5060510930018",
+              "image_url": "https://m.media-amazon.com/images/I/51bIbWECrqL._AC_UL320_.jpg",
+              "price": "19.25",
+              "product_id": "165342943",
+              "retailer": "amazon",
+              "title": "Mighty Brew | Organic Kombucha Pu- Erh 275ML | 6 x 275ml (UK)",
+              "url": "https://www.amazon.co.uk/Mighty-Brew-Organic-Kombucha-Pu-Erh/dp/B07SYBWBSH/ref=sr_1_2323?qid=1568622151&s=grocery&sr=1-2323"
+            },
+            {
+              "attributes": "Pack Material Type: Glass; Tea Type: puerh; Geographic Origin: united kingdom; Juice Content: 0-2%; Sustainable Sourcing: organic; Volume: 275; Pack Type: Bottle",
+              "barcode": "5060510930018",
+              "brand": "Mighty Brew",
+              "category": "Carbonated RTD Tea and Kombucha",
+              "category_path": "[\"\" Grocery\"\",\"\" Food Cupboard\"\",\"\" Instant Meals & Sides\"\"]",
+              "country": "United Kingdom",
+              "description": "Organic Kombucha Pu-erh 275ml\nGluten Free\nVegan\nOrganic\nKnown Barcodes: 5060510930018",
+              "image_url": "https://m.media-amazon.com/images/I/51bIbWECrqL._AC_UL320_.jpg",
+              "price": "15.84",
+              "product_id": "165373767",
+              "retailer": "amazon",
+              "title": "Mighty Brew | Organic Kombucha Pu- Erh 275ML | 5 x 275ml (UK)",
+              "url": "https://www.amazon.co.uk/Mighty-Brew-Organic-Kombucha-Pu-Erh/dp/B07SYBV6P1/ref=sr_1_2327?qid=1568622151&s=grocery&sr=1-2327"
+            },
+            {
+              "attributes": "Pack Material Type: Glass; Juice Content: 0-2%; Pack Type: Bottle; Sustainable Sourcing: organic; Geographic Origin: united kingdom; Tea Type: puerh; Volume: 275",
+              "barcode": "5060510930018",
+              "brand": "Mighty Brew",
+              "category": "Carbonated RTD Tea and Kombucha",
+              "category_path": "[\"\" Grocery\"\",\"\" Food Cupboard\"\",\"\" Instant Meals & Sides\"\"]",
+              "country": "United Kingdom",
+              "description": "Organic Kombucha Pu-erh 275ml\nGluten Free\nVegan\nOrganic\nKnown Barcodes: 5060510930018",
+              "image_url": "https://m.media-amazon.com/images/I/51bIbWECrqL._AC_UL320_.jpg",
+              "price": "21",
+              "product_id": "165573712",
+              "retailer": "amazon",
+              "title": "Mighty Brew | Organic Kombucha Pu- Erh 275ML | 7 x 275ml (UK)",
+              "url": "https://www.amazon.co.uk/Mighty-Brew-Organic-Kombucha-Pu-Erh/dp/B07SXCHX3R/ref=sr_1_2511?qid=1568622175&s=grocery&sr=1-2511"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Mighty Brew",
+            "mode_flavor": "",
+            "mode_type": "kombucha",
+            "flavor_set": [],
+            "volume_set": [
+              275.0
+            ],
+            "pack_set": [
+              5,
+              6,
+              7
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 0.333,
+            "carbonation_set": [],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "5060510930124",
+          "original_listings": [
+            {
+              "attributes": "Volume: 275; Geographic Origin: united kingdom; Sustainable Sourcing: organic; Pack Type: Bottle; Juice Content: 0-2%; Pack Material Type: Glass",
+              "barcode": "5060510930124",
+              "brand": "Mighty Brew",
+              "category": "Carbonated RTD Tea and Kombucha",
+              "category_path": "[\"\" Grocery\"\",\"\" Food Cupboard\"\",\"\" Instant Meals & Sides\"\"]",
+              "country": "United Kingdom",
+              "description": "Organic Kombucha - Linden 275ml\nGluten Free\nVegan\nOrganic\nKnown Barcodes: 5060510930124",
+              "image_url": "https://m.media-amazon.com/images/I/51UW4r6tMdL._AC_UL320_.jpg",
+              "price": "25.46",
+              "product_id": "165473883",
+              "retailer": "amazon",
+              "title": "Mighty Brew | Organic Kombucha - Linden 275ML | 7 x 275ml (UK)",
+              "url": "https://www.amazon.co.uk/Mighty-Brew-Organic-Kombucha-Linden/dp/B07SXD1WQN/ref=sr_1_1070?qid=1567068380&s=grocery&sr=1-1070"
+            },
+            {
+              "attributes": "Pack Type: Bottle; Geographic Origin: united kingdom; Sustainable Sourcing: organic; Juice Content: 0-2%; Pack Material Type: Glass; Volume: 275",
+              "barcode": "5060510930124",
+              "brand": "Mighty Brew",
+              "category": "Carbonated RTD Tea and Kombucha",
+              "category_path": "[\"\" Grocery\"\",\"\" Food Cupboard\"\",\"\" Instant Meals & Sides\"\"]",
+              "country": "United Kingdom",
+              "description": "Organic Kombucha - Linden 275ml\nGluten Free\nVegan\nOrganic\nKnown Barcodes: 5060510930124",
+              "image_url": "https://m.media-amazon.com/images/I/51UW4r6tMdL._AC_UL320_.jpg",
+              "price": "19.12",
+              "product_id": "165607237",
+              "retailer": "amazon",
+              "title": "Mighty Brew | Organic Kombucha - Linden 275ML | 5 x 275ml (UK)",
+              "url": "https://www.amazon.co.uk/Mighty-Brew-Organic-Kombucha-Linden/dp/B07SYC92DC/ref=sr_1_887?qid=1567068348&s=grocery&sr=1-887"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Mighty Brew",
+            "mode_flavor": "",
+            "mode_type": "kombucha",
+            "flavor_set": [],
+            "volume_set": [
+              275.0
+            ],
+            "pack_set": [
+              5,
+              7
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 0.5,
+            "carbonation_set": [],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "5060128500801",
+      "gtin2": "5060128501105",
+      "score": 0.03,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Cultivar identity collapsed",
+      "evidence": "Gala versus Braeburn apple juice. Both collapse to apple. Source pack counts also vary (1/2/12 versus 2/3/5/12); their overlap is accepted.",
+      "next_step": "Preserve named cultivar/product variants and review inconsistent pack claims.",
+      "records": [
+        {
+          "gtin": "5060128500801",
+          "original_listings": [
+            {
+              "attributes": "Pack Type: Bottle; Volume: 1000; Flavour: apple; Carbonization: still; Made From: apple; Pack Material Type: Glass",
+              "barcode": "5060128500801",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" juice\"\"]",
+              "country": "France",
+              "description": "Apple Juice - Gala\nVegan\nknown barcodes: 5060128500801",
+              "image_url": "https://m.media-amazon.com/images/I/51lk3XWB+gL._AC_UL320_.jpg",
+              "price": "96.3",
+              "product_id": "80821222",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - Gala | 2 x 6 x 1l",
+              "url": "https://www.amazon.fr/Duskin-Apple-Juice-Gala-1l/dp/B0758Q4SMZ/ref=sr_1_1179?_encoding=UTF8&c=ts&dchild=1&keywords=Jus+de+fruits&qid=1607318094&s=grocery&sr=1-1179&ts_id=6357100031"
+            },
+            {
+              "attributes": "Pack Material Type: Glass; Made From: apple; Volume: 1000; Carbonization: still; Pack Type: Bottle; Flavour: apple",
+              "barcode": "5060128500801",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" juice\"\"]",
+              "country": "France",
+              "description": "Apple Juice - Gala\nVegan\nknown barcodes: 5060128500801",
+              "image_url": "https://m.media-amazon.com/images/I/51lk3XWB+gL._AC_UL320_.jpg",
+              "price": "29.15",
+              "product_id": "81526038",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - Gala | 2 x 1l",
+              "url": "https://www.amazon.fr/Duskin-Apple-Juice-Gala-1l/dp/B01M168021/ref=sr_1_1326?_encoding=UTF8&c=ts&dchild=1&keywords=Jus+de+fruits&qid=1607318123&s=grocery&sr=1-1326&ts_id=6357100031"
+            },
+            {
+              "attributes": "Flavour: apple; Volume: 1000; Carbonization: still; Pack Type: Bottle; Made From: apple; Pack Material Type: Glass",
+              "barcode": "5060128500801",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]",
+              "country": "Germany",
+              "description": "Apple Juice - Gala\nVegan\nknown barcodes: 5060128500801",
+              "image_url": "https://m.media-amazon.com/images/I/51lk3XWB+gL._AC_UL320_.jpg",
+              "price": "23.81",
+              "product_id": "82151743",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - Gala | 2 x 1l",
+              "url": "https://www.amazon.de/Duskin-Apple-Juice-Gala-1l/dp/B01M168021/ref=sr_1_4383?dchild=1&qid=1592129352&s=grocery&sr=1-4383"
+            },
+            {
+              "attributes": "Carbonization: still; Volume: 1000; Pack Material Type: Glass; Pack Type: Bottle; Flavour: apple; Made From: apple",
+              "barcode": "5060128500801",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]",
+              "country": "Germany",
+              "description": "Apple Juice - Gala\nVegan\nknown barcodes: 5060128500801",
+              "image_url": "https://m.media-amazon.com/images/I/51lk3XWB+gL._AC_UL320_.jpg",
+              "price": "86.96",
+              "product_id": "82593295",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - Gala | 2 x 6 x 1l",
+              "url": "https://www.amazon.de/Duskin-Apple-Juice-Gala-1l/dp/B0758Q4SMZ/ref=sr_1_4221?_encoding=UTF8&c=ts&dchild=1&keywords=Fruchts%C3%A4fte&qid=1607523008&s=grocery&sr=1-4221&ts_id=364719031"
+            },
+            {
+              "attributes": "Juice Content: 100%; Pack Material Type: Glass; Volume: 1000; Made From: apple; Pack Type: Bottle; Flavour: apple; Carbonization: still",
+              "barcode": "5060128500801",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" food and care of home\"\",\"\" products dairy and refrigerated\"\"]",
+              "country": "Italy",
+              "description": "Apple Juice - Gala\nVegan\nknown barcodes: 5060128500801",
+              "image_url": "https://m.media-amazon.com/images/I/51lk3XWB+gL._AC_UL320_ML3_.jpg",
+              "price": "112.42",
+              "product_id": "95041540",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - Gala | 2 x 6 x 1l",
+              "url": "https://www.amazon.it/Duskin-Apple-Juice-Gala-1l/dp/B0758Q4SMZ/ref=sr_1_2867?qid=1578469173&s=grocery&sr=1-2867"
+            },
+            {
+              "attributes": "Volume: 1000; Juice Content: 100%; Pack Material Type: Glass; Juice Features: smoothie; Made From: apple; Flavour: apple; Pack Type: Bottle; Carbonization: still",
+              "barcode": "5060128500801",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" food and care of home\"\",\"\" coffee, tea and drinks\"\",\"\" juices, smoothies and centrifuged\"\",\"\" fruit juices\"\"]",
+              "country": "Italy",
+              "description": "Apple Juice - Gala\nVegan\nknown barcodes: 5060128500801",
+              "image_url": "https://m.media-amazon.com/images/I/51lk3XWB+gL._AC_UL320_.jpg",
+              "price": "37.12",
+              "product_id": "96675389",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - Gala | 2 x 1l",
+              "url": "https://www.amazon.it/Duskin-Apple-Juice-Gala-1l/dp/B01M168021/ref=sr_1_996?dchild=1&qid=1591688385&s=grocery&sr=1-996"
+            },
+            {
+              "attributes": "Volume: 1000; Carbonization: still; Geographic Origin: united kingdom; Caffeine: 15-25 mg; Juice Features: smoothie; Pack Type: Bottle; Immune Support Ingredients: vitamin c, antioxidants; Made From: apple; Flavour: apple",
+              "barcode": "5060128500801",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" Grocery\"\",\"\" Drinks\"\",\"\" Juice & Smoothies\"\"]",
+              "country": "United Kingdom",
+              "description": "* Apple Juice - Gala \n* Vegan \n* Known Barcodes: 5060128500801 \n› See more product details , \n## Product description \nDuskin | Apple Juice - Gala | 1 x 1l \nThis product is :- Vegan, \nIngredients: Appl",
+              "image_url": "https://m.media-amazon.com/images/I/51pvJzM7stL._AC_UL320_.jpg",
+              "price": "10.76",
+              "product_id": "251539833",
+              "retailer": "amazon",
+              "title": "Duskin | Apple Juice - Gala | 1 x 1l (UK)",
+              "url": "https://www.amazon.co.uk/dp/B084G75CR9"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Duskin",
+            "mode_flavor": "apple",
+            "mode_type": "juice",
+            "flavor_set": [
+              "apple",
+              "coffee",
+              "fruit"
+            ],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [
+              1,
+              2,
+              12
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 0.429,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "5060128501105",
+          "original_listings": [
+            {
+              "attributes": "Volume: 1000; Pack Type: Bottle; Pack Material Type: Glass; Juice Content: 0-2%; Made From: apple; Flavour: apple; Carbonization: still",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" juice\"\"]",
+              "country": "France",
+              "description": "Apple Juice - braeburn\nVegan\nknown barcodes: 5060128501105",
+              "image_url": "https://m.media-amazon.com/images/I/51F4+1AcIyL._AC_UL320_.jpg",
+              "price": "33.89",
+              "product_id": "80047209",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - braeburn | 3 x 1l",
+              "url": "https://www.amazon.fr/Duskin-Apple-Juice-Braeburn-1l/dp/B01LZVFNNZ/ref=sr_1_1395?_encoding=UTF8&c=ts&dchild=1&keywords=Jus+de+fruits&qid=1607318131&s=grocery&sr=1-1395&ts_id=6357100031"
+            },
+            {
+              "attributes": "Volume: 1000; Pack Type: Bottle; Made From: apple; Carbonization: still; Pack Material Type: Glass; Flavour: apple",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" juice\"\"]",
+              "country": "France",
+              "description": "Apple Juice - braeburn\nVegan\nknown barcodes: 5060128501105",
+              "image_url": "https://m.media-amazon.com/images/I/51F4+1AcIyL._AC_UL320_.jpg",
+              "price": "29.15",
+              "product_id": "80139476",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - braeburn | 2 x 1l",
+              "url": "https://www.amazon.fr/Duskin-Apple-Juice-Braeburn-1l/dp/B01LZVFZKK/ref=sr_1_1389?_encoding=UTF8&c=ts&dchild=1&keywords=Jus+de+fruits&qid=1607318131&s=grocery&sr=1-1389&ts_id=6357100031"
+            },
+            {
+              "attributes": "Volume: 1000; Pack Type: Bottle; Made From: apple; Flavour: apple; Carbonization: still; Pack Material Type: Glass",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" juice\"\"]",
+              "country": "France",
+              "description": "Apple Juice - braeburn\nVegan\nknown barcodes: 5060128501105",
+              "image_url": "https://m.media-amazon.com/images/I/51F4+1AcIyL._AC_UL320_.jpg",
+              "price": "90.28",
+              "product_id": "80839310",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - braeburn | 2 x 6 x 1l",
+              "url": "https://www.amazon.fr/Duskin-Apple-Juice-Braeburn-1l/dp/B0758N5H69/ref=sr_1_1118?qid=1570518118&s=grocery&sr=1-1118"
+            },
+            {
+              "attributes": "Pack Type: Bottle; Volume: 1000; Flavour: apple; Carbonization: still; Pack Material Type: Glass; Made From: apple",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]",
+              "country": "Germany",
+              "description": "Apple Juice - braeburn\nVegan\nknown barcodes: 5060128501105",
+              "image_url": "https://m.media-amazon.com/images/I/51F4+1AcIyL._AC_UL320_.jpg",
+              "price": "24.61",
+              "product_id": "82523327",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - braeburn | 2 x 1l",
+              "url": "https://www.amazon.de/Duskin-Apple-Juice-Braeburn-1l/dp/B01LZVFZKK/ref=sr_1_5217?qid=1575283209&s=grocery&sr=1-5217"
+            },
+            {
+              "attributes": "Pack Type: Bottle; Carbonization: still; Volume: 1000; Flavour: apple; Made From: apple; Pack Material Type: Glass",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]",
+              "country": "Germany",
+              "description": "Apple Juice - braeburn\nVegan\nknown barcodes: 5060128501105",
+              "image_url": "https://m.media-amazon.com/images/I/51F4+1AcIyL._AC_UL320_.jpg",
+              "price": "84.58",
+              "product_id": "82642808",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - braeburn | 2 x 6 x 1l",
+              "url": "https://www.amazon.de/Duskin-Apple-Juice-Braeburn-1l/dp/B0758N5H69/ref=sr_1_4441?qid=1577440703&s=grocery&sr=1-4441"
+            },
+            {
+              "attributes": "Carbonization: still; Flavour: apple; Made From: apple; Pack Material Type: Glass; Volume: 1000; Juice Content: 100%; Pack Type: Bottle",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" alimentation and drinks\"\",\"\" coffee, tea and drinks\"\",\"\" juices\"\",\"\" fruit juice\"\"]",
+              "country": "Spain",
+              "description": "Apple Juice - Braeburn\nVegan\nknown barcodes: 5060128501105",
+              "image_url": "https://m.media-amazon.com/images/I/51F4+1AcIyL._AC_UL320_.jpg",
+              "price": "38.69",
+              "product_id": "87892391",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - Braeburn | 2 x 1l",
+              "url": "https://www.amazon.es/Duskin-Apple-Juice-Braeburn-1l/dp/B01LZVFZKK/ref=sr_1_960?dchild=1&qid=1607317788&s=grocery&sr=1-960"
+            },
+            {
+              "attributes": "Juice Features: smoothie; Made From: apple; Pack Type: Bottle; Volume: 1000; Carbonization: still; Juice Content: 100%; Flavour: apple; Pack Material Type: Glass",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" food and care of home\"\",\"\" coffee, tea and drinks\"\",\"\" juices, smoothies and centrifuged\"\",\"\" fruit juices\"\"]",
+              "country": "Italy",
+              "description": "Apple Juice - braeburn\nVegan\nknown barcodes: 5060128501105",
+              "image_url": "https://m.media-amazon.com/images/I/51F4+1AcIyL._AC_UL320_.jpg",
+              "price": "37.97",
+              "product_id": "88091349",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - braeburn | 2 x 1l",
+              "url": "https://www.amazon.it/Duskin-Apple-Juice-Braeburn-1l/dp/B01LZVFZKK/ref=sr_1_874?dchild=1&qid=1607247298&s=grocery&sr=1-874"
+            },
+            {
+              "attributes": "Pack Type: Bottle; Juice Features: smoothie; Volume: 1000; Carbonization: still; Made From: apple; Flavour: apple; Pack Material Type: Glass; Juice Content: 100%",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" food and care of home\"\",\"\" coffee, tea and drinks\"\",\"\" juices, smoothies and centrifuged\"\",\"\" fruit juices\"\"]",
+              "country": "Italy",
+              "description": "Apple Juice - braeburn\nVegan\nknown barcodes: 5060128501105",
+              "image_url": "https://m.media-amazon.com/images/I/51F4+1AcIyL._AC_UL320_.jpg",
+              "price": "109.14",
+              "product_id": "91762467",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - braeburn | 2 x 6 x 1l",
+              "url": "https://www.amazon.it/Duskin-Apple-Juice-Braeburn-1l/dp/B0758N5H69/ref=sr_1_821?dchild=1&qid=1591260435&s=grocery&sr=1-821"
+            },
+            {
+              "attributes": "Carbonization: still; Pack Type: Bottle; Volume: 1000; Pack Material Type: Glass; Juice Content: 100%; Made From: apple; Flavour: apple",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" alimentation and drinks\"\",\"\" coffee, tea and drinks\"\",\"\" juices\"\",\"\" fruit juice\"\"]",
+              "country": "Spain",
+              "description": "Apple Juice - Braeburn\nVegan\nknown barcodes: 5060128501105",
+              "image_url": "https://m.media-amazon.com/images/I/51F4+1AcIyL._AC_UL320_.jpg",
+              "price": "115.16",
+              "product_id": "96877438",
+              "retailer": "amazon",
+              "title": "duskin | Apple Juice - Braeburn | 2 x 6 x 1l",
+              "url": "https://www.amazon.es/Duskin-Apple-Juice-Braeburn-1l/dp/B0758N5H69/ref=sr_1_820?dchild=1&qid=1607317770&s=grocery&sr=1-820"
+            },
+            {
+              "attributes": "Volume: 1000; Pack Type: Bottle; Juice Features: smoothie; Caffeine: 15-25 mg; Flavour: apple; Carbonization: still; Geographic Origin: united kingdom; Made From: apple; Immune Support Ingredients: vitamin c, antioxidants",
+              "barcode": "5060128501105",
+              "brand": "Duskin",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" Grocery\"\",\"\" Drinks\"\",\"\" Juice & Smoothies\"\"]",
+              "country": "United Kingdom",
+              "description": "* Apple Juice - Braeburn \n* Vegan \n* Known Barcodes: 5060128501105 \n› See more product details , \n## Product description \nDuskin | Apple Juice - Braeburn | 5 x 1l \nThis product is :- Vegan, \nIngredien",
+              "image_url": "https://m.media-amazon.com/images/I/512qCd-qPQL._AC_UL320_.jpg",
+              "price": "30.93",
+              "product_id": "251689195",
+              "retailer": "amazon",
+              "title": "Duskin | Apple Juice - Braeburn | 5 x 1l (UK)",
+              "url": "https://www.amazon.co.uk/dp/B084G8421M"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Duskin",
+            "mode_flavor": "apple",
+            "mode_type": "juice",
+            "flavor_set": [
+              "apple",
+              "coffee",
+              "fruit"
+            ],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [
+              2,
+              3,
+              5,
+              12
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 0.4,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "876063811910",
+      "gtin2": "876063811927",
+      "score": 0.03,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Named commercial flavor missing",
+      "evidence": "Cool Blue versus Glacier Freeze across six listings per product. Both flavor sets are empty while generic energy-drink fields agree.",
+      "next_step": "Preserve declared variant names even when they are outside an ingredient/flavor dictionary.",
+      "records": [
+        {
+          "gtin": "876063811910",
+          "original_listings": [
+            {
+              "attributes": "Volume: 355; Health Claims: energy boosting, no sugar; Sports Ingredients: electrolytes; Caffeine: 50-100 mg; Juice Content: 0-2%",
+              "barcode": "876063811910",
+              "brand": "Fast Twitch",
+              "category": "Sports Drinks",
+              "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Energy Drinks\"\"]",
+              "country": "USA",
+              "description": "* * *\n## Important information \n[ingredients_start]\nIngredients \nFast Twitch RTD - Cool Blue 12oz \n[ingredients_end]\n\nLegal Disclaimer \nStatements regarding dietary supplements have not been evaluated",
+              "image_url": "https://m.media-amazon.com/images/I/71bP7tNEA8L._AC_UL320_.jpg",
+              "price": "2.18",
+              "product_id": "720736642",
+              "retailer": "amazon",
+              "title": "Energy drink from Gatorade, Cool Blue, 12oz Bottle, 200mg Caffeine, Zero Sugar, Electrolytes",
+              "url": "https://www.amazon.com/dp/B0BCX7YV28"
+            },
+            {
+              "attributes": "Sweetener: sucralose; Pack Material Type: Metal; Volume: 355; Pack Type: Bottle; Carbonization: still; Juice Content: 0-2%; No Artificial Ingredients: no artificial colours, no artificial flavours; Caffeine: 15-25 mg; Health Claims: low calories, energy boosting, no sugar, good source of minerals; Sports Ingredients: electrolytes; Naturally derived: natural flavours",
+              "barcode": "876063811910",
+              "brand": "Fast Twitch",
+              "category": "Sports Drinks",
+              "category_path": "[\"\" Beverages\"\",\"\" Sports Drinks\"\",\"\" Sports Drinks\"\"]",
+              "country": "USA",
+              "description": "Energy Drink, Zero Sugar, Cool Blue \nNo artificial flavors or colors from artificial sources. 5 calories per bottle. Zero sugar. 200 mg caffeine and electrolytes. Low calorie. Electrolytes & vitamins",
+              "image_url": "https://images.albertsons-media.com/is/image/ABS/970480888",
+              "price": "3",
+              "product_id": "722878378",
+              "retailer": "safeway",
+              "title": "Fast Twitch Cool Blue Energy Drink - 12 Fl . Oz.",
+              "url": "https://www.safeway.com/shop/product-details.970480888.html"
+            },
+            {
+              "attributes": "Volume: 355; Free From: no allergens; Caffeine: 50-100 mg; Naturally derived: natural flavours; No Artificial Ingredients: no artificial flavours, no artificial colours; Carbonization: still; Pack Type: Bottle; Juice Content: 0-2%; Sweetener: sucralose; Energy Source: b-vitamins; Health Claims: energy boosting, no sugar, good source of minerals",
+              "barcode": "876063811910",
+              "brand": "Fast Twitch",
+              "category": "Energy Drinks",
+              "category_path": "[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Energy Drinks\"\"]",
+              "country": "USA",
+              "description": "[ingredients_start]\n Does Not Contain Any of the 8 Major Allergens Form: Liquid \n[ingredients_end]\nState of Readiness: Ready to Drink Package Quantity: 1 Caffeine claim 1: Caffeinated Net weight: 12",
+              "image_url": "https://target.scene7.com/is/image/Target/GUEST_e369b2b0-15d4-4e4f-a7bb-56229bc9a23d",
+              "price": "2.39",
+              "product_id": "724850628",
+              "retailer": "Target",
+              "title": "Fast Twitch Cool Blue Energy Drink - 12 fl oz Bottle",
+              "url": "https://www.target.com/p/fast-twitch-by-gatorade-cool-blue-energy-drink-12-fl-oz-bottle/-/A-88098651"
+            },
+            {
+              "attributes": "Naturally derived: natural flavours; Juice Content: 0-2%; Volume: 355; Sweetener: sucralose; Carbonization: still; Health Claims: no sugar, energy boosting; Energy Source: b-vitamins",
+              "barcode": "876063811910",
+              "brand": "Fast Twitch",
+              "category": "Energy Drinks",
+              "category_path": "[\"\" Beverages\"\",\"\" Energy Drinks\"\",\"\" Energy Drinks Cans & Bottles\"\",\"\" Energy Drinks Misc\"\"]",
+              "country": "USA",
+              "description": "Cyto Sport and its family of brands help athletes of all ages and levels reach their full potential, providing products that help the body recover, rebuild and restore.",
+              "image_url": "https://images.media.gianteagle.com/00876063811910-a57d11e6-2aff-4e1c-b49b-bfbb57ed8a1e.jpg?trim=auto&trim-md=0&fit=fill&fill=solid&w=256&h=256&pad=7",
+              "price": "1.99",
+              "product_id": "746908830",
+              "retailer": "Giant Eagle",
+              "title": "Fast Twitch Zero Sugar Energy Drink Cool Blue 12 Fl Oz",
+              "url": "https://shop.gianteagle.com/parkway-center/search/product/00876063811910"
+            },
+            {
+              "attributes": "Naturally derived: natural flavours; Sports Ingredients: electrolytes; Volume: 355; Sweetener: sucralose; Carbonization: still; Caffeine: 50-100 mg; Health Claims: energy boosting, good source of minerals, good source of vitamins; Juice Content: 0-2%; Pack Material Type: Metal; Energy Source: b-vitamins; No Artificial Ingredients: no artificial flavours, no artificial colours",
+              "barcode": "876063811910",
+              "brand": "Fast Twitch",
+              "category": "Energy Drinks",
+              "category_path": "[\"\" Health & Beauty\"\",\"\" Health & Wellness\"\",\"\" Diet & Nutrition\"\"]",
+              "country": "USA",
+              "description": "Product Details \nDescription \nFrom the makers of G. Developed by Gatorade with 200mg of caffeine to help athletes ignite power and athletic performance. Fast Twitch is how Gatorade does Energy. Focus",
+              "image_url": "https://fa74d61d848a20b729bb-0251b36b713060ab3e0e8321940e01ff.ssl.cf2.rackcdn.com/731a4ff5-ba5f-4cfc-8715-8f8ea1a2e853_large.png",
+              "price": "2.69",
+              "product_id": "749374356",
+              "retailer": "Hy-Vee",
+              "title": "Fast Twitch Energy Drink, Cool Blue",
+              "url": "https://www.hy-vee.com/aisles-online/p/3716947/Fast-Twitch-Energy-Drink-Cool-Blue"
+            },
+            {
+              "attributes": "Pack Type: Bottle; Energy Source: b-vitamins; Sports Ingredients: electrolytes; Juice Content: 0-2%; No Artificial Ingredients: no artificial flavours, no artificial colours; Carbonization: still; Pack Material Type: Plastic; Caffeine: 50-100 mg; Volume: 355; Health Claims: energy boosting, no sugar",
+              "barcode": "876063811910",
+              "brand": "Fast Twitch",
+              "category": "Energy Drinks",
+              "category_path": "[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Energy Drinks\"\"]",
+              "country": "USA",
+              "description": "Introducing Fast Twitch Energy Drink, a new energy drink from Gatorade designed to give you energy to ignite power and performance! Fast Twitch has caffeine to help you ignite power and fuel greatness",
+              "image_url": "https://www.meijer.com/content/dam/meijer/product/0876/06/3811/91/0876063811910_0_A1C1_0600.png",
+              "price": "2.35",
+              "product_id": "840144035",
+              "retailer": "meijer",
+              "title": "FAST TWITCH COOL BLUE 12OZ",
+              "url": "https://www.meijer.com/shopping/product/-/87606381191.html"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Fast Twitch",
+            "mode_flavor": "",
+            "mode_type": "energy",
+            "flavor_set": [],
+            "volume_set": [
+              355.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [
+              "sucralose"
+            ],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "876063811927",
+          "original_listings": [
+            {
+              "attributes": "Juice Content: 0-2%; Carbonization: still; Volume: 355; Naturally derived: natural flavours; Pack Material Type: Plastic; Sweetener: sucralose; Health Claims: good source of minerals, energy boosting; Energy Source: b-vitamins; Caffeine: 50-100 mg",
+              "barcode": "876063811927",
+              "brand": "Fast Twitch",
+              "category": "Energy Drinks",
+              "category_path": "[\"\" Health & Nutrition\"\",\"\" Vitamins & Supplements\"\",\"\" Supplements\"\",\"\" Supplements Misc\"\"]",
+              "country": "USA",
+              "description": "Ignites power. From the makers of Gatorade. Developed by Gatorade with 200 mg of caffeine to help athletes ignite power and athletic performance. Fast Twitch is how Gatorade does energy. Focus the min",
+              "image_url": "https://hl-grocery-prod-master.imgix.net/products/77c9c437a95654d5fd11901ca88d07b8f0c3e063?fm=jpg&trim=auto&trim-md=0&fit=fill&fill=solid&w=512&h=512&pad=13",
+              "price": "1.99",
+              "product_id": "720862113",
+              "retailer": "Giant Eagle",
+              "title": "Fast Twitch Energy Drink, Glacier Freeze",
+              "url": "https://shop.gianteagle.com/parkway-center/search/product/00876063811927"
+            },
+            {
+              "attributes": "No Artificial Ingredients: no artificial flavours, no artificial colours; Juice Content: 0-2%; Volume: 355; Caffeine: 15-25 mg; Sports Ingredients: electrolytes; Pack Material Type: Metal; Pack Type: Bottle; Naturally derived: natural flavours; Health Claims: energy boosting, no sugar, low calories, good source of minerals; Carbonization: still; Sweetener: sucralose",
+              "barcode": "876063811927",
+              "brand": "Fast Twitch",
+              "category": "Sports Drinks",
+              "category_path": "[\"\" Beverages\"\",\"\" Sports Drinks\"\",\"\" Sports Drinks\"\"]",
+              "country": "USA",
+              "description": "Energy Drink, Glacier Freeze \nNo artificial flavors or colors from artificial sources. 5 calories per bottle. Zero sugar. 200 mg caffeine and electrolytes. Electrolytes & vitamins B6 & B12. Caffeine C",
+              "image_url": "https://images.albertsons-media.com/is/image/ABS/970481177-ECOM?$ng-ecom-pdp-mobile$&defaultImage=Not_Available",
+              "price": "2",
+              "product_id": "722360917",
+              "retailer": "safeway",
+              "title": "Fast Twitch Glacier Freeze - 12 Fl. Oz.",
+              "url": "https://www.safeway.com/shop/product-details.970481177.html"
+            },
+            {
+              "attributes": "Caffeine: 50-100 mg; Volume: 355; Pack Type: Bottle; Sweetener: sucralose; Energy Source: b-vitamins; Free From: no allergens; Naturally derived: natural flavours; Juice Content: 0-2%; No Artificial Ingredients: no artificial colours, no artificial flavours; Carbonization: still; Health Claims: no sugar, energy boosting, good source of minerals",
+              "barcode": "876063811927",
+              "brand": "Fast Twitch",
+              "category": "Energy Drinks",
+              "category_path": "[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Energy Drinks\"\"]",
+              "country": "USA",
+              "description": "[ingredients_start]\n Does Not Contain Any of the 8 Major Allergens Form: Liquid \n[ingredients_end]\nState of Readiness: Ready to Drink Package Quantity: 1 Caffeine claim 1: Caffeinated Net weight: 12",
+              "image_url": "https://target.scene7.com/is/image/Target/GUEST_750fa06c-bcad-4ed6-93b0-e4ea79a490c0",
+              "price": "2.39",
+              "product_id": "724770943",
+              "retailer": "Target",
+              "title": "Fast Twitch Glacier Freeze Energy Drink - 12 fl oz Bottle",
+              "url": "https://www.target.com/p/fast-twitch-by-gatorade-glacier-freeze-energy-drink-12-fl-oz-bottle/-/A-88098781"
+            },
+            {
+              "attributes": "Sports Ingredients: electrolytes; Carbonization: still; Pack Material Type: Metal; Health Claims: energy boosting, good source of minerals, good source of vitamins; Sweetener: sucralose; Caffeine: 50-100 mg; Volume: 355; Naturally derived: natural flavours; Energy Source: b-vitamins; Juice Content: 0-2%; No Artificial Ingredients: no artificial flavours, no artificial colours",
+              "barcode": "876063811927",
+              "brand": "Fast Twitch",
+              "category": "Energy Drinks",
+              "category_path": "[\"\" Health & Beauty\"\",\"\" Health & Wellness\"\",\"\" Diet & Nutrition\"\"]",
+              "country": "USA",
+              "description": "Product Details \nDescription \nFrom the makers of G. Developed by Gatorade with 200mg of caffeine to help athletes ignite power and athletic performance. Fast Twitch is how Gatorade does Energy. Focus",
+              "image_url": "https://fa74d61d848a20b729bb-0251b36b713060ab3e0e8321940e01ff.ssl.cf2.rackcdn.com/b3d92cdc-f258-4509-a1c1-9a8f4d3b6c28_large.png",
+              "price": "2.69",
+              "product_id": "750547658",
+              "retailer": "Hy-Vee",
+              "title": "Fast Twitch Energy Drink, Glacier Freeze",
+              "url": "https://www.hy-vee.com/aisles-online/p/3716948/Fast-Twitch-Energy-Drink-Glacier-Freeze"
+            },
+            {
+              "attributes": "Juice Content: 0-2%; Pack Material Type: Metal; Sports Ingredients: electrolytes; Volume: 355; Health Claims: no sugar, energy boosting; Caffeine: 50-100 mg",
+              "barcode": "876063811927",
+              "brand": "Fast Twitch",
+              "category": "Sports Drinks",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\"]",
+              "country": "USA",
+              "description": "* * *\n## Important information \n[ingredients_start]\nIngredients \nFast Twitch RTD - Glacier Freeze 12oz \n[ingredients_end]\n\nLegal Disclaimer \nStatements regarding dietary supplements have not been eval",
+              "image_url": "https://m.media-amazon.com/images/I/71vUDwMiyGL._AC_UL320_.jpg",
+              "price": "1.94",
+              "product_id": "756205576",
+              "retailer": "amazon",
+              "title": "Fast Twitch Energy drink from Gatorade, Glacier Freeze, 12oz Bottle, 200mg Caffeine, Zero Sugar, Electrolytes",
+              "url": "https://www.amazon.com/dp/B0BCXFFP8T"
+            },
+            {
+              "attributes": "Energy Source: b-vitamins; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Pack Type: Bottle; Pack Material Type: Plastic; Volume: 355; Sports Ingredients: electrolytes; Carbonization: still",
+              "barcode": "876063811927",
+              "brand": "Fast Twitch",
+              "category": "Energy Drinks",
+              "category_path": "[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Energy Drinks\"\"]",
+              "country": "USA",
+              "description": "Introducing Fast Twitch Energy Drink, a new energy drink from Gatorade designed to give you energy to ignite power and performance! Fast Twitch has caffeine to help you ignite power and fuel greatness",
+              "image_url": "https://www.meijer.com/content/dam/meijer/product/0876/06/3811/92/0876063811927_0_A1C1_0600.png",
+              "price": "2.35",
+              "product_id": "840518546",
+              "retailer": "meijer",
+              "title": "FAST TWITCH GLACIER FREEZE 12OZ",
+              "url": "https://www.meijer.com/shopping/product/-/87606381192.html"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Fast Twitch",
+            "mode_flavor": "",
+            "mode_type": "energy",
+            "flavor_set": [],
+            "volume_set": [
+              355.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [
+              "sucralose"
+            ],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "8690327892222",
+      "gtin2": "8690327892420",
+      "score": 0.02,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Functional formulation identity missing",
+      "evidence": "Women Fit versus C Mix vitamin water, both 500ml. Source functional ingredients differ, while flavor sets are empty and the gate approves.",
+      "next_step": "Capture formulation/line names as identity evidence; generic functional-water classification is insufficient.",
+      "records": [
+        {
+          "gtin": "8690327892222",
+          "original_listings": [
+            {
+              "attributes": "Pack Type: Bottle; Carbonization: still; Volume: 500; Pack Material Type: Plastic; Juice Content: 0-2%",
+              "barcode": "8690327892222",
+              "brand": "Saol Vitamin Water",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\"organic and VEGAN\"\",\"\" Vegan products\"\"]",
+              "country": "Turkey",
+              "image_url": "https://d23ic3f0nw4szy.cloudfront.net/marketpaketi/products/539603/saol-vitamin-water-women-fit-500-ml-316523001508958460.jpg",
+              "price": "8.99",
+              "product_id": "72004966",
+              "retailer": "marketpaketi.com",
+              "title": "thanks Vitamin Water Women Fit 500 ml",
+              "url": "https://www.marketpaketi.com.tr/saol-vitamin-water-women-fit-500-ml-p-539603"
+            },
+            {
+              "attributes": "Pack Material Type: Plastic; Pack Type: Bottle; Volume: 500; Juice Content: 0-2%; Carbonization: still",
+              "barcode": "8690327892222",
+              "brand": "Saol Vitamin Water",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\" home page\"\",\"\"drink\"\",\"\" cold drinks\"\",\"\" juices\"\"]",
+              "country": "Turkey",
+              "image_url": "https://img-ozdilek.mncdn.com/images/catalog/200x310/8690327892222.jpg",
+              "price": "3.9",
+              "product_id": "75887996",
+              "retailer": "Ozdilek Sanal Market",
+              "title": "thanks Vitamin Water Women Fit 500ml",
+              "url": "https://www.ozdilekteyim.com/shop/tr/bursahipermarket/icecek/soguk-icecekler/meyve-sulari/saol-vitamin-water-women-fit-500ml?Cposition=146"
+            },
+            {
+              "attributes": "Pack Material Type: Plastic; Botanicals And Functional Ingredients: ginseng; Carbonization: still; Energy Source: b-vitamins; Health Claims: antioxidant, good source of vitamins; Immune Support Ingredients: antioxidants; Juice Content: 0-2%; Pack Type: Bottle; Volume: 500",
+              "barcode": "8690327892222",
+              "brand": "Saol Vitamin Water",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\"supermarket\"\",\"\"food\"\",\"\"beverages\"\"]",
+              "country": "Turkey",
+              "description": "thanks Women Fit with vitamins that 500 ml \n• healthy lifestyle with the trend together from america starting from, advanced in countries one to phenomenon transforming with vitamins that now in turke",
+              "image_url": "https://img.gratis.com/mnpadding/300/300/ffffff/productimages/10042086/10042086_01/8805533712434_1702199587532.jpg?v=1085466259826846",
+              "price": "49",
+              "product_id": "868319089",
+              "retailer": "Gratis",
+              "title": "thanks Women Fit with vitamins that 500 ml",
+              "url": "https://www.gratis.com/icecekler/saol-women-fit-vitaminli-su-500-ml-p-10042086"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Saol Vitamin Water",
+            "mode_flavor": "",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "8690327892420",
+          "original_listings": [
+            {
+              "attributes": "Volume: 500; Pack Material Type: Plastic; Pack Type: Bottle; Carbonization: still; Juice Content: 0-2%; Immune Support Ingredients: vitamin c",
+              "barcode": "8690327892420",
+              "brand": "Saol Vitamin Water",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\" home page\"\",\"\"drink\"\",\"\" cold drinks\"\",\"\" juices\"\"]",
+              "country": "Turkey",
+              "image_url": "https://img-ozdilek.mncdn.com/images/catalog/200x310/8690327892420.jpg",
+              "price": "3.15",
+              "product_id": "72262335",
+              "retailer": "Ozdilek Sanal Market",
+              "title": "thanks Vitamin Water C Mix 500ml",
+              "url": "https://www.ozdilekteyim.com/shop/tr/bursahipermarket/icecek/soguk-icecekler/meyve-sulari/saol-vitamin-water-c-mix-500ml?Cposition=169"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Saol Vitamin Water",
+            "mode_flavor": "",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "8710624308360",
+      "gtin2": "8710624345631",
+      "score": 0.03,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Light versus regular variant absent",
+      "evidence": "First Choice cola regular versus light, both 500ml. Both sweetening and sweetener sets are empty; shared cola does not distinguish the variant.",
+      "next_step": "Review explicitly named light/regular siblings without inferring an exact sweetener recipe.",
+      "records": [
+        {
+          "gtin": "8710624308360",
+          "original_listings": [
+            {
+              "attributes": "Pack Material Type: Plastic; Volume: 500; Carbonization: carbonated; Pack Type: Bottle; Juice Content: 0-2%",
+              "barcode": "8710624308360",
+              "brand": "First Choice",
+              "category": "Regular Cola Carbonates",
+              "category_path": "[\"\" soft drink, juices and water\"\",\"\" soft drinks\"\",\"\" Cola\"\"]",
+              "country": "Netherlands",
+              "description": "First Choice cola regular bottle 500 ml",
+              "image_url": "https://syndy-content.azureedge.net/media/products/4e750000-ff27-0003-3a25-08d7eb6b2137/images/AW0HA3GItENDpZ-NPK0ohvI./AABbUCf-AwASwgjYLffB5w.290x290.jpg",
+              "price": "0.79",
+              "product_id": "280183693",
+              "retailer": "Coop",
+              "title": "First Choice cola regular bottle 500 ml",
+              "url": "https://www.coop.nl/product/8710624308360"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "First Choice",
+            "mode_flavor": "cola",
+            "mode_type": "water",
+            "flavor_set": [
+              "cola"
+            ],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "8710624345631",
+          "original_listings": [
+            {
+              "attributes": "Volume: 500; Carbonization: carbonated; Pack Material Type: Plastic; Juice Content: 0-2%",
+              "barcode": "8710624345631",
+              "brand": "First Choice",
+              "category": "Reduced Sugar Cola Carbonates",
+              "category_path": "[\"\" soft drink, juices and water\"\",\"\" soft drinks\"\",\"\" Cola\"\"]",
+              "country": "Netherlands",
+              "description": "First Choice cola light",
+              "image_url": "https://syndy-content.azureedge.net/media/products/734a0000-ff27-0003-bed2-08d924329572/images/AW0HA3GItENDpZ-NPK0ohvI./AABKcyf-AwD0oAjZZsSQIA.290x290.jpg",
+              "price": "0.79",
+              "product_id": "465930983",
+              "retailer": "Coop",
+              "title": "First Choice cola light 0.5 l",
+              "url": "https://www.coop.nl/product/8710624345631"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "First Choice",
+            "mode_flavor": "cola",
+            "mode_type": "water",
+            "flavor_set": [
+              "cola"
+            ],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "8693354001032",
+      "gtin2": "8693354001230",
+      "score": 0.03,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Spicy versus plain turnip variant absent",
+      "evidence": "Titles explicitly distinguish plain/simple from spicy/hot turnip juice, both 2l. Flavor sets are empty and ingredient sets broadly overlap.",
+      "next_step": "Capture product-scoped spicy/plain variant evidence; do not treat arbitrary hot text as spiciness.",
+      "records": [
+        {
+          "gtin": "8693354001032",
+          "original_listings": [
+            {
+              "attributes": "Pack Material Type: Glass; Made From: turnip; Volume: 2000; Juice Content: 0-2%; Pack Type: Bottle; Carbonization: still",
+              "barcode": "8693354001032",
+              "brand": "Doganay",
+              "category": "Nectars",
+              "category_path": "[\"\" home page\"\",\"\"drink\"\",\"\" cold drinks\"\"]",
+              "country": "Turkey",
+              "description": "virtual market.com, your grocery shopping safe and easy to do; more to your loved ones a lot of time allows you to separate. most trusted brands quality products, different campaigns every week and di",
+              "image_url": "https://img-ozdilek.mncdn.com/images/catalog/200x310/8693354001032.jpg",
+              "price": "7.75",
+              "product_id": "70919774",
+              "retailer": "Ozdilek Sanal Market",
+              "title": "doganay turnip juice 2 lt simple",
+              "url": "https://www.ozdilekteyim.com/shop/tr/bursahipermarket/icecek/soguk-icecekler/salgam-suyu/doganay-salgam-suyu-2-lt-sade?Cposition=2"
+            },
+            {
+              "attributes": "Pack Type: Bottle; Volume: 2000; Made From: turnip, carrot, pepper; Juice Content: 0-2%; Carbonization: still",
+              "barcode": "8693354001032",
+              "brand": "Doganay",
+              "category": "Nectars",
+              "category_path": "[\"\"drink\"\",\"\" cold drinks\"\",\"\"turnip juice\"\",\"\" simple turnip juice\"\"]",
+              "country": "Turkey",
+              "description": "doganay turnip, hygiene and food to safety maximum with emphasis manufactured. sweet and in the form of a pain has taste.special grown purple carrots, carefully cleaning up fermentation to their tanks",
+              "image_url": "https://img-ozdilekteyim.mncdn.com/mnresize/848/848/medias/8693354001032.jpg?context=bWFzdGVyfHNhcHByb2R1Y3RpbWd8MTMwMjQ1fGltYWdlL2pwZWd8YURBM0wyaGhaQzh4TURVeE5qWXhPRFF4TWpBMk1nfGI0OGY5NDRhYzUxMzIxYzIxY2MyZDE5ZmZkY2YwNzJjMmY4YmEwZjNlOWQ4NDFlNGY0Yjg2NTZiNjM3MmE0M2M",
+              "price": "69.9",
+              "product_id": "407552982",
+              "retailer": "Ozdilek Sanal Market",
+              "title": "doganay turnip juice plain 2 l",
+              "url": "https://www.ozdilekteyim.com/market/doganay-salgam-suyu-sade-2-l"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Doganay",
+            "mode_flavor": "",
+            "mode_type": "juice",
+            "flavor_set": [],
+            "volume_set": [
+              2000.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "8693354001230",
+          "original_listings": [
+            {
+              "attributes": "Volume: 2000; Pack Material Type: Glass; Carbonization: still; Pack Type: Bottle; Made From: turnip; Juice Content: 0-2%",
+              "barcode": "8693354001230",
+              "brand": "Doganay",
+              "category": "Nectars",
+              "category_path": "[\"\"food\"\",\"\"beverages\"\"]",
+              "country": "Turkey",
+              "description": "doganay turnip hot water 2 lt",
+              "image_url": "https://d23ic3f0nw4szy.cloudfront.net/marketpaketi/products/949/doganay-salgam-suyu-acili-2-lt-800128001509299109.jpg",
+              "price": "75",
+              "product_id": "69702930",
+              "retailer": "marketpaketi.com",
+              "title": "doganay turnip hot water 2 lt",
+              "url": "https://www.marketpaketi.com.tr/doganay-salgam-suyu-acili-2-lt-p-949"
+            },
+            {
+              "attributes": "Volume: 2000; Pack Type: Bottle; Made From: turnip; Juice Content: 0-2%; Pack Material Type: Glass; Carbonization: still",
+              "barcode": "8693354001230",
+              "brand": "Doganay",
+              "category": "Nectars",
+              "category_path": "[\"\" home page\"\",\"\"drink\"\",\"\" cold drinks\"\"]",
+              "country": "Turkey",
+              "description": "virtual market.com, your grocery shopping safe and easy to do; more to your loved ones a lot of time allows you to separate. most trusted brands quality products, different campaigns every week and di",
+              "image_url": "https://img-ozdilek.mncdn.com/images/catalog/200x310/8693354001230.jpg",
+              "price": "7.75",
+              "product_id": "77049226",
+              "retailer": "Ozdilek Sanal Market",
+              "title": "doganay turnip juice 2 lt spicy",
+              "url": "https://www.ozdilekteyim.com/shop/tr/bursahipermarket/icecek/soguk-icecekler/salgam-suyu/doganay-salgam-suyu-2-lt-acili?Cposition=1"
+            },
+            {
+              "attributes": "Juice Content: 0-2%; Carbonization: still; Volume: 2000; Pack Type: Bottle; Made From: turnip, carrot, pepper",
+              "barcode": "8693354001230",
+              "brand": "Doganay",
+              "category": "Nectars",
+              "category_path": "[\"\"drink\"\",\"\" cold drinks\"\",\"\"turnip juice\"\",\"\" spicy turnip juice\"\"]",
+              "country": "Turkey",
+              "description": "doganay turnip, hygiene and food to safety maximum with emphasis manufactured. sweet and in the form of a pain has taste.special grown purple carrots, carefully cleaning up fermentation to their tanks",
+              "image_url": "https://img-ozdilekteyim.mncdn.com/mnresize/848/848/medias/8693354001230.jpg?context=bWFzdGVyfHNhcHByb2R1Y3RpbWd8MTMzNTcxfGltYWdlL2pwZWd8YURnd0wyZzBPUzh4TURVeE5qWXhPVEkyTkRBek1BfDUyZGE1NDhmNTQ1Y2I1YzA1YTJmNGQwYWU5NWJjZDUwYTVhZjQxZDZiMWUzNjc4ZjllMzc2YTE5MTk5ZmRhOGM",
+              "price": "69.9",
+              "product_id": "407587293",
+              "retailer": "Ozdilek Sanal Market",
+              "title": "doganay turnip juice 2 l spicy",
+              "url": "https://www.ozdilekteyim.com/market/doganay-salgam-suyu-2-l-acili"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Doganay",
+            "mode_flavor": "",
+            "mode_type": "juice",
+            "flavor_set": [],
+            "volume_set": [
+              2000.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "6410270009353",
+      "gtin2": "6410270009384",
+      "score": 0.03,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Untranslated compound names and declared-input loss",
+      "evidence": "Marjex titles differ as mustikkamehujuoma versus puolukkamehujuoma. One source explicitly says Made From: blueberry, but neither canonical has flavor evidence. Exact intended translation is not externally verified here.",
+      "next_step": "Preserve source variant text and separate declared flavor from ingredients; investigate compound-language normalization.",
+      "records": [
+        {
+          "gtin": "6410270009353",
+          "original_listings": [
+            {
+              "attributes": "Juice Content: 25-50%; Made From: blueberry; Carbonization: still; Volume: 1000; Sweetener: sugar; Pack Type: Liquid Carton; Pack Material Type: Paper / Carton",
+              "barcode": "6410270009353",
+              "brand": "Marjex",
+              "category": "Juice Drinks (up to 24% Juice)",
+              "category_path": "[\"\" beverages\"\",\"\" juice\"\",\"\" other juices\"\"]",
+              "country": "Finland",
+              "description": "of finns wild berries prepared easily drink juice drinks fit so for everyday life, like a party.",
+              "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/6410270009353_kuva1.jpg",
+              "price": "1.55",
+              "product_id": "499392842",
+              "retailer": "S-kaupat",
+              "title": "marjex mustikkamehujuoma 1l",
+              "url": "https://www.s-kaupat.fi/tuote/marjex-mustikkamehujuoma-1l/6410270009353"
+            },
+            {
+              "attributes": "Pack Material Type: Paper / Carton; Sweetener: sugar; Volume: 1000; Juice Content: 25-50%; Pack Type: Liquid Carton; Carbonization: still; Made From: blueberry",
+              "barcode": "6410270009353",
+              "brand": "Marjex",
+              "category": "Juice Drinks (up to 24% Juice)",
+              "category_path": "[\"\" beverages\"\",\"\" juice\"\",\"\" other juices\"\"]",
+              "country": "Finland",
+              "description": "of finns wild berries prepared easily drink juice drinks fit so for everyday life, like a party.",
+              "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/6410270009353_kuva1.jpg",
+              "price": "2.25",
+              "product_id": "524409632",
+              "retailer": "Food Market Herkku",
+              "title": "marjex mustikkamehujuoma 1l",
+              "url": "https://www.s-kaupat.fi/tuote/6410270009353"
+            },
+            {
+              "attributes": "Volume: 1000; Carbonization: still; Juice Features: smoothie; Pack Material Type: Paper / Carton; Pack Type: Liquid Carton",
+              "barcode": "6410270009353",
+              "brand": "Marjex",
+              "category": "Juice Drinks (up to 24% Juice)",
+              "category_path": "[\"\" beverages\"\",\"\" juice and smoothies\"\",\"\" juices from warm\"\"]",
+              "country": "Finland",
+              "description": "\"\" ready-to-drink juice made with finnish berries. Our juices are great for everyday use as well as special holidays and parties.\"\"",
+              "image_url": "https://public.keskofiles.com/f/k-ruoka/product/6410270009353",
+              "price": "2.35",
+              "product_id": "733667284",
+              "retailer": "K Ruoka",
+              "title": "marjex mustikkamehujuoma 1l",
+              "url": "https://www.k-ruoka.fi/kauppa/tuote/marjex-mustikkamehujuoma-1l-6410270009353"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Marjex",
+            "mode_flavor": "",
+            "mode_type": "juice",
+            "flavor_set": [],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [
+              "sugar"
+            ],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "6410270009384",
+          "original_listings": [
+            {
+              "attributes": "Volume: 1000; Pack Material Type: Paper / Carton; Carbonization: still; Juice Content: 25-50%; Sweetener: sugar",
+              "barcode": "6410270009384",
+              "brand": "Marjex",
+              "category": "Juice Drinks (up to 24% Juice)",
+              "category_path": "[\"\" beverages\"\",\"\" juice\"\",\"\" other juices\"\"]",
+              "country": "Finland",
+              "description": "of finns wild berries prepared easily drink juice drinks fit so for everyday life, like a party.",
+              "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/6410270009384_kuva1.jpg",
+              "price": "2.29",
+              "product_id": "499201929",
+              "retailer": "S-kaupat",
+              "title": "marjex puolukkamehujuoma 1l",
+              "url": "https://www.s-kaupat.fi/tuote/marjex-puolukkamehujuoma-1l/6410270009384"
+            },
+            {
+              "attributes": "Juice Content: 25-50%; Pack Material Type: Paper / Carton; Sweetener: sugar; Volume: 1000; Carbonization: still",
+              "barcode": "6410270009384",
+              "brand": "Marjex",
+              "category": "Juice Drinks (up to 24% Juice)",
+              "category_path": "[\"\" beverages\"\",\"\" juice\"\",\"\" other juices\"\"]",
+              "country": "Finland",
+              "description": "of finns wild berries prepared easily drink juice drinks fit so for everyday life, like a party.",
+              "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/6410270009384_kuva1.jpg",
+              "price": "2.25",
+              "product_id": "524053892",
+              "retailer": "Food Market Herkku",
+              "title": "marjex puolukkamehujuoma 1l",
+              "url": "https://www.s-kaupat.fi/tuote/6410270009384"
+            },
+            {
+              "attributes": "Volume: 1000; Juice Features: smoothie; Carbonization: still; Pack Material Type: Paper / Carton",
+              "barcode": "6410270009384",
+              "brand": "Marjex",
+              "category": "Juice Drinks (up to 24% Juice)",
+              "category_path": "[\"\" beverages\"\",\"\" juice and smoothies\"\",\"\" juices from warm\"\"]",
+              "country": "Finland",
+              "description": "\"\" ready-to-drink juice made with finnish berries. Our juices are great for everyday use as well as special holidays and parties.\"\"",
+              "image_url": "https://public.keskofiles.com/f/k-ruoka/product/6410270009384",
+              "price": "2.45",
+              "product_id": "733826696",
+              "retailer": "K Ruoka",
+              "title": "marjex puolukkamehujuoma 1l",
+              "url": "https://www.k-ruoka.fi/kauppa/tuote/marjex-puolukkamehujuoma-1l-6410270009384"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Marjex",
+            "mode_flavor": "",
+            "mode_type": "juice",
+            "flavor_set": [],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [
+              "sugar"
+            ],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "6415712509408",
+      "gtin2": "6415712509422",
+      "score": 0.03,
+      "saved_gate": "proceed",
+      "replayed_gate": "proceed",
+      "finding": "Captured carbonation conflict excluded by policy",
+      "evidence": "6 x 500ml spring water: first carbonation set is {still}, second {carbonated}; gate proceeds because carbonation is absent from configured veto_dimensions.",
+      "next_step": "Explicit carbonation differences need a configured review/veto policy; this is not an extraction miss.",
+      "records": [
+        {
+          "gtin": "6415712509408",
+          "original_listings": [
+            {
+              "attributes": "Pack Material Type: Plastic; Volume: 500; Juice Content: 0-2%; Carbonization: still; Water Type: spring; Caffeine: 0-15 mg",
+              "barcode": "6415712509408",
+              "brand": "Kotimaista",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" selection\"\",\"\" beverages\"\",\"\" waters\"\"]",
+              "country": "Finland",
+              "description": "spring water Polarspringin from the source Asikkalasta 6 x 0.5 l. preservation unopened at room temperature, opened in the refrigerator 2 - 3 days.we actively update the product information of the ser",
+              "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/6415712509408_kuva1.jpg",
+              "price": "3.29",
+              "product_id": "72149305",
+              "retailer": "S-kaupat",
+              "title": "shelf spacing 15 - domestic 6x0.5l spring water",
+              "url": "https://www.s-kaupat.fi/tuote/kotimaista-6x0-5l-lahdevesi/6415712509408"
+            },
+            {
+              "attributes": "Water Type: spring; Pack Material Type: Plastic; Carbonization: still; Volume: 500; Juice Content: 0-2%",
+              "barcode": "6415712509408",
+              "brand": "Kotimaista",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" waters\"\",\"\"spring waters\"\"]",
+              "country": "Finland",
+              "description": "spring water Polarspringin from the source Asikkalasta 6 x 0.5 l. preservation unopened at room temperature, opened in the refrigerator 2 - 3 days.",
+              "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/6415712509408_kuva1.jpg",
+              "price": "3.29",
+              "product_id": "524396602",
+              "retailer": "Food Market Herkku",
+              "title": "domestic 6x0.5l spring water",
+              "url": "https://www.s-kaupat.fi/tuote/6415712509408"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Kotimaista",
+            "mode_flavor": "",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [
+              6
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "6415712509422",
+          "original_listings": [
+            {
+              "attributes": "Volume: 500; Juice Content: 0-2%; Caffeine: 0-15 mg; Pack Type: Blister; Water Type: spring; Carbonization: carbonated",
+              "barcode": "6415712509422",
+              "brand": "Kotimaista",
+              "category": "Carbonated Bottled Water",
+              "category_path": "[\"\" selection\"\",\"\" beverages\"\",\"\" waters\"\"]",
+              "country": "Finland",
+              "description": "finnish carbonated spring water.we actively update the product information of the service. however, we recommend checking ingredients always from the sales package.",
+              "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/6415712509422_kuva1.jpg",
+              "price": "3.95",
+              "product_id": "76092326",
+              "retailer": "S-kaupat",
+              "title": "shelf spacing 15 - domestic 6x0.5l carbonated spring water",
+              "url": "https://www.s-kaupat.fi/tuote/kotimaista-6x0-5l-hiilihapotettu-lahdevesi/6415712509422"
+            },
+            {
+              "attributes": "Water Type: spring; Carbonization: carbonated; Juice Content: 0-2%; Caffeine: 0-15 mg; Volume: 500; Pack Type: Blister",
+              "barcode": "6415712509422",
+              "brand": "Kotimaista",
+              "category": "Carbonated Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" waters\"\",\"\"spring waters\"\"]",
+              "country": "Finland",
+              "description": "finnish carbonated spring water.",
+              "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/6415712509422_kuva1.jpg",
+              "price": "3.95",
+              "product_id": "524228068",
+              "retailer": "Food Market Herkku",
+              "title": "domestic 6x0.5l carbonated spring water",
+              "url": "https://www.s-kaupat.fi/tuote/6415712509422"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Kotimaista",
+            "mode_flavor": "",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [
+              6
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "894357002042",
+      "gtin2": "894357002844",
+      "score": 0.88,
+      "saved_gate": "fallback",
+      "replayed_gate": "fallback",
+      "finding": "Mode flavor overrules equal complete sets",
+      "evidence": "Super Fruit 7 1l versus 33.8fl oz. Full flavor sets agree, but mode_flavor is cherry versus fruit, influenced by per-listing generic wording; review persists despite JEV 0.88.",
+      "next_step": "Avoid treating a lossy single representative token as an independent contradiction when full declared identity agrees.",
+      "records": [
+        {
+          "gtin": "894357002042",
+          "original_listings": [
+            {
+              "attributes": "Juice Features: not from concentrate; Volume: 1000; Made From: grape, strawberry, mulberry, cherry, pomegranate, fig, cranberry; Pack Material Type: Glass; Carbonization: still; Health Claims: superfruit; Sustainable Sourcing: organic; Pack Type: Bottle; Juice Content: 100%",
+              "barcode": "894357002042",
+              "brand": "Smart Juice",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" Food\"\",\"\" Drinks\"\"]",
+              "country": "Canada",
+              "description": "Imported. . Pomegranate, tart cherry, strawberry, mulberry, fig, cranberry, red grape. . Not from concentrate. . Certified organic by PCO. . Smart Juice Super Fruit 7 juice is prepared from premium, o",
+              "image_url": "https://assets.shop.loblaws.ca/products/21127100/b1/en/front/21127100_front_a06_@2.png",
+              "price": "11.99",
+              "product_id": "117993866",
+              "retailer": "Loblaws",
+              "title": "Smart Juice Organic Super Fruit 7, 100% Juice | 1 l",
+              "url": "https://www.loblaws.ca/organic-super-fruit-7-100-juice/p/21127100_EA"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Smart Juice",
+            "mode_flavor": "cherry",
+            "mode_type": "juice",
+            "flavor_set": [
+              "cherry",
+              "cranberry",
+              "fruit",
+              "grape",
+              "pomegranate",
+              "strawberry"
+            ],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "894357002844",
+          "original_listings": [
+            {
+              "attributes": "Volume: 1000; Pack Material Type: Glass; Pack Type: Bottle; Juice Content: 100%; Carbonization: still; Health Claims: superfruit; Sustainable Sourcing: organic",
+              "barcode": "894357002844",
+              "brand": "Smart Juice",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Juice\"\",\"\" Juice Blends\"\"]",
+              "country": "USA",
+              "image_url": "https://www.kroger.com/product/images/xlarge/front/0089435700284",
+              "price": "6.99",
+              "product_id": "47100679",
+              "retailer": "Kroger",
+              "title": "Smart Juice Organic Super Fruit 7 Juice - 33.8 fl oz",
+              "url": "https://www.kroger.com/p/smart-juice-organic-super-fruit-7-juice/0089435700284#:#zipcode=46204&storeid=02100339"
+            },
+            {
+              "attributes": "Carbonization: still; Volume: 1000; Pack Material Type: Glass; Immune Support Ingredients: antioxidants; Sustainable Sourcing: usda organic, organic; Health Claims: antioxidant, superfruit; Pack Type: Bottle; Juice Content: 100%; Geographic Origin: turkey; Juice Features: not from concentrate; Made From: grape, strawberry, mulberry, cherry, pomegranate, fig, cranberry",
+              "barcode": "894357002844",
+              "brand": "Smart Juice",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" Food & Beverages\"\",\"\" Beverages\"\",\"\" Juice\"\",\"\" Juice Blends\"\"]",
+              "country": "USA",
+              "description": "## Smart Juice Organic Super Fruit 7 100% Juice Description \n* Organic Super Fruit 7 \n* Pomegranate, Grape, Strawberry, Tart Cherry, Fig, Mulberry, Cranberry \n* 100% Juice \n* Not From Concentrate \n* U",
+              "image_url": "https://www.vitacost.com/Images/Products/500/Smart-Juice/Smart-Juice-Organic-Super-Fruit-7-100-Juice-894357002844.jpg",
+              "price": "7.29",
+              "product_id": "764496876",
+              "retailer": "Vitacost",
+              "title": "Smart Juice Organic Super Fruit 7 100% Juice -- 33.8 fl oz",
+              "url": "https://www.vitacost.com/smart-juice-organic-super-fruit-7-100-juice"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Smart Juice",
+            "mode_flavor": "fruit",
+            "mode_type": "juice",
+            "flavor_set": [
+              "cherry",
+              "cranberry",
+              "fruit",
+              "grape",
+              "pomegranate",
+              "strawberry"
+            ],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "642709089940",
+      "gtin2": "642709101987",
+      "score": 0.79,
+      "saved_gate": "fallback",
+      "replayed_gate": "proceed",
+      "finding": "Matching-looking titles with contradictory pack descriptions",
+      "evidence": "Identical Ingrilli organic lemon squeeze 4oz pack-of-6 titles; first description lists Unit Count 12, second Unit Count 6. JEV 0.79 is plausible uncertainty, not a demonstrated model mistake.",
+      "next_step": "Keep source quantity contradictions visible; do not call identical titles sufficient proof of matching retail packs.",
+      "records": [
+        {
+          "gtin": "642709089940",
+          "original_listings": [
+            {
+              "attributes": "Flavour: lemon; Pack Type: Bottle; Juice Content: 15-25%; Juice Features: not from concentrate; Pack Material Type: Plastic; Carbonization: still; Sustainable Packaging: from recycled materials; Sustainable Sourcing: organic; Made From: lemon; Volume: 118",
+              "barcode": "642709089940",
+              "brand": "Ingrilli",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Juices\"\"]",
+              "country": "USA",
+              "description": "Brand Ingrilli \nUnit Count 12.00 Count \nItem Form Bottle \n* * *\n# About this item \n* 100% Pure Organic Lemon Juice \n* From Organic Sicilian lemons \n* Never from concentrate \n* Bottle made from PET 50%",
+              "image_url": "https://m.media-amazon.com/images/I/71WxcuLf76L._AC_UL400_.jpg",
+              "price": "20.99",
+              "product_id": "602287264",
+              "retailer": "amazon",
+              "title": "Ingrilli Organic Lemon Squeeze, 4 Fl Oz Bottle ( Pack of 6)",
+              "url": "https://www.amazon.com/Ingrilli-Premium-Organic-Concentrate-Squeeze/dp/B0B2246JY6/ref=sr_1_7569?c=ts&keywords=Juices&qid=1680751942&s=grocery&sr=1-7569&ts_id=16318171"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Ingrilli",
+            "mode_flavor": "lemon",
+            "mode_type": "water",
+            "flavor_set": [
+              "lemon"
+            ],
+            "volume_set": [
+              118.0
+            ],
+            "pack_set": [
+              6
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "642709101987",
+          "original_listings": [
+            {
+              "attributes": "Carbonization: still; No Artificial Ingredients: no gmo; Sustainable Packaging: from recycled materials, can be recycled; Juice Features: not from concentrate; Volume: 118; Juice Content: 15-25%; Flavour: lemon; Made From: lemon; Sustainable Sourcing: usda organic, organic; Diets: kosher; Pack Type: Bottle",
+              "barcode": "642709101987",
+              "brand": "Ingrilli",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Juices\"\",\"\" Fruit Juice Beverages\"\"]",
+              "country": "USA",
+              "description": "Number of Items 1 \nUnit Count 6.00 Count \nBrand Ingrilli \nFlavor Lemon \nSpecialty Gluten-free, Vegan \n* * *\n# About this item \n* FRESH FLAVOR, FRESH TASTE: Never from concentrate, our Ingrilli Organic",
+              "image_url": "https://m.media-amazon.com/images/I/51nU-UKn+mL._AC_UL320_.jpg",
+              "price": "7.7",
+              "product_id": "767765809",
+              "retailer": "amazon",
+              "title": "Ingrilli Organic Lemon Squeeze, 4 Fl Oz Bottle ( Pack of 6)",
+              "url": "https://www.amazon.com/dp/B0C1PBC8NP"
+            }
+          ],
+          "stored_features": {
+            "mode_brand": "Ingrilli",
+            "mode_flavor": "fruit",
+            "mode_type": "water",
+            "flavor_set": [
+              "fruit",
+              "lemon"
+            ],
+            "volume_set": [
+              118.0
+            ],
+            "pack_set": [
+              6
+            ],
+            "volume_consistency": 1.0,
+            "pack_consistency": 1.0,
+            "carbonation_set": [
+              "still"
+            ],
+            "sweetener_type_set": [],
+            "sweetening_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    }
+  ],
+  "structural_flags": {
+    "counts": {
+      "fallback_equal_full_flavor_sets_but_different_modes": 14,
+      "approved_both_empty_flavor": 60,
+      "approved_pair_has_incompatible_volumes_in_one_record": 5,
+      "approved_disjoint_carbonation": 10
+    },
+    "examples": {
+      "mode_flavor": [
+        [
+          "6415130031536",
+          "6415130087960"
+        ],
+        [
+          "3289196040503",
+          "3289196100665"
+        ],
+        [
+          "7340073300281",
+          "7350000550849"
+        ],
+        [
+          "7313619000099",
+          "7313619001331"
+        ],
+        [
+          "8427406017111",
+          "8427406017210"
+        ],
+        [
+          "3564700813621",
+          "3564700813973"
+        ],
+        [
+          "8722200954250",
+          "8722200963047"
+        ],
+        [
+          "7350068170072",
+          "7350068170577"
+        ],
+        [
+          "7310050005348",
+          "7310050005492"
+        ],
+        [
+          "3760186970067",
+          "3760186970562"
+        ],
+        [
+          "894357002042",
+          "894357002844"
+        ],
+        [
+          "8722200954274",
+          "8722200963078"
+        ],
+        [
+          "7310050005348",
+          "7310050005485"
+        ],
+        [
+          "7313619000006",
+          "7313619001522"
+        ]
+      ],
+      "volume": [
+        [
+          "8437007759273",
+          "8437007759433"
+        ],
+        [
+          "7610900138913",
+          "7610900266258"
+        ],
+        [
+          "7350068172694",
+          "7350068177088"
+        ],
+        [
+          "4032108138725",
+          "4032108138763"
+        ],
+        [
+          "4251023901003",
+          "4251023901102"
+        ]
+      ],
+      "carbonation": [
+        [
+          "3301591000590",
+          "3301591002105"
+        ],
+        [
+          "3760195900161",
+          "3760195902134"
+        ],
+        [
+          "6415712509408",
+          "6415712509422"
+        ],
+        [
+          "3301591000163",
+          "3301591004086"
+        ],
+        [
+          "3301591000149",
+          "3301591004086"
+        ],
+        [
+          "6419806044554",
+          "6419806053631"
+        ],
+        [
+          "4104450065582",
+          "4104450065599"
+        ],
+        [
+          "6430065312550",
+          "6430065312833"
+        ],
+        [
+          "8435608803494",
+          "8436584250234"
+        ],
+        [
+          "3301591001450",
+          "3301591004086"
+        ]
+      ]
+    },
+    "meaning": "Diagnostic flags within saved sample, not counts of proven mistakes."
+  },
+  "order_checks": {
+    "pairs": 100,
+    "bucket_changes": 7,
+    "gaps_at_least_0_2": 2,
+    "largest_gaps": [
+      {
+        "gtin1": "7350068170072",
+        "gtin2": "7350068170577",
+        "stratum": "label_1|fallback|0.9_to_1.0",
+        "forward": 0.57,
+        "swapped": 0.31,
+        "gap": 0.25999999999999995,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "3124480185129",
+        "gtin2": "5410221306143",
+        "stratum": "label_1|fallback|0.8_to_0.9",
+        "forward": 0.5,
+        "swapped": 0.72,
+        "gap": 0.21999999999999997,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "5601195150027",
+        "gtin2": "8437012363007",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.19,
+        "swapped": 0.38,
+        "gap": 0.19,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "7702090003918",
+        "gtin2": "8437010209000",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.62,
+        "swapped": 0.79,
+        "gap": 0.17000000000000004,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "894357002042",
+        "gtin2": "894357002844",
+        "stratum": "label_1|fallback|0.9_to_1.0",
+        "forward": 0.88,
+        "swapped": 0.74,
+        "gap": 0.14,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "3100881040755",
+        "gtin2": "3100882040754",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.34,
+        "swapped": 0.21,
+        "gap": 0.13000000000000003,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "4104450005311",
+        "gtin2": "4104450005335",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.28,
+        "swapped": 0.15,
+        "gap": 0.13000000000000003,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "671785201007",
+        "gtin2": "769553420962",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.57,
+        "swapped": 0.7,
+        "gap": 0.13,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "858159001177",
+        "gtin2": "858159001795",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.32,
+        "swapped": 0.2,
+        "gap": 0.12,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "7310867008624",
+        "gtin2": "7350000550573",
+        "stratum": "label_1|fallback|0.8_to_0.9",
+        "forward": 0.28,
+        "swapped": 0.17,
+        "gap": 0.11000000000000001,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "7313619000006",
+        "gtin2": "7313619001522",
+        "stratum": "label_1|fallback|0.9_to_1.0",
+        "forward": 0.2,
+        "swapped": 0.31,
+        "gap": 0.10999999999999999,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "231302714337",
+        "gtin2": "845033087686",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.75,
+        "swapped": 0.65,
+        "gap": 0.09999999999999998,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "7310070003751",
+        "gtin2": "7310070005335",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.28,
+        "swapped": 0.38,
+        "gap": 0.09999999999999998,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "726284000016",
+        "gtin2": "726284000597",
+        "stratum": "label_1|hard_no|below_0.8",
+        "forward": 0.21,
+        "swapped": 0.29,
+        "gap": 0.07999999999999999,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "3760186970067",
+        "gtin2": "3760186970562",
+        "stratum": "label_1|fallback|0.9_to_1.0",
+        "forward": 0.2,
+        "swapped": 0.26,
+        "gap": 0.06,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "7350020691546",
+        "gtin2": "7350020691621",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.03,
+        "swapped": 0.09,
+        "gap": 0.06,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "8715600240641",
+        "gtin2": "8715600243789",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.75,
+        "swapped": 0.7,
+        "gap": 0.050000000000000044,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "5060444850055",
+        "gtin2": "5060444850246",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.04,
+        "swapped": 0.09,
+        "gap": 0.049999999999999996,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "7350068172687",
+        "gtin2": "7350068177071",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.34,
+        "swapped": 0.39,
+        "gap": 0.04999999999999999,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "7044610875811",
+        "gtin2": "7044610876597",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.07,
+        "swapped": 0.12,
+        "gap": 0.04999999999999999,
+        "bucket_changed": false
+      }
+    ]
+  },
+  "limitations": "Deliberately selected diagnostic examples from existing round-7 results. Counts describe flags, not proven errors or prevalence. No additional API calls. Replay reflects targeted extraction changes; these additional issues remain outstanding."
+}

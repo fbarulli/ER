@@ -54,7 +54,14 @@ def jev(round: int | None = None, stratum: str = ''):
             body += '<p>Intentional repeat of one previously tested pair, using both input formats and both orders.</p>'
         else:
             body += '<p>Seed ' + e(summary.get('seed','')) + '; excludes ' + e(summary.get('excluded_previously_staged_or_tested_pairs',0)) + ' previously staged or tested pairs. Positive = proceed; negative = hard no; uncertain = fallback. High similarity ≥ 0.8; lower similarity &lt; 0.8.</p>'
-        body += table(['Stratum','Candidate pool','Selected pairs'], [[k,v['candidate_pool'],v['selected']] for k,v in summary.get('allocations',{}).items()])
+        allocation_rows = []
+        for allocation_stratum, allocation in (summary.get('allocations') or {}).items():
+            if isinstance(allocation, dict):
+                pool = allocation.get('candidate_pool', allocation.get('eligible_population'))
+                allocation_rows.append([allocation_stratum, pool, allocation.get('selected')])
+            else:
+                allocation_rows.append([allocation_stratum, '', allocation])
+        body += table(['Stratum','Candidate pool','Selected pairs'], allocation_rows)
         body += '<details><summary>Attribute coverage (unique pairs)</summary>'
         coverage = summary.get('attribute_coverage',{})
         body += table(['Stratum','Attribute','State','Pairs'], [[*k.split('|'),v] for k,v in coverage.items() if not stratum or k.split('|')[0]==stratum]) + '</details>'
@@ -89,7 +96,8 @@ def jev(round: int | None = None, stratum: str = ''):
         body += '<h3>Judgments by input cohort</h3>' + table(['Input','Gate decision','Pairs','Mean score','Both scores < 0.2','Both scores > 0.8'], [[scope,decision,v['pairs'],f"{v['mean_score']:.3f}" if v['mean_score'] is not None else '',v['both_below_0_2'],v['both_above_0_8']] for scope,decisions in selected_report.get('input_cohorts',{}).items() for decision,v in decisions.items()])
     inspection = load(f'inspection_{round}.json', None)
     if inspection:
-        body += '<h3>Inspected judgment changes</h3>' + table(['Pair','Gate','Finding','Evidence','Next step'], [[x['gtin1'] + ' / ' + x['gtin2'],x['gate'],x['finding'],x['observation'],x['next_step']] for x in inspection['changed_pairs']])
+        inspected = inspection.get('changed_pairs', inspection.get('pairs', []))
+        body += '<h3>Inspected judgment changes</h3>' + table(['Pair','Gate','Finding','Evidence','Next step'], [[x['gtin1'] + ' / ' + x['gtin2'],x['gate'],x['finding'],x.get('observation', x.get('evidence','')),x.get('next_step','')] for x in inspected])
         body += '<p>' + e(inspection['limitations']) + '</p>'
         body += f'<p><a href="/jev/artifact?name=INSPECTION_{round}.md">Download inspection report</a> · <a href="/jev/artifact?name=inspection_{round}.json">Download evidence details</a></p>'
     control = load('control_comparison_5.json', {})

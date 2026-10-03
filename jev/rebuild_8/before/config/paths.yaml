@@ -1,0 +1,654 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# paths.yaml — the shared data contract (split-SSOT, 2026-09-13).
+#
+# This file holds ONLY what every lane shares: artifact paths, file names,
+# the raw-export column mapping, the seed, the model registry, and the
+# owned-layout templates for generated artifacts. Domain knobs live in their
+# OWN dir, validated by a pydantic model in src/core/schemas.py at load time
+# (fail-loud at import, never mid-run):
+#
+#   config/training.yaml  → TrainingConfig
+#
+# src/core/common.py is still the ONLY reader: it deep-merges these files into
+# one view (load_config()) and validates each against its schema. No script
+# reads YAML directly (unchanged SSOT doctrine).
+#
+# FILE BINDING FORMAT  "root:name"
+# Every files./layouts. entry is bound to exactly ONE root and a name within
+# it — the phone book owns the address, code owns only the resolution rule.
+# Roots:
+#   repo              → TRAIN_ROOT/name                     (repo root)
+#   data              → DATA_DIR/name                       (data)
+#   results           → RESULTS/name                        (honors
+#                       EUROMONITOR_RESULTS_DIR — on a Colab worker this is
+#                       the worker dir, NEVER the repo results root)
+#   results_training  → RESULTS/training/name               (training family)
+#   results_hpo       → RESULTS/hpo/name                    (hpo family)
+# An unknown root crashes at import — no guessing, no fallback.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── folder layout (relative to the repo root unless absolute) ──────────────
+paths:
+  artifacts_dir: "artifacts"            # ONE root: everything lives under it
+  # Versioned runtime data lives in this one repository-root directory.
+  # A clean clone therefore has every non-model CSV needed by data prep,
+  # training, and inference without relying on local artifact directories.
+  data_dir: "data"
+  results_dir: "results"                # frozen inputs + run-tree parent +
+                                        # shared/orchestration outputs at repo root
+  training_results_dir: "training_results" # verified Colab smoke outputs
+  models_dir: "artifacts/models"        # Git-shipped production model bundle
+  embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
+  mlruns_dir: "artifacts/mlruns"        # mlflow backend + artifact store (local)
+  logs_dir: "logs"                      # per-step orchestrator logs
+  # Training inputs share the versioned root-level data directory with the
+  # reference data. Results remain separate and are never inputs by default.
+  training_data_dir: "data"
+
+# ── artifact bindings (SSOT — nothing else in the tree spells these) ────────
+files:
+  # The inspected raw export is repository-root dataset.csv. Keep this
+  # explicit rather than silently falling back when artifacts/data is absent.
+  dataset: "repo:dataset.csv"
+  dataset_deduped: "training_data:dataset_deduped.csv"
+  sku_to_rep: "data:sku_to_rep.csv"
+  canonical_records: "training_data:canonical_records.csv"   # SHARED frozen input
+  gate_results: "training_data:gate_results.csv"             # SHARED frozen input
+  # Frozen calibration pairs are an input to both training and inference,
+  # so ship them with the rest of the versioned runtime data.
+  labeled_pairs: "data:labeled_pairs.csv"
+  # THE single validation population (P0). Folds 2+3 of the merged component
+  # graph; replaces the retired dataset_deduped_sample_3000/5000 lanes, whose
+  # splits were derived from a validation-blind graph and leaked (23.3% of
+  # positives had both endpoints in train).
+  final_validation: "training_data:final_validation.csv"
+  # COMPLETE split accounting: every graph entity -> fold + component. The
+  # validation CSV above holds only the scored half, so a consumer holding the
+  # full labeled census needs this to tell "withheld, the model trained on it"
+  # from "missing".
+  validation_fold_map: "results_training:validation_fold_map.csv"
+  embedding_similarities: "results_training:embedding_similarities.csv"
+  model_evaluation_summary: "results_training:model_evaluation_summary.csv"
+  attribute_separation_summary: "results_training:attribute_separation_summary.csv"
+  attribute_separation_values: "results_training:attribute_separation_values.csv"
+  fold_metrics: "results:train_fold_metrics.csv"       # worker-scoped pointer
+  hpo_grid_csv: "results_hpo:hpo_grid.csv"
+  # hpo_tpe_best REMOVED (audit round 2 F02, finished round 3): dead key —
+  # F["hpo_tpe_best"] had zero readers. The TPE lane writes its best-config
+  # JSON under a run-tagged name (train_<model><era>_hpo_best.json) built
+  # inline in src/training/training.run_hpo, which prints the actual out_path.
+  dedupe_summary: "results_training:dedupe_summary.csv"
+  ambiguous_offer_groups: "results_training:ambiguous_offer_groups.csv"
+  removals: "results_training:dedupe_removals.csv"
+  dedupe_conflicts: "results_training:dedupe_conflicts.csv"
+  four_pop_scores: "results_training:four_pop_scores.csv"
+  field_ablation: "results_training:field_ablation.csv"
+  data_scaling: "results_training:data_scaling.csv"
+  data_quality_summary: "results_training:data_quality_summary.csv"
+  data_quality_columns: "results_training:data_quality_columns.csv"
+  data_quality_gtin_groups: "results_training:data_quality_gtin_groups.csv"
+  title_attribute_evidence: "results_training:title_attribute_evidence.csv"
+  title_attribute_summary: "results_training:title_attribute_summary.csv"
+  title_removed_tokens: "results_training:title_removed_tokens.csv"
+  attribute_agreement_summary: "results_training:attribute_agreement_summary.csv"
+  attribute_agreement_conflicts: "results_training:attribute_agreement_conflicts.csv"
+  package_gate_impact_summary: "results_training:package_gate_impact_summary.csv"
+  package_gate_impact_pairs: "results_training:package_gate_impact_pairs.csv"
+  # cache_dir REMOVED (audit 2026-09-09): dead knob — zero readers; the
+  # embeddings cache path is constructed inline (DATA_DIR/embeddings_cache)
+  # by its three consumers.
+  number_reference: "data:number_tokens_reference.csv"
+  # Generated by src/training/build_second04_pairs.py from the frozen
+  # deduplicated dataset; consumed by src/core/volume_verified.
+  second04_pairs_positive: "results_training:second04_pairs_positive.csv"
+  results_pointer: "results:latest_results.json"  # the ONE file consumers read
+  # to find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
+  # src/training/train.py rewrites it on every non-sample run; sample runs never
+  # touch it
+  colab_live_log: "repo:colab_system.log"      # launcher/system log
+  colab_training_log: "repo:training.log"      # training stdout/stderr only
+
+# ── owned layout templates for GENERATED artifacts (training-hpo 2026-09-13)
+# Each layout binds a generated artifact to one root, one template, and one
+# owning module.  Consumers render the destination via common.artifact() —
+# placeholders are substituted ONLY from the declared fields; a missing field
+# or an unknown layout crashes.  Nothing in the tree builds these paths by
+# hand (no bare leaves, no "results/" literals, no glob conventions):
+layouts:
+  report_plot:
+    root: results_training
+    owner: training.report_plots
+    template: "report_{kind}.png"
+    fields: {kind: str}
+  report_csv:
+    root: results_training
+    owner: training.report_plots
+    template: "report_{kind}.csv"
+    fields: {kind: str}
+  final_inference:
+    root: results
+    owner: training.validation_inference
+    template: "final_inference/{name}"
+    fields: {name: str}
+  hpo_trials:
+    root: results_hpo
+    owner: training.training
+    template: "train_{model}{era}_hpo_trials.csv"
+    fields: {model: str, era: str}
+  hpo_best:
+    root: results_hpo
+    owner: training.training
+    template: "train_{model}{era}_hpo_best.json"
+    fields: {model: str, era: str}
+  checkpoint_repo:
+    root: results
+    owner: training.training
+    template: "_checkpoints/{model_tag}/r{run_tag}_f{fold}/checkpoint-{step}"
+    fields: {model_tag: str, run_tag: str, fold: int, step: int}
+  visibility:
+    root: results
+    owner: training.train
+    template: "logs/{name}"
+    fields: {name: str}
+  visibility_run:
+    root: results
+    owner: training.train
+    template: "logs/{run_tag}/{name}"
+    fields: {run_tag: str, name: str}
+  # The ONE consolidated pipeline trace (owner: core.tracing). Every stage of
+  # data_prep and training appends its steps here instead of scattering them
+  # across results/logs/*.csv. fields is deliberately EMPTY: the destination is
+  # fixed, because a splittable trace is exactly what this layout prevents.
+  training_trace:
+    root: results
+    owner: core.tracing
+    template: "logs/training_trace.csv"
+    fields: {}
+  resume_pointer:
+    root: results
+    owner: training.dvc_store
+    template: ".resume/{name}.dvc"
+    fields: {name: str}
+  dvc_publication_pointer:
+    root: repo
+    owner: training.dvc_store
+    template: "dvc_refs/{run_id}/worker_{worker}/{pointer}"
+    fields: {run_id: str, worker: int, pointer: str}
+  dvc_publication_manifest:
+    root: repo
+    owner: training.dvc_store
+    template: "dvc_refs/{run_id}/worker_{worker}/publication_manifest.json"
+    fields: {run_id: str, worker: int}
+
+# ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
+# SSOT for EVERY column name in the project (owner ruling 2026-10-01).
+# Read once by core.columns, which derives:
+#   * RAW_EXPORT_COLUMNS / CANONICAL_COLUMNS / COLUMN_MAPPING
+#   * SOURCE_ROW_FIELDS   — which columns the per-title original-evidence
+#                           capture (canonical_records.source_rows) retains
+#   * every required-column contract downstream of it
+# Code must NOT hardcode a column-name tuple. A literal list is a second
+# declaration that cannot be steered by this file and drifts silently — the
+# same class of defect as the volume tolerance (five lanes each declaring one
+# tolerance) and the stage-7 re-parse (a mechanism reading column names that
+# no caller supplied).
+# Preserve pandas' existing string/NA parsing across all dataset loaders.
+dataset_csv_read:
+  dtype: str
+  keep_default_na: true
+  na_filter: true
+
+# Plausibility is per physical package, not multiplied by pack count.
+# A named bulk container can be larger; conflicting sources still need review.
+extraction:
+  volume_min_ml: 1.0
+  volume_max_ml: 10000.0
+  bulk_volume_max_ml: 25000.0
+  title_attribute_override_ratio: 10.0
+  bulk_container_terms: [bucket, barrel, drum, carboy, jerry can]
+  source_groups:
+    attributes: declared_attributes
+    title: listing_text
+    sku_url: listing_text
+    image_url: listing_text
+    description: listing_text
+  pack_confidence:
+    nested: 0.95
+    multiplier: 0.90
+    pack_of: 0.90
+    count: 0.85
+    compact: 0.75
+    container: 0.90
+    attribute: 0.90
+
+# Completeness scores use product descriptors; all other mapped columns are
+# excluded. Order preserves the existing product-identity metadata contract.
+descriptor_columns:
+  - title
+  - brand
+  - category
+  - category_path
+  - attributes
+  - description
+
+# Owner-reviewed malformed-barcode groups. Repeated keys are rejected even
+# when they carry the same verdict, so keep/collapse can never overlap.
+dedupe_adjudications:
+  - {retailer: amazon, barcode: "41755098003", decision: collapse, reason: "L&A cranberry juice: no-sugar-added qualifier describes the shared product"}
+  - {retailer: amazon, barcode: "72392329915", decision: collapse, reason: "Orange Crush sugar-free singles: listing spam describes the shared product"}
+  - {retailer: Wholefoods, barcode: "99482464950", decision: keep, reason: "Nutrient water versus zero-calorie lemonade"}
+  - {retailer: amazon, barcode: "22592446530", decision: keep, reason: "Ozarka sparkling water: lemon versus lime"}
+  - {retailer: amazon, barcode: "53721632036", decision: keep, reason: "Cool Brew concentrate: French Roast versus vanilla"}
+  - {retailer: amazon, barcode: "56918000304", decision: keep, reason: "Montellier mineral water: lemon versus lime"}
+  - {retailer: amazon, barcode: "71573024687", decision: keep, reason: "Pennsylvania Dutch birch beer: regular versus diet"}
+  - {retailer: amazon, barcode: "73430910713", decision: keep, reason: "Zephyrhills: lemon versus lime versus spring"}
+  - {retailer: amazon, barcode: "98794313048", decision: keep, reason: "Stewart's root beer: original versus diet"}
+  - {retailer: amazon, barcode: "99429158133", decision: keep, reason: "Cranberry: Hormel versus Thick & Easy brands"}
+
+column_mapping:
+  sku_id: product_id
+  retailer: retailer
+  country: country
+  sku_name_eng: title
+  description_short_eng: description
+  breadcrumbs_eng: category_path
+  sku_url: url
+  image_url: image_url
+  sku_last_price: price
+  gtin: barcode
+  brand: brand
+  category: category
+  attribute: attributes
+
+# ── per-column evidence ruling (canonical_records.source_rows) ───────────────
+# EVERY mapped column is declared here, exactly once, with the ruling on
+# whether it survives into the per-title evidence JSON that the decision
+# engine's stage-7 clarification re-reads, and the reason either way.
+#
+# Why all thirteen and not only the captured ones: a column that is merely
+# ABSENT from the config is indistinguishable from one somebody forgot. An
+# exclusion recorded as `capture: false` plus a reason is auditable — it can be
+# re-opened by changing the ruling with its stated basis, never by taste.
+# core.schemas asserts the declaration is a total, duplicate-free partition of
+# column_mapping's values.
+#
+# capture: true  — the column can corroborate or refute a product-attribute
+#   claim, or is an identity confounder the gate must be able to see.
+# capture: false — the column cannot bear on WHICH product a title describes.
+#     url / image_url  listing IDENTIFIERS: they differ per retailer for one
+#                      and the same trade item, so they carry no product
+#                      semantics.
+#     price            commercial, varying by retailer, stock and time.
+#     product_id       a listing key; the GTIN supersedes it for identity.
+#     barcode          identity, not description — already carried as `gtin`,
+#                      and an identity match is decided before any of this.
+column_evidence:
+  title:
+    column: title
+    capture: true
+    reason: primary stage-7 evidence; the string every attribute claim is read from
+  attributes:
+    column: attributes
+    capture: true
+    reason: the declared attribute cell; 71,623/71,623 rows populated, the densest evidence
+  description:
+    column: description
+    capture: true
+    reason: prose claims (carbonation/sweetener/pulp) and sweetener status
+  category_path:
+    column: category_path
+    capture: true
+    reason: category context for flavor/type disambiguation
+  category:
+    column: category
+    capture: true
+    reason: category context, narrower than category_path
+  brand:
+    column: brand
+    capture: true
+    reason: brand is an identity attribute the gate blocks on
+  retailer:
+    column: retailer
+    capture: true
+    reason: identity CONFOUNDER — same trade item listed by two retailers
+  country:
+    column: country
+    capture: true
+    reason: identity CONFOUNDER — same trade item across markets
+  barcode:
+    column: barcode
+    capture: true
+    reason: identity evidence — an equal GTIN is the same product, decisive before parsing
+  product_id:
+    column: product_id
+    capture: true
+    reason: retailer listing key; corroborates identity within one retailer
+  url:
+    column: url
+    capture: true
+    reason: >-
+      the PATH SLUG carries product tokens: measured
+      "walmart.com/ip/Concord-Foods-Smoothie-Banana-Drink-Mixes-2-oz-Shelf-Stable"
+      and "riteaid.com/shop/sierra-mist-soda-lemon-lime-12-12-fl-oz-355-ml-cans".
+      An earlier ruling excluded this as a mere locator without ever reading a
+      value; it is evidence, so it is captured and its slug is read as text.
+  image_url:
+    column: image_url
+    capture: true
+    reason: >-
+      PARTIALLY evidentiary: walmartimages.com/seo/Concord-Foods-Smoothie-Banana-Drink-Mix-2-oz
+      carries product tokens while hashed paths (riteaid .../9df78eab.../0) do not.
+      Captured; the reader gains nothing from a hash and must not pretend to.
+  price:
+    column: price
+    capture: true
+    reason: >-
+      commercial column, captured for completeness of the row. Its value is a
+      bare decimal and carries no direct attribute token; it is NOT read as
+      attribute evidence, and capture must not be mistaken for that.
+
+# Extra names a column is known by, beyond the raw and canonical names
+# column_mapping already declares. Every read path that accepts "either name"
+# had hardcoded the pair — e.g. ("attributes", "attr"),
+# ("description", "description_short_eng"), {"title": "sku_name_eng"} — which
+# is a second declaration of a fact this file already owns, and one that drifts
+# the moment a rename happens. core.columns.resolve_aliases() serves them.
+column_aliases:
+  attributes:
+    - attr
+  product_id:
+    - SKU_ID
+
+# Columns the data-prep lane cannot run without (subset of column_mapping).
+# The raw-export load guard and the canonical-dataset guard both read this.
+data_prep_required_columns:
+  - gtin
+  - sku_name_eng
+  - attribute
+  - brand
+  - description_short_eng
+  - breadcrumbs_eng
+
+# canonical_records columns a record may LACK because they were added after the
+# first artifact version, and the value that means "unknown" for that column.
+# Declared here rather than as a tuple in the read adapter so the shape
+# difference between a list column ("[]") and a mapping column ("{}") is DATA,
+# not a special case in code — the adapter used to branch on the column name.
+canonical_optional_columns:
+  sweetener_type_set: "[]"
+  sweetening_set: "[]"
+  attribute_consistency_flags: "[]"
+  universe_evidence: "{}"
+  source_rows: "[]"
+  evidence_ledger: "[]"
+  organic_set: "[]"
+
+# ── unit taxonomy (core.text, core.unit_canonicalization, ner features) ─────
+# THE one table for volume units and pack bounds; three module-local literals
+# held copies of it before and three of them already disagreed:
+#   * core.text._TO_ML (float, 37 spellings) parsed '2 dl' but
+#     src/core/unit_canonicalization._VOLUME_TO_ML had NO dl/decilitre family,
+#     so the whole-ml converter raised ValueError: unsupported volume unit
+#     'dl' on real rows ("27 pcs juice pot Trip orange drink 2 dl").
+#   * the converter accepted 'cc', but the parse regex never matched it — the
+#     "300 cc" notation in 65 real titles ("Exotic orange juice 300 cc") lost
+#     its volume instead of 300.
+#   * same unit, different factors (29.5735 in the parse table vs
+#     29.5735295625 in the converter — gal/qt differed by the same rounding),
+#     i.e. identical titles bucketed differently depending on which module
+#     converted them.
+# patterns/regex fragments stay algorithm-side: this table owns SPELLINGS the
+# modules key by; core.text builds its alternation and candidates from these.
+units:
+  bucket_ml: 5      # nearest 5 ml absorbs 355 vs 355.0 vs 354 noise
+  pack_min: 2       # sane multipack range (excludes "1 count"/"365 days")
+  pack_max: 100
+  # Glued-digit plausibility ceiling (code-artifact fix): a volume match whose
+  # digits are stuck to a preceding letter (alphanumeric product code) and
+  # whose canonical ml exceeds this ceiling is SKIPPED and scanning continues.
+  # Evidence: 'L & A Juice BG14980 L ... 6x32OZ' parsed '14980 l' = 14,980,000
+  # ml; the catalog's measured single-title max is 25,000 ml (bulk formats).
+  # Un-glued big numbers ('makes 128 gal' dilution yield) are legitimate and
+  # unaffected, as are glued-but-plausible sizes ('chinotto1 l', 'burst850ml').
+  glued_code_max_ml: 25000
+  volume:
+    # pattern: verbatim alternation fragment, in the EXISTING regex order (a
+    # fragment may list variants: 'ltr|lt|l'). spellings: the norm_unit keys
+    # those captures feed the tables with — keep in lockstep; an irregular
+    # write falls out via the pattern's own guards and the module asserts
+    # every spelling has exactly one pattern in these fields.
+    - {pattern: 'milli\s?lit(?:er|re)s?', spellings: [milliliter, milliliters, millilitre, millilitres], ml_per_unit: 1, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'ml', spellings: [ml], ml_per_unit: 1, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'centi\s?lit(?:er|re)s?', spellings: [centiliter, centiliters, centilitre, centilitres], ml_per_unit: 10, family: metric_volume, confidence: 0.95}
+    - {pattern: 'cl', spellings: [cl], ml_per_unit: 10, family: metric_volume, confidence: 0.95}
+    - {pattern: 'deci\s?lit(?:er|re)s?', spellings: [deciliter, deciliters, decilitre, decilitres], ml_per_unit: 100, family: metric_volume, confidence: 0.95}
+    - {pattern: 'dl', spellings: [dl], ml_per_unit: 100, family: metric_volume, confidence: 0.95}
+    - {pattern: 'lit(?:er|re)s?', spellings: [liter, liters, litre, litres], ml_per_unit: 1000, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'ltr|lt|l', spellings: [ltr, lt, l], ml_per_unit: 1000, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'fluid\s?ounces?', spellings: [fluid ounce, fluid ounces], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.85}
+    - {pattern: 'fl\.?\s?-?\s?oz\.?', spellings: [fl oz, floz], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.85}
+    - {pattern: 'floz', spellings: [floz], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.85}
+    - {pattern: 'cc', spellings: [cc], ml_per_unit: 1, family: metric_volume, confidence: 0.95, decimal_confidence: 0.98}
+    - {pattern: 'gallons?', spellings: [gallon, gallons], ml_per_unit: 3785.411784, family: us_volume, confidence: 0.95}
+    - {pattern: 'gal', spellings: [gal], ml_per_unit: 3785.411784, family: us_volume, confidence: 0.95}
+    - {pattern: 'quarts?', spellings: [quart, quarts], ml_per_unit: 946.352946, family: us_volume, confidence: 0.95}
+    - {pattern: 'qt', spellings: [qt], ml_per_unit: 946.352946, family: us_volume, confidence: 0.95}
+    - {pattern: 'pints?', spellings: [pint, pints], ml_per_unit: 473.176473, family: us_volume, confidence: 0.95}
+    - {pattern: 'pt', spellings: [pt], ml_per_unit: 473.176473, family: us_volume, confidence: 0.95}
+    - {pattern: 'ounces?', spellings: [ounce, ounces], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.75, ambiguous: true}
+    - {pattern: 'oz', spellings: [oz], ml_per_unit: 29.5735295625, family: us_volume, confidence: 0.75, ambiguous: true}
+
+# ── listing-URL product text (core.url_evidence) ───────────────────────────
+# url/image_url are captured per title (column_evidence above). This block is
+# the READER for them: the vocabulary and thresholds deciding which slug tokens
+# are product text.
+#
+# MEASURED DEFECTS THIS BLOCK FIXES (hardcoded literals in the module before):
+#   * a bare 8+ char token was dropped as a hash, which ate the real product
+#     words "sparkling" (70x in 8,000 sampled sku_url slugs) and
+#     "strawberry" (48x). Hence bare_hash_min_digits: a hash must also carry a
+#     digit, so "9df78eab" dies and "sparkling" lives.
+#   * a letter+digit token was dropped as a media code, which ate "250ml"
+#     (34x) and "2l" (9x) — the size evidence the pack gate depends on.
+#     Hence `units`: a token whose letter part is a declared unit is never a
+#     media code.
+url_evidence:
+  # Storefront path scaffolding: describes the retailer's URL scheme, never the
+  # product. Includes identifier-keyed schemes carrying no product text at all
+  # — amazon /dp/<ASIN> (179/2000 sampled urls), coop /product/<EAN>, meijer
+  # /shopping/product, wegmans /shop/categories. Those must read as "" rather
+  # than as their own scaffolding.
+  path_schema_words:
+  - "account"
+  - "asin"
+  - "aspx"
+  - "assets"
+  - "aw"
+  - "basket"
+  - "browse"
+  - "cache"
+  - "cart"
+  - "catalog"
+  - "catalogue"
+  - "categories"
+  - "checkout"
+  - "co"
+  - "col"
+  - "com"
+  - "compare"
+  - "content"
+  - "crop"
+  - "dam"
+  - "deals"
+  - "detail"
+  - "details"
+  - "dp"
+  - "en"
+  - "file"
+  - "files"
+  - "fit"
+  - "format"
+  - "gif"
+  - "gp"
+  - "height"
+  - "htm"
+  - "html"
+  - "image"
+  - "images"
+  - "img"
+  - "index"
+  - "ip"
+  - "irs"
+  - "is"
+  - "item"
+  - "items"
+  - "itm"
+  - "jsp"
+  - "large"
+  - "list"
+  - "lists"
+  - "main"
+  - "master"
+  - "media"
+  - "net"
+  - "node"
+  - "offers"
+  - "org"
+  - "original"
+  - "p"
+  - "pd"
+  - "php"
+  - "product"
+  - "products"
+  - "quality"
+  - "resize"
+  - "scale"
+  - "search"
+  - "seo"
+  - "shop"
+  - "shopping"
+  - "sk"
+  - "small"
+  - "sp"
+  - "sr"
+  - "static"
+  - "store"
+  - "stores"
+  - "svg"
+  - "thumb"
+  - "thumbnail"
+  - "upload"
+  - "uploads"
+  - "us"
+  - "webp"
+  - "width"
+  - "wishlist"
+  - "www"
+  # Units are PRESERVED, never dropped. Disjoint from path_schema_words by
+  # validation (schemas.UrlEvidenceSpec), so "cl" cannot be both again.
+  units:
+  - "cl"
+  - "dl"
+  - "fl"
+  - "g"
+  - "kg"
+  - "l"
+  - "mg"
+  - "ml"
+  - "oz"
+  # A token shorter than this is storefront filler (peapod ".../c/K6/...").
+  min_token_length: 2
+  # A token this long with no vowel is a content hash ("k6rmm", "9df78eab").
+  no_vowel_min_length: 5
+  # An alphanumeric run this long is a hash ONLY when it also carries a digit —
+  # the fix for "sparkling"/"strawberry" being eaten.
+  bare_hash_min_length: 8
+  bare_hash_min_digits: 1
+  # A short letter+digit run is a media code ("k6rmm", "ab12") unless its letter
+  # part is a declared unit, which keeps "250ml" and "2l" intact.
+  short_code_letters: 3
+
+# ── product-type + subtype vocabulary (pipeline.extract_all reads; SSOT) ───
+# The card's `type`/`subtype` product words. Everything that used to be
+# inline regexes in extract_all is moved here (one declaration, never two).
+# Words are measured (corpus census 2026-10-01): the previous coarse
+# classes keep their semantics, and the subtype rows recover the measured
+# ~20% of titles that carried a product word the coarse classes never
+# read (coffee 706, smoothie 323, kombucha 284...).
+# Matching rule: list order is precedence — phrases before their
+# containing word ("coconut water" must not collapse into "water") and
+# subtypes before their family (latte stays latte, not coffee).
+product_types:
+  types:
+    coconut_water:
+      words: [coconut water]
+    water:
+      words: [water]
+    juice:
+      words: [juice]
+    tea:
+      words: [ice tea, iced tea, tea]
+    energy:
+      words: [energy drink, energy water]
+    soda:
+      words: [soda, soft drink]
+    tonic:
+      words: [tonic]
+    coffee:
+      words: [coffee]
+      subtypes: [latte, cappuccino, espresso, mocha, mocca, macchiato]
+    smoothie:
+      words: [smoothie]
+    kombucha:
+      words: [kombucha]
+    drink_mix:
+      words: [drink mix, drinkmix]
+    beer:
+      words: [beer]
+      subtypes: [ale, lager, pilsner, stout, porter, ipa, cider]
+    shot:
+      words: [shot]
+    nectar:
+      words: [nectar]
+    lemonade:
+      words: [lemonade]
+    punch:
+      words: [punch, squash, cordial]
+    matcha:
+      words: [matcha]
+    chai:
+      words: [chai]
+    yerba:
+      words: [yerba]
+    infusion:
+      words: [infusion]
+    shake:
+      words: [shake, protein]
+    milk:
+      words: [milk]
+    isotonic:
+      words: [isotonic]
+
+
+# ── seed (whole tree uses this one value) ───────────────────────────────────
+seed: 42
+
+# ── model registry (shared by every model-loading lane) ─────────────────────
+# Values are relative directories inside the configured model roots. The
+# production bundle is shipped in paths.models_dir with the repository;
+# values are never Hub IDs.
+models:
+  minilm_l6: "all-MiniLM-L6-v2"
+  multilingual_l12: "paraphrase-multilingual-MiniLM-L12-v2"
+  deberta_v3_base: "deberta-v3-base"
+  rerank_minilm_l6: "ms-marco-MiniLM-L-6-v2"
+  ner_semantic_base: "paraphrase-multilingual-mpnet-base-v2"
+  ner_transformer_base: "xlm-roberta-base"
+
+# Bi-encoder bundles consumed by embedding/similarity/report lanes. The model
+# registry also contains cross-encoder and NER bundles; those are not valid
+# inputs to SentenceTransformer.encode and must never be iterated as encoders.
+embedding_model_keys:
+  - minilm_l6
+  - multilingual_l12
+  - deberta_v3_base

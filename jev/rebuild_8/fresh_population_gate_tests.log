@@ -1,0 +1,111 @@
+...........................................F...............              [100%]
+=================================== FAILURES ===================================
+_______ test_live_gate_positive_population_is_not_starved_of_auto_merge ________
+
+    def test_live_gate_positive_population_is_not_starved_of_auto_merge():
+        """The regression, pinned on the LIVE frozen artifacts.
+    
+        The invariant is NO INVENTED CONFLICT: an explicit conflict is exactly
+        what the training gate refuses to label ``proceed``, so the calibration
+        gate must never reject this population. Before the first fix it routed
+        1,591/1,592 (99.94%) to human review because ``pulp_set`` is populated on
+        ~2% of canonical records; before the 2026-10-01 pack-evidence fix it
+        rejected 63/16,570 because the ``pack`` dimension fell back to the
+        ``pack type`` registry cell — package FORMAT (bag in box vs bottle),
+        which is the ``package_type`` dimension's vocabulary, not a pack count.
+    
+        What is NOT an invariant any more: auto_merge for every pair.
+        ``pipeline.three_way_gate`` no longer reads "no pack count was extracted
+        on either side" as low confidence (an empty ``pack_set`` is a single-unit
+        product, not an unmeasured one), so the proceed population grew 13.4x to
+        16,570 and 92.1% of it carries no curated pack evidence at all.
+        ``rand_matching.DEFERRAL_DIMENSIONS`` routes exactly that case to review
+        by design — "it can never silently become an automatic graph edge" —
+        behind the ``missing_pack_or_volume_route`` dial. The population is
+        therefore pinned as: nothing rejected, everything routed, and every
+        review attributable to the two declared deferral dimensions.
+        """
+        from core.attribute_conflicts import canonical_attribute_info
+        from core.common import F, canonical_records_frame
+        from training.rand_matching import DEFERRAL_DIMENSIONS
+    
+        gate_path = F["gate_results"]
+        if not gate_path.exists():
+            pytest.skip("frozen gate_results.csv is unavailable")
+        gates = pd.read_csv(gate_path, dtype=str, keep_default_na=False)
+        records = canonical_records_frame()
+        by_gtin = {str(row["gtin"]): row.to_dict() for _, row in records.iterrows()}
+        proceed = gates[gates["gate_decision"] == "proceed"]
+        assert len(proceed) > 0, "frozen gate artifact has no proceed population"
+    
+        info_cache: dict[str, dict] = {}
+    
+        def info(gtin: str) -> dict:
+            if gtin not in info_cache:
+                info_cache[gtin] = canonical_attribute_info(by_gtin[gtin])
+            return info_cache[gtin]
+    
+        routes = {"auto_merge": 0, "human_review": 0, "reject": 0}
+        resolved = 0
+        missing_census: dict[str, int] = {}
+        reviewed_without_deferral_evidence = 0
+        for _, row in proceed.iterrows():
+            left_gtin, right_gtin = str(row["gtin1"]), str(row["gtin2"])
+            if left_gtin not in by_gtin or right_gtin not in by_gtin:
+                continue
+            resolved += 1
+            gate = targeted_veto_gate(
+                info(left_gtin),
+                info(right_gtin),
+                sku_brand=by_gtin[left_gtin].get("mode_brand"),
+                candidate_brand=by_gtin[right_gtin].get("mode_brand"),
+                exact_gtin=left_gtin == right_gtin,
+            )
+            route = str(gate["targeted_gate_route"])
+            routes[route] += 1
+            tokens = {
+                token for token in str(gate["targeted_missing_attributes"]).split(",")
+                if token
+            }
+            for token in tokens:
+                missing_census[token] = missing_census.get(token, 0) + 1
+            if route == "human_review" and not tokens & {
+                f"{dimension}_{side}"
+                for dimension in DEFERRAL_DIMENSIONS
+                for side in ("a", "b")
+            }:
+                reviewed_without_deferral_evidence += 1
+    
+        assert resolved == len(proceed)
+        # No conflict can exist in this population: an explicit conflict is exactly
+        # what the training gate refuses to label ``proceed``.
+        assert routes["reject"] == 0
+        # Nothing is lost: every pair takes a route, and a review is only ever the
+        # DECLARED deferral (pack/volume absent on a side), never starvation.
+        assert routes["auto_merge"] + routes["human_review"] == resolved
+        assert reviewed_without_deferral_evidence == 0
+        # Measured split, re-pinned 2026-10-02 against the regenerated
+        # gate_results.csv: proceed 16,611 -> 12,733 (extraction boundary
+        # repairs + stage-7 claim lift moves uncertain pairs to review; see
+        # the docstring).
+>       assert resolved == 12733
+E       assert 929 == 12733
+
+tests/test_targeted_ann_gates.py:524: AssertionError
+=============================== warnings summary ===============================
+src/core/schemas.py:353
+  /home/opc/ONE/ER/src/core/schemas.py:353: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.13/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+src/core/schemas.py:456
+  /home/opc/ONE/ER/src/core/schemas.py:456: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.13/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+src/core/schemas.py:562
+  /home/opc/ONE/ER/src/core/schemas.py:562: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.13/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_targeted_ann_gates.py::test_live_gate_positive_population_is_not_starved_of_auto_merge
+1 failed, 58 passed, 3 warnings in 9.90s

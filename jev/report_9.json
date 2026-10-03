@@ -1,0 +1,532 @@
+{
+  "calls": 50,
+  "successful": 50,
+  "exact_request_repeats_verified": 50,
+  "transitions": {
+    "different->different": 30,
+    "uncertain->uncertain": 10,
+    "same->same": 8,
+    "same->uncertain": 2
+  },
+  "bands_by_cohort": {
+    "positive_different": {
+      "different": 20
+    },
+    "positive_uncertain": {
+      "uncertain": 10
+    },
+    "positive_same": {
+      "same": 8,
+      "uncertain": 2
+    },
+    "old_negative": {
+      "different": 10
+    }
+  },
+  "band_changes": 2,
+  "mean_absolute_score_delta": 0.007800000000000002,
+  "large_score_changes": 0,
+  "pairs": [
+    {
+      "gtin1": "5425002401146",
+      "gtin2": "5425002407261",
+      "prior_score": 0.04,
+      "repeat_score": 0.04,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "708820982505",
+      "gtin2": "713733675482",
+      "prior_score": 0.16,
+      "repeat_score": 0.15,
+      "score_delta": -0.010000000000000009,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "5201156031732",
+      "gtin2": "5201156031954",
+      "prior_score": 0.1,
+      "repeat_score": 0.09,
+      "score_delta": -0.010000000000000009,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "688267075025",
+      "gtin2": "688267075049",
+      "prior_score": 0.07,
+      "repeat_score": 0.07,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "3546635040549",
+      "gtin2": "3546635040747",
+      "prior_score": 0.03,
+      "repeat_score": 0.03,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "3268650004053",
+      "gtin2": "3268650006057",
+      "prior_score": 0.06,
+      "repeat_score": 0.06,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "5060671000063",
+      "gtin2": "5060671000490",
+      "prior_score": 0.09,
+      "repeat_score": 0.11,
+      "score_delta": 0.020000000000000004,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "5425015361383",
+      "gtin2": "5425015361468",
+      "prior_score": 0.09,
+      "repeat_score": 0.09,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "7033850007946",
+      "gtin2": "7033850008394",
+      "prior_score": 0.04,
+      "repeat_score": 0.04,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "6415600555098",
+      "gtin2": "6415600579292",
+      "prior_score": 0.03,
+      "repeat_score": 0.03,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "5204125100361",
+      "gtin2": "5204125100385",
+      "prior_score": 0.06,
+      "repeat_score": 0.05,
+      "score_delta": -0.009999999999999995,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "6415600564649",
+      "gtin2": "7044613875504",
+      "prior_score": 0.06,
+      "repeat_score": 0.06,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "8715600227048",
+      "gtin2": "8715600243710",
+      "prior_score": 0.04,
+      "repeat_score": 0.05,
+      "score_delta": 0.010000000000000002,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "7310401032696",
+      "gtin2": "7310401054377",
+      "prior_score": 0.03,
+      "repeat_score": 0.03,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "7340011404255",
+      "gtin2": "7340191118317",
+      "prior_score": 0.17,
+      "repeat_score": 0.19,
+      "score_delta": 0.01999999999999999,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "3268650006057",
+      "gtin2": "3268650606059",
+      "prior_score": 0.18,
+      "repeat_score": 0.2,
+      "score_delta": 0.020000000000000018,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "3292090000252",
+      "gtin2": "3292090000269",
+      "prior_score": 0.03,
+      "repeat_score": 0.03,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "3119070064090",
+      "gtin2": "3119070064106",
+      "prior_score": 0.04,
+      "repeat_score": 0.04,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "8433329089906",
+      "gtin2": "8433329123822",
+      "prior_score": 0.02,
+      "repeat_score": 0.02,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "4013143110013",
+      "gtin2": "4013143110921",
+      "prior_score": 0.35,
+      "repeat_score": 0.34,
+      "score_delta": -0.009999999999999953,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "5601195510128",
+      "gtin2": "8437012363007",
+      "prior_score": 0.67,
+      "repeat_score": 0.65,
+      "score_delta": -0.020000000000000018,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "6415712505745",
+      "gtin2": "6415712612498",
+      "prior_score": 0.02,
+      "repeat_score": 0.02,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "positive_different"
+    },
+    {
+      "gtin1": "633610753105",
+      "gtin2": "995561291595",
+      "prior_score": 0.73,
+      "repeat_score": 0.73,
+      "score_delta": 0.0,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "3272036002182",
+      "gtin2": "3272036008375",
+      "prior_score": 0.21,
+      "repeat_score": 0.22,
+      "score_delta": 0.010000000000000009,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "8437010011016",
+      "gtin2": "8437010011078",
+      "prior_score": 0.39,
+      "repeat_score": 0.41,
+      "score_delta": 0.019999999999999962,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "87222982",
+      "gtin2": "87365290",
+      "prior_score": 0.76,
+      "repeat_score": 0.73,
+      "score_delta": -0.030000000000000027,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "5060335634726",
+      "gtin2": "5060517880613",
+      "prior_score": 0.79,
+      "repeat_score": 0.79,
+      "score_delta": 0.0,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "3489490000016",
+      "gtin2": "3700036900509",
+      "prior_score": 0.66,
+      "repeat_score": 0.64,
+      "score_delta": -0.020000000000000018,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "8713300049755",
+      "gtin2": "8720157464679",
+      "prior_score": 0.77,
+      "repeat_score": 0.77,
+      "score_delta": 0.0,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "615888989264",
+      "gtin2": "673276821404",
+      "prior_score": 0.93,
+      "repeat_score": 0.93,
+      "score_delta": 0.0,
+      "prior_band": "same",
+      "repeat_band": "same",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "5705001432113",
+      "gtin2": "5705010078814",
+      "prior_score": 0.31,
+      "repeat_score": 0.39,
+      "score_delta": 0.08000000000000002,
+      "prior_band": "uncertain",
+      "repeat_band": "uncertain",
+      "cohort": "positive_uncertain"
+    },
+    {
+      "gtin1": "4101130002929",
+      "gtin2": "4101130525091",
+      "prior_score": 0.82,
+      "repeat_score": 0.82,
+      "score_delta": 0.0,
+      "prior_band": "same",
+      "repeat_band": "same",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "618020799950",
+      "gtin2": "664697916435",
+      "prior_score": 0.87,
+      "repeat_score": 0.84,
+      "score_delta": -0.030000000000000027,
+      "prior_band": "same",
+      "repeat_band": "same",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "747519482230",
+      "gtin2": "751901631939",
+      "prior_score": 0.89,
+      "repeat_score": 0.89,
+      "score_delta": 0.0,
+      "prior_band": "same",
+      "repeat_band": "same",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "4048517720949",
+      "gtin2": "9001400005016",
+      "prior_score": 0.8,
+      "repeat_score": 0.79,
+      "score_delta": -0.010000000000000009,
+      "prior_band": "same",
+      "repeat_band": "uncertain",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "198717100493",
+      "gtin2": "747519482230",
+      "prior_score": 0.93,
+      "repeat_score": 0.93,
+      "score_delta": 0.0,
+      "prior_band": "same",
+      "repeat_band": "same",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "732623770731",
+      "gtin2": "810053000311",
+      "prior_score": 0.81,
+      "repeat_score": 0.78,
+      "score_delta": -0.030000000000000027,
+      "prior_band": "same",
+      "repeat_band": "uncertain",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "736983894311",
+      "gtin2": "870616959197",
+      "prior_score": 0.88,
+      "repeat_score": 0.89,
+      "score_delta": 0.010000000000000009,
+      "prior_band": "same",
+      "repeat_band": "same",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "782761983081",
+      "gtin2": "786173816302",
+      "prior_score": 0.91,
+      "repeat_score": 0.92,
+      "score_delta": 0.010000000000000009,
+      "prior_band": "same",
+      "repeat_band": "same",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "198717100493",
+      "gtin2": "739781523438",
+      "prior_score": 0.93,
+      "repeat_score": 0.93,
+      "score_delta": 0.0,
+      "prior_band": "same",
+      "repeat_band": "same",
+      "cohort": "positive_same"
+    },
+    {
+      "gtin1": "8411902002207",
+      "gtin2": "8411902008124",
+      "prior_score": 0.04,
+      "repeat_score": 0.04,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    },
+    {
+      "gtin1": "6415600537759",
+      "gtin2": "6415600551373",
+      "prior_score": 0.03,
+      "repeat_score": 0.03,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    },
+    {
+      "gtin1": "5201156173296",
+      "gtin2": "5201156303303",
+      "prior_score": 0.02,
+      "repeat_score": 0.03,
+      "score_delta": 0.009999999999999998,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    },
+    {
+      "gtin1": "8715600241846",
+      "gtin2": "8715600243314",
+      "prior_score": 0.03,
+      "repeat_score": 0.03,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    },
+    {
+      "gtin1": "100142899385",
+      "gtin2": "723651221609",
+      "prior_score": 0.05,
+      "repeat_score": 0.05,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    },
+    {
+      "gtin1": "853158004006",
+      "gtin2": "853158004853",
+      "prior_score": 0.04,
+      "repeat_score": 0.04,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    },
+    {
+      "gtin1": "3800500925738",
+      "gtin2": "3800500925752",
+      "prior_score": 0.03,
+      "repeat_score": 0.03,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    },
+    {
+      "gtin1": "9031100003685",
+      "gtin2": "90311789",
+      "prior_score": 0.02,
+      "repeat_score": 0.02,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    },
+    {
+      "gtin1": "667103102262",
+      "gtin2": "667103330177",
+      "prior_score": 0.04,
+      "repeat_score": 0.04,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    },
+    {
+      "gtin1": "671785301950",
+      "gtin2": "769553420962",
+      "prior_score": 0.04,
+      "repeat_score": 0.04,
+      "score_delta": 0.0,
+      "prior_band": "different",
+      "repeat_band": "different",
+      "cohort": "old_negative"
+    }
+  ],
+  "interpretation": "Stratified same-input repeat measures judgment stability, not improvement from gate fixes or population accuracy."
+}

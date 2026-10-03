@@ -1,0 +1,231 @@
+{
+  "groups": {
+    "current_negative": {
+      "pairs": 160,
+      "score_bands": {
+        "different": 158,
+        "uncertain": 2
+      }
+    },
+    "current_positive": {
+      "pairs": 640,
+      "score_bands": {
+        "different": 387,
+        "uncertain": 210,
+        "same": 43
+      }
+    },
+    "lost_positive_partners": {
+      "pairs": 100,
+      "score_bands": {
+        "different": 92,
+        "uncertain": 8
+      }
+    }
+  },
+  "weighted_positive_low_score_before": 0.9361547504453933,
+  "weighted_positive_low_score_after": 0.6056367571031299,
+  "inspected_remaining_variant_examples": [
+    {
+      "gtin1": "7391881837636",
+      "gtin2": "7398818389848",
+      "score": 0.02,
+      "similarity": 1.0,
+      "gate": "proceed",
+      "listings": {
+        "7391881837636": [
+          {
+            "attributes": "Immune Support Ingredients: zinc; Volume: 330; Carbonization: carbonated; Sweetener: sucralose, acesulfame potassium; Juice Content: 0-2%; Caffeine: 15-25 mg; Pack Material Type: Metal; Sports Ingredients: bcaa; Health Claims: no sugar, energy boosting; Sports Positioning: muscle growth; Energy Source: b-vitamins",
+            "barcode": "7391881837636",
+            "brand": "Lohilo",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" natural products and supplements\"\",\"\" sports nutrition\"\",\"\" sports nutrition drinks\"\"]",
+            "country": "Finland",
+            "description": "guavan -flavored bcaa amino acids containing energy drink. sugar free and carbonated. high caffeine content because of recommendation up to 2 cans / day. salmon of good taste energy drinks boostia to",
+            "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/7391881837636_kuva1.jpg",
+            "price": "2.39",
+            "product_id": "400903311",
+            "retailer": "S-kaupat",
+            "title": "lohilo Pink beach bcaa drink 330ml",
+            "url": "https://www.s-kaupat.fi/tuote/lohilo-pink-beach-bcaa-juoma-330ml/7391881837636"
+          },
+          {
+            "attributes": "Pack Material Type: Metal; Energy Source: b-vitamins; Caffeine: 15-25 mg; Sports Positioning: muscle growth; Immune Support Ingredients: zinc; Carbonization: carbonated; Juice Content: 0-2%; Volume: 330; Health Claims: energy boosting, no sugar; Sports Ingredients: bcaa; Sweetener: sucralose, acesulfame potassium",
+            "barcode": "7391881837636",
+            "brand": "Lohilo",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" natural products and supplements\"\",\"\" sports nutrition\"\",\"\" sports nutrition drinks\"\"]",
+            "country": "Finland",
+            "description": "guavan -flavored bcaa amino acids containing energy drink. sugar free and carbonated. high caffeine content because of recommendation up to 2 cans / day. salmon of good taste energy drinks boostia to",
+            "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/7391881837636_kuva1.jpg",
+            "price": "2.39",
+            "product_id": "524268600",
+            "retailer": "Food Market Herkku",
+            "title": "lohilo Pink beach bcaa drink 330ml",
+            "url": "https://www.s-kaupat.fi/tuote/7391881837636"
+          }
+        ],
+        "7398818389848": [
+          {
+            "attributes": "Volume: 330; Caffeine: 15-25 mg; Pack Material Type: Metal; Sweetener: aspartame, sucralose, acesulfame potassium; Health Claims: no sugar, energy boosting; Immune Support Ingredients: vitamin c, zinc; Juice Content: 0-2%; Carbonization: carbonated",
+            "barcode": "7398818389848",
+            "brand": "Lohilo",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" natural products and supplements\"\",\"\" sports nutrition\"\",\"\" sports nutrition drinks\"\"]",
+            "country": "Finland",
+            "description": "fresh green apple -flavored collagen containing energy drink. sugar free and carbonated. high caffeine content because of recommendation up to 2 cans / day. salmon of good taste energy drinks boostia",
+            "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/7398818389848_kuva1.jpg",
+            "price": "1.27",
+            "product_id": "517984287",
+            "retailer": "S-kaupat",
+            "title": "lohilo Glow 2022 collagen containing carbonated sugar free beverage 330ml",
+            "url": "https://www.s-kaupat.fi/tuote/lohilo-glow-2022-kollageenia-sisaltava-hiilihapotettu-sokeriton-juoma-330ml/7398818389848"
+          },
+          {
+            "attributes": "Pack Material Type: Metal; Volume: 330; Carbonization: carbonated; Immune Support Ingredients: vitamin c, zinc; Health Claims: no sugar, energy boosting; Sweetener: aspartame, sucralose, acesulfame potassium; Juice Content: 0-2%; Caffeine: 15-25 mg",
+            "barcode": "7398818389848",
+            "brand": "Lohilo",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" natural products and supplements\"\",\"\" sports nutrition\"\",\"\" sports nutrition drinks\"\"]",
+            "country": "Finland",
+            "description": "fresh green apple -flavored collagen containing energy drink. sugar free and carbonated. high caffeine content because of recommendation up to 2 cans / day. salmon of good taste energy drinks boostia",
+            "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/7398818389848_kuva1.jpg",
+            "price": "1.27",
+            "product_id": "524336649",
+            "retailer": "Food Market Herkku",
+            "title": "lohilo Glow 2022 collagen containing carbonated sugar free beverage 330ml",
+            "url": "https://www.s-kaupat.fi/tuote/7398818389848"
+          }
+        ]
+      }
+    },
+    {
+      "gtin1": "688267001222",
+      "gtin2": "688267001505",
+      "score": 0.03,
+      "similarity": 1.0,
+      "gate": "proceed",
+      "listings": {
+        "688267001222": [
+          {
+            "attributes": "Sweetener: hfcs; Carbonization: carbonated; Naturally derived: natural flavours; Volume: 2000; Pack Material Type: Plastic; Juice Content: 0-2%; Caffeine: 15-25 mg",
+            "barcode": "688267001222",
+            "brand": "Peapod",
+            "category": "Other Non-Cola Carbonates",
+            "category_path": "[\"\" Beverages\"\",\"\" Regular Cola\"\"]",
+            "country": "USA",
+            "description": "Ahold Dr. Bob . Amount and % daily value per serving. *A fat free food. Calories 100. Fat 0g, 0%. Sodium 25mg, 1%. Please recycle. 1-877-846-9949. Quality guaranteed or your money back. 2010 Ahold Lic",
+            "image_url": "https://i5.peapod.com/c/YI/YIHI4.jpg",
+            "price": "1.19",
+            "product_id": "7985745",
+            "retailer": "peapod",
+            "title": "Peapod Dr. Bob Soda",
+            "url": "https://www.peapod.com/"
+          },
+          {
+            "attributes": "Carbonization: carbonated; Pack Material Type: Plastic; Volume: 2000; Water Type: soda; Sweetener: hfcs; Naturally derived: natural flavours; Juice Content: 0-2%; Caffeine: 15-25 mg",
+            "barcode": "688267001222",
+            "brand": "Peapod",
+            "category": "Other Non-Cola Carbonates",
+            "category_path": "[\"\" Beverages\"\",\"\" Regular Cola\"\"]",
+            "country": "USA",
+            "image_url": "https://i5.peapod.com/c/G4/G45OI.jpg",
+            "price": "0.89",
+            "product_id": "23458200",
+            "retailer": "peapod",
+            "title": "Peapod Dr. Bob Soda"
+          }
+        ],
+        "688267001505": [
+          {
+            "attributes": "Pack Type: Bottle; Sweetener: hfcs; Pack Material Type: Plastic; Carbonization: carbonated; Caffeine: 0-15 mg; Volume: 2000; Juice Content: 0-2%; Naturally derived: natural flavours",
+            "barcode": "688267001505",
+            "brand": "Peapod",
+            "category": "Other Non-Cola Carbonates",
+            "category_path": "[\"\" Beverages\"\",\"\" Regular Cream Soda\"\"]",
+            "country": "USA",
+            "description": "Ahold Cream Soda. Amount and % daily value per serving. *A fat free food. Calories 110. Fat 0g*, 0%. Sodium 25mg, 1%. Please recycle. 1-877-846-9949. Quality guaranteed or your money back. 2009 Ahold",
+            "image_url": "https://i5.peapod.com/c/EI/EITY7.jpg",
+            "price": "1.19",
+            "product_id": "3611196",
+            "retailer": "peapod",
+            "title": "Peapod Cream Soda",
+            "url": "https://www.peapod.com/"
+          },
+          {
+            "attributes": "Pack Type: Bottle; Pack Material Type: Plastic; Volume: 2000; Juice Content: 0-2%; Water Type: soda; Sweetener: hfcs; Carbonization: carbonated; Caffeine: 15-25 mg; Naturally derived: natural flavours",
+            "barcode": "688267001505",
+            "brand": "Peapod",
+            "category": "Other Non-Cola Carbonates",
+            "category_path": "[\"\" Beverages\"\",\"\" Regular Cream Soda\"\"]",
+            "country": "USA",
+            "image_url": "https://i5.peapod.com/c/MY/MYVI5.jpg",
+            "price": "0.89",
+            "product_id": "23310412",
+            "retailer": "peapod",
+            "title": "Peapod Cream Soda"
+          }
+        ]
+      }
+    },
+    {
+      "gtin1": "6415600579292",
+      "gtin2": "6415600590358",
+      "score": 0.02,
+      "similarity": 1.0,
+      "gate": "proceed",
+      "listings": {
+        "6415600579292": [
+          {
+            "attributes": "Sweetener: sugar; Energy Source: b-vitamins, guarana; Pack Material Type: Metal; Special Edition: special edition; Volume: 500; Health Claims: energy boosting; Juice Content: 0-2%; Carbonization: carbonated",
+            "barcode": "6415600579292",
+            "brand": "Battery",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" drink\"\",\"\" energy drink\"\"]",
+            "country": "Norway",
+            "description": "Battery Black tastes like the original Battery the energy drink - the popular the classic both on taste and functionality. Battery black is an exciting limited edition, with black content and in a pre",
+            "image_url": "https://bilder.ngdata.no/6415600579292/meny/large.jpg",
+            "price": "28.4",
+            "product_id": "848975243",
+            "retailer": "Meny",
+            "title": "Battery Black 0.5l box",
+            "url": "https://meny.no/varer/drikke/energidrikk/battery-black-6415600579292"
+          },
+          {
+            "attributes": "Geographic Origin: finland; Pack Material Type: Metal; Volume: 500; Sweetener: sugar; Juice Content: 0-2%; Energy Source: b-vitamins, guarana; Health Claims: energy boosting; Carbonization: carbonated; Caffeine: 0-15 mg; Pack Type: Can",
+            "barcode": "6415600579292",
+            "brand": "Battery",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" online store\"\",\"\" drink\"\",\"\" energy drink\"\"]",
+            "country": "Norway",
+            "description": "producer: is called as\nbrand: Battery\ncountry of origin: Finland\nean: 6415600579292",
+            "image_url": "https://bilder.ngdata.no/6415600579292/kmh/large.jpg?fallback=404&foretrekk=bedark",
+            "price": "27.9",
+            "product_id": "862109455",
+            "retailer": "Spar",
+            "title": "Battery Black 0.5l box",
+            "url": "https://spar.no/nettbutikk/varer/drikke/energidrikk/battery-black-6415600579292"
+          }
+        ],
+        "6415600590358": [
+          {
+            "attributes": "Volume: 500; Juice Content: 0-2%; Sweetener: sugar; Pack Type: Can; Naturally derived: natural fragrances; Health Claims: energy boosting; Carbonization: carbonated",
+            "barcode": "6415600590358",
+            "brand": "Battery",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" drink\"\",\"\" energy drink\"\"]",
+            "country": "Norway",
+            "description": "Battery Pearberry remix 2.0 - sugary Battery with taste of bulb and wild strawberries",
+            "image_url": "https://bilder.ngdata.no/6415600590358/meny/large.jpg",
+            "price": "30.9",
+            "product_id": "1036573233",
+            "retailer": "Meny",
+            "title": "Battery Pearberry 0.5l box",
+            "url": "https://meny.no/varer/drikke/energidrikk/battery-pearberry-6415600590358"
+          }
+        ]
+      }
+    }
+  ],
+  "assessment": "Source-supported fixes removed many incorrect candidate partner links, but current positive labels still contain substantial JEV disagreement with explicit remaining variant examples. Do not infer accuracy from model opinions or regard the positive CSV as validated for training. Inspect and correct remaining name/formulation/flavor collapse using saved evidence; no further JEV calls required or scheduled."
+}

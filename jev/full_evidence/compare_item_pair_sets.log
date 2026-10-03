@@ -1,0 +1,119 @@
+{
+  "comparison_unit": "item with its old and new partner sets",
+  "items_compared": 13216,
+  "items_added": 0,
+  "items_removed": 0,
+  "items_with_changed_labeled_partner_sets": 4904,
+  "items_losing_positive_partners": 961,
+  "items_gaining_positive_partners": 4,
+  "items_with_no_old_eligible_partners": 7937,
+  "items_with_no_new_eligible_partners": 12036,
+  "items_losing_all_eligible_partners": 4183,
+  "previous_run_item_cohorts": [
+    {
+      "round": 1,
+      "historical_items": 159,
+      "items_in_fixed_census": 159,
+      "items_with_changed_partner_sets": 83,
+      "old_positive_partner_links": 49,
+      "new_positive_partner_links": 17,
+      "old_negative_partner_links": 353,
+      "new_negative_partner_links": 50,
+      "items_without_new_eligible_partners": 131
+    },
+    {
+      "round": 2,
+      "historical_items": 109,
+      "items_in_fixed_census": 109,
+      "items_with_changed_partner_sets": 48,
+      "old_positive_partner_links": 42,
+      "new_positive_partner_links": 13,
+      "old_negative_partner_links": 137,
+      "new_negative_partner_links": 6,
+      "items_without_new_eligible_partners": 93
+    },
+    {
+      "round": 3,
+      "historical_items": 861,
+      "items_in_fixed_census": 861,
+      "items_with_changed_partner_sets": 463,
+      "old_positive_partner_links": 219,
+      "new_positive_partner_links": 26,
+      "old_negative_partner_links": 1960,
+      "new_negative_partner_links": 155,
+      "items_without_new_eligible_partners": 742
+    },
+    {
+      "round": 4,
+      "historical_items": 851,
+      "items_in_fixed_census": 851,
+      "items_with_changed_partner_sets": 482,
+      "old_positive_partner_links": 290,
+      "new_positive_partner_links": 58,
+      "old_negative_partner_links": 1996,
+      "new_negative_partner_links": 124,
+      "items_without_new_eligible_partners": 733
+    },
+    {
+      "round": 5,
+      "historical_items": 2,
+      "items_in_fixed_census": 2,
+      "items_with_changed_partner_sets": 2,
+      "old_positive_partner_links": 4,
+      "new_positive_partner_links": 0,
+      "old_negative_partner_links": 10,
+      "new_negative_partner_links": 0,
+      "items_without_new_eligible_partners": 2
+    },
+    {
+      "round": 6,
+      "historical_items": 187,
+      "items_in_fixed_census": 187,
+      "items_with_changed_partner_sets": 104,
+      "old_positive_partner_links": 59,
+      "new_positive_partner_links": 8,
+      "old_negative_partner_links": 503,
+      "new_negative_partner_links": 18,
+      "items_without_new_eligible_partners": 164
+    },
+    {
+      "round": 7,
+      "historical_items": 1364,
+      "items_in_fixed_census": 1364,
+      "items_with_changed_partner_sets": 873,
+      "old_positive_partner_links": 581,
+      "new_positive_partner_links": 137,
+      "old_negative_partner_links": 4053,
+      "new_negative_partner_links": 274,
+      "items_without_new_eligible_partners": 1105
+    },
+    {
+      "round": 8,
+      "historical_items": 1370,
+      "items_in_fixed_census": 1370,
+      "items_with_changed_partner_sets": 1200,
+      "old_positive_partner_links": 1473,
+      "new_positive_partner_links": 333,
+      "old_negative_partner_links": 4518,
+      "new_negative_partner_links": 208,
+      "items_without_new_eligible_partners": 977
+    },
+    {
+      "round": 9,
+      "historical_items": 97,
+      "items_in_fixed_census": 97,
+      "items_with_changed_partner_sets": 92,
+      "old_positive_partner_links": 145,
+      "new_positive_partner_links": 41,
+      "old_negative_partner_links": 425,
+      "new_negative_partner_links": 15,
+      "items_without_new_eligible_partners": 62
+    }
+  ],
+  "current_artifact_sha256": {
+    "data/canonical_records.csv": "2135894d363cdc669f6b6a7b27a3896a67f16a3b18cc17eb7cea3051a3487402",
+    "data/gate_results.csv": "d54f782701e6e8a3bc58dcac36dc02d7118e32f4f16e2ae7343e0d6c0699134d",
+    "data/labeled_pairs.csv": "5f75706dcbcfb7c495938e638957fe86bc95f77d5e8189e54d27975228dfc25d"
+  },
+  "meaning": "Complete canonical-item census, including items with no candidates or labels. Positive and negative partners follow each snapshot's configured gate-derived labeled population. Partner-link counts count both endpoints and are not independent pair counts. Historical run cohorts reuse their item IDs, then obtain partners from each complete old/new catalog; saved pair judgments are not reassigned to new partners."
+}

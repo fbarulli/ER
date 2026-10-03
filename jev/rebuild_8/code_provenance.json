@@ -1,0 +1,14 @@
+{
+  "git_head": "b370ff1cdf4eb156bc7d84159cae78c94593776b",
+  "sha256": {
+    "dataset.csv": "539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c",
+    "src/pipeline.py": "8d7eef1c710bc7d418b14e194acd015c2255582c357de70aa06c8a19507cdba2",
+    "src/core/critical_attributes.py": "f019b3f6df21fa5d297a5d252d37a23b16dbd9b2267944f999cd9d07c6a31d3c",
+    "src/core/declared_identity.py": "cee52fe52bb59a3734eaa7e6901a1d17468df48adee845f4dc2c752993f006be",
+    "src/core/product_selection.py": "c25acf90f57f7919e6e44856dd0df632774a14fd040d5604fd4b29a6fb760a52",
+    "src/core/attribute_decision.py": "667f7c8a894aac648697a3db23464548c8b8f891166f02ef3fdc9ea115c307b8",
+    "src/core/attribute_conflicts.py": "4c0cd7df6ebeaf5f135af30134181c4a47b01d60c570e53fcc74b02e2fe7fbc2",
+    "src/training/data_prep.py": "e5325c131f8d29fe2f0a4c84408a8c32f08c5a2b104649d26b2177b511e267e3"
+  },
+  "note": "Captured during the rebuild; dirty working-tree changes are included."
+}

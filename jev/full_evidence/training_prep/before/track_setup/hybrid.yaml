@@ -1,0 +1,36 @@
+track: hybrid
+listings: /home/opc/ONE/ER/data/track_setup/prepared/listings.json
+pairs: /home/opc/ONE/ER/data/track_setup/prepared/pairs.csv
+text_cache: /home/opc/ONE/ER/data/track_setup/shared_minilm__embeddings.npz
+output_dir: .
+hidden_dim: 64
+output_dim: 128
+epochs: 10
+learning_rate: 0.001
+weight_decay: 0.0001
+seed: 1337
+device: cpu
+graph_enabled: true
+metric_weight: 1.0
+negative_margin: 0.3
+max_grad_norm: 1.0
+input_manifest: /home/opc/ONE/ER/data/track_setup/prepared/input_manifest.json
+wandb:
+  project: e-r
+  mode: offline
+dvc:
+  enabled: true
+  remote: null
+  push: false
+postprocess: false
+report_test: false
+build_index: false
+inference_batch_size: 1024
+retrieval_ks:
+- 1
+- 5
+- 10
+- 50
+hnsw_m: 16
+hnsw_ef_construction: 200
+hnsw_ef_search: 100

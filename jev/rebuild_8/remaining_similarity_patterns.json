@@ -1,0 +1,1686 @@
+{
+  "counts": {
+    "different_compatible_volume_sets": {
+      "different": 2,
+      "uncertain": 1
+    },
+    "short_similarity_1": {
+      "different": 131,
+      "uncertain": 90,
+      "same": 31
+    },
+    "similarity_1_despite_different_compounds": {
+      "different": 127,
+      "uncertain": 83,
+      "same": 28
+    }
+  },
+  "examples": [
+    {
+      "gtin1": "6415600570503",
+      "gtin2": "6415600579292",
+      "score": 0.03,
+      "canonical1": "battery energy carbonated sugar rise_material_type_metal",
+      "canonical2": "battery energy carbonated sugar special_edition_volume_health"
+    },
+    {
+      "gtin1": "4202815494586",
+      "gtin2": "645318991642",
+      "score": 0.21,
+      "canonical1": "farm naturelle juice still colours_artificial_additives_material type_paper_volume_1600",
+      "canonical2": "farm naturelle juice still pure_natural_volume_material"
+    },
+    {
+      "gtin1": "8715600243864",
+      "gtin2": "8715600249439",
+      "score": 0.19,
+      "canonical1": "sourcy acai water still sourcing_vitamin_braam",
+      "canonical2": "sourcy acai water still type_spring_artificial"
+    },
+    {
+      "gtin1": "3664320011510",
+      "gtin2": "7613032733025",
+      "score": 0.24,
+      "canonical1": "qu zac water carbonated mineral_juice_content_health",
+      "canonical2": "qu zac water carbonated type_mineral_volume_1150"
+    },
+    {
+      "gtin1": "8427406010112",
+      "gtin2": "8427406010815",
+      "score": 0.19,
+      "canonical1": "cal valls apple juice still flavour_content",
+      "canonical2": "cal valls apple juice still no_added_sugar without_filter"
+    },
+    {
+      "gtin1": "792649468050",
+      "gtin2": "792649468111",
+      "score": 0.06,
+      "canonical1": "pressbar ginger juice still 4.50_disposable_pledge_volume",
+      "canonical2": "pressbar ginger juice still treatment_days_incl._7.50 pledge_type_jar_immune"
+    },
+    {
+      "gtin1": "5061005130012",
+      "gtin2": "5061005130029",
+      "score": 0.09,
+      "canonical1": "mockingbird smoothie raw_juice_content_volume",
+      "canonical2": "mockingbird smoothie raw_boost_volume"
+    },
+    {
+      "gtin1": "4260428140580",
+      "gtin2": "4260428140665",
+      "score": 0.68,
+      "canonical1": "mono tea still natural_type_liquid_flavour",
+      "canonical2": "mono tea still paper_flavour_sustainable"
+    },
+    {
+      "gtin1": "4032108163901",
+      "gtin2": "4032108164021",
+      "score": 0.05,
+      "canonical1": "cosmoveda ayus_asava_punarnava_geographic lanka_ceylon_volume_juice sugar",
+      "canonical2": "cosmoveda sugar ayus_rasayana_elixier_bhakti 25_50_volume_free"
+    },
+    {
+      "gtin1": "7310401019536",
+      "gtin2": "7310401033426",
+      "score": 0.03,
+      "canonical1": "nyg rda soda carbonated sugar gently_romfat_stored",
+      "canonical2": "nyg rda soda carbonated sugar easter_must_oak_barrel"
+    },
+    {
+      "gtin1": "4260353177965",
+      "gtin2": "4260353178641",
+      "score": 0.4,
+      "canonical1": "got7 no_sugar free_type_sweetener_sucralose",
+      "canonical2": "got7 no_sugar free_volume_sweetener_sucralose"
+    },
+    {
+      "gtin1": "6415600570503",
+      "gtin2": "6415600590358",
+      "score": 0.03,
+      "canonical1": "battery energy carbonated sugar rise_material_type_metal",
+      "canonical2": "battery energy carbonated sugar pearberry_volume_juice_content"
+    },
+    {
+      "gtin1": "6438574025848",
+      "gtin2": "6438574283774",
+      "score": 0.07,
+      "canonical1": "kotimaista water carbonated magnesium_carbonization_caffeine",
+      "canonical2": "kotimaista water carbonated domestic_vichy_volume_contains"
+    },
+    {
+      "gtin1": "810164203144",
+      "gtin2": "810184856511",
+      "score": 0.69,
+      "canonical1": "stirrings lemon juice calorie_drink_mixer_flavour sugar",
+      "canonical2": "stirrings lemon juice health_claims_calorie_diets based_caffeine_15_25 sugar"
+    },
+    {
+      "gtin1": "732976282370",
+      "gtin2": "743272197558",
+      "score": 0.92,
+      "canonical1": "bare nature peach tea still iced_ct._carbonization",
+      "canonical2": "bare nature peach tea still ct._health_claims_antioxidant"
+    },
+    {
+      "gtin1": "4027109007897",
+      "gtin2": "4027109087882",
+      "score": 0.06,
+      "canonical1": "viva water still con_agua_quietly_organic",
+      "canonical2": "viva water still con_agua_according_bio12x0."
+    },
+    {
+      "gtin1": "654871009077",
+      "gtin2": "654871069071",
+      "score": 0.06,
+      "canonical1": "tejava raspberry tea still black_caffeine",
+      "canonical2": "tejava raspberry tea still black_16.9"
+    },
+    {
+      "gtin1": "5601195510128",
+      "gtin2": "8437012363007",
+      "score": 0.67,
+      "canonical1": "pedras salgadas lemon water carbonated 4x0._naturally_derived_natural",
+      "canonical2": "pedras salgadas lemon water carbonated flavor_stones_25_centiliters"
+    },
+    {
+      "gtin1": "4260428140603",
+      "gtin2": "4260428140665",
+      "score": 0.69,
+      "canonical1": "mono tea still organic_iced_volume",
+      "canonical2": "mono tea still paper_flavour_sustainable"
+    },
+    {
+      "gtin1": "8410981093441",
+      "gtin2": "8432425094975",
+      "score": 0.04,
+      "canonical1": "kaiku coffee still sugar latte macchiato_milk_drink_arabica",
+      "canonical2": "kaiku coffee still sugar latte free_lactose_flavour"
+    },
+    {
+      "gtin1": "736983894311",
+      "gtin2": "870616959197",
+      "score": 0.88,
+      "canonical1": "gus ginger beer carbonated ale_flavour_volume",
+      "canonical2": "gus ginger beer carbonated grown_up_soda_lightly"
+    },
+    {
+      "gtin1": "5061005130005",
+      "gtin2": "5061005130029",
+      "score": 0.07,
+      "canonical1": "mockingbird smoothie raw_greens_juice",
+      "canonical2": "mockingbird smoothie raw_boost_volume"
+    },
+    {
+      "gtin1": "6408430006021",
+      "gtin2": "6408430064595",
+      "score": 0.04,
+      "canonical1": "valio apple juice still type_liquid_champion_applicate",
+      "canonical2": "valio apple juice still omena_rypale"
+    },
+    {
+      "gtin1": "633610753105",
+      "gtin2": "995561291595",
+      "score": 0.73,
+      "canonical1": "harmless harvest coconut water still raw_volume_473_carbonization",
+      "canonical2": "harmless harvest coconut water still no_added_sugar electrolyte_juice_features_pasteurized"
+    },
+    {
+      "gtin1": "688267001222",
+      "gtin2": "688267001505",
+      "score": 0.03,
+      "canonical1": "peapod soda carbonated dr._bob",
+      "canonical2": "peapod soda carbonated cream_type"
+    },
+    {
+      "gtin1": "751901886438",
+      "gtin2": "752697964546",
+      "score": 0.75,
+      "canonical1": "proud source water still aluminum_bpa_free_sports ingredients_electrolyte_volume_artificial sources_product_corp_sustainable",
+      "canonical2": "proud source water still aluminum_bpa_free_volume recycled_materials_plastic"
+    },
+    {
+      "gtin1": "8713300049731",
+      "gtin2": "8720157464631",
+      "score": 0.81,
+      "canonical1": "cool best lemon water still sugar orange cb_premium_70",
+      "canonical2": "cool best lemon water still sugar orange premium_70"
+    },
+    {
+      "gtin1": "8722200964969",
+      "gtin2": "8722200964983",
+      "score": 0.13,
+      "canonical1": "bar le duc water carbonated mineral_bottled_source_type",
+      "canonical2": "bar le duc water carbonated without_carbonic_volume"
+    },
+    {
+      "gtin1": "5701018045698",
+      "gtin2": "5701018051286",
+      "score": 0.65,
+      "canonical1": "den gamle fabrik berry juice fruit mixed_material",
+      "canonical2": "den gamle fabrik berry juice fruit glass_volume_700_caffeine"
+    },
+    {
+      "gtin1": "5410233710020",
+      "gtin2": "5410233710082",
+      "score": 0.37,
+      "canonical1": "realemon lemon juice still features_concentrate_volume_flavour",
+      "canonical2": "realemon lemon juice still type_plastic_carbonization"
+    },
+    {
+      "gtin1": "8004243100109",
+      "gtin2": "840368082023",
+      "score": 0.81,
+      "canonical1": "fiuggi water still source_mineral_volume_caffeine",
+      "canonical2": "fiuggi water still natural_mineral_material"
+    },
+    {
+      "gtin1": "840461202939",
+      "gtin2": "840461202960",
+      "score": 0.08,
+      "canonical1": "black rifle energy carbonated no_sugar drink_200mg_caffeine_sweetener theanine_contains_mineral_calcium",
+      "canonical2": "black rifle energy carbonated no_sugar source_theanine_type_volume"
+    },
+    {
+      "gtin1": "7310401032696",
+      "gtin2": "7310401033426",
+      "score": 0.05,
+      "canonical1": "nyg rda soda carbonated sugar stored_julmust_calvadosfat_sweetener",
+      "canonical2": "nyg rda soda carbonated sugar easter_must_oak_barrel"
+    },
+    {
+      "gtin1": "840121600099",
+      "gtin2": "855186006878",
+      "score": 0.29,
+      "canonical1": "stumptown coffee still roasters_winter_cheer_cold sugar",
+      "canonical2": "stumptown coffee still oatly_original sugar"
+    },
+    {
+      "gtin1": "769553420689",
+      "gtin2": "769553420696",
+      "score": 0.82,
+      "canonical1": "naya water still 20_volume_material_type",
+      "canonical2": "naya water still plastic_type_volume_carbonization"
+    },
+    {
+      "gtin1": "642709037460",
+      "gtin2": "736983891563",
+      "score": 0.87,
+      "canonical1": "hal new york water carbonated no_sugar calorie_zero_carbs_carbonization",
+      "canonical2": "hal new york water carbonated no_sugar calorie_zero_carbs_juice kosher_caffeine_15_volume"
+    },
+    {
+      "gtin1": "6430065310617",
+      "gtin2": "6430065310624",
+      "score": 0.04,
+      "canonical1": "poikain parhaat tea still sugar real_black_iced",
+      "canonical2": "poikain parhaat tea still sugar real_green_iced"
+    },
+    {
+      "gtin1": "3700036900509",
+      "gtin2": "3700036907812",
+      "score": 0.55,
+      "canonical1": "naturalia apple juice still sugar organic_material",
+      "canonical2": "naturalia apple juice still sugar france_organic"
+    },
+    {
+      "gtin1": "860002364100",
+      "gtin2": "860002364179",
+      "score": 0.05,
+      "canonical1": "taika coffee still no_sugar fruit latte kosher_naturally_derived_natural",
+      "canonical2": "taika coffee still no_sugar fruit latte 237_health_claims_ayurvedic"
+    },
+    {
+      "gtin1": "4260428140580",
+      "gtin2": "4260428140641",
+      "score": 0.7,
+      "canonical1": "mono tea still natural_type_liquid_flavour",
+      "canonical2": "mono tea still organic_iced_juice"
+    },
+    {
+      "gtin1": "7610200337511",
+      "gtin2": "7613312052976",
+      "score": 0.12,
+      "canonical1": "aproz water carbonated apro_classic_volume_juice type_geographic_origin_switzerland",
+      "canonical2": "aproz water carbonated apro_cristal_naturally_derived switzerland_caffeine_15_25"
+    },
+    {
+      "gtin1": "4101130002929",
+      "gtin2": "4101130525091",
+      "score": 0.82,
+      "canonical1": "rheinfels quelle lemon water still type_mineral_flavour",
+      "canonical2": "rheinfels quelle lemon water still type_mineral_carbonization"
+    },
+    {
+      "gtin1": "7310074006253",
+      "gtin2": "7310074009278",
+      "score": 0.25,
+      "canonical1": "zingo orange soda carbonated sugar paper_flavour",
+      "canonical2": "zingo orange soda carbonated sugar 10x33cl_volume_juice_content"
+    },
+    {
+      "gtin1": "732623770731",
+      "gtin2": "810053000311",
+      "score": 0.81,
+      "canonical1": "ten water still type_pure_volume_caffeine",
+      "canonical2": "ten water still 10_high_electrolyte_gallon source_potassium_volume_caffeine"
+    },
+    {
+      "gtin1": "4260353177965",
+      "gtin2": "4260353177972",
+      "score": 0.32,
+      "canonical1": "got7 no_sugar free_type_sweetener_sucralose",
+      "canonical2": "got7 no_sugar potassium_health_claims_calorie flavour_natural_colourants_material"
+    },
+    {
+      "gtin1": "732623607419",
+      "gtin2": "850019890105",
+      "score": 0.67,
+      "canonical1": "ardor peach water carbonated organic_inc.",
+      "canonical2": "ardor peach water carbonated no_sugar organic_white"
+    },
+    {
+      "gtin1": "5011020104727",
+      "gtin2": "5026791543002",
+      "score": 0.73,
+      "canonical1": "deep riverrock water still content_health_claims_hydrating",
+      "canonical2": "deep riverrock water still recycled_materials_volume_energy"
+    },
+    {
+      "gtin1": "6415130050506",
+      "gtin2": "7310865074225",
+      "score": 0.22,
+      "canonical1": "god morgon apple juice still morning_classic",
+      "canonical2": "god morgon apple juice still type_liquid_made"
+    },
+    {
+      "gtin1": "810137320281",
+      "gtin2": "850041914978",
+      "score": 0.04,
+      "canonical1": "ryse energy still no_sugar cotton_candy",
+      "canonical2": "ryse energy still no_sugar rainbow_sherbet"
+    },
+    {
+      "gtin1": "8003170016354",
+      "gtin2": "8003170045378",
+      "score": 0.1,
+      "canonical1": "conad water carbonated materials_type_pouch_health natural_caffeine_15_sustainability",
+      "canonical2": "conad water carbonated natural_effervescent"
+    },
+    {
+      "gtin1": "4260453340276",
+      "gtin2": "4260453342553",
+      "score": 0.5,
+      "canonical1": "benorganic pomegranate juice still organic_direct",
+      "canonical2": "benorganic pomegranate juice still ben_organic"
+    },
+    {
+      "gtin1": "7033850007298",
+      "gtin2": "7033850007656",
+      "score": 0.03,
+      "canonical1": "oskar sylte soda carbonated sugar norway_type_volume_sweetener",
+      "canonical2": "oskar sylte soda carbonated sugar rudolf_nissens_christmas"
+    },
+    {
+      "gtin1": "3345252899857",
+      "gtin2": "3346097625496",
+      "score": 0.87,
+      "canonical1": "fruiss fruit pomegranate syrup_organic_sustainable_sourcing",
+      "canonical2": "fruiss fruit pomegranate syrup_organic_flavour"
+    },
+    {
+      "gtin1": "4260428140603",
+      "gtin2": "4260428140757",
+      "score": 0.72,
+      "canonical1": "mono tea still organic_iced_volume",
+      "canonical2": "mono tea still additives_type_liquid_flavour natural_volume_sustainable_sourcing"
+    },
+    {
+      "gtin1": "6417802586245",
+      "gtin2": "7310470586236",
+      "score": 0.16,
+      "canonical1": "ekstr m nos berry juice sugar wild berries extreme_mixed",
+      "canonical2": "ekstr m nos berry juice sugar wild berries derived_natural_flavour_extreme"
+    },
+    {
+      "gtin1": "6415130086062",
+      "gtin2": "6415130086086",
+      "score": 0.04,
+      "canonical1": "mehukatti orange juice still sugar pear raspberry strawberry pot_trip",
+      "canonical2": "mehukatti orange juice still sugar pear raspberry strawberry pot_trip_metsamansikkajuoma_dl"
+    },
+    {
+      "gtin1": "7310401034560",
+      "gtin2": "7310401046754",
+      "score": 0.41,
+      "canonical1": "trocadero soda carbonated no_sugar zero",
+      "canonical2": "trocadero soda carbonated potassium_volume_type_energy zero"
+    },
+    {
+      "gtin1": "810132093708",
+      "gtin2": "810132093739",
+      "score": 0.04,
+      "canonical1": "luzianne tea bundled_louisiana_pantry_unsweetened",
+      "canonical2": "luzianne tea bundled_louisiana_pantry_sweetened 150_volume_type_flavour"
+    },
+    {
+      "gtin1": "668723034889",
+      "gtin2": "751901886438",
+      "score": 0.13,
+      "canonical1": "proud source water still aluminum_bpa_free_carbonization spring_sports_ingredients_electrolyte",
+      "canonical2": "proud source water still aluminum_bpa_free_sports ingredients_electrolyte_volume_artificial sources_product_corp_sustainable"
+    },
+    {
+      "gtin1": "8015962000021",
+      "gtin2": "840368082023",
+      "score": 0.4,
+      "canonical1": "fiuggi water still mineral_good_source_nutrients",
+      "canonical2": "fiuggi water still natural_mineral_material"
+    },
+    {
+      "gtin1": "9004145005938",
+      "gtin2": "9004145005969",
+      "score": 0.03,
+      "canonical1": "sonnentor ginger sugar lemon lemons_syrup_bio_type",
+      "canonical2": "sonnentor ginger sugar lemon lemons_syrup_bio_caffeine"
+    },
+    {
+      "gtin1": "6415600590358",
+      "gtin2": "7044610799490",
+      "score": 0.05,
+      "canonical1": "battery energy carbonated sugar pearberry_volume_juice_content",
+      "canonical2": "battery energy carbonated sugar fresh_volume"
+    },
+    {
+      "gtin1": "4260453342553",
+      "gtin2": "8680313580325",
+      "score": 0.78,
+      "canonical1": "benorganic pomegranate juice still ben_organic",
+      "canonical2": "benorganic pomegranate juice still organic_type"
+    },
+    {
+      "gtin1": "8713300049755",
+      "gtin2": "8720157464679",
+      "score": 0.77,
+      "canonical1": "cool best apple water still sugar grape lemon mango orange dream_70_30_pk",
+      "canonical2": "cool best apple water still sugar grape lemon mango orange dream_70_30"
+    },
+    {
+      "gtin1": "4003490014546",
+      "gtin2": "4003490099376",
+      "score": 0.74,
+      "canonical1": "hochwald coffee still sugar milk_juice_content_geographic",
+      "canonical2": "hochwald coffee still sugar style_milk_volume_flavour"
+    },
+    {
+      "gtin1": "8728500002714",
+      "gtin2": "9008703000762",
+      "score": 0.18,
+      "canonical1": "bullit energy carbonated drink_sweetener_glucose_sucrose",
+      "canonical2": "bullit energy carbonated sweetener_glucose_sucrose"
+    },
+    {
+      "gtin1": "5000382032700",
+      "gtin2": "5000382037774",
+      "score": 0.82,
+      "canonical1": "ka pineapple juice carbonated soft_drink_volume_type sucrose_acesulfame_potassium_energy sugar",
+      "canonical2": "ka pineapple juice carbonated soft_drink_type_material sugar"
+    },
+    {
+      "gtin1": "3268650604055",
+      "gtin2": "3268650606059",
+      "score": 0.06,
+      "canonical1": "carola water carbonated spring_volume_1250_juice",
+      "canonical2": "carola water carbonated spring_alsace_green"
+    },
+    {
+      "gtin1": "4740042700204",
+      "gtin2": "4740042700983",
+      "score": 0.05,
+      "canonical1": "v rska water carbonated fresh_natural_mineral claims_low_salt_caffeine",
+      "canonical2": "v rska water carbonated fresh_original_natural_mineral"
+    },
+    {
+      "gtin1": "747519482230",
+      "gtin2": "751901631939",
+      "score": 0.89,
+      "canonical1": "proud source water still eco_friendly_packaging_environmentally type_spring_alkaline_volume",
+      "canonical2": "proud source water still friendly_packaging_volume_juice type_spring_alkaline_sports"
+    },
+    {
+      "gtin1": "8715600243949",
+      "gtin2": "8715600248395",
+      "score": 0.03,
+      "canonical1": "sourcy water still framboos_granaatappel_volume_type",
+      "canonical2": "sourcy water still peer_vlierbloesem_energy_source"
+    },
+    {
+      "gtin1": "637913163975",
+      "gtin2": "638097300309",
+      "score": 0.2,
+      "canonical1": "holoslife water still mineral_health_claims_pre derived_natural_volume_geographic magnesium_juice_content_carbonization",
+      "canonical2": "holoslife water still sea_spray"
+    },
+    {
+      "gtin1": "4101130003438",
+      "gtin2": "4101130003544",
+      "score": 0.13,
+      "canonical1": "rheinfels quelle water still magnesium_juice_content_geographic classic_health_claims_good",
+      "canonical2": "rheinfels quelle water still source_mineral_volume_material"
+    },
+    {
+      "gtin1": "4503966641738",
+      "gtin2": "653233160579",
+      "score": 0.45,
+      "canonical1": "farm naturelle juice still colours_artificial_additives_carbonization",
+      "canonical2": "farm naturelle juice still pure_natural_naturally_derived type_paper_artificial"
+    },
+    {
+      "gtin1": "7350021422309",
+      "gtin2": "7350021422323",
+      "score": 0.07,
+      "canonical1": "amino pro energy carbonated no_added_sugar sour_straps",
+      "canonical2": "amino pro energy carbonated no_added_sugar sour_pops"
+    },
+    {
+      "gtin1": "7310401033426",
+      "gtin2": "7310401051376",
+      "score": 0.03,
+      "canonical1": "nyg rda soda carbonated sugar easter_must_oak_barrel",
+      "canonical2": "nyg rda soda carbonated sugar bourbon_must"
+    },
+    {
+      "gtin1": "732623769018",
+      "gtin2": "732623769032",
+      "score": 0.06,
+      "canonical1": "sprecher soda carbonated low_calorie_root_beer 473_sweetener_stevia_juice",
+      "canonical2": "sprecher soda carbonated root_beer"
+    },
+    {
+      "gtin1": "7611612404471",
+      "gtin2": "7611612524919",
+      "score": 0.03,
+      "canonical1": "premier soda carbonated no_sugar passionsoda_zero",
+      "canonical2": "premier soda carbonated no_sugar julmust_without"
+    },
+    {
+      "gtin1": "688267073519",
+      "gtin2": "688267080562",
+      "score": 0.03,
+      "canonical1": "peapod water still acadia_distilled",
+      "canonical2": "peapod water still acadia_spring"
+    },
+    {
+      "gtin1": "615888989264",
+      "gtin2": "673276821404",
+      "score": 0.93,
+      "canonical1": "stumptown coffee still 25.4_fz_volume_rtd",
+      "canonical2": "stumptown coffee still 25.4_fz_volume_juice"
+    },
+    {
+      "gtin1": "3301591000040",
+      "gtin2": "3301591002167",
+      "score": 0.21,
+      "canonical1": "c teaux nantais apple juice still no_added_sugar nantes_hillsides",
+      "canonical2": "c teaux nantais apple juice still no_sugar demeter_organic_naturally_derived flavour_geographic_origin_france"
+    },
+    {
+      "gtin1": "794398000192",
+      "gtin2": "794398000208",
+      "score": 0.04,
+      "canonical1": "crazy water still select_flavor_below_no. craziest_caffeine_15_25",
+      "canonical2": "crazy water still ntrl_mnrl_low_carbonization"
+    },
+    {
+      "gtin1": "7310401036083",
+      "gtin2": "7310401051918",
+      "score": 0.33,
+      "canonical1": "nyg rda soda carbonated sugar julmust_sweetener_material",
+      "canonical2": "nyg rda soda carbonated sugar volume_carbonization_gently juice_content_type_must"
+    },
+    {
+      "gtin1": "100141564826",
+      "gtin2": "915953021616",
+      "score": 0.93,
+      "canonical1": "starbucks frappuccino vanilla coffee still packaging_may_vary_carbonization",
+      "canonical2": "starbucks frappuccino vanilla coffee still drink_package_may_vary"
+    },
+    {
+      "gtin1": "8710395945634",
+      "gtin2": "8710395949229",
+      "score": 0.34,
+      "canonical1": "roosvicee apple juice still sugar elderberry fruit rose strawberry multivit_forest",
+      "canonical2": "roosvicee apple juice still sugar elderberry fruit rose strawberry 50_volume_made"
+    },
+    {
+      "gtin1": "4000349860088",
+      "gtin2": "5010102001978",
+      "score": 0.56,
+      "canonical1": "jimmy s coffee still sugar rainforest_alliance_juice_content",
+      "canonical2": "jimmy s coffee still sugar arabica_juice_content_sustainable"
+    },
+    {
+      "gtin1": "8713300051666",
+      "gtin2": "8713300075419",
+      "score": 0.68,
+      "canonical1": "dubbelfrisss raspberry water still strawberry frisss_spring",
+      "canonical2": "dubbelfrisss raspberry water still strawberry double_friss_spring"
+    },
+    {
+      "gtin1": "8693593115682",
+      "gtin2": "8693593118294",
+      "score": 0.33,
+      "canonical1": "akmina lemon water still flow_mineral",
+      "canonical2": "akmina lemon water still flow_mineral_vit."
+    },
+    {
+      "gtin1": "8717056181165",
+      "gtin2": "8717056181189",
+      "score": 0.7,
+      "canonical1": "dalphin water carbonated volume_type",
+      "canonical2": "dalphin water carbonated mineral_juice_content_carbonization"
+    },
+    {
+      "gtin1": "8722200954373",
+      "gtin2": "8722200963085",
+      "score": 0.42,
+      "canonical1": "bar le duc water carbonated 15_juice_content_carbonization",
+      "canonical2": "bar le duc water carbonated effervescent_material_type_plastic"
+    },
+    {
+      "gtin1": "8715600242706",
+      "gtin2": "8715600243291",
+      "score": 0.8,
+      "canonical1": "rivella cranberry water carbonated volume_sweetener",
+      "canonical2": "rivella cranberry water carbonated natural_flavour_type"
+    },
+    {
+      "gtin1": "4770301237837",
+      "gtin2": "4770301238629",
+      "score": 0.03,
+      "canonical1": "kane s soda carbonated sugar pop_beach_vibes_kmp",
+      "canonical2": "kane s soda carbonated sugar pop_linda_vista_lipslide"
+    },
+    {
+      "gtin1": "732976288761",
+      "gtin2": "743272200043",
+      "score": 0.91,
+      "canonical1": "vivaloe aloe coconut_water still fl._oz._pk._juice content_volume_free_gelatin",
+      "canonical2": "vivaloe aloe coconut_water still free_gelatin_material_type"
+    },
+    {
+      "gtin1": "5010102001879",
+      "gtin2": "5010102001978",
+      "score": 0.4,
+      "canonical1": "jimmy s coffee still sugar iced_my",
+      "canonical2": "jimmy s coffee still sugar arabica_juice_content_sustainable"
+    },
+    {
+      "gtin1": "4770301233778",
+      "gtin2": "4770301238629",
+      "score": 0.03,
+      "canonical1": "kane s soda carbonated sugar pop_coachella_chill",
+      "canonical2": "kane s soda carbonated sugar pop_linda_vista_lipslide"
+    },
+    {
+      "gtin1": "4032108163901",
+      "gtin2": "4032108164069",
+      "score": 0.06,
+      "canonical1": "cosmoveda ayus_asava_punarnava_geographic lanka_ceylon_volume_juice sugar",
+      "canonical2": "cosmoveda sugar ayus_rasayana_elixier_ojas lactose_free_volume_sustainable"
+    },
+    {
+      "gtin1": "5201156256586",
+      "gtin2": "5201156517007",
+      "score": 0.09,
+      "canonical1": "ebe lemon lemonade carbonated no_sugar puberty_refreshment_sugarless",
+      "canonical2": "ebe lemon lemonade carbonated puberty_refreshment sweetener_sucralose_sugar_acesulfame"
+    },
+    {
+      "gtin1": "8410981093441",
+      "gtin2": "8432425090953",
+      "score": 0.05,
+      "canonical1": "kaiku coffee still sugar latte macchiato_milk_drink_arabica",
+      "canonical2": "kaiku coffee still sugar latte semi_skimmed_cacao_gluten"
+    },
+    {
+      "gtin1": "5011020104741",
+      "gtin2": "5026791543507",
+      "score": 0.57,
+      "canonical1": "deep riverrock water still claims_hydrating_volume_juice",
+      "canonical2": "deep riverrock water still type_river_rock"
+    },
+    {
+      "gtin1": "3289196040534",
+      "gtin2": "3289196100641",
+      "score": 0.25,
+      "canonical1": "jardin bio apple juice still sourcing_organic_made",
+      "canonical2": "jardin bio apple juice still trouble_etic_organic_garden"
+    },
+    {
+      "gtin1": "6417783168928",
+      "gtin2": "6417783169062",
+      "score": 0.12,
+      "canonical1": "wolverine energy carbonated no_sugar free_volume_carbonization_gently 50_juice_content_health",
+      "canonical2": "wolverine energy carbonated no_sugar ice_blast"
+    },
+    {
+      "gtin1": "6415600556835",
+      "gtin2": "6415600572507",
+      "score": 0.06,
+      "canonical1": "battery energy carbonated no_sugar source_vitamin_guarana",
+      "canonical2": "battery energy carbonated no_sugar calorie_sizzle"
+    },
+    {
+      "gtin1": "8410981093205",
+      "gtin2": "8432425090953",
+      "score": 0.06,
+      "canonical1": "kaiku coffee still sugar latte espresso_milk_drink_arabica cool_cup_without_gluten",
+      "canonical2": "kaiku coffee still sugar latte semi_skimmed_cacao_gluten"
+    },
+    {
+      "gtin1": "811374035587",
+      "gtin2": "811374035594",
+      "score": 0.04,
+      "canonical1": "bucked up energy carbonated no_sugar blood_raz",
+      "canonical2": "bucked up energy carbonated drink_blue_raz_caffeine source_theanine_vitamin_carbonization"
+    },
+    {
+      "gtin1": "2020005436343",
+      "gtin2": "2020005436367",
+      "score": 0.09,
+      "canonical1": "r merquelle water carbonated mild_naturally_derived_natural spring_caffeine_15_carbonization",
+      "canonical2": "r merquelle water carbonated tingly_juice_content_material calcium_magnesium_type_health"
+    },
+    {
+      "gtin1": "8713300048659",
+      "gtin2": "8713300049847",
+      "score": 0.23,
+      "canonical1": "cool best orange juice still premium_volume_material",
+      "canonical2": "cool best orange juice still 70_30_naturally_derived source_potassium_immune_system"
+    },
+    {
+      "gtin1": "6415712505714",
+      "gtin2": "6415712612498",
+      "score": 0.04,
+      "canonical1": "kotimaista water carbonated domestic_spring",
+      "canonical2": "kotimaista water carbonated type_mineral_soda content_domestic_vichy_caffeine"
+    },
+    {
+      "gtin1": "100142347862",
+      "gtin2": "915953021616",
+      "score": 0.94,
+      "canonical1": "starbucks frappuccino vanilla coffee still vary_volume_281_juice",
+      "canonical2": "starbucks frappuccino vanilla coffee still drink_package_may_vary"
+    },
+    {
+      "gtin1": "7310401046754",
+      "gtin2": "7310402046777",
+      "score": 0.23,
+      "canonical1": "trocadero soda carbonated potassium_volume_type_energy zero",
+      "canonical2": "trocadero soda carbonated antioxidants_material_type_metal zero"
+    },
+    {
+      "gtin1": "7310401032696",
+      "gtin2": "7310401051376",
+      "score": 0.04,
+      "canonical1": "nyg rda soda carbonated sugar stored_julmust_calvadosfat_sweetener",
+      "canonical2": "nyg rda soda carbonated sugar bourbon_must"
+    },
+    {
+      "gtin1": "7610200337375",
+      "gtin2": "7610200337399",
+      "score": 0.04,
+      "canonical1": "aproz water carbonated apro_cristal_material_type",
+      "canonical2": "aproz water carbonated apro_medium_caffeine_15 mineral_low_salt_material geographic_origin_switzerland_naturally"
+    },
+    {
+      "gtin1": "4740042700983",
+      "gtin2": "4740042701072",
+      "score": 0.04,
+      "canonical1": "v rska water carbonated fresh_original_natural_mineral",
+      "canonical2": "v rska water carbonated fresh_vichy_cap"
+    },
+    {
+      "gtin1": "858159001696",
+      "gtin2": "858159001795",
+      "score": 0.06,
+      "canonical1": "liquid ice energy carbonated no_sugar active_drink_supreme",
+      "canonical2": "liquid ice energy carbonated drink_arctic_zero_health calcium_geographic_origin_united"
+    },
+    {
+      "gtin1": "850026913101",
+      "gtin2": "850026913774",
+      "score": 0.03,
+      "canonical1": "transformhq energy no_sugar pina_colada good_source_vitamin_nootropic",
+      "canonical2": "transformhq energy no_sugar type_bucket rocket_pop"
+    },
+    {
+      "gtin1": "604645541524",
+      "gtin2": "740642667802",
+      "score": 0.46,
+      "canonical1": "moxie soda carbonated volume_juice_content_type",
+      "canonical2": "moxie soda carbonated maine_decal_sticker_caffeine"
+    },
+    {
+      "gtin1": "8722200954373",
+      "gtin2": "8722200963092",
+      "score": 0.16,
+      "canonical1": "bar le duc water carbonated 15_juice_content_carbonization",
+      "canonical2": "bar le duc water carbonated without_carbonic_sustainable_packaging low_salt_volume_carbonization"
+    },
+    {
+      "gtin1": "7391881837636",
+      "gtin2": "7398818389848",
+      "score": 0.02,
+      "canonical1": "lohilo carbonated no_sugar pink_beach_bcaa_drink",
+      "canonical2": "lohilo carbonated no_sugar glow_2022_collagen_containing"
+    },
+    {
+      "gtin1": "7310401034560",
+      "gtin2": "7310402046777",
+      "score": 0.24,
+      "canonical1": "trocadero soda carbonated no_sugar zero",
+      "canonical2": "trocadero soda carbonated antioxidants_material_type_metal zero"
+    },
+    {
+      "gtin1": "6415600579292",
+      "gtin2": "7044610799490",
+      "score": 0.03,
+      "canonical1": "battery energy carbonated sugar special_edition_volume_health",
+      "canonical2": "battery energy carbonated sugar fresh_volume"
+    },
+    {
+      "gtin1": "4260428140580",
+      "gtin2": "4260428140757",
+      "score": 0.71,
+      "canonical1": "mono tea still natural_type_liquid_flavour",
+      "canonical2": "mono tea still additives_type_liquid_flavour natural_volume_sustainable_sourcing"
+    },
+    {
+      "gtin1": "3760195900024",
+      "gtin2": "3760195902318",
+      "score": 0.46,
+      "canonical1": "coeur de pom apple juice still no_added_sugar pink_lady_volume_flavour",
+      "canonical2": "coeur de pom apple juice still no_added_sugar pure_natural"
+    },
+    {
+      "gtin1": "810164203144",
+      "gtin2": "810164203199",
+      "score": 0.73,
+      "canonical1": "stirrings lemon juice calorie_drink_mixer_flavour sugar",
+      "canonical2": "stirrings lemon juice claims_calorie_volume_artificial sugar"
+    },
+    {
+      "gtin1": "618020799950",
+      "gtin2": "664697916435",
+      "score": 0.87,
+      "canonical1": "waiakea water still naturally_alkaline_recycled_carbonization",
+      "canonical2": "waiakea water still volcanic_juice_content_volume waikea_hawaiian"
+    },
+    {
+      "gtin1": "8436011295210",
+      "gtin2": "8436011295258",
+      "score": 0.15,
+      "canonical1": "sierra cazorla water without_gas_glass_caffeine",
+      "canonical2": "sierra cazorla water siluette_natural"
+    },
+    {
+      "gtin1": "4770301238629",
+      "gtin2": "4770301238650",
+      "score": 0.03,
+      "canonical1": "kane s soda carbonated sugar pop_linda_vista_lipslide",
+      "canonical2": "kane s soda carbonated sugar pop_heat_wave_kmp"
+    },
+    {
+      "gtin1": "4013595644173",
+      "gtin2": "4013595644630",
+      "score": 0.06,
+      "canonical1": "vita cola sugar vitamin_type_juice_content",
+      "canonical2": "vita cola sugar mix_material_type_plastic fragrances_juice_content_sweetener"
+    },
+    {
+      "gtin1": "880287899500",
+      "gtin2": "880570467560",
+      "score": 0.12,
+      "canonical1": "nos energy still sonic_sour_high_performance drink_total_contains_mineral",
+      "canonical2": "nos energy still content_volume_473_contains"
+    },
+    {
+      "gtin1": "90311789",
+      "gtin2": "90311796",
+      "score": 0.14,
+      "canonical1": "r merquelle water carbonated roman_spring_tingly_volume source_nutrients_juice_content",
+      "canonical2": "r merquelle water carbonated roman_spring_mild_material"
+    },
+    {
+      "gtin1": "7310401019536",
+      "gtin2": "7310401032696",
+      "score": 0.03,
+      "canonical1": "nyg rda soda carbonated sugar gently_romfat_stored",
+      "canonical2": "nyg rda soda carbonated sugar stored_julmust_calvadosfat_sweetener"
+    },
+    {
+      "gtin1": "7313619000587",
+      "gtin2": "7313619001430",
+      "score": 0.38,
+      "canonical1": "br mhults apple smoothie still no_added_sugar blackcurrant cherry orange raspberry stress_relief_volume_material",
+      "canonical2": "br mhults apple smoothie still blackcurrant cherry orange raspberry claims_stress_relief_juice"
+    },
+    {
+      "gtin1": "198717100493",
+      "gtin2": "751901631939",
+      "score": 0.92,
+      "canonical1": "proud source water still friendly_packaging_volume_naturally type_spring_alkaline_environmentally",
+      "canonical2": "proud source water still friendly_packaging_volume_juice type_spring_alkaline_sports"
+    },
+    {
+      "gtin1": "810164202826",
+      "gtin2": "810164202901",
+      "score": 0.03,
+      "canonical1": "stirrings juice simple_sour_cocktail_mix sugar",
+      "canonical2": "stirrings juice bloody_mary_cocktail_mix sugar"
+    },
+    {
+      "gtin1": "8722200963023",
+      "gtin2": "8722200963030",
+      "score": 0.11,
+      "canonical1": "bar le duc water carbonated mineral_caffeine_15_juice",
+      "canonical2": "bar le duc water carbonated without_carbonic_health_claims"
+    },
+    {
+      "gtin1": "2020003517945",
+      "gtin2": "2020005433380",
+      "score": 0.11,
+      "canonical1": "r merquelle water carbonated natural_type_volume_contains",
+      "canonical2": "r merquelle water carbonated packaging_recycled_pet_carbonization"
+    },
+    {
+      "gtin1": "604310727345",
+      "gtin2": "858973007003",
+      "score": 0.08,
+      "canonical1": "b tea original_fl._oz._material plastic_volume_473_juice",
+      "canonical2": "b tea kombucha_raw_organic_green sugar_health_claims_mood"
+    },
+    {
+      "gtin1": "6430032800332",
+      "gtin2": "6430032800394",
+      "score": 0.24,
+      "canonical1": "raikastamo lemon lemonade carbonated sugar space_organic_type",
+      "canonical2": "raikastamo lemon lemonade carbonated sugar space_organic_material"
+    },
+    {
+      "gtin1": "8058649330134",
+      "gtin2": "8058649330233",
+      "score": 0.71,
+      "canonical1": "recoaro water carbonated slightly_volume",
+      "canonical2": "recoaro water carbonated slightly_carbonization"
+    },
+    {
+      "gtin1": "8715600248395",
+      "gtin2": "8715600249316",
+      "score": 0.06,
+      "canonical1": "sourcy water still peer_vlierbloesem_energy_source",
+      "canonical2": "sourcy water still spring_volume_type_juice framboos_granaatappel_naturally_derived"
+    },
+    {
+      "gtin1": "8433329089890",
+      "gtin2": "8433329089944",
+      "score": 0.05,
+      "canonical1": "el corte ingl s water spring_monte_pine_trees",
+      "canonical2": "el corte ingl s water mineralization_very_weak_stopper"
+    },
+    {
+      "gtin1": "3760065177129",
+      "gtin2": "8410470181185",
+      "score": 0.41,
+      "canonical1": "planet drinks tonic water sugar classic_premium_volume",
+      "canonical2": "planet drinks tonic water sugar classic_premium"
+    },
+    {
+      "gtin1": "609311276861",
+      "gtin2": "609311277219",
+      "score": 0.05,
+      "canonical1": "hip syrups water no_sugar natural_cotton_candy_flavored flavour_juice_content_naturally",
+      "canonical2": "hip syrups water no_sugar free_unicorn_candy_flavored syrup_volume_type_health"
+    },
+    {
+      "gtin1": "231302714337",
+      "gtin2": "763515912137",
+      "score": 0.39,
+      "canonical1": "blenheim ginger beer carbonated ale_spicy_sampler_glass",
+      "canonical2": "blenheim ginger beer carbonated ale_hot_glass_juice"
+    },
+    {
+      "gtin1": "90311291",
+      "gtin2": "90311307",
+      "score": 0.08,
+      "canonical1": "r merquelle water carbonated good_source_nutrients_carbonization",
+      "canonical2": "r merquelle water carbonated roman_spring_mild_volume"
+    },
+    {
+      "gtin1": "8410885071262",
+      "gtin2": "854255008850",
+      "score": 0.03,
+      "canonical1": "weider water still collagen_material_type",
+      "canonical2": "weider water still mexico_juice_content_volume"
+    },
+    {
+      "gtin1": "195372000595",
+      "gtin2": "642709101956",
+      "score": 0.07,
+      "canonical1": "just ice tea still glass_unsweetened_original_black",
+      "canonical2": "just ice tea still glass_flavor_variety_carbonization"
+    },
+    {
+      "gtin1": "25198232",
+      "gtin2": "4088600264363",
+      "score": 0.16,
+      "canonical1": "vive tonic water carbonated sugar plastic_geographic_origin_india",
+      "canonical2": "vive tonic water carbonated india_united_kingdom_material sugar"
+    },
+    {
+      "gtin1": "7613312187685",
+      "gtin2": "7617027009454",
+      "score": 0.06,
+      "canonical1": "ap ritiv ginger beer carbonated sugar additives_geographic_origin_switzerland",
+      "canonical2": "ap ritiv ginger beer carbonated sugar ale_volume_geographic_origin switzerland_type_material"
+    },
+    {
+      "gtin1": "41011317",
+      "gtin2": "41011379",
+      "score": 0.16,
+      "canonical1": "rheinfels quelle water still source_classic_volume_juice",
+      "canonical2": "rheinfels quelle water still source_average_type_volume"
+    },
+    {
+      "gtin1": "4003490091158",
+      "gtin2": "4003490099376",
+      "score": 0.48,
+      "canonical1": "hochwald coffee still sugar high_forest_eismacchiato_volume",
+      "canonical2": "hochwald coffee still sugar style_milk_volume_flavour"
+    },
+    {
+      "gtin1": "4260428140641",
+      "gtin2": "4260428140665",
+      "score": 0.65,
+      "canonical1": "mono tea still organic_iced_juice",
+      "canonical2": "mono tea still paper_flavour_sustainable"
+    },
+    {
+      "gtin1": "80037804",
+      "gtin2": "80128533",
+      "score": 0.08,
+      "canonical1": "conad orange juice carbonated content_15_type_naturally",
+      "canonical2": "conad orange juice carbonated no_added_sugar zero_volume_caffeine_25 dye_artificial_additives_sweetener"
+    },
+    {
+      "gtin1": "668723034889",
+      "gtin2": "761759557602",
+      "score": 0.1,
+      "canonical1": "proud source water still aluminum_bpa_free_carbonization spring_sports_ingredients_electrolyte",
+      "canonical2": "proud source water still aluminum_bpa_free_caffeine artificial_additives_volume_contains electrolyte_health_claims_brain"
+    },
+    {
+      "gtin1": "7310401041339",
+      "gtin2": "7310401051376",
+      "score": 0.04,
+      "canonical1": "nyg rda soda carbonated sugar type_carbonization_gently julmust_volume_juice_content",
+      "canonical2": "nyg rda soda carbonated sugar bourbon_must"
+    },
+    {
+      "gtin1": "4018852010265",
+      "gtin2": "4018852032755",
+      "score": 0.61,
+      "canonical1": "bebivita apple juice still no_added_sugar germany_caffeine_15_flavour",
+      "canonical2": "bebivita apple juice still lactose_free_eggs_carbonization"
+    },
+    {
+      "gtin1": "7610200337375",
+      "gtin2": "7610200337481",
+      "score": 0.07,
+      "canonical1": "aproz water carbonated apro_cristal_material_type",
+      "canonical2": "aproz water carbonated apro_classic_health_claims low_salt_volume_naturally"
+    },
+    {
+      "gtin1": "2020005433380",
+      "gtin2": "90311291",
+      "score": 0.18,
+      "canonical1": "r merquelle water carbonated packaging_recycled_pet_carbonization",
+      "canonical2": "r merquelle water carbonated good_source_nutrients_carbonization"
+    },
+    {
+      "gtin1": "198717100493",
+      "gtin2": "739781523438",
+      "score": 0.93,
+      "canonical1": "proud source water still friendly_packaging_volume_naturally type_spring_alkaline_environmentally",
+      "canonical2": "proud source water still friendly_packaging_volume_carbonization type_spring_alkaline_material"
+    },
+    {
+      "gtin1": "697937379080",
+      "gtin2": "763351603541",
+      "score": 0.94,
+      "canonical1": "tahitian treat fruit soda carbonated caffeine_material_type_paper liquid_juice_content_volume",
+      "canonical2": "tahitian treat fruit soda carbonated caffeine_juice_content 15_type_liquid_volume"
+    },
+    {
+      "gtin1": "810164203199",
+      "gtin2": "810184856511",
+      "score": 0.54,
+      "canonical1": "stirrings lemon juice claims_calorie_volume_artificial sugar",
+      "canonical2": "stirrings lemon juice health_claims_calorie_diets based_caffeine_15_25 sugar"
+    },
+    {
+      "gtin1": "4260428140641",
+      "gtin2": "4260428140757",
+      "score": 0.67,
+      "canonical1": "mono tea still organic_iced_juice",
+      "canonical2": "mono tea still additives_type_liquid_flavour natural_volume_sustainable_sourcing"
+    },
+    {
+      "gtin1": "8722200963085",
+      "gtin2": "8722200963092",
+      "score": 0.16,
+      "canonical1": "bar le duc water carbonated effervescent_material_type_plastic",
+      "canonical2": "bar le duc water carbonated without_carbonic_sustainable_packaging low_salt_volume_carbonization"
+    },
+    {
+      "gtin1": "7611612221375",
+      "gtin2": "7611612221603",
+      "score": 0.1,
+      "canonical1": "powerking energy carbonated no_sugar sweetener_aspartame_volume_caffeine",
+      "canonical2": "powerking energy carbonated drink_zero 25_50_volume_material"
+    },
+    {
+      "gtin1": "7310070002488",
+      "gtin2": "7310070008701",
+      "score": 0.15,
+      "canonical1": "apotekarnes ginger soda carbonated sugar type_volume_naturally_derived",
+      "canonical2": "apotekarnes ginger soda carbonated sugar julmust_glass_volume_naturally"
+    },
+    {
+      "gtin1": "4260667060168",
+      "gtin2": "4260667060847",
+      "score": 0.78,
+      "canonical1": "4bro fruit tea still sugar mango passion passionfruit taste_material_type_metal",
+      "canonical2": "4bro fruit tea still sugar mango passion passionfruit volume_type"
+    },
+    {
+      "gtin1": "8722200954236",
+      "gtin2": "8722200963030",
+      "score": 0.1,
+      "canonical1": "bar le duc water carbonated juice_content",
+      "canonical2": "bar le duc water carbonated without_carbonic_health_claims"
+    },
+    {
+      "gtin1": "7033850007878",
+      "gtin2": "7033850008509",
+      "score": 0.03,
+      "canonical1": "oskar sylte soda carbonated no_added_sugar ananasbrus_easy content_type_sweetener_aspartame",
+      "canonical2": "oskar sylte soda carbonated no_added_sugar type_sweetener_aspartame_acesulfame rudolf_nissens"
+    },
+    {
+      "gtin1": "8433329089944",
+      "gtin2": "8433329122962",
+      "score": 0.23,
+      "canonical1": "el corte ingl s water mineralization_very_weak_stopper",
+      "canonical2": "el corte ingl s water very_weak_landin_volume"
+    },
+    {
+      "gtin1": "7044613877126",
+      "gtin2": "7044614877125",
+      "score": 0.06,
+      "canonical1": "farris apple water carbonated no_sugar kiwi health_claims",
+      "canonical2": "farris apple water carbonated no_sugar kiwi frus_0.33lx6"
+    },
+    {
+      "gtin1": "4260196292115",
+      "gtin2": "4260196294966",
+      "score": 0.63,
+      "canonical1": "ironmaxx carbonated calorie_sports_drink_contains mineral_stress_relief_good",
+      "canonical2": "ironmaxx carbonated calorie_sports_drink_sweetener relief_stress_contains"
+    },
+    {
+      "gtin1": "7033850009162",
+      "gtin2": "7033850011615",
+      "score": 0.07,
+      "canonical1": "oskar sylte soda carbonated no_added_sugar rudolf_nissens_easy_caffeine",
+      "canonical2": "oskar sylte soda carbonated rudolf_nissemor_sugar"
+    },
+    {
+      "gtin1": "732623733477",
+      "gtin2": "732623733484",
+      "score": 0.06,
+      "canonical1": "crazy water no._natural_mineral_low",
+      "canonical2": "crazy water no._natural_mineral_deep"
+    },
+    {
+      "gtin1": "7035620050077",
+      "gtin2": "7037400054435",
+      "score": 0.39,
+      "canonical1": "eldorado peach juice still sugar iste_volume",
+      "canonical2": "eldorado peach juice still sugar type_paper_made"
+    },
+    {
+      "gtin1": "6415130086307",
+      "gtin2": "6415131401611",
+      "score": 0.4,
+      "canonical1": "marli orange juice still no_sugar sweeter_dl",
+      "canonical2": "marli orange juice still no_sugar tayspillimehu_dl_material_type"
+    },
+    {
+      "gtin1": "7310401033426",
+      "gtin2": "7310401041339",
+      "score": 0.03,
+      "canonical1": "nyg rda soda carbonated sugar easter_must_oak_barrel",
+      "canonical2": "nyg rda soda carbonated sugar type_carbonization_gently julmust_volume_juice_content"
+    },
+    {
+      "gtin1": "7350068170119",
+      "gtin2": "7350068170133",
+      "score": 0.21,
+      "canonical1": "loviseberg r saft apple juice still vitamin_volume_700_immune press_raw_type_carbonization",
+      "canonical2": "loviseberg r saft apple juice still red_love"
+    },
+    {
+      "gtin1": "811374035594",
+      "gtin2": "811374039691",
+      "score": 0.1,
+      "canonical1": "bucked up energy carbonated drink_blue_raz_caffeine source_theanine_vitamin_carbonization",
+      "canonical2": "bucked up energy carbonated no_sugar sour_bucks"
+    },
+    {
+      "gtin1": "3268650004053",
+      "gtin2": "3268650604055",
+      "score": 0.2,
+      "canonical1": "carola water carbonated 1250_type_spring",
+      "canonical2": "carola water carbonated spring_volume_1250_juice"
+    },
+    {
+      "gtin1": "4260428140580",
+      "gtin2": "4260428140603",
+      "score": 0.71,
+      "canonical1": "mono tea still natural_type_liquid_flavour",
+      "canonical2": "mono tea still organic_iced_volume"
+    },
+    {
+      "gtin1": "810158587670",
+      "gtin2": "810158587748",
+      "score": 0.06,
+      "canonical1": "cutwater water flavorful_mixer_type_contains mineral_calcium_volume_health",
+      "canonical2": "cutwater water bodied_flavorful_mixer_naturally mineral_calcium_type_juice"
+    },
+    {
+      "gtin1": "6419800120643",
+      "gtin2": "6419800120780",
+      "score": 0.04,
+      "canonical1": "teho energy carbonated sugar power_crazy",
+      "canonical2": "teho energy carbonated power_biting_goat sugar"
+    },
+    {
+      "gtin1": "7310401032696",
+      "gtin2": "7310401041339",
+      "score": 0.06,
+      "canonical1": "nyg rda soda carbonated sugar stored_julmust_calvadosfat_sweetener",
+      "canonical2": "nyg rda soda carbonated sugar type_carbonization_gently julmust_volume_juice_content"
+    },
+    {
+      "gtin1": "4013143110013",
+      "gtin2": "4013143110921",
+      "score": 0.35,
+      "canonical1": "bad liebenwerda water still mineral_manganese_volume_700",
+      "canonical2": "bad liebenwerda water still love_werda_gently_12x0."
+    },
+    {
+      "gtin1": "688267078446",
+      "gtin2": "688267078477",
+      "score": 0.08,
+      "canonical1": "peapod orange juice still calcium_concentrate",
+      "canonical2": "peapod orange juice still original_concentrate_all_natural"
+    },
+    {
+      "gtin1": "5425002401146",
+      "gtin2": "5425002407261",
+      "score": 0.04,
+      "canonical1": "qnt punch still amino_load",
+      "canonical2": "qnt punch still nutrition_fire_explosion"
+    },
+    {
+      "gtin1": "231302714337",
+      "gtin2": "758106228582",
+      "score": 0.2,
+      "canonical1": "blenheim ginger beer carbonated ale_spicy_sampler_glass",
+      "canonical2": "blenheim ginger beer carbonated ale_hot_glass_volume"
+    },
+    {
+      "gtin1": "4012824601031",
+      "gtin2": "4012824601048",
+      "score": 0.21,
+      "canonical1": "yogi tea still infusion_spices",
+      "canonical2": "yogi tea still barista_chai_classic_biological"
+    },
+    {
+      "gtin1": "752697964546",
+      "gtin2": "761759557602",
+      "score": 0.58,
+      "canonical1": "proud source water still aluminum_bpa_free_volume recycled_materials_plastic",
+      "canonical2": "proud source water still aluminum_bpa_free_caffeine artificial_additives_volume_contains electrolyte_health_claims_brain"
+    },
+    {
+      "gtin1": "4270000616310",
+      "gtin2": "4270000616358",
+      "score": 0.07,
+      "canonical1": "roy ginger kombucha plastic_juice_content_tea",
+      "canonical2": "roy ginger kombucha black_material_type_plastic"
+    },
+    {
+      "gtin1": "853158004044",
+      "gtin2": "853158004051",
+      "score": 0.19,
+      "canonical1": "alkaline88 water still sport_cap",
+      "canonical2": "alkaline88 water still mineral_8.8ph_balance_electroytes smooth_taste_recyclable_volume"
+    },
+    {
+      "gtin1": "4015732003539",
+      "gtin2": "4015732007155",
+      "score": 0.84,
+      "canonical1": "spreequell water still type_caffeine_15_material juice_content_volume_geographic",
+      "canonical2": "spreequell water still natural_caffeine_15_material juice_content_type_geographic"
+    },
+    {
+      "gtin1": "751901886438",
+      "gtin2": "761759557602",
+      "score": 0.89,
+      "canonical1": "proud source water still aluminum_bpa_free_sports ingredients_electrolyte_volume_artificial sources_product_corp_sustainable",
+      "canonical2": "proud source water still aluminum_bpa_free_caffeine artificial_additives_volume_contains electrolyte_health_claims_brain"
+    },
+    {
+      "gtin1": "5061005130005",
+      "gtin2": "5061005130012",
+      "score": 0.06,
+      "canonical1": "mockingbird smoothie raw_greens_juice",
+      "canonical2": "mockingbird smoothie raw_juice_content_volume"
+    },
+    {
+      "gtin1": "3268651007282",
+      "gtin2": "3268651490015",
+      "score": 0.28,
+      "canonical1": "carola lemon water carbonated alsace_flavored_green",
+      "canonical2": "carola lemon water carbonated alsace_flavored_volume"
+    },
+    {
+      "gtin1": "7340191151079",
+      "gtin2": "7340191151116",
+      "score": 0.38,
+      "canonical1": "coop orange juice still sugar liquid_flavour_volume",
+      "canonical2": "coop orange juice still sugar content_type_liquid_sweetener"
+    },
+    {
+      "gtin1": "8410981093205",
+      "gtin2": "8410981093441",
+      "score": 0.07,
+      "canonical1": "kaiku coffee still sugar latte espresso_milk_drink_arabica cool_cup_without_gluten",
+      "canonical2": "kaiku coffee still sugar latte macchiato_milk_drink_arabica"
+    },
+    {
+      "gtin1": "810164202345",
+      "gtin2": "810164202901",
+      "score": 0.03,
+      "canonical1": "stirrings juice cosmopolitan_cocktail_mix_real natural_flavour_volume_health sugar",
+      "canonical2": "stirrings juice bloody_mary_cocktail_mix sugar"
+    },
+    {
+      "gtin1": "6430065312833",
+      "gtin2": "6430065312857",
+      "score": 0.03,
+      "canonical1": "poikain parhaat carbonated sugar boys_best_sour_omenalimonaadi type_artificial_ingredients_dye",
+      "canonical2": "poikain parhaat carbonated sugar boys_best_sour_raparperilimonaadi"
+    },
+    {
+      "gtin1": "5201156031954",
+      "gtin2": "5201156121105",
+      "score": 0.63,
+      "canonical1": "ebe lemon soda carbonated volume_juice",
+      "canonical2": "ebe lemon soda carbonated volume_carbonization"
+    },
+    {
+      "gtin1": "669149105528",
+      "gtin2": "786173801889",
+      "score": 0.35,
+      "canonical1": "real water still ionised_drinking_purified_carbonization ingredients_antioxidants_volume_health",
+      "canonical2": "real water still alkaline_sports_bottled"
+    },
+    {
+      "gtin1": "8433329120975",
+      "gtin2": "8433329152105",
+      "score": 0.05,
+      "canonical1": "el corte ingl s orange juice still english_court",
+      "canonical2": "el corte ingl s orange juice still selection_freshly"
+    },
+    {
+      "gtin1": "198717100493",
+      "gtin2": "747519482230",
+      "score": 0.93,
+      "canonical1": "proud source water still friendly_packaging_volume_naturally type_spring_alkaline_environmentally",
+      "canonical2": "proud source water still eco_friendly_packaging_environmentally type_spring_alkaline_volume"
+    },
+    {
+      "gtin1": "673276821404",
+      "gtin2": "673276851340",
+      "score": 0.88,
+      "canonical1": "stumptown coffee still 25.4_fz_volume_juice",
+      "canonical2": "stumptown coffee still concentrate_25.4_fz_type"
+    },
+    {
+      "gtin1": "8003170016347",
+      "gtin2": "8003170016361",
+      "score": 0.11,
+      "canonical1": "conad water carbonated sustainability_mineral",
+      "canonical2": "conad water carbonated natural_mineral_slightly"
+    },
+    {
+      "gtin1": "4250519610719",
+      "gtin2": "4260631760902",
+      "score": 0.84,
+      "canonical1": "esn cappuccino coffee flavor_drops",
+      "canonical2": "esn cappuccino coffee flavor_drops_type volume_50_juice_content"
+    },
+    {
+      "gtin1": "96171516",
+      "gtin2": "96171530",
+      "score": 0.05,
+      "canonical1": "merchant s heart tonic water carbonated sugar pink_peppercorn",
+      "canonical2": "merchant s heart tonic water carbonated sugar 150_material_type_glass"
+    },
+    {
+      "gtin1": "8715600244328",
+      "gtin2": "87332902",
+      "score": 0.73,
+      "canonical1": "sourcy raspberry water carbonated red_mineral",
+      "canonical2": "sourcy raspberry water carbonated sourcecy_flavor_volume"
+    },
+    {
+      "gtin1": "695145142519",
+      "gtin2": "696850061607",
+      "score": 0.24,
+      "canonical1": "thick easy orange juice still flavor_ready_use_consistency 40123_sold_one_volume",
+      "canonical2": "thick easy orange juice still use_nectar_consistency_42161"
+    },
+    {
+      "gtin1": "8004243100109",
+      "gtin2": "8015962000021",
+      "score": 0.6,
+      "canonical1": "fiuggi water still source_mineral_volume_caffeine",
+      "canonical2": "fiuggi water still mineral_good_source_nutrients"
+    },
+    {
+      "gtin1": "6415712400101",
+      "gtin2": "6415712509217",
+      "score": 0.04,
+      "canonical1": "kotimaista water carbonated domestic_spring",
+      "canonical2": "kotimaista water carbonated caffeine_15_domestic_vichy"
+    },
+    {
+      "gtin1": "8715600242553",
+      "gtin2": "8715600243390",
+      "score": 0.58,
+      "canonical1": "rivella water carbonated groceries_volume_carbonization saccharin_acesulfame_potassium_material",
+      "canonical2": "rivella water carbonated type_liquid_sweetener_cyclamate"
+    },
+    {
+      "gtin1": "7044610874579",
+      "gtin2": "7044610875811",
+      "score": 0.42,
+      "canonical1": "solo soda carbonated no_added_sugar no_sugar volume_sweetener_cyclamate_aspartame",
+      "canonical2": "solo soda carbonated super_material_type_plastic"
+    },
+    {
+      "gtin1": "5701598028777",
+      "gtin2": "5701598028852",
+      "score": 0.03,
+      "canonical1": "harboe water carbonated sugar ananasbrus_type_volume",
+      "canonical2": "harboe water carbonated sugar 15_25_sports_soda"
+    },
+    {
+      "gtin1": "6410405217530",
+      "gtin2": "6410405217554",
+      "score": 0.03,
+      "canonical1": "pirkka juice still rypale_mansikkamehutiiviste_carbonization",
+      "canonical2": "pirkka juice still omena_appelsiinimehutiiviste_volume_carbonization 15_geographic_origin_finland"
+    },
+    {
+      "gtin1": "8681845211206",
+      "gtin2": "8690327892215",
+      "score": 0.06,
+      "canonical1": "saol vitamin water still antioxidant_juice_content_immune",
+      "canonical2": "saol vitamin water still thanks_men"
+    },
+    {
+      "gtin1": "7310867008761",
+      "gtin2": "7350000550610",
+      "score": 0.6,
+      "canonical1": "proviva berry juice still sugar fruit grape strawberry made_aronia",
+      "canonical2": "proviva berry juice still sugar fruit grape strawberry probiotic_antioxidant"
+    },
+    {
+      "gtin1": "637769186319",
+      "gtin2": "728131236357",
+      "score": 0.81,
+      "canonical1": "indian summer apple juice still pk._type_volume_flavour",
+      "canonical2": "indian summer apple juice still pk._material_type_plastic"
+    },
+    {
+      "gtin1": "4003490014546",
+      "gtin2": "4003490091158",
+      "score": 0.09,
+      "canonical1": "hochwald coffee still sugar milk_juice_content_geographic",
+      "canonical2": "hochwald coffee still sugar high_forest_eismacchiato_volume"
+    },
+    {
+      "gtin1": "6427401300005",
+      "gtin2": "6427401301002",
+      "score": 0.03,
+      "canonical1": "kaskein juice still sugar cascades_luomumustikkamehutiiviste",
+      "canonical2": "kaskein juice still sugar cascades_luomupuolukkamehutiiviste"
+    },
+    {
+      "gtin1": "5705010078791",
+      "gtin2": "5705010078814",
+      "score": 0.05,
+      "canonical1": "rynkeby apple juice still sugar ginger lemon shots_material_type_glass",
+      "canonical2": "rynkeby apple juice still sugar ginger lemon support_ingredients_vitamin_turmeric"
+    },
+    {
+      "gtin1": "845033053629",
+      "gtin2": "876104544708",
+      "score": 0.86,
+      "canonical1": "blenheim ginger beer carbonated medium_heat_set_volume",
+      "canonical2": "blenheim ginger beer carbonated medium_heat_set_flavour"
+    },
+    {
+      "gtin1": "8410128000424",
+      "gtin2": "8410128160623",
+      "score": 0.3,
+      "canonical1": "bezoya water still mineral_juice_content_type",
+      "canonical2": "bezoya water still weak_plug_sport_characters"
+    },
+    {
+      "gtin1": "4032108138725",
+      "gtin2": "4032108138862",
+      "score": 0.06,
+      "canonical1": "cosmoveda ayus_asava_pippali_type lanka_ceylon_volume_material",
+      "canonical2": "cosmoveda ayus_asava_punarnava"
+    },
+    {
+      "gtin1": "7611612221658",
+      "gtin2": "7611612221795",
+      "score": 0.32,
+      "canonical1": "powerking energy carbonated drink_zero",
+      "canonical2": "powerking energy carbonated no_sugar metal_type_volume_health"
+    },
+    {
+      "gtin1": "8432425091219",
+      "gtin2": "8432425094340",
+      "score": 0.07,
+      "canonical1": "kaiku coffee still sugar latte espresso_arabica",
+      "canonical2": "kaiku coffee still sugar latte mr._big_creamy_milk"
+    },
+    {
+      "gtin1": "6415712508760",
+      "gtin2": "6415712613402",
+      "score": 0.25,
+      "canonical1": "rainbow cola soda carbonated sugar soft_drink",
+      "canonical2": "rainbow cola soda carbonated sugar 12x330_soft_drink_volume"
+    },
+    {
+      "gtin1": "8433329089890",
+      "gtin2": "8433329122962",
+      "score": 0.04,
+      "canonical1": "el corte ingl s water spring_monte_pine_trees",
+      "canonical2": "el corte ingl s water very_weak_landin_volume"
+    },
+    {
+      "gtin1": "100141649301",
+      "gtin2": "100141871429",
+      "score": 0.71,
+      "canonical1": "strike force orange juice still concentrate_original_packaging_may",
+      "canonical2": "strike force orange juice still concentrate_original_carbonization"
+    },
+    {
+      "gtin1": "6430025257495",
+      "gtin2": "6430032801360",
+      "score": 0.02,
+      "canonical1": "raikastamo apple juice still freshener_whole",
+      "canonical2": "raikastamo apple juice still mustikka_omenamehu"
+    },
+    {
+      "gtin1": "463559297824",
+      "gtin2": "732623770106",
+      "score": 0.78,
+      "canonical1": "taika coffee still latte mocha dairy_free_type_diets",
+      "canonical2": "taika coffee still latte mocha rtd_carbonization"
+    },
+    {
+      "gtin1": "615888989264",
+      "gtin2": "673276851340",
+      "score": 0.93,
+      "canonical1": "stumptown coffee still 25.4_fz_volume_rtd",
+      "canonical2": "stumptown coffee still concentrate_25.4_fz_type"
+    },
+    {
+      "gtin1": "4740042700204",
+      "gtin2": "4740042701072",
+      "score": 0.05,
+      "canonical1": "v rska water carbonated fresh_natural_mineral claims_low_salt_caffeine",
+      "canonical2": "v rska water carbonated fresh_vichy_cap"
+    },
+    {
+      "gtin1": "5060466510210",
+      "gtin2": "5060608740031",
+      "score": 0.04,
+      "canonical1": "relentless energy carbonated erythritol_sucralose_sucrose_volume sugar",
+      "canonical2": "relentless energy carbonated sugar source_vitamin_type_blister"
+    },
+    {
+      "gtin1": "4101130062909",
+      "gtin2": "4101130062916",
+      "score": 0.08,
+      "canonical1": "rheinfels quelle water still source_classic_12x0._volume content_type_blister_carbonization",
+      "canonical2": "rheinfels quelle water still source_medium_12x0._volume blister_juice_content_carbonization"
+    },
+    {
+      "gtin1": "4102560110352",
+      "gtin2": "4102560110376",
+      "score": 0.14,
+      "canonical1": "rh nsprudel water carbonated original_6x1l_type_blister",
+      "canonical2": "rh nsprudel water carbonated natural_6x1l_volume_carbonization"
+    },
+    {
+      "gtin1": "6415600579292",
+      "gtin2": "6415600590358",
+      "score": 0.02,
+      "canonical1": "battery energy carbonated sugar special_edition_volume_health",
+      "canonical2": "battery energy carbonated sugar pearberry_volume_juice_content"
+    },
+    {
+      "gtin1": "8437010011016",
+      "gtin2": "8437010011078",
+      "score": 0.39,
+      "canonical1": "ekolo apple juice still no_added_sugar bio_ecological",
+      "canonical2": "ekolo apple juice still no_added_sugar bio_squeezed_kolo_volume"
+    },
+    {
+      "gtin1": "4260353177972",
+      "gtin2": "4260353178641",
+      "score": 0.36,
+      "canonical1": "got7 no_sugar potassium_health_claims_calorie flavour_natural_colourants_material",
+      "canonical2": "got7 no_sugar free_volume_sweetener_sucralose"
+    },
+    {
+      "gtin1": "8715600243949",
+      "gtin2": "8715600249316",
+      "score": 0.43,
+      "canonical1": "sourcy water still framboos_granaatappel_volume_type",
+      "canonical2": "sourcy water still spring_volume_type_juice framboos_granaatappel_naturally_derived"
+    }
+  ]
+}

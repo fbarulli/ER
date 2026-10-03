@@ -1,0 +1,107 @@
+{
+  "schema_version": "3",
+  "payload_variant": "full",
+  "masking_profile": "baseline",
+  "model_input": {
+    "profile": "cleaned",
+    "include_evidence": false,
+    "emit_field_markers": false,
+    "keep_redundant_attribute_words": true,
+    "emit_singleton_pack_token": false
+  },
+  "n_df": 62927,
+  "n_payload": 125521,
+  "n_pos": 59046,
+  "n_neg": 32336,
+  "n_train_neg": 32336,
+  "n_labeled_pairs_bytes": 465888,
+  "n_canonical_records_bytes": 67252590,
+  "n_gate_results_bytes": 29663128,
+  "sha256": "fc2d110e27db1bc0e43f75acb5caca2863f45271169a20edabda309c5dc02d67",
+  "masking_config": {
+    "enabled": true,
+    "profile": "baseline",
+    "frac": 0.8,
+    "mask_hard_negatives": true,
+    "hard_negative_frac": 0.3,
+    "mask_prob": null,
+    "mask_lo": 0.2,
+    "mask_hi": 0.3,
+    "hard_negative_mask_prob": null,
+    "hard_negative_mask_lo": 0.1,
+    "hard_negative_mask_hi": 0.2,
+    "swap_value_frac": 0.2,
+    "hard_negative_swap_value_frac": 0.2,
+    "counterfactual_frac": 0.1,
+    "swap_max_field_share": 0.35,
+    "swap_max_value_share": 0.03,
+    "field_quota_shares": {
+      "sweetener": 0.82,
+      "carbonation": 0.07,
+      "package_material": 0.07,
+      "juice_content": 0.04
+    },
+    "attribute_augment": {
+      "volume": {
+        "hard": true,
+        "pos_frac": 0.15,
+        "neg_frac": 0.1
+      },
+      "pack": {
+        "hard": true,
+        "pos_frac": 0.15,
+        "neg_frac": 0.1
+      },
+      "flavor": {
+        "hard": false,
+        "pos_frac": 0.2,
+        "neg_frac": 0.15
+      },
+      "sweetener": {
+        "hard": true,
+        "pos_frac": 0.25,
+        "neg_frac": 0.15
+      },
+      "carbonation": {
+        "hard": false,
+        "pos_frac": 0.1,
+        "neg_frac": 0.05
+      },
+      "package_type": {
+        "hard": false,
+        "pos_frac": 0.1,
+        "neg_frac": 0.05
+      },
+      "package_material": {
+        "hard": true,
+        "pos_frac": 0.1,
+        "neg_frac": 0.05
+      },
+      "juice_content": {
+        "hard": false,
+        "pos_frac": 0.1,
+        "neg_frac": 0.05
+      }
+    },
+    "cross_retailer_donors": true,
+    "declaration_dropout": {
+      "frac": 0.3,
+      "min_drop": 1,
+      "max_drop": 3
+    },
+    "swap_max_donor_overlap": 0.95,
+    "diet_min_neg_aug_frac": 0.3,
+    "diet_max_pos_neg_view_ratio": 1.5,
+    "track_visibility": true,
+    "track_per_epoch": true
+  },
+  "easy_config": {
+    "enabled": true,
+    "ratio_to_hard": 1.0,
+    "candidate_pool_size": 10000
+  },
+  "ratio_to_hard": 1.0,
+  "static_view_ratio": 1.8260143493320138,
+  "effective_train_ratio": 1.8260143493320138,
+  "ratio_contract_note": "Guaranteed bundle-only view ratio 1.826; easy-negative settings (enabled, ratio=1) are a possible contrastive projection and are not guaranteed."
+}

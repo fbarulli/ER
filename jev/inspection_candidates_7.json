@@ -1,0 +1,562 @@
+[
+  {
+    "gtin1": "3272030008234",
+    "gtin2": "3272036007460",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.04,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:24.116957+00:00",
+    "request_sha256": "05b98771513bba3facb28f602e93a5cf84b26bc17ac0ad56278cd22d02524ec0",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.04
+        }
+      },
+      "usage": {
+        "input_tokens": 1923,
+        "output_tokens": 22,
+        "cost": 8.0766e-05
+      },
+      "id": "gen-dec-1790976623-izB5ilE38n5HIx6yGEFC",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "3274490970274",
+    "gtin2": "3274490970281",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.02,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:28.567055+00:00",
+    "request_sha256": "cedf41a02c1ac03d6c9d6f97813147ae96f469d11efa090209f587d7ede0fbe8",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.02
+        }
+      },
+      "usage": {
+        "input_tokens": 1156,
+        "output_tokens": 22,
+        "cost": 4.8552e-05
+      },
+      "id": "gen-dec-1790976627-JA3ciNttVhroUxmsFnTS",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "3292481350010",
+    "gtin2": "3292482350026",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.05,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:27.869222+00:00",
+    "request_sha256": "cde421e9ec452623e82337b2ae44cf350ba6d1c27314303c6bf885b93b7f595e",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.05
+        }
+      },
+      "usage": {
+        "input_tokens": 2162,
+        "output_tokens": 22,
+        "cost": 9.0804e-05
+      },
+      "id": "gen-dec-1790976627-9s4k5zTyNLFUA5f6q1sK",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "3361730001253",
+    "gtin2": "3361730001352",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.07,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:25.725980+00:00",
+    "request_sha256": "d8d4d7246b455fb9e24892cb6e5ee8c8af6012ea2f19c0fa5bb13cc5ee0d7c25",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.07
+        }
+      },
+      "usage": {
+        "input_tokens": 1073,
+        "output_tokens": 22,
+        "cost": 4.5066e-05
+      },
+      "id": "gen-dec-1790976625-zyTPfLjwyjaoFRWqG36M",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "4004191908448",
+    "gtin2": "4004191908806",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.13,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:23.161625+00:00",
+    "request_sha256": "495609515f26ae5a7bb49cdc1ba04d75e2edda28639b48e06bf8b519d839c61f",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.13
+        }
+      },
+      "usage": {
+        "input_tokens": 993,
+        "output_tokens": 22,
+        "cost": 4.1706e-05
+      },
+      "id": "gen-dec-1790976622-ySQQfBbeUxDRuh3G9uMR",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "4032108138688",
+    "gtin2": "4032108138800",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.07,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:25.925711+00:00",
+    "request_sha256": "b469e7581962589eb3a3393e56eda769499ac776b71c2f6dcc0873651a12196a",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.07
+        }
+      },
+      "usage": {
+        "input_tokens": 1393,
+        "output_tokens": 22,
+        "cost": 5.8506e-05
+      },
+      "id": "gen-dec-1790976625-cINbYIwCa4YAQuaFAFxz",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "4088600388816",
+    "gtin2": "4088600388823",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.19,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:28.148328+00:00",
+    "request_sha256": "fbc73822de71e552d9738963d8bec115b45ba64049230dc224252b8749cee8e4",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.19
+        }
+      },
+      "usage": {
+        "input_tokens": 1199,
+        "output_tokens": 22,
+        "cost": 5.0358e-05
+      },
+      "id": "gen-dec-1790976627-VIc57yrA4o0hay0sBxEx",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "4101130003445",
+    "gtin2": "4101130003544",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.16,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:29.390219+00:00",
+    "request_sha256": "1809a0d32a022217bd53b90df9dff4336e120dca22df965b6d73093da46fb511",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.16
+        }
+      },
+      "usage": {
+        "input_tokens": 1040,
+        "output_tokens": 22,
+        "cost": 4.368e-05
+      },
+      "id": "gen-dec-1790976629-XCNn5I1bubPpJkLLJq9d",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "4260107220831",
+    "gtin2": "4260107223177",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.02,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:24.335564+00:00",
+    "request_sha256": "a32d1ec102452bfbd2a243df7f7e6311437acd4c454eaac712ba7ebf1c9a0547",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.02
+        }
+      },
+      "usage": {
+        "input_tokens": 1046,
+        "output_tokens": 22,
+        "cost": 4.3932e-05
+      },
+      "id": "gen-dec-1790976624-jWNzC8QzzFhiTJUXlMNQ",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "4260183210122",
+    "gtin2": "4260183212072",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.19,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:24.987335+00:00",
+    "request_sha256": "d77bfed0cae718cfd6c6fcc3a8f3c32829f9a5152f6bc4130be23f1f1d493a76",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.19
+        }
+      },
+      "usage": {
+        "input_tokens": 1813,
+        "output_tokens": 22,
+        "cost": 7.6146e-05
+      },
+      "id": "gen-dec-1790976624-PmnFewEHEv7GEeEYLu34",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "192397070268",
+    "gtin2": "363756405971",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.76,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:25.403544+00:00",
+    "request_sha256": "0e51631cec2e2b5b84ba7b28b20e457329a97e54b25b12a8f4337004f83b177a",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.76
+        }
+      },
+      "usage": {
+        "input_tokens": 1148,
+        "output_tokens": 22,
+        "cost": 4.8216e-05
+      },
+      "id": "gen-dec-1790976625-rBmODVzQZq2oclEJeBXp",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "2020003787690",
+    "gtin2": "2020005429079",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.63,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:27.297077+00:00",
+    "request_sha256": "4634f3dd05dc6ccdc39f1228d195f3ac932c4a9ce356b3e4e8f7aa843de12e92",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.63
+        }
+      },
+      "usage": {
+        "input_tokens": 1147,
+        "output_tokens": 22,
+        "cost": 4.8174e-05
+      },
+      "id": "gen-dec-1790976627-6P9udTkPIFrME8MSTHg2",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "231302714337",
+    "gtin2": "747519475737",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.26,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:25.964898+00:00",
+    "request_sha256": "755f045276ed1a33f2652f11f207f792b0b51624ebc79cd166727413b64c6ab3",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.26
+        }
+      },
+      "usage": {
+        "input_tokens": 1161,
+        "output_tokens": 22,
+        "cost": 4.8762e-05
+      },
+      "id": "gen-dec-1790976625-wjdbKAH0JyXhxMwS1jQj",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "100141564826",
+    "gtin2": "100142347862",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.93,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:28.370603+00:00",
+    "request_sha256": "fa433290955437b2100d778c2cbe51313951f3ccf7ee859d48f765e6db39d6c1",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.93
+        }
+      },
+      "usage": {
+        "input_tokens": 1308,
+        "output_tokens": 22,
+        "cost": 5.4936e-05
+      },
+      "id": "gen-dec-1790976628-xlu45cwUKiLIJots47Mx",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "642709037477",
+    "gtin2": "736983891518",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.83,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:26.826195+00:00",
+    "request_sha256": "06b4f0e741334e46b09718053bbae829d0e19e047eeed50b0d370e5c37438660",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.83
+        }
+      },
+      "usage": {
+        "input_tokens": 1075,
+        "output_tokens": 22,
+        "cost": 4.515e-05
+      },
+      "id": "gen-dec-1790976626-YIjin9XbkuQuldKl3wef",
+      "provider": "TypeSafe"
+    }
+  },
+  {
+    "gtin1": "686082455671",
+    "gtin2": "689128697950",
+    "training_label": 1,
+    "gate": "proceed",
+    "gate_reason": "Known critical attributes compatible",
+    "frozen_gate": "proceed",
+    "similarity": 1.0,
+    "similarity_band": "0.9_to_1.0",
+    "stratum": "label_1|proceed|0.9_to_1.0",
+    "input_scope": "original_data",
+    "copy": "a_order",
+    "noul": 0.87,
+    "status": "ok",
+    "adapter": "openrouter",
+    "model": "typesafe/jev-1.13",
+    "completed_utc": "2026-10-02T21:30:23.246907+00:00",
+    "request_sha256": "347327a838e28aa4e09e3a303b855cd8611ffdfeabb9a49b0ebc1571251374dd",
+    "raw_response": {
+      "model": "typesafe/jev-1.13-20260917",
+      "answers": {
+        "is_same_product": {
+          "type": "noul",
+          "noul": 0.87
+        }
+      },
+      "usage": {
+        "input_tokens": 1029,
+        "output_tokens": 22,
+        "cost": 4.3218e-05
+      },
+      "id": "gen-dec-1790976622-CEylOMzIc2uxO2oUtNPS",
+      "provider": "TypeSafe"
+    }
+  }
+]

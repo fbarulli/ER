@@ -73,7 +73,7 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
         backend._upload_with_retries(resume_archive, remote_recovery,
                                      timeout=backend._RESULT_DOWNLOAD_TIMEOUT_SECONDS)
     remote_output = f'{backend.REMOTE_ROOT}/results/model_tracks/{run_tag}'
-    needs_dvc = settings['publish_git'] or settings.get('publish_dvc', False)
+    needs_dvc = False  # CPU postprocessing and publication run locally after download.
     auth = backend._remote_auth_env_script(include_wandb=True, force_dvc=needs_dvc)
     script = backend._BOOTSTRAP + auth + f'''
 import hashlib, json, os, pathlib, subprocess, sys, zipfile
@@ -94,17 +94,14 @@ output_path=pathlib.Path({remote_output!r})
 if {resume_archive is not None!r} and not output_path.exists():
     from model_tracks.package import restore_recovery
     restore_recovery(pathlib.Path({remote_recovery!r}),output_path,{run_tag!r})
-env={{**os.environ,"PYTHONPATH":str(root/"src"),"PYTHONUNBUFFERED":"1"}}
+env={{**os.environ,"PYTHONPATH":str(root/"src"),"PYTHONUNBUFFERED":"1", "ER_GPU_TRAINING_ONLY":"1"}}
 result_archive=pathlib.Path({remote_output!r}+".zip")
 if result_archive.exists():
     # Collection/publication retry must never restart completed training.
     verified=verify_archive(result_archive,"suite_bundle_manifest.json")
     if verified["run_tag"] != {run_tag!r}:
         raise ValueError("existing suite result run mismatch")
-    from model_tracks.config import load_config
-    if load_config(root/"data/model_tracks/suite.yaml").dvc_enabled:
-        from model_tracks.publish import persist_results
-        persist_results(result_archive,{run_tag!r})
+
 else:
     if {resume!r} and not output_path.exists():
         raise FileNotFoundError("interrupted suite state is unavailable; refusing to restart under its run tag")
@@ -185,7 +182,7 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
             print(f'Failure diagnostic collection unavailable: {log_error}; inspect local Colab stage log', flush=True)
         raise
     expected = backend._read_remote_text(remote_output+'.sha256').strip()
-    local = RESULTS/'model_tracks'/f'{run_tag}.zip'
+    local = RESULTS/'model_tracks'/f'{run_tag}.training.zip'
     local.parent.mkdir(parents=True,exist_ok=True)
     if not local.exists() or file_hash(local) != expected:
         partial = local.with_suffix('.zip.partial')
@@ -216,38 +213,12 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
         print(f'Suite final event log verified: {events_local}', flush=True)
     except Exception as error:
         print(f'Suite final event log unavailable: {error}; archived worker logs remain available', flush=True)
-    with zipfile.ZipFile(local) as archive:
-        for track in ('text','gnn_only','hybrid'):
-            marker=json.loads(archive.read(f'{track}/track_complete.json'))
-            if marker.get('status')!='ok' or not marker.get('postprocess_complete'):
-                raise ValueError(f'{track} incomplete in downloaded results')
-    from model_tracks.publish import materialize
-    with zipfile.ZipFile(local) as archive:
-        suite=json.loads(archive.read('suite_manifest.json'))
-    if suite['config']['publish_git'] or suite['config'].get('publish_dvc', False):
-        from core.common import TRAIN_ROOT
-        receipt = json.loads(backend._read_remote_text(remote_output+'.publication.json'))
-        if (receipt.get('run_tag') != run_tag or receipt.get('archive_sha256') != expected
-                or receipt.get('verified_download') is not True):
-            raise ValueError('suite DVC publication receipt mismatch')
-        prefix = f'dvc_refs/{run_tag}/worker_1/'
-        receipts = [receipt]
-        with zipfile.ZipFile(local) as archive:
-            receipts.extend(json.loads(archive.read(member)) for member in archive.namelist()
-                if '/_artifact_publications/' in member and member.endswith('.publication.json'))
-        for incremental in receipts:
-            if not incremental['run_tag'].startswith(run_tag):
-                raise ValueError('incremental publication run mismatch')
-            prefix = f"dvc_refs/{incremental['run_tag']}/worker_1/"
-            for relative, contents in incremental['references'].items():
-                target = TRAIN_ROOT / relative
-                if not relative.startswith(prefix) or not target.resolve().is_relative_to((TRAIN_ROOT/prefix).resolve()):
-                    raise ValueError('unsafe suite DVC reference')
-                if target.exists() and target.read_text() != contents:
-                    raise ValueError('existing suite DVC reference differs')
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(contents)
-        local.with_suffix('.publication.json').write_text(json.dumps(receipt, indent=2)+'\n')
-        if suite['config']['publish_git']:
-            materialize(local,run_tag,push=True)
-    return local
+    with zipfile.ZipFile(local) as result:
+        for track in ('text', 'gnn_only', 'hybrid'):
+            marker = json.loads(result.read(f'{track}/track_complete.json'))
+            if marker != {'track': track, 'status': 'ok', 'postprocess_complete': False}:
+                raise ValueError(f'{track} missing verified training-only completion')
+    # Release GPU quota before local inference, indexing, reporting or publishing.
+    backend.stop()
+    from model_tracks.local_complete import complete
+    return complete(local, archive, run_tag)

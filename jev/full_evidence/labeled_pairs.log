@@ -1,0 +1,3 @@
+[labeled] excluded 19,143 fallback-gate pairs (gate=fallback — not labelable as pos/hard-neg)
+[manifest] labeled_pairs complete -> /home/opc/ONE/ER/results/manifests/labeled_pairs.json | closure 135,246 == 803 kept + 134,443 dropped (fallback 19,143 / below-thr 115,300 / other 0)
+labeled_pairs.csv: 803 rows (197 pos / 606 hard-neg)

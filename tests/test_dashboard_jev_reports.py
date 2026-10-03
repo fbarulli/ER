@@ -43,8 +43,10 @@ def test_controlled_repeat_displays_all_four_calls_and_both_formats(reports):
     assert '0.24' in page and '0.06' in page
     assert '>4</td>' in page
     latest=reports.jev()
-    assert '<h2>Round 6</h2>' in latest
-    assert 'Judgments by input cohort' in latest
+    assert '<h2>Round 8</h2>' in latest
+    assert 'label_0|hard_no' in latest
+    paired=reports.jev(round=6)
+    assert 'Judgments by input cohort' in paired
 
 def test_paired_comparison_displays_100_pairs_and_400_calls(reports):
     page=reports.jev(round=6)

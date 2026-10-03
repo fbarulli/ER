@@ -1,0 +1,47 @@
+{
+  "schema_version": "1",
+  "stage": "labeled_pairs",
+  "started": "2026-10-02T21:13:05.330764+00:00",
+  "finished": "2026-10-02T21:13:06.142763+00:00",
+  "status": "complete",
+  "inputs": [
+    {
+      "path": "/home/opc/ONE/ER/data/gate_results.csv",
+      "sha256": "274a8735e64a331ba81bfbbae69c8dc808ec646a87bc6ed761e027b94c434913",
+      "rows": 135246,
+      "cols": 7,
+      "expected": null
+    }
+  ],
+  "outputs": [
+    {
+      "path": "/home/opc/ONE/ER/data/labeled_pairs.csv",
+      "sha256": "33ef8aeba8db92f5a5f1c2766d35ec9d94402f2814a91d33f20165ec48363399",
+      "rows": 15837,
+      "cols": 3,
+      "expected": true
+    }
+  ],
+  "row_accounting": {
+    "input_rows": 135246,
+    "output_rows": 15837,
+    "dropped": {
+      "fallback_gate_pairs": 17143,
+      "below_similarity_threshold": 102266,
+      "other_gate_decision": 0
+    },
+    "pos_labeled": 8071,
+    "hard_neg_labeled": 7766,
+    "pos_sim_threshold": 0.5,
+    "hardneg_sim_threshold": 0.8
+  },
+  "environment": {
+    "git_sha": "2602fa8a5fd6-dirty",
+    "config_sha256": "1e32819e24d892c5295e4acc1dbecdfc02db3962c1c78b45e656ba929193bd15",
+    "host": "instance-20260726-2239",
+    "seed": "42"
+  },
+  "expected_outputs": [
+    "labeled_pairs.csv"
+  ]
+}

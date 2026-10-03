@@ -1,0 +1,1101 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# config/training.yaml — the TRAINING lane's OWN config (split-SSOT,
+# 2026-09-08). Every knob below steers training only; shared data paths,
+# file names, the column mapping, the seed and the model registry live in
+# the root config/paths.yaml. Validated at load by lib.schemas.TrainingConfig
+# via lib.common — a bad value crashes at import, never mid-run.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── similarity column names (one per model-registry key) ────────────────────
+sim_columns:
+  minilm_l6: "sim_minilm_l6"
+  multilingual_l12: "sim_multilingual_l12"
+  deberta_v3_base: "sim_deberta_v3_base"
+
+# ── masking augmentation ────────────────────────────────────────────────────
+masking:
+  enabled: true
+  profile: baseline
+  frac: 0.80          # fraction of positive anchors masked when enabled
+  mask_hard_negatives: true  # enable dynamic masking on label-0 training pairs
+  hard_negative_frac: 0.30   # mask_frac_negatives: only 30% of label-0 presentations
+  mask_prob: null     # null: positive extent drawn from mask_lo..mask_hi
+  mask_lo: 0.20       # variable extent band, U(0.20, 0.30) per masked copy
+  mask_hi: 0.30
+  hard_negative_mask_prob: null  # null: negative extent drawn from its band
+  hard_negative_mask_lo: 0.10  # extent per masked presentation, not mask frequency
+  hard_negative_mask_hi: 0.20
+  # Static pre-training VALUE swaps (donor value transplant, coconut->lime).
+  # Positives: BOTH sides rewritten from an agreeing donor pair, so a match
+  # stays a match. Hard negatives: anchor side only, label 0 by identity.
+  # Donor tokens come from the corpus payload; nothing is invented and
+  # nothing is decided during training (no dynamic/per-presentation path).
+  swap_value_frac: 0.20               # positives: symmetric value-swap copies
+  hard_negative_swap_value_frac: 0.20 # hard negatives: anchor-side value swaps
+  # Counterfactual twins: minimal single-agreed-field flips of positive
+  # anchors, labeled 0 (a one-field break of a verified match cannot be the
+  # same product). Static, pre-training; joins the negative pool.
+  counterfactual_frac: 0.10         # share of positives minted as twin 0s
+  # Anti-dominance caps for the swap lanes: no one field takes more than
+  # ~1/3 of the picks (soft fallback), no one (field, value) transplant
+  # more than ~3% (hard skip — the transplant-footprint guard).
+  swap_max_field_share: 0.35
+  swap_max_value_share: 0.03
+  # ── measured-variation wiring (duplicate variation census 2026-10-01) ──────
+  # Same-GTIN duplicate groups measured WHAT retailers actually vary: title
+  # token dissimilarity 0.703 mean / 0.750 median; 91.4% of duplicates are
+  # cross-retailer; attribute cells differ in 100% of groups (partial
+  # declarations); same-GTIN copies genuinely disagree per field group
+  # (health claims 58.1%, juice features 63.6%, caffeine 33.3%, sweetener
+  # 30.2%, carbonization 26.1%). That measured distribution IS the headroom —
+  # it supersedes the earlier weakspot-quota crosstest shares.
+  # Ceiling: quotas expressed over the structurally-maskable field groups
+  # (weights = measured conflict rate of the mapped registry keys, renormalized
+  # to 1); packs/volume droplets ride the soft field cap.
+  field_quota_shares:
+    sweetener: 0.82   # sweetener + sweetener_type + sweetening + diets
+    carbonation: 0.07
+    package_material: 0.07
+    juice_content: 0.04
+  # Per-attribute augmentation: hard/soft enforcement and
+  # per-slice (pos/neg) fracs, configurable per attribute.
+  # Hard: skip the field when quota exhausted (strict).
+  # Soft: fall back to uncapped field rather than emit nothing.
+  attribute_augment:
+    volume:
+      hard: true
+      pos_frac: 0.15
+      neg_frac: 0.10
+    pack:
+      hard: true
+      pos_frac: 0.15
+      neg_frac: 0.10
+    flavor:
+      hard: false
+      pos_frac: 0.20
+      neg_frac: 0.15
+    sweetener:
+      hard: true
+      pos_frac: 0.25
+      neg_frac: 0.15
+    carbonation:
+      hard: false
+      pos_frac: 0.10
+      neg_frac: 0.05
+    package_type:
+      hard: false
+      pos_frac: 0.10
+      neg_frac: 0.05
+    package_material:
+      hard: true
+      pos_frac: 0.10
+      neg_frac: 0.05
+    juice_content:
+      hard: false
+      pos_frac: 0.10
+      neg_frac: 0.05
+  cross_retailer_donors: true
+  declaration_dropout:
+    frac: 0.30        # share of ORIGINAL positive anchors minted as dropouts
+    min_drop: 1
+    max_drop: 3
+  # Near-duplicate donor guard (second net behind entity clusters).
+  swap_max_donor_overlap: 0.95
+  # Diet contract (scripts/diet_manifest.py gates every bundle on these).
+  diet_min_neg_aug_frac: 0.30     # negatives: augmented views / presentations
+  diet_max_pos_neg_view_ratio: 1.50  # effective pos views / neg views ceiling
+  track_visibility: true      # persist per-copy realized mask percentages
+  track_per_epoch: true       # persist dynamic hard-negative mask percentages
+
+# ── prepared-bundle drift switch (TIER 1(e)) ─────────────────────────────────
+# FALSE (today): load_prepared_bundle WARNS on a bundle built under a
+# different masking/easy config (e.g. one recording the deleted
+# once-agreed-surface swap sidecar knobs) so the
+# pre-rebuild audit findings stay reproducible. TRUE: it HARD-FAILS with a
+# ValueError and the bundle must be re-prepared. Flip TRUE immediately after
+# the bundle rebuild lands. The env form wins when set:
+#   export PREPARED_BUNDLE_DRIFT_STRICT=1
+# env unset + key absent => FALSE.
+prepared_bundle_drift_strict: true
+
+masking_profiles:
+  baseline: {}
+  matched_positive_negative:
+    mask_lo: 0.40
+    mask_hi: 0.60
+    # Keep the experiment's positive masking band, but make negative
+    # masking less frequent and much less destructive per presentation.
+    hard_negative_frac: 0.30
+    hard_negative_mask_lo: 0.10
+    hard_negative_mask_hi: 0.20
+  lower_negative_masking:
+    # Comparison arm: lower frequency and lower per-presentation extent.
+    hard_negative_frac: 0.15
+    hard_negative_mask_lo: 0.05
+    hard_negative_mask_hi: 0.10
+  minimal_negative_masking:
+    # Third arm: substantially lower frequency and extent than the comparison
+    # arm, while retaining a small negative-mask signal.
+    hard_negative_frac: 0.05
+    hard_negative_mask_lo: 0.02
+    hard_negative_mask_hi: 0.05
+
+# Optional remote mirror. Credentials stay in WANDB_API_KEY, never here.
+# Without that environment variable, runs remain local and MLflow is intact.
+tracking:
+  wandb:
+    project: "e-r"
+    mode: "online"
+
+# ── Colab checkout/runtime ─────────────────────────────────────────────────
+# The launcher clones this public training branch instead of uploading a
+# local working tree or data snapshot.
+colab:
+  repository: "https://github.com/fbarulli/ER.git"
+  branch: "main"
+  git_remote_name: "ER"
+  remote_root: "/content/EuromonitoR"
+  session: "my-highram-session"
+  # CPU-only default for smoke and training launches.  A GPU requires an
+  # explicit command-line override plus --allow-gpu.
+  gpu: "CPU"
+  # Training workers consume immutable bundles prepared locally.  Keep all
+  # payload, pair, masking, country, and calibration construction off Colab.
+  remote_data_prep: false
+  training_dataset_csv: "data/dataset_deduped.csv"
+  # The normal ANN lane consumes its entire prepared training set.
+  train_fraction: 1.0
+  # Versioned checkout inputs for the fast standard ANN lane.
+  full_prepared_bundles:
+    - "data/prepared/full/worker_1_baseline.pkl.gz"
+  # Retained legacy schema binding; plain smoke is rejected before provisioning.
+  # Use an explicit sampled model_tracks suite with frozen parent splits.
+  smoke_dataset_csv: "data/dataset_deduped_smoke_128.csv"
+  smoke_inference_sample: 5
+  # Distributions the launcher asserts on the VM, per lane.  The Colab image
+  # already ships torch/transformers/sentence-transformers/datasets/pandas/
+  # numpy/scikit-learn (the launcher streams them back as "already
+  # satisfied"), so the deps stage costs what is NOT in the image.  Measured
+  # on the 2026-09-15 T4 launch: 19.99 MiB downloaded, 18 distributions
+  # installed, and only two top-level items needed work — `hnswlib` (source
+  # build; PyPI publishes no wheel) and full `mlflow` (11.6 MB + its closure).
+  # Tracking now uses skinny plus the explicit SQLite backend dependencies.
+  # Trim, pin, or drop entries here rather than editing src/cli/colab.py.
+  runtime_packages:
+    # Graph-only additions use the same satisfied-package-aware installer.
+    graph:
+      - "dvc"
+      - "pydantic"
+      - "PyYAML"
+      - "matplotlib"
+    prepared:
+      - "sentence-transformers"
+      - "datasets"
+      - "accelerate"
+      - "scikit-learn"
+      - "pandas"
+      - "numpy"
+      - "hnswlib"
+      - "mlflow-skinny"
+      - "sqlalchemy"
+      - "alembic"
+      - "wandb"
+    full:
+      - "sentence-transformers"
+      - "datasets"
+      - "accelerate"
+      - "evaluate"
+      - "scikit-learn"
+      - "pandas"
+      - "numpy"
+      - "hnswlib"
+      - "mlflow-skinny"
+      - "sqlalchemy"
+      - "alembic"
+      - "optuna"
+      - "psycopg[binary]"
+      - "wandb"
+    # Wheels shipped in the repository instead of being compiled on the VM.
+    # `hnswlib` publishes no wheel on PyPI, so every fresh VM used to spend
+    # ~37 s building the sdist (measured with uv on a CPU VM: "Prepared 19
+    # packages in 37.19s").  This wheel was built once on a CPU Colab VM, for
+    # the image's own interpreter (cp313 / linux_x86_64), and is installed as
+    # a local requirement.  If the tag stops matching the VM interpreter the
+    # launcher logs it and falls back to the index.
+    prebuilt_wheels:
+      - "artifacts/wheels/hnswlib-0.8.0-cp313-cp313-linux_x86_64.whl"
+  # Prefer `uv pip install` on the VM, falling back to `pip` when uv is absent
+  # or refuses.  This mirrors what the installed Colab CLI does for its own
+  # `colab install` subcommand (uv first, pip on failure), and the detached
+  # stage logs which installer actually ran.  Set false to force pip.
+  prefer_uv_install: true
+  # Reuse a prepared bundle whose inputs are byte-identical to one already
+  # built: same dataset bytes, same requested model/profile/payload, and the
+  # same digest over every config file and bundle-producing source file.  The
+  # local build took 531 s measured on 2026-09-15 once the payload stage was
+  # cold, and every launch rebuilt it.  Set false to force a fresh build.
+  cache_prepared_bundles: true
+  hpo_mode: "sequential"
+  hpo_workers: 2
+  # Full checkout lane is ANN-only; matcher training is not part of this run.
+  train_workers: 1
+  # One baseline worker plus one worker for the configured smoke model.
+  smoke_workers: 2
+  mixed_train_workers: 1
+  mixed_sims_workers: 1
+  mixed_mining_profile: "masking_only"
+  sims_model: "minilm_l6"
+  log_poll_seconds: 2
+  # First probe delay for a detached stage, before backing off to
+  # log_poll_seconds.  The dependency install is ~2.4 s of work, so a full
+  # interval spent waiting to notice it is pure setup latency.
+  log_poll_initial_seconds: 0.25
+  # Log probes only read a small remote status/log delta.  A long timeout here
+  # hides a dead kernel-control request as a silent training run.
+  probe_timeout_seconds: 60
+  # Recover transient control-channel losses without replacing a live VM.
+  probe_retries: 2
+  probe_retry_backoff_seconds: 5
+  artifact_repo_id: "fbarulli/e-r-training-artifacts"
+  artifact_repo_private: true
+  # Mask-effect scoring is a local post-run analysis over the downloaded
+  # checkpoint/results; do not spend remote GPU time on it during training.
+  mask_effect_after_train: false
+  smoke_epochs: 1
+  dvc_remote_url: "https://dagshub.com/fbarulli/ER.dvc"
+  dagshub_repo: "fbarulli/ER"
+  worker_timeout_seconds: 14400
+  result_download_timeout_seconds: 3600
+  result_download_heartbeat_seconds: 15
+  result_archive_name: "result_bundle.tar.gz"
+  result_manifest_name: "result_bundle_manifest.json"
+  result_download_excluded_dirs:
+    - ".dvc-cache"
+    - ".dvc-site-cache"
+    - "_checkpoint_upload_staging"
+    - "_checkpoints"
+  worker_monitor_seconds: 15
+  dvc_enabled: false
+  # One lane-level DVC publisher is separate from trainer/HPO workers.
+  dvc_workers: 1
+  # DVC's internal content-transfer jobs. This controls parallel object
+  # transfers inside one DVC command; it is not another trainer process.
+  dvc_jobs: 4
+  result_events_file: "result_events.jsonl"
+  dvc_events_file: "dvc_events.jsonl"
+  dvc_push_retries: 5
+  dvc_push_backoff_seconds: 15
+  # Quiet window the streaming checkpoint publisher waits for before it pushes.
+  # Saves landing inside one window leave as a single `dvc push`; a lone
+  # checkpoint is still published within this window.
+  dvc_publish_debounce_seconds: 20.0
+  # SCORED-PAIR contract (2026-10-01): the scored population is NOT a yaml
+  # path literal here. It is the SSOT files.final_validation binding
+  # (data/final_validation.csv — the scored-pair rows of merged-graph folds
+  # 2+3), resolved by consumers via core.common; the row-count identity the
+  # preflight closes on (deduped + dropped == 71,623) is derived at exec time
+  # from the artifacts, with a byte-stability assert.
+  final_inference:
+    enabled: true
+    output_dir: "final_inference"
+    # REQUIRED, not a preference: final inference must actually run on the GPU
+    # when one is present. The worker refuses to start rather than silently
+    # falling back to CPU, so a CPU run is never mistaken for a GPU one.
+    device: "cuda"
+    # 12 GB VRAM, inference only. Finetuning uses 64 on a 14.6-GB T4 because
+    # backward passes and Adam moments dominate memory; forward-only under
+    # no_grad keeps the working set alone, so the same class of card carries a
+    # batch an order of magnitude larger. 512 is the chosen operating point and
+    # max_batch_size is the enforced ceiling: a typo fails at config load, and
+    # the worker re-checks it against the device before encoding.
+    batch_size: 512
+    max_batch_size: 1024
+    min_vram_gb: 10.0
+    error_threshold: 0.787
+    thresholds: [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
+
+# ── three-way gate (deterministic attribute gate; F01 audit round 2) ────────
+# The gate's decision table, formerly signature defaults in
+# data_pipe.three_way_gate (vol_tolerance=0.05 / raw_conf_threshold=0.85 /
+# consistency_fallback_threshold=0.3). Same values, now config-owned:
+#   vol_tolerance               ± relative volume overlap (250ml ≈ 260ml)
+#   vol_abs_tolerance           ± absolute volume overlap in ml; applied
+#                               WHICHER of the two is wider. Declared here so
+#                               the gate, census, miners and masking lanes all
+#                               read one SSOT (previously they defaulted to 0.0
+#                               and disagreed with the veto lane at small
+#                               volumes, where the relative cut is stricter).
+#   raw_conf_threshold          min volume/pack parse confidence to gate at all
+#   consistency_fallback_threshold  below this consistency -> fallback, not hard_no
+gate:
+  vol_tolerance: 0.05
+  vol_abs_tolerance: 5.0
+  raw_conf_threshold: 0.85
+  consistency_fallback_threshold: 0.3
+  # The gate's reason strings — the single declared source. three_way_gate
+  # composes decisions from these; consumers (gate_replay's fired-stage map,
+  # reason-keyed audits) read the same values, so a wording change lands
+  # everywhere at once instead of leaving a stale copy behind.
+  reasons:
+    pack_blocker: "Pack blocker: pack size, package type, or volume mismatch"
+    ambiguous_volume: "Ambiguous volume evidence"
+    low_volume_confidence: "Low raw volume confidence"
+    low_pack_confidence: "Low raw pack confidence"
+    no_volume_overlap: "No volume overlap"
+    no_pack_overlap: "No pack overlap"
+    package_type_mismatch: "Package type mismatch"
+    package_material_mismatch: "Package material mismatch"
+    packaging_level_mismatch: "Packaging level mismatch"
+    packaging_level_review: "Packaging level asserted on one side only (case vs unstated) — needs review"
+    categorical_mismatch: "Critical attribute mismatch:"
+    low_consistency: "Overlap but low consistency"
+    clean_proceed: "Known critical attributes compatible"
+    source_conflict: "Contradictory source attribute evidence"
+    supporting_feature_review: "Missing flavor evidence with differing supporting attributes:"
+    declared_identity_review: "Declared product identity differs or is incomplete:"
+
+# ── brand-differentiation audit (owner theory 2026-10-01) ──────────────────
+# Does between-GTIN card delta exceed within-GTIN (same product,
+# cross-retailer) noise — per brand? The graph-lane go/no-go: brands that
+# PASS can be differentiated by slot-filling (volume/pack/package
+# comparison against the product's own observed variation); brands that
+# FAIL send their low-confidence pairs to the original-dataset
+# clarification lane. Knobs are the audit's own; the card parsing, the
+# volume predicate and the extraction are the existing SSOT functions
+# (core.attribute_conflicts set parsers, core.critical_attributes.
+# volumes_compatible, pipeline.extract_all) — this block declares ONLY
+# what is new, never a copy of another block's value.
+differentiation_audit:
+  sim_min: 0.35            # gate-similarity floor for a pair = "similar products"
+  min_between_pairs: 30    # a brand verdict needs at least this many similar pairs
+  min_within_gtins: 5      # ...and at least this many multi-listing GTINs
+  volume_margin: 1.5       # verdict: median between-delta >= margin × median within-noise
+  max_listings_per_gtin: 20
+  max_between_pairs_per_brand: 200
+
+# ── split (component-aware; no pair ever straddles a boundary) ─────────────
+# train  = 50% of connected components — the ONLY data the model trains on
+# dev    = 25% — early-stopping/calibration source; calibration is a GTIN-disjoint
+#          subset reserved from DEV and is not used for early stopping
+# test   = 25% — HOLDOUT: the model NEVER trains on it, directly or via
+#          early stopping. Every reported test metric (AUC, PR-AUC, F1)
+#          comes from this set and nothing else.
+split:
+  mode: "holdout"
+  train_fraction: 0.50
+  dev_fraction: 0.25    # holdout q2 component quarter (q0+q1=train); CV
+                        # must declare 0.0 here because training.dev_fraction
+                        # owns the per-fold early-stopping carve
+  calibration_dev_fraction: 0.50  # component-safe share of DEV reserved for Rand threshold
+                                  # calibration; at most half (config load rejects > 0.5)
+  calibration_seed_offset: 17     # deterministic per-fold calibration carve offset
+  holdout_component_folds: 4      # q0+q1 train, q2 dev, q3 test — the ONLY arity the
+                                  # 50/25/25 contract supports (schema-pinned Literal[4]);
+                                  # folds.holdout_split derives the roles from it and
+                                  # requires dev_fraction == test_fraction == 1/4
+  test_fraction: 0.25   # holdout q3 component quarter; CV must declare 0.0
+  fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
+  cv_folds: 5           # cv mode only
+  # DECIDED 2026-10-01 (was TODO "STILL OPEN — the scored halves are thin").
+  # Policy A ("withhold_straddle") parked every negative with mismatched
+  # endpoint folds: 4,728 of 5,786 withheld and consumed by nothing, DEV 592
+  # / TEST 466 scored. Policy B ("train_side") assigns every negative ONE
+  # whole fold — the fold of its train-side endpoint when one endpoint is a
+  # train fold, else the fold of gtin1 — so DEV 1,087 (+495, +83.6%) and
+  # TEST 957 (+491, +105.4%) score, the withheld 3,742 return to the train
+  # fold instead of being orphaned, the min_test_negatives=5 thin-cell share
+  # improves (DEV 67.6% -> 64.9%, TEST 70.2% -> 67.2%), and no trained-on
+  # endpoint enters the scored half under either policy (leak check
+  # unchanged). B is implemented as the default; A stays reachable here.
+  # RE-DECIDED at the 2026-10-01 regeneration (canonical/gate/labeled rerun
+  # after the volume-unification closure): on the regenerated dev half the
+  # pinned A no longer holds — build_final_validation's split assert measured
+  # A scoring MORE thin-heavy negatives than B (65.71% vs 63.80% of cells
+  # below min_test_negatives=5; 4,823 negatives withheld under B vs 3,872
+  # under A). Evidence rejects the pinned policy, so the config moves to B;
+  # no artifact may ship under a policy its evidence rejects.
+  negative_fold_policy: "withhold_straddle"
+
+# ── zero-shot evaluation protocol (src/training/evaluate_models.py) ────────────────
+# HOLDOUT DISCIPLINE for the zero-shot lane (self-fit leak closed 2026-09-14):
+# labeled pairs are split into DEV/TEST halves by CONNECTED COMPONENT
+# (component_folds, same seed SSOT as the training lane). The Youden
+# threshold is FIT ON DEV and applied verbatim to TEST — never fitted on
+# the scores it rates. Every reported metric is test-side; the CSV keeps
+# youden_thr_test_descriptive as the leak diagnostic only.
+evaluation:
+  # ── attribute separation metrics (attribute_separation_*.csv) ───────────
+  # How well each attribute (and each of its VALUES) separates true pairs from
+  # false ones. Computed from labelled pairs + canonical attributes: no model,
+  # no training. SUPPORT IS ENFORCED: a score is only flagged as weak when
+  # BOTH classes clear the support floor, so a brand seen twice is reported
+  # with its counts but never called a defect.
+  attribute_separation:
+    enabled: true
+    min_pairs_per_class: 30   # attribute-level: min positives AND negatives
+    min_value_support: 20     # per-value: min pairs in BOTH classes to flag
+    flag_below: 0.10          # separation <= this (with support) = weak
+  component_split_k: 2   # component folds over the labeled-pair barcode graph
+  dev_fold: 0             # fold index used as DEV  (threshold-fit half)
+  test_fold: 1            # fold index used as TEST (reported half)
+  # DECIDED 2026-10-01 (was TODO "slice-flag gate semantics"). The slice
+  # columns are SET-VALUED (v1_* = v2_* are sets of extracted values, per
+  # side per positive pair), so agreement is BAG equality, not scalar v1==v2.
+  # Measured on data/final_validation.csv (565 positives) with this flag on:
+  # EVERY disagree count is byte-identical to the scalar comparison (volume
+  # 13, pack 48, package_type 153, sweetener 127, flavor 363, carbonation
+  # 38), so no manifest number drifts today -- the flag changes semantics
+  # only where order/spacing-only spellings differ, and synthetic spellings
+  # are pinned in tests/test_scored_half_decisions.py. Legacy "scalar" stays
+  # reachable for byte-stability audits.
+  slice_agreement: "set_bag"
+  retrieval_ks: [1, 5, 10]  # persisted Precision@K / Recall@K cutoffs
+  robust_validation:
+    enabled: true
+    n_folds: 5             # repeated held-out folds over SKU/GTIN components
+    repeats: 3             # independent seeded assignments, 15 scored folds total
+    seed: 42
+    min_slice_size: 25     # suppress unstable brand/category slices
+    min_test_negatives: 5  # reject/reseed a fold with fewer test negatives
+    max_split_attempts: 100 # bounded reseed/re-shuffle attempts for strict CV
+    dimensions: [brand, category, attribute]
+    operating_thresholds:
+      balanced_review: 0.787
+      high_precision: 0.85
+  uniformity:
+    enabled: true
+    sample_pairs: 100
+    seed: 42
+    checkpoint_scope: "final"
+
+# Shared unrelated-pair collapse monitoring and HPO penalty contract.
+collapse_guardrail:
+  enabled: true
+  profile: threshold_80
+  unrelated_pairs: 100
+  seed: 42
+  median_penalty_start: 0.50
+  p90_penalty_start: 0.70
+  cosine_std_floor: 0.05
+  penalty_weight: 1.0
+  reject_median: 0.80
+  max_token_frequency: 0.05
+  operating_threshold: 0.80
+  crossing_rate_ceiling: 0.02
+
+collapse_guardrail_profiles:
+  threshold_80:
+    operating_threshold: 0.80
+  threshold_65:
+    operating_threshold: 0.65
+
+# ── final Rand Index matching lane ─────────────────────────────────────────
+# Runtime input files are required CLI arguments; all matcher behavior and
+# output locations live here so the final submission has one SSOT.
+rand_matching:
+  output_dir: "submission"
+  truth_splits:
+    # One representative SKU for each selected canonical identity.  The two
+    # files are disjoint in both SKU_ID and true_item_id, so they can be
+    # supplied directly to er-rand-match.
+    output_dir: "results/rand_truth"
+    calibration_output: "calibration_truth.csv"
+    holdout_output: "holdout_truth.csv"
+    # All canonical truths that have a representative deduplicated SKU.
+    # There are currently 12,986; the remaining 264 canonical records have
+    # no source SKU and therefore cannot be evaluated by the matcher.
+    sample_size: 12986
+    calibration_size: 8657
+    calibration_folds: 3
+    seed: 42
+  stratum_sweep:
+    # A non-degenerate GTIN-ablation fixture: two source SKUs per canonical
+    # truth, with complete, mismatched, and missing source GTIN scenarios.
+    output_dir: "results/rand_truth"
+    output: "gtin_stratum_sweep.csv"
+    identities_per_status: 600
+    skus_per_identity: 2
+    calibration_folds: 3
+    seed: 42
+  outputs:
+    submission: "SKU_ITEM_submission.csv"
+    diagnostics: "SKU_ITEM_submission_diagnostics.csv"
+    threshold_selection_by_fold: "threshold_selection_by_fold.csv"
+    threshold_sensitivity_by_gtin_status: "threshold_sensitivity_by_gtin_status.csv"
+    threshold_sensitivity_plot: "threshold_sensitivity_by_gtin_status.png"
+    threshold_comparison: "threshold_comparison.csv"
+    plateau_diagnostic: "plateau_diagnostic.json"
+    holdout_metrics: "holdout_metrics.csv"
+    calibration_diagnostics: "calibration_diagnostics.csv"
+    holdout_diagnostics: "holdout_diagnostics.csv"
+    holdout_pair_disagreements: "holdout_pair_disagreements.csv"
+    holdout_ann_missed_true_matches: "holdout_ann_missed_true_matches.csv"
+    holdout_retrieval_ablation_metrics: "holdout_retrieval_ablation_metrics.csv"
+    provenance: "submission_provenance.json"
+  # ANN/semantic candidate depth. Calibration records this value alongside
+  # ANN-only true-candidate recall; do not tune it independently of the
+  # downstream assignment threshold and over-merge rate.
+  top_k: 20
+  batch_size: 128
+  # The sensitivity surface must reach the lower one_missing/different
+  # operating range; exact-GTIN remains locked independently of this grid.
+  threshold_min: 0.61
+  threshold_max: 0.98
+  threshold_step: 0.01
+  threshold_by_gtin_status:
+    both_equal: 0.80
+    different: 0.80
+    one_missing: 0.61
+    both_missing: 0.80
+  brand_conflict_veto: true
+  # Strict, auditable guards for thresholded (non-exact-GTIN) candidates.
+  # Exact GTIN remains a lock and bypasses these guards.  Unknown pack or
+  # volume evidence is never silently treated as agreement: it is exported
+  # to the human-review route and excluded from automatic graph edges.
+  targeted_veto_gates:
+    enabled: true
+    # Which dimensions may HARD-BLOCK a non-exact match. The veto requires a
+    # value observed on BOTH sides that genuinely disagrees; absent evidence is
+    # classified "unknown" and never vetoes (that is the doctrine, and it is
+    # pinned by tests). Measured per dimension on the 6,898 labelled holdout
+    # pairs at the operating threshold, leading with the number that matters --
+    # TRUE MATCHES LOST:
+    #   volume        60 false merges removed,  0 true lost
+    #   pack          20,  0        package_type 13, 0
+    #   flavor         1,  0        carbonation   0, 0        pulp 3, 0
+    #   sweetener      6 false merges removed, 74 TRUE LOST   <-- 12:1 against
+    # The full seven remove 82 false merges but lose 74 true matches, dropping
+    # recall 0.8670 -> 0.8536 for +0.001 precision. Excluding sweetener keeps 81
+    # of the 82 and loses NONE: precision 0.9751 -> 0.9915 at UNCHANGED recall.
+    # That historical evaluation argued for excluding sweetener. The CURRENT
+    # list below includes it; the measured exclusion result is retained as
+    # review evidence, not a description of today's active veto policy.
+    # Changes to this policy require a fresh measured decision.
+    #
+    # pack_material (owner ruling, 2026-10-01). Measured full-corpus, original
+    # 13-column feed, session numbers (attribute_universe census semantics):
+    #   hard_no pairs with material evidence     92,259
+    #   material both-populated on those pairs   67,899
+    #   genuinely disjoint (mismatch class)      32,641   (48% of both-populated)
+    # Identity-safe BY CONSTRUCTION: the material union is aggregated at
+    # canonical level (package_material_set unions every member row), and both
+    # sides of a verified true match share the same canonical -> the same set.
+    # A row-level SKU set is always a subset of its canonical's union, so a
+    # same-canonical pair can never hold two disjoint material sets: a set-
+    # intersection veto structurally CANNOT lose a true match (pinned by
+    # tests/test_pack_material_veto.py). Deliberately EXCLUDED dimensions,
+    # with their same-GTIN noise rates (informational only -- feed noise, not
+    # identity): water type 14.9%, made from 21.2%, caffeine 3.2% same-GTIN
+    # noise.
+    veto_dimensions: [volume, pack, package_type, flavor, sweetener, pulp, pack_material]
+    # Two-sided ingredient sets that are neither subsets require review when
+    # flavor is missing. Capture-correct audit: 86 previously passing pairs.
+    supporting_feature_review_dimensions: ["made from"]
+    pack_mismatch_veto: true
+    volume_mismatch_veto: true
+    package_type_mismatch_veto: true
+    brand_mismatch_veto: true
+    missing_pack_or_volume_route: "human_review"
+    volume_relative_tolerance: 0.05
+    volume_absolute_tolerance_ml: 5.0
+    preserve_exact_gtin: true
+  # Missing evidence must not be compensated for by lowering the global
+  # threshold. For non-exact candidates only, reduce confidence when the same
+  # critical attributes are absent from both endpoints. This is monotonic: it
+  # can reject uncertain links but can never introduce a new merge.
+  confidence_penalty_mask:
+    enabled: true
+    critical_attributes: [volume, pack, flavor]
+    minimum_joint_missing: 2
+    penalty_per_joint_missing: 0.01
+    max_penalty: 0.03
+    preserve_exact_gtin: true
+  # Flavor evidence is compared as normalized token sets instead of raw
+  # strings.  A bounded score penalty is applied only when both endpoints
+  # expose flavor evidence and their overlap is weak.  Exact-GTIN candidates
+  # remain locked and retain their unadjusted semantic score.
+  flavor_overlap_penalty:
+    enabled: true
+    minimum_overlap: 0.50
+    max_penalty: 0.05
+    preserve_exact_gtin: true
+  # Measured gate-outcome census TRIPWIRE — NOT a business constant. It exists
+  # so an unintended gate/universe change fails loudly instead of silently
+  # skewing the labeled lane. This block is the SINGLE declared source: both
+  # training/labeled_pairs.py (fallback exclusion) and training/selftest.py
+  # (oracle_pinned_counts) read it, replacing two divergent hardcoded literals.
+  # Update ONLY on an intentional, measured gate change, and update it here
+  # once — the schema enforces hard_no + proceed + fallback == total_pairs.
+  # Measured against the regenerated gate_results.csv (13,216 products).
+  # 2026-10-02 regen (attribution): extraction changes landed (16,942-row
+  # field motion), x-multiplier unit-boundary repaired (split 3),
+  # URL decimal pack evidence (26 rows), stage-7 claim lift with
+  # review-downgrade, and the no_added_sugar_with_cane_sugar routing.
+  # Prior pin: hard_no 112372, proceed 16611, fallback 6263. Mass moved
+  # INTO review: fallback 6263 -> 17143; hard_no -7002; proceed -3878.
+  # degraded map (vs prior pin): lost_true_block 300, lost_true_review
+  # 2506, new_merge_risk 14, lost_neg_review 1365.
+  gate_census_pin:
+    total_pairs: 135246
+    hard_no: 105370
+    proceed: 12733
+    fallback: 17143
+  target_recall: 0.90
+  threshold_tie_break:
+    - "rand_index"
+    - "fewest_unmatched_skus"
+    - "lowest_threshold"
+  threshold_reconciliation_scope: "final_assignment_gtin_and_attribute_gates"
+  threshold_min_fold_support: 3
+  calibration_proxy_source: "dev_component_safe_split+labeled_pairs_gate_positive_different"
+  # Deterministic source rule for the labeled_pairs cross-GTIN calibration
+  # stratum: lowest eligible source-row index, then lexicographically smallest
+  # target GTIN. The Pydantic Literal makes this policy fail loudly if changed
+  # without an implementation update.
+  calibration_different_gtin_selection: "lowest_source_row_lexicographic_target"
+  plateau_tolerance: 0.005
+  plateau_min_points: 3
+  # SSOT for the unmatched-SKU ITEM_ID prefix (RM8). rand_matching.py's four
+  # hardcoded "UNMATCHED_" sites must read this key — REQUIRED by
+  # RandMatchingSpec (extra="forbid"), so a missing/mismatched value fails
+  # every lane at config load, and the lookup vs column-name mismatch on
+  # fit_threshold_at_90pct_recall needs NO config key (the f-string
+  # f"fit_threshold_at_{target_recall:.0%}_recall" is the fix).
+  unmatched_prefix: "UNMATCHED_"
+
+# ── training ────────────────────────────────────────────────────────────────
+training:
+  # Registry key used when --model is omitted from the training entry point.
+  base_model: "minilm_l6"
+  architecture: "two_tower"  # default: shared-weight SKU/canonical retrieval towers
+  uniformity_regularization:
+    enabled: true
+    weight: 0.05
+    temperature: 2.0
+    min_batch_size: 4
+  late_epoch_lr_decay:
+    enabled: true
+    start_epoch_fraction: 0.50
+    multiplier: 0.50
+  structured_features:
+    enabled: true
+    append_to_text: true  # intentional text channel for normalized volume/pack/package type
+    feed_to_loss: true    # intentional second structured channel in the loss
+    embedding_weight: 0.35
+    volume_scale_ml: 10000.0
+    pack_scale: 100.0
+    max_set_size: 8
+    # Universal symmetry (owner ruling): an unobserved pack count is an
+    # implicit 1.0 on BOTH sides of a pair — source and target, text channel
+    # and numeric vector alike. Applied by the 'cleaned' composition only;
+    # 'legacy' keeps its historical one-sided sentinel and its golden bytes.
+    implicit_pack_qty: 1.0
+  # ── model-input text composition (SSOT: core.model_input) ───────────────
+  # Both lanes (training candidate retrieval + scoring prediction) and the
+  # payload audit build the encoder text through core.model_input, which
+  # reads this block.  Switch profiles here — never by reverting code.
+  #
+  #   profile: cleaned  [Brand] [Title] [Attributes] composition (default):
+  #                     underscore compounds split so they can match source
+  #                     text, discriminative numbers kept, percentage
+  #                     evidence preserved, and the description/breadcrumb
+  #                     evidence channel excluded
+  #   profile: legacy   the original committed composition, byte for byte —
+  #                     the fallback selection, kept verified by
+  #                     tests/test_model_input_contract.py
+  #
+  # include_evidence appends the description/breadcrumb evidence channel.
+  # 'cleaned' excludes that channel by definition, so cleaned+true is
+  # rejected at config load rather than silently ignored.
+  model_input:
+    profile: "cleaned"
+    include_evidence: false
+    # ── redundancy removals (measured on the real 13,250 canonicals) ───────
+    # Each is independently selectable so it can be A/B'd and rolled back by
+    # config alone. Defaults reproduce today's bytes exactly. Setting any of
+    # them against profile: legacy is REJECTED at config load — legacy is the
+    # byte-for-byte pre-change stream and an ignored flag would be a silent
+    # no-op. See MODEL_INPUT_FIX_REPORT.md for the paired ANN A/B per variant.
+    # Shipped defaults below are the MEASURED optimum (paired ANN A/B on the
+    # recovered checkpoint-44, each variant judged at its own Youden optimum):
+    #   both removals on : 13.4 tok/text (-26.0%), Youden .7688 -> .7786,
+    #                      FP 123 -> 122, FN 784 -> 734, recall@1 .7769 -> .7784
+    #   markers alone    : -21.6% tokens, Youden +.0118, recall@1 -.0029
+    #   pack_qty_1 alone :  -8.7% tokens, Youden +.0015, recall@1 +.0042
+    emit_field_markers: false         # [FIELD_*] markers were 26.35% of tokens
+    # KEPT DELIBERATELY. Dropping a plain word whose structured twin is present
+    # measured Youden +.0083 but recall@1 -.0315 (3.15pp BELOW baseline), which
+    # breaks the standing "keep retrieval recall at or above baseline" bar. The
+    # flag stays selectable so the trade can be revisited.
+    keep_redundant_attribute_words: true
+    emit_singleton_pack_token: false  # "pack_qty_1" sits in 75.8% of texts
+  # Switchable through er-colab --loss. contrastive = OnlineContrastiveLoss
+  # over labeled (pos=1/neg=0) hard pairs; mnrl =
+  # MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
+  loss: "mnrl"
+  # ── MNRL subset monitoring + twin warmup (EXP-03) ─────────────────────────
+  # Monitoring records per-population (twin/masked/base) mean loss per epoch to
+  # mnrl_subset_loss_by_epoch_fold{i}.csv. Observability only: without it no
+  # P@R95 move can be attributed to a population, so every calibration call
+  # (TIER 3) is unanswerable. The warmup changes LOSS WEIGHTING and stays
+  # DISABLED — that is a calibration decision, not an observability one.
+  mnrl_monitoring:
+    enabled: true
+  twin_loss_warmup:
+    enabled: false
+    warmup_epochs: 2
+    twin_weight: 0.25
+  contrastive_margin: 0.1     # OnlineContrastiveLoss margin (cosine distance); target negative cosine < 0.8
+  hard_positives: true        # generate volume-verified cross-country pairs
+                              # and join them to the training positives
+  epochs: 10
+  lr: 0.00002
+  warmup_ratio: 0.05
+  weight_decay: 0.01          # conservative AdamW regularization
+  projection_dropout: 0.10    # applied after SentenceTransformer pooling
+  label_smoothing: 0.05       # binary smoothing for contrastive loss only
+  random_easy_negatives:
+    enabled: true
+    ratio_to_hard: 1.0        # retain every hard negative, then add 1 easy per hard
+    candidate_pool_size: 10000
+  lr_scheduler: "linear"
+  max_grad_norm: 1.0
+  es_patience: 3
+  es_threshold: 0.001
+  # discriminative-LR groups: per-layer multiplicative decay bottom->top
+  # (was an inline 0.9 default in src/training/training._discriminative_groups)
+  layer_decay: 0.9
+  # checkpoint retention (HF Trainer save_total_limit): best + last
+  # (was an inline 2 in the STArgs build)
+  save_total_limit: 2
+  # cross-encoder rerank lane (07e): the stage-2 model's own encode cap
+  # (was an inline 512 in src/training/rerank.CrossEncoder)
+  rerank_max_length: 512
+  # ── runtime knobs — no-fallback: every key must exist, nothing defaults
+  #    inline at a call site (owner Q27) ──
+  batch_size_cpu: 32          # finetune batch when on CPU
+  # Conservative shared batch sizes for the 14.6-GB T4 across all three
+  # swept backbones (MiniLM, multilingual L12, and DeBERTa-v3-base).
+  batch_size_cuda: 64         # finetune batch when on GPU
+  batch_size_embed: 64        # encode batch (zero-shot, plots, eval encoders)
+  batch_size_eval: 64         # post-train eval encodes
+  max_seq_length: 128         # every encoder call
+  eval_steps_per_epoch: 4     # early-stop eval cadence
+  dev_fraction: 0.15          # dev share OF THE TRAIN side (early stopping)
+  max_triples: 5000           # triplet-lane cap (build_triplets reads this)
+  track_datapoint_usage: true # per-presentation population/epoch verifier
+  # Controlled batch sampler (owner): offline prep determines
+  # composition; default HF sampling is used when disabled.
+  batch_sampler:
+    enabled: true
+    composition:
+      gate_positive: 4
+      masked_positive: 4
+      hard_negative: 8
+    seed: 42
+
+# ── pair-selection thresholds (owner's label semantics) ─────────────────────
+# thresholds: the label rule; caps: eval-pair construction (were EDA/eda.yaml
+# pairs: — migrated 2026-09-10 when the EDA dir was deleted).
+# neg_oversample: random-negative bulk-draw multiplier (was inline 60 in
+# src/core/blocking.build_pairs).
+pairs:
+  proceed_sim_threshold: 0.50    # positives: proceed & sim>=0.50 (lowered
+                                 # 2026-09-28 0.80->0.65->0.50: +884
+                                 # gate-verified pairs, canonical-agreement
+                                 # 1.0000 in every 0.05 band down to 0.50;
+                                 # negatives unchanged at 0.80)
+  hardneg_sim_threshold: 0.80    # hard negatives: hard_no & sim>=0.80
+  max_pos_per_group: 4           # eval-pair positives per multi-retailer group
+  n_neg: 10000                   # eval negatives per build_pairs call
+  neg_oversample: 60             # bulk-draw multiplier for valid negatives
+  balance_train_classes: true    # next training run: train negatives match all positives
+
+# ── entity-cluster circuit breaker ──────────────────────────────────────────
+# Components are tiny by construction (max 13 over ~39k covered rows at
+# full scale): a giant means catalog corruption (shared placeholder
+# barcode, feed merge), not a big product family. The prep lane fails
+# loudly past either cap instead of training on merged entities.
+entity_clusters:
+  max_component_size: 15
+  max_giant_ratio: 0.05
+
+# ── plotting (was EDA/eda.yaml plots: — every fig.savefig reads this) ────────
+plots:
+  dpi: 150                      # SSOT for every figure in the tree
+
+# ── audits ────────────────────────────────────────────────────────────────────
+# strip-audit sample size (was EDA/eda.yaml strip_audit_sample).
+# blocking_audit knobs (audit round 2 F18, moved round 3): the blocking-
+# feature audit's candidate-pair budget and greedy min-recall floor (were
+# inline BUDGET = 5_000_000 / MIN_RECALL = 0.95 in src/training/blocking_audit.py).
+# strip_ladder_bands (SSOT move, this round): the strip-audit similarity
+# ladder's Jaccard band edges — were an inline literal list in
+# src/training/strip_audit.py (~:186). Same values, new home; read via
+# lib.common.strip_ladder_bands().
+# The four manifest_* / source_* knobs below (SILENT_DROPS task 2) feed the
+# silent-drop guardrail layer: per-stage manifests, the raw-export census,
+# and the source-drift gate that enforces it. Defaults live in
+# AuditSpec (src/core/schemas.py) and are mirrored here explicitly so the SSOT
+# stays self-documenting; tasks 3+ consume them via training_cfg().audit.
+audit:
+  strip_audit_sample: 200
+  strip_ladder_bands: [[0.0, 0.2], [0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.01]]
+  blocking_budget: 5_000_000      # candidate pairs the classifier can afford
+  blocking_min_recall: 0.95      # greedy forward-selection recall floor
+  manifest_dir: "results/manifests"   # per-stage <stage>.json, written LAST;
+                               # presence w/ status "complete" = stage ran
+  source_export_expected_rows: 71_623 # approved dataset.csv census (drift gate)
+  source_drift_threshold_pct: 0.0     # allowed row-count drift; 0.0 = exact
+  source_export_expected_sha256: "539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c" # approved source bytes
+  manifest_stages:                    # stages that MUST produce a manifest,
+    - "dedupe"                        # in pipeline order (an orchestrator lane
+    - "data_prep"                     # may append its own later)
+    - "labeled_pairs"
+    - "evaluate_models"
+    - "zero_shot_sims"
+
+
+# ── confusion / rerank bands (bi-encoder cosine) ────────────────────────────
+bands:
+  eval_mining: [0.35, 0.90]   # train_one_config's EVAL-pool mining band
+  rerank_band: [0.50, 0.75]   # cross-encoder rerank slice
+
+# ── rerank A/B decision rule (07e) — the quantitative "clearly improve" ────
+# The hybrid SHIPS only when it beats the bi-encoder by at least this
+# margin on PR-AUC OR F1 (dev-selected threshold, test-side absolutes —
+# see the holdout discipline in src/training/rerank.py).
+rerank:
+  min_delta_pr_auc: 0.005
+  min_delta_f1: 0.005
+
+# ── HPO lanes (grid + TPE) — sweep spaces, trial budgets ────────────────────
+# second07's fixed grid, verbatim (epochs x lr x warmup%), + the TPE
+# search space and budgets. All were module-level literals in src/training/hpo.py
+# / src/training/training.py — a config change can now steer every sweep.
+hpo:
+  # Backbone registry keys swept in round-robin order. Values resolve through
+  # config/paths.yaml models; the launcher never embeds model identifiers.
+  models: ["minilm_l6"]
+  grid:                       # each row: epochs / lr / warmup percent
+    - {epochs: 1, lr: 2.0e-05, warmup: 0}
+    - {epochs: 1, lr: 5.0e-05, warmup: 0}
+    - {epochs: 1, lr: 1.0e-04, warmup: 0}
+    - {epochs: 2, lr: 2.0e-05, warmup: 0}
+    - {epochs: 2, lr: 5.0e-05, warmup: 0}
+    - {epochs: 2, lr: 1.0e-04, warmup: 0}
+    - {epochs: 4, lr: 2.0e-05, warmup: 0}
+    - {epochs: 4, lr: 5.0e-05, warmup: 0}
+    - {epochs: 4, lr: 1.0e-04, warmup: 0}
+    - {epochs: 1, lr: 2.0e-05, warmup: 10}
+    - {epochs: 2, lr: 5.0e-05, warmup: 10}
+  quick:                      # --quick smoke: 3-config subset of the grid
+    - {epochs: 1, lr: 2.0e-05, warmup: 0}
+    - {epochs: 2, lr: 5.0e-05, warmup: 0}
+    - {epochs: 2, lr: 5.0e-05, warmup: 10}
+  tpe_space:                  # optuna suggest ranges per knob
+    epochs: [10, 10]         # fixed: every HPO trial runs 10 epochs
+    lr: [1.0e-05, 1.0e-04]    # float, log-uniform
+    warmup_ratio: [0.0, 0.1]  # float
+    weight_decay: [0.0, 0.1]  # float
+    negative_mask_frac: [0.0, 0.5]  # hard-negative masking; positive masking stays masking.frac
+    uniformity_weight: [0.0, 0.05]  # trial-level anti-collapse regularizer
+  n_trials: 20                # default TPE trial budget (was --n-trials 20)
+  n_jobs: 2                   # default parallel HPO trial workers
+  persistence: "none"        # DVC disabled; retain HPO state only in the run workspace
+  calibration_folds: 3        # canonical-disjoint folds for the trial proxy
+  # ── selection protocol (test-leak fix, 2026-09-12) ─────────────────────
+  # WHICH signal a sweep ranks configs on, per split mode. Holdout sweeps
+  # train q0+q1, early-stop + select on the dev quarter q2's component-safe
+  # calibration Rand proxy and NEVER compute a per-config test metric — the
+  # test quarter is read exactly once, by the main train lane. CV uses the
+  # same calibration Rand schema on its validation-side folds.
+  objective:
+    holdout: rand_index_proxy
+    cv: rand_index_proxy
+  # selection-mode folds skip the test-side eval block + pair dump and
+  # record test_eval=skipped_selection_mode instead. MUST stay true:
+  # computing a per-config test metric re-opens the leak this closed.
+  selection_skip_test_eval: true
+
+# ── ablation sweep (07-series axes / colab smoke) ──────────────────────────
+# The 07-series axes: payload variants (07c, 'full' is the main holdout lane
+# itself so it is skipped), train-frac curve (07d), the smoke sample size,
+# and the 07e rerank cross-encoder. src/cli/colab.py derives its
+# smoke-sample, train-frac and rerank defaults from this block. All were
+# inline literals in the deleted run_all.py orchestrator / colab_backend.py.
+sweep:
+  payload_variants: ["title_only"]   # 07c variants beyond 'full'
+  train_fracs: [0.25, 0.50, 0.75]    # 07d data-scaling curve
+  smoke_sample: 128                   # chain-check sample size (--sample)
+  sweep_sample: 2000                  # step-2 smoke sweep size
+  rerank_model: "rerank_minilm_l6"  # local registry key; DVC-shipped bundle
+
+# ── TIER 3 calibration sweep (documented but DISABLED) ──────────────────────
+# DECIDED 2026-10-01: the delta-counterfactual/hard-negative fracs get swept
+# on held-out P@R95 ONLY, once a training-run lane exists (this environment
+# cannot start training). The spec lives in
+# src/core/schemas.CalibrationSweepSpec — its docstring holds the reasoning,
+# sweeping fractions are null while disabled, and activating the block means
+# flipping enabled=true AND declaring the fractions (the schema refuses the
+# half-activated state). Sweetener runs FIRST: measured margin 0.0017,
+# 62.4% ranked correct, 35.8% flip-SUPPORTED, n=109 (flavor second:
+# 0.0113/89.3%); both margins come from scripts/minimal_flip_slice.py,
+# which is NOT yet self-reviewed — that review is a precondition pinned in
+# the spec. Acceptance is the twin-bucket floor contract already defined in
+# TODO's checkpoint-eval section: per-bucket twin P@R95 >= 0.500 floor,
+# overall up + twin down = over-smoothing = arm REJECTED; twin margin must
+# lift off ~0.008. No training run was started here.
+calibration_sweep:
+  enabled: false
+  counterfactual_fracs: null   # activate with e.g. [0.05, 0.10, 0.20, 0.30]
+  hard_negative_fracs: null    # activate with e.g. [0.20, 0.30, 0.33, 0.50]
+  eval_model: "minilm_l6"      # registry key the sweep scores under
+  # Sweetener first is pinned in the schema's validator (order is
+  # measured-weakness, not rearrangeable config); the tail fields are
+  # flavor, package_type, pack, volume, carbonation.
+  slice_order: [sweetener, flavor, package_type, pack, volume, carbonation]
+
+# ── mining band for in-batch negatives ───────────────────────────────────────
+mining:
+  # Each miner has an independent switch and parameter set. Masking is
+  # configured separately above.
+  ann:
+    # Safe default: ANN mining requires an explicit mining_enabled profile.
+    # masking_only and ordinary training runs must not turn it on implicitly.
+    enabled: false
+    target: 20000             # maximum generic hard/eval pairs per lane
+    band: "0.45-0.80"        # cosine band for ANN candidates
+    band_mode: "adaptive_quantile" # fixed | adaptive_quantile | intersection
+    k: 40                     # top ANN candidates per row
+    chunk_size: 2048          # rows per cosine-matrix chunk (OOM control)
+    exclude_conflicting: true # drop known conflicting-barcode label errors
+    refresh_enabled: false    # ANN stays off unless an explicit experiment enables it
+    refresh_every_epochs: 1   # checkpoint refresh cadence in completed epochs
+    candidate_multiplier: 4    # broad candidates retained for score calibration
+    score_quantiles: "0.10-0.90" # fine-tuned candidate quantiles inside band
+    max_per_canonical: 5      # endpoint diversity cap per canonical/barcode
+    max_per_brand: 100        # endpoint diversity cap per brand
+  attribute_conflict:
+    enabled: true
+    target: 12000             # maximum shared critical-attribute conflict pairs
+    band: "0.50-0.95"        # dynamic cosine band; lower bound is strict (>0.50)
+    min_similarity: 0.50      # static gate Jaccard must be strictly greater
+    same_product_name: true   # normalized name removes pack/size/container only
+  # ── cross-brand hard negatives (the brand-separation lever, §15) ─────────
+  # THE DEFECT: the gate's candidate pairs are generated INSIDE a brand block,
+  # so brand agreement is 100% in BOTH training classes and measured pair
+  # separation for brand is exactly 0.000 (volume: +0.837). The encoder can
+  # only learn that brand is noise. This lane mines the mirror population —
+  # brands DIFFER, every other critical attribute agrees — verified non-matches
+  # by canonical identity, label-error guard and brand-spelling guard, so brand
+  # becomes the only discriminating evidence.
+  #
+  # Measured on the live artifacts (13,250 canonicals, 133,127 blocked
+  # candidates): 46,251 survive the attribute filter, 30,372 clear the
+  # similarity floor below, and the target keeps the hardest 3,000 candidates
+  # (6,000 pair rows, both directions).
+  cross_brand:
+    enabled: true
+    target: 6000              # maximum emitted (sku row, other canonical) rows;
+                              # ~28% of the 15,397-row negative population
+    min_similarity: 0.10      # gate short-token Jaccard, strictly greater. A
+                              # 0.20 floor was measured and REJECTED: it drops
+                              # the cross-brand pairs the review band cites
+                              # (Piacelli/Premier 0.143-0.250).
+    require_agreement: ["volume", "package_type"]
+                              # BLOCKING key, not the whole rule: both sides
+                              # must CARRY and agree on these values. `volume`
+                              # alone blocks 5,693,447 candidates (43x more
+                              # work for the same answer); package_type alone
+                              # is present on only 2,712 canonicals.
+    max_per_canonical: 20     # endpoint diversity: max accepted pairs per GTIN
+    max_per_brand: 100        # endpoint diversity: max accepted pairs per brand
+
+# Named concurrent-run selectors. They toggle methods only; all miner knobs
+# remain in mining.ann / mining.attribute_conflict / mining.cross_brand above.
+mining_profiles:
+  mining_enabled:
+    ann_enabled: true
+    attribute_conflict_enabled: true
+    cross_brand_enabled: true
+  masking_only:
+    ann_enabled: false
+    attribute_conflict_enabled: false
+    cross_brand_enabled: false
+
+# ── NER lane ───────────────────────────────────────────────────────────────
+# NER is a training consumer, so it shares this configuration contract rather
+# than carrying a module-specific config file. Paths are resolved by
+# core.common.ner_config(); no NER module infers a config location.
+ner:
+  base_dir: "."
+  results_dir: "results"
+  columns: &ner_columns
+    sku_name_eng: "sku_name_eng"
+    brand: "brand"
+    sku_name_clean: "sku_name_clean"
+    namebrandmatch: "namebrandmatch"
+  data_prep:
+    input_csv: "dataset.csv"
+    output_csv: "${results_dir}/dataset_model_input.csv"
+    columns: *ner_columns
+  semantic_training:
+    INPUT_CSV: "${results_dir}/dataset_model_input.csv"
+    MODEL_NAME: "ner_semantic_base"
+    OUTPUT_DIR: "${results_dir}/model"
+    EPOCHS: 3
+    BATCH_SIZE: 32
+    LEARNING_RATE: 2.0e-5
+    WARMUP_STEPS: 100
+    WEIGHT_DECAY: 0.01
+    TRAIN_FRAC: 0.50
+    VALIDATION_FRAC: 0.25
+    HOLDOUT_FRAC: 0.25
+    NEGATIVE_SAMPLING_RATIO: 1.0
+    EVAL_STEPS: 500
+    SAVE_STEPS: 1000
+    SEED: 42
+    COLUMNS: *ner_columns
+    HF_REPO_ID: "fbarulli/euromonitor-semantic-model"
+  semantic_evaluation:
+    model_dir: "${results_dir}/model"
+    input_csv: "${results_dir}/dataset_model_input.csv"
+    hf_repo_id: "fbarulli/euromonitor-semantic-model"
+    sample_size: 100
+    random_state: 42
+    output_csv: "${results_dir}/semantic_similarity_top.csv"
+    metrics_csv: "${results_dir}/metrics.csv"
+    fp_csv: "${results_dir}/false_positives.csv"
+    fn_csv: "${results_dir}/false_negatives.csv"
+    predictions_csv: "${results_dir}/predictions.csv"
+    top_n_fp_fn: 100
+    seed: 42
+    columns:
+      <<: *ner_columns
+      similarity: "similarity"
+      predicted: "predicted"
+      semantic_similarity: "semantic_similarity"
+    encode_params:
+      normalize_embeddings: true
+      show_progress_bar: true
+  ner_training:
+    input_jsonl: "${results_dir}/ner_dataset.jsonl"
+    output_dir: "${results_dir}/ner_model"
+    model_name: "ner_transformer_base"
+    epochs: 10
+    batch_size: 32
+    learning_rate: 2.0e-5
+    dropout: 0.2
+    train_frac: 0.50
+    validation_frac: 0.25
+    holdout_frac: 0.25
+    seed: 42
+    label: "BRAND"
+  colab:
+    session: "SemanticSim"
+    gpu: "T4"
+    remote_root: "/content/SemanticSim"
+  huggingface:
+    ner_repo_id: "fbarulli/e-r"
+    token_file: ".env"

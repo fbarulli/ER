@@ -1,0 +1,27 @@
+{
+  "round": 8,
+  "questions": {
+    "is_same_product": {
+      "type": "noul",
+      "instructions": "Do record_a and record_b describe the exact same retail product (same brand, product type, flavor/variant, and pack size), accounting for typos, abbreviations, and wording differences?"
+    }
+  },
+  "models": [
+    "typesafe/jev-1.13"
+  ],
+  "adapter": [
+    "openrouter"
+  ],
+  "completed_utc": "2026-10-02T22:33:18.897451+00:00",
+  "calls_completed": 1000,
+  "unique_pairs": 900,
+  "request_hashes_verified": true,
+  "raw_responses_saved": true,
+  "sha256": {
+    "jev/sample_doubled_8.json": "ef4b051648671ef3f6824d4156b07db66acec6344022b64f834f5fac60211b9e",
+    "jev/input_states_8.json": "af05c6789ac630863d1d5399b7984d59fe963c82d1777536d9db89a5becb316e",
+    "jev/audit_results_8.jsonl": "e806012c58151516f53f84f39aee5867e2881b142d804af3025095d3287e54a9",
+    "jev/sample_8_summary.json": "ba51662856e50af7537abe5a29b3b41d1b8023a70bd44e126649f0fdbab48cdd",
+    "jev/report_8.json": "db1aa68d3c3c47cfdc83aba9193ac9a1b95ef202969b5e64930dec564915b822"
+  }
+}

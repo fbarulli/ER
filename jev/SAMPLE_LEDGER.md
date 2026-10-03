@@ -62,3 +62,17 @@ freezes both formats; audit_results_6.jsonl saves responses and request
 hashes; paired_comparison_6.json saves matched results. All hashes and scores
 verified. The ledger now reserves 1,235 distinct pairs, plus the intentional
 round-5 repeat. Future sampling must exclude the ledger's unordered pairs.
+
+Round 7: staged offline; 900 fresh training pairs (720 stored positives,
+180 stored negatives), plus 100 swapped original-input checks: 1,000
+planned calls. Current gate replay and similarity stratification separate
+stale training labels from current decisions. Frozen full original listings
+and source hashes are saved; no live calls yet. See NEXT_RUN.md.
+
+Round 7 completed: all 1,000 calls succeeded; request hashes and raw
+response scores verified. Ledger status is tested. See RESULTS_7.md
+and report_7.json for results and weighted fresh-population estimates.
+
+Round 8 completed: final 1,000 calls, 900 fresh pairs plus 100 swaps. Primary cohorts: 640 current positives, 160 negative controls and 100 lost-positive diagnostics. All supplied source fields were verified against the official source loader, with no description truncation. Request hashes and saved raw scores verified. A preliminary unexecuted staging revision is retained under rebuild_8/staging_revision_0/. See rebuild_8/RESULTS_REVIEW.md; no further JEV calls are scheduled.
+
+Round 9: user explicitly requested 50 old pairs again after the round-8 closure. Exactly 50 prior round-8 pairs were repeated once each: 20 low-score positives, 10 uncertain positives, 10 high-score positives and 10 negatives, seed 950. All 50 calls succeeded. All request hashes equal their prior request hashes: original listings only were sent to JEV; saved scores and gates remained local sample metadata. Forty-eight bands were unchanged, two same-to-uncertain changes; no score changed by 0.2 or more. This is a diagnostic stability check, not a fresh population estimate. See report_9.json. No additional calls are queued.

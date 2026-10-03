@@ -1,0 +1,179 @@
+{
+  "status": "complete",
+  "resume_from": "validation",
+  "training_started": false,
+  "smoke_updated": false,
+  "stages": [
+    "validation",
+    "graph_inputs",
+    "full_bundle",
+    "verify_handoff"
+  ],
+  "run_dir": "/home/opc/ONE/ER/jev/full_evidence/training_prep",
+  "outputs": {
+    "/home/opc/ONE/ER/data/dataset_deduped.csv": {
+      "sha256": "ceb7f2d846c51c59581d495784101ffb8df56f1ebce1705ad1be971840dd4463",
+      "bytes": 47569150
+    },
+    "/home/opc/ONE/ER/data/sku_to_rep.csv": {
+      "sha256": "5ffa96da91af8bd8261e242b9c00781742a5960ab0aebf10c85e5e32c10bd867",
+      "bytes": 1119817
+    },
+    "/home/opc/ONE/ER/data/number_tokens_reference.csv": {
+      "sha256": "59bbd2e6e683e360407747af7dd3895311cb36c073d1c9693bc3a4144a855d43",
+      "bytes": 54569
+    },
+    "/home/opc/ONE/ER/results/training/second04_pairs_positive.csv": {
+      "sha256": "3668ffc8c5a1ad4ad21e69aca779a51ed1ef4ddba502b860d945ef3142d9a1af",
+      "bytes": 56805
+    },
+    "/home/opc/ONE/ER/data/canonical_records.csv": {
+      "sha256": "2135894d363cdc669f6b6a7b27a3896a67f16a3b18cc17eb7cea3051a3487402",
+      "bytes": 71597231
+    },
+    "/home/opc/ONE/ER/data/gate_results.csv": {
+      "sha256": "d54f782701e6e8a3bc58dcac36dc02d7118e32f4f16e2ae7343e0d6c0699134d",
+      "bytes": 29692886
+    },
+    "/home/opc/ONE/ER/data/labeled_pairs.csv": {
+      "sha256": "5f75706dcbcfb7c495938e638957fe86bc95f77d5e8189e54d27975228dfc25d",
+      "bytes": 23570
+    },
+    "/home/opc/ONE/ER/data/final_validation.csv": {
+      "sha256": "3a0b22d566bf3aa1744709258d4fb032ebbb59e07c8c044fed8542d2820afaba",
+      "bytes": 124505
+    },
+    "/home/opc/ONE/ER/results/training/validation_fold_map.csv": {
+      "sha256": "459305263b7e2d4bf62d2a304b41f453998ace66992a7802a06b1a0639358bf1",
+      "bytes": 308304
+    },
+    "/home/opc/ONE/ER/data/track_setup/eligible_catalog.csv": {
+      "sha256": "97d0d72f25c137ee915fb0f81f227e8494735eac5e9936aa6439194645f3e9fb",
+      "bytes": 21330781
+    },
+    "/home/opc/ONE/ER/data/track_setup/listing_splits.csv": {
+      "sha256": "d458b792ebf8b94a191736c3daef8433e625fcd35848ceadbe98cb35226907e6",
+      "bytes": 417437
+    },
+    "/home/opc/ONE/ER/data/track_setup/listing_pairs.csv": {
+      "sha256": "ba6a11af18097362f0ece104423ae5a21eee8c13cf431ae476918b39e315ce89",
+      "bytes": 309788
+    },
+    "/home/opc/ONE/ER/data/track_setup/prepared/pairs.csv": {
+      "sha256": "ba6a11af18097362f0ece104423ae5a21eee8c13cf431ae476918b39e315ce89",
+      "bytes": 309788
+    },
+    "/home/opc/ONE/ER/data/prepared/full/worker_1_baseline.pkl.gz": {
+      "sha256": "c039049ae8824351277fbd87362a3365cfec600d9a6df3e6ac35e5937c0318d6",
+      "bytes": 24522923
+    }
+  },
+  "bundle": {
+    "schema_version": "3",
+    "payload_variant": "full",
+    "masking_profile": "baseline",
+    "model_input": {
+      "profile": "cleaned",
+      "include_evidence": false,
+      "emit_field_markers": false,
+      "keep_redundant_attribute_words": true,
+      "emit_singleton_pack_token": false
+    },
+    "n_df": 62939,
+    "n_payload": 115648,
+    "n_pos": 56162,
+    "n_neg": 10923,
+    "n_train_neg": 10923,
+    "n_labeled_pairs_bytes": 23570,
+    "n_canonical_records_bytes": 71597231,
+    "n_gate_results_bytes": 29692886,
+    "sha256": "c039049ae8824351277fbd87362a3365cfec600d9a6df3e6ac35e5937c0318d6",
+    "masking_config": {
+      "enabled": true,
+      "profile": "baseline",
+      "frac": 0.8,
+      "mask_hard_negatives": true,
+      "hard_negative_frac": 0.3,
+      "mask_prob": null,
+      "mask_lo": 0.2,
+      "mask_hi": 0.3,
+      "hard_negative_mask_prob": null,
+      "hard_negative_mask_lo": 0.1,
+      "hard_negative_mask_hi": 0.2,
+      "swap_value_frac": 0.2,
+      "hard_negative_swap_value_frac": 0.2,
+      "counterfactual_frac": 0.1,
+      "swap_max_field_share": 0.35,
+      "swap_max_value_share": 0.03,
+      "field_quota_shares": {
+        "sweetener": 0.82,
+        "carbonation": 0.07,
+        "package_material": 0.07,
+        "juice_content": 0.04
+      },
+      "attribute_augment": {
+        "volume": {
+          "hard": true,
+          "pos_frac": 0.15,
+          "neg_frac": 0.1
+        },
+        "pack": {
+          "hard": true,
+          "pos_frac": 0.15,
+          "neg_frac": 0.1
+        },
+        "flavor": {
+          "hard": false,
+          "pos_frac": 0.2,
+          "neg_frac": 0.15
+        },
+        "sweetener": {
+          "hard": true,
+          "pos_frac": 0.25,
+          "neg_frac": 0.15
+        },
+        "carbonation": {
+          "hard": false,
+          "pos_frac": 0.1,
+          "neg_frac": 0.05
+        },
+        "package_type": {
+          "hard": false,
+          "pos_frac": 0.1,
+          "neg_frac": 0.05
+        },
+        "package_material": {
+          "hard": true,
+          "pos_frac": 0.1,
+          "neg_frac": 0.05
+        },
+        "juice_content": {
+          "hard": false,
+          "pos_frac": 0.1,
+          "neg_frac": 0.05
+        }
+      },
+      "cross_retailer_donors": true,
+      "declaration_dropout": {
+        "frac": 0.3,
+        "min_drop": 1,
+        "max_drop": 3
+      },
+      "swap_max_donor_overlap": 0.95,
+      "diet_min_neg_aug_frac": 0.3,
+      "diet_max_pos_neg_view_ratio": 1.5,
+      "track_visibility": true,
+      "track_per_epoch": true
+    },
+    "easy_config": {
+      "enabled": true,
+      "ratio_to_hard": 1.0,
+      "candidate_pool_size": 10000
+    },
+    "ratio_to_hard": 1.0,
+    "static_view_ratio": 5.141627757941957,
+    "effective_train_ratio": 5.141627757941957,
+    "ratio_contract_note": "Guaranteed bundle-only view ratio 5.142; easy-negative settings (enabled, ratio=1) are a possible contrastive projection and are not guaranteed."
+  },
+  "smoke_unchanged_verified": true
+}

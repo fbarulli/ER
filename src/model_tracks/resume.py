@@ -63,7 +63,7 @@ def artifact_files(output: Path):
             and not path.name.endswith('.log')]
 
 
-def record_completion(output: Path, track: str) -> None:
+def record_completion(output: Path, track: str, *, postprocess_complete: bool = True) -> None:
     files = {path.relative_to(output).as_posix(): digest(path) for path in artifact_files(output)}
     if not files:
         raise ValueError(f'cannot complete empty track: {track}')
@@ -73,15 +73,15 @@ def record_completion(output: Path, track: str) -> None:
     temporary.replace(target)
     marker = output / 'track_complete.json'
     temporary = marker.with_suffix('.tmp')
-    temporary.write_text(json.dumps({'track': track, 'status': 'ok', 'postprocess_complete': True}) + '\n')
+    temporary.write_text(json.dumps({'track': track, 'status': 'ok', 'postprocess_complete': postprocess_complete}) + '\n')
     temporary.replace(marker)
 
 
-def completed_track(output: Path, track: str) -> bool:
+def completed_track(output: Path, track: str, *, postprocess_complete: bool = True) -> bool:
     marker = output / 'track_complete.json'
     if not marker.exists():
         return False
-    if json.loads(marker.read_text()) != {'track': track, 'status': 'ok', 'postprocess_complete': True}:
+    if json.loads(marker.read_text()) != {'track': track, 'status': 'ok', 'postprocess_complete': postprocess_complete}:
         raise ValueError(f'invalid completion marker: {track}')
     inventory_path = output / 'track_inventory.json'
     if not inventory_path.is_file():

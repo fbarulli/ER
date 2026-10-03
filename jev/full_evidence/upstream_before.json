@@ -1,0 +1,18 @@
+{
+  "dataset_deduped": {
+    "path": "/home/opc/ONE/ER/data/dataset_deduped.csv",
+    "sha256": "73a94016fe9dd747d0995d37843f57527d4f66b5d74c7ab43a4766c74e141585"
+  },
+  "sku_to_rep": {
+    "path": "/home/opc/ONE/ER/data/sku_to_rep.csv",
+    "sha256": "624f7968d1b8956734f0ffdf0f5671bdee17d26ba8cd633fbb4090bf79c5ea90"
+  },
+  "number_reference": {
+    "path": "/home/opc/ONE/ER/data/number_tokens_reference.csv",
+    "sha256": "38b23f9b2c21ed820922a2d27abfdb5bb0a91fc921e8a4af1098595e18d55647"
+  },
+  "final_validation": {
+    "path": "/home/opc/ONE/ER/data/final_validation.csv",
+    "sha256": "ab96543a146468d819016407391554ec1a0dc30413c1f10e54894192cf2db239"
+  }
+}

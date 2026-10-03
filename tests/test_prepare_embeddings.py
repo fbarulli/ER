@@ -18,7 +18,9 @@ def inputs(tmp_path, monkeypatch):
     checkpoint = tmp_path / 'model'
     checkpoint.mkdir()
     (checkpoint / 'weights').write_bytes(b'frozen')
-    expected = {'catalog_sha256': job.file_hash(catalog),
+    listings = setup / 'prepared/listings.json'
+    listings.write_text(json.dumps([{'product_id': 'a'}, {'product_id': 'b'}]))
+    expected = {'listings_sha256': job.file_hash(listings), 'catalog_sha256': job.file_hash(catalog),
                 'identity_policy_sha256': job.file_hash(POLICY_PATH),
                 'identity_dimensions_sha256': job.file_hash(TRAIN_ROOT / 'config/identity_dimensions.yaml'),
                 'checkpoint_sha256': job.checkpoint_hash(checkpoint),
@@ -26,13 +28,14 @@ def inputs(tmp_path, monkeypatch):
     (setup / 'prepared/input_manifest.json').write_text(json.dumps(expected))
     (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint_sha256': expected['checkpoint_sha256']}))
     monkeypatch.setattr(job, 'load_records', lambda _: [{'product_id': 'a'}, {'product_id': 'b'}])
+    monkeypatch.setattr(job, 'compose_texts', lambda _: (['a', 'b'], ['text a', 'text b']))
     calls = []
 
     def create(catalog, checkpoint, output, **kwargs):
         calls.append(kwargs)
         with output.open('wb') as handle:
-            np.savez(handle, ids=np.asarray(['a', 'b']), embeddings=np.ones((2, 3), dtype='float32'),
-                     metadata=json.dumps(expected))
+            np.savez(handle, ids=np.asarray(['a', 'b']), embeddings=np.ones((2, 3), dtype='float32') / np.sqrt(3),
+                     metadata=json.dumps(kwargs['input_metadata']))
     monkeypatch.setattr(job, 'create_cache', create)
     return setup, checkpoint, calls
 

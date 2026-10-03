@@ -1,0 +1,278 @@
+{
+  "round": 8,
+  "completed_calls": 1000,
+  "unique_pairs": 900,
+  "score_bands": {
+    "different": "<=0.2",
+    "same": ">=0.8",
+    "uncertain": "between"
+  },
+  "training_label_and_gate_transition": {
+    "current_training_pairs|label_0|hard_no->hard_no": {
+      "pairs": 160,
+      "mean_score": 0.0423125,
+      "score_buckets": {
+        "different": 158,
+        "uncertain": 2
+      }
+    },
+    "current_training_pairs|label_1|proceed->proceed": {
+      "pairs": 640,
+      "mean_score": 0.255390625,
+      "score_buckets": {
+        "different": 387,
+        "uncertain": 210,
+        "same": 43
+      }
+    },
+    "lost_positive_partners|label_0|hard_no->hard_no": {
+      "pairs": 28,
+      "mean_score": 0.06857142857142857,
+      "score_buckets": {
+        "different": 26,
+        "uncertain": 2
+      }
+    },
+    "lost_positive_partners|label_None|fallback->fallback": {
+      "pairs": 50,
+      "mean_score": 0.062,
+      "score_buckets": {
+        "different": 47,
+        "uncertain": 3
+      }
+    },
+    "lost_positive_partners|label_None|hard_no->hard_no": {
+      "pairs": 16,
+      "mean_score": 0.0225,
+      "score_buckets": {
+        "different": 16
+      }
+    },
+    "lost_positive_partners|label_None|proceed->proceed": {
+      "pairs": 6,
+      "mean_score": 0.27666666666666667,
+      "score_buckets": {
+        "different": 3,
+        "uncertain": 3
+      }
+    }
+  },
+  "weighted_fresh_training_population": {
+    "0": {
+      "eligible_population": 7439,
+      "mean_score": 0.04247943271945151,
+      "bucket_fractions": {
+        "same": 0.0,
+        "different": 0.9874999999999999,
+        "uncertain": 0.01249999999999997
+      }
+    },
+    "1": {
+      "eligible_population": 677,
+      "mean_score": 0.2551280745865531,
+      "bucket_fractions": {
+        "same": 0.06725137664002036,
+        "different": 0.6056367571031299,
+        "uncertain": 0.32711186625684147
+      }
+    }
+  },
+  "weighted_lost_positive_partners": {
+    "eligible_population": 6256,
+    "mean_score": 0.03195073905521287,
+    "bucket_fractions": {
+      "same": 0.0,
+      "different": 0.9924672314578005,
+      "uncertain": 0.007532768542199489
+    }
+  },
+  "order_checks": {
+    "pairs": 100,
+    "bucket_changes": 8,
+    "gaps_at_least_0_2": 5,
+    "largest_gaps": [
+      {
+        "gtin1": "697937086070",
+        "gtin2": "810132093395",
+        "stratum": "lost_positive|proceed|below_0.8",
+        "forward": 0.27,
+        "swapped": 0.57,
+        "gap": 0.29999999999999993,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "7340116879453",
+        "gtin2": "7340116879460",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.45,
+        "swapped": 0.73,
+        "gap": 0.27999999999999997,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "721866639066",
+        "gtin2": "721867271111",
+        "stratum": "lost_positive|hard_no|0.9_to_1.0",
+        "forward": 0.23,
+        "swapped": 0.45,
+        "gap": 0.22,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "810164203205",
+        "gtin2": "810184856511",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.51,
+        "swapped": 0.73,
+        "gap": 0.21999999999999997,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "4018852010265",
+        "gtin2": "4018852032755",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.61,
+        "swapped": 0.4,
+        "gap": 0.20999999999999996,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "8710624349264",
+        "gtin2": "8718989009441",
+        "stratum": "lost_positive|proceed|below_0.8",
+        "forward": 0.42,
+        "swapped": 0.61,
+        "gap": 0.19,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "5410046190507",
+        "gtin2": "5410046190514",
+        "stratum": "lost_positive|fallback|0.9_to_1.0",
+        "forward": 0.04,
+        "swapped": 0.21,
+        "gap": 0.16999999999999998,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "5060335634726",
+        "gtin2": "5060517880613",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.79,
+        "swapped": 0.63,
+        "gap": 0.16000000000000003,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "8720157465393",
+        "gtin2": "8720157468165",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.17,
+        "swapped": 0.33,
+        "gap": 0.16,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "4015732007162",
+        "gtin2": "4015732009050",
+        "stratum": "lost_positive|fallback|0.9_to_1.0",
+        "forward": 0.07,
+        "swapped": 0.23,
+        "gap": 0.16,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "732623770731",
+        "gtin2": "810053000311",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.81,
+        "swapped": 0.66,
+        "gap": 0.15000000000000002,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "7310401007151",
+        "gtin2": "7310401046723",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.37,
+        "swapped": 0.22,
+        "gap": 0.15,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "8722200954373",
+        "gtin2": "8722200963030",
+        "stratum": "lost_positive|fallback|0.9_to_1.0",
+        "forward": 0.25,
+        "swapped": 0.12,
+        "gap": 0.13,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "5060466510562",
+        "gtin2": "5060466517011",
+        "stratum": "label_0|hard_no|0.8_to_0.9",
+        "forward": 0.07,
+        "swapped": 0.19,
+        "gap": 0.12,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "810164203168",
+        "gtin2": "810164203175",
+        "stratum": "label_0|hard_no|0.9_to_1.0",
+        "forward": 0.18,
+        "swapped": 0.06,
+        "gap": 0.12,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "798235705363",
+        "gtin2": "894357002134",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.07,
+        "swapped": 0.19,
+        "gap": 0.12,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "4003490014546",
+        "gtin2": "4003490099376",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.74,
+        "swapped": 0.64,
+        "gap": 0.09999999999999998,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "721866639073",
+        "gtin2": "721867277267",
+        "stratum": "lost_positive|hard_no|0.9_to_1.0",
+        "forward": 0.69,
+        "swapped": 0.76,
+        "gap": 0.07000000000000006,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "680332584104",
+        "gtin2": "736983894311",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.84,
+        "swapped": 0.77,
+        "gap": 0.06999999999999995,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "8710624349080",
+        "gtin2": "8718989009267",
+        "stratum": "lost_positive|proceed|below_0.8",
+        "forward": 0.78,
+        "swapped": 0.85,
+        "gap": 0.06999999999999995,
+        "bucket_changed": true
+      }
+    ]
+  },
+  "errors_in_checkpoint": {},
+  "meaning": "JEV judgments of exact retail-product identity; training labels are gate-derived. Current-training estimates cover fresh eligible training pairs after separately sampled lost-positive diagnostics are reserved; lost-positive estimates cover their separate fresh eligible population. Swapped calls excluded from primary estimates. Score bands are reporting conventions, not calibrated truth probabilities. No score is transferred to a different partner."
+}

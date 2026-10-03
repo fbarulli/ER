@@ -1,0 +1,50 @@
+.....F.................................................................. [ 35%]
+........................................................................ [ 71%]
+..........................................................               [100%]
+=================================== FAILURES ===================================
+_________________ test_legacy_profile_reproduces_golden_bytes __________________
+
+    def test_legacy_profile_reproduces_golden_bytes() -> None:
+        """Every fixture row must round-trip byte for byte on BOTH sides.
+    
+        Historical extraction mistakes have narrow source-reviewed corrections;
+        the fixture retains their original bytes and rationale alongside them.
+        """
+        checked = 0
+        for record in RECORDS:
+            row = pd.Series(record["sku"])
+            got_sku = build_sku_text(
+                row, sku_info(row["title"], row["attributes"]), spec=LEGACY
+            )
+            got_canonical = build_canonical_text(
+                record["canonical_record"],
+                canonical_info(record["canonical_record"]),
+                spec=LEGACY,
+            )
+>           assert got_sku == record["legacy_sku_text"], f"sku text changed: {record['sku_id']}"
+E           AssertionError: sku text changed: 145338357
+E           assert 'naren pomegr..._content_100%' == 'naren pomegr..._content_100%'
+E             
+E             Skipping 240 identical leading characters in diff, use -v to show
+E             - pack_qty_1 [FIELD_FLAVOR] flavor_pomegranate [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%
+E             + pack_qty_12 [FIELD_FLAVOR] flavor_pomegranate [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%
+E             ?           +
+
+tests/test_model_input_contract.py:149: AssertionError
+=============================== warnings summary ===============================
+src/core/schemas.py:353
+  /home/opc/ONE/ER/src/core/schemas.py:353: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.13/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+src/core/schemas.py:456
+  /home/opc/ONE/ER/src/core/schemas.py:456: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.13/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+src/core/schemas.py:562
+  /home/opc/ONE/ER/src/core/schemas.py:562: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.13/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_model_input_contract.py::test_legacy_profile_reproduces_golden_bytes
+1 failed, 201 passed, 3 warnings in 29.17s

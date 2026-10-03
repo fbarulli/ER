@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT.parent / 'src'))
 os.environ['BROADWAY_EXPERIMENTS_ROOT'] = str(ROOT / 'experiments')
 os.environ['BROADWAY_DEFAULT_EXPERIMENT_SERIES'] = 'identity'

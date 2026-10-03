@@ -1,0 +1,9 @@
+[
+  {
+    "sku_id": "288675989",
+    "title": "rh\u00f6n sparkling water natural mineral water without carbonic acid 1l",
+    "attributes": "Pack Material Type: Glass; Water Type: mineral; Volume: 1000; Naturally derived: natural; Pack Type: Bottle; Juice Content: 0-2%; Carbonization: sparkling; Caffeine: 0-15 mg; Geographic Origin: germany",
+    "old": "rh sparkling mineral without carbonic acid mineral sparkling caffeine origin germany brand rh nsprudel description nutritional values average nutritional values unprepared per nitrate sulfate category carbonated bottled breadcrumbs beverages [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%",
+    "new": "rh sparkling mineral without carbonic acid mineral sparkling caffeine origin germany brand rh nsprudel description nutritional values average nutritional values unprepared per nitrate sulfate category carbonated bottled breadcrumbs beverages [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_1 [FIELD_CARBONATION] carbonation_carbonated carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%"
+  }
+]

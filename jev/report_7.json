@@ -1,0 +1,269 @@
+{
+  "round": 7,
+  "completed_calls": 1000,
+  "unique_pairs": 900,
+  "score_bands": {
+    "different": "<=0.2",
+    "same": ">=0.8",
+    "uncertain": "between"
+  },
+  "training_label_and_gate_transition": {
+    "label_0|hard_no->fallback": {
+      "pairs": 25,
+      "mean_score": 0.0416,
+      "score_buckets": {
+        "different": 25
+      }
+    },
+    "label_0|hard_no->hard_no": {
+      "pairs": 154,
+      "mean_score": 0.04597402597402597,
+      "score_buckets": {
+        "different": 150,
+        "uncertain": 4
+      }
+    },
+    "label_0|hard_no->proceed": {
+      "pairs": 1,
+      "mean_score": 0.07,
+      "score_buckets": {
+        "different": 1
+      }
+    },
+    "label_1|proceed->fallback": {
+      "pairs": 233,
+      "mean_score": 0.08240343347639485,
+      "score_buckets": {
+        "different": 213,
+        "uncertain": 19,
+        "same": 1
+      }
+    },
+    "label_1|proceed->hard_no": {
+      "pairs": 152,
+      "mean_score": 0.028421052631578948,
+      "score_buckets": {
+        "different": 151,
+        "uncertain": 1
+      }
+    },
+    "label_1|proceed->proceed": {
+      "pairs": 335,
+      "mean_score": 0.1304776119402985,
+      "score_buckets": {
+        "different": 274,
+        "uncertain": 55,
+        "same": 6
+      }
+    }
+  },
+  "weighted_fresh_training_population": {
+    "0": {
+      "eligible_population": 7580,
+      "mean_score": 0.046075163622657025,
+      "bucket_fractions": {
+        "same": 0.0,
+        "different": 0.9738409347908028,
+        "uncertain": 0.02615906520919714
+      }
+    },
+    "1": {
+      "eligible_population": 7609,
+      "mean_score": 0.06370682598233818,
+      "bucket_fractions": {
+        "same": 0.0061226117787426294,
+        "different": 0.9361547504453933,
+        "uncertain": 0.05772263777586377
+      }
+    }
+  },
+  "order_checks": {
+    "pairs": 100,
+    "bucket_changes": 7,
+    "gaps_at_least_0_2": 2,
+    "largest_gaps": [
+      {
+        "gtin1": "7350068170072",
+        "gtin2": "7350068170577",
+        "stratum": "label_1|fallback|0.9_to_1.0",
+        "forward": 0.57,
+        "swapped": 0.31,
+        "gap": 0.25999999999999995,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "3124480185129",
+        "gtin2": "5410221306143",
+        "stratum": "label_1|fallback|0.8_to_0.9",
+        "forward": 0.5,
+        "swapped": 0.72,
+        "gap": 0.21999999999999997,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "5601195150027",
+        "gtin2": "8437012363007",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.19,
+        "swapped": 0.38,
+        "gap": 0.19,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "7702090003918",
+        "gtin2": "8437010209000",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.62,
+        "swapped": 0.79,
+        "gap": 0.17000000000000004,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "894357002042",
+        "gtin2": "894357002844",
+        "stratum": "label_1|fallback|0.9_to_1.0",
+        "forward": 0.88,
+        "swapped": 0.74,
+        "gap": 0.14,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "3100881040755",
+        "gtin2": "3100882040754",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.34,
+        "swapped": 0.21,
+        "gap": 0.13000000000000003,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "4104450005311",
+        "gtin2": "4104450005335",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.28,
+        "swapped": 0.15,
+        "gap": 0.13000000000000003,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "671785201007",
+        "gtin2": "769553420962",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.57,
+        "swapped": 0.7,
+        "gap": 0.13,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "858159001177",
+        "gtin2": "858159001795",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.32,
+        "swapped": 0.2,
+        "gap": 0.12,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "7310867008624",
+        "gtin2": "7350000550573",
+        "stratum": "label_1|fallback|0.8_to_0.9",
+        "forward": 0.28,
+        "swapped": 0.17,
+        "gap": 0.11000000000000001,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "7313619000006",
+        "gtin2": "7313619001522",
+        "stratum": "label_1|fallback|0.9_to_1.0",
+        "forward": 0.2,
+        "swapped": 0.31,
+        "gap": 0.10999999999999999,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "231302714337",
+        "gtin2": "845033087686",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.75,
+        "swapped": 0.65,
+        "gap": 0.09999999999999998,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "7310070003751",
+        "gtin2": "7310070005335",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.28,
+        "swapped": 0.38,
+        "gap": 0.09999999999999998,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "726284000016",
+        "gtin2": "726284000597",
+        "stratum": "label_1|hard_no|below_0.8",
+        "forward": 0.21,
+        "swapped": 0.29,
+        "gap": 0.07999999999999999,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "3760186970067",
+        "gtin2": "3760186970562",
+        "stratum": "label_1|fallback|0.9_to_1.0",
+        "forward": 0.2,
+        "swapped": 0.26,
+        "gap": 0.06,
+        "bucket_changed": true
+      },
+      {
+        "gtin1": "7350020691546",
+        "gtin2": "7350020691621",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.03,
+        "swapped": 0.09,
+        "gap": 0.06,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "8715600240641",
+        "gtin2": "8715600243789",
+        "stratum": "label_1|proceed|0.8_to_0.9",
+        "forward": 0.75,
+        "swapped": 0.7,
+        "gap": 0.050000000000000044,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "5060444850055",
+        "gtin2": "5060444850246",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.04,
+        "swapped": 0.09,
+        "gap": 0.049999999999999996,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "7350068172687",
+        "gtin2": "7350068177071",
+        "stratum": "label_1|proceed|0.9_to_1.0",
+        "forward": 0.34,
+        "swapped": 0.39,
+        "gap": 0.04999999999999999,
+        "bucket_changed": false
+      },
+      {
+        "gtin1": "7044610875811",
+        "gtin2": "7044610876597",
+        "stratum": "label_1|proceed|below_0.8",
+        "forward": 0.07,
+        "swapped": 0.12,
+        "gap": 0.04999999999999999,
+        "bucket_changed": false
+      }
+    ]
+  },
+  "errors_in_checkpoint": {},
+  "meaning": "JEV judgments of exact retail-product identity; training labels are gate-derived. Weighted estimates cover fresh eligible training pairs only. Swapped calls excluded from primary estimates. Score bands are reporting conventions, not calibrated truth probabilities."
+}

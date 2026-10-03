@@ -51,10 +51,15 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
         raise ValueError('invalid run tag')
     cfg = load_config(config)
-    if cfg.dvc_enabled and not os.environ.get('DVC_API_KEY'):
+    gpu_only = os.environ.get('ER_GPU_TRAINING_ONLY') == '1'
+    if cfg.dvc_enabled and not gpu_only and not os.environ.get('DVC_API_KEY'):
         raise RuntimeError('DVC_API_KEY is required before training a publishing suite')
     events.emit('preflight', 'starting')
-    inputs = preflight(config)
+    if gpu_only:
+        from core.common import TRAIN_ROOT
+        inputs = json.loads((TRAIN_ROOT / 'model_tracks_package.json').read_text())['preflight']
+    else:
+        inputs = preflight(config)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
     from model_tracks.resume import TRACKS, suite_identity, validate_suite, completed_track
@@ -83,7 +88,8 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         'shared_inputs':'read-only; text bundle CSVs materialized in text worker output',
         'hybrid_text_checkpoint':'frozen prepared baseline; no dependency on concurrent text worker'
     }, indent=2) + '\n')
-    skipped = [track for track in TRACKS if resume and completed_track(output / track, track)]
+    skipped = [track for track in TRACKS if resume and completed_track(output / track, track,
+                                                                   postprocess_complete=not gpu_only)]
     for track in skipped:
         events.emit('worker_selection', 'skipped', worker_track=track,
                     reason='completed artifacts verified against SHA256 inventory')
@@ -92,7 +98,8 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
                 for track in TRACKS if track not in skipped}
     env = {**os.environ, 'PYTHONPATH':str(TRAIN_ROOT/'src'),
            'ER_SUITE_ATTEMPT': events.attempt,
-           'ER_INCREMENTAL_DVC':'1' if cfg.dvc_enabled else '0',
+           'ER_INCREMENTAL_DVC':'1' if cfg.dvc_enabled and not gpu_only else '0',
+           'EUROMONITOR_DISABLE_DVC_CHECKPOINTS':'1' if gpu_only else os.environ.get('EUROMONITOR_DISABLE_DVC_CHECKPOINTS', '0'),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
     if not commands:
         result = {'mode': 'resume', 'workers': [], 'skipped_verified_tracks': skipped}
@@ -105,7 +112,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     # Every worker must finish its report before the shared run is complete.
     for track in TRACKS:
         marker = json.loads((output/track/'track_complete.json').read_text())
-        if marker != {'track':track, 'status':'ok', 'postprocess_complete':True}:
+        if marker != {'track':track, 'status':'ok', 'postprocess_complete':not gpu_only}:
             raise ValueError(f'incomplete track: {track}')
     (output/'suite_result.json').write_text(json.dumps({'status':'ok', **result}, indent=2)+'\n')
     events.emit('collection', 'starting', tracks=list(TRACKS), skipped_verified_tracks=skipped)
@@ -117,7 +124,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         archive_path.with_suffix('.sha256').write_text(file_hash(archive_path) + '\n')
         events.emit('collection', 'verified', archive=str(archive_path), sha256=file_hash(archive_path),
                     reused=True)
-        if cfg.dvc_enabled:
+        if cfg.dvc_enabled and not gpu_only:
             from model_tracks.publish import persist_results
             events.emit('publication', 'starting', archive=str(archive_path))
             persist_results(archive_path, run_tag)
@@ -138,7 +145,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     archive_path.with_suffix('.sha256').write_text(file_hash(archive_path)+'\n')
     events.emit('collection', 'complete', archive=str(archive_path), sha256=file_hash(archive_path),
                 bytes=archive_path.stat().st_size)
-    if cfg.dvc_enabled:
+    if cfg.dvc_enabled and not gpu_only:
         from model_tracks.publish import persist_results
         events.emit('publication', 'starting', archive=str(archive_path))
         persist_results(archive_path, run_tag)

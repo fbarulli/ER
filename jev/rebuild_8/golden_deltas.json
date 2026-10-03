@@ -1,0 +1,325 @@
+[
+  {
+    "sku_id": "145338357",
+    "sku": {
+      "title": "naren pomegranate juice 250 ml set of 12",
+      "attributes": "Flavour: pomegranate; Made From: pomegranate; Juice Content: 100%; Volume: 250; Naturally derived: natural; Carbonization: still; Pack Material Type: Glass",
+      "brand": "Naren",
+      "description": "naren 100% pomegranate juice 250 ml \nnatural unadulterated pomegranate juice",
+      "category": "Not from Concentrate 100% Juice",
+      "category_path": "[\"\" home page\"\",\"\"supermarket\"\",\"\"drink\"\",\"\" other drinks\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_12"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "naren pomegranate set pomegranate made pomegranate still brand naren description naren pomegranate unadulterated pomegranate category concentrate breadcrumbs home page supermarket other drinks [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_12 [FIELD_FLAVOR] flavor_pomegranate [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%"
+  },
+  {
+    "sku_id": "75367564",
+    "sku": {
+      "title": "shelf spacing 15 - 6 x domestic mineral water raspberry 1.5l",
+      "attributes": "Volume: 1500; Contains Minerals: magnesium; Flavour: raspberry; Juice Content: 0-2%; Water Type: flavoured, mineral; Pack Material Type: Plastic; Carbonization: carbonated",
+      "brand": "Kotimaista",
+      "description": "domestic raspberry flavored mineral water 1.5 we will update product information actively. however, we recommend checking ingredients always from the sales package.",
+      "category": "Sparkling Flavoured Bottled Water",
+      "category_path": "[\"\" selection\"\",\"\" beverages\"\",\"\" waters\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_6"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "shelf spacing domestic mineral raspberry contains minerals magnesium raspberry flavoured mineral carbonated brand kotimaista description domestic raspberry flavored mineral we will update product information actively. however we recommend checking always sales package. category sparkling flavoured bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_raspberry [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%"
+  },
+  {
+    "sku_id": "229516012",
+    "sku": {
+      "title": "O natur - pure juice D' pineapple of benign 75 cl organic - set of 3 - fast delivery in france - price per lot",
+      "attributes": "Juice Content: 100%; Pack Type: Bottle; Made From: pineapple; Sustainable Sourcing: organic; Pack Material Type: Glass; Flavour: pineapple; Volume: 750; Geographic Origin: france; Carbonization: still",
+      "brand": "Natur pur",
+      "description": "* drinks \n* juice, vegetable juice \n* juice classics \n* O natur \n* pure juice D' pineapple of benign 75 cl organic \n,",
+      "category": "Not from Concentrate 100% Juice",
+      "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" coffee, tea and hot chocolate\"\",\"\" tea and infusions\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_3"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "natur pure pineapple benign set fast delivery france price per lot made pineapple pineapple origin france still brand natur pur description drinks vegetable classics natur pure pineapple benign category concentrate breadcrumbs grocery coffee tea drinks coffee tea hot chocolate tea infusions [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_3 [FIELD_FLAVOR] flavor_pineapple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%"
+  },
+  {
+    "sku_id": "384958838",
+    "sku": {
+      "title": "mill of valdonne - mint sirup 70 cl - set of 4",
+      "attributes": "Juice Content: 15-25%; Sweetener: hfcs, sugar; Volume: 700; Naturally derived: natural fragrances; Pack Material Type: Glass; Flavour: mint; Pack Type: Bottle",
+      "brand": "Moulin de Valdonne",
+      "description": "* drinks \n* syrups \n* syrups \n* mill of valdonne \n* mint sirup 70 cl \n, \n## product description \n### product description \nthanks to simple recipes, generous and greedy, syrups mill of valdonne offers ",
+      "category": "Liquid Concentrates",
+      "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" syrups and concentrated juices\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_4"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "mill valdonne mint sirup set sweetener hfcs sugar mint brand moulin de valdonne description drinks syrups syrups mill valdonne mint sirup product description product description thanks simple recipes generous greedy syrups mill valdonne offers category liquid concentrates breadcrumbs grocery coffee tea drinks syrups concentrated juices [FIELD_VOLUME] volume_ml_700 [FIELD_PACK_SIZE] pack_qty_4 [FIELD_FLAVOR] flavor_mint [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_15-25%"
+  },
+  {
+    "sku_id": "914834084",
+    "sku": {
+      "title": "ethical pure apple juice organic 1l - ethical - set of 3 - special offer",
+      "attributes": "Pack Material Type: Glass; Caffeine: 150-200 mg; Volume: 1000; Pack Type: Bottle; Sustainable Sourcing: organic; Flavour: apple; Carbonization: still; Juice Content: 0-2%; Made From: apple",
+      "brand": "Ethiquable",
+      "description": "number of units 3000 millilitre \ngeneric brand \nbottle packaging information \nitem volume 1 Litres \n* * *\n# at about this article \n* salty grocery \n* dietetics and nutrition \n* organic \n* ethical pure",
+      "category": "Not from Concentrate 100% Juice",
+      "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" juice\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_3"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "ethical pure apple ethical set special offer caffeine apple still made apple brand ethiquable description number millilitre generic brand packaging information item litres about article salty grocery dietetics nutrition ethical pure category concentrate breadcrumbs grocery coffee tea drinks [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_3 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%"
+  },
+  {
+    "sku_id": "78888962",
+    "sku": {
+      "title": "6x klosterneuburg abbey - apple juice with pear, naturtrYb - 1000ml",
+      "attributes": "Made From: pear, apple; Pack Type: Bottle; Juice Content: 100%; Volume: 1000; Pack Material Type: Glass; Flavour: pear, apple; Carbonization: still",
+      "brand": "Stift",
+      "description": "",
+      "category": "Not from Concentrate 100% Juice",
+      "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_6"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "klosterneuburg abbey apple pear naturtryb made pear apple pear apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_apple flavor_pear [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_100%"
+  },
+  {
+    "sku_id": "71713660",
+    "sku": {
+      "title": "shelf spacing 15 - 6 x domestic spring water 1.5l",
+      "attributes": "Pack Type: Bag/Packet; Pack Material Type: Plastic; Volume: 1500; Juice Content: 0-2%; Caffeine: 0-15 mg; Water Type: spring; Carbonization: still",
+      "brand": "Kotimaista",
+      "description": "domestic spring water multilan from the source keski-pohjanmaalta.we actively update the product information of the service. however, we recommend checking ingredients always from the sales package.",
+      "category": "Still Bottled Water",
+      "category_path": "[\"\" selection\"\",\"\" beverages\"\",\"\" waters\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_6"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "shelf spacing domestic spring bag caffeine spring still brand kotimaista description domestic spring multilan source keski pohjanmaalta.we actively update product information service. however we recommend checking always sales package. category still bottled breadcrumbs selection beverages waters [FIELD_VOLUME] volume_ml_1500 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%"
+  },
+  {
+    "sku_id": "915079232",
+    "sku": {
+      "title": "niehoffs vaihinger Orange Juice 1l TWO set of 4 with deposit Reusable",
+      "attributes": "Volume: 1000; Made From: orange; Carbonization: still; Pack Type: Bottle; Juice Content: 100%; Sweetener: sugar; Geographic Origin: germany; Flavour: orange; Juice Features: smoothie",
+      "brand": "Niehoffs Vaihinger",
+      "description": "unit count 4000.0 milliliters \nbrand mix company.de bar & glass \nFlavour Orange \nPackage information Bottle \nitem volume 1 liter \nallergen information contains: Sulphites \n## Product information \n# Te",
+      "category": "Not from Concentrate 100% Juice",
+      "category_path": "[\"\" Any Category\"\",\"\" Grocery\"\",\"\" Drinks\"\",\"\" juice & smoothies\"\",\"\" Fruit Juice\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_4"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "niehoffs vaihinger orange two set deposit reusable made orange still sweetener sugar origin germany orange smoothie brand niehoffs vaihinger description milliliters brand mix company.de bar orange package information item allergen information contains sulphites product information te category concentrate breadcrumbs any category grocery drinks smoothies fruit [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_4 [FIELD_FLAVOR] flavor_orange [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_JUICE_CONTENT_BAND] juice_content_100%"
+  },
+  {
+    "sku_id": "553514421",
+    "sku": {
+      "title": "6x smarty syrup blood orange Grapefruit 650 ml",
+      "attributes": "Pack Material Type: Plastic; Volume: 650; Sweetener: sugar; Pack Type: Bottle; Flavour: orange, grapefruit; Juice Content: 0-2%; Health Claims: no sugar",
+      "brand": "Slimpie",
+      "description": "smarty blood orange Grapefruit is a syrup with 0% sugar. delectable pampering, gluten free\u2026",
+      "category": "Liquid Concentrates",
+      "category_path": "[\"\" eat drink\"\",\"\" soft drink, juice, coffee and tea\"\",\"\" syrups\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_6"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "smarty syrup blood orange grapefruit sweetener sugar orange grapefruit sugar brand slimpie description smarty blood orange grapefruit syrup sugar. delectable pampering gluten free category liquid concentrates breadcrumbs eat soft coffee tea syrups [FIELD_VOLUME] volume_ml_650 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_grapefruit flavor_orange [FIELD_SWEETENER_DIET] sweetener_diet_no_sugar sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%"
+  },
+  {
+    "sku_id": "81709213",
+    "sku": {
+      "title": "6x klosterneuburg abbey - apple juice Golden Delicious, naturally cloudy - 1000ml",
+      "attributes": "Volume: 1000; Pack Type: Bottle; Flavour: apple; Pack Material Type: Glass; Made From: apple; Carbonization: still",
+      "brand": "Stift",
+      "description": "",
+      "category": "Not from Concentrate 100% Juice",
+      "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_6"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "klosterneuburg abbey apple golden delicious cloudy apple made apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass"
+  },
+  {
+    "sku_id": "80679178",
+    "sku": {
+      "title": "6x klosterneuburg abbey - apple juice jonagold, naturally cloudy - 1000ml",
+      "attributes": "Made From: apple; Flavour: apple; Volume: 1000; Pack Material Type: Glass; Naturally derived: natural; Pack Type: Bottle; Carbonization: still",
+      "brand": "Stift",
+      "description": "",
+      "category": "Not from Concentrate 100% Juice",
+      "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_6"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "klosterneuburg abbey apple jonagold cloudy made apple apple still brand stift category concentrate breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_apple [FIELD_CARBONATION] carbonation_still [FIELD_PACK_MATERIAL] package_material_glass"
+  },
+  {
+    "sku_id": "81054050",
+    "sku": {
+      "title": "6x klosterneuburg abbey - Marillennektar, naturtr b - 750ml",
+      "attributes": "Juice Content: 0-2%; Volume: 750; Pack Type: Bottle; Pack Material Type: Glass",
+      "brand": "Stift",
+      "description": "",
+      "category": "Liquid Concentrates",
+      "category_path": "[\"\" food and drink\"\",\"\" beverages, coffee, tea\"\",\"\" fruit juices\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_6"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "klosterneuburg abbey marillennektar naturtr brand stift category liquid concentrates breadcrumbs food beverages coffee tea fruit juices [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%"
+  },
+  {
+    "sku_id": "199835405",
+    "sku": {
+      "title": "mill of valdonne - syrup Orgeat - the 750 ml bottle - set of 4 - fast delivery in france - price per lot",
+      "attributes": "Pack Material Type: Glass; Volume: 750; Pack Type: Bottle; Juice Content: 0-2%",
+      "brand": "Moulin de Valdonne",
+      "description": "syrup\nmill of valdonne\nsyrup Orgeat\nthe 750 ml bottle",
+      "category": "Liquid Concentrates",
+      "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" syrups and concentrated juices\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_4"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "mill valdonne syrup orgeat set fast delivery france price per lot brand moulin de valdonne description syrup mill valdonne syrup orgeat category liquid concentrates breadcrumbs grocery coffee tea drinks syrups concentrated juices [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_4 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%"
+  },
+  {
+    "sku_id": "79479983",
+    "sku": {
+      "title": "4x qcumber sparkling water cucumber 750 ml",
+      "attributes": "Volume: 750; Carbonization: sparkling; Flavour: cucumber; Pack Type: Bottle; Pack Material Type: Glass; Juice Content: 0-2%",
+      "brand": "Qcumber",
+      "description": "4x qcumber sparkling water cucumber 750 ml\n4x qcumber Sparkling Cucumber Water 750ml\n750ml (x4)\nqcumber",
+      "category": "Sparkling Flavoured Bottled Water",
+      "category_path": "[\"\" grocery\"\",\"\" coffee, tea and drinks\"\",\"\" waters\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_4"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "qcumber sparkling cucumber sparkling cucumber brand qcumber description qcumber sparkling cucumber qcumber sparkling cucumber qcumber category sparkling flavoured bottled breadcrumbs grocery coffee tea drinks waters [FIELD_VOLUME] volume_ml_750 [FIELD_PACK_SIZE] pack_qty_4 [FIELD_CARBONATION] carbonation_carbonated [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%"
+  },
+  {
+    "sku_id": "431789838",
+    "sku": {
+      "title": "niehoffs vaihinger bananas nectar 1l TWO - set of 6 incl. pledge MULTI-WAY",
+      "attributes": "Pack Material Type: Glass; Made From: banana, lemon; Immune Support Ingredients: vitamin c, antioxidants; Juice Content: 25-50%; Volume: 1000; Carbonization: still; Pack Type: Bottle; Sweetener: sugar; Flavour: banana; Juice Features: from concentrate",
+      "brand": "Niehoffs Vaihinger",
+      "description": "niehoffs vaihinger bananas nectar 1l TWO - set of 6 incl. pledge MULTI-WAY \nadditional information: \nnutritional values: \nniehoffs vaihinger bananas nectar \nnutritional value per 100 ml, Brennwert230 ",
+      "category": "Nectars",
+      "category_path": "[\"\" food\"\",\"\" beverages\"\",\"\" soft drinks\"\",\"\" fruit juices\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_6"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "niehoffs vaihinger bananas nectar two set incl. pledge way made banana lemon vitamin antioxidants still sweetener sugar banana concentrate brand niehoffs vaihinger description niehoffs vaihinger bananas nectar two set incl. pledge way additional information nutritional values niehoffs vaihinger bananas nectar nutritional value per category nectars breadcrumbs food beverages soft drinks fruit juices [FIELD_VOLUME] volume_ml_1000 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_lemon [FIELD_CARBONATION] carbonation_still [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_glass [FIELD_JUICE_CONTENT_BAND] juice_content_25-50%"
+  },
+  {
+    "sku_id": "118736024",
+    "sku": {
+      "title": "T Ri TOP syrup lime mint set of 6 ever 600 ml",
+      "attributes": "Pack Material Type: Plastic; Flavour: lime, mint; Sweetener: sugar; Health Claims: low sugar, low calories; Volume: 600",
+      "brand": "Tri Top",
+      "description": "mixing ratio of 1:7 results in approx. 4.8 liter of drink, fruit content in syrup 40 % low in calories with less sugar, intensity and are sweet individually dosed, also ideal for bubbly systems, and C",
+      "category": "Liquid Concentrates",
+      "category_path": "[\"\"kitchen\"\",\"\" food and drink\"\",\"\" beverages\"\",\"\" fruit juices\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_6"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "ri top syrup lime mint set ever lime mint sweetener sugar low sugar low calories brand tri top description mixing ratio results approx. fruit syrup low calories less sugar intensity sweet individually dosed also ideal bubbly systems category liquid concentrates breadcrumbs kitchen food beverages fruit juices [FIELD_VOLUME] volume_ml_600 [FIELD_PACK_SIZE] pack_qty_6 [FIELD_FLAVOR] flavor_lime flavor_mint [FIELD_SWEETENER_DIET] sweetener_diet_sugar [FIELD_PACK_MATERIAL] package_material_plastic"
+  },
+  {
+    "sku_id": "635552746",
+    "sku": {
+      "title": "lot 12x Infusion mint green tea organic - 250ml bottle",
+      "attributes": "Juice Content: 0-2%; Carbonization: still; Volume: 250; Pack Type: Bottle; Sustainable Sourcing: organic; Tea Type: green, earl grey; Flavour: tea, mint",
+      "brand": "Infusion",
+      "description": "",
+      "category": "Still RTD Tea",
+      "category_path": "[\"\" sweet groceries\"\",\"\" coffee, tea and hot drinks\"\",\"\" teas\"\",\"\" plain teas and Earl Grey\"\"]"
+    },
+    "removed": [
+      "pack_qty_1"
+    ],
+    "added": [
+      "pack_qty_12"
+    ],
+    "canonical_changed": false,
+    "new_sku_text": "lot infusion mint green tea still tea green earl grey tea mint brand infusion category still rtd tea breadcrumbs sweet groceries coffee tea hot drinks teas plain teas earl grey [FIELD_VOLUME] volume_ml_250 [FIELD_PACK_SIZE] pack_qty_12 [FIELD_PACKAGE_TYPE] package_type_bottle [FIELD_FLAVOR] flavor_mint [FIELD_CARBONATION] carbonation_still [FIELD_JUICE_CONTENT_BAND] juice_content_0-2%"
+  }
+]

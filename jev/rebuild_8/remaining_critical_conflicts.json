@@ -1,0 +1,1088 @@
+{
+  "counts": {
+    "carbonation": {
+      "different": 41,
+      "uncertain": 10
+    }
+  },
+  "carbonation_examples": [
+    {
+      "gtin1": "7610867016712",
+      "gtin2": "7610867023987",
+      "noul": 0.02,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "from the region Mineral little co2"
+        ],
+        [
+          "knutwiler Mandarinli"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5000382041801",
+      "gtin2": "5000382041825",
+      "noul": 0.07,
+      "similarity": 0.7142857142857143,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "Strathmore Twist Raspberry & Apple Flavoured Sparkling Water Bottle"
+        ],
+        [
+          "Strathmore Twist Still Raspberry & Apple Flavoured Water Bottle"
+        ]
+      ]
+    },
+    {
+      "gtin1": "6415712400071",
+      "gtin2": "6415712400101",
+      "noul": 0.04,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "shelf spacing 14 - domestic spring water 1.5l",
+          "domestic spring water 1.5l"
+        ],
+        [
+          "shelf spacing 14 - domestic carbonated spring water 1.5l",
+          "domestic carbonated spring water 1.5l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5011020104727",
+      "gtin2": "5026791542203",
+      "noul": 0.04,
+      "similarity": 0.6,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "Deep River Rock Still Water 500 Ml"
+        ],
+        [
+          "Deep River Rock Sparkling Water 500 M",
+          "River Rock Sparkling Water (500 ml)"
+        ]
+      ]
+    },
+    {
+      "gtin1": "732623626670",
+      "gtin2": "810146582991",
+      "noul": 0.1,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "Pathwater Water Purified"
+        ],
+        [
+          "PATH Alkaline Bottled Water - 9.5 pH- Balanced Purified Water with Electrolytes in Aluminum Bottle - BPA- Free, Reusable, Infinitely Recyclable - Pure, Crisp, Refreshing Taste 20.3 fl oz ( Pack of 12)"
+        ]
+      ]
+    },
+    {
+      "gtin1": "3119070064090",
+      "gtin2": "3119070064106",
+      "noul": 0.04,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "sparkling water natural mineral ogeu",
+          "natural mineral water ogeu",
+          "sparkling natural mineral water of the pyrenees"
+        ],
+        [
+          "natural mineral water ogeu",
+          "natural mineral water ogeu"
+        ]
+      ]
+    },
+    {
+      "gtin1": "7610867016804",
+      "gtin2": "7610867024809",
+      "noul": 0.31,
+      "similarity": 0.6,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "from the region raspberry- balm"
+        ],
+        [
+          "knutwiler raspberry- balm"
+        ]
+      ]
+    },
+    {
+      "gtin1": "732623769032",
+      "gtin2": "732623848294",
+      "noul": 0.68,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "Sprecher Root Beer Soda"
+        ],
+        [
+          "Sprecher Soda Root Beer 16 fl oz ( Pack Of 12)"
+        ]
+      ]
+    },
+    {
+      "gtin1": "8710624308360",
+      "gtin2": "8710624345600",
+      "noul": 0.51,
+      "similarity": 0.6666666666666666,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "First Choice cola regular bottle 500 ml"
+        ],
+        [
+          "First Choice cola regular",
+          "First Choice cola regular",
+          "First Choice cola regular 500 ml"
+        ]
+      ]
+    },
+    {
+      "gtin1": "4260456730388",
+      "gtin2": "4260456730494",
+      "noul": 0.06,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "gönrgy Juneberry Jam 0.5l"
+        ],
+        [
+          "gönrgy Arctic Ice 0.5l",
+          "gönrgy Arctic Ice 0.5l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5060335634726",
+      "gtin2": "6430057694824",
+      "noul": 0.49,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "Monster Energy Drink MIXXD Punch 500ml"
+        ],
+        [
+          "Monster Mixxd Punch energy drink 0.5l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "8720157465393",
+      "gtin2": "8720157468165",
+      "noul": 0.17,
+      "similarity": 0.6,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "tax tingle",
+          "tax tingle look"
+        ],
+        [
+          "tax tingle"
+        ]
+      ]
+    },
+    {
+      "gtin1": "3142794192299",
+      "gtin2": "649456079835",
+      "noul": 0.65,
+      "similarity": 0.6,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "Cortas Premium Rose Water 10 oz. Pack 2"
+        ],
+        [
+          "Cortas Premium Rose Water 10 oz - Pack 2"
+        ]
+      ]
+    },
+    {
+      "gtin1": "8715600227048",
+      "gtin2": "8715600243710",
+      "noul": 0.04,
+      "similarity": 0.6666666666666666,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "Crystal Clear Sparkling lemon bottle",
+          "Crystal Clear Sparkling lemon"
+        ],
+        [
+          "Crystal Clear lemon 1.5 l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "6430065310617",
+      "gtin2": "6430065312857",
+      "noul": 0.02,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "shelf spacing 17 - real black iced tea",
+          "SON best real black iced tea 330ml"
+        ],
+        [
+          "boys best SOUR Raparperilimonaadi 0.33l",
+          "boys best SOUR Raparperilimonaadi 0.33l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5201156031756",
+      "gtin2": "5201156303303",
+      "noul": 0.03,
+      "similarity": 0.6666666666666666,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "puberty soft drink orange juice with carbonate 330ml"
+        ],
+        [
+          "puberty orange without carbon 330ml"
+        ]
+      ]
+    },
+    {
+      "gtin1": "3760065179697",
+      "gtin2": "8011087136416",
+      "noul": 0.02,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "lurisia sparkling water 3*75cl planet_drinks"
+        ],
+        [
+          "Solo Deco Plate 75cl planet_drinks",
+          "sole DECO PLATE italy"
+        ]
+      ]
+    },
+    {
+      "gtin1": "6415712505998",
+      "gtin2": "6415712509408",
+      "noul": 0.02,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "6 x domestic vichy 0.5l",
+          "6 x domestic vichy 0.5l"
+        ],
+        [
+          "shelf spacing 15 - domestic 6x0.5l spring water",
+          "domestic 6x0.5l spring water"
+        ]
+      ]
+    },
+    {
+      "gtin1": "3546635040549",
+      "gtin2": "3546635040747",
+      "noul": 0.03,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "natural mineral water plate",
+          "mineral water plate bees"
+        ],
+        [
+          "mineral water finely sparkling bees",
+          "natural mineral water sparkling"
+        ]
+      ]
+    },
+    {
+      "gtin1": "7610867016750",
+      "gtin2": "7610867024007",
+      "noul": 0.02,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "from the region Mineral with CO2"
+        ],
+        [
+          "knutwiler Mandarinli"
+        ]
+      ]
+    },
+    {
+      "gtin1": "2020005436350",
+      "gtin2": "2020005436367",
+      "noul": 0.04,
+      "similarity": 0.6,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "roman spring mineral water still 8 x 0.5l"
+        ],
+        [
+          "roman spring mineral water tingly 8 x 0.5l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5099483007649",
+      "gtin2": "5099483007656",
+      "noul": 0.03,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "Ballygowan Glass Still 750 Ml",
+          "Ballygowan Still Mineral Water (750 ml)"
+        ],
+        [
+          "Ballygowan Glass Sparkling 750 Ml",
+          "Ballygowan Irish Sparkling Water (750 ml)"
+        ]
+      ]
+    },
+    {
+      "gtin1": "70117769",
+      "gtin2": "70118186",
+      "noul": 0.03,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "clear Sparkling 1.5l bottle of the week offer t.o.m. 27.8",
+          "clear Sparkling 1.5l bottle"
+        ],
+        [
+          "clear still water natural 1.5l bottle",
+          "clear still water natural 1.5l bottle"
+        ]
+      ]
+    },
+    {
+      "gtin1": "8715600245288",
+      "gtin2": "8715600245332",
+      "noul": 0.04,
+      "similarity": 0.6666666666666666,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "groceries",
+          "Sisi Orange"
+        ],
+        [
+          "groceries",
+          "Sisi No bubbles orange"
+        ]
+      ]
+    },
+    {
+      "gtin1": "70118001",
+      "gtin2": "70120974",
+      "noul": 0.03,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "clear still water 0.5l bottle"
+        ],
+        [
+          "clear Sparkling natural 0.5l",
+          "clear Sparkling natural 0.5l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "6415712505714",
+      "gtin2": "6415712505745",
+      "noul": 0.03,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "shelf spacing 14 - domestic carbonated spring water 0.5l",
+          "domestic carbonated spring water 0.5l"
+        ],
+        [
+          "shelf spacing 14 - domestic spring water 0.5l",
+          "domestic spring water 0.5l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "7070841006120",
+      "gtin2": "7070841006168",
+      "noul": 0.05,
+      "similarity": 0.6,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "zeroh! Fizzy Candy 0.8l",
+          "zeroh! Fizzy Candy 0.8l"
+        ],
+        [
+          "zeroh Skumnisse 0.8l",
+          "zeroh Skumnisse 0.8l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5942328600010",
+      "gtin2": "5942328600072",
+      "noul": 0.08,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "Still Natural Mineral and Alkaline Water with Gold and Silver Colloids - Single Bottle of 750ml",
+          "AURA natural mineral water with colloids gold and silver bottle 75 cl (glass bottle)"
+        ],
+        [
+          "AURA natural mineral water without gas with colloids gold and silver bottle 75 cl (glass bottle)"
+        ]
+      ]
+    },
+    {
+      "gtin1": "6430065310617",
+      "gtin2": "6430065312833",
+      "noul": 0.02,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "shelf spacing 17 - real black iced tea",
+          "SON best real black iced tea 330ml"
+        ],
+        [
+          "boys best SOUR Omenalimonaadi 0.33l",
+          "boys best SOUR Omenalimonaadi 0.33l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "8715600243925",
+      "gtin2": "8715600243932",
+      "noul": 0.13,
+      "similarity": 0.6666666666666666,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "sourcing vitamin water framboos-granaatappel",
+          "sourcecy Vitamin water raspberry pomegranate"
+        ],
+        [
+          "sourcecy | vitamin water | raspberry\\ pomegranate | 6 x 1 liter",
+          "sourcecy | vitamin water | raspberry\\ pomegranate | 6 x 1 liter"
+        ]
+      ]
+    },
+    {
+      "gtin1": "8715600228571",
+      "gtin2": "8715600243802",
+      "noul": 0.06,
+      "similarity": 0.5714285714285714,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "Crystal Clear Sparkling peach"
+        ],
+        [
+          "Crystal Clear Peach 500 ml"
+        ]
+      ]
+    },
+    {
+      "gtin1": "4013143010351",
+      "gtin2": "4013143010375",
+      "noul": 0.05,
+      "similarity": 0.6,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "bad love werda mineral water sparkling 1l"
+        ],
+        [
+          "bad love werda natural 1l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "3546635007382",
+      "gtin2": "3546635070782",
+      "noul": 0.04,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "mineral water the bordeaux"
+        ],
+        [
+          "sparkling water bees",
+          "natural mineral water sparkling arcachon",
+          "bees mineral water finely sparkling 1l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5201156031831",
+      "gtin2": "5201156633035",
+      "noul": 0.76,
+      "similarity": 0.6,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "puberty soft drink orange juice with carbonate 6x330ml"
+        ],
+        [
+          "puberty soft drink orange juice with carbonate 6X330ml"
+        ]
+      ]
+    },
+    {
+      "gtin1": "9310371162339",
+      "gtin2": "9310371162407",
+      "noul": 0.64,
+      "similarity": 0.6,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "ginger- Refresher reduced sugar"
+        ],
+        [
+          "buderim Ginger ginger Refresher 0.75l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "3119070053209",
+      "gtin2": "3119070053308",
+      "noul": 0.03,
+      "similarity": 0.6,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "ogeu - still water - glass - 75 cl",
+          "still water ogeu, glass 75cl"
+        ],
+        [
+          "ogeu - sparkling water - glass - 75 cl",
+          "sparkling water ogeu 75cl"
+        ]
+      ]
+    },
+    {
+      "gtin1": "4009228040030",
+      "gtin2": "4009228040139",
+      "noul": 0.07,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "teinacher mineral water classic 1l"
+        ],
+        [
+          "teinacher Classic carbonated 1l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "666945268341",
+      "gtin2": "666945268471",
+      "noul": 0.03,
+      "similarity": 0.6666666666666666,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "The Mountain Valley 1 Liter Sparkling Water In Glass Bottle 1 Liter ( Pack of 12) Original 33.81 Fl Oz ( Pack of 12)"
+        ],
+        [
+          "The Mountain Valley Spring Water, Glass Bottle 1 Liter ( Pack of 12)"
+        ]
+      ]
+    },
+    {
+      "gtin1": "3162850141511",
+      "gtin2": "3162850641677",
+      "noul": 0.03,
+      "similarity": 0.6,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "sparkling water natural mineral saint amand",
+          "sparkling natural mineral water"
+        ],
+        [
+          "mineral water saint amand, 6 1l bottles",
+          "natural mineral water saint amand",
+          "natural mineral water plate"
+        ]
+      ]
+    },
+    {
+      "gtin1": "6408430671113",
+      "gtin2": "6408430690336",
+      "noul": 0.03,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "champion grandi winter apple 1 l juice drink sugar free",
+          "champion grandi winter apple 1 l juice drink sugar free",
+          "champion grandi juice drink winter apple 1l sugar free"
+        ],
+        [
+          "champion gulp juice drink 1 l seko sugar free",
+          "champion gulp juice drink 1l seko sugar free",
+          "champion gulp juice drink 1l SEKO sugar free",
+          "champion gulp juice drink 1 l seko sugar free"
+        ]
+      ]
+    },
+    {
+      "gtin1": "6415712505745",
+      "gtin2": "6415712612498",
+      "noul": 0.02,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "shelf spacing 14 - domestic spring water 0.5l",
+          "domestic spring water 0.5l"
+        ],
+        [
+          "domestic vichy 0.5l",
+          "domestic vichy 0.5l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5201156031831",
+      "gtin2": "5201156091613",
+      "noul": 0.62,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "puberty soft drink orange juice with carbonate 6x330ml"
+        ],
+        [
+          "orange juice with carbon puberty (6 X 330 ml) 5 + 1 gift"
+        ]
+      ]
+    },
+    {
+      "gtin1": "666945268341",
+      "gtin2": "666945268358",
+      "noul": 0.04,
+      "similarity": 0.6666666666666666,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "The Mountain Valley 1 Liter Sparkling Water In Glass Bottle 1 Liter ( Pack of 12) Original 33.81 Fl Oz ( Pack of 12)"
+        ],
+        [
+          "The Mountain Valley 1 Liter Spring Water In Glass Bottle 1 Liter ( Pack of 12) 33.8 Fl Oz ( Pack of 12)"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5026791542203",
+      "gtin2": "5026791543002",
+      "noul": 0.03,
+      "similarity": 0.6,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "Deep River Rock Sparkling Water 500 M",
+          "River Rock Sparkling Water (500 ml)"
+        ],
+        [
+          "Deep River Rock Still Water (500 ml)",
+          "Deep River Rock Still Water 500 M"
+        ]
+      ]
+    },
+    {
+      "gtin1": "8715600242140",
+      "gtin2": "8715600244045",
+      "noul": 0.46,
+      "similarity": 0.6,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "sourcecy Vitamin Water passion kumquat"
+        ],
+        [
+          "sourcing vitamin water 0% passion kumquat"
+        ]
+      ]
+    },
+    {
+      "gtin1": "2020005436343",
+      "gtin2": "2020005436350",
+      "noul": 0.05,
+      "similarity": 0.6,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "roman spring mineral water mild 8 x 0.5l"
+        ],
+        [
+          "roman spring mineral water still 8 x 0.5l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "4104450003256",
+      "gtin2": "4105960003934",
+      "noul": 0.15,
+      "similarity": 0.5,
+      "left": [
+        "carbonated"
+      ],
+      "right": [
+        "still"
+      ],
+      "titles": [
+        [
+          "deit Pink Grapefruit sugar free ( reusable)"
+        ],
+        [
+          "deit Grapefruit 1l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "6430065310624",
+      "gtin2": "6430065312833",
+      "noul": 0.02,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "shelf spacing 17 - real green iced tea",
+          "SON best real green iced tea 330ml"
+        ],
+        [
+          "boys best SOUR Omenalimonaadi 0.33l",
+          "boys best SOUR Omenalimonaadi 0.33l"
+        ]
+      ]
+    },
+    {
+      "gtin1": "8056326430139",
+      "gtin2": "8056326432331",
+      "noul": 0.17,
+      "similarity": 0.6,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "BEEBAD energy drink sweetened with honey, enriched with royal jelly and propolis can 25 cl",
+          "BEEBAD energy drink sweetened with honey, enriched with royal jelly and propolis can 25 cl"
+        ],
+        [
+          "BEEBAD energy drink 0.25l, contains only natural and terveellisia ingredients, sweetened 100% with honey, no contains taurine, gluten, lactose, salt and artificial ingredients!",
+          "BEEBAD energy drink 0.25l, contains only natural and terveellisia ingredients, sweetened 100% with honey, no contains taurine, gluten, lactose, salt and artificial ingredients!"
+        ]
+      ]
+    },
+    {
+      "gtin1": "5741000220207",
+      "gtin2": "7350020691171",
+      "noul": 0.36,
+      "similarity": 0.6,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "energy drink m. mango flavor",
+          "Energy Flaming Mangos"
+        ],
+        [
+          "Cult Flamingo Mango energy drink, can",
+          "energy drink Flamingo Mango 50cl Cult"
+        ]
+      ]
+    },
+    {
+      "gtin1": "6430065310624",
+      "gtin2": "6430065312857",
+      "noul": 0.02,
+      "similarity": 0.5,
+      "left": [
+        "still"
+      ],
+      "right": [
+        "carbonated"
+      ],
+      "titles": [
+        [
+          "shelf spacing 17 - real green iced tea",
+          "SON best real green iced tea 330ml"
+        ],
+        [
+          "boys best SOUR Raparperilimonaadi 0.33l",
+          "boys best SOUR Raparperilimonaadi 0.33l"
+        ]
+      ]
+    }
+  ]
+}

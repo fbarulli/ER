@@ -1,0 +1,17 @@
+{
+  "git_revision": "main",
+  "identity_policy_sha256": "identity_policy",
+  "labeled_pairs_sha256": "33ef8aeba8db92f5a5f1c2766d35ec9d94402f2814a91d33f20165ec48363399",
+  "negative_policy": "same-split labeled negatives only",
+  "pair_protocol": "first listing per labeled entity plus same-entity positive chains",
+  "parent_setup_sha256": "994f6c827375f99686450deef12d4757b88c33a0c5b1eb4e4af6fb84d51bf0ad",
+  "schema": "er-track-setup-v1",
+  "seed": 42,
+  "smoke": true,
+  "source_catalog_sha256": "f9d8720996fb43166e1e4cd417c5b9226d774e79fe125c1699aedc617613b2e3",
+  "source_listing_count": 500,
+  "split_protocol": "training.folds.derive_holdout",
+  "text_checkpoint": "artifacts/models/all-MiniLM-L6-v2",
+  "text_checkpoint_sha256": "a3f36d62c73027de84a628b90e8c4ae133dafb21fe4b7ede7740923b1c99ccab",
+  "text_checkpoint_status": "local baseline"
+}

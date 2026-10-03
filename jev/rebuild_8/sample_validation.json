@@ -1,0 +1,16 @@
+{
+  "calls": 1000,
+  "unique_pairs": 900,
+  "primary_cohorts": {
+    "current_training_pairs": 800,
+    "lost_positive_partners": 100
+  },
+  "current_training_primary_labels": {
+    "0": 160,
+    "1": 640
+  },
+  "original_listings_verified_field_by_field": 2501,
+  "previous_pair_overlap": 0,
+  "description_truncation": false,
+  "supplied_source_fields_preserved": true
+}

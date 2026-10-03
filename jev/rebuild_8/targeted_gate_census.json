@@ -1,0 +1,21 @@
+{
+  "proceed": 929,
+  "routes": {
+    "auto_merge": 162,
+    "human_review": 767
+  },
+  "missing_census": {
+    "sweetener_a": 569,
+    "sweetener_b": 563,
+    "pulp_a": 917,
+    "pulp_b": 917,
+    "pack_a": 767,
+    "pack_b": 767,
+    "flavor_b": 430,
+    "package_type_a": 178,
+    "package_type_b": 172,
+    "flavor_a": 410,
+    "carbonation_b": 116,
+    "carbonation_a": 114
+  }
+}

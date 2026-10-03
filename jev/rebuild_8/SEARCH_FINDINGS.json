@@ -1,0 +1,559 @@
+{
+  "scope": "All 640 current-positive primary pairs from the final audit, compared with 43 high-scoring controls. No new API calls and no labels changed by this search.",
+  "counts": {
+    "carbonation_conflict": {
+      "different": 41,
+      "uncertain": 10
+    },
+    "description_flavor_language_with_incomplete_flavor_sets": {
+      "different": 46,
+      "same": 2,
+      "uncertain": 7
+    },
+    "different_mode_type": {
+      "uncertain": 25,
+      "different": 39,
+      "same": 1
+    },
+    "shared_normalized_title": {
+      "same": 24,
+      "uncertain": 47,
+      "different": 17
+    },
+    "different_title_tokens_missing_from_global_flavor_lexicon": {
+      "different": 9
+    },
+    "different_compatible_volume_sets": {
+      "different": 2,
+      "uncertain": 1
+    },
+    "short_similarity_1": {
+      "different": 131,
+      "uncertain": 90,
+      "same": 31
+    },
+    "similarity_1_despite_different_compounds": {
+      "different": 127,
+      "uncertain": 83,
+      "same": 28
+    }
+  },
+  "missing_flavor_both_sides": {
+    "different": 212,
+    "uncertain": 48,
+    "same": 12
+  },
+  "inspected_cases": [
+    {
+      "gtin1": "7391881837636",
+      "gtin2": "7398818389848",
+      "pattern": "functional formulations and description flavors",
+      "saved_jev_score": 0.02,
+      "similarity": 1.0,
+      "sources": {
+        "7391881837636": [
+          {
+            "attributes": "Immune Support Ingredients: zinc; Volume: 330; Carbonization: carbonated; Sweetener: sucralose, acesulfame potassium; Juice Content: 0-2%; Caffeine: 15-25 mg; Pack Material Type: Metal; Sports Ingredients: bcaa; Health Claims: no sugar, energy boosting; Sports Positioning: muscle growth; Energy Source: b-vitamins",
+            "barcode": "7391881837636",
+            "brand": "Lohilo",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" natural products and supplements\"\",\"\" sports nutrition\"\",\"\" sports nutrition drinks\"\"]",
+            "country": "Finland",
+            "description": "guavan -flavored bcaa amino acids containing energy drink. sugar free and carbonated. high caffeine content because of recommendation up to 2 cans / day. salmon of good taste energy drinks boostia to",
+            "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/7391881837636_kuva1.jpg",
+            "price": "2.39",
+            "product_id": "400903311",
+            "retailer": "S-kaupat",
+            "title": "lohilo Pink beach bcaa drink 330ml",
+            "url": "https://www.s-kaupat.fi/tuote/lohilo-pink-beach-bcaa-juoma-330ml/7391881837636"
+          },
+          {
+            "attributes": "Pack Material Type: Metal; Energy Source: b-vitamins; Caffeine: 15-25 mg; Sports Positioning: muscle growth; Immune Support Ingredients: zinc; Carbonization: carbonated; Juice Content: 0-2%; Volume: 330; Health Claims: energy boosting, no sugar; Sports Ingredients: bcaa; Sweetener: sucralose, acesulfame potassium",
+            "barcode": "7391881837636",
+            "brand": "Lohilo",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" natural products and supplements\"\",\"\" sports nutrition\"\",\"\" sports nutrition drinks\"\"]",
+            "country": "Finland",
+            "description": "guavan -flavored bcaa amino acids containing energy drink. sugar free and carbonated. high caffeine content because of recommendation up to 2 cans / day. salmon of good taste energy drinks boostia to",
+            "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/7391881837636_kuva1.jpg",
+            "price": "2.39",
+            "product_id": "524268600",
+            "retailer": "Food Market Herkku",
+            "title": "lohilo Pink beach bcaa drink 330ml",
+            "url": "https://www.s-kaupat.fi/tuote/7391881837636"
+          }
+        ],
+        "7398818389848": [
+          {
+            "attributes": "Volume: 330; Caffeine: 15-25 mg; Pack Material Type: Metal; Sweetener: aspartame, sucralose, acesulfame potassium; Health Claims: no sugar, energy boosting; Immune Support Ingredients: vitamin c, zinc; Juice Content: 0-2%; Carbonization: carbonated",
+            "barcode": "7398818389848",
+            "brand": "Lohilo",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" natural products and supplements\"\",\"\" sports nutrition\"\",\"\" sports nutrition drinks\"\"]",
+            "country": "Finland",
+            "description": "fresh green apple -flavored collagen containing energy drink. sugar free and carbonated. high caffeine content because of recommendation up to 2 cans / day. salmon of good taste energy drinks boostia",
+            "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/7398818389848_kuva1.jpg",
+            "price": "1.27",
+            "product_id": "517984287",
+            "retailer": "S-kaupat",
+            "title": "lohilo Glow 2022 collagen containing carbonated sugar free beverage 330ml",
+            "url": "https://www.s-kaupat.fi/tuote/lohilo-glow-2022-kollageenia-sisaltava-hiilihapotettu-sokeriton-juoma-330ml/7398818389848"
+          },
+          {
+            "attributes": "Pack Material Type: Metal; Volume: 330; Carbonization: carbonated; Immune Support Ingredients: vitamin c, zinc; Health Claims: no sugar, energy boosting; Sweetener: aspartame, sucralose, acesulfame potassium; Juice Content: 0-2%; Caffeine: 15-25 mg",
+            "barcode": "7398818389848",
+            "brand": "Lohilo",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" natural products and supplements\"\",\"\" sports nutrition\"\",\"\" sports nutrition drinks\"\"]",
+            "country": "Finland",
+            "description": "fresh green apple -flavored collagen containing energy drink. sugar free and carbonated. high caffeine content because of recommendation up to 2 cans / day. salmon of good taste energy drinks boostia",
+            "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/7398818389848_kuva1.jpg",
+            "price": "1.27",
+            "product_id": "524336649",
+            "retailer": "Food Market Herkku",
+            "title": "lohilo Glow 2022 collagen containing carbonated sugar free beverage 330ml",
+            "url": "https://www.s-kaupat.fi/tuote/7398818389848"
+          }
+        ]
+      }
+    },
+    {
+      "gtin1": "688267001222",
+      "gtin2": "688267001505",
+      "pattern": "named soda variants",
+      "saved_jev_score": 0.03,
+      "similarity": 1.0,
+      "sources": {
+        "688267001222": [
+          {
+            "attributes": "Sweetener: hfcs; Carbonization: carbonated; Naturally derived: natural flavours; Volume: 2000; Pack Material Type: Plastic; Juice Content: 0-2%; Caffeine: 15-25 mg",
+            "barcode": "688267001222",
+            "brand": "Peapod",
+            "category": "Other Non-Cola Carbonates",
+            "category_path": "[\"\" Beverages\"\",\"\" Regular Cola\"\"]",
+            "country": "USA",
+            "description": "Ahold Dr. Bob . Amount and % daily value per serving. *A fat free food. Calories 100. Fat 0g, 0%. Sodium 25mg, 1%. Please recycle. 1-877-846-9949. Quality guaranteed or your money back. 2010 Ahold Lic",
+            "image_url": "https://i5.peapod.com/c/YI/YIHI4.jpg",
+            "price": "1.19",
+            "product_id": "7985745",
+            "retailer": "peapod",
+            "title": "Peapod Dr. Bob Soda",
+            "url": "https://www.peapod.com/"
+          },
+          {
+            "attributes": "Carbonization: carbonated; Pack Material Type: Plastic; Volume: 2000; Water Type: soda; Sweetener: hfcs; Naturally derived: natural flavours; Juice Content: 0-2%; Caffeine: 15-25 mg",
+            "barcode": "688267001222",
+            "brand": "Peapod",
+            "category": "Other Non-Cola Carbonates",
+            "category_path": "[\"\" Beverages\"\",\"\" Regular Cola\"\"]",
+            "country": "USA",
+            "image_url": "https://i5.peapod.com/c/G4/G45OI.jpg",
+            "price": "0.89",
+            "product_id": "23458200",
+            "retailer": "peapod",
+            "title": "Peapod Dr. Bob Soda"
+          }
+        ],
+        "688267001505": [
+          {
+            "attributes": "Pack Type: Bottle; Sweetener: hfcs; Pack Material Type: Plastic; Carbonization: carbonated; Caffeine: 0-15 mg; Volume: 2000; Juice Content: 0-2%; Naturally derived: natural flavours",
+            "barcode": "688267001505",
+            "brand": "Peapod",
+            "category": "Other Non-Cola Carbonates",
+            "category_path": "[\"\" Beverages\"\",\"\" Regular Cream Soda\"\"]",
+            "country": "USA",
+            "description": "Ahold Cream Soda. Amount and % daily value per serving. *A fat free food. Calories 110. Fat 0g*, 0%. Sodium 25mg, 1%. Please recycle. 1-877-846-9949. Quality guaranteed or your money back. 2009 Ahold",
+            "image_url": "https://i5.peapod.com/c/EI/EITY7.jpg",
+            "price": "1.19",
+            "product_id": "3611196",
+            "retailer": "peapod",
+            "title": "Peapod Cream Soda",
+            "url": "https://www.peapod.com/"
+          },
+          {
+            "attributes": "Pack Type: Bottle; Pack Material Type: Plastic; Volume: 2000; Juice Content: 0-2%; Water Type: soda; Sweetener: hfcs; Carbonization: carbonated; Caffeine: 15-25 mg; Naturally derived: natural flavours",
+            "barcode": "688267001505",
+            "brand": "Peapod",
+            "category": "Other Non-Cola Carbonates",
+            "category_path": "[\"\" Beverages\"\",\"\" Regular Cream Soda\"\"]",
+            "country": "USA",
+            "image_url": "https://i5.peapod.com/c/MY/MYVI5.jpg",
+            "price": "0.89",
+            "product_id": "23310412",
+            "retailer": "peapod",
+            "title": "Peapod Cream Soda"
+          }
+        ]
+      }
+    },
+    {
+      "gtin1": "6415600579292",
+      "gtin2": "6415600590358",
+      "pattern": "named energy-drink variants",
+      "saved_jev_score": 0.02,
+      "similarity": 1.0,
+      "sources": {
+        "6415600579292": [
+          {
+            "attributes": "Sweetener: sugar; Energy Source: b-vitamins, guarana; Pack Material Type: Metal; Special Edition: special edition; Volume: 500; Health Claims: energy boosting; Juice Content: 0-2%; Carbonization: carbonated",
+            "barcode": "6415600579292",
+            "brand": "Battery",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" drink\"\",\"\" energy drink\"\"]",
+            "country": "Norway",
+            "description": "Battery Black tastes like the original Battery the energy drink - the popular the classic both on taste and functionality. Battery black is an exciting limited edition, with black content and in a pre",
+            "image_url": "https://bilder.ngdata.no/6415600579292/meny/large.jpg",
+            "price": "28.4",
+            "product_id": "848975243",
+            "retailer": "Meny",
+            "title": "Battery Black 0.5l box",
+            "url": "https://meny.no/varer/drikke/energidrikk/battery-black-6415600579292"
+          },
+          {
+            "attributes": "Geographic Origin: finland; Pack Material Type: Metal; Volume: 500; Sweetener: sugar; Juice Content: 0-2%; Energy Source: b-vitamins, guarana; Health Claims: energy boosting; Carbonization: carbonated; Caffeine: 0-15 mg; Pack Type: Can",
+            "barcode": "6415600579292",
+            "brand": "Battery",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" online store\"\",\"\" drink\"\",\"\" energy drink\"\"]",
+            "country": "Norway",
+            "description": "producer: is called as\nbrand: Battery\ncountry of origin: Finland\nean: 6415600579292",
+            "image_url": "https://bilder.ngdata.no/6415600579292/kmh/large.jpg?fallback=404&foretrekk=bedark",
+            "price": "27.9",
+            "product_id": "862109455",
+            "retailer": "Spar",
+            "title": "Battery Black 0.5l box",
+            "url": "https://spar.no/nettbutikk/varer/drikke/energidrikk/battery-black-6415600579292"
+          }
+        ],
+        "6415600590358": [
+          {
+            "attributes": "Volume: 500; Juice Content: 0-2%; Sweetener: sugar; Pack Type: Can; Naturally derived: natural fragrances; Health Claims: energy boosting; Carbonization: carbonated",
+            "barcode": "6415600590358",
+            "brand": "Battery",
+            "category": "Energy Drinks",
+            "category_path": "[\"\" drink\"\",\"\" energy drink\"\"]",
+            "country": "Norway",
+            "description": "Battery Pearberry remix 2.0 - sugary Battery with taste of bulb and wild strawberries",
+            "image_url": "https://bilder.ngdata.no/6415600590358/meny/large.jpg",
+            "price": "30.9",
+            "product_id": "1036573233",
+            "retailer": "Meny",
+            "title": "Battery Pearberry 0.5l box",
+            "url": "https://meny.no/varer/drikke/energidrikk/battery-pearberry-6415600590358"
+          }
+        ]
+      }
+    },
+    {
+      "gtin1": "5000382041801",
+      "gtin2": "5000382041825",
+      "pattern": "explicit sparkling versus still",
+      "saved_jev_score": 0.07,
+      "similarity": 0.7142857142857143,
+      "sources": {
+        "5000382041801": [
+          {
+            "attributes": "Volume: 1500; Sustainable Packaging: widely recycled; Health Claims: no sugar, hydrating; Flavour: apple, raspberry; Water Type: bottled at source; Naturally derived: natural flavours; Caffeine: 15-25 mg; Sweetener: sucralose, acesulfame potassium; Juice Content: 5-10%; Pack Material Type: Paper / Carton; Carbonization: carbonated, sparkling",
+            "barcode": "5000382041801",
+            "brand": "Strathmore",
+            "category": "Sparkling Flavoured Bottled Water",
+            "category_path": "[\"\" Drinks\"\",\"\" Soft Drinks, Juice & Water\"\",\"\" Water\"\",\"\" Flavoured Water\"\"]",
+            "country": "United Kingdom",
+            "description": "Net Content 1.5 Litres ℮ Ingredients Carbonated Spring Water , Acid ( Citric Acid) , Natural Raspberry and Apple Flavourings , Natural Flavouring , Sweeteners ( Sucralose, Acesulfame K) , Preservative",
+            "image_url": "https://ui3.assets-asda.com/dm/asdagroceries/5000382041801_T1?defaultImage=asdagroceries/noImageAvailable&resMode=sharp2&id=y4vSL1&fmt=jpg&fit=constrain,1&wid=280&hei=280",
+            "price": "1",
+            "product_id": "24266068",
+            "retailer": "Asda",
+            "title": "Strathmore Twist Raspberry & Apple Flavoured Sparkling Water Bottle",
+            "url": "https://groceries.asda.com/product/flavoured-water/strathmore-twist-raspberry-apple-flavoured-sparkling-water-bottle/910001737297"
+          }
+        ],
+        "5000382041825": [
+          {
+            "attributes": "Health Claims: no sugar, hydrating; Juice Content: 5-10%; Flavour: apple, raspberry; Water Type: bottled at source; Sustainable Packaging: widely recycled; Naturally derived: natural flavours; Sweetener: sucralose, acesulfame potassium; Pack Material Type: Paper / Carton; Carbonization: still; Volume: 1500; Caffeine: 15-25 mg",
+            "barcode": "5000382041825",
+            "brand": "Strathmore",
+            "category": "Still Flavoured Bottled Water",
+            "category_path": "[\"\" Drinks\"\",\"\" Soft Drinks, Juice & Water\"\",\"\" Water\"\",\"\" Flavoured Water\"\"]",
+            "country": "United Kingdom",
+            "description": "Net Content 1.5 Litres ℮ Lifestyle No Sugar. Ingredients Spring Water , Acid ( Citric Acid) , Natural Raspberry and Apple Flavourings with other Natural Flavourings , Preservative ( Sodium Benzoate) ,",
+            "image_url": "https://ui3.assets-asda.com/dm/asdagroceries/5000382041825_T1?defaultImage=asdagroceries/noImageAvailable&resMode=sharp2&id=unBRz1&fmt=jpg&fit=constrain,1&wid=280&hei=280",
+            "price": "1",
+            "product_id": "9069515",
+            "retailer": "Asda",
+            "title": "Strathmore Twist Still Raspberry & Apple Flavoured Water Bottle",
+            "url": "https://groceries.asda.com/product/flavoured-water/strathmore-twist-still-raspberry-apple-flavoured-water-bottle/910001737810"
+          }
+        ]
+      }
+    },
+    {
+      "gtin1": "5011020104727",
+      "gtin2": "5026791542203",
+      "pattern": "explicit still versus sparkling",
+      "saved_jev_score": 0.04,
+      "similarity": 0.6,
+      "sources": {
+        "5011020104727": [
+          {
+            "attributes": "Volume: 500; Juice Content: 0-2%; Health Claims: hydrating; Carbonization: still",
+            "barcode": "5011020104727",
+            "brand": "Deep RiverRock",
+            "category": "Still Bottled Water",
+            "category_path": "[\"\" Drinks\"\",\"\" On The Go Drinks\"\",\"\" On The Go Water\"\"]",
+            "country": "Ireland",
+            "description": "Still Water Keep both your mind and body hydrated with Deep River Rock, sourced from deep beneath a glacial valley in Co. Antrim. Deep River Rock.",
+            "image_url": "https://digitalcontent.api.tesco.com/v2/media/ghs/273437da-c41d-402d-9934-688166792b80/970978cf-82b5-44c7-a454-dcbdf64e5ecc_2092356198.jpeg?h=540&w=540",
+            "price": "1.6",
+            "product_id": "897434335",
+            "retailer": "Tesco",
+            "title": "Deep River Rock Still Water 500 Ml",
+            "url": "https://www.tesco.ie/groceries/en-IE/products/315835573"
+          }
+        ],
+        "5026791542203": [
+          {
+            "attributes": "Juice Content: 0-2%; Caffeine: 0-15 mg; Pack Material Type: Plastic; Carbonization: carbonated, sparkling",
+            "barcode": "5026791542203",
+            "brand": "Deep RiverRock",
+            "category": "Carbonated Bottled Water",
+            "category_path": "[\"\" Drinks\"\"]",
+            "country": "Ireland",
+            "description": "Sparkling Water Sparkling Water",
+            "image_url": "https://digitalcontent.api.tesco.com/v2/media/ghs/b8fbae61-bc62-42c0-9461-341776ff6891/995d70f6-6349-470d-bffc-10103535420b_254107133.jpeg?h=540&w=540",
+            "price": "1.1",
+            "product_id": "225928489",
+            "retailer": "Tesco",
+            "title": "Deep River Rock Sparkling Water 500 M",
+            "url": "https://www.tesco.ie/groceries/en-IE/products/252062413"
+          },
+          {
+            "attributes": "Energy Source: b-vitamins; Juice Content: 0-2%; Volume: 500; Pack Material Type: Plastic; Health Claims: good source of minerals, hydrating; Contains Minerals: calcium, magnesium; Pack Type: Bottle; Naturally derived: natural; Sustainable Packaging: from recycled materials; Carbonization: carbonated",
+            "barcode": "5026791542203",
+            "brand": "Deep RiverRock",
+            "category": "Carbonated Bottled Water",
+            "category_path": "[\"\" Drinks\"\",\"\" Water\"\",\"\" Sparkling\"\"]",
+            "country": "Ireland",
+            "description": "Details\nKeep both your mind and body hydrated with Deep River Rock, sourced from deep beneath a glacial valley in Co. Antrim. Deep River Rock.\nIntroduced to the market in 1994, Deep River Rock is a qu",
+            "image_url": "https://d2wwnnx8tks4e8.cloudfront.net/images/app/large/5026791542203_3.JPG",
+            "price": "1.55",
+            "product_id": "437035731",
+            "retailer": "SuperValu",
+            "title": "River Rock Sparkling Water (500 ml)",
+            "url": "https://shop.supervalu.ie/shopping/drinks-sparkling-river-rock-water-500-ml-/p-1006139000"
+          }
+        ]
+      }
+    },
+    {
+      "gtin1": "8722200964969",
+      "gtin2": "8722200964983",
+      "pattern": "title/attribute carbonation contradiction",
+      "saved_jev_score": 0.13,
+      "similarity": 1.0,
+      "sources": {
+        "8722200964969": [
+          {
+            "attributes": "Volume: 1000; Water Type: mineral, bottled at source; Pack Type: Bottle; Sustainable Sourcing: from sustainable sources (product); Sustainable Packaging: from recycled materials; Juice Content: 0-2%; Carbonization: carbonated, sparkling",
+            "barcode": "8722200964969",
+            "brand": "Bar-le-Duc",
+            "category": "Carbonated Bottled Water",
+            "category_path": "[\"\" soft drink, juices, syrups, water\"\",\"\" Water\"\",\"\" sparkling water\"\",\"\" bottled water (carbonated)\"\"]",
+            "country": "Netherlands",
+            "description": "characteristics: green point, deposit (only the netherlands), \nkeep: save out of the sun, on a dry cool and odorless place. perishable after opening., \nHighlights: of course sparkling mineral water, s",
+            "image_url": "https://static.ah.nl/dam/product/AHI_4354523130303635383137?revLabel=1&rendition=400x400_JPG_Q85&fileType=binary",
+            "price": "0.79",
+            "product_id": "766618991",
+            "retailer": "Albert Heijn",
+            "title": "bar-le- Duc mineral water effervescent",
+            "url": "https://www.ah.nl/producten/product/wi550293/bar-le-duc-mineraalwater-bruisend"
+          },
+          {
+            "attributes": "Naturally derived: natural; Volume: 1000; Water Type: mineral; Juice Content: 0-2%; Caffeine: 0-15 mg; Pack Material Type: Plastic; Health Claims: good source of minerals",
+            "barcode": "8722200964969",
+            "brand": "Bar-le-Duc",
+            "category": "Carbonated Bottled Water",
+            "category_path": "[\"\" drinks, juice, coffee tea\"\",\"\" mineral- & spring water\"\"]",
+            "country": "Netherlands",
+            "description": "natural mineral water with added carbon dioxide",
+            "image_url": "https://d3r3h30p75xj6a.cloudfront.net/artikelen/162311_1_453554_638279499292032728.png",
+            "price": "0.75",
+            "product_id": "783167151",
+            "retailer": "Dirk",
+            "title": "bar le duc mineral water carbonated",
+            "url": "https://www.dirk.nl/boodschappen/dranken-sap-koffie-thee/mineraal-bronwater/bar%20le%20duc%20mineraalwater%20koolzuurhoudend/96084"
+          },
+          {
+            "attributes": "Juice Content: 0-2%; Contains Minerals: calcium; Volume: 1000; Pack Type: Bottle; Carbonization: carbonated; Water Type: mineral, bottled at source; Caffeine: 15-25 mg; Health Claims: good source of minerals; Naturally derived: natural",
+            "barcode": "8722200964969",
+            "brand": "Bar-le-Duc",
+            "category": "Carbonated Bottled Water",
+            "category_path": "[\"\" groceries\"\",\"\" soft drink, juices, and, Water\"\",\"\" Water\"\",\"\" carbonated, Water\"\"]",
+            "country": "Netherlands",
+            "description": "> \n## store & use \nstorage advice save out of the sun on a dry, cool and odorless place. Ten best before end: see date on the neck of the bottle. perishable after opening. \n## extra information \ndepar",
+            "image_url": "https://cdn.syndy.com/media/products/14110000-3a24-000d-1c92-08dbded9151a/images/AW0HA3GItENDpZ-NPK0ohvI./AAMY_CQ6DQBFmgjb32rLZQ.290x290.jpg",
+            "price": "0.83",
+            "product_id": "860316385",
+            "retailer": "Coop",
+            "title": "Bar- Le- Duc mineral water carbonated",
+            "url": "https://www.coop.nl/product/8722200964969"
+          }
+        ],
+        "8722200964983": [
+          {
+            "attributes": "Caffeine: 0-15 mg; Pack Material Type: Plastic; Volume: 1000; Contains Minerals: calcium; Naturally derived: natural; Juice Content: 0-2%; Water Type: mineral",
+            "barcode": "8722200964983",
+            "brand": "Bar-le-Duc",
+            "category": "Carbonated Bottled Water",
+            "category_path": "[\"\" drinks, juice, coffee tea\"\",\"\" mineral- & spring water\"\"]",
+            "country": "Netherlands",
+            "description": "natural mineral water",
+            "image_url": "https://d3r3h30p75xj6a.cloudfront.net/artikelen/162312_1_453555_638279499300902687.png",
+            "price": "0.74",
+            "product_id": "783336710",
+            "retailer": "Dirk",
+            "title": "bar le duc mineral water carbonated",
+            "url": "https://www.dirk.nl/boodschappen/dranken-sap-koffie-thee/mineraal-bronwater/bar%20le%20duc%20mineraalwater%20koolzuurvrij/96085"
+          },
+          {
+            "attributes": "Water Type: mineral, bottled at source; Volume: 1000; Naturally derived: natural; Caffeine: 15-25 mg; Contains Minerals: calcium; Juice Content: 0-2%; Carbonization: carbonated",
+            "barcode": "8722200964983",
+            "brand": "Bar-le-Duc",
+            "category": "Carbonated Bottled Water",
+            "category_path": "[\"\" groceries\"\",\"\" soft drink, juices, and, Water\"\",\"\" Water\"\",\"\" carbonated, Water\"\"]",
+            "country": "Netherlands",
+            "description": "> \n## store & use \nstorage advice save out of the sun on a dry, cool and odorless place. Ten best before end: see date on the neck of the bottle. perishable after opening. \n## extra information \ndepar",
+            "image_url": "https://cdn.syndy.com/media/products/14110100-3a24-000d-f596-08dbded91512/images/AW0HA3GItENDpZ-NPK0ohvI./AAMY_CQ6DQBcAQjb32rCvw.290x290.jpg",
+            "price": "0.83",
+            "product_id": "859979074",
+            "retailer": "Coop",
+            "title": "Bar- Le- Duc mineral water carbonated",
+            "url": "https://www.coop.nl/product/8722200964983"
+          },
+          {
+            "attributes": "Volume: 1000; Carbonization: carbonated; Sustainable Packaging: from recycled materials; Water Type: mineral, bottled at source; Naturally derived: natural; Pack Type: Bottle; Sustainable Sourcing: from sustainable sources (product); Juice Content: 0-2%",
+            "barcode": "8722200964983",
+            "brand": "Bar-le-Duc",
+            "category": "Carbonated Bottled Water",
+            "category_path": "[\"\" soft drink, juices, syrups, water\"\",\"\" Water\"\",\"\" carbonated water\"\",\"\" bottled water (carbonated)\"\"]",
+            "country": "Netherlands",
+            "description": "characteristics: green point, deposit (only the netherlands), \nkeep: save out of the sun, on a dry cool and odorless place. perishable after opening., \nHighlights: natural mineral water, suitable for",
+            "image_url": "https://static.ah.nl/dam/product/AHI_4354523130303635383233?revLabel=1&rendition=400x400_JPG_Q85&fileType=binary",
+            "price": "0.79",
+            "product_id": "971860149",
+            "retailer": "Albert Heijn",
+            "title": "bar-le- Duc mineral water without carbonic",
+            "url": "https://www.ah.nl/producten/product/wi550294/bar-le-duc-mineraalwater-zonder-koolzuur"
+          },
+          {
+            "attributes": "Volume: 1000; Juice Content: 0-2%; Water Type: mineral; Carbonization: carbonated; Pack Type: Bottle",
+            "barcode": "8722200964983",
+            "brand": "Bar-le-Duc",
+            "category": "Carbonated Bottled Water",
+            "category_path": "[\"\" soft drink, juices, syrups, water\"\",\"\" Water\"\",\"\" carbonated water\"\",\"\" bottled water (carbonated)\"\"]",
+            "country": "Belgium",
+            "image_url": "https://static.ah.nl/dam/product/AHI_4354523130303635383233?revLabel=1&rendition=400x400_JPG_Q85&fileType=binary",
+            "price": "0.89",
+            "product_id": "1000536944",
+            "retailer": "Albert Heijn",
+            "title": "bar-le- Duc mineral water without carbonic",
+            "url": "https://www.ah.be/producten/product/wi550294/bar-le-duc-mineraalwater-zonder-koolzuur"
+          }
+        ]
+      }
+    },
+    {
+      "gtin1": "8433329104364",
+      "gtin2": "8433329122795",
+      "pattern": "lemon soda versus lemon tea drink",
+      "saved_jev_score": 0.03,
+      "similarity": 0.7777777777777778,
+      "sources": {
+        "8433329104364": [
+          {
+            "attributes": "Sweetener: sugar; Volume: 1500; Caffeine: 15-25 mg; Immune Support Ingredients: antioxidants; Carbonization: still; Pack Material Type: Plastic; Flavour: lemon; Juice Content: 5-10%",
+            "barcode": "8433329104364",
+            "brand": "El Corte Inglés",
+            "category": "Lemonade/Lime",
+            "category_path": "[\"\" supermarket\"\",\"\" drinks\"\",\"\" water, soft drinks and juices\"\",\"\" soft drinks and soda\"\",\"\" soft drink lemon\"\"]",
+            "country": "Spain",
+            "description": "### general information \n* name of the food: refreshing juice drink of fruits. with sugars and sweetener. \n* name of the operator: prepared for\nthe english court by soft drink Iberia S.A.U.\nhighway N-",
+            "image_url": "https://cdn.grupoelcorteingles.es/SGFM/dctm/MEDIA03/202006/29/00118611200637____1__325x325.jpg",
+            "price": "0.92",
+            "product_id": "305318361",
+            "retailer": "El Corte Inglés",
+            "title": "the english court soda of lemon without gas bottle 1.5 l",
+            "url": "https://www.elcorteingles.es/supermercado/0110118611200637-el-corte-ingles-refresco-de-limon-sin-gas-botella-15-l/"
+          }
+        ],
+        "8433329122795": [
+          {
+            "attributes": "Juice Content: 0-2%; Caffeine: 15-25 mg; Water Type: mineral; Pack Type: Bottle; Volume: 1500; Naturally derived: natural fragrances, natural; Flavour: tea, lemon; Immune Support Ingredients: vitamin c, antioxidants; Sweetener: sugar; Pack Material Type: Plastic; Carbonization: still",
+            "barcode": "8433329122795",
+            "brand": "El Corte Inglés",
+            "category": "Still RTD Tea",
+            "category_path": "[\"\"supermarket\"\",\"\"drinks\"\",\"\"water soft drinks and juices\"\",\"\"soft drinks and soda\"\",\"\"soft drink tea\"\"]",
+            "country": "Spain",
+            "description": "### general information \n* name of the food: refreshing drink of extracts \n* name of the operator: made for the english court by \nmineral water San Benedetto, S.A.U.\npath of pineapple y / n, \n46390 Sa",
+            "image_url": "https://sgfm.elcorteingles.es/SGFM/dctm/MEDIA03/202011/03/00118614001719____1__600x600.jpg",
+            "price": "0.95",
+            "product_id": "385278536",
+            "retailer": "El Corte Inglés",
+            "title": "the english court soft drink of tea lemon flavor without gluten bottle 1.5 l",
+            "url": "https://www.elcorteingles.es/supermercado/0110118614001719-el-corte-ingles-refresco-de-te-sabor-limon-sin-gluten-botella-15-l/"
+          }
+        ]
+      }
+    },
+    {
+      "gtin1": "787776666134",
+      "gtin2": "787776666417",
+      "pattern": "gingerbread syrup versus chai concentrate",
+      "saved_jev_score": 0.03,
+      "similarity": 0.5,
+      "sources": {
+        "787776666134": [
+          {
+            "attributes": "Volume: 750; Pack Material Type: Glass; Health Claims: no sugar; Immune Support Ingredients: ginger; Juice Content: 0-2%",
+            "barcode": "787776666134",
+            "brand": "Davincii",
+            "category": "Liquid Concentrates",
+            "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Flavor Syrups\"\"]",
+            "country": "USA",
+            "description": "Da Vinci syrups provide a rich taste with high-quality ingredients\nSugar Free Gingerbread Syrup from Da Vinci Gourmet is spiced with cinnamon, ginger, and nutmeg and has a sweet, buttery flavor. Sweet",
+            "image_url": "https://m.media-amazon.com/images/I/512SPPGz9RL._AC_UL320_.jpg",
+            "price": "20.99",
+            "product_id": "134748735",
+            "retailer": "amazon",
+            "title": "DAVINCI SUGAR FREE GINGERBREAD SYRUP (750ML) ES",
+            "url": "https://www.amazon.com/DAVINCI-SUGAR-GINGERBREAD-SYRUP-750ML/dp/B07PKGTNGL/ref=sr_1_2352?dchild=1&qid=1600676933&s=grocery&sr=1-2352"
+          }
+        ],
+        "787776666417": [
+          {
+            "attributes": "Pack Type: Bottle; Immune Support Ingredients: ginger; Health Claims: no sugar; Pack Material Type: Glass; Flavour: tea; Volume: 750; Juice Content: 0-2%",
+            "barcode": "787776666417",
+            "brand": "Davincii",
+            "category": "Liquid Concentrates",
+            "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Flavor Syrups\"\"]",
+            "country": "USA",
+            "description": "Da Vinci syrups provide a rich taste with high-quality ingredients\nugar Free Spiced Chai Tea Concentrate from Da Vinci Gourmet is a soothing combination of black Tea, honey and rich spices including c",
+            "image_url": "https://m.media-amazon.com/images/I/51r7RPm6OeL._AC_UL320_.jpg",
+            "price": "13.99",
+            "product_id": "134541583",
+            "retailer": "amazon",
+            "title": "DAVINCI SUGAR FREE CHAI TEA CONCENTRATE (750ML) ES",
+            "url": "https://www.amazon.com/DAVINCI-SUGAR-FREE-CONCENTRATE-750ML/dp/B07PKF8Y9H/ref=sr_1_2972?dchild=1&qid=1600677009&s=grocery&sr=1-2972"
+          }
+        ]
+      }
+    }
+  ],
+  "files_sha256": {
+    "jev/audit_results_8.jsonl": "e806012c58151516f53f84f39aee5867e2881b142d804af3025095d3287e54a9",
+    "jev/input_states_8.json": "af05c6789ac630863d1d5399b7984d59fe963c82d1777536d9db89a5becb316e",
+    "data/canonical_records.csv": "d52ccbb875a501c233f880d30b33d7d3c8b05c1070d3349bc16e74b809be5853",
+    "data/gate_results.csv": "cc695d002edb74534f90b89856545ec79cc82286226a2abe12c04d78dafb4c97"
+  },
+  "limitations": "Flags overlap and cannot be summed. JEV bands are model judgments, not truth labels. Mode-type differences can reflect extraction precedence, and compound differences often contain harmless catalog metadata. Sources are preserved in full from the supplied dataset."
+}

@@ -1,0 +1,32 @@
+{
+  "catalog_sha256": "b25c80668497e538160478001310a80389a6b8fc6863eab39e7b7adb7b7a35d5",
+  "excluded_model_inputs": [
+    "barcode",
+    "verified identity edges",
+    "raw text"
+  ],
+  "feature_scope": "derived from core.product_identity.graph_schema; every extractor descriptor is a model input",
+  "identity_dimensions_sha256": "c4443ead5764b4b79fdbae033144617d769f19c748472f0fd0f14e5d8df3d203",
+  "identity_extractor": "core.product_identity.row_identity",
+  "identity_policy_sha256": "084952a02c58ffc1bdd7e681ce4d25c4ca6fcbae3d696f325b9206d1f4821021",
+  "listings_sha256": "cbf97c8920e770c835b8a1174fa6ddb3117b379371be8d7f2a31d7f75fd16832",
+  "numeric": [
+    "volume_ml",
+    "pack"
+  ],
+  "pairs_sha256": "bd3709b4ded466a0e9b7a6814dbb95a3789e2a72bbc37c0c31aea711c5d1639e",
+  "relations": [
+    "brand",
+    "flavor",
+    "carbonation",
+    "sweetener",
+    "sweetener_type",
+    "sweetening",
+    "pulp",
+    "package_type",
+    "package_material"
+  ],
+  "report_attributes_sha256": "2865df8e20f0315aaa9a52b7330208be7f6955c6f4a9013adf8145ba83910b8a",
+  "schema": "er-graph-inputs-v1",
+  "splits_sha256": "3c3711462a985df878a665c240a76f28b67f30c2e66b15dffe9b156637d17efe"
+}

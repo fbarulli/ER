@@ -1,0 +1,29 @@
+{
+  "git_head": "b370ff1cdf4eb156bc7d84159cae78c94593776b",
+  "inputs": {
+    "data/canonical_records.csv": {
+      "sha256": "beaf35cd45517afba1a9b8b75ecf6eee6b3e8cbe30480b08f6b90ac7c5d9a584",
+      "bytes": 67252590
+    },
+    "data/gate_results.csv": {
+      "sha256": "274a8735e64a331ba81bfbbae69c8dc808ec646a87bc6ed761e027b94c434913",
+      "bytes": 29663128
+    },
+    "data/labeled_pairs.csv": {
+      "sha256": "33ef8aeba8db92f5a5f1c2766d35ec9d94402f2814a91d33f20165ec48363399",
+      "bytes": 465888
+    },
+    "config/paths.yaml": {
+      "sha256": "c732adec47e04ed258438a211ba049f33c95dca54e0db8c07f8f6141e7ce9a0e",
+      "bytes": 29145
+    },
+    "config/training.yaml": {
+      "sha256": "35e7e91a232bbf1d077f07fd77019b08ba0902128bc7f1b45152736442a60590",
+      "bytes": 57667
+    },
+    "results/manifests/labeled_pairs.json": {
+      "sha256": "648d9e5358c8b42ba46cf266657653c9b49f21877a0ac77fcf9fdd6131408b0e",
+      "bytes": 1235
+    }
+  }
+}

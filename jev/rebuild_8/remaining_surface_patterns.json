@@ -1,0 +1,4606 @@
+{
+  "counts": {
+    "description_flavor_language_with_incomplete_flavor_sets": {
+      "different": 46,
+      "same": 2,
+      "uncertain": 7
+    },
+    "different_mode_type": {
+      "uncertain": 25,
+      "different": 39,
+      "same": 1
+    },
+    "shared_normalized_title": {
+      "same": 24,
+      "uncertain": 47,
+      "different": 17
+    },
+    "different_title_tokens_missing_from_global_flavor_lexicon": {
+      "different": 9
+    }
+  },
+  "examples": {
+    "description_flavor_language_with_incomplete_flavor_sets": [
+      {
+        "gtin1": "849819000081",
+        "gtin2": "849819000210",
+        "noul": 0.08,
+        "similarity": 0.8,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Nature's Twist 12 Pack of 12oz Cans ( Orangeade)"
+          ],
+          [
+            "Nature's Twist 12 Pack of 12oz Cans ( Sugar- Free Orangeade)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3292090000252",
+        "gtin2": "3292090000269",
+        "noul": 0.03,
+        "similarity": 0.8,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "flavored soft drink grenadine",
+            "soft drink refreshing with aromas of Grenadine ROYAL SODA"
+          ],
+          [
+            "flavored soft drink kampane",
+            "soft drink refreshing with aromas of Kampane ROYAL SODA"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329123822",
+        "gtin2": "8433329145930",
+        "noul": 0.05,
+        "similarity": 0.8571428571428571,
+        "score_band": "different",
+        "mode_types": [
+          "isotonic",
+          "isotonic"
+        ],
+        "titles": [
+          [
+            "the english court isotonic drink Blue flavored with sugar and sweeteners bottle 50 cl with stopper sport"
+          ],
+          [
+            "the english court isotonic drink Citric bottle 50 cl with stopper sport"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415600590358",
+        "gtin2": "7044610806228",
+        "noul": 0.05,
+        "similarity": 0.8,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Battery Pearberry 0.5l box"
+          ],
+          [
+            "Battery Energy 0.5l box",
+            "Battery energy Drink 0.5l",
+            "Battery Energy 0.5l box"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3564700813546",
+        "gtin2": "3564700814260",
+        "noul": 0.03,
+        "similarity": 0.8,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          ""
+        ],
+        "titles": [
+          [
+            "soft drink taste mojito - 1.5 liters",
+            "soft drink taste mojito - 1.5 liters - sprink's"
+          ],
+          [
+            "Diabolo grenadine - 1.5 liters",
+            "Diabolo grenadine - 1.5 liters - sprink's"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7033850008394",
+        "gtin2": "7033850008578",
+        "noul": 0.03,
+        "similarity": 0.8333333333333334,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "rudolf & nissens christmas soda 1.5l bottle",
+            "rudolf nissens christmas soda 1.5l",
+            "rudolf & nissens christmas soda 1.5l bottle"
+          ],
+          [
+            "citronbrus",
+            "citronbrus 1.5l bottle Oskar jam"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7033850007946",
+        "gtin2": "7033850008394",
+        "noul": 0.04,
+        "similarity": 0.8333333333333334,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "Bringebaerbrus 1.5l bottle Oskar jam",
+            "Bringebaerbrus 1.5l bottle Oskar jam"
+          ],
+          [
+            "rudolf & nissens christmas soda 1.5l bottle",
+            "rudolf nissens christmas soda 1.5l",
+            "rudolf & nissens christmas soda 1.5l bottle"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415600555098",
+        "gtin2": "6415600590358",
+        "noul": 0.04,
+        "similarity": 0.8,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Battery remix 0.5l box",
+            "Battery remix 0.5l",
+            "Battery remix 0.5l box"
+          ],
+          [
+            "Battery Pearberry 0.5l box"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415600568401",
+        "gtin2": "6415600590358",
+        "noul": 0.03,
+        "similarity": 0.8,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Battery Pulse 0.5l",
+            "Battery Pulse 0.5l box",
+            "Battery Pulse 0.5l box"
+          ],
+          [
+            "Battery Pearberry 0.5l box"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415600570503",
+        "gtin2": "6415600590358",
+        "noul": 0.03,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Battery Rise 0.5l box",
+            "Battery Rise 0.5l box"
+          ],
+          [
+            "Battery Pearberry 0.5l box"
+          ]
+        ]
+      },
+      {
+        "gtin1": "642709037460",
+        "gtin2": "736983891563",
+        "noul": 0.87,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Hal's New York Seltzer Carbonated Plain Sparkling Water, Zero Sugar, Zero Calorie, Zero Carbs, 20 Fl Oz ( Pack of 24)"
+          ],
+          [
+            "Hal's New York Seltzer Carbonated Original Sparkling Water, Zero Sugar, Zero Calorie, Zero Carbs, 20 Fl Oz ( Pack of 24)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "732623770731",
+        "gtin2": "810053000311",
+        "noul": 0.81,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Ten Water Spring Alkaline Gal"
+          ],
+          [
+            "TEN Alkaline Spring Water, pH 10, High in Electrolytes - 1 Gallon ( Pack of 4)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415600590358",
+        "gtin2": "7044610799490",
+        "noul": 0.05,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Battery Pearberry 0.5l box"
+          ],
+          [
+            "Battery fresh 0.5l box",
+            "Battery fresh 0.5l",
+            "Battery fresh 0.5l box"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8715600243949",
+        "gtin2": "8715600248395",
+        "noul": 0.03,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "sourcing vitamin water framboos-granaatappel"
+          ],
+          [
+            "sourcing vitamin water peer-vlierbloesem"
+          ]
+        ]
+      },
+      {
+        "gtin1": "732623769018",
+        "gtin2": "732623769032",
+        "noul": 0.06,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "Sprecher Low Calorie Root Beer Soda"
+          ],
+          [
+            "Sprecher Root Beer Soda"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7611612404471",
+        "gtin2": "7611612524919",
+        "noul": 0.03,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "Passionsoda Zero soda, Pet",
+            "Passionsoda Zero soda, Pet"
+          ],
+          [
+            "julmust without sugar soda Pet",
+            "julmust without sugar soda Pet"
+          ]
+        ]
+      },
+      {
+        "gtin1": "794398000192",
+        "gtin2": "794398000208",
+        "noul": 0.04,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Crazy Water ( Mineral Wells, TX) Natural Alkaline Mineral Water 1L Bottle ( Pack of 9) Select Flavor Below (no. 4 - The Craziest)"
+          ],
+          [
+            "Crazy Water Water No 2 Ntrl Mnrl Low"
+          ]
+        ]
+      },
+      {
+        "gtin1": "858159001696",
+        "gtin2": "858159001795",
+        "noul": 0.06,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Active Energy Drink - Supreme Classic, 0 Sugar, with Caffeine and Taurine, 16oz Cans (12 Pack)"
+          ],
+          [
+            "Energy Drink - Arctic Zero (16 Fl Oz, 12 Count)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7391881837636",
+        "gtin2": "7398818389848",
+        "noul": 0.02,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "",
+          ""
+        ],
+        "titles": [
+          [
+            "lohilo Pink beach bcaa drink 330ml",
+            "lohilo Pink beach bcaa drink 330ml"
+          ],
+          [
+            "lohilo Glow 2022 collagen containing carbonated sugar free beverage 330ml",
+            "lohilo Glow 2022 collagen containing carbonated sugar free beverage 330ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "609311276861",
+        "gtin2": "609311277219",
+        "noul": 0.05,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Hip Syrups Natural Cotton Candy Flavored Syrup 750ml"
+          ],
+          [
+            "Hip Syrups Natural Sugar Free Unicorn Candy Flavored Syrup 750ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6419800120643",
+        "gtin2": "6419800120780",
+        "noul": 0.04,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "shelf spacing 15 - power Crazy Santa energy drink 0.33 l tlk",
+            "power CRAZY SAND energy drink 0.33l tlk",
+            "power Crazy Santa energy drink 0.33 l tlk"
+          ],
+          [
+            "power biting goat energy drink 0.33 l tlk",
+            "power biting goat energy drink 0.33 l tlk"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5425002401146",
+        "gtin2": "5425002407261",
+        "noul": 0.04,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "punch",
+          "punch"
+        ],
+        "titles": [
+          [
+            "QNT Amino Load Punch Flavour",
+            "QNT Amino Load Punch Flavour"
+          ],
+          [
+            "QNT Nutrition Fire explosion punch 12x500 ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5701598028777",
+        "gtin2": "5701598028852",
+        "noul": 0.03,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "ANANASBRUS 50 cl. / harboe",
+            "Ananassodavand"
+          ],
+          [
+            "SPORTSBRUS 50 cl. / harboe",
+            "sports soda"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415600579292",
+        "gtin2": "6415600590358",
+        "noul": 0.02,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Battery Black 0.5l box",
+            "Battery Black 0.5l box"
+          ],
+          [
+            "Battery Pearberry 0.5l box"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8715600243949",
+        "gtin2": "8715600249316",
+        "noul": 0.43,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "sourcing vitamin water framboos-granaatappel"
+          ],
+          [
+            "sourcing vitamin water 0% framboos-granaatappel"
+          ]
+        ]
+      },
+      {
+        "gtin1": "671785400004",
+        "gtin2": "671785400042",
+        "noul": 0.3,
+        "similarity": 0.75,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Eska Natural Spring Water 4L Bottle, Natural Spring Water"
+          ],
+          [
+            "Eska Natural Spring Water 4L Bottle - Demineralized, Demineralized Natural Spring Water"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5701598028814",
+        "gtin2": "5701598028852",
+        "noul": 0.02,
+        "similarity": 0.6,
+        "score_band": "different",
+        "mode_types": [
+          "tonic",
+          "water"
+        ],
+        "titles": [
+          [
+            "INDIAN TONIC 50 cl. / harboe",
+            "Tonic"
+          ],
+          [
+            "SPORTSBRUS 50 cl. / harboe",
+            "sports soda"
+          ]
+        ]
+      },
+      {
+        "gtin1": "609311270081",
+        "gtin2": "609311276861",
+        "noul": 0.05,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Hip Syrups Natural Swedish Gummy Fruit Syrup 750ml"
+          ],
+          [
+            "Hip Syrups Natural Cotton Candy Flavored Syrup 750ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "732623769032",
+        "gtin2": "732623848294",
+        "noul": 0.68,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "Sprecher Root Beer Soda"
+          ],
+          [
+            "Sprecher Soda Root Beer 16 fl oz ( Pack Of 12)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "708820982505",
+        "gtin2": "713733675482",
+        "noul": 0.16,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Meijer Original Sparkling Water 12 Pack / 12 oz Cans"
+          ],
+          [
+            "Meijer Sparkling Water Cans, 12 Count"
+          ]
+        ]
+      },
+      {
+        "gtin1": "851107003025",
+        "gtin2": "857161008280",
+        "noul": 0.09,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "kombucha",
+          "kombucha"
+        ],
+        "titles": [
+          [
+            "Brew Dr. Kombucha Herbal Uplift, 14 fl oz",
+            "Kombucha Herbal Uplift"
+          ],
+          [
+            "Brew Dr. Uplift Kombucha - 14 fl oz Bottle",
+            "Brew Dr. Kombucha Organic Uplift Caffeinated Tea",
+            "Brew Dr Kombucha Uplift Caffeinated - 14 Fl. Oz."
+          ]
+        ],
+        "missed_title_tokens": [
+          [],
+          [
+            "tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7310401007151",
+        "gtin2": "7310401051741",
+        "noul": 0.1,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "trocadero soda can",
+            "trocadero soda can",
+            "Original incl. Pant",
+            "trocadero"
+          ],
+          [
+            "trochumust 33cl trocadero",
+            "trochumust carbonated soda, can",
+            "trochumust carbonated soda, can",
+            "soda trochumust"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5060466510326",
+        "gtin2": "5060466514140",
+        "noul": 0.21,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Relentless Origin Sugarfree 500ml",
+            "Relentless Origin Ultra 500 Ml"
+          ],
+          [
+            "Relentless Zero Energy Drink"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7611612404389",
+        "gtin2": "7611612516174",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "water"
+        ],
+        "titles": [
+          [
+            "Passionsoda Zero soda,can",
+            "Passionsoda Zero soda,can"
+          ],
+          [
+            "natural spring water carbonated incl.pant",
+            "natural spring water carbonated carbonated water can",
+            "natural spring water carbonated carbonated water can"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089906",
+        "gtin2": "8433329145930",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "isotonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water from the spring Monte pine trees bottle 50 cl"
+          ],
+          [
+            "the english court isotonic drink Citric bottle 50 cl with stopper sport"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3564700814017",
+        "gtin2": "3564700814260",
+        "noul": 0.03,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          ""
+        ],
+        "titles": [
+          [
+            "Soda tonic - 1.5 liters",
+            "Soda tonic - 1.5 liters - sprink's"
+          ],
+          [
+            "Diabolo grenadine - 1.5 liters",
+            "Diabolo grenadine - 1.5 liters - sprink's"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8715600241846",
+        "gtin2": "8715600242553",
+        "noul": 0.03,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "groceries"
+          ],
+          [
+            "groceries"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089913",
+        "gtin2": "8433329122771",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "isotonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water from the spring Monte pine trees bottle 1.5 l"
+          ],
+          [
+            "the english court isotonic drink Citric bottle 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "609311270081",
+        "gtin2": "609311277219",
+        "noul": 0.05,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Hip Syrups Natural Swedish Gummy Fruit Syrup 750ml"
+          ],
+          [
+            "Hip Syrups Natural Sugar Free Unicorn Candy Flavored Syrup 750ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5701598028852",
+        "gtin2": "5701598119970",
+        "noul": 0.04,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "SPORTSBRUS 50 cl. / harboe",
+            "sports soda"
+          ],
+          [
+            "water m. brus"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415600590082",
+        "gtin2": "7044613875504",
+        "noul": 0.05,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Battery Juiced Euphoria energy drink can 0.33 l",
+            "Battery Juiced Euphoria energy drink can 0.33 l"
+          ],
+          [
+            "Battery Nocal"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415712400101",
+        "gtin2": "6415712510510",
+        "noul": 0.02,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "shelf spacing 14 - domestic carbonated spring water 1.5l",
+            "domestic carbonated spring water 1.5l"
+          ],
+          [
+            "domestic mustaherukka-omena b6 + b12 carbonated beverage 1.5l",
+            "domestic mustaherukka-omena b6 + b12 carbonated beverage 1.5l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415712509217",
+        "gtin2": "6415712510510",
+        "noul": 0.02,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "domestic vichy 1.5l",
+            "domestic vichy 1.5l"
+          ],
+          [
+            "domestic mustaherukka-omena b6 + b12 carbonated beverage 1.5l",
+            "domestic mustaherukka-omena b6 + b12 carbonated beverage 1.5l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "682670932319",
+        "gtin2": "740642667482",
+        "noul": 0.79,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "soda"
+        ],
+        "titles": [
+          [
+            "Moxie 6 pack - 12 oz cans"
+          ],
+          [
+            "Moxie Soda, 12 Ounce (6 Cans)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5060335634726",
+        "gtin2": "5060337507363",
+        "noul": 0.73,
+        "similarity": 0.75,
+        "score_band": "uncertain",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "Monster Energy Drink MIXXD Punch 500ml"
+          ],
+          [
+            "Energy drink | Punch mixxd | look",
+            "MIXXD Punch + Energy"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8715600227604",
+        "gtin2": "8715600241846",
+        "noul": 0.15,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "",
+          "water"
+        ],
+        "titles": [
+          [
+            "rivella bottle"
+          ],
+          [
+            "groceries"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5601151156063",
+        "gtin2": "5601151966846",
+        "noul": 0.03,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "water c / gas frize original 4x0.25l"
+          ],
+          [
+            "beverage c / gas frize yuzu 4x0.25l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3119070053209",
+        "gtin2": "3119070053308",
+        "noul": 0.03,
+        "similarity": 0.6,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "ogeu - still water - glass - 75 cl",
+            "still water ogeu, glass 75cl"
+          ],
+          [
+            "ogeu - sparkling water - glass - 75 cl",
+            "sparkling water ogeu 75cl"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5410316997980",
+        "gtin2": "5410316999021",
+        "noul": 0.06,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "",
+          ""
+        ],
+        "titles": [
+          [
+            "smirnoff Ice 250ml box"
+          ],
+          [
+            "smirnoff Ice 250mlx4 box"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8690723613506",
+        "gtin2": "8690723693508",
+        "noul": 0.04,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "uludag frutti Extra with tangerines carbonated beverage 1 l"
+          ],
+          [
+            "uludag frutti Extra forest fruit carbonated beverage 1 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089968",
+        "gtin2": "8433329122771",
+        "noul": 0.01,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "isotonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water of mineralization very weak Landin bottle 1.5 l",
+            "the english court natural mineral water of mineralization very weak Landin bottle 1.5 l"
+          ],
+          [
+            "the english court isotonic drink Citric bottle 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3274490970243",
+        "gtin2": "3274490970298",
+        "noul": 0.02,
+        "similarity": 0.6,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "syrup pure cane red fruits 50cl - mullion mullion house",
+            "syrup red fruits with cane sugar 50cl"
+          ],
+          [
+            "syrup pure cane Orgeat 50cl - mullion mullion house",
+            "syrup of orgeat with cane sugar 50cl"
+          ]
+        ]
+      },
+      {
+        "gtin1": "616003741361",
+        "gtin2": "616003895644",
+        "noul": 0.04,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "beer",
+          ""
+        ],
+        "titles": [
+          [
+            "Zing Zang Bloody Mary Mix",
+            "Zing Zang Bloody Mary Mix",
+            "Zing Zang Bloody Mary Mix"
+          ],
+          [
+            "Zing Zang Blazing Bloody Mary Mix"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089906",
+        "gtin2": "8433329123822",
+        "noul": 0.02,
+        "similarity": 0.5714285714285714,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "isotonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water from the spring Monte pine trees bottle 50 cl"
+          ],
+          [
+            "the english court isotonic drink Blue flavored with sugar and sweeteners bottle 50 cl with stopper sport"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7310401007151",
+        "gtin2": "7310401046723",
+        "noul": 0.37,
+        "similarity": 0.6666666666666666,
+        "score_band": "uncertain",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "trocadero soda can",
+            "trocadero soda can",
+            "Original incl. Pant",
+            "trocadero"
+          ],
+          [
+            "can incl.pant",
+            "trocadero soda can",
+            "trocadero soda can",
+            "trocadero"
+          ]
+        ]
+      }
+    ],
+    "different_mode_type": [
+      {
+        "gtin1": "8710395946983",
+        "gtin2": "8710395949236",
+        "noul": 0.37,
+        "similarity": 0.8,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "juice"
+        ],
+        "titles": [
+          [
+            "roosvicee multivit forest fruits suit 6 x 20 cl",
+            "roosvicee multivit forest fruits 6x200ml"
+          ],
+          [
+            "roosvicee multivit forest fruits 6x20 cl"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8713300049793",
+        "gtin2": "8720157464570",
+        "noul": 0.46,
+        "similarity": 0.8,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "juice"
+        ],
+        "titles": [
+          [
+            "coolbest Mango dream",
+            "coolbest discount pack mango dream"
+          ],
+          [
+            "cool best Mango dream discount pack",
+            "cool best Mango dream discount pack",
+            "cool best Mango Dream discount pack 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7330605001311",
+        "gtin2": "7350093030273",
+        "noul": 0.03,
+        "similarity": 0.8,
+        "score_band": "different",
+        "mode_types": [
+          "tonic",
+          "water"
+        ],
+        "titles": [
+          [
+            "blackcurrants Tonic drinkmix, bottle"
+          ],
+          [
+            "spruce shoots Tonic Water drinkmix glass",
+            "Tonic Water spruce shoots",
+            "spruce shoots Tonic Water drinkmix glass",
+            "Tonic spruce shoots organic 200ml eco-brewery",
+            "Tonic spruce shoots organic"
+          ]
+        ]
+      },
+      {
+        "gtin1": "96171530",
+        "gtin2": "96171547",
+        "noul": 0.05,
+        "similarity": 0.8571428571428571,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "tonic"
+        ],
+        "titles": [
+          [
+            "Merchant's Heart Tonic Water 200ml"
+          ],
+          [
+            "Merchant's Heart Floral Aromatics Tonic 200ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4006220014946",
+        "gtin2": "4006220019453",
+        "noul": 0.23,
+        "similarity": 0.8571428571428571,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "juice"
+        ],
+        "titles": [
+          [
+            "fruity king Multi Fruit 2l",
+            "fruity king Multi Fruit 2 L",
+            "fruity king multi-fruit"
+          ],
+          [
+            "Fruity Juice Multi Fruit 2 L",
+            "Fruity Juice multi fruit"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8710395949236",
+        "gtin2": "8715700112152",
+        "noul": 0.26,
+        "similarity": 0.8,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "water"
+        ],
+        "titles": [
+          [
+            "roosvicee multivit forest fruits 6x20 cl"
+          ],
+          [
+            "rose vicee fruity drink strawberry mini suit 6 x 20 cl"
+          ]
+        ]
+      },
+      {
+        "gtin1": "96171516",
+        "gtin2": "96171547",
+        "noul": 0.03,
+        "similarity": 0.8571428571428571,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "tonic"
+        ],
+        "titles": [
+          [
+            "Merchant's Heart Pink Peppercorn Tonic Water 200ml"
+          ],
+          [
+            "Merchant's Heart Floral Aromatics Tonic 200ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7340116879453",
+        "gtin2": "7340116879484",
+        "noul": 0.32,
+        "similarity": 0.625,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Lemon operating water, Pet",
+            "Lemon operating water, Pet",
+            "Aloe vera Sweet lemon"
+          ],
+          [
+            "nobe Sweet Lemon, lemon -flavored hiiilihapoton aloe vera beverage 500ml",
+            "nobe Sweet Lemon, lemon -flavored hiiilihapoton aloe vera beverage 500ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705001432113",
+        "gtin2": "5705010081289",
+        "noul": 0.32,
+        "similarity": 0.625,
+        "score_band": "uncertain",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "ginger / turmeric Shot",
+            "Shot ginger / turmeric 500ml rynkeby",
+            "Shot Turmeric Ginger",
+            "Shot Turmeric Ginger",
+            "Shot ginger & turmeric"
+          ],
+          [
+            "rynkeby Inkivaari-kurkumataysmehushot 0.5l",
+            "rynkeby ginger-turmeric taysmehushot 0.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8711900015392",
+        "gtin2": "8711900017495",
+        "noul": 0.66,
+        "similarity": 0.6666666666666666,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "juice"
+        ],
+        "titles": [
+          [
+            "wicky Fruit 0.0% sugar pack 10 x 20 cl"
+          ],
+          [
+            "wicky without sugar Fruit 10 x 200 ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "90280184",
+        "gtin2": "90280443",
+        "noul": 0.45,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "soda",
+          "kombucha"
+        ],
+        "titles": [
+          [
+            "soft drink kombucha Classic, 0.5 l"
+          ],
+          [
+            "Carpe Diem kombucha classic 0.5l",
+            "kombucha- spritzer with fresh spring water"
+          ]
+        ]
+      },
+      {
+        "gtin1": "688267001505",
+        "gtin2": "688267001574",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "water"
+        ],
+        "titles": [
+          [
+            "Peapod Cream Soda",
+            "Peapod Cream Soda"
+          ],
+          [
+            "Peapod Original Seltzer Water",
+            "Peapod Original Seltzer Water"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5701598028814",
+        "gtin2": "5701598028852",
+        "noul": 0.02,
+        "similarity": 0.6,
+        "score_band": "different",
+        "mode_types": [
+          "tonic",
+          "water"
+        ],
+        "titles": [
+          [
+            "INDIAN TONIC 50 cl. / harboe",
+            "Tonic"
+          ],
+          [
+            "SPORTSBRUS 50 cl. / harboe",
+            "sports soda"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705001432052",
+        "gtin2": "5705010081289",
+        "noul": 0.05,
+        "similarity": 0.7142857142857143,
+        "score_band": "different",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Shot ginger",
+            "Shot Ginger",
+            "Shot ginger 500ml rynkeby",
+            "ginger threat",
+            "Shot Ginger",
+            "ginger shot",
+            "ginger Shot",
+            "Shot ginger",
+            "ginger Shot 0.5l bottle rynkeby",
+            "rynkeby ginger Shot 0.5l",
+            "ginger Shot 0.5l bottle rynkeby"
+          ],
+          [
+            "rynkeby Inkivaari-kurkumataysmehushot 0.5l",
+            "rynkeby ginger-turmeric taysmehushot 0.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089913",
+        "gtin2": "8433329104456",
+        "noul": 0.01,
+        "similarity": 0.5714285714285714,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "soda"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water from the spring Monte pine trees bottle 1.5 l"
+          ],
+          [
+            "the english court soda bottle 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5060333540357",
+        "gtin2": "5060333540630",
+        "noul": 0.24,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "smoothie",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Savsé Super Orange Smoothie 250ml"
+          ],
+          [
+            "Savse Nina's Orange Juice 250ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "782761983081",
+        "gtin2": "786173816302",
+        "noul": 0.91,
+        "similarity": 0.6,
+        "score_band": "same",
+        "mode_types": [
+          "juice",
+          "water"
+        ],
+        "titles": [
+          [
+            "Badia Sour Orange -- 20 fl oz"
+          ],
+          [
+            "Badia Sour Orange -- 20 fl oz"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7340116879460",
+        "gtin2": "7340116879484",
+        "noul": 0.68,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "juice"
+        ],
+        "titles": [
+          [
+            "NOBE ALOE VERA 50 cl. / SWEET LEMON"
+          ],
+          [
+            "nobe Sweet Lemon, lemon -flavored hiiilihapoton aloe vera beverage 500ml",
+            "nobe Sweet Lemon, lemon -flavored hiiilihapoton aloe vera beverage 500ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705001432052",
+        "gtin2": "5705010078791",
+        "noul": 0.14,
+        "similarity": 0.625,
+        "score_band": "different",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Shot ginger",
+            "Shot Ginger",
+            "Shot ginger 500ml rynkeby",
+            "ginger threat",
+            "Shot Ginger",
+            "ginger shot",
+            "ginger Shot",
+            "Shot ginger",
+            "ginger Shot 0.5l bottle rynkeby",
+            "rynkeby ginger Shot 0.5l",
+            "ginger Shot 0.5l bottle rynkeby"
+          ],
+          [
+            "ginger shots",
+            "ginger shot"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7611612404389",
+        "gtin2": "7611612516174",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "water"
+        ],
+        "titles": [
+          [
+            "Passionsoda Zero soda,can",
+            "Passionsoda Zero soda,can"
+          ],
+          [
+            "natural spring water carbonated incl.pant",
+            "natural spring water carbonated carbonated water can",
+            "natural spring water carbonated carbonated water can"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089913",
+        "gtin2": "8433329104432",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "tonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water from the spring Monte pine trees bottle 1.5 l"
+          ],
+          [
+            "the english court tonic bottle 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089906",
+        "gtin2": "8433329145930",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "isotonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water from the spring Monte pine trees bottle 50 cl"
+          ],
+          [
+            "the english court isotonic drink Citric bottle 50 cl with stopper sport"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705010078791",
+        "gtin2": "5705010079347",
+        "noul": 0.05,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "shot"
+        ],
+        "titles": [
+          [
+            "ginger shots",
+            "ginger shot"
+          ],
+          [
+            "ginger shot m. chili",
+            "ginger / chili shots"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705001432113",
+        "gtin2": "5705010078791",
+        "noul": 0.12,
+        "similarity": 0.5555555555555556,
+        "score_band": "different",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "ginger / turmeric Shot",
+            "Shot ginger / turmeric 500ml rynkeby",
+            "Shot Turmeric Ginger",
+            "Shot Turmeric Ginger",
+            "Shot ginger & turmeric"
+          ],
+          [
+            "ginger shots",
+            "ginger shot"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5425015361383",
+        "gtin2": "5425015361468",
+        "noul": 0.09,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "punch"
+        ],
+        "titles": [
+          [
+            "Carb- Charger ( Red Punch - 12 x 500 ml) - mp3 - energy drink - sports drink - 6 liters"
+          ],
+          [
+            "Energized ( Red Punch - 12 x 500 ml) - mp3 - hypertonic sports drink - 6 liters"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8437017153146",
+        "gtin2": "8437017153351",
+        "noul": 0.26,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "kombucha"
+        ],
+        "titles": [
+          [
+            "Kombujito komvida 250 ml"
+          ],
+          [
+            "kombucha pina colada ecological komvida 25 cl.",
+            "komvida Organic kombucha pina colada ecological 250 ml bottle"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089906",
+        "gtin2": "8433329104463",
+        "noul": 0.02,
+        "similarity": 0.5714285714285714,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "soda"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water from the spring Monte pine trees bottle 50 cl"
+          ],
+          [
+            "the english court soda bottle 50 cl"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5060925290752",
+        "gtin2": "5060925293142",
+        "noul": 0.17,
+        "similarity": 0.5714285714285714,
+        "score_band": "different",
+        "mode_types": [
+          "coffee",
+          "water"
+        ],
+        "titles": [
+          [
+            "Huel Black Edition Chocolate 500ml",
+            "Huel Black Edition Ready-to-drink Complete Meal Chocolate 500ml"
+          ],
+          [
+            "Chocolate Black Edition drink"
+          ]
+        ]
+      },
+      {
+        "gtin1": "787776666134",
+        "gtin2": "787776666417",
+        "noul": 0.03,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "tea"
+        ],
+        "titles": [
+          [
+            "DAVINCI SUGAR FREE GINGERBREAD SYRUP (750ML) ES"
+          ],
+          [
+            "DAVINCI SUGAR FREE CHAI TEA CONCENTRATE (750ML) ES"
+          ]
+        ],
+        "missed_title_tokens": [
+          [],
+          [
+            "tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4018852010586",
+        "gtin2": "4018852032779",
+        "noul": 0.05,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "water"
+        ],
+        "titles": [
+          [
+            "bebivita fennel tea with apple juice 0.5l",
+            "fennel tea with apple juice",
+            "bebivita Tee & juice fennel tea with apple juice"
+          ],
+          [
+            "bebivita fennel with apple in still mineral water ( disposable)"
+          ]
+        ],
+        "missed_title_tokens": [
+          [
+            "fennel",
+            "tea"
+          ],
+          [
+            "fennel"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3760065179345",
+        "gtin2": "3760065179697",
+        "noul": 0.05,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "lemonade",
+          "water"
+        ],
+        "titles": [
+          [
+            "bees sparkling 3*75cl planet_drinks"
+          ],
+          [
+            "lurisia sparkling water 3*75cl planet_drinks"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7340116870207",
+        "gtin2": "7340116870214",
+        "noul": 0.36,
+        "similarity": 0.5555555555555556,
+        "score_band": "uncertain",
+        "mode_types": [
+          "energy",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Aloe Vera Mango",
+            "Aloe Vera Mango",
+            "Aloe Vera Mango 50cl nobe",
+            "Aloe Vera Mango incl. Pant"
+          ],
+          [
+            "nobe Aloe Vera still beverage 0.5l mango",
+            "500ml nobe mango flavored still aloe vera beverage",
+            "500ml nobe mango flavored still aloe vera beverage"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089913",
+        "gtin2": "8433329122771",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "isotonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water from the spring Monte pine trees bottle 1.5 l"
+          ],
+          [
+            "the english court isotonic drink Citric bottle 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5201156031732",
+        "gtin2": "5201156031954",
+        "noul": 0.1,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "lemonade",
+          "soda"
+        ],
+        "titles": [
+          [
+            "puberty refreshment lemon 330ml"
+          ],
+          [
+            "puberty soda with lemon 330ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7350021421616",
+        "gtin2": "7350021422354",
+        "noul": 0.06,
+        "similarity": 0.7142857142857143,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "shot"
+        ],
+        "titles": [
+          [
+            "GINGER SHOT",
+            "healthy co Eco Ginger Shots 500 ml",
+            "organic Shots ginger"
+          ],
+          [
+            "Shot Ginger Turmeric Chili Eco",
+            "SHOT GINGER TURMERIC CHILI",
+            "healthy co Eco Ginger Turmeric Chili Shots 500 ml",
+            "organic Shots Ginger, Turmeric & Chili"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705001432113",
+        "gtin2": "5705010078814",
+        "noul": 0.31,
+        "similarity": 0.5555555555555556,
+        "score_band": "uncertain",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "ginger / turmeric Shot",
+            "Shot ginger / turmeric 500ml rynkeby",
+            "Shot Turmeric Ginger",
+            "Shot Turmeric Ginger",
+            "Shot ginger & turmeric"
+          ],
+          [
+            "ginger / turmeric shots",
+            "ginger shot m. turmeric"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8722200962873",
+        "gtin2": "87222203",
+        "noul": 0.53,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "soda"
+        ],
+        "titles": [
+          [
+            "AA Drink High Energy Cool 500 ml",
+            "AA Drink sports drink high energy chilled"
+          ],
+          [
+            "sports drink | High energy | sports cap"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705010079347",
+        "gtin2": "5705010081289",
+        "noul": 0.08,
+        "similarity": 0.5555555555555556,
+        "score_band": "different",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "ginger shot m. chili",
+            "ginger / chili shots"
+          ],
+          [
+            "rynkeby Inkivaari-kurkumataysmehushot 0.5l",
+            "rynkeby ginger-turmeric taysmehushot 0.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "9008703000625",
+        "gtin2": "9008703000793",
+        "noul": 0.54,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "energy",
+          "water"
+        ],
+        "titles": [
+          [
+            "bullit Energy Drink sugar free citrus"
+          ],
+          [
+            "bullit sugarfree citrus 250 ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7313619001959",
+        "gtin2": "7313619001966",
+        "noul": 0.48,
+        "similarity": 0.75,
+        "score_band": "uncertain",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Shot Ginger"
+          ],
+          [
+            "god morning Omena-inkivaari-sitruuna mehushot + vitamins D, E and C 450 ml",
+            "god morning Omena-inkivaari-sitruuna mehushot + vitamins D, E and C 450 ml",
+            "god morning mehushot 450ml ginger-lemon + vitamins D, E and C"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8713300049786",
+        "gtin2": "8720157464457",
+        "noul": 0.42,
+        "similarity": 0.75,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "juice"
+        ],
+        "titles": [
+          [
+            "CB Strawberry Hill 1l PK ds12",
+            "cool best Strawberry Hill 1 l"
+          ],
+          [
+            "cool best Strawberry hill"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7313619001089",
+        "gtin2": "7313619001393",
+        "noul": 0.23,
+        "similarity": 0.75,
+        "score_band": "uncertain",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Shot ginger / apple",
+            "Juice apple / ginger / lemon",
+            "Shot ginger / apple",
+            "Shot apple- ginger- lemon"
+          ],
+          [
+            "Shot Immun apple, ginger & lemon 300ml brämhults",
+            "Shots Immun ginger apple lemon",
+            "Shot apple / ginger / lemon incl. Pant",
+            "Shots Immun ginger apple lemon",
+            "juiceshot apple, ginger & lemon"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4018852010685",
+        "gtin2": "4018852032755",
+        "noul": 0.18,
+        "similarity": 0.6,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "juice"
+        ],
+        "titles": [
+          [
+            "bebivita apple juice with mineral water 0.5l"
+          ],
+          [
+            "juice 100 % mild apple, 500 ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5060335634726",
+        "gtin2": "5060517880613",
+        "noul": 0.79,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "energy",
+          "punch"
+        ],
+        "titles": [
+          [
+            "Monster Energy Drink MIXXD Punch 500ml"
+          ],
+          [
+            "Monster mixxd Punch",
+            "Monster mixxd Punch (50cl)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260272250084",
+        "gtin2": "4260272250374",
+        "noul": 0.09,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "matcha",
+          "energy"
+        ],
+        "titles": [
+          [
+            "matcha superfood Drink...",
+            "matcha Magic matcha superfood Drink soft drink organic 0.25l"
+          ],
+          [
+            "BIO Energy Drink 0.25l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089869",
+        "gtin2": "8433329104463",
+        "noul": 0.02,
+        "similarity": 0.7142857142857143,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "soda"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water with gas bottle 50 cl",
+            "the english court natural mineral water with gas bottle 50 cl"
+          ],
+          [
+            "the english court soda bottle 50 cl"
+          ]
+        ]
+      },
+      {
+        "gtin1": "682670932319",
+        "gtin2": "740642667482",
+        "noul": 0.79,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "soda"
+        ],
+        "titles": [
+          [
+            "Moxie 6 pack - 12 oz cans"
+          ],
+          [
+            "Moxie Soda, 12 Ounce (6 Cans)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "10072058619722",
+        "gtin2": "892125002546",
+        "noul": 0.03,
+        "similarity": 0.6,
+        "score_band": "different",
+        "mode_types": [
+          "coffee",
+          "water"
+        ],
+        "titles": [
+          [
+            "Thick- It Clear Advantage Beverage Mildly Thick Regular Coffee 237ml"
+          ],
+          [
+            "Thick- It Clear Advantage Thickened Water Unflavored 8 oz Bottle",
+            "Thick- It Clear Advantage Thickened Water Unflavored 8 oz Bottle"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5708190023018",
+        "gtin2": "5775345201928",
+        "noul": 0.45,
+        "similarity": 0.75,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "shot"
+        ],
+        "titles": [
+          [
+            "shelf space 23 - Little Miracles 60 ml Mehushotti ginger- lemon organic"
+          ],
+          [
+            "Little Miracles Shot organic ginger & lemon drink 60ml",
+            "Little Miracles Shot ginger-lemon 60ml organic"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5011026008227",
+        "gtin2": "5011026701180",
+        "noul": 0.08,
+        "similarity": 0.5714285714285714,
+        "score_band": "different",
+        "mode_types": [
+          "punch",
+          "water"
+        ],
+        "titles": [
+          [
+            "Miwadi No Added Sugar Blackcurrant 1 Ltr",
+            "Mi Wadi Blackcurrant No Added Sugar Squash (1 L)"
+          ],
+          [
+            "Mi Wadi No Added Sugar Double Concentrate Blackcurrant 1 Ltr",
+            "Mi Wadi Double Concentrate Blackcurrant (1 L)",
+            "Mi Wadi No Added Sugar Double Concentrate Blackcurrant"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7330605001311",
+        "gtin2": "7350093030235",
+        "noul": 0.29,
+        "similarity": 0.6666666666666666,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tonic",
+          "water"
+        ],
+        "titles": [
+          [
+            "blackcurrants Tonic drinkmix, bottle"
+          ],
+          [
+            "soda Tonic Bitter organic 20cl eco-brewery",
+            "Bitter Tonic Water glass",
+            "Bitter Tonic Water glass",
+            "Bitter Tonic Water glass",
+            "Tonic Bitter organic"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8713300049847",
+        "gtin2": "8720157463863",
+        "noul": 0.3,
+        "similarity": 0.5714285714285714,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "water"
+        ],
+        "titles": [
+          [
+            "coolbest Orange 70 / 30",
+            "cool best Premium Orange 1 l"
+          ],
+          [
+            "cool best Premium orange",
+            "cool best Premium orange"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8713300049717",
+        "gtin2": "8720157464532",
+        "noul": 0.52,
+        "similarity": 0.6666666666666666,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "juice"
+        ],
+        "titles": [
+          [
+            "coolbest Premium orange"
+          ],
+          [
+            "cool best Premium orange discount pack",
+            "cool best Premium orange discount pack",
+            "cool best Premium Orange discount pack 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "688267001222",
+        "gtin2": "688267001574",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "water"
+        ],
+        "titles": [
+          [
+            "Peapod Dr. Bob Soda",
+            "Peapod Dr. Bob Soda"
+          ],
+          [
+            "Peapod Original Seltzer Water",
+            "Peapod Original Seltzer Water"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329104364",
+        "gtin2": "8433329122795",
+        "noul": 0.03,
+        "similarity": 0.7777777777777778,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "tea"
+        ],
+        "titles": [
+          [
+            "the english court soda of lemon without gas bottle 1.5 l"
+          ],
+          [
+            "the english court soft drink of tea lemon flavor without gluten bottle 1.5 l"
+          ]
+        ],
+        "missed_title_tokens": [
+          [],
+          [
+            "tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705010078814",
+        "gtin2": "5705010079347",
+        "noul": 0.03,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "shot"
+        ],
+        "titles": [
+          [
+            "ginger / turmeric shots",
+            "ginger shot m. turmeric"
+          ],
+          [
+            "ginger shot m. chili",
+            "ginger / chili shots"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089968",
+        "gtin2": "8433329104432",
+        "noul": 0.01,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "tonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water of mineralization very weak Landin bottle 1.5 l",
+            "the english court natural mineral water of mineralization very weak Landin bottle 1.5 l"
+          ],
+          [
+            "the english court tonic bottle 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4018852010265",
+        "gtin2": "4018852010685",
+        "noul": 0.1,
+        "similarity": 0.6,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "water"
+        ],
+        "titles": [
+          [
+            "bebivita mild apple 0.5l"
+          ],
+          [
+            "bebivita apple juice with mineral water 0.5l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415712610333",
+        "gtin2": "7300156504456",
+        "noul": 0.2,
+        "similarity": 0.7142857142857143,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "water"
+        ],
+        "titles": [
+          [
+            "shelf spacing 15 - xtra 1.5l orange soft drink",
+            "xtra 1.5l orange soft drink"
+          ],
+          [
+            "Orange",
+            "Orange"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705001432052",
+        "gtin2": "5705010078814",
+        "noul": 0.04,
+        "similarity": 0.625,
+        "score_band": "different",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Shot ginger",
+            "Shot Ginger",
+            "Shot ginger 500ml rynkeby",
+            "ginger threat",
+            "Shot Ginger",
+            "ginger shot",
+            "ginger Shot",
+            "Shot ginger",
+            "ginger Shot 0.5l bottle rynkeby",
+            "rynkeby ginger Shot 0.5l",
+            "ginger Shot 0.5l bottle rynkeby"
+          ],
+          [
+            "ginger / turmeric shots",
+            "ginger shot m. turmeric"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089968",
+        "gtin2": "8433329104456",
+        "noul": 0.01,
+        "similarity": 0.5714285714285714,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "soda"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water of mineralization very weak Landin bottle 1.5 l",
+            "the english court natural mineral water of mineralization very weak Landin bottle 1.5 l"
+          ],
+          [
+            "the english court soda bottle 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089968",
+        "gtin2": "8433329122771",
+        "noul": 0.01,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "isotonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water of mineralization very weak Landin bottle 1.5 l",
+            "the english court natural mineral water of mineralization very weak Landin bottle 1.5 l"
+          ],
+          [
+            "the english court isotonic drink Citric bottle 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705010081548",
+        "gtin2": "5705010082019",
+        "noul": 0.41,
+        "similarity": 0.6,
+        "score_band": "uncertain",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Shot Ginger Cranberry",
+            "Shot Ginger Cranberry",
+            "Shot ginger & cranberry 500ml rynkeby"
+          ],
+          [
+            "rynkeby Inkivaari-karpaloshot 0.5l",
+            "rynkeby inkivaari-karpalo taysmehushot 0.5 l",
+            "rynkeby inkivaari-karpalo taysmehushot 0.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8433329089906",
+        "gtin2": "8433329123822",
+        "noul": 0.02,
+        "similarity": 0.5714285714285714,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "isotonic"
+        ],
+        "titles": [
+          [
+            "the english court natural mineral water from the spring Monte pine trees bottle 50 cl"
+          ],
+          [
+            "the english court isotonic drink Blue flavored with sugar and sweeteners bottle 50 cl with stopper sport"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6417802390699",
+        "gtin2": "7316110001008",
+        "noul": 0.03,
+        "similarity": 0.5714285714285714,
+        "score_band": "different",
+        "mode_types": [
+          "tea",
+          "water"
+        ],
+        "titles": [
+          [
+            "fun light Ice Tea lemon to ice -flavored beverage concentrate 0.5l",
+            "fun light Ice Tea lemon to ice -flavored beverage concentrate 0.5l"
+          ],
+          [
+            "Lemon Breeze rtd",
+            "Lemon Breeze rtd"
+          ]
+        ],
+        "missed_title_tokens": [
+          [
+            "tea"
+          ],
+          []
+        ]
+      }
+    ],
+    "shared_normalized_title": [
+      {
+        "gtin1": "683615451414",
+        "gtin2": "741587333487",
+        "noul": 0.82,
+        "similarity": 0.8,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Cortas Orange Blossom Water 10fl Oz"
+          ],
+          [
+            "Cortas Orange Blossom Water, 10 oz",
+            "Cortas - Orange Blossom Water 10fl oz"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5410233710082",
+        "gtin2": "5410233710228",
+        "noul": 0.37,
+        "similarity": 0.8,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Lemonjuice 250ml realemon",
+            "realemon lemon juice 250ml",
+            "Lemonjuice 250ml realemon"
+          ],
+          [
+            "REALEMON lemon juice 250ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7310867578912",
+        "gtin2": "7350000550627",
+        "noul": 0.43,
+        "similarity": 0.8181818181818182,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "fruit drink raspberry / pomegranate",
+            "fruit drink raspberry pomegranate",
+            "fruit drink raspberry pomegranate",
+            "fruit drink raspberry & pomegranate 1l proviva"
+          ],
+          [
+            "fruit drink raspberry & pomegranate 1l proviva",
+            "fruit drink raspberry & pomegranate 1l proviva",
+            "raspberry pomegranate fruit drink",
+            "raspberry pomegranate fruit drink",
+            "raspberry pomegranate fruit drink",
+            "fruit drink raspberry & pomegranate"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3272030002232",
+        "gtin2": "3272036007835",
+        "noul": 0.28,
+        "similarity": 0.8571428571428571,
+        "score_band": "uncertain",
+        "mode_types": [
+          "",
+          "juice"
+        ],
+        "titles": [
+          [
+            "pomegranate syrup mill of valdonne",
+            "pomegranate syrup mill of valdonne"
+          ],
+          [
+            "pomegranate syrup mill of valdonne",
+            "pomegranate syrup mill of valdonne, 70cl bottle",
+            "mill of valdonne\ngrenadine syrup glass bottle",
+            "grenadine syrup glass bottle"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7310867578394",
+        "gtin2": "7350000550535",
+        "noul": 0.29,
+        "similarity": 0.875,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "fruit drink Mango",
+            "fruit drink Mango",
+            "Mango 1l pro viva"
+          ],
+          [
+            "fruit drink Mango 1l proviva",
+            "fruit drink Mango 1l proviva",
+            "Mango fruit drink",
+            "Mango fruit drink",
+            "Mango fruit drink",
+            "fruit drink Mango"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415130077039",
+        "gtin2": "6415130103622",
+        "noul": 0.15,
+        "similarity": 0.8571428571428571,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "juice pot Trip sugar free circus juice drink 2 dl",
+            "juice pot Trip circus 2 dl sugar free",
+            "juice pot Trip sugar free circus juice drink 2 dl"
+          ],
+          [
+            "juice pot Trip circus sugar free fruit juice drink 2 dl",
+            "juice pot Trip circus sugar free fruit juice drink 2 dl",
+            "juice pot Trip sugar free circus juice drink 2 dl"
+          ]
+        ]
+      },
+      {
+        "gtin1": "195372000557",
+        "gtin2": "3661834102482",
+        "noul": 0.96,
+        "similarity": 0.8,
+        "score_band": "same",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "Just Ice Tea Organic Iced Tea, 16 Fl Oz Glass Bottles ( Peach Oolong Tea, Pack of 12)"
+          ],
+          [
+            "Just Ice Tea Organic Iced Tea 16 Fl Oz Glass Bottles ( Peach Oolong Tea, Pack of 12)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4008074100370",
+        "gtin2": "4008074102374",
+        "noul": 0.34,
+        "similarity": 0.8333333333333334,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "wolfra apple juice 1l"
+          ],
+          [
+            "wolfra apple juice 1l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7611612404341",
+        "gtin2": "7611612514712",
+        "noul": 0.23,
+        "similarity": 0.8333333333333334,
+        "score_band": "uncertain",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "raspberry soda soda,can",
+            "raspberry soda soda,can"
+          ],
+          [
+            "raspberry soda incl. Pant",
+            "raspberry soda soda can",
+            "raspberry soda soda can",
+            "raspberry soda 33cl Premier"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8722200954212",
+        "gtin2": "8722200963030",
+        "noul": 0.17,
+        "similarity": 0.8333333333333334,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "bar-le- Duc carbonated mineral water",
+            "bar le duc mineral water carbonated",
+            "bar-le- Duc natural mineral water carbonated 1.5 l"
+          ],
+          [
+            "bar-le- Duc natural mineral water without carbonic",
+            "bar le duc mineral water carbonated"
+          ]
+        ]
+      },
+      {
+        "gtin1": "185687878958",
+        "gtin2": "680332584555",
+        "noul": 0.92,
+        "similarity": 0.8888888888888888,
+        "score_band": "same",
+        "mode_types": [
+          "beer",
+          "beer"
+        ],
+        "titles": [
+          [
+            "Bruce Cost Unfiltered Ginger Ale - Passion Fruit with Turmeric - 12 oz (24 Glass Bottles)"
+          ],
+          [
+            "Bruce Cost Unfiltered Ginger Ale - Passion Fruit with Turmeric - 12 oz (24 Glass Bottles)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8722200954212",
+        "gtin2": "8722200963023",
+        "noul": 0.14,
+        "similarity": 0.8333333333333334,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "bar-le- Duc carbonated mineral water",
+            "bar le duc mineral water carbonated",
+            "bar-le- Duc natural mineral water carbonated 1.5 l"
+          ],
+          [
+            "bar-le- Duc natural mineral water effervescent",
+            "bar le duc mineral water carbonated"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8722200954212",
+        "gtin2": "8722200954236",
+        "noul": 0.17,
+        "similarity": 0.8333333333333334,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "bar-le- Duc carbonated mineral water",
+            "bar le duc mineral water carbonated",
+            "bar-le- Duc natural mineral water carbonated 1.5 l"
+          ],
+          [
+            "bar-le- Duc mineral water carbonated",
+            "bar le duc mineral water effervescent",
+            "bar-le- Duc natural mineral water effervescent 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8710725018205",
+        "gtin2": "8718989852917",
+        "noul": 0.75,
+        "similarity": 0.8,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Coop fresh juice orange"
+          ],
+          [
+            "Coop fresh juice orange"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4049377017514",
+        "gtin2": "8714862708715",
+        "noul": 0.29,
+        "similarity": 0.8333333333333334,
+        "score_band": "uncertain",
+        "mode_types": [
+          "smoothie",
+          "smoothie"
+        ],
+        "titles": [
+          [
+            "fruity king Smoothie mango",
+            "Fruity Smoothie 100% Smoothie mango passion fruit apple banana 250 ml",
+            "fruity king 100% smoothie mango, passion fruit, apple, banana"
+          ],
+          [
+            "fruity king Smoothie mango passion fruit banana apple",
+            "fruity king Smoothie mango"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3664320011510",
+        "gtin2": "7613032733025",
+        "noul": 0.24,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "sparkling water quezac",
+            "sparkling water quézac",
+            "quezac\nmineral water sparkling natural",
+            "mineral water sparkling natural"
+          ],
+          [
+            "sparkling natural mineral water",
+            "mineral water sparkling natural"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260428140580",
+        "gtin2": "4260428140665",
+        "noul": 0.68,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "MONO organic iced tea"
+          ],
+          [
+            "MONO organic iced tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260353177965",
+        "gtin2": "4260353178641",
+        "noul": 0.4,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "",
+          ""
+        ],
+        "titles": [
+          [
+            "got7 syrup Sugar free",
+            "got7 Syrup Sugar Free (750ml)"
+          ],
+          [
+            "got7 syrup Sugar free"
+          ]
+        ]
+      },
+      {
+        "gtin1": "810164203144",
+        "gtin2": "810184856511",
+        "noul": 0.69,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Stirrings Pack Lemon Drop Cocktail Mix 750ml Bottle - Real Juice No Preservatives - 90 Calories - Drink Mixer"
+          ],
+          [
+            "Stirrings Pack Lemon Drop Cocktail Mix 750ml Bottle - Real Juice No Preservatives - 90 Calories - Drink Mixer"
+          ]
+        ]
+      },
+      {
+        "gtin1": "732976282370",
+        "gtin2": "743272197558",
+        "noul": 0.92,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "Bare Nature Peach Vitamin Iced Tea (20 oz., 12 ct.)"
+          ],
+          [
+            "Bare Nature Peach Vitamin Iced Tea (20 oz., 12 ct.)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260428140603",
+        "gtin2": "4260428140665",
+        "noul": 0.69,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "MONO organic iced tea"
+          ],
+          [
+            "MONO organic iced tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "633610753105",
+        "gtin2": "995561291595",
+        "noul": 0.73,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "coconut_water",
+          "coconut_water"
+        ],
+        "titles": [
+          [
+            "Harmless Harvest Raw Organic Coconut Water, 16 oz"
+          ],
+          [
+            "Harmless Harvest Raw Organic Coconut Water, 16 oz"
+          ]
+        ]
+      },
+      {
+        "gtin1": "751901886438",
+        "gtin2": "752697964546",
+        "noul": 0.75,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Proud Source Alkaline Spring Water, Natural Minerals + Electrolytes, Infinitely Recyclable Aluminum, BPA- Free (24 pack 12 oz Cans)"
+          ],
+          [
+            "Proud Source Alkaline Spring Water, Natural Minerals + Electrolytes, Infinitely Recyclable Aluminum, BPA- Free (24 pack 12 oz Cans)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8722200964969",
+        "gtin2": "8722200964983",
+        "noul": 0.13,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "bar-le- Duc mineral water effervescent",
+            "bar le duc mineral water carbonated",
+            "Bar- Le- Duc mineral water carbonated"
+          ],
+          [
+            "bar le duc mineral water carbonated",
+            "Bar- Le- Duc mineral water carbonated",
+            "bar-le- Duc mineral water without carbonic",
+            "bar-le- Duc mineral water without carbonic"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5701018045698",
+        "gtin2": "5701018051286",
+        "noul": 0.65,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "mixed berry / fruit"
+          ],
+          [
+            "mixed berry / fruit"
+          ]
+        ]
+      },
+      {
+        "gtin1": "769553420689",
+        "gtin2": "769553420696",
+        "noul": 0.82,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "NAYA WATER - 600ML 20"
+          ],
+          [
+            "NAYA WATER - 600ML 20"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260428140580",
+        "gtin2": "4260428140641",
+        "noul": 0.7,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "MONO organic iced tea"
+          ],
+          [
+            "MONO organic iced tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4101130002929",
+        "gtin2": "4101130525091",
+        "noul": 0.82,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "rheinfels source Lemon 0.75l"
+          ],
+          [
+            "rheinfels source Lemon 0.75l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260353177965",
+        "gtin2": "4260353177972",
+        "noul": 0.32,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "",
+          ""
+        ],
+        "titles": [
+          [
+            "got7 syrup Sugar free",
+            "got7 Syrup Sugar Free (750ml)"
+          ],
+          [
+            "got7 Syrup Sugar Free (750ml)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5011020104727",
+        "gtin2": "5026791543002",
+        "noul": 0.73,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Deep River Rock Still Water 500 Ml"
+          ],
+          [
+            "Deep River Rock Still Water (500 ml)",
+            "Deep River Rock Still Water 500 M"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3345252899857",
+        "gtin2": "3346097625496",
+        "noul": 0.87,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "",
+          ""
+        ],
+        "titles": [
+          [
+            "pack of 2 - FRUIT pomegranate syrup organic 70cl bottle"
+          ],
+          [
+            "pack of 2 - FRUIT pomegranate syrup organic 70cl bottle"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260428140603",
+        "gtin2": "4260428140757",
+        "noul": 0.72,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "MONO organic iced tea"
+          ],
+          [
+            "MONO organic iced tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6417802586245",
+        "gtin2": "7310470586236",
+        "noul": 0.16,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "extreme wild berry mixed juice concentrates 0.5l",
+            "extreme mixed juice concentrates 0.5l wild berry",
+            "extreme wild berry mixed juice concentrates 0.5l",
+            "extreme wild berry mixed juice concentrates 0.5l"
+          ],
+          [
+            "mixed juice concentrates 0.5l",
+            "extreme wild berry mixed juice concentrates 0.5l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7310401034560",
+        "gtin2": "7310401046754",
+        "noul": 0.41,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "Zero incl.pant",
+            "trocadero Zero Sugar soda can",
+            "trocadero Zero Sugar soda can",
+            "trocadero Zero",
+            "trocadero Zero"
+          ],
+          [
+            "trocadero Zero soda can",
+            "trocadero Zero soda can",
+            "Zero incl. Pant",
+            "trocadero Zero"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4003490014546",
+        "gtin2": "4003490099376",
+        "noul": 0.74,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "coffee",
+          "coffee"
+        ],
+        "titles": [
+          [
+            "high forest iced coffee 250ml"
+          ],
+          [
+            "high forest iced coffee 250ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8728500002714",
+        "gtin2": "9008703000762",
+        "noul": 0.18,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "energy",
+          "energy"
+        ],
+        "titles": [
+          [
+            "bullit Energy Drink",
+            "bullit Energy Drink 250 ml",
+            "bullit energy drink"
+          ],
+          [
+            "bullit Energy drink",
+            "bullit ENERGY DRINK 250ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "613665160738",
+        "gtin2": "629710237393",
+        "noul": 0.88,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Zero Calorie Flavored Water Peach (12 bottles)"
+          ],
+          [
+            "Zero Calorie Flavored Water Peach (12 bottles)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "747519482230",
+        "gtin2": "751901631939",
+        "noul": 0.89,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Proud Source Naturally Alkaline 8.5pH + Spring Water with Electrolytes, BPA Free and Eco- Friendly Packaging, 750ml (12 Pack)"
+          ],
+          [
+            "Proud Source Naturally Alkaline 8.5pH + Spring Water with Electrolytes, BPA Free and Eco- Friendly Packaging, 750ml (12 Pack)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7310867008631",
+        "gtin2": "7350000550597",
+        "noul": 0.29,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "fruit drink rose hip",
+            "fruit drink rose hip",
+            "fruit drink rose hip",
+            "fruit drink rose hip",
+            "fruit drink rose hip 1l pro viva"
+          ],
+          [
+            "fruit drink rose hip 1l proviva",
+            "rose hip fruit drink",
+            "rose hip fruit drink",
+            "fruit drink rose hip",
+            "fruit drink rose hip"
+          ]
+        ]
+      },
+      {
+        "gtin1": "615888989264",
+        "gtin2": "673276821404",
+        "noul": 0.93,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "coffee",
+          "coffee"
+        ],
+        "titles": [
+          [
+            "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ"
+          ],
+          [
+            "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8710395945634",
+        "gtin2": "8710395949229",
+        "noul": 0.34,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "roosvicee multivit forest fruits",
+            "roosvicee multivit forest fruits",
+            "roosvicee multivit forest fruits"
+          ],
+          [
+            "roosvicee multivit forest fruits"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8717056181165",
+        "gtin2": "8717056181189",
+        "noul": 0.7,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "dalphin Water 500 ml"
+          ],
+          [
+            "dalphin Water 500 ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8715600242706",
+        "gtin2": "8715600243291",
+        "noul": 0.8,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "rivella Cranberry"
+          ],
+          [
+            "rivella Cranberry"
+          ]
+        ]
+      },
+      {
+        "gtin1": "732976288761",
+        "gtin2": "743272200043",
+        "noul": 0.91,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "coconut_water",
+          "coconut_water"
+        ],
+        "titles": [
+          [
+            "Vivaloe Coconut Aloe Drink (16.9 fl. oz., 12 pk.)"
+          ],
+          [
+            "Vivaloe Coconut Aloe Drink (16.9 fl. oz., 12 pk.)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5011020104741",
+        "gtin2": "5026791543507",
+        "noul": 0.57,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Deep River Rock Still Water 750 Ml"
+          ],
+          [
+            "Deep River Rock Still Water Bottle",
+            "Deep River Rock Still Water (750 ml)",
+            "Deep River Rock 750 Ml Sports Cap"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7310401046754",
+        "gtin2": "7310402046777",
+        "noul": 0.23,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "trocadero Zero soda can",
+            "trocadero Zero soda can",
+            "Zero incl. Pant",
+            "trocadero Zero"
+          ],
+          [
+            "trocadero Zero soda can",
+            "trocadero Zero soda can",
+            "Zero can incl. Pant"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260428140580",
+        "gtin2": "4260428140757",
+        "noul": 0.71,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "MONO organic iced tea"
+          ],
+          [
+            "MONO organic iced tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "198717100493",
+        "gtin2": "751901631939",
+        "noul": 0.92,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Proud Source Naturally Alkaline 8.5pH + Spring Water with Electrolytes, BPA Free and Eco- Friendly Packaging, 750ml (12 Pack)"
+          ],
+          [
+            "Proud Source Naturally Alkaline 8.5pH + Spring Water with Electrolytes, BPA Free and Eco- Friendly Packaging, 750ml (12 Pack)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8722200963023",
+        "gtin2": "8722200963030",
+        "noul": 0.11,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "bar-le- Duc natural mineral water effervescent",
+            "bar le duc mineral water carbonated"
+          ],
+          [
+            "bar-le- Duc natural mineral water without carbonic",
+            "bar le duc mineral water carbonated"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6430032800332",
+        "gtin2": "6430032800394",
+        "noul": 0.24,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "lemonade",
+          "lemonade"
+        ],
+        "titles": [
+          [
+            "shelf space 16 - organic lemonade 330ml",
+            "REFINERY PLANT organic KOLALIMONADI 330ml"
+          ],
+          [
+            "shelf space 16 - organic lemonade 330ml",
+            "REFINERY PLANT organic lemon lemonade 330ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8058649330134",
+        "gtin2": "8058649330233",
+        "noul": 0.71,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "recoaro slightly sparkling 1.5 l"
+          ],
+          [
+            "recoaro slightly sparkling 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260428140641",
+        "gtin2": "4260428140665",
+        "noul": 0.65,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "MONO organic iced tea"
+          ],
+          [
+            "MONO organic iced tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "198717100493",
+        "gtin2": "739781523438",
+        "noul": 0.93,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Proud Source Naturally Alkaline 8.5pH + Spring Water with Electrolytes, BPA Free and Eco- Friendly Packaging, 750ml (12 Pack)"
+          ],
+          [
+            "Proud Source Naturally Alkaline 8.5pH + Spring Water with Electrolytes, BPA Free and Eco- Friendly Packaging, 750ml (12 Pack)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "697937379080",
+        "gtin2": "763351603541",
+        "noul": 0.94,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "Tahitian Treat Fruit Punch Soda 12oz Cans, 24 Units"
+          ],
+          [
+            "Tahitian Treat Fruit Punch Soda 12oz Cans, 24 Units"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260428140641",
+        "gtin2": "4260428140757",
+        "noul": 0.67,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "MONO organic iced tea"
+          ],
+          [
+            "MONO organic iced tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7310070002488",
+        "gtin2": "7310070008701",
+        "noul": 0.15,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "apotekarnes julmust",
+            "julmust bottle",
+            "julmust 33cl apotekarnes",
+            "julmust",
+            "julmust soda glass",
+            "julmust glass bottle",
+            "julmust soda glass"
+          ],
+          [
+            "julmust glass bottle",
+            "julmust"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8722200954236",
+        "gtin2": "8722200963030",
+        "noul": 0.1,
+        "similarity": 1.0,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "bar-le- Duc mineral water carbonated",
+            "bar le duc mineral water effervescent",
+            "bar-le- Duc natural mineral water effervescent 1.5 l"
+          ],
+          [
+            "bar-le- Duc natural mineral water without carbonic",
+            "bar le duc mineral water carbonated"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260196292115",
+        "gtin2": "4260196294966",
+        "noul": 0.63,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "",
+          ""
+        ],
+        "titles": [
+          [
+            "iron maxx Low Calories sports drink"
+          ],
+          [
+            "iron maxx Low Calories sports drink"
+          ]
+        ]
+      },
+      {
+        "gtin1": "810164203199",
+        "gtin2": "810164203205",
+        "noul": 0.85,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Stirrings Simple Lemon Drop Cocktail Mix 750ml Bottles - Real Juice No Preservatives - 90 Calories - Drink Mixer"
+          ],
+          [
+            "Stirrings Simple Lemon Drop Cocktail Mix 750ml Bottles - Real Juice No Preservatives - 90 Calories - Drink Mixer"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4260428140580",
+        "gtin2": "4260428140603",
+        "noul": 0.71,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "tea",
+          "tea"
+        ],
+        "titles": [
+          [
+            "MONO organic iced tea"
+          ],
+          [
+            "MONO organic iced tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "629710237393",
+        "gtin2": "646035595779",
+        "noul": 0.87,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Zero Calorie Flavored Water Peach (12 bottles)"
+          ],
+          [
+            "Zero Calorie Flavored Water Peach (12 bottles)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "752697964546",
+        "gtin2": "761759557602",
+        "noul": 0.58,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Proud Source Alkaline Spring Water, Natural Minerals + Electrolytes, Infinitely Recyclable Aluminum, BPA- Free (24 pack 12 oz Cans)"
+          ],
+          [
+            "Proud Source Alkaline Spring Water, Natural Minerals + Electrolytes, Infinitely Recyclable Aluminum, BPA- Free (24 pack 12 oz Cans)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4015732003539",
+        "gtin2": "4015732007155",
+        "noul": 0.84,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "spreequell mineral water natural 1l"
+          ],
+          [
+            "spreequell mineral water natural 1l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "751901886438",
+        "gtin2": "761759557602",
+        "noul": 0.89,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Proud Source Alkaline Spring Water, Natural Minerals + Electrolytes, Infinitely Recyclable Aluminum, BPA- Free (24 pack 12 oz Cans)"
+          ],
+          [
+            "Proud Source Alkaline Spring Water, Natural Minerals + Electrolytes, Infinitely Recyclable Aluminum, BPA- Free (24 pack 12 oz Cans)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7340191151079",
+        "gtin2": "7340191151116",
+        "noul": 0.38,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "coop orange juice 1l",
+            "coop orange juice 1l"
+          ],
+          [
+            "coop orange juice 1l",
+            "coop orange juice 1l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "198717100493",
+        "gtin2": "747519482230",
+        "noul": 0.93,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Proud Source Naturally Alkaline 8.5pH + Spring Water with Electrolytes, BPA Free and Eco- Friendly Packaging, 750ml (12 Pack)"
+          ],
+          [
+            "Proud Source Naturally Alkaline 8.5pH + Spring Water with Electrolytes, BPA Free and Eco- Friendly Packaging, 750ml (12 Pack)"
+          ]
+        ]
+      },
+      {
+        "gtin1": "673276821404",
+        "gtin2": "673276851340",
+        "noul": 0.88,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "coffee",
+          "coffee"
+        ],
+        "titles": [
+          [
+            "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ"
+          ],
+          [
+            "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ"
+          ]
+        ]
+      },
+      {
+        "gtin1": "637769186319",
+        "gtin2": "728131236357",
+        "noul": 0.81,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Indian Summer Apple Juice - 4 pk. - 128 oz."
+          ],
+          [
+            "Indian Summer Apple Juice - 4 pk. - 128 oz."
+          ]
+        ]
+      },
+      {
+        "gtin1": "615888989264",
+        "gtin2": "673276851340",
+        "noul": 0.93,
+        "similarity": 1.0,
+        "score_band": "same",
+        "mode_types": [
+          "coffee",
+          "coffee"
+        ],
+        "titles": [
+          [
+            "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ"
+          ],
+          [
+            "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8437010011016",
+        "gtin2": "8437010011078",
+        "noul": 0.39,
+        "similarity": 1.0,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "ekolo BIO juice ecological 100% apple 750 ml bottle",
+            "ekolo BIO juice ecological 100% apple 750 ml bottle",
+            "apple juice Bio 100% squeezed ékolo"
+          ],
+          [
+            "apple juice Bio 100% squeezed ékolo"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8713300449227",
+        "gtin2": "8720157463900",
+        "noul": 0.65,
+        "similarity": 0.9090909090909091,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "cool best Passionfruit heaven"
+          ],
+          [
+            "cool best Passionfruit heaven"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3119070064090",
+        "gtin2": "3119070064106",
+        "noul": 0.04,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "sparkling water natural mineral ogeu",
+            "natural mineral water ogeu",
+            "sparkling natural mineral water of the pyrenees"
+          ],
+          [
+            "natural mineral water ogeu",
+            "natural mineral water ogeu"
+          ]
+        ]
+      },
+      {
+        "gtin1": "782761983081",
+        "gtin2": "786173816302",
+        "noul": 0.91,
+        "similarity": 0.6,
+        "score_band": "same",
+        "mode_types": [
+          "juice",
+          "water"
+        ],
+        "titles": [
+          [
+            "Badia Sour Orange -- 20 fl oz"
+          ],
+          [
+            "Badia Sour Orange -- 20 fl oz"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8720157465393",
+        "gtin2": "8720157468165",
+        "noul": 0.17,
+        "similarity": 0.6,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "tax tingle",
+            "tax tingle look"
+          ],
+          [
+            "tax tingle"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5705001432052",
+        "gtin2": "5705010078791",
+        "noul": 0.14,
+        "similarity": 0.625,
+        "score_band": "different",
+        "mode_types": [
+          "shot",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Shot ginger",
+            "Shot Ginger",
+            "Shot ginger 500ml rynkeby",
+            "ginger threat",
+            "Shot Ginger",
+            "ginger shot",
+            "ginger Shot",
+            "Shot ginger",
+            "ginger Shot 0.5l bottle rynkeby",
+            "rynkeby ginger Shot 0.5l",
+            "ginger Shot 0.5l bottle rynkeby"
+          ],
+          [
+            "ginger shots",
+            "ginger shot"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7350068295867",
+        "gtin2": "7350068296864",
+        "noul": 0.27,
+        "similarity": 0.75,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Mango fruit drink sugar free",
+            "njie 1 l Mango fruit juice drink",
+            "fruit drink Mango sugar free 1l njie",
+            "njie juice drink 1l sugar free mango",
+            "fruit drink Mango 1l njie",
+            "njie 1 l Mango fruit juice drink"
+          ],
+          [
+            "fruit drink Mango 1l njie",
+            "Mango drink",
+            "Mango drink"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3142794192299",
+        "gtin2": "649456079835",
+        "noul": 0.65,
+        "similarity": 0.6,
+        "score_band": "uncertain",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "Cortas Premium Rose Water 10 oz. Pack 2"
+          ],
+          [
+            "Cortas Premium Rose Water 10 oz - Pack 2"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8710624096328",
+        "gtin2": "8710624345662",
+        "noul": 0.68,
+        "similarity": 0.5,
+        "score_band": "uncertain",
+        "mode_types": [
+          "",
+          "water"
+        ],
+        "titles": [
+          [
+            "First Choice Cola no sugar"
+          ],
+          [
+            "First Choice Cola no sugar",
+            "First Choice Cola Zero Sugar 500 ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8715600235654",
+        "gtin2": "8715600242577",
+        "noul": 0.68,
+        "similarity": 0.6,
+        "score_band": "uncertain",
+        "mode_types": [
+          "",
+          "water"
+        ],
+        "titles": [
+          [
+            "rivella Cranberry"
+          ],
+          [
+            "rivella Cranberry"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8715600241846",
+        "gtin2": "8715600242553",
+        "noul": 0.03,
+        "similarity": 0.75,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "groceries"
+          ],
+          [
+            "groceries"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8715600245288",
+        "gtin2": "8715600245332",
+        "noul": 0.04,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "groceries",
+            "Sisi Orange"
+          ],
+          [
+            "groceries",
+            "Sisi No bubbles orange"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8437010011023",
+        "gtin2": "8437010011085",
+        "noul": 0.51,
+        "similarity": 0.75,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "ekolo BIO juice ecological 100% grape 750 ml bottle",
+            "ekolo BIO juice ecological 100% grape 750 ml bottle",
+            "grape juice black bio 100% squeezed ékolo"
+          ],
+          [
+            "grape juice black bio 100% squeezed ékolo"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3665549103109",
+        "gtin2": "3665549104526",
+        "noul": 0.62,
+        "similarity": 0.6666666666666666,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "pure organic lemon juice - limmi"
+          ],
+          [
+            "pure organic lemon juice - limmi"
+          ]
+        ]
+      },
+      {
+        "gtin1": "5201156031831",
+        "gtin2": "5201156633035",
+        "noul": 0.76,
+        "similarity": 0.6,
+        "score_band": "uncertain",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "puberty soft drink orange juice with carbonate 6x330ml"
+          ],
+          [
+            "puberty soft drink orange juice with carbonate 6X330ml"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6415712502874",
+        "gtin2": "6415718072180",
+        "noul": 0.2,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "juice"
+        ],
+        "titles": [
+          [
+            "Rainbow orange juice 1l",
+            "Rainbow orange juice 1l"
+          ],
+          [
+            "Rainbow orange juice 1l",
+            "Rainbow orange juice 1l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "8715600245288",
+        "gtin2": "8715600246315",
+        "noul": 0.06,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "water"
+        ],
+        "titles": [
+          [
+            "groceries",
+            "Sisi Orange"
+          ],
+          [
+            "Sisi orange zero sugar",
+            "Sisi orange",
+            "Sisi orange 0% sugar bottle 1.5 l",
+            "Sisi orange 0% 1.5 l"
+          ]
+        ]
+      },
+      {
+        "gtin1": "7310401007151",
+        "gtin2": "7310401046723",
+        "noul": 0.37,
+        "similarity": 0.6666666666666666,
+        "score_band": "uncertain",
+        "mode_types": [
+          "soda",
+          "soda"
+        ],
+        "titles": [
+          [
+            "trocadero soda can",
+            "trocadero soda can",
+            "Original incl. Pant",
+            "trocadero"
+          ],
+          [
+            "can incl.pant",
+            "trocadero soda can",
+            "trocadero soda can",
+            "trocadero"
+          ]
+        ]
+      },
+      {
+        "gtin1": "3272030018233",
+        "gtin2": "3272036008283",
+        "noul": 0.4,
+        "similarity": 0.75,
+        "score_band": "uncertain",
+        "mode_types": [
+          "",
+          "juice"
+        ],
+        "titles": [
+          [
+            "syrup peach & apricot mill of valdonne",
+            "syrup peach & apricot mill of valdonne"
+          ],
+          [
+            "syrup peach apricot mill of valdonne",
+            "syrup peach / apricot mill of valdonne, 70cl",
+            "syrup peach apricot",
+            "syrup peach apricot glass bottle"
+          ]
+        ]
+      }
+    ],
+    "different_title_tokens_missing_from_global_flavor_lexicon": [
+      {
+        "gtin1": "851107003025",
+        "gtin2": "857161008280",
+        "noul": 0.09,
+        "similarity": 0.6666666666666666,
+        "score_band": "different",
+        "mode_types": [
+          "kombucha",
+          "kombucha"
+        ],
+        "titles": [
+          [
+            "Brew Dr. Kombucha Herbal Uplift, 14 fl oz",
+            "Kombucha Herbal Uplift"
+          ],
+          [
+            "Brew Dr. Uplift Kombucha - 14 fl oz Bottle",
+            "Brew Dr. Kombucha Organic Uplift Caffeinated Tea",
+            "Brew Dr Kombucha Uplift Caffeinated - 14 Fl. Oz."
+          ]
+        ],
+        "missed_title_tokens": [
+          [],
+          [
+            "tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6430065310617",
+        "gtin2": "6430065312857",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "tea",
+          ""
+        ],
+        "titles": [
+          [
+            "shelf spacing 17 - real black iced tea",
+            "SON best real black iced tea 330ml"
+          ],
+          [
+            "boys best SOUR Raparperilimonaadi 0.33l",
+            "boys best SOUR Raparperilimonaadi 0.33l"
+          ]
+        ],
+        "missed_title_tokens": [
+          [
+            "tea"
+          ],
+          []
+        ]
+      },
+      {
+        "gtin1": "787776666134",
+        "gtin2": "787776666417",
+        "noul": 0.03,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "water",
+          "tea"
+        ],
+        "titles": [
+          [
+            "DAVINCI SUGAR FREE GINGERBREAD SYRUP (750ML) ES"
+          ],
+          [
+            "DAVINCI SUGAR FREE CHAI TEA CONCENTRATE (750ML) ES"
+          ]
+        ],
+        "missed_title_tokens": [
+          [],
+          [
+            "tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "4018852010586",
+        "gtin2": "4018852032779",
+        "noul": 0.05,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "juice",
+          "water"
+        ],
+        "titles": [
+          [
+            "bebivita fennel tea with apple juice 0.5l",
+            "fennel tea with apple juice",
+            "bebivita Tee & juice fennel tea with apple juice"
+          ],
+          [
+            "bebivita fennel with apple in still mineral water ( disposable)"
+          ]
+        ],
+        "missed_title_tokens": [
+          [
+            "fennel",
+            "tea"
+          ],
+          [
+            "fennel"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6430065310617",
+        "gtin2": "6430065312833",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "tea",
+          ""
+        ],
+        "titles": [
+          [
+            "shelf spacing 17 - real black iced tea",
+            "SON best real black iced tea 330ml"
+          ],
+          [
+            "boys best SOUR Omenalimonaadi 0.33l",
+            "boys best SOUR Omenalimonaadi 0.33l"
+          ]
+        ],
+        "missed_title_tokens": [
+          [
+            "tea"
+          ],
+          []
+        ]
+      },
+      {
+        "gtin1": "8433329104364",
+        "gtin2": "8433329122795",
+        "noul": 0.03,
+        "similarity": 0.7777777777777778,
+        "score_band": "different",
+        "mode_types": [
+          "soda",
+          "tea"
+        ],
+        "titles": [
+          [
+            "the english court soda of lemon without gas bottle 1.5 l"
+          ],
+          [
+            "the english court soft drink of tea lemon flavor without gluten bottle 1.5 l"
+          ]
+        ],
+        "missed_title_tokens": [
+          [],
+          [
+            "tea"
+          ]
+        ]
+      },
+      {
+        "gtin1": "6430065310624",
+        "gtin2": "6430065312833",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "tea",
+          ""
+        ],
+        "titles": [
+          [
+            "shelf spacing 17 - real green iced tea",
+            "SON best real green iced tea 330ml"
+          ],
+          [
+            "boys best SOUR Omenalimonaadi 0.33l",
+            "boys best SOUR Omenalimonaadi 0.33l"
+          ]
+        ],
+        "missed_title_tokens": [
+          [
+            "tea"
+          ],
+          []
+        ]
+      },
+      {
+        "gtin1": "6430065310624",
+        "gtin2": "6430065312857",
+        "noul": 0.02,
+        "similarity": 0.5,
+        "score_band": "different",
+        "mode_types": [
+          "tea",
+          ""
+        ],
+        "titles": [
+          [
+            "shelf spacing 17 - real green iced tea",
+            "SON best real green iced tea 330ml"
+          ],
+          [
+            "boys best SOUR Raparperilimonaadi 0.33l",
+            "boys best SOUR Raparperilimonaadi 0.33l"
+          ]
+        ],
+        "missed_title_tokens": [
+          [
+            "tea"
+          ],
+          []
+        ]
+      },
+      {
+        "gtin1": "6417802390699",
+        "gtin2": "7316110001008",
+        "noul": 0.03,
+        "similarity": 0.5714285714285714,
+        "score_band": "different",
+        "mode_types": [
+          "tea",
+          "water"
+        ],
+        "titles": [
+          [
+            "fun light Ice Tea lemon to ice -flavored beverage concentrate 0.5l",
+            "fun light Ice Tea lemon to ice -flavored beverage concentrate 0.5l"
+          ],
+          [
+            "Lemon Breeze rtd",
+            "Lemon Breeze rtd"
+          ]
+        ],
+        "missed_title_tokens": [
+          [
+            "tea"
+          ],
+          []
+        ]
+      }
+    ]
+  },
+  "meaning": "Overlapping diagnostic flags, not automatic labels. Title vocabulary probes can match ingredients or a product type; shared titles and source-mode differences are not proof of identity."
+}

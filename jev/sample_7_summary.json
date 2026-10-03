@@ -1,0 +1,173 @@
+{
+  "strategy": "positive-enriched, current-gate and similarity stratified random sampling",
+  "seed": 47,
+  "requested_pairs": 900,
+  "requested_calls": 1000,
+  "positive_fraction": 0.8,
+  "order_check_allocations": {
+    "label_0|fallback|0.8_to_0.9": {
+      "eligible_population": 13,
+      "selected": 5,
+      "inclusion_probability": 0.38461538461538464
+    },
+    "label_0|fallback|0.9_to_1.0": {
+      "eligible_population": 12,
+      "selected": 5,
+      "inclusion_probability": 0.4166666666666667
+    },
+    "label_0|hard_no|0.8_to_0.9": {
+      "eligible_population": 77,
+      "selected": 5,
+      "inclusion_probability": 0.06493506493506493
+    },
+    "label_0|hard_no|0.9_to_1.0": {
+      "eligible_population": 77,
+      "selected": 4,
+      "inclusion_probability": 0.05194805194805195
+    },
+    "label_0|proceed|0.8_to_0.9": {
+      "eligible_population": 1,
+      "selected": 1,
+      "inclusion_probability": 1.0
+    },
+    "label_1|fallback|0.8_to_0.9": {
+      "eligible_population": 112,
+      "selected": 11,
+      "inclusion_probability": 0.09821428571428571
+    },
+    "label_1|fallback|0.9_to_1.0": {
+      "eligible_population": 9,
+      "selected": 9,
+      "inclusion_probability": 1.0
+    },
+    "label_1|fallback|below_0.8": {
+      "eligible_population": 112,
+      "selected": 10,
+      "inclusion_probability": 0.08928571428571429
+    },
+    "label_1|hard_no|0.8_to_0.9": {
+      "eligible_population": 40,
+      "selected": 10,
+      "inclusion_probability": 0.25
+    },
+    "label_1|hard_no|below_0.8": {
+      "eligible_population": 112,
+      "selected": 10,
+      "inclusion_probability": 0.08928571428571429
+    },
+    "label_1|proceed|0.8_to_0.9": {
+      "eligible_population": 112,
+      "selected": 10,
+      "inclusion_probability": 0.08928571428571429
+    },
+    "label_1|proceed|0.9_to_1.0": {
+      "eligible_population": 112,
+      "selected": 10,
+      "inclusion_probability": 0.08928571428571429
+    },
+    "label_1|proceed|below_0.8": {
+      "eligible_population": 111,
+      "selected": 10,
+      "inclusion_probability": 0.09009009009009009
+    }
+  },
+  "unique_pairs": 900,
+  "calls": 1000,
+  "source_paths": {
+    "pairs": "/home/opc/ONE/ER/data/labeled_pairs.csv",
+    "gate": "/home/opc/ONE/ER/data/gate_results.csv",
+    "records": "/home/opc/ONE/ER/data/canonical_records.csv"
+  },
+  "source_sha256": {
+    "pairs": "33ef8aeba8db92f5a5f1c2766d35ec9d94402f2814a91d33f20165ec48363399",
+    "gate": "274a8735e64a331ba81bfbbae69c8dc808ec646a87bc6ed761e027b94c434913",
+    "records": "beaf35cd45517afba1a9b8b75ecf6eee6b3e8cbe30480b08f6b90ac7c5d9a584"
+  },
+  "row_accounting": {
+    "input_rows": 15837,
+    "previously_reserved_pairs": 648
+  },
+  "source_label_population": {
+    "1": 8071,
+    "0": 7766
+  },
+  "eligible_pairs": 15189,
+  "excluded_previously_staged_or_tested_pairs": 1235,
+  "allocations": {
+    "label_0|fallback|0.8_to_0.9": {
+      "eligible_population": 13,
+      "selected": 13,
+      "inclusion_probability": 1.0
+    },
+    "label_0|fallback|0.9_to_1.0": {
+      "eligible_population": 12,
+      "selected": 12,
+      "inclusion_probability": 1.0
+    },
+    "label_0|hard_no|0.8_to_0.9": {
+      "eligible_population": 3697,
+      "selected": 77,
+      "inclusion_probability": 0.020827698133621855
+    },
+    "label_0|hard_no|0.9_to_1.0": {
+      "eligible_population": 3857,
+      "selected": 77,
+      "inclusion_probability": 0.019963702359346643
+    },
+    "label_0|proceed|0.8_to_0.9": {
+      "eligible_population": 1,
+      "selected": 1,
+      "inclusion_probability": 1.0
+    },
+    "label_1|fallback|0.8_to_0.9": {
+      "eligible_population": 153,
+      "selected": 112,
+      "inclusion_probability": 0.7320261437908496
+    },
+    "label_1|fallback|0.9_to_1.0": {
+      "eligible_population": 9,
+      "selected": 9,
+      "inclusion_probability": 1.0
+    },
+    "label_1|fallback|below_0.8": {
+      "eligible_population": 987,
+      "selected": 112,
+      "inclusion_probability": 0.11347517730496454
+    },
+    "label_1|hard_no|0.8_to_0.9": {
+      "eligible_population": 40,
+      "selected": 40,
+      "inclusion_probability": 1.0
+    },
+    "label_1|hard_no|below_0.8": {
+      "eligible_population": 3145,
+      "selected": 112,
+      "inclusion_probability": 0.0356120826709062
+    },
+    "label_1|proceed|0.8_to_0.9": {
+      "eligible_population": 578,
+      "selected": 112,
+      "inclusion_probability": 0.19377162629757785
+    },
+    "label_1|proceed|0.9_to_1.0": {
+      "eligible_population": 617,
+      "selected": 112,
+      "inclusion_probability": 0.18152350081037277
+    },
+    "label_1|proceed|below_0.8": {
+      "eligible_population": 2080,
+      "selected": 111,
+      "inclusion_probability": 0.05336538461538461
+    }
+  },
+  "gate_drift_eligible": {
+    "proceed->proceed": 3275,
+    "proceed->hard_no": 3185,
+    "proceed->fallback": 1149,
+    "hard_no->hard_no": 7554,
+    "hard_no->proceed": 1,
+    "hard_no->fallback": 25
+  },
+  "meaning": "Training labels are gate-derived, not human ground truth. Full original listings for all pairs; stratified swapped-order subset. Primary estimates use a_order only; do not count swaps as independent pairs. Raw means are not prevalence estimates. Inclusion probabilities refer to fresh eligible pairs; cells with zero selections are not estimable.",
+  "input_states_sha256": "ff0b47c803ec8bf57ec729065deac6796f3d809eda9c2cc14336dfb9fe9bcdfd"
+}

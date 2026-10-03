@@ -56,6 +56,9 @@ def load_inputs(cfg):
         for key in ('catalog_sha256', 'identity_policy_sha256', 'identity_dimensions_sha256'):
             if manifest is not None and metadata.get(key) != manifest.get(key):
                 raise ValueError(f'text cache/prepared input mismatch: {key}')
+        if manifest is not None:
+            from training.prepare_embeddings import validate_prepared_provenance
+            validate_prepared_provenance(resolve(cfg.text_cache), metadata, manifest)
     return manifest, records, pairs, vectors, metadata
 
 

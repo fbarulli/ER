@@ -1,0 +1,1821 @@
+{
+  "inspected_cases": [
+    {
+      "gtin1": "703694611551",
+      "gtin2": "703694611599",
+      "score": 0.14,
+      "saved_gate": "fallback",
+      "pattern": "Option lists contaminate selected variant",
+      "evidence": "Both titles enumerate Sassafras, Green, Raspberry and Peach tea, but the selected parenthetical is Sassafras versus Raspberry. Captured attributes also list peach/tea/raspberry on both. Bag-of-flavors extraction treats the list of choices as the purchased SKU.",
+      "records": [
+        {
+          "gtin": "703694611551",
+          "original_listings": [
+            {
+              "attributes": "Health Claims: no sugar; Caffeine: 0-15 mg; Flavour: peach, tea, raspberry; Volume: 355; Tea Type: green, herbal; Diets: low carbs; Juice Content: 0-2%; Pack Type: Bottle; Pack Material Type: Glass; Geographic Origin: united states; Carbonization: still",
+              "barcode": "703694611551",
+              "brand": "Ancient Infusions",
+              "category": "Still RTD Tea",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Tea Beverages\"\",\"\" Fruit & Herbal Tea\"\"]",
+              "country": "USA",
+              "description": "Ancient Infusions Tea Concentrate in Your Choice of Four Flavors\nJust Add Water, A Full Bottle of Concentrate Makes a 2 Quart Pitch of Strong Tea\nMade in the USA with No Sugar- No Carbs- Gluten Free\nD",
+              "image_url": "https://m.media-amazon.com/images/I/61a1tkMChCL._AC_UL320_.jpg",
+              "price": "12.69",
+              "product_id": "108494493",
+              "retailer": "amazon",
+              "title": "Ancient Infusions Tea Concentrates: Your Choice of Sassafras Tea, Green Tea, Raspberry Tea or Peach Tea 12 oz. Bottles ( Sassafras Tea, 2 Bottles)",
+              "url": "https://www.amazon.com/dp/B07MJ1WL58"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "tea",
+            "flavor_set": [
+              "fruit",
+              "peach",
+              "raspberry",
+              "tea"
+            ],
+            "volume_set": [
+              355.0
+            ],
+            "pack_set": [
+              2
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "glass"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "703694611599",
+          "original_listings": [
+            {
+              "attributes": "Pack Material Type: Glass; Caffeine: 0-15 mg; Health Claims: no sugar; Flavour: peach, tea, raspberry; Juice Content: 0-2%; Volume: 355; Pack Type: Bottle; Diets: low carbs; Geographic Origin: united states",
+              "barcode": "703694611599",
+              "brand": "Ancient Infusions",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Coffee, Tea & Cocoa\"\",\"\" Tea\"\",\"\" Green\"\"]",
+              "country": "USA",
+              "description": "Ancient Infusions Tea Concentrate in Your Choice of Four Flavors\nJust Add Water, A Full Bottle of Concentrate Makes a 2 Quart Pitch of Strong Tea\nMade in the USA with No Sugar- No Carbs- Gluten Free\nD",
+              "image_url": "https://m.media-amazon.com/images/I/61AOoqgkBhL._AC_UL320_.jpg",
+              "price": "21.99",
+              "product_id": "152170426",
+              "retailer": "amazon",
+              "title": "Ancient Infusions Tea Concentrates: Your Choice of Sassafras Tea, Green Tea, Raspberry Tea or Peach Tea 12 oz. Bottles ( Raspberry Tea, 2 Bottles)",
+              "url": "https://www.amazon.com/Ancient-Infusions-Tea-Concentrates-Sassafras/dp/B07MLM7Z7X/ref=sr_1_4200?qid=1563286260&s=grocery&sr=1-4200"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "tea",
+            "flavor_set": [
+              "coffee",
+              "peach",
+              "raspberry",
+              "tea"
+            ],
+            "volume_set": [
+              355.0
+            ],
+            "pack_set": [
+              2
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "glass"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "642709090021",
+      "gtin2": "736983891563",
+      "score": 0.05,
+      "saved_gate": "proceed",
+      "pattern": "Generic flavor filtering erases a real named variant",
+      "evidence": "Fruit Punch versus Original seltzer, same 24 x 20oz pack. The first stored flavor is only fruit; the other is empty. The current declared-identity review drops fruit as generic, so it misses the product-specific phrase fruit punch.",
+      "records": [
+        {
+          "gtin": "642709090021",
+          "original_listings": [
+            {
+              "attributes": "Caffeine: 0-15 mg; Diets: kosher; Volume: 591; Health Claims: no sugar, no calories; Carbonization: carbonated, sparkling; Pack Material Type: Glass; Pack Type: Bottle; Geographic Origin: united states; Juice Content: 0-2%; Water Type: flavoured, seltzer",
+              "barcode": "642709090021",
+              "brand": "Hal New York",
+              "category": "Carbonated Bottled Water",
+              "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Soft Drinks\"\"]",
+              "country": "USA",
+              "description": "Brand Hal's New York \nNumber of Items 1 \nUnit Count 24.00 Count \n* * *\n# About this item \n* O-U- Kosher \n* 0 Calories \n* 0 Sugar \n* 0 Carbohydrates \nundefinedundefined \n* * *\n## Important information",
+              "image_url": "https://m.media-amazon.com/images/I/71I6R-pYToL._AC_UL320_.jpg",
+              "price": "35.99",
+              "product_id": "608933281",
+              "retailer": "amazon",
+              "title": "Hal's New York Seltzer Carbonated Fruit Punch Flavored Sparkling Water, Zero Sugar, Zero Calorie, Zero Carbs, 20 Fl Oz ( Pack of 24)",
+              "url": "https://www.amazon.com/dp/B0B25W7MDF"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [
+              "fruit"
+            ],
+            "volume_set": [
+              591.0
+            ],
+            "pack_set": [
+              24
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "glass"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "736983891563",
+          "original_listings": [
+            {
+              "attributes": "Juice Content: 0-2%; Diets: kosher; Caffeine: 0-15 mg; Volume: 591; Water Type: seltzer; Carbonization: carbonated, sparkling; Geographic Origin: united states; Health Claims: no sugar, no calories, hydrating",
+              "barcode": "736983891563",
+              "brand": "Hal New York",
+              "category": "Carbonated Bottled Water",
+              "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Cocktail Mixers\"\"]",
+              "country": "USA",
+              "description": "Origianl Flavored\nO-U- Kosher\n0 Calories\n0 Sugar\n0 Carbo-hydrates",
+              "image_url": "https://m.media-amazon.com/images/I/71PraH7JzYL._AC_UL320_.jpg",
+              "price": "35.99",
+              "product_id": "71612816",
+              "retailer": "amazon",
+              "title": "Hal's New York Seltzer Carbonated Original Sparkling Water, Zero Sugar, Zero Calorie, Zero Carbs, 20 Fl Oz ( Pack of 24)",
+              "url": "https://www.amazon.com/dp/B00MMOCLAO"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              591.0
+            ],
+            "pack_set": [
+              24
+            ],
+            "package_type_set": [],
+            "package_material_set": [],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "637910229575",
+      "gtin2": "637910729006",
+      "score": 0.08,
+      "saved_gate": "proceed",
+      "pattern": "Compound product names are more specific than ingredient agreement",
+      "evidence": "Bawls Root Beer versus Original. Both use guarana and extract the same generic family evidence, but root beer is a distinct named formulation. Shared guarana is not identity evidence for that formulation.",
+      "records": [
+        {
+          "gtin": "637910229575",
+          "original_listings": [
+            {
+              "attributes": "Juice Content: 0-2%; Energy Source: guarana; Volume: 296; Water Type: soda; Pack Material Type: Glass; Carbonization: carbonated; Naturally derived: natural flavours; Caffeine: 15-25 mg; Flavour: guarana; Pack Type: Bottle; Sweetener: hfcs",
+              "barcode": "637910229575",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Beverages\"\",\"\" Regular Root Beer\"\"]",
+              "country": "USA",
+              "description": "Bawls Guarana Root Beer. 10 fl oz. (296ml). High caffeine guarana soda.",
+              "image_url": "https://i5.peapod.com/c/DV/DVUWV.jpg",
+              "price": "1.99",
+              "product_id": "150691511",
+              "retailer": "peapod",
+              "title": "Bawls Guarana Soda Root Beer",
+              "url": "https://www.peapod.com/"
+            },
+            {
+              "attributes": "Juice Content: 0-2%; Energy Source: guarana; Pack Type: Bottle; Volume: 296; Flavour: guarana; Pack Material Type: Glass",
+              "barcode": "637910229575",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Beverages\"\",\"\" Soft Drinks\"\",\"\" Specialty Sodas\"\"]",
+              "country": "USA",
+              "description": "BAWLS Guarana Root Beer takes this All- American soda to the next level, adding our elusive guarana berry flavor with its caffeine kick to your cerebrum. \nBAWLS Guarana Root Beer takes this All- Ameri",
+              "image_url": "https://www.meijer.com/content/dam/meijer/product/0063/79/1022/95/0063791022957_0_A1C1_1200.png",
+              "price": "1.99",
+              "product_id": "264882030",
+              "retailer": "meijer",
+              "title": "Bawls Guarana Root Beer Soda Bottle, 10 oz.",
+              "url": "https://www.meijer.com/shop/en/beverages/soft-drinks/specialty-sodas/bawls-guarana-root-beer-soda-bottle-10-oz-/p/63791022957"
+            },
+            {
+              "attributes": "Sweetener: hfcs; Pack Material Type: Glass; Volume: 296; Juice Content: 0-2%; Naturally derived: natural flavours; Caffeine: 15-25 mg; Energy Source: guarana; Flavour: guarana; Carbonization: carbonated; Pack Type: Bottle",
+              "barcode": "637910229575",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Pantry\"\",\"\" Beverages\"\",\"\" Energy Drinks\"\"]",
+              "country": "USA",
+              "description": "Description\nwww.bawls.com. For information 1-888-731-9708.\nUPC: 0637910229570",
+              "image_url": "https://8e9d5b8b8dcb9208ef3f-01db2a53ae0368d03387780ee86ead55.ssl.cf2.rackcdn.com/0637910229570_CF_hyvee_default_large.png",
+              "price": "1.99",
+              "product_id": "322824071",
+              "retailer": "Hy-Vee",
+              "title": "Bawls Guarana Root Beer Soda",
+              "url": "https://www.hy-vee.com/grocery/PD52691005/Bawls-Guarana-Root-Beer-Soda"
+            },
+            {
+              "attributes": "Juice Content: 0-2%; Caffeine: 15-25 mg; Naturally derived: natural flavours; Energy Source: guarana; Pack Type: Bottle; Flavour: guarana; Volume: 296; Sweetener: hfcs; Carbonization: carbonated",
+              "barcode": "637910229575",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Beverages\"\",\"\" Soft Drinks\"\",\"\" Root Beer & Cream Soda\"\"]",
+              "country": "USA",
+              "description": "Guarana Soda, High Caffeine, Root Beer \nwww.bawls.com. For information 1-888-731-9708.",
+              "image_url": "https://images.albertsons-media.com/is/image/ABS/960138014",
+              "price": "1.79",
+              "product_id": "913417811",
+              "retailer": "safeway",
+              "title": "BAWLS Guarana Soda High Caffeine Root Beer - 10 Fl. Oz.",
+              "url": "https://www.safeway.com/shop/product-details.960138014.html"
+            },
+            {
+              "attributes": "Sweetener: hfcs; Volume: 296; Energy Source: guarana; Naturally derived: natural flavours; Pack Type: Bottle; Juice Content: 0-2%; Flavour: guarana; Carbonization: carbonated; Caffeine: 15-25 mg",
+              "barcode": "637910229575",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Beverages\"\",\"\"soft drinks\"\"]",
+              "country": "USA",
+              "description": "Product Details \nUPC: \n0637910229570 \nManufacturers may alter their products and / or packaging and the packaging and products may be different from what is shown on www.hy-vee.com. \nShow More",
+              "image_url": "https://fa74d61d848a20b729bb-0251b36b713060ab3e0e8321940e01ff.ssl.cf2.rackcdn.com/0637910229570_CF_Syndigo_default_large.png",
+              "price": "4",
+              "product_id": "985701481",
+              "retailer": "Hy-Vee",
+              "title": "Bawls Guarana Root Beer Soda",
+              "url": "https://www.hy-vee.com/aisles-online/p/77607/Bawls-Guarana-Root-Beer-Soda"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "soda",
+            "flavor_set": [
+              "cola",
+              "guarana"
+            ],
+            "volume_set": [
+              296.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "glass"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "637910729006",
+          "original_listings": [
+            {
+              "attributes": "Volume: 296; Pack Material Type: Glass; Juice Content: 0-2%; Energy Source: guarana; Flavour: guarana; Pack Type: Bottle",
+              "barcode": "637910729006",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Soda & Pop\"\"]",
+              "country": "USA",
+              "image_url": "https://www.kroger.com/product/images/xlarge/front/0063791072900",
+              "price": "1.99",
+              "product_id": "31493666",
+              "retailer": "Kroger",
+              "title": "Bawls Guarana Soda",
+              "url": "https://www.kroger.com/p/bawls-guarana-soda/0063791072900"
+            },
+            {
+              "attributes": "Pack Type: Bottle; Volume: 296; Pack Material Type: Glass; Energy Source: guarana; Juice Content: 0-2%; Flavour: guarana",
+              "barcode": "637910729006",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Beverages\"\",\"\" Soft Drinks\"\",\"\" Specialty Sodas\"\"]",
+              "country": "USA",
+              "description": "It's just epic deliciousness in a stylish cobalt blue bottle, infused with enough caffeinated guarana guts to send you into the stratosphere, with no crash afterward. \nIt's just epic deliciousness in",
+              "image_url": "https://www.meijer.com/content/dam/meijer/product/0063/79/1072/90/0063791072900_0_A1C1_1200.png",
+              "price": "1.99",
+              "product_id": "264688449",
+              "retailer": "meijer",
+              "title": "Bawls Guarana Original Soda Bottle, 10 oz.",
+              "url": "https://www.meijer.com/shop/en/beverages/soft-drinks/specialty-sodas/bawls-guarana-original-soda-bottle-10-oz-/p/63791072900"
+            },
+            {
+              "attributes": "Flavour: guarana; Volume: 296; Juice Content: 0-2%; Pack Material Type: Glass; Energy Source: guarana; Pack Type: Bottle",
+              "barcode": "637910729006",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Beverages\"\",\"\" Soda & Pop\"\",\"\" Specialty Sodas\"\"]",
+              "country": "USA",
+              "description": "Bawls Guarana is the flagship concoction of the Bawls family. It's just epic deliciousness in a devilishly stylish cobalt blue bottle, infused with enough caffeinated guarana guts to send you into the",
+              "image_url": "https://www.kroger.com/product/images/medium/front/0063791072900",
+              "price": "1.99",
+              "product_id": "318574357",
+              "retailer": "Fred Meyer Stores",
+              "title": "Bawls Guarana Soda",
+              "url": "https://www.fredmeyer.com/p/bawls-guarana-soda/0063791072900"
+            },
+            {
+              "attributes": "Energy Source: guarana; Naturally derived: natural flavours; Caffeine: 15-25 mg; Volume: 296; Pack Type: Bottle; Flavour: guarana; Pack Material Type: Glass; Sweetener: corn syrup; Carbonization: carbonated; Juice Content: 0-2%",
+              "barcode": "637910729006",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Pantry\"\",\"\" Beverages\"\",\"\" Energy Drinks\"\"]",
+              "country": "USA",
+              "description": "Description\nMade from guarana, a highly caffeinated berry native to the Amazonian rainforest, BAWLS Guarana is the carbonated beverage of tomorrow with an extra kick. Since its inception, BAWLS Guaran",
+              "image_url": "https://8e9d5b8b8dcb9208ef3f-01db2a53ae0368d03387780ee86ead55.ssl.cf2.rackcdn.com/0637910729000_CF_hyvee_default_large.jpeg",
+              "price": "1.99",
+              "product_id": "322579084",
+              "retailer": "Hy-Vee",
+              "title": "Bawls Guarana High Caffeine Soda",
+              "url": "https://www.hy-vee.com/grocery/PD52690941/Bawls-Guarana-High-Caffeine-Soda"
+            },
+            {
+              "attributes": "Volume: 296; Sweetener: hfcs; Naturally derived: natural flavours; Energy Source: guarana; Carbonization: carbonated; Caffeine: 15-25 mg; Flavour: guarana; Juice Content: 0-2%; Pack Material Type: Paper / Carton",
+              "barcode": "637910729006",
+              "brand": "Bawls",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" Beverages\"\",\"\"soft drinks\"\"]",
+              "country": "USA",
+              "description": "Product Details \nDescription \nMade from guarana, a highly caffeinated berry native to the Amazonian rainforest, BAWLS Guarana is the carbonated beverage of tomorrow with an extra kick. Since its incep",
+              "image_url": "https://44ad1a49939da3ebb29f-9b4de32c78812914c2e28a1bdd528c38.ssl.cf2.rackcdn.com/0637910729000_IN_hyvee_default_large.jpeg",
+              "price": "2.19",
+              "product_id": "750131888",
+              "retailer": "Hy-Vee",
+              "title": "Bawls Guarana High Caffeine Soda",
+              "url": "https://www.hy-vee.com/aisles-online/p/90170/Bawls-Guarana-High-Caffeine-Soda"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "soda",
+            "flavor_set": [
+              "cola",
+              "guarana"
+            ],
+            "volume_set": [
+              296.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "glass",
+              "paper / carton"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "8427406017111",
+      "gtin2": "8427406017210",
+      "score": 0.04,
+      "saved_gate": "fallback",
+      "pattern": "Modifiers change flavor identity",
+      "evidence": "Cal Valls white-grape versus black-grape juice. Titles and descriptions retain the color and different grape varieties; both collapse to grape.",
+      "records": [
+        {
+          "gtin": "8427406017111",
+          "original_listings": [
+            {
+              "attributes": "Pack Type: Bottle; Juice Content: 100%; Volume: 1000; Juice Features: not from concentrate; Flavour: grape; No Artificial Ingredients: no artificial additives; Carbonization: still; Sustainable Sourcing: organic; Made From: grape; Environmentally Friendly: environmentally friendly; Health Claims: no sugar",
+              "barcode": "8427406017111",
+              "brand": "Cal Valls",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" alimentation and drinks\"\",\"\" coffee, tea and drinks\"\",\"\" juices\"\"]",
+              "country": "Spain",
+              "description": "grape juice white ecological without no additive, sugar, no water. No comes from a concentrated it is simply 100% fruit! certificate organic production",
+              "image_url": "https://m.media-amazon.com/images/I/317HAVULB8L._AC_UL320_.jpg",
+              "price": "8",
+              "product_id": "86801039",
+              "retailer": "amazon",
+              "title": "cal valls grape juice white 1lt ECO",
+              "url": "https://www.amazon.es/dp/B00DN9CZ8A"
+            },
+            {
+              "attributes": "Flavour: grape; Environmentally Friendly: environmentally friendly; Made From: grape; Volume: 1000; Pack Material Type: Glass; Pack Type: Bottle; Juice Content: 100%; Health Claims: no added sugar",
+              "barcode": "8427406017111",
+              "brand": "Cal Valls",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" feeding\"\",\"\" organic juices\"\"]",
+              "country": "Spain",
+              "description": "juice made from white grape cool. \n* no added sugar \n* variety grapes macabeu and parellada grown in tarragona. \n* not applicable of concentrates. \n* neither in cultivation neither in the elaboration",
+              "image_url": "https://cdn2.planetahuerto.es/estaticos/imagenes/ficha/26580/26580_1.png",
+              "price": "1.15",
+              "product_id": "580614728",
+              "retailer": "Planeta Huerto",
+              "title": "grape juice white ECO cal valls",
+              "url": "https://www.planetahuerto.es/venta-zumo-de-uva-blanca-eco-cal-valls_26580"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "juice",
+            "flavor_set": [
+              "coffee",
+              "grape"
+            ],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "glass"
+            ],
+            "organic_set": [
+              "organic"
+            ],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "8427406017210",
+          "original_listings": [
+            {
+              "attributes": "Pack Type: Bottle; Made From: grape; Juice Features: not from concentrate; Volume: 1000; Sustainable Sourcing: organic; Environmentally Friendly: environmentally friendly; Carbonization: still; Juice Content: 100%; Flavour: grape; No Artificial Ingredients: no artificial additives; Health Claims: no sugar",
+              "barcode": "8427406017210",
+              "brand": "Cal Valls",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" alimentation and drinks\"\",\"\" coffee, tea and drinks\"\",\"\" juices\"\"]",
+              "country": "Spain",
+              "description": "grape juice black ecological without no additive, sugar, no water. No comes from a concentrated it is simply 100% fruit! certificate organic production",
+              "image_url": "https://m.media-amazon.com/images/I/31BP9R2dXSL._AC_UL320_.jpg",
+              "price": "8.52",
+              "product_id": "83924444",
+              "retailer": "amazon",
+              "title": "juice black grape BIO 1 lt\"\" or what do you wear in contact with us to change the value of the brand if you are the headline.",
+              "url": "https://www.amazon.es/dp/B00DN9D098"
+            },
+            {
+              "attributes": "Pack Type: Bottle; Pack Material Type: Glass; Volume: 1000; Made From: grape; Carbonization: still; Juice Content: 100%; Environmentally Friendly: environmentally friendly; Flavour: grape; Health Claims: no added sugar",
+              "barcode": "8427406017210",
+              "brand": "Cal Valls",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" eco supermarket\"\",\"\" eco food\"\",\"\" vegetable drinks and juices\"\",\"\" organic juices\"\"]",
+              "country": "Spain",
+              "description": "* principal ingredient: grape \n* intolerances: no added sugars, without sugars, without gluten \n* feeding - feeding type: vegan, vegetarian \njuice made from black grape cool. \n* no added sugar \n* grap",
+              "image_url": "https://imagesph.global.ssl.fastly.net/estaticos/imagenes/ficha/26581/26581_1_1400.jpg",
+              "price": "3.69",
+              "product_id": "191769284",
+              "retailer": "Greenweez",
+              "title": "juice black grape ECO cal valls, 1 l",
+              "url": "https://www.planetahuerto.es/venta-zumo-uva-negra-eco-cal-valls-1-l_26581"
+            },
+            {
+              "attributes": "Volume: 1000; Juice Content: 100%; Flavour: grape; Made From: grape; Pack Type: Bottle; Pack Material Type: Glass; Environmentally Friendly: environmentally friendly; Health Claims: no added sugar",
+              "barcode": "8427406017210",
+              "brand": "Cal Valls",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" feeding\"\",\"\" organic juices\"\"]",
+              "country": "Spain",
+              "description": "* intolerances:\nno added sugars, without sugars, without gluten \njuice made from black grape cool. \n* no added sugar \n* grape cool of the tempranillo varieties, syrah and grenache grown in he Alt Camp",
+              "image_url": "https://imagesph.freetls.fastly.net/estaticos/imagenes/ficha/26581/26581_1_1400.jpg",
+              "price": "4.47",
+              "product_id": "247426625",
+              "retailer": "Planeta Huerto",
+              "title": "juice black grape ECO cal valls, 1 l",
+              "url": "https://www.planetahuerto.es/venta-zumo-uva-negra-eco-cal-valls-1-l_26581"
+            },
+            {
+              "attributes": "Pack Type: Bottle; Volume: 1000; Flavour: grape; Pack Material Type: Glass; Environmentally Friendly: environmentally friendly; Health Claims: no added sugar; Juice Content: 100%; Made From: grape",
+              "barcode": "8427406017210",
+              "brand": "Cal Valls",
+              "category": "Reconstituted 100% Juice",
+              "category_path": "[\"\" feeding\"\",\"\" organic juices\"\"]",
+              "country": "Spain",
+              "description": "juice made from black grape cool. \n* no added sugar \n* grape cool of the tempranillo varieties, syrah and grenache grown in he Alt Camp ( tarragona). \n* not applicable of concentrates. \n* neither in c",
+              "image_url": "https://cdn2.planetahuerto.es/estaticos/imagenes/ficha/26581/26581_1.png",
+              "price": "4.95",
+              "product_id": "580605141",
+              "retailer": "Planeta Huerto",
+              "title": "grape juice black ECO cal valls 1 l",
+              "url": "https://www.planetahuerto.es/venta-zumo-de-uva-negra-eco-cal-valls-1-l_26581"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "juice",
+            "flavor_set": [
+              "coffee",
+              "grape"
+            ],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "glass"
+            ],
+            "organic_set": [
+              "organic"
+            ],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "6419800053972",
+      "gtin2": "6419806053976",
+      "score": 0.11,
+      "saved_gate": "proceed",
+      "pattern": "Leading multipliers separated from units are missed",
+      "evidence": "Single 330ml can versus 6x [product name] 330ml. Extracting the multipack title yields pack_qty=1, pack_confidence=0, and no pack evidence, so both canonical pack sets are empty.",
+      "records": [
+        {
+          "gtin": "6419800053972",
+          "original_listings": [
+            {
+              "attributes": "Volume: 330; Pack Type: Can; Flavour: lemon; Carbonization: carbonated; Health Claims: good source of minerals; Naturally derived: natural flavours, natural",
+              "barcode": "6419800053972",
+              "brand": "KevytOlo",
+              "category": "Sparkling Flavoured Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" waters\"\",\"\" juice mineral waters and taste water\"\"]",
+              "country": "Finland",
+              "description": "product compound lemon juice naturalness and health beaded mineral water, but contain energy only 21 kcal − less than many fresh juices. light feeling lemon juice content on 3 %.",
+              "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/6419800053972_kuva1.jpg",
+              "price": "0.65",
+              "product_id": "1040469080",
+              "retailer": "Food Market Herkku",
+              "title": "light feeling lemon juicy mineral water 0.33 l tlk",
+              "url": "https://www.s-kaupat.fi/tuote/6419800053972"
+            },
+            {
+              "attributes": "Carbonization: carbonated; Naturally derived: natural flavours, natural; Health Claims: good source of minerals; Volume: 330; Flavour: lemon; Pack Type: Can",
+              "barcode": "6419800053972",
+              "brand": "KevytOlo",
+              "category": "Sparkling Flavoured Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" waters\"\",\"\" juice mineral waters and taste water\"\"]",
+              "country": "Finland",
+              "description": "product compound lemon juice naturalness and health beaded mineral water, but contain energy only 21 kcal − less than many fresh juices. light feeling lemon juice content on 3 %.",
+              "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/6419800053972_kuva1.jpg",
+              "price": "1.19",
+              "product_id": "1042409592",
+              "retailer": "S-kaupat",
+              "title": "light feeling lemon juicy mineral water 0.33 l tlk",
+              "url": "https://www.s-kaupat.fi/tuote/kevytolo-sitruuna-mehukivennaisvesi-0-33-l-tlk/6419800053972"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [
+              "lemon"
+            ],
+            "volume_set": [
+              330.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "can"
+            ],
+            "package_material_set": [],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "6419806053976",
+          "original_listings": [
+            {
+              "attributes": "Volume: 330; Naturally derived: natural flavours, natural; Health Claims: good source of minerals; Flavour: lemon; Pack Type: Can; Carbonization: carbonated",
+              "barcode": "6419806053976",
+              "brand": "KevytOlo",
+              "category": "Sparkling Flavoured Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" waters\"\",\"\" juice mineral waters and taste water\"\"]",
+              "country": "Finland",
+              "description": "light feeling lemon juicy mineral water on beverage for all ages. product compound lemon juice naturalness and health beaded mineral water, but contain energy only 20 kcal − less than many fresh juice",
+              "image_url": "https://cdn.s-cloud.fi/v1/w640_q75/product/ean/6419806053976_kuva1.jpg",
+              "price": "4.99",
+              "product_id": "1034377526",
+              "retailer": "S-kaupat",
+              "title": "6x light feeling lemon juicy mineral water 0.33 l tlk",
+              "url": "https://www.s-kaupat.fi/tuote/6xkevytolo-sitruuna-mehukivennaisvesi-0-33-l-tlk/6419806053976"
+            },
+            {
+              "attributes": "Flavour: lemon; Health Claims: good source of minerals; Volume: 330; Naturally derived: natural flavours, natural; Pack Type: Can; Carbonization: carbonated",
+              "barcode": "6419806053976",
+              "brand": "KevytOlo",
+              "category": "Sparkling Flavoured Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" waters\"\",\"\" juice mineral waters and taste water\"\"]",
+              "country": "Finland",
+              "description": "light feeling lemon juicy mineral water on beverage for all ages. product compound lemon juice naturalness and health beaded mineral water, but contain energy only 20 kcal − less than many fresh juice",
+              "image_url": "https://cdn.s-cloud.fi/v1/w828_q75/product/ean/6419806053976_kuva1.jpg",
+              "price": "4.99",
+              "product_id": "1040183589",
+              "retailer": "Food Market Herkku",
+              "title": "6x light feeling lemon juicy mineral water 0.33 l tlk",
+              "url": "https://www.s-kaupat.fi/tuote/6419806053976"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [
+              "lemon"
+            ],
+            "volume_set": [
+              330.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "can"
+            ],
+            "package_material_set": [],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "4055188067525",
+      "gtin2": "4055188068751",
+      "score": 0.12,
+      "saved_gate": "proceed",
+      "pattern": "Set-of-N pack phrasing is missed",
+      "evidence": "Tri Top syrup 600ml versus set of 6 ever 600ml. Extractor returns pack_qty=1 and zero confidence on both, despite the explicit set quantity.",
+      "records": [
+        {
+          "gtin": "4055188067525",
+          "original_listings": [
+            {
+              "attributes": "Flavour: orange; Sweetener: sugar; Pack Material Type: Plastic; Volume: 600; Health Claims: low sugar, low calories; Juice Content: 0-2%",
+              "barcode": "4055188067525",
+              "brand": "Tri Top",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\"kitchen\"\",\"\" food and drink\"\",\"\" beverages\"\",\"\" beverage syrup\"\"]",
+              "country": "Germany",
+              "description": "mixing ratio of 1:7 results in approx. 4.8 liter of drink, fruit content in syrup 40 % low in calories with less sugar, intensity and are sweet individually dosed, also ideal for bubbly systems, and C",
+              "image_url": "https://i.otto.de/i/otto/30890639?$responsive_ft2$",
+              "price": "3.29",
+              "product_id": "118619279",
+              "retailer": "Otto",
+              "title": "T Ri TOP syrup orange cola mix 600 ml",
+              "url": "https://www.otto.de/p/tri-top-sirup-orange-cola-mix-600-ml-802078494/#variationId=802078495"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "",
+            "flavor_set": [
+              "cola",
+              "orange"
+            ],
+            "volume_set": [
+              600.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "package_material_set": [
+              "plastic"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "4055188068751",
+          "original_listings": [
+            {
+              "attributes": "Pack Material Type: Plastic; Health Claims: low calories, low sugar; Sweetener: sugar; Flavour: orange; Volume: 600",
+              "barcode": "4055188068751",
+              "brand": "Tri Top",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\"kitchen\"\",\"\" food and drink\"\",\"\" beverages\"\",\"\" fruit juices\"\"]",
+              "country": "Germany",
+              "description": "mixing ratio of 1:7 results in approx. 4.8 liter of drink, fruit content in syrup 40 % low in calories with less sugar, intensity and are sweet individually dosed, also ideal for bubbly systems, and C",
+              "image_url": "https://i.otto.de/i/otto/30914472?$responsive_ft2$",
+              "price": "19.29",
+              "product_id": "118631659",
+              "retailer": "Otto",
+              "title": "T Ri TOP syrup orange cola mix set of 6 ever 600 ml",
+              "url": "https://www.otto.de/p/tri-top-sirup-orange-cola-mix-6er-set-je-600-ml-803068119/#variationId=803068122"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "",
+            "flavor_set": [
+              "cola",
+              "fruit",
+              "orange"
+            ],
+            "volume_set": [
+              600.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "package_material_set": [
+              "plastic"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "8722200954236",
+      "gtin2": "8722200954373",
+      "score": 0.05,
+      "saved_gate": "proceed",
+      "pattern": "Description-only pack quantity is omitted",
+      "evidence": "Both titles say Bar-le-Duc mineral water carbonated, but the second description says 4x1.5 ltr. Neither canonical has pack evidence. The low JEV score has a concrete pack explanation despite identical titles.",
+      "records": [
+        {
+          "gtin": "8722200954236",
+          "original_listings": [
+            {
+              "attributes": "Pack Type: Bottle; Carbonization: carbonated, sparkling; Volume: 1500; Pack Material Type: Plastic; Caffeine: 0-15 mg; Water Type: mineral; Juice Content: 0-2%",
+              "barcode": "8722200954236",
+              "brand": "Bar-le-Duc",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\" soft drink, juices and water\"\",\"\" Water\"\",\"\" sparkling water\"\"]",
+              "country": "Netherlands",
+              "description": "bar-le- Duc mineral water carbonated 1.5 ltr.",
+              "image_url": "https://syndy-content.azureedge.net/media/products/0f7e0000-ff41-0003-433d-08d3fcba3412/images/AW0HA3GItENDpZ-NPK0ohvI./AAC1KSf-AwAbTwjYpwgiVw.290x290.jpg",
+              "price": "0.85",
+              "product_id": "72337010",
+              "retailer": "Coop",
+              "title": "bar-le- Duc mineral water carbonated",
+              "url": "https://www.coop.nl/product/8722200954236"
+            },
+            {
+              "attributes": "Carbonization: carbonated; Health Claims: low fat; Water Type: mineral, bottled at source; Pack Material Type: Plastic; Naturally derived: natural; Juice Content: 0-2%",
+              "barcode": "8722200954236",
+              "brand": "Bar-le-Duc",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\" product range\"\",\"\" fresh, juice, tea, coffee\"\",\"\" soft drink\"\",\"\" Water\"\"]",
+              "country": "Netherlands",
+              "description": "* * *\n* * *\n#### storage instructions \nafter opening bottle close properly, cool storage and limited shelf life. out of the sun, in a neat, dry, cool and odorless place keep \n* * *\n#### country of ori",
+              "image_url": "https://www.janlinders.nl/tl_assets/8722200954236_D8bkxkHBX1jcY7AOXst46g_1_bb.png",
+              "price": "0.89",
+              "product_id": "512752621",
+              "retailer": "Jan Linders",
+              "title": "bar le duc mineral water effervescent",
+              "url": "https://www.janlinders.nl/bar-le-duc-mineraalwater-bruisend.html"
+            },
+            {
+              "attributes": "Volume: 1500; Pack Material Type: Plastic; Health Claims: good source of minerals; Contains Minerals: calcium; Caffeine: 15-25 mg; Naturally derived: natural; Water Type: mineral; Carbonization: carbonated; Juice Content: 0-2%",
+              "barcode": "8722200954236",
+              "brand": "Bar-le-Duc",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\" product range\"\",\"\" soft drink, juices, coffee tea\"\",\"\" soft drink\"\",\"\" Water\"\"]",
+              "country": "Netherlands",
+              "description": "natural mineral water with added carbon dioxide \n1.5 liters \n## product information \n### content and weight \n1.5\nliter \n### keep \nsave out of the sun, on a dry, cool and odorless place. \nTen best befo",
+              "image_url": "https://files.vomar.nl/articles/Bar-le-Duc-Natuurlijk-Mineraalwater-Bruisend-1-5-L-8722200954236-1-637438177632121496.png",
+              "price": "0.83",
+              "product_id": "555803600",
+              "retailer": "Vomar",
+              "title": "bar-le- Duc natural mineral water effervescent 1.5 l",
+              "url": "https://www.vomar.nl/producten/frisdrank-sappen-koffie-thee/frisdrank/bar-le-duc-kzh-1500ml/102824"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [
+              "coffee"
+            ],
+            "volume_set": [
+              1500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "plastic"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "8722200954373",
+          "original_listings": [
+            {
+              "attributes": "Caffeine: 0-15 mg; Juice Content: 0-2%; Carbonization: carbonated, sparkling; Volume: 1500; Pack Material Type: Plastic; Water Type: mineral",
+              "barcode": "8722200954373",
+              "brand": "Bar-le-Duc",
+              "category": "Carbonated Bottled Water",
+              "category_path": "[\"\" soft drink, juices and water\"\",\"\" Water\"\",\"\" sparkling water\"\"]",
+              "country": "Netherlands",
+              "description": "bar-le- Duc mineral water carbonated 4x1.5 ltr.",
+              "image_url": "https://syndy-content.azureedge.net/media/products/020c0000-ff41-0003-871f-08d43b118408/images/AW0HA3GItENDpZ-NPK0ohvI./AADDJSf-AwB_IQjXzLajyA.290x290.jpg",
+              "price": "3.39",
+              "product_id": "165551597",
+              "retailer": "Coop",
+              "title": "bar-le- Duc mineral water carbonated",
+              "url": "https://www.coop.nl/product/8722200954373"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              1500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "package_material_set": [
+              "plastic"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "8003160128593",
+      "gtin2": "8003170057739",
+      "score": 0.06,
+      "saved_gate": "proceed",
+      "pattern": "Certification and product-line identity can differ",
+      "evidence": "Conad juice versus Towards Organic Nature/Bio juice, both 3 x 200ml. The organic marker is extracted on one side, but does not prevent approval. Absence of organic on the other side is unknown, not proof of non-organic; line names strengthen the distinction.",
+      "records": [
+        {
+          "gtin": "8003160128593",
+          "original_listings": [
+            {
+              "attributes": "Volume: 200; Caffeine: 25-50 mg; Sweetener: sugar; Immune Support Ingredients: vitamin c, antioxidants; Carbonization: still",
+              "barcode": "8003160128593",
+              "brand": "Conad",
+              "category": "Nectars",
+              "category_path": "[\"\" drinks\"\",\"\" juices\"\"]",
+              "country": "Italy",
+              "description": "sales description: nectar of fishing \nfruit 50% minimum Features: italian fruit Other Information: it contains unsaleable packs separately.",
+              "image_url": "https://s2c.altuoservizio.conad.it/imgs.conadacasa.it/imgs-conadacasa/300/8003160128593.png?v=1622581878",
+              "price": "0.84",
+              "product_id": "53722405",
+              "retailer": "Conad",
+              "title": "conad juice and pulp fishing 3 x 200 ml",
+              "url": "https://s2c.altuoservizio.conad.it/005126/prodotto?product=1c9bb519-ba0c-11e7-a7e3-005056b04252"
+            },
+            {
+              "attributes": "Made From: lemon; Health Claims: good source of vitamins; Carbonization: still; Juice Content: 50-75%; Sweetener: sugar; Immune Support Ingredients: vitamin c; Pack Material Type: Paper / Carton; Environmentally Friendly: carbon neutral/reduced carbon; Juice Features: from concentrate; Volume: 200",
+              "barcode": "8003160128593",
+              "brand": "Conad",
+              "category": "Nectars",
+              "category_path": "[\"\" drinks and get ready\"\",\"\" juices and drinks of fruit\"\"]",
+              "country": "Italy",
+              "description": "* features \ndescription \nnourishment e freshness in one package! self choose the juice and pulp to fishing conad choose a tasty product for all ages, a concentrate of flavors and sweetness of nature t",
+              "image_url": "https://spesaonline.conad.it/assets/products/succo-e-polpa-brick-pesca-200-ml-x-3-conad--106323/ID-Shot.jpeg/renditions/medium.jpeg",
+              "price": "0.99",
+              "product_id": "637971093",
+              "retailer": "Conad",
+              "title": "juice and pulp brick fishing 200 ml x 3 conad",
+              "url": "https://spesaonline.conad.it/p/succo-e-polpa-brick-pesca-200-ml-x-3-conad--106323"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "juice",
+            "flavor_set": [
+              "fruit",
+              "lemon"
+            ],
+            "volume_set": [
+              200.0
+            ],
+            "pack_set": [
+              3
+            ],
+            "package_type_set": [],
+            "package_material_set": [
+              "paper / carton"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "8003170057739",
+          "original_listings": [
+            {
+              "attributes": "Sweetener: sugar; Sustainable Sourcing: organic; Volume: 200; Immune Support Ingredients: vitamin c, antioxidants; Caffeine: 25-50 mg; Carbonization: still",
+              "barcode": "8003170057739",
+              "brand": "Conad",
+              "category": "Nectars",
+              "category_path": "[\"\" drinks\"\",\"\" juices\"\"]",
+              "country": "Italy",
+              "description": "sales description: nectar of fishing from organic farming\nfruit 50% minimum Features: 100% italian fruit Other Information: it contains unsaleable packs separately.",
+              "image_url": "https://s2c.altuoservizio.conad.it/imgs.conadacasa.it/imgs-conadacasa/300/8003170057739.png?v=1622581878",
+              "price": "1.68",
+              "product_id": "53740276",
+              "retailer": "Conad",
+              "title": "conad towards organic nature juice and pulp fishing biological 3 x 200 ml",
+              "url": "https://s2c.altuoservizio.conad.it/005126/prodotto?product=1ca4c3b6-ba0c-11e7-a7e3-005056b04252"
+            },
+            {
+              "attributes": "Environmentally Friendly: environmentally friendly, carbon neutral/reduced carbon; Sustainable Sourcing: organic; Juice Content: 25-50%; Contains Minerals: sulfur; Volume: 200; Immune Support Ingredients: vitamin c, antioxidants; Naturally derived: natural; Made From: lemon; Sweetener: sugar; Juice Features: from concentrate, with pulp; Geographic Origin: italy",
+              "barcode": "8003170057739",
+              "brand": "Conad",
+              "category": "Nectars",
+              "category_path": "[\"\" drinks and get ready\"\",\"\" juices and drinks of fruit\"\",\"\" nectars\"\"]",
+              "country": "Italy",
+              "description": "* features \ndescription \na fruit juice biological perfect for snacks is snacks of the little ones, but what can be worn where do you want ed be consumed from everyone: and the juice and pulp of fishin",
+              "image_url": "https://spesaonline.conad.it/assets/products/conad-verso-natura-bio-succo-e-polpa-pesca-biologico-3-x-200-ml--401128/ID-Shot.jpeg/renditions/cq5dam.web.1280.1280.jpeg",
+              "price": "1.68",
+              "product_id": "638198865",
+              "retailer": "Conad",
+              "title": "100% italian\njuice and pulp of fishing biological brik 200 ml x 3 towards nature Bio conad",
+              "url": "https://spesaonline.conad.it/p/succo-e-polpa-di-pesca-biologica-brik-200-ml-x-3-verso-natura-bio-conad--401128"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "juice",
+            "flavor_set": [
+              "fruit",
+              "lemon"
+            ],
+            "volume_set": [
+              200.0
+            ],
+            "pack_set": [
+              3
+            ],
+            "package_type_set": [],
+            "package_material_set": [],
+            "organic_set": [
+              "organic"
+            ],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "8433329104340",
+      "gtin2": "8433329122955",
+      "score": 0.15,
+      "saved_gate": "proceed",
+      "pattern": "Caffeine-free identity is missing from the decisive gate",
+      "evidence": "Zero-sugar cola versus a explicitly ZERO caffeine / Free From:no caffeine cola. Both reduce to cola/no-sugar fields. The first listing does not establish caffeine content, so this is a product-variant review candidate, not a proven caffeine contradiction.",
+      "records": [
+        {
+          "gtin": "8433329104340",
+          "original_listings": [
+            {
+              "attributes": "Volume: 330; Juice Content: 0-2%; Carbonization: carbonated; Pack Material Type: Metal; Health Claims: no sugar",
+              "barcode": "8433329104340",
+              "brand": "El Corte Inglés",
+              "category": "Reduced Sugar Cola Carbonates",
+              "category_path": "[\"\" supermarket\"\",\"\" drinks\"\",\"\" water, soft drinks and juices\"\",\"\" soft drinks and soda\"\",\"\" cola\"\"]",
+              "country": "Spain",
+              "image_url": "https://cdn.grupoelcorteingles.es/SGFM/dctm/MEDIA03/202005/27/00118622500876____1__325x325.jpg",
+              "price": "0.32",
+              "product_id": "297168829",
+              "retailer": "El Corte Inglés",
+              "title": "the english court Zero cola drink without sugars tin 33 cl",
+              "url": "https://www.elcorteingles.es/supermercado/0110118622500876-el-corte-ingles-zero-refresco-de-cola-sin-azucares-lata-33-cl/"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [
+              "cola"
+            ],
+            "volume_set": [
+              330.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "tin"
+            ],
+            "package_material_set": [
+              "metal"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "8433329122955",
+          "original_listings": [
+            {
+              "attributes": "Caffeine: 0-15 mg; Pack Type: Can; Volume: 330; Juice Content: 0-2%; Carbonization: carbonated; Free From: no caffeine; Pack Material Type: Metal; Naturally derived: natural fragrances; Health Claims: no sugar",
+              "barcode": "8433329122955",
+              "brand": "El Corte Inglés",
+              "category": "Reduced Sugar Cola Carbonates",
+              "category_path": "[\"\" supermarket\"\",\"\" drinks\"\",\"\" water, soft drinks and juices\"\",\"\" soft drinks and soda\"\",\"\" cola\"\"]",
+              "country": "Spain",
+              "description": "name of the food: flavored refreshing drink. with sweeteners. name of the operator: prepared for\nthe english court by soft drink Iberia S.A.U.\nhighway N-332, Km. 206.9\n46780 - olive ( Valencia) spanis",
+              "image_url": "https://sgfm.elcorteingles.es/SGFM/dctm/MEDIA03/202011/03/00118622700278____1__600x600.jpg",
+              "price": "0.32",
+              "product_id": "374115644",
+              "retailer": "El Corte Inglés",
+              "title": "the english court zero sugar ZERO caffeine cola drink tin 33 cl",
+              "url": "https://www.elcorteingles.es/supermercado/0110118622700278-el-corte-ingles-zero-azucar-zero-cafeina-refresco-de-cola-lata-33-cl/"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [
+              "cola"
+            ],
+            "volume_set": [
+              330.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "tin"
+            ],
+            "package_material_set": [
+              "metal"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "7310050005348",
+      "gtin2": "7310050005492",
+      "score": 0.05,
+      "saved_gate": "fallback",
+      "pattern": "Functional product subtypes and nearby sizes collapse",
+      "evidence": "Double Espresso coffee 230ml versus Protein Boost coffee 225ml. Both retain coffee and compatible sizes, while the named subtype and Sports Ingredients:protein distinction is not decisive.",
+      "records": [
+        {
+          "gtin": "7310050005348",
+          "original_listings": [
+            {
+              "attributes": "Carbonization: still; Juice Content: 0-2%; Roast Type: espresso; Pack Material Type: Metal; Caffeine: 15-25 mg; Volume: 230; Sweetener: cane sugar; Coffee Type: arabica; Pack Type: Tin; Sustainable Sourcing: fairtrade, organic; Naturally derived: natural flavours; Flavour: coffee",
+              "barcode": "7310050005348",
+              "brand": "Löfbergs",
+              "category": "RTD Coffee",
+              "category_path": "[\"\" act\"\",\"\" drink\"\",\"\" Juice - milk drink\"\",\"\" coffee- & chocolate drink\"\"]",
+              "country": "Sweden",
+              "image_url": "https://res.cloudinary.com/coopsverige/image/upload/fl_progressive,q_90,c_lpad,g_center,h_222,w_222/v1531156501/327146.jpg",
+              "price": "18",
+              "product_id": "58768145",
+              "retailer": "Coop",
+              "title": "Ice Coffee Double Espresso fairtrade organic",
+              "url": "https://www.coop.se/handla-online/varor/dryck/juice-mjolkdryck/kaffe-chokladdryck/44969641-ice-coffee-double-espresso-fairtrade-eko/"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "coffee",
+            "flavor_set": [
+              "chocolate",
+              "coffee"
+            ],
+            "volume_set": [
+              230.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "tin"
+            ],
+            "package_material_set": [
+              "metal"
+            ],
+            "organic_set": [
+              "organic"
+            ],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "7310050005492",
+          "original_listings": [
+            {
+              "attributes": "Flavour: coffee; Caffeine: 25-50 mg; Pack Material Type: Metal; Sweetener: cane sugar; Juice Content: 0-2%; Sports Ingredients: protein; Sustainable Sourcing: organic; Volume: 225; Carbonization: still",
+              "barcode": "7310050005492",
+              "brand": "Löfbergs",
+              "category": "RTD Coffee",
+              "category_path": "[\"\" dairy, cheese & eggs\"\",\"\" snacks & desserts\"\",\"\" drinkable & other\"\"]",
+              "country": "Sweden",
+              "image_url": "https://d2rfo6yapuixuu.cloudfront.net/h77/hae/9133982547998/7310050005492_1526442969319_master_axfood_400",
+              "price": "18.5",
+              "product_id": "55611006",
+              "retailer": "Willys",
+              "title": "Protein Boost Ice Coffee Drink",
+              "url": "https://www.willys.se//produkt/Protein-Boost-Ice-Coffee-Drink-101280153_ST"
+            },
+            {
+              "attributes": "Sports Ingredients: protein; Sustainable Sourcing: organic; Volume: 225; Pack Material Type: Metal; Juice Content: 0-2%; Caffeine: 25-50 mg; Flavour: coffee; Sweetener: cane sugar; Carbonization: still",
+              "barcode": "7310050005492",
+              "brand": "Löfbergs",
+              "category": "RTD Coffee",
+              "category_path": "[\"\" all supplies\"\",\"\" dairy, ost & ã¤gg\"\",\"\" intermediate¥l & desserts\"\",\"\" drinkable & ã¶vrigt\"\"]",
+              "country": "Sweden",
+              "description": "can be stored at room temperature",
+              "image_url": "https://d2rfo6yapuixuu.cloudfront.net/h77/hae/9133982547998/7310050005492_1526442969319_master_axfood_400",
+              "price": "19.95",
+              "product_id": "59083436",
+              "retailer": "Hemköp",
+              "title": "Protein Boost Ice Coffee Drink",
+              "url": "https://www.hemkop.se/produkt/P-101280153_ST"
+            },
+            {
+              "attributes": "Juice Content: 0-2%; Pack Material Type: Metal; Sports Ingredients: protein; Caffeine: 25-50 mg; Sweetener: cane sugar; Carbonization: still; Sustainable Sourcing: organic; Volume: 225",
+              "barcode": "7310050005492",
+              "brand": "Löfbergs",
+              "category": "RTD Coffee",
+              "category_path": "[\"\" act\"\",\"\" drink\"\",\"\" coffee\"\",\"\" instant coffee\"\"]",
+              "country": "Sweden",
+              "image_url": "https://res.cloudinary.com/coopsverige/image/upload/fl_progressive,q_70,c_lpad,g_center,h_444,w_444/v1531316091/338616.jpg",
+              "price": "18",
+              "product_id": "80303460",
+              "retailer": "Coop",
+              "title": "Ice Protein Boost",
+              "url": "https://www.coop.se/handla-online/varor/dryck/kaffe/snabbkaffe/159475416-ice-protein-boost/"
+            },
+            {
+              "attributes": "Sweetener: cane sugar; Volume: 225; Pack Material Type: Metal; Flavour: coffee; Juice Content: 0-2%; Carbonization: still; Sports Ingredients: protein; Sustainable Sourcing: fairtrade, organic",
+              "barcode": "7310050005492",
+              "brand": "Löfbergs",
+              "category": "RTD Coffee",
+              "category_path": "[\"\" drink\"\",\"\" coffee, tea & chocolate\"\",\"\" iced coffee\"\"]",
+              "country": "Sweden",
+              "description": "ICA has the ambition that always give you the right information. minor changes in the content of the products can take place over time and we therefore asks you to always check before use the informat",
+              "image_url": "https://assets.icanet.se/t_product_large_2x_v1,f_auto/7310050005492.jpg",
+              "price": "22.9",
+              "product_id": "90343535",
+              "retailer": "ICA",
+              "title": "iced coffee Ice Protein Boost organic 225ml fairtrade löfbergs",
+              "url": "https://www.ica.se/handla/produkt/iskaffe-ice-protein-boost-ekologisk-225ml-fairtrade-lofbergs-id_p_7310050005492"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "coffee",
+            "flavor_set": [
+              "chocolate",
+              "coffee"
+            ],
+            "volume_set": [
+              225.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "package_material_set": [
+              "metal"
+            ],
+            "organic_set": [
+              "organic"
+            ],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "4018852031093",
+      "gtin2": "4018852032755",
+      "score": 0.04,
+      "saved_gate": "proceed",
+      "pattern": "Diluted drink versus pure juice",
+      "evidence": "Bebivita apple juice in mineral water (Juice Content:25-50%) versus 100% apple juice, both 500ml. Stored product types are water versus juice; shared apple and size still permit approval.",
+      "records": [
+        {
+          "gtin": "4018852031093",
+          "original_listings": [
+            {
+              "attributes": "Pack Material Type: Plastic; Juice Content: 25-50%; Sustainable Sourcing: organic; Naturally derived: natural; Immune Support Ingredients: vitamin c; Flavour: apple; Volume: 500; Environmentally Friendly: environmentally friendly; Carbonization: still; Pack Type: Bottle; Water Type: mineral; Health Claims: good source of minerals, good source of vitamins, hydrating, no added sugar, immune system health; No Artificial Ingredients: no artificial preservatives",
+              "barcode": "4018852031093",
+              "brand": "Bebivita",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\"baby and child\"\",\"\"baby food drinks\"\",\"\"beverages for children\"\"]",
+              "country": "Germany",
+              "description": "rich in vitamins C for the iron intake and the immune system, with natural mineral water, particularly refreshing and ideal as a thirst quencher, without added sugar, just with the sweet from the frui",
+              "image_url": "https://media.dm-static.com/images/q_auto,f_auto,w_150,h_230,c_fit/v1601872464/products/pim/4018852031093-2313978/bebivita-apfelsaft-in-stillem-mineralwasser-bio",
+              "price": "0.85",
+              "product_id": "356707865",
+              "retailer": "dm",
+              "title": "apple juice in still mineral water - Bio, 500 ml",
+              "url": "https://www.dm.de/bebivita-apfelsaft-in-stillem-mineralwasser-bio-p4018852031093.html"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [
+              "apple"
+            ],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "plastic"
+            ],
+            "organic_set": [
+              "organic"
+            ],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "4018852032755",
+          "original_listings": [
+            {
+              "attributes": "Free From: lactose free, no eggs; Carbonization: still; Flavour: apple; Pack Type: Bottle; Volume: 500; No Artificial Ingredients: no artificial preservatives; Health Claims: good source of vitamins; Juice Content: 100%; Made From: apple; Immune Support Ingredients: vitamin c; Environmentally Friendly: environmentally friendly",
+              "barcode": "4018852032755",
+              "brand": "Bebivita",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\"baby and child\"\",\"\"baby food drinks\"\",\"\"beverages for children\"\"]",
+              "country": "Germany",
+              "description": "taste: sweet; age recommendation: from 5. month; product characteristics: gluten free, lactose free, without egg, without preservative substances, vegetarian product description: rich in vitamins C; 1",
+              "image_url": "https://media.dm-static.com/images/f_auto,q_auto,c_fit,w_500/v1720143561/products/pim/4018852032755-3985725/bebivita-saft-100-prozent-milder-apfel",
+              "price": "1.35",
+              "product_id": "680838387",
+              "retailer": "dm",
+              "title": "juice 100 % mild apple, 500 ml",
+              "url": "https://www.dm.de/bebivita-saft-100-prozent-milder-apfel-p4018852032755.html"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "juice",
+            "flavor_set": [
+              "apple"
+            ],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "8411902001057",
+      "gtin2": "8411902008179",
+      "score": 0.12,
+      "saved_gate": "proceed",
+      "pattern": "Closure/packaging variant is outside the captured contract",
+      "evidence": "Cabreiroa 750ml glass bottle versus 750ml Sport stopper. Both package formats become bottle; second material is missing. Sport closure suggests a different retail presentation but does not prove its material.",
+      "records": [
+        {
+          "gtin": "8411902001057",
+          "original_listings": [
+            {
+              "attributes": "Juice Content: 0-2%; Volume: 750; Naturally derived: natural; Pack Type: Bottle; Water Type: mineral; Pack Material Type: Glass",
+              "barcode": "8411902001057",
+              "brand": "Cabreiroa",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\"supermarket\"\",\"\"drinks\"\",\"\"water soft drinks and juices\"\",\"\"water and soda\"\",\"\"mineral water without gas\"\"]",
+              "country": "Spain",
+              "image_url": "https://sgfm.elcorteingles.es/SGFM/dctm/MEDIA03/202207/20/00118630602599____1__600x600.jpg",
+              "price": "1.55",
+              "product_id": "717125833",
+              "retailer": "El Corte Inglés",
+              "title": "cabreiroa natural mineral water bottle 75 cl (glass bottle)",
+              "url": "https://www.elcorteingles.es/supermercado/0110118630602599-cabreiroa-agua-mineral-natural-botella-75-cl-envase-de-vidrio/"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              750.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "glass"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "8411902008179",
+          "original_listings": [
+            {
+              "attributes": "Contains Minerals: calcium, magnesium; Volume: 750; Caffeine: 0-15 mg; Naturally derived: natural; Water Type: mineral; Juice Content: 0-2%",
+              "barcode": "8411902008179",
+              "brand": "Cabreiroa",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\"supermarket\"\",\"\"drinks\"\",\"\"water soft drinks and juices\"\",\"\"water and soda\"\",\"\"mineral water without gas\"\"]",
+              "country": "Spain",
+              "description": "### general information \n* name of the food: natural mineral water \n* name of the operator: water from cabreiroa S.A.U. \n* operator address: Estrada of cabreiroá y / n 32600 - Verin - ourense - spain",
+              "image_url": "https://sgfm.elcorteingles.es/SGFM/dctm/MEDIA03/202406/05/00118630601401____23__40x40.jpg",
+              "price": "0.82",
+              "product_id": "53852521",
+              "retailer": "El Corte Inglés",
+              "title": "cabreiroa natural mineral water bottle 75 cl with stopper Sport",
+              "url": "https://www.elcorteingles.es/supermercado/0110118630601401-cabreiroa-agua-mineral-natural-botella-75-cl-con-tapon-sport/"
+            },
+            {
+              "attributes": "Naturally derived: natural; Volume: 750; Juice Content: 0-2%; Water Type: mineral",
+              "barcode": "8411902008179",
+              "brand": "Cabreiroa",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" supermarket\"\",\"\" drinks\"\",\"\" water, soft drinks and juices\"\",\"\" water and soda\"\",\"\" mineral water without gas\"\",\"\" mineral water without gas (132)\"\"]",
+              "country": "Spain",
+              "image_url": "https://sgfm.elcorteingles.es/SGFM/dctm/MEDIA03/202406/05/00118630601401____23__40x40.jpg",
+              "price": "0.82",
+              "product_id": "56576691",
+              "retailer": "Hipercor",
+              "title": "cabreiroa natural mineral water bottle 75 cl with stopper Sport",
+              "url": "https://www.hipercor.es/supermercado/0110118630601401-cabreiroa-agua-mineral-natural-botella-75-cl-con-tapon-sport/"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              750.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "4015732003539",
+      "gtin2": "4015732006370",
+      "score": 0.32,
+      "saved_gate": "hard_no",
+      "pattern": "Matching names can hide a real packaging distinction",
+      "evidence": "SpreeQuell natural mineral water 1l versus natural 1l: descriptions align, but attributes explicitly declare plastic versus glass. The rejection is source-supported; JEV 0.32 does not justify removing the material veto.",
+      "records": [
+        {
+          "gtin": "4015732003539",
+          "original_listings": [
+            {
+              "attributes": "Naturally derived: natural; Pack Type: Bottle; Caffeine: 0-15 mg; Pack Material Type: Plastic; Juice Content: 0-2%; Volume: 1000; Geographic Origin: germany; Water Type: mineral; Carbonization: still",
+              "barcode": "4015732003539",
+              "brand": "SpreeQuell",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" water\"\"]",
+              "country": "Germany",
+              "description": "nutritional values average nutritional values unprepared per 1 l Calcium17.0 mg magnesium3.3 mg potassium1.7 mg Chlor5.1 mg sodium6.2 mg sulfate 4+ 56.9 mg Bikarbonat13.2 mg hints sourcename: spreeque",
+              "image_url": "https://img.rewe-static.de/7279236/29000123_digital-image.png",
+              "price": "0.59",
+              "product_id": "154238130",
+              "retailer": "Rewe",
+              "title": "spreequell mineral water natural 1l",
+              "url": "https://shop.rewe.de/p/spreequell-mineralwasser-naturell-1l/7279236"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "plastic"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "4015732006370",
+          "original_listings": [
+            {
+              "attributes": "Juice Content: 0-2%; Volume: 1000; Carbonization: still; Pack Material Type: Glass; Geographic Origin: germany; Pack Type: Bottle; Naturally derived: natural; Caffeine: 0-15 mg",
+              "barcode": "4015732006370",
+              "brand": "SpreeQuell",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" water\"\"]",
+              "country": "Germany",
+              "description": "nutritional values average nutritional values unprepared per 1 l Calcium17.0 mg magnesium3.3 mg potassium1.7 mg Chlor5.1 mg sodium6.2 mg sulfate 4+ 56.9 mg Bikarbonat13.2 mg hints sourcename: spreeque",
+              "image_url": "https://img.rewe-static.de/2783747/26008980_digital-image.png",
+              "price": "0.79",
+              "product_id": "162627248",
+              "retailer": "Rewe",
+              "title": "spreequell natural 1l",
+              "url": "https://shop.rewe.de/p/spreequell-naturell-1l/2783747"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [
+              "glass"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "852789008445",
+      "gtin2": "852789008452",
+      "score": 0.12,
+      "saved_gate": "proceed",
+      "pattern": "Conflicting packaging within a canonical record",
+      "evidence": "Matching-looking ZenWTR 6 x 1l listings receive JEV 0.12. One canonical includes bottle/plastic listings and a pouch/flexible-pack listing under the same GTIN. This is unresolved source evidence; the low score alone does not prove different water products.",
+      "records": [
+        {
+          "gtin": "852789008445",
+          "original_listings": [
+            {
+              "attributes": "Contains Minerals: calcium, magnesium; Pack Material Type: Plastic; Carbonization: still; Juice Content: 0-2%; Pack Type: Bottle; Volume: 1000; Sustainable Packaging: from recycled materials; Water Type: distilled, alkaline",
+              "barcode": "852789008445",
+              "brand": "ZenWTR",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" Beverages\"\",\"\" Water\"\",\"\" Spring Water\"\"]",
+              "country": "USA",
+              "description": "ZenWTR Alkaline Water is a premium 9.5 pH vapor distilled water that is the only beverage in the world that is certifed plastic negative and in bottles made from Recycled Ocean- Bound Plastic. Togethe",
+              "image_url": "https://hl-grocery-prod-master.imgix.net/products/e0431416b223618b1b2c0af9f4b88644f684e072?fm=jpg&trim=auto&trim-md=0&fit=fill&fill=solid&w=512&h=512&pad=13",
+              "price": "8.99",
+              "product_id": "531534689",
+              "retailer": "Giant Eagle",
+              "title": "Zenwtr 100% Recycled, Vapor Distilled Alkaline Water, 6 Pack, 33.8 Oz Each",
+              "url": "https://shop.gianteagle.com/parkway-center/search/product/00852789008445"
+            },
+            {
+              "attributes": "Juice Content: 0-2%; Pack Material Type: Plastic; Water Type: distilled; Volume: 1000; Contains Minerals: calcium, magnesium; Carbonization: still; Pack Type: Bottle",
+              "barcode": "852789008445",
+              "brand": "ZenWTR",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" Grocery\"\",\"\" Beverages\"\",\"\" Water\"\"]",
+              "country": "USA",
+              "description": "ZENWTR 33.8 OZ 6PK",
+              "image_url": "https://www.meijer.com/content/dam/meijer/product/0852/78/9008/44/0852789008445_0_A1C1_1200.png",
+              "price": "10.99",
+              "product_id": "635464212",
+              "retailer": "meijer",
+              "title": "ZENWTR 33.8 OZ 6PK 1 LITER",
+              "url": "https://www.meijer.com/shopping/product/-/85278900844.html"
+            },
+            {
+              "attributes": "Volume: 1000; Water Type: distilled; Sustainable Packaging: from recycled materials, can be recycled; Pack Type: Pouch; Pack Material Type: Flexible Pack; Juice Content: 0-2%; Contains Minerals: calcium, magnesium",
+              "barcode": "852789008445",
+              "brand": "ZenWTR",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\" Beverages\"\",\"\" Water & Sparkling Water\"\",\"\" Still Water\"\"]",
+              "country": "USA",
+              "description": "Alkaline Water, 9.5 pH \n9.5 pH ( Approximately 9.5 pH). Alkaline. Crisp, ultra-pure, vapor distilled water. NYSHD Cert. No.623. zenwtr.com. (at)drinkzenwtr. For water quality & info: zenwtr.com; 833-3",
+              "image_url": "https://images.albertsons-media.com/is/image/ABS/970490030",
+              "price": "12.99",
+              "product_id": "810524890",
+              "retailer": "safeway",
+              "title": "Zenwtr Alkaline Water - 6-33.8 Oz",
+              "url": "https://www.safeway.com/shop/product-details.970490030.html"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [
+              6
+            ],
+            "package_type_set": [
+              "bottle",
+              "pouch"
+            ],
+            "package_material_set": [
+              "flexible pack",
+              "plastic"
+            ],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        },
+        {
+          "gtin": "852789008452",
+          "original_listings": [
+            {
+              "attributes": "Pack Type: Bottle; Juice Content: 0-2%; Volume: 1000; Environmentally Friendly: environmentally friendly; Sports Ingredients: electrolytes; Sustainable Packaging: from recycled materials; Water Type: drinking; Contains Minerals: calcium, magnesium; Caffeine: 0-15 mg; Health Claims: good source of calcium, good source of minerals, good source of potassium, hydrating; Carbonization: still",
+              "barcode": "852789008452",
+              "brand": "ZenWTR",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Drinking Water\"\"]",
+              "country": "USA",
+              "description": "Brand ZEN WTR \nVariety Mineral \nFlavor Water \nItem Volume 33.8 Fluid Ounces \nUnit Count 202.80 Fl Oz \n* * *\n# About this item \n* THE ULTIMATE IN PURITY: ZenWTR undergoes a multi-step process that resu",
+              "image_url": "https://m.media-amazon.com/images/I/71eLOzdWTjL._AC_UL320_.jpg",
+              "price": "17.99",
+              "product_id": "922283795",
+              "retailer": "amazon",
+              "title": "ZenWTR Ultra- Pure, Vapor Distilled Water, 1 Liter ( Pack of 6) Bottled Water, 9.5 pH Alkaline Water with Electrolytes for a Crisp, Refreshing Taste",
+              "url": "https://www.amazon.com/dp/B0D17NWXVX"
+            }
+          ],
+          "stored_features": {
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              1000.0
+            ],
+            "pack_set": [
+              6
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "package_material_set": [],
+            "organic_set": [],
+            "attribute_consistency_flags": []
+          }
+        }
+      ]
+    }
+  ],
+  "systematic_flags": {
+    "counts": {
+      "record_has_multiple_package_materials": 26,
+      "record_has_multiple_package_formats": 10,
+      "one_sided_organic_declaration": 8,
+      "low_score_approved_pairs_sharing_long_identical_title": 6,
+      "different_populated_product_types": 6
+    },
+    "examples": {
+      "record_has_multiple_package_materials": [
+        [
+          "6415130086079",
+          "6415130086093"
+        ],
+        [
+          "7313619001362",
+          "7313619002161"
+        ],
+        [
+          "3289196040503",
+          "3289196100665"
+        ],
+        [
+          "3124480185228",
+          "8414100364047"
+        ],
+        [
+          "3760186970067",
+          "3760186970562"
+        ],
+        [
+          "7613312094464",
+          "9120106640014"
+        ],
+        [
+          "7611612401173",
+          "7611612404488"
+        ],
+        [
+          "637910229575",
+          "637910729006"
+        ],
+        [
+          "810132090851",
+          "810132090905"
+        ],
+        [
+          "7350068172687",
+          "7350068177071"
+        ],
+        [
+          "7310401007939",
+          "7310401041339"
+        ],
+        [
+          "7350021420480",
+          "7350021424273"
+        ],
+        [
+          "4740042700037",
+          "4740042700846"
+        ],
+        [
+          "852789008445",
+          "852789008452"
+        ],
+        [
+          "6415130086086",
+          "6415130086093"
+        ],
+        [
+          "7310401007939",
+          "7310401051376"
+        ],
+        [
+          "7310401048628",
+          "7310401052465"
+        ],
+        [
+          "7310401001661",
+          "7310401041339"
+        ],
+        [
+          "8693354005696",
+          "8693354007041"
+        ],
+        [
+          "7310070000149",
+          "7310070008701"
+        ],
+        [
+          "4770301232955",
+          "4770301237462"
+        ],
+        [
+          "7070841003037",
+          "7070841003549"
+        ],
+        [
+          "876063811910",
+          "876063811927"
+        ],
+        [
+          "6415130086062",
+          "6415130086093"
+        ],
+        [
+          "7310070000057",
+          "7310070002488"
+        ],
+        [
+          "7611612513920",
+          "7611612515269"
+        ]
+      ],
+      "record_has_multiple_package_formats": [
+        [
+          "6408430061891",
+          "6408430670185"
+        ],
+        [
+          "8437007759273",
+          "8437007759433"
+        ],
+        [
+          "7610900016259",
+          "7610900205165"
+        ],
+        [
+          "7310070004802",
+          "7310070005014"
+        ],
+        [
+          "7610900237654",
+          "7610900251759"
+        ],
+        [
+          "852789008445",
+          "852789008452"
+        ],
+        [
+          "721867271111",
+          "721867277267"
+        ],
+        [
+          "721866639073",
+          "721867271128"
+        ],
+        [
+          "6415712508944",
+          "6438574025909"
+        ],
+        [
+          "6419806044554",
+          "6419806053631"
+        ]
+      ],
+      "one_sided_organic_declaration": [
+        [
+          "6415130073222",
+          "6415131402328"
+        ],
+        [
+          "3760069963322",
+          "3760190652102"
+        ],
+        [
+          "8009490000196",
+          "8009490001421"
+        ],
+        [
+          "3274936041117",
+          "3274936042206"
+        ],
+        [
+          "6410270005591",
+          "6410270010267"
+        ],
+        [
+          "8003160128593",
+          "8003170057739"
+        ],
+        [
+          "4018852031093",
+          "4018852032755"
+        ],
+        [
+          "3804078263162",
+          "812427011251"
+        ]
+      ],
+      "identical_title_low_score": [
+        [
+          "8722200954250",
+          "8722200963047"
+        ],
+        [
+          "8722200954274",
+          "8722200963078"
+        ],
+        [
+          "5410233710082",
+          "5410233712871"
+        ],
+        [
+          "8722200954236",
+          "8722200954373"
+        ],
+        [
+          "8722200954236",
+          "8722200963023"
+        ],
+        [
+          "8722200962835",
+          "8722200964891"
+        ]
+      ],
+      "different_populated_product_types": [
+        [
+          "8713300048659",
+          "8720157463863"
+        ],
+        [
+          "8713300079653",
+          "8720157463863"
+        ],
+        [
+          "4260183210122",
+          "4260183212072"
+        ],
+        [
+          "4018852031093",
+          "4018852032755"
+        ],
+        [
+          "8722200962835",
+          "8722200964891"
+        ],
+        [
+          "7611612404365",
+          "7611612516167"
+        ]
+      ]
+    },
+    "meaning": "Flags among 175 approvals in offline fresh-feature replay; diagnostic, not verified errors. Stored features used for structural flags."
+  },
+  "description_provenance": {
+    "saved_listings": 2975,
+    "nonempty_descriptions": 2557,
+    "descriptions_exactly_200_chars": 1351,
+    "descriptions_190_to_210_chars": 1741,
+    "longest_saved_description_chars": 235,
+    "mapped_source_field": "description_short_eng",
+    "interpretation": "Payloads preserve full saved fields, not full retailer-page descriptions. Raw field name and length clustering indicate upstream shortening; no extra truncation in round-7 sampler."
+  },
+  "limitations": "Source-based diagnostic inspection of saved results, not externally verified ground truth. No new API calls or additional policy changes. Case selection is not a population sample."
+}

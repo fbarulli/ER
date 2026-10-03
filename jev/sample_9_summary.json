@@ -1,0 +1,15 @@
+{
+  "strategy": "stratified repeat of prior round-8 pairs",
+  "calls": 50,
+  "unique_pairs": 50,
+  "allocations": {
+    "positive_different": 20,
+    "positive_uncertain": 10,
+    "positive_same": 10,
+    "old_negative": 10
+  },
+  "seed": 950,
+  "sample_sha256": "e477b4699559fe77b7bd139942ffd9ea7c0d13622464b81c6ed4aeceaf27a65e",
+  "input_states_sha256": "b17db22fb891a94bbde81d553163f92e651310aa28bf8f47e85000874b38a2e4",
+  "interpretation": "Diagnostic repeat, not a population accuracy estimate. Same model inputs and order as the prior call; gates are evaluated offline separately."
+}

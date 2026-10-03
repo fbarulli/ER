@@ -1,0 +1,2041 @@
+{
+  "selection": "16 deliberately chosen high-similarity surviving approvals, covering ten low, three intermediate, and three high scores; not a random or prevalence sample.",
+  "pairs": [
+    {
+      "gtin1": "3272030008234",
+      "gtin2": "3272036007460",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.04,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:24.116957+00:00",
+      "request_sha256": "05b98771513bba3facb28f602e93a5cf84b26bc17ac0ad56278cd22d02524ec0",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.04
+          }
+        },
+        "usage": {
+          "input_tokens": 1923,
+          "output_tokens": 22,
+          "cost": 8.0766e-05
+        },
+        "id": "gen-dec-1790976623-izB5ilE38n5HIx6yGEFC",
+        "provider": "TypeSafe"
+      },
+      "finding": "Clear declared variant difference",
+      "evidence": "Anise syrup versus exotic-fruit syrup. Both canonical flavor sets collapse to fruit; title-specific anise/exotic differences remain outside the comparison.",
+      "records": [
+        {
+          "gtin": "3272030008234",
+          "listings": [
+            {
+              "attributes": "Pack Material Type: Glass; Caffeine: 15-25 mg; Pack Type: Bottle; Naturally derived: natural flavours; Volume: 700; Sweetener: sugar",
+              "barcode": "3272030008234",
+              "brand": "Moulin de Valdonne",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" drinks\"\",\"\" colas, iced teas, syrups and sodas\"\",\"\" syrups and concentrates\"\",\"\" syrups\"\"]",
+              "country": "France",
+              "description": "\"\" Preferably keep cool after opening \nTo be consumed preferably before end : see on the cap true consumer service : Nathalie knight - knight@teisseire.fr 482 av. Ambroise croizat - cs 70501 - 38926 cr",
+              "image_url": "https://www.carrefour.fr/media/1500x1500/Photosite/PGC/BOISSONS/3272030008234_PHOTOSITE_20190913_052534_0.jpg?placeholder=1",
+              "price": "3.69",
+              "product_id": "92246060",
+              "retailer": "Carrefour",
+              "title": "syrup' anise mill of valdonne",
+              "url": "https://www.carrefour.fr/p/sirop-anis-moulin-de-valdonne-3272030008234"
+            },
+            {
+              "attributes": "Volume: 700; Sweetener: sugar; Pack Type: Bottle; Free From: no alcohol; Naturally derived: natural fragrances, natural flavours; Caffeine: 15-25 mg",
+              "barcode": "3272030008234",
+              "brand": "Moulin de Valdonne",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" waters, juice, soda, alcohol-free drinks\"\",\"\" teas, fruit drinks, syrups\"\",\"\" syrups, concentrates\"\",\"\"peaches and other perfumes\"\"]",
+              "country": "France",
+              "description": "## characteristics \n##### lot \nNon \n##### legal name of sale \nsyrup anise \n### useful information \nspecial storage conditions Preferably keep cool after ouvertureA preferably before end : see on the c",
+              "image_url": "https://cdn.auchan.fr/media/A0219900101000053679PRIMARY_2048x2048/B2CD/?format=rw&quality=75&width=1200&height=1200",
+              "price": "4.35",
+              "product_id": "771055652",
+              "retailer": "Auchan",
+              "title": "syrup anise glass bottle",
+              "url": "https://www.auchan.fr/moulin-de-valdonne-sirop-d-anis-bouteille-verre/pr-C1222436"
+            }
+          ],
+          "processed": {
+            "canonical": "moulin de valdonne fruit juice sugar syrup_anise",
+            "mode_brand": "Moulin de Valdonne",
+            "mode_type": "juice",
+            "flavor_set": [
+              "fruit"
+            ],
+            "volume_set": [
+              700.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [],
+            "pulp_set": [],
+            "sweetener_set": [
+              "sugar"
+            ]
+          }
+        },
+        {
+          "gtin": "3272036007460",
+          "listings": [
+            {
+              "attributes": "Sweetener: sugar; Caffeine: 15-25 mg; Volume: 700; Pack Type: Bottle; Naturally derived: natural flavours; Pack Material Type: Glass",
+              "barcode": "3272036007460",
+              "brand": "Moulin de Valdonne",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" drinks\"\",\"\" colas, iced teas, syrups and sodas\"\",\"\" syrups and concentrates\"\",\"\" syrups\"\"]",
+              "country": "France",
+              "description": "\"\"Preferably keep cool after opening. \nTo be consumed preferably before end : see on the cap.\"\" \ntrue consumer service : Nathalie knight - knight@teisseire.fr 482 av. Ambroise croizat - cs 70501 - 38926",
+              "image_url": "https://www.carrefour.fr/media/1500x1500/Photosite/PGC/BOISSONS/3272036007460_PHOTOSITE_20190704_045152_0.jpg?placeholder=1",
+              "price": "4.19",
+              "product_id": "173908443",
+              "retailer": "Carrefour",
+              "title": "syrup trip exotic mill of valdonne",
+              "url": "https://www.carrefour.fr/p/sirop-voyage-exotique-moulin-de-valdonne-3272036007460"
+            },
+            {
+              "attributes": "Volume: 700; Sweetener: sugar; Naturally derived: natural flavours, natural fragrances; Pack Type: Bottle; Free From: no alcohol; Juice Content: 10-15%; Caffeine: 15-25 mg; Sustainable Packaging: can be recycled",
+              "barcode": "3272036007460",
+              "brand": "Moulin de Valdonne",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" waters, juice, soda, alcohol-free drinks\"\",\"\" teas, fruit drinks, syrups\"\",\"\" syrups, concentrates\"\",\"\"peaches and other perfumes\"\"]",
+              "country": "France",
+              "description": "## characteristics \n##### lot \nNon \n### Marketing \nproduct advantages unique know-how: the recipes syrups mill of valdonne are authentic and tasty, made in respect of a french know-how uniquePOUR all",
+              "image_url": "https://cdn.auchan.fr/media/A0220180216000749974PRIMARY_2048x2048/B2CD/?format=rw&quality=75&width=1200&height=1200",
+              "product_id": "936081897",
+              "retailer": "Auchan",
+              "title": "syrup with exotic fruits glass bottle",
+              "url": "https://www.auchan.fr/moulin-de-valdonne-sirop-aux-fruits-exotiques-bouteille-verre/pr-C1211419"
+            }
+          ],
+          "processed": {
+            "canonical": "moulin de valdonne fruit juice sugar syrup_trip_exotic_mill",
+            "mode_brand": "Moulin de Valdonne",
+            "mode_type": "juice",
+            "flavor_set": [
+              "fruit"
+            ],
+            "volume_set": [
+              700.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [],
+            "pulp_set": [],
+            "sweetener_set": [
+              "sugar"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "3274490970274",
+      "gtin2": "3274490970281",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.02,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:28.567055+00:00",
+      "request_sha256": "cedf41a02c1ac03d6c9d6f97813147ae96f469d11efa090209f587d7ede0fbe8",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.02
+          }
+        },
+        "usage": {
+          "input_tokens": 1156,
+          "output_tokens": 22,
+          "cost": 4.8552e-05
+        },
+        "id": "gen-dec-1790976627-JA3ciNttVhroUxmsFnTS",
+        "provider": "TypeSafe"
+      },
+      "finding": "Clear declared flavor difference",
+      "evidence": "Cassis/blackcurrant versus anise. Descriptions name blackcurrant concentrate versus natural anise flavor, yet both canonical flavor sets are empty.",
+      "records": [
+        {
+          "gtin": "3274490970274",
+          "listings": [
+            {
+              "attributes": "Pack Type: Bottle; Sweetener: cane sugar; Pack Material Type: Glass; Naturally derived: natural flavours; Volume: 500; Sustainable Sourcing: organic",
+              "barcode": "3274490970274",
+              "brand": "Meneau",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" drinks\"\",\"\" colas, iced teas and soft drinks\"\",\"\" syrups and concentrates\"\",\"\" syrups\"\"]",
+              "country": "France",
+              "description": "True ; \n[ingredients_start]\nbrown cane sugar d' south america**, eau, concentrated juices fruits* 16% (12% blackcurrant*, 4% of lemon*), natural blackcurrant flavor*\n[ingredients_end]\n\n*ingredients fr",
+              "image_url": "https://www.carrefour.frhttps://media.carrefour.fr/medias/cb5ba4ff7af23356916e4a9eb8244ac1/p_540x540/6639be0bc8fb4c2cbf7eb80a907d91b0-image.jpg",
+              "price": "9.1",
+              "product_id": "344490929",
+              "retailer": "Carrefour",
+              "title": "syrup pure cane Cassis 50cl - mullion mullion house",
+              "url": "https://www.carrefour.fr/p/sirop-pur-canne-cassis-50cl-meneau-3274490970274"
+            }
+          ],
+          "processed": {
+            "canonical": "meneau syrup_pure_cane_cassis mullion_house_type_sweetener sugar",
+            "mode_brand": "Meneau",
+            "mode_type": "",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "3274490970281",
+          "listings": [
+            {
+              "attributes": "Sustainable Sourcing: organic; Pack Type: Bottle; Naturally derived: natural flavours; Juice Content: 0-2%; Volume: 500; Sweetener: cane sugar; Pack Material Type: Glass",
+              "barcode": "3274490970281",
+              "brand": "Meneau",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" alcohol-free drinks\"\",\"\" syrups and drinks concentrated\"\",\"\" syrups\"\"]",
+              "country": "France",
+              "description": "True ; \n[ingredients_start]\nbrown cane sugar d' south america**, eau, natural flavor anise*\n[ingredients_end]\n\n*ingredients from organic farming",
+              "image_url": "https://www.carrefour.frhttps://media.carrefour.fr/medias/9d4f2179ccab353cbb5ef215385d7aae/p_540x540/85738755bc8a48f58e05d2464b044da7-image.jpg",
+              "price": "9.09",
+              "product_id": "339447387",
+              "retailer": "Carrefour",
+              "title": "syrup pure cane anise 50cl - mullion mullion house",
+              "url": "https://www.carrefour.fr/p/sirop-pur-canne-anis-50cl-meneau-3274490970281"
+            }
+          ],
+          "processed": {
+            "canonical": "meneau syrup_pure_cane_anise sugar",
+            "mode_brand": "Meneau",
+            "mode_type": "",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "3292481350010",
+      "gtin2": "3292482350026",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.05,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:27.869222+00:00",
+      "request_sha256": "cde421e9ec452623e82337b2ae44cf350ba6d1c27314303c6bf885b93b7f595e",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.05
+          }
+        },
+        "usage": {
+          "input_tokens": 2162,
+          "output_tokens": 22,
+          "cost": 9.0804e-05
+        },
+        "id": "gen-dec-1790976627-9s4k5zTyNLFUA5f6q1sK",
+        "provider": "TypeSafe"
+      },
+      "finding": "Confirmed category contamination",
+      "evidence": "Lemon-lime versus lemon-only lemonade. Removing category inputs changes the lemon-only source flavor sets to lemon alone; categories introduce lime, and sometimes berry/fruit. The merged sets become identical.",
+      "records": [
+        {
+          "gtin": "3292481350010",
+          "listings": [
+            {
+              "attributes": "Sweetener: sugar; Naturally derived: natural; Volume: 750; Pack Type: Bottle; Carbonization: carbonated; Pack Material Type: Glass; Juice Content: 0-2%; Flavour: lemon, lime",
+              "barcode": "3292481350010",
+              "brand": "Rieme",
+              "category": "Lemonade/Lime",
+              "category_path": "[\"\" all supplies\"\",\"\" drink\"\",\"\"soda\"\",\"\" small\"\"]",
+              "country": "Sweden",
+              "image_url": "https://assets.axfood.se/image/upload/f_auto,t_200/03292481350010_C1N1_s01",
+              "price": "45.95",
+              "product_id": "426887114",
+              "retailer": "Hemköp",
+              "title": "Lemon / lime lemonade glass",
+              "url": "https://www.hemkop.se/produkt/L-101340715_ST"
+            },
+            {
+              "attributes": "Juice Content: 0-2%; Flavour: lemon, lime; Volume: 750; Carbonization: carbonated, sparkling; Pack Material Type: Glass; Sweetener: sugar; Naturally derived: natural",
+              "barcode": "3292481350010",
+              "brand": "Rieme",
+              "category": "Lemonade/Lime",
+              "category_path": "[\"\" beverages\"\",\"\" fruit & berry drinks\"\"]",
+              "country": "Sweden",
+              "description": "sparkling and refreshing Lemon Lime Lemonade with unchanged prescription in almost one century from Maison Rieme. only with clean additives.\nstored standing on a cool and dry place,\navoid direct sunli",
+              "image_url": "https://d1hr6nb56yyl1.cloudfront.net/product-images/125028-560.jpg",
+              "price": "45.5",
+              "product_id": "431048199",
+              "retailer": "mat.se",
+              "title": "Lemon / lime lemonade glass",
+              "url": "https://www.mat.se/butik/lemonad-traditional-lemon-lime-75cl"
+            },
+            {
+              "attributes": "Sweetener: sugar; Flavour: lemon, lime; Volume: 750; Carbonization: carbonated, sparkling; Juice Content: 0-2%; Naturally derived: natural flavours, natural",
+              "barcode": "3292481350010",
+              "brand": "Rieme",
+              "category": "Lemonade/Lime",
+              "category_path": "[\"\" drink\"\",\"\" lask\"\",\"\" lemon & limesmak\"\"]",
+              "country": "Sweden",
+              "description": "sparkling and refreshing Lemon Lime Lemonade with unchanged prescription in almost one century from Maison Rieme. only with clean additives.\nstorage \nstored for a maximum of 25 hours °C",
+              "image_url": "http://res.cloudinary.com/coopsverige/image/upload/v1614957045/423972.tiff",
+              "price": "49.95",
+              "product_id": "571460501",
+              "retailer": "Coop",
+              "title": "Lemon Lime Lemonade",
+              "url": "https://www.coop.se/handla/varor/-3292481350010"
+            }
+          ],
+          "processed": {
+            "canonical": "rieme lemon lemonade carbonated sugar berry fruit lime glass",
+            "mode_brand": "Rieme",
+            "mode_type": "lemonade",
+            "flavor_set": [
+              "berry",
+              "fruit",
+              "lemon",
+              "lime"
+            ],
+            "volume_set": [
+              750.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "pulp_set": [],
+            "sweetener_set": [
+              "sugar"
+            ]
+          }
+        },
+        {
+          "gtin": "3292482350026",
+          "listings": [
+            {
+              "attributes": "Pack Material Type: Glass; Volume: 750; Carbonization: carbonated, sparkling; Sweetener: sugar; Juice Content: 0-2%; Immune Support Ingredients: vitamin c, antioxidants; Flavour: lemon; Pack Type: Bottle; Naturally derived: natural flavours",
+              "barcode": "3292482350026",
+              "brand": "Rieme",
+              "category": "Lemonade/Lime",
+              "category_path": "[\"\" all supplies\"\",\"\" drink\"\",\"\"soda\"\",\"\"soda small\"\"]",
+              "country": "Sweden",
+              "description": "sparkling and refreshing lemon Lemonade with unchanged prescription in almost one century from Maison Rieme. only with clean additives.",
+              "image_url": "https://assets.axfood.se/image/upload/f_auto,t_500/03292482350026_C1N1_s01",
+              "price": "45.95",
+              "product_id": "426942104",
+              "retailer": "Hemköp",
+              "title": "Lemon lemonade glass",
+              "url": "https://www.hemkop.se/produkt/L-101339937_ST"
+            },
+            {
+              "attributes": "Sweetener: sugar; Pack Type: Bottle; Pack Material Type: Glass; Volume: 750; Immune Support Ingredients: vitamin c, antioxidants; Juice Content: 0-2%; Naturally derived: natural flavours; Flavour: lemon; Carbonization: carbonated, sparkling",
+              "barcode": "3292482350026",
+              "brand": "Rieme",
+              "category": "Lemonade/Lime",
+              "category_path": "[\"\" beverages\"\",\"\" fruit & berry drinks\"\"]",
+              "country": "Sweden",
+              "description": "sparkling and refreshing lemon Lemonade with unchanged prescription in almost one century from Maison Rieme. only with clean additives.\nstored standing on a cool and dry place,\navoid direct sunlight.",
+              "image_url": "https://d1hr6nb56yyl1.cloudfront.net/product-images/125026-560.jpg",
+              "price": "45.5",
+              "product_id": "431159322",
+              "retailer": "mat.se",
+              "title": "Lemon lemonade glass",
+              "url": "https://www.mat.se/butik/lemonad-lemon-75cl"
+            },
+            {
+              "attributes": "Carbonization: carbonated, sparkling; Immune Support Ingredients: vitamin c, antioxidants; Volume: 750; Naturally derived: natural flavours; Juice Content: 0-2%; Sweetener: sugar; Flavour: lemon; Pack Type: Bottle",
+              "barcode": "3292482350026",
+              "brand": "Rieme",
+              "category": "Lemonade/Lime",
+              "category_path": "[\"\" drink\"\",\"\" lask\"\",\"\" lemon & limesmak\"\"]",
+              "country": "Sweden",
+              "description": "sparkling and refreshing lemon Lemonade with unchanged prescription in almost one century from Maison Rieme. only with clean additives.",
+              "image_url": "http://res.cloudinary.com/coopsverige/image/upload/v1614957047/423973.tiff",
+              "price": "49.95",
+              "product_id": "571724308",
+              "retailer": "Coop",
+              "title": "lemon Lemonade",
+              "url": "https://www.coop.se/handla/varor/-3292482350026"
+            }
+          ],
+          "processed": {
+            "canonical": "rieme lemon lemonade carbonated sugar berry fruit lime glass",
+            "mode_brand": "Rieme",
+            "mode_type": "lemonade",
+            "flavor_set": [
+              "berry",
+              "fruit",
+              "lemon",
+              "lime"
+            ],
+            "volume_set": [
+              750.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "pulp_set": [],
+            "sweetener_set": [
+              "sugar"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "3361730001253",
+      "gtin2": "3361730001352",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.07,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:25.725980+00:00",
+      "request_sha256": "d8d4d7246b455fb9e24892cb6e5ee8c8af6012ea2f19c0fa5bb13cc5ee0d7c25",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.07
+          }
+        },
+        "usage": {
+          "input_tokens": 1073,
+          "output_tokens": 22,
+          "cost": 4.5066e-05
+        },
+        "id": "gen-dec-1790976625-zyTPfLjwyjaoFRWqG36M",
+        "provider": "TypeSafe"
+      },
+      "finding": "Clear carbonation-strength difference",
+      "evidence": "Lightly sparkling versus strongly sparkling 6 x 500ml water. Both carbonation sets contain only carbonated; strength disappears from structured comparison.",
+      "records": [
+        {
+          "gtin": "3361730001253",
+          "listings": [
+            {
+              "attributes": "Volume: 500; Caffeine: 15-25 mg; Naturally derived: natural; Carbonization: carbonated, sparkling; Pack Material Type: Flexible Pack; Contains Minerals: calcium, magnesium; Water Type: volcanic; Juice Content: 0-2%",
+              "barcode": "3361730001253",
+              "brand": "Celtic",
+              "category": "Carbonated Bottled Water",
+              "category_path": "[\"\" drinks\"\",\"\" waters\"\"]",
+              "country": "France",
+              "description": "Pack sparkling water slight 6x0.5l \nCeltic is a « natural mineral water » approved by the ministry of health because of its therapeutic virtues and stay one of the very rare sources independent and fa",
+              "image_url": "https://media.naturalia.fr/media/catalog/product/cache/c97961dbe2ef8ae9072b778469b58f9a/3/3/3361730001253.1-0000.jpg",
+              "price": "4",
+              "product_id": "856449",
+              "retailer": "Naturalia",
+              "title": "Pack sparkling water slight 6x0.5l",
+              "url": "https://www.naturalia.fr/produit/celtic-legere-0-5lx6"
+            }
+          ],
+          "processed": {
+            "canonical": "celtic water carbonated slight_6x0._volume_caffeine",
+            "mode_brand": "Celtic",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [
+              6
+            ],
+            "package_type_set": [],
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "3361730001352",
+          "listings": [
+            {
+              "attributes": "Carbonization: sparkling; Pack Material Type: Flexible Pack; Contains Minerals: calcium, magnesium; Naturally derived: natural; Volume: 500; Juice Content: 0-2%; Caffeine: 0-15 mg; Water Type: mineral",
+              "barcode": "3361730001352",
+              "brand": "Celtic",
+              "category": "Carbonated Bottled Water",
+              "category_path": "[\"\" drinks\"\",\"\" waters\"\"]",
+              "country": "France",
+              "description": "mineral water sparkling strong 6x0.5l. \nvery weakly mineralized, poor in sodium, from the natural park vosges north. \nSource independent and family. \nto make your eau \"\"alive\"\", a drop fresh lemon can h",
+              "image_url": "https://media.naturalia.fr/media/catalog/product/cache/c97961dbe2ef8ae9072b778469b58f9a/3/3/3361730001352.1-0000.jpg",
+              "price": "4",
+              "product_id": "21289823",
+              "retailer": "Naturalia",
+              "title": "Pack mineral water sparkling strong 6x0.5l",
+              "url": "https://www.naturalia.fr/produit/celtic-forte-0-50lx6"
+            }
+          ],
+          "processed": {
+            "canonical": "celtic water carbonated strong_6x0.",
+            "mode_brand": "Celtic",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [
+              6
+            ],
+            "package_type_set": [],
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "4004191908448",
+      "gtin2": "4004191908806",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.13,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:23.161625+00:00",
+      "request_sha256": "495609515f26ae5a7bb49cdc1ba04d75e2edda28639b48e06bf8b519d839c61f",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.13
+          }
+        },
+        "usage": {
+          "input_tokens": 993,
+          "output_tokens": 22,
+          "cost": 4.1706e-05
+        },
+        "id": "gen-dec-1790976622-ySQQfBbeUxDRuh3G9uMR",
+        "provider": "TypeSafe"
+      },
+      "finding": "Distinct named formulation; likely different",
+      "evidence": "Immune Strong versus Morgenstark. Descriptions distinguish zinc/vitamin C formulation from multivitamin juice, while both flavor sets are empty.",
+      "records": [
+        {
+          "gtin": "4004191908448",
+          "listings": [
+            {
+              "attributes": "Juice Content: 100%; Carbonization: still; Contains Minerals: zinc; Volume: 700; Health Claims: good source of vitamins, good source of minerals; Pack Type: Bottle; Juice Features: smoothie; Immune Support Ingredients: vitamin c, zinc",
+              "barcode": "4004191908448",
+              "brand": "Rotbäckchen",
+              "category": "Nectars",
+              "category_path": "[\"\" nutrition & amp; lose weight\"\",\"\" nutrition\"\",\"\" beverages\"\",\"\"juices & amp; Smoothies\"\",\"\" more functional juice\"\"]",
+              "country": "Germany",
+              "description": "multi-fruit juice with zinc and vitamin C - direct juice",
+              "image_url": "https://cdn.shop-apotheke.com/images/mp/prod/5aa6c5f89eb84953b2609d10bee8e07d",
+              "price": "23.94",
+              "product_id": "836152577",
+              "retailer": "Shop Apotheke",
+              "title": "red cheeks immune strong",
+              "url": "https://www.shop-apotheke.com/ernaehrung/upmAY7DCY/rotbaeckchen-immunstark.htm"
+            }
+          ],
+          "processed": {
+            "canonical": "rotb ckchen juice still mineral_zinc_volume_700",
+            "mode_brand": "Rotbäckchen",
+            "mode_type": "juice",
+            "flavor_set": [],
+            "volume_set": [
+              700.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "4004191908806",
+          "listings": [
+            {
+              "attributes": "Pack Type: Bottle; Juice Content: 100%; Juice Features: smoothie; Carbonization: still; Volume: 700",
+              "barcode": "4004191908806",
+              "brand": "Rotbäckchen",
+              "category": "Nectars",
+              "category_path": "[\"\" nutrition & amp; lose weight\"\",\"\" nutrition\"\",\"\" beverages\"\",\"\"juices & amp; Smoothies\"\",\"\" more functional juice\"\"]",
+              "country": "Germany",
+              "description": "Multi- Vitamin- multi-fruit juice - direct juice",
+              "image_url": "https://cdn.shop-apotheke.com/images/mp/prod/4faecf7e51334fec83841a75f7954a0c",
+              "price": "23.94",
+              "product_id": "890854844",
+              "retailer": "Shop Apotheke",
+              "title": "red cheeks Morgenstark",
+              "url": "https://www.shop-apotheke.com/ernaehrung/upmY74CWT/rotbaeckchen-morgenstark.htm"
+            }
+          ],
+          "processed": {
+            "canonical": "rotb ckchen juice still red_cheeks_morgenstark_type",
+            "mode_brand": "Rotbäckchen",
+            "mode_type": "juice",
+            "flavor_set": [],
+            "volume_set": [
+              700.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "4032108138688",
+      "gtin2": "4032108138800",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.07,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:25.925711+00:00",
+      "request_sha256": "b469e7581962589eb3a3393e56eda769499ac776b71c2f6dcc0873651a12196a",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.07
+          }
+        },
+        "usage": {
+          "input_tokens": 1393,
+          "output_tokens": 22,
+          "cost": 5.8506e-05
+        },
+        "id": "gen-dec-1790976625-cINbYIwCa4YAQuaFAFxz",
+        "provider": "TypeSafe"
+      },
+      "finding": "Distinct named herbal variant",
+      "evidence": "Musta versus Khadira herbal drinks, both 500ml. Product-specific names survive in canonical text but neither record has a recognized flavor or product type.",
+      "records": [
+        {
+          "gtin": "4032108138688",
+          "listings": [
+            {
+              "attributes": "Volume: 500; Pack Material Type: Glass; Free From: lactose free, no allergens; Health Claims: ayurvedic; Juice Content: 0-2%; Pack Type: Bottle; Water Type: herbal; Geographic Origin: sri lanka (ceylon); Sustainable Sourcing: fairtrade",
+              "barcode": "4032108138688",
+              "brand": "Cosmoveda",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" food\"\",\"\" Ayurveda\"\",\"\" Tee´s & beverages\"\"]",
+              "country": "Belgium",
+              "description": "the ayus arishta line will based on a traditional procedure of self-fermentation of water, cane molasses and herbs made, as well as all other herbal drinks by cosmoveda. before the Fermentation will t",
+              "image_url": "https://c-va.niceshops.com/upload/image/product/medium/default/cosmoveda-ayus-arishta-musta-500-ml-751612-en.jpg",
+              "price": "15.99",
+              "product_id": "485632708",
+              "retailer": "Vitalabo",
+              "title": "ayus arishta musta - 500 ml",
+              "url": "https://www.vitalabo.be/de-BE/cosmoveda/ayus-arishta-musta?sai=23911"
+            }
+          ],
+          "processed": {
+            "canonical": "cosmoveda ayus_arishta_musta_volume sri_lanka_ceylon_sustainable",
+            "mode_brand": "Cosmoveda",
+            "mode_type": "",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "4032108138800",
+          "listings": [
+            {
+              "attributes": "Volume: 500; Health Claims: ayurvedic; Juice Content: 0-2%; Pack Material Type: Glass; Geographic Origin: sri lanka (ceylon); Pack Type: Bottle; Water Type: herbal",
+              "barcode": "4032108138800",
+              "brand": "Cosmoveda",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" food\"\",\"\" Ayurveda\"\",\"\" Tees & beverages\"\"]",
+              "country": "Germany",
+              "description": "the ayus arishta line will based on a traditional procedure of self-fermentation of water, cane molasses and herbs made, as well as all other herbal drinks by cosmoveda. before the Fermentation will t",
+              "image_url": "https://c-va.niceshops.com/upload/image/product/large/default/ayus-arishta-khadira-751584-de.jpg",
+              "price": "16.03",
+              "product_id": "492688944",
+              "retailer": "Vitalabo",
+              "title": "cosmoveda ayus arishta Khadira, 500 ml",
+              "url": "https://www.vitalabo.de/cosmoveda/ayus-arishta-khadira?sai=23908"
+            },
+            {
+              "attributes": "Pack Material Type: Glass; Geographic Origin: sri lanka (ceylon); Pack Type: Bottle; Volume: 500; Health Claims: ayurvedic; Juice Content: 0-2%; Water Type: herbal",
+              "barcode": "4032108138800",
+              "brand": "Cosmoveda",
+              "category": "Liquid Concentrates",
+              "category_path": "[\"\" food\"\",\"\" Ayurveda\"\",\"\" Tees & beverages\"\"]",
+              "country": "Switzerland",
+              "description": "the ayus arishta line will based on a traditional procedure of self-fermentation of water, cane molasses and herbs made, as well as all other herbal drinks by cosmoveda. before the Fermentation will t",
+              "image_url": "https://c-va.niceshops.com/upload/image/product/large/default/35566_9c0ba73a.jpg",
+              "price": "24.35",
+              "product_id": "651593272",
+              "retailer": "Vitalabo",
+              "title": "cosmoveda ayus arishta Khadira, 500 ml",
+              "url": "https://www.vitalabo.ch/de-CH/cosmoveda/ayus-arishta-khadira?sai=23908"
+            }
+          ],
+          "processed": {
+            "canonical": "cosmoveda glass_geographic_origin_sri ayus_arishta_khadira volume_health_claims_ayurvedic",
+            "mode_brand": "Cosmoveda",
+            "mode_type": "",
+            "flavor_set": [],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "4088600388816",
+      "gtin2": "4088600388823",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.19,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:28.148328+00:00",
+      "request_sha256": "fbc73822de71e552d9738963d8bec115b45ba64049230dc224252b8749cee8e4",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.19
+          }
+        },
+        "usage": {
+          "input_tokens": 1199,
+          "output_tokens": 22,
+          "cost": 5.0358e-05
+        },
+        "id": "gen-dec-1790976627-VIc57yrA4o0hay0sBxEx",
+        "provider": "TypeSafe"
+      },
+      "finding": "Explicit texture difference missed",
+      "evidence": "Smooth orange juice versus orange juice whose description explicitly says With Bits. Both pulp sets are empty despite the description.",
+      "records": [
+        {
+          "gtin": "4088600388816",
+          "listings": [
+            {
+              "attributes": "Volume: 330; Sweetener: sugar; Immune Support Ingredients: vitamin c; Pack Material Type: Plastic; Made From: orange; Juice Content: 100%; Caffeine: 15-25 mg; Juice Features: smoothie, not from concentrate; Flavour: orange; Carbonization: still; Pack Type: Bottle",
+              "barcode": "4088600388816",
+              "brand": "The Juice Company",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" Home\"\",\"\" Drinks\"\",\"\" Soft Drinks & Juices\"\",\"\" Juices\"\"]",
+              "country": "United Kingdom",
+              "description": "## Specifications \n[ingredients_start]\n\nIngredients Orange Juice Not From Concentrate (100%). \n[ingredients_end]\n\nAllergy advice For allergens, see ingredients in bold \nLifestyle Vegetarian \nNet weigh",
+              "image_url": "https://aldprdproductimages.azureedge.net/media/resized\\$Aldi_GB\\02.06.23 (2)\\4088600388816_0_M.jpg",
+              "price": "0.99",
+              "product_id": "496042624",
+              "retailer": "Aldi",
+              "title": "The Juice Company 100% Pure Pressed Smooth Orange Juice 330ml",
+              "url": "https://groceries.aldi.co.uk/en-GB/p-the-juice-company-100-pure-pressed-smooth-orange-juice-330ml/4088600388816"
+            }
+          ],
+          "processed": {
+            "canonical": "the juice company orange still sugar pure_pressed_smooth",
+            "mode_brand": "The Juice Company",
+            "mode_type": "juice",
+            "flavor_set": [
+              "orange"
+            ],
+            "volume_set": [
+              330.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": [
+              "sugar"
+            ]
+          }
+        },
+        {
+          "gtin": "4088600388823",
+          "listings": [
+            {
+              "attributes": "Pack Type: Bottle; Volume: 330; Juice Features: not from concentrate; Juice Content: 100%; Made From: orange; Carbonization: still; Pack Material Type: Plastic; Flavour: orange; Sweetener: sugar; Immune Support Ingredients: vitamin c; Caffeine: 15-25 mg",
+              "barcode": "4088600388823",
+              "brand": "The Juice Company",
+              "category": "Not from Concentrate 100% Juice",
+              "category_path": "[\"\" Home\"\",\"\" Drinks\"\",\"\" Soft Drinks & Juices\"\",\"\" Juices\"\"]",
+              "country": "United Kingdom",
+              "description": "## Specifications \nIngredients Orange Juice Not From Concentrate With Bits (100%). \nLifestyle Vegetarian \nNet weight 330ml \nStorage instructions Keep refrigerated below 5°C. Once opened, keep refriger",
+              "image_url": "https://aldprdproductimages.azureedge.net/media/resized\\$Aldi_GB\\02.06.23 (2)\\4088600388823_0_M.jpg",
+              "price": "0.99",
+              "product_id": "495865866",
+              "retailer": "Aldi",
+              "title": "The Juice Company 100% Pure Pressed Orange Juice 330ml",
+              "url": "https://groceries.aldi.co.uk/en-GB/p-the-juice-company-100-pure-pressed-orange-juice-330ml/4088600388823"
+            }
+          ],
+          "processed": {
+            "canonical": "the juice company orange still sugar pressed_type",
+            "mode_brand": "The Juice Company",
+            "mode_type": "juice",
+            "flavor_set": [
+              "orange"
+            ],
+            "volume_set": [
+              330.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": [
+              "sugar"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "4101130003445",
+      "gtin2": "4101130003544",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.16,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:29.390219+00:00",
+      "request_sha256": "1809a0d32a022217bd53b90df9dff4336e120dca22df965b6d73093da46fb511",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.16
+          }
+        },
+        "usage": {
+          "input_tokens": 1040,
+          "output_tokens": 22,
+          "cost": 4.368e-05
+        },
+        "id": "gen-dec-1790976629-XCNn5I1bubPpJkLLJq9d",
+        "provider": "TypeSafe"
+      },
+      "finding": "Source contradiction; identity requires review",
+      "evidence": "Medium versus Natural mineral water. Titles suggest differing carbonation variants, but captured attributes mark both still; do not infer the exact intended carbonation from names alone.",
+      "records": [
+        {
+          "gtin": "4101130003445",
+          "listings": [
+            {
+              "attributes": "Juice Content: 0-2%; Volume: 1500; Health Claims: good source of minerals; Water Type: mineral; Contains Minerals: magnesium; Pack Material Type: Plastic; Carbonization: still; Geographic Origin: germany; Pack Type: Bottle",
+              "barcode": "4101130003445",
+              "brand": "Rheinfels Quelle",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" water\"\"]",
+              "country": "Germany",
+              "description": "nutritional values average nutritional values unprepared per 1 l calcium0.0017 g magnesium0.00067 g chlorine0.124g potassium0.0048 g bicarbonate0.32 g sodium0.24 g notices sourcename: rheinfels source",
+              "image_url": "https://img.rewe-static.de/0064724/1511050_digital-image.png",
+              "price": "0.79",
+              "product_id": "206578174",
+              "retailer": "Rewe",
+              "title": "rheinfels source mineral water medium 1.5l",
+              "url": "https://shop.rewe.de/p/rheinfels-quelle-medium-1-5l/64724"
+            }
+          ],
+          "processed": {
+            "canonical": "rheinfels quelle water still medium_juice_content_volume",
+            "mode_brand": "Rheinfels Quelle",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              1500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "4101130003544",
+          "listings": [
+            {
+              "attributes": "Contains Minerals: magnesium; Health Claims: good source of minerals; Volume: 1500; Pack Material Type: Plastic; Juice Content: 0-2%; Naturally derived: natural; Geographic Origin: germany; Water Type: mineral; Carbonization: still",
+              "barcode": "4101130003544",
+              "brand": "Rheinfels Quelle",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" water\"\"]",
+              "country": "Germany",
+              "description": "nutritional values average nutritional values unprepared per 1 l calcium0 g magnesium0 g chlorine0.12 g potassium0 g bicarbonate0.32 g sodium0.24 g notices sourcename: rheinfels source. source: Walsum",
+              "image_url": "https://img.rewe-static.de/1962025/29866083_digital-image.png",
+              "product_id": "324088877",
+              "retailer": "Rewe",
+              "title": "rheinfels source mineral water natural 1.5l",
+              "url": "https://shop.rewe.de/p/rheinfels-quelle-mineralwasser-naturelle-1-5l/1962025"
+            }
+          ],
+          "processed": {
+            "canonical": "rheinfels quelle water still source_mineral_volume_material",
+            "mode_brand": "Rheinfels Quelle",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              1500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "4260107220831",
+      "gtin2": "4260107223177",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.02,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:24.335564+00:00",
+      "request_sha256": "a32d1ec102452bfbd2a243df7f7e6311437acd4c454eaac712ba7ebf1c9a0547",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.02
+          }
+        },
+        "usage": {
+          "input_tokens": 1046,
+          "output_tokens": 22,
+          "cost": 4.3932e-05
+        },
+        "id": "gen-dec-1790976624-jWNzC8QzzFhiTJUXlMNQ",
+        "provider": "TypeSafe"
+      },
+      "finding": "Clear product-type difference; confirmed category contamination",
+      "evidence": "Stevia cola versus mate tea. Removing categories removes cola from the mate record. Other Non-Cola Carbonates contributes cola despite the negation. Both canonical mode_type fields are empty.",
+      "records": [
+        {
+          "gtin": "4260107220831",
+          "listings": [
+            {
+              "attributes": "Pack Material Type: Glass; Health Claims: no saturated fats; Volume: 330; Pack Type: Bottle; Juice Content: 0-2%; Sweetener: stevia, sugar; Naturally derived: natural fragrances; Geographic Origin: germany; Carbonization: still",
+              "barcode": "4260107220831",
+              "brand": "Fritz Kola",
+              "category": "Reduced Sugar Cola Carbonates",
+              "category_path": "[\"\" beverages\"\",\"\" Soft Drinks\"\"]",
+              "country": "Germany",
+              "description": "[ingredients_start]\ningredients and allergenic ingredients: water, sugar, carbonic acid, dye ammonium sulfite- caramel, acidifier phosphoric acid, caffeine, sweetener steviol glycosides, natural arom",
+              "image_url": "https://img.rewe-static.de/1291871/25531055_digital-image.png",
+              "price": "0.79",
+              "product_id": "49346975",
+              "retailer": "Rewe",
+              "title": "fritz-kola Stevia 0.33l",
+              "url": "https://shop.rewe.de/p/fritz-kola-stevia-0-33l/1291871"
+            }
+          ],
+          "processed": {
+            "canonical": "fritz kola cola still saturated_fats_volume_type sugar",
+            "mode_brand": "Fritz Kola",
+            "mode_type": "",
+            "flavor_set": [
+              "cola"
+            ],
+            "volume_set": [
+              330.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "4260107223177",
+          "listings": [
+            {
+              "attributes": "Naturally derived: natural fragrances, natural; Pack Material Type: Glass; Water Type: mineral; Health Claims: good source of minerals; Volume: 330; Juice Content: 0-2%; Geographic Origin: germany; Pack Type: Bottle; Sweetener: sugar; Energy Source: yerba mate; Immune Support Ingredients: vitamin c, antioxidants; Carbonization: still",
+              "barcode": "4260107223177",
+              "brand": "Fritz Kola",
+              "category": "Other Non-Cola Carbonates",
+              "category_path": "[\"\" beverages\"\",\"\" Soft Drinks\"\"]",
+              "country": "Germany",
+              "description": "product description ever nen tea shop smoked? we also not. but as let's introduce ourselves the infusion from this aromenfeuer in front. Intensiv-rauchig-teeig. typical Fritz: with 25mg natural caffei",
+              "image_url": "https://img.rewe-static.de/2923520/25531128_digital-image.png",
+              "price": "0.99",
+              "product_id": "49393833",
+              "retailer": "Rewe",
+              "title": "Fritz-mate 0.33l",
+              "url": "https://shop.rewe.de/p/fritz-mate-0-33l/2923520"
+            }
+          ],
+          "processed": {
+            "canonical": "fritz kola cola still sugar origin_germany_type_sweetener",
+            "mode_brand": "Fritz Kola",
+            "mode_type": "",
+            "flavor_set": [
+              "cola"
+            ],
+            "volume_set": [
+              330.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": [
+              "sugar"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "4260183210122",
+      "gtin2": "4260183212072",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.19,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:24.987335+00:00",
+      "request_sha256": "d77bfed0cae718cfd6c6fcc3a8f3c32829f9a5152f6bc4130be23f1f1d493a76",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.19
+          }
+        },
+        "usage": {
+          "input_tokens": 1813,
+          "output_tokens": 22,
+          "cost": 7.6146e-05
+        },
+        "id": "gen-dec-1790976624-PmnFewEHEv7GEeEYLu34",
+        "provider": "TypeSafe"
+      },
+      "finding": "Ambiguous named coconut variant",
+      "evidence": "Ordinary organic coconut drink versus king-coconut drink. Titles and descriptions distinguish king coconut, but translation and source reliability warrant review; low JEV score alone does not prove a mismatch.",
+      "records": [
+        {
+          "gtin": "4260183210122",
+          "listings": [
+            {
+              "attributes": "Juice Content: 0-2%; Sustainable Sourcing: organic; Volume: 500; Juice Features: smoothie; Made From: coconut; Flavour: coconut; Carbonization: still",
+              "barcode": "4260183210122",
+              "brand": "Dr Antonio Martins",
+              "category": "Coconut and Other Plant Waters",
+              "category_path": "[\"\" Any Category\"\",\"\" Grocery\"\",\"\" Drinks\"\",\"\" juice & smoothies\"\",\"\" Coconut Water\"\"]",
+              "country": "Germany",
+              "description": "packing quantity: (1 x 500 ml)\nBio- certification: EG- Bio\nthe first isotonic Durstlscher from nature",
+              "image_url": "https://m.media-amazon.com/images/I/718b60+Xn+L._AC_UL320_.jpg",
+              "price": "9.72",
+              "product_id": "82013507",
+              "retailer": "amazon",
+              "title": "Organic Coconut Drink",
+              "url": "https://www.amazon.de/dp/B003UA57F0"
+            },
+            {
+              "attributes": "Caffeine: 0-15 mg; Sweetener: sugar; Volume: 500; Sustainable Sourcing: organic; Carbonization: still; Free From: lactose free; Geographic Origin: germany; Juice Content: 100%; Flavour: coconut; Environmentally Friendly: environmentally friendly; Made From: coconut; Immune Support Ingredients: vitamin c, antioxidants; No Artificial Ingredients: no dye",
+              "barcode": "4260183210122",
+              "brand": "Dr Antonio Martins",
+              "category": "Coconut and Other Plant Waters",
+              "category_path": "[\"\" beverages\"\",\"\" Soft Drinks\"\"]",
+              "country": "Germany",
+              "description": "product description dr. Martins Coco drink is: \npurely vegetable \ncholesterol free \nlactose free \nmilk protein free \naccording to law without preservation- and dyes \nfrom organic agriculture\n\n[ingredi",
+              "image_url": "https://a.rewe-static.de/rewe-pure-00023/Q3849IZE/Dr.MartinCocoJuicePurKokosnuss-Saft%2CBio%2C500ml_fb23dff3-7c1e-41a4-98da-2652373dfc99_mp.jpg",
+              "price": "3.52",
+              "product_id": "163945642",
+              "retailer": "Rewe",
+              "title": "Dr. Martin Coco Juice Pur coconut- juice, Bio, 500 ml",
+              "url": "https://shop.rewe.de/p/dr-martin-coco-juice-pur-kokosnuss-saft-bio-500-ml/KWFJR6MW"
+            }
+          ],
+          "processed": {
+            "canonical": "dr antonio martins coconut water still sugar drink_juice_content_sustainable",
+            "mode_brand": "Dr Antonio Martins",
+            "mode_type": "coconut_water",
+            "flavor_set": [
+              "coconut"
+            ],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": [
+              "sugar"
+            ]
+          }
+        },
+        {
+          "gtin": "4260183212072",
+          "listings": [
+            {
+              "attributes": "Sweetener: sugar; Naturally derived: natural; Volume: 500; Juice Content: 100%; Pack Material Type: Plastic; Sustainable Sourcing: organic; Made From: coconut; Contains Minerals: calcium, magnesium; Carbonization: still",
+              "barcode": "4260183212072",
+              "brand": "Dr Antonio Martins",
+              "category": "Coconut and Other Plant Waters",
+              "category_path": "[\"\" eco supermarket\"\",\"\" eco food\"\",\"\" vegetable drinks and juices\"\",\"\" organic juices\"\"]",
+              "country": "Spain",
+              "description": "* feeding - feeding type: vegetarian, vegan \ncoconut juice organic of cocos KING youths \n\n[ingredients_start]\ningredients: \n100% juice organic of coco rey \nconservation: \ndark place, without direct su",
+              "image_url": "https://imagesph.global.ssl.fastly.net/estaticos/imagenes/ficha/89640/89640_1_1400.jpg",
+              "price": "2.75",
+              "product_id": "191510809",
+              "retailer": "Greenweez",
+              "title": "Coco drink pure king natural bio vegetalia 500 ml",
+              "url": "https://www.planetahuerto.es/venta-coco-drink-pure-king-natural-bio-vegetalia-500-ml_89640"
+            },
+            {
+              "attributes": "Contains Minerals: calcium, magnesium; Volume: 500; Carbonization: still; Sweetener: sugar; Pack Material Type: Plastic; Juice Content: 100%; Made From: coconut; Naturally derived: natural; Sustainable Sourcing: organic",
+              "barcode": "4260183212072",
+              "brand": "Dr Antonio Martins",
+              "category": "Coconut and Other Plant Waters",
+              "category_path": "[\"\" feeding\"\",\"\" water and refreshments\"\",\"\" refreshments\"\"]",
+              "country": "Spain",
+              "description": "coconut juice organic of cocos KING youths \n\n[ingredients_start]\ningredients: \n100% juice organic of coco rey \nconservation: \ndark place, without direct sunlight, 2-18 ºc \nnutritional value: \nper cont",
+              "image_url": "https://imagesph.freetls.fastly.net/estaticos/imagenes/ficha/89640/89640_1_1400.jpg",
+              "price": "2.75",
+              "product_id": "246924641",
+              "retailer": "Planeta Huerto",
+              "title": "Coco drink pure king natural bio vegetalia 500 ml",
+              "url": "https://www.planetahuerto.es/venta-coco-drink-pure-king-natural-bio-vegetalia-500-ml_89640"
+            }
+          ],
+          "processed": {
+            "canonical": "dr antonio martins coconut water still sugar coco_drink_pure_king",
+            "mode_brand": "Dr Antonio Martins",
+            "mode_type": "water",
+            "flavor_set": [
+              "coconut"
+            ],
+            "volume_set": [
+              500.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": [
+              "sugar"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "192397070268",
+      "gtin2": "363756405971",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.76,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:25.403544+00:00",
+      "request_sha256": "0e51631cec2e2b5b84ba7b28b20e457329a97e54b25b12a8f4337004f83b177a",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.76
+          }
+        },
+        "usage": {
+          "input_tokens": 1148,
+          "output_tokens": 22,
+          "cost": 4.8216e-05
+        },
+        "id": "gen-dec-1790976625-rBmODVzQZq2oclEJeBXp",
+        "provider": "TypeSafe"
+      },
+      "finding": "Plausible same product below reporting threshold",
+      "evidence": "Ozarka spring water 3 litre versus 3 L. Brand, water type, volume, and titles align; score 0.76 falls below the arbitrary 0.80 same band.",
+      "records": [
+        {
+          "gtin": "192397070268",
+          "listings": [
+            {
+              "attributes": "Volume: 3000; No Artificial Ingredients: no artificial sweeteners, no artificial colours; Naturally derived: natural minerals, natural; Water Type: spring; Juice Content: 0-2%; Sustainable Packaging: can be recycled; Carbonization: still",
+              "barcode": "192397070268",
+              "brand": "Ozarka",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" Food\"\",\"\" Beverages\"\",\"\" Water\"\",\"\" Spring Water\"\",\"\" Ozarka Water\"\"]",
+              "country": "USA",
+              "description": "\"\" \n* • 101.4-ounce / 3- Liter plastic jug with handle: easy to pour for all your kitchen needs \n• Perfect when more water is needed, instead of bringing multiple small bottles \n• 100% natural spring w",
+              "image_url": "https://i5.walmartimages.com/seo/Ozarka-100-Natural-Spring-Water-3-Liter_dcffab18-dbfc-4cf5-8b77-a4725e89740a.c7c00f85127e7a553469137482973877.png",
+              "price": "7.97",
+              "product_id": "1033725946",
+              "retailer": "Walmart",
+              "title": "Ozarka 100% Natural Spring Water, 3 Liter",
+              "url": "https://www.walmart.com/ip/Ozarka-100-Natural-Spring-Water-3-Liter/1284321793?classType=REGULAR"
+            }
+          ],
+          "processed": {
+            "canonical": "ozarka water still spring_juice_content_sustainable sweetener_artificial_colours_naturally",
+            "mode_brand": "Ozarka",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              3000.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "363756405971",
+          "listings": [
+            {
+              "attributes": "Volume: 3000; Juice Content: 0-2%; Naturally derived: natural; Water Type: spring; Carbonization: still",
+              "barcode": "363756405971",
+              "brand": "Ozarka",
+              "category": "Still Bottled Water",
+              "category_path": "[\"\" Food\"\",\"\" Beverages\"\",\"\" Water\"\",\"\" Spring Water\"\",\"\" Ozarka Water\"\"]",
+              "country": "USA",
+              "description": "\"\" Ozarka 100% Natural Spring Water - 3 L\"\" ; Brand Ozarka",
+              "image_url": "https://i5.walmartimages.com/seo/Ozarka-100-Natural-Spring-Water-3-L_141f5368-80ec-4bc2-87a3-e3ca75bb66b3.c35c09da002688a5f4a0c48dfacea32d.jpeg",
+              "price": "15.37",
+              "product_id": "1046510399",
+              "retailer": "Walmart",
+              "title": "Ozarka 100% Natural Spring Water - 3 L",
+              "url": "https://www.walmart.com/ip/Ozarka-100-Natural-Spring-Water-3-L/15670750864?classType=REGULAR"
+            }
+          ],
+          "processed": {
+            "canonical": "ozarka water still spring_volume_juice",
+            "mode_brand": "Ozarka",
+            "mode_type": "water",
+            "flavor_set": [],
+            "volume_set": [
+              3000.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "2020003787690",
+      "gtin2": "2020005429079",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.63,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:27.297077+00:00",
+      "request_sha256": "4634f3dd05dc6ccdc39f1228d195f3ac932c4a9ce356b3e4e8f7aa843de12e92",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.63
+          }
+        },
+        "usage": {
+          "input_tokens": 1147,
+          "output_tokens": 22,
+          "cost": 4.8174e-05
+        },
+        "id": "gen-dec-1790976627-6P9udTkPIFrME8MSTHg2",
+        "provider": "TypeSafe"
+      },
+      "finding": "Plausible match with source differences",
+      "evidence": "Identical Romerquelle Emotion apricot/elderflower titles, both 250ml. Sweetener attributes differ (fructose versus fructose/sugar); score 0.63 warrants review rather than a categorical mismatch.",
+      "records": [
+        {
+          "gtin": "2020003787690",
+          "listings": [
+            {
+              "attributes": "Sweetener: fructose; Immune Support Ingredients: vitamin c, antioxidants; Volume: 250; Pack Material Type: Plastic; Health Claims: low calories, good source of minerals; Caffeine: 15-25 mg; Naturally derived: natural flavours, natural fragrances, natural; Flavour: apricot, elderflower; Pack Type: Bottle; Juice Content: 0-2%; Water Type: mineral",
+              "barcode": "2020003787690",
+              "brand": "Römerquelle",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" Mineral- & table water\"\",\"\" fruity mineral water\"\"]",
+              "country": "Austria",
+              "description": "low-calorie soft drink from natural mineral water with apricots- elderflower flavor \npledge: \n* ONE WAY \nwarehouse notice: \n* at room temperature, dry, odorless such as before heat and store protected",
+              "image_url": "https://cdn1.interspar.at/cachableservlets/articleImage.dam/at/2020003787690/dt_zoom.jpg",
+              "price": "1.29",
+              "product_id": "430896026",
+              "retailer": "Spar",
+              "title": "roman spring Emotion apricot elderflower",
+              "url": "https://www.interspar.at/shop/lebensmittel/roemerquelle-emotion-marille-holunderbluete/p/2020003787690"
+            }
+          ],
+          "processed": {
+            "canonical": "r merquelle apricot water elderflower fruit sweetener_fructose_immune",
+            "mode_brand": "Römerquelle",
+            "mode_type": "water",
+            "flavor_set": [
+              "apricot",
+              "elderflower",
+              "fruit"
+            ],
+            "volume_set": [
+              250.0
+            ],
+            "pack_set": [],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "2020005429079",
+          "listings": [
+            {
+              "attributes": "Juice Content: 0-2%; Volume: 250; Flavour: apricot, elderflower; Immune Support Ingredients: vitamin c, antioxidants; Sweetener: fructose, sugar; Water Type: mineral; Naturally derived: natural flavours, natural fragrances, natural; Health Claims: low calories, good source of minerals",
+              "barcode": "2020005429079",
+              "brand": "Römerquelle",
+              "category": "Functional Bottled Water",
+              "category_path": "[\"\" beverages\"\",\"\" Mineral- & table water\"\",\"\" fruity mineral water\"\"]",
+              "country": "Austria",
+              "description": "low-calorie soft drink from natural mineral water with apricots- elderflower flavor \npledge: \n* disposable with pledge \nwarehouse notice: \n* at room temperature, dry, odorless such as before heat and",
+              "image_url": "https://cdn1.interspar.at/cachableservlets/articleImage.dam/at/2020005429079/dt_sub.jpg",
+              "price": "1.29",
+              "product_id": "1037517294",
+              "retailer": "Spar",
+              "title": "roman spring Emotion apricot elderflower",
+              "url": "https://www.interspar.at/shop/lebensmittel/roemerquelle-emotion-marille-holunderbluete/p/2020005429079"
+            }
+          ],
+          "processed": {
+            "canonical": "r merquelle apricot water elderflower fruit antioxidants_sweetener_fructose_sugar",
+            "mode_brand": "Römerquelle",
+            "mode_type": "water",
+            "flavor_set": [
+              "apricot",
+              "elderflower",
+              "fruit"
+            ],
+            "volume_set": [
+              250.0
+            ],
+            "pack_set": [],
+            "package_type_set": [],
+            "carbonation_set": [],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "231302714337",
+      "gtin2": "747519475737",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.26,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:25.964898+00:00",
+      "request_sha256": "755f045276ed1a33f2652f11f207f792b0b51624ebc79cd166727413b64c6ab3",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.26
+          }
+        },
+        "usage": {
+          "input_tokens": 1161,
+          "output_tokens": 22,
+          "cost": 4.8762e-05
+        },
+        "id": "gen-dec-1790976625-wjdbKAH0JyXhxMwS1jQj",
+        "provider": "TypeSafe"
+      },
+      "finding": "Possible mixed pack versus single variant",
+      "evidence": "Blenheim Spicy Sampler versus Hot, both 12 x 12oz. Sampler may indicate a mixed selection; source text is insufficient to establish equivalence.",
+      "records": [
+        {
+          "gtin": "231302714337",
+          "listings": [
+            {
+              "attributes": "Volume: 355; Juice Content: 0-2%; Carbonization: carbonated; Flavour: ginger",
+              "barcode": "231302714337",
+              "brand": "Blenheim",
+              "category": "Tonic Water/Mixers/Other Bitters",
+              "category_path": "[\"\" Food\"\",\"\" Beverages\"\",\"\" Soda Pop\"\",\"\" Ginger ale\"\"]",
+              "country": "USA",
+              "description": "\"\"1\"\" ; Brand liuhangchengdedian",
+              "image_url": "https://i5.walmartimages.com/asr/2e43dfa0-9470-4223-8190-de1f4a4fafe9.2eac3380382b8e2a73e764602ebf49d9.jpeg",
+              "price": "46.54",
+              "product_id": "1023208587",
+              "retailer": "Walmart",
+              "title": "Blenheim Ginger Ale Spicy Sampler, 12 Ounce (12 Glass Bottles)",
+              "url": "https://www.walmart.com/ip/Blenheim-Ginger-Ale-Spicy-Sampler-12-Ounce-12-Glass-Bottles/14925750957?classType=undefined"
+            }
+          ],
+          "processed": {
+            "canonical": "blenheim ginger beer carbonated tonic ale_spicy_sampler_glass",
+            "mode_brand": "Blenheim",
+            "mode_type": "beer",
+            "flavor_set": [
+              "ginger",
+              "tonic"
+            ],
+            "volume_set": [
+              355.0
+            ],
+            "pack_set": [
+              12
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "747519475737",
+          "listings": [
+            {
+              "attributes": "Pack Type: Bottle; Volume: 355; No Artificial Ingredients: no artificial preservatives; Sustainable Packaging: can be recycled; Juice Content: 0-2%; Environmentally Friendly: environmentally friendly; Carbonization: carbonated; Immune Support Ingredients: ginger; Flavour: ginger",
+              "barcode": "747519475737",
+              "brand": "Blenheim",
+              "category": "Tonic Water/Mixers/Other Bitters",
+              "category_path": "[\"\" Food\"\",\"\" Beverages\"\",\"\" Soda Pop\"\",\"\" Ginger ale\"\"]",
+              "country": "USA",
+              "description": "\"\" \n* Ginger Flavor: This ginger ale has a delicious ginger flavor that provides a refreshing taste. \n* Medium Caffeine Content: The ginger ale has a moderate caffeine content that provides a mild ener",
+              "image_url": "https://i5.walmartimages.com/seo/Blenheim-Ginger-Ale-Hot-12-Ounce-12-Glass-Bottles_af0f1c1a-6ab0-4006-aaed-1bbd8bdf3467.4e6303dfb680b0b1e891c19b1bff5c83.jpeg",
+              "price": "45.12",
+              "product_id": "1048560651",
+              "retailer": "Walmart",
+              "title": "Blenheim Ginger Ale Hot, 12 Ounce (12 Glass Bottles)",
+              "url": "https://www.walmart.com/ip/Blenheim-Ginger-Ale-Hot-12-Ounce-12-Glass-Bottles/15765220942?classType=REGULAR"
+            }
+          ],
+          "processed": {
+            "canonical": "blenheim ginger beer carbonated tonic ale_hot_glass_type recycled_juice_content_environmentally",
+            "mode_brand": "Blenheim",
+            "mode_type": "beer",
+            "flavor_set": [
+              "ginger",
+              "tonic"
+            ],
+            "volume_set": [
+              355.0
+            ],
+            "pack_set": [
+              12
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "100141564826",
+      "gtin2": "100142347862",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.93,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:28.370603+00:00",
+      "request_sha256": "fa433290955437b2100d778c2cbe51313951f3ccf7ee859d48f765e6db39d6c1",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.93
+          }
+        },
+        "usage": {
+          "input_tokens": 1308,
+          "output_tokens": 22,
+          "cost": 5.4936e-05
+        },
+        "id": "gen-dec-1790976628-xlu45cwUKiLIJots47Mx",
+        "provider": "TypeSafe"
+      },
+      "finding": "Strong source match",
+      "evidence": "Identical Starbucks vanilla Frappuccino titles and descriptions, both 4 x 9.5oz. JEV score 0.93 is consistent with the source evidence.",
+      "records": [
+        {
+          "gtin": "100141564826",
+          "listings": [
+            {
+              "attributes": "Carbonization: still; Volume: 281; Juice Content: 0-2%; Coffee Type: arabica; Flavour: vanilla, coffee; RTD Coffee Style: milk, frappuccino",
+              "barcode": "100141564826",
+              "brand": "Starbucks Frappuccino Vanilla",
+              "category": "RTD Coffee",
+              "category_path": "[\"\" Food\"\",\"\" Coffee\"\",\"\" Bottled Coffee\"\",\"\" Starbucks Frappuccino\"\"]",
+              "country": "USA",
+              "description": "\"\" \n* pack of four 9.5 oz. glass bottles \n* Only 200 calories per bottle \n* Great for in the morning or on the go \n* Discover Vanilla Frappuccino coffee drink, a creamy blend of coffee and milk, mixed",
+              "image_url": "https://i5.walmartimages.com/seo/Starbucks-Frappuccino-Vanilla-Iced-Coffee-Drink-9-5Oz-Bottles-4-Pack-Packaging-May-Vary_10a814c7-1c8a-4fe7-a435-6b6ae829e696.b279ee5319e9c7b7d54c07d56bf4dc25.jpeg",
+              "price": "11.99",
+              "product_id": "1055443660",
+              "retailer": "Walmart",
+              "title": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pack) Packaging May Vary",
+              "url": "https://www.walmart.com/ip/Starbucks-Frappuccino-Vanilla-Iced-Coffee-Drink-9-5Oz-Bottles-4-Pack-Packaging-May-Vary/15422670974?classType=REGULAR"
+            }
+          ],
+          "processed": {
+            "canonical": "starbucks frappuccino vanilla coffee still packaging_may_vary_carbonization",
+            "mode_brand": "Starbucks Frappuccino Vanilla",
+            "mode_type": "coffee",
+            "flavor_set": [
+              "coffee",
+              "vanilla"
+            ],
+            "volume_set": [
+              281.0
+            ],
+            "pack_set": [
+              4
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "100142347862",
+          "listings": [
+            {
+              "attributes": "Volume: 281; Juice Content: 0-2%; RTD Coffee Style: milk, frappuccino; Flavour: vanilla, coffee; Carbonization: still; Coffee Type: arabica",
+              "barcode": "100142347862",
+              "brand": "Starbucks Frappuccino Vanilla",
+              "category": "RTD Coffee",
+              "category_path": "[\"\" Food\"\",\"\" Coffee\"\",\"\" Bottled Coffee\"\",\"\" Starbucks Frappuccino\"\"]",
+              "country": "USA",
+              "description": "\"\" \n* pack of four 9.5 oz. glass bottles \n* Only 200 calories per bottle \n* Great for in the morning or on the go \n* Discover Vanilla Frappuccino coffee drink, a creamy blend of coffee and milk, mixed",
+              "image_url": "https://i5.walmartimages.com/seo/Starbucks-Frappuccino-Vanilla-Iced-Coffee-Drink-9-5Oz-Bottles-4-Pack-Packaging-May-Vary_10a814c7-1c8a-4fe7-a435-6b6ae829e696.b279ee5319e9c7b7d54c07d56bf4dc25.jpeg",
+              "price": "7.47",
+              "product_id": "1023331221",
+              "retailer": "Walmart",
+              "title": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pack) Packaging May Vary",
+              "url": "https://www.walmart.com/ip/Starbucks-Frappuccino-Vanilla-Iced-Coffee-Drink-9-5Oz-Bottles-4-Pack-Packaging-May-Vary/14735864457?classType=REGULAR"
+            }
+          ],
+          "processed": {
+            "canonical": "starbucks frappuccino vanilla coffee still vary_volume_281_juice",
+            "mode_brand": "Starbucks Frappuccino Vanilla",
+            "mode_type": "coffee",
+            "flavor_set": [
+              "coffee",
+              "vanilla"
+            ],
+            "volume_set": [
+              281.0
+            ],
+            "pack_set": [
+              4
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "642709037477",
+      "gtin2": "736983891518",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.83,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:26.826195+00:00",
+      "request_sha256": "06b4f0e741334e46b09718053bbae829d0e19e047eeed50b0d370e5c37438660",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.83
+          }
+        },
+        "usage": {
+          "input_tokens": 1075,
+          "output_tokens": 22,
+          "cost": 4.515e-05
+        },
+        "id": "gen-dec-1790976626-YIjin9XbkuQuldKl3wef",
+        "provider": "TypeSafe"
+      },
+      "finding": "Strong source match",
+      "evidence": "Identical Hals black-cherry sparkling-water titles and descriptions, both 24 x 20oz. JEV score 0.83 aligns with identity; some captured packaging fields differ or are missing.",
+      "records": [
+        {
+          "gtin": "642709037477",
+          "listings": [
+            {
+              "attributes": "Caffeine: 0-15 mg; Flavour: cherry; Diets: kosher; Juice Content: 0-2%; Carbonization: carbonated, sparkling; Volume: 591; Water Type: flavoured, seltzer; Health Claims: no sugar, hydrating, no calories; Geographic Origin: united states",
+              "barcode": "642709037477",
+              "brand": "Hal New York",
+              "category": "Sparkling Flavoured Bottled Water",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\"]",
+              "country": "USA",
+              "description": "Black Cherry Flavored\nO-U- Kosher\n0 Calories\n0 Sugar\n0 Carbo-hydrates",
+              "image_url": "https://m.media-amazon.com/images/I/71UkDCCUAFS._AC_UL320_.jpg",
+              "price": "35.99",
+              "product_id": "79756047",
+              "retailer": "amazon",
+              "title": "Hal's New York Seltzer Carbonated Black Cherry Flavored Sparkling Water, Zero Sugar, Zero Calorie, Zero Carbs, 20 Fl Oz ( Pack of 24)",
+              "url": "https://www.amazon.com/dp/B07GT4XSXK"
+            }
+          ],
+          "processed": {
+            "canonical": "hal new york cherry water carbonated no_sugar hydrating_calorie_geographic_origin",
+            "mode_brand": "Hal New York",
+            "mode_type": "water",
+            "flavor_set": [
+              "cherry"
+            ],
+            "volume_set": [
+              591.0
+            ],
+            "pack_set": [
+              24
+            ],
+            "package_type_set": [],
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "pulp_set": [],
+            "sweetener_set": [
+              "no_sugar"
+            ]
+          }
+        },
+        {
+          "gtin": "736983891518",
+          "listings": [
+            {
+              "attributes": "Flavour: cherry; Pack Material Type: Glass; Diets: kosher; Water Type: flavoured, seltzer; Pack Type: Bottle; Volume: 591; Caffeine: 0-15 mg; Geographic Origin: united states; Health Claims: no sugar, no calories, hydrating; Carbonization: carbonated, sparkling; Juice Content: 0-2%",
+              "barcode": "736983891518",
+              "brand": "Hal New York",
+              "category": "Sparkling Flavoured Bottled Water",
+              "category_path": "[\"\" Any Department\"\",\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Bottled Beverages, Water & Drink Mixes\"\",\"\" Water\"\"]",
+              "country": "USA",
+              "description": "Black Cherry Flavored\nO-U- Kosher\n0 Calories\n0 Sugar\n0 Carbo-hydrates",
+              "image_url": "https://m.media-amazon.com/images/I/71jlkJNVIVL._AC_UL320_.jpg",
+              "price": "29.99",
+              "product_id": "77153838",
+              "retailer": "amazon",
+              "title": "Hal's New York Seltzer Carbonated Black Cherry Flavored Sparkling Water, Zero Sugar, Zero Calorie, Zero Carbs, 20 Fl Oz ( Pack of 24)",
+              "url": "https://www.amazon.com/dp/B00MMO27U8"
+            }
+          ],
+          "processed": {
+            "canonical": "hal new york cherry water carbonated no_sugar type_flavoured_seltzer",
+            "mode_brand": "Hal New York",
+            "mode_type": "water",
+            "flavor_set": [
+              "cherry"
+            ],
+            "volume_set": [
+              591.0
+            ],
+            "pack_set": [
+              24
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "carbonated"
+            ],
+            "pulp_set": [],
+            "sweetener_set": [
+              "no_sugar"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "gtin1": "686082455671",
+      "gtin2": "689128697950",
+      "training_label": 1,
+      "gate": "proceed",
+      "gate_reason": "Known critical attributes compatible",
+      "frozen_gate": "proceed",
+      "similarity": 1.0,
+      "similarity_band": "0.9_to_1.0",
+      "stratum": "label_1|proceed|0.9_to_1.0",
+      "input_scope": "original_data",
+      "copy": "a_order",
+      "noul": 0.87,
+      "status": "ok",
+      "adapter": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "completed_utc": "2026-10-02T21:30:23.246907+00:00",
+      "request_sha256": "347327a838e28aa4e09e3a303b855cd8611ffdfeabb9a49b0ebc1571251374dd",
+      "raw_response": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "is_same_product": {
+            "type": "noul",
+            "noul": 0.87
+          }
+        },
+        "usage": {
+          "input_tokens": 1029,
+          "output_tokens": 22,
+          "cost": 4.3218e-05
+        },
+        "id": "gen-dec-1790976622-CEylOMzIc2uxO2oUtNPS",
+        "provider": "TypeSafe"
+      },
+      "finding": "Strong wording-equivalent match",
+      "evidence": "Bare Nature peach vitamin iced tea, 12 x 20oz, expressed as 12 Pack versus 12 ct. JEV score 0.87 aligns with matching product details.",
+      "records": [
+        {
+          "gtin": "686082455671",
+          "listings": [
+            {
+              "attributes": "Volume: 591; Pack Material Type: Plastic; Juice Content: 0-2%; Carbonization: still; Flavour: tea, peach",
+              "barcode": "686082455671",
+              "brand": "Bare Nature",
+              "category": "Still RTD Tea",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Coffee, Tea & Cocoa\"\",\"\" Tea\"\",\"\" Iced Tea\"\"]",
+              "country": "USA",
+              "image_url": "https://m.media-amazon.com/images/I/91FgC8l3CEL._AC_UL320_ML3_.jpg",
+              "price": "76.37",
+              "product_id": "186007151",
+              "retailer": "amazon",
+              "title": "(12 Pack) Bare Nature Vitamin Iced Tea - Peach, 20 Fl Oz Bottles",
+              "url": "https://www.amazon.com/Pack-Bare-Nature-Vitamin-Iced/dp/B07WH5RPN5/ref=sr_1_2240?qid=1570440079&s=grocery&sr=1-2240"
+            }
+          ],
+          "processed": {
+            "canonical": "bare nature coffee tea still peach volume_material",
+            "mode_brand": "Bare Nature",
+            "mode_type": "tea",
+            "flavor_set": [
+              "coffee",
+              "peach",
+              "tea"
+            ],
+            "volume_set": [
+              591.0
+            ],
+            "pack_set": [
+              12
+            ],
+            "package_type_set": [
+              "bottle"
+            ],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        },
+        {
+          "gtin": "689128697950",
+          "listings": [
+            {
+              "attributes": "Volume: 591; Count per Unit: 12; Pack Material Type: Plastic; Juice Content: 0-2%; Flavour: peach, tea; Carbonization: still",
+              "barcode": "689128697950",
+              "brand": "Bare Nature",
+              "category": "Still RTD Tea",
+              "category_path": "[\"\" Grocery & Gourmet Food\"\",\"\" Beverages\"\",\"\" Coffee, Tea & Cocoa\"\",\"\" Tea\"\",\"\" Iced Tea\"\"]",
+              "country": "USA",
+              "description": "Bare Nature Peach Vitamin Iced Tea (20 oz., 12 ct.)",
+              "image_url": "https://images-na.ssl-images-amazon.com/images/I/41b173T1jhL._AC_US160_.jpg",
+              "price": "24.26",
+              "product_id": "80647027",
+              "retailer": "amazon",
+              "title": "Bare Nature Peach Vitamin Iced Tea (20 oz., 12 ct.) - ( Original from manufacturer - Bulk Discount available)",
+              "url": "https://www.amazon.com/Bare-Nature-Peach-Vitamin-Iced/dp/B0773CM76Q/ref=sr_1_9471_s_it?s=grocery&ie=UTF8&qid=1547573115&sr=1-9471"
+            }
+          ],
+          "processed": {
+            "canonical": "bare nature coffee tea still peach ct._original_manufacturer_bulk discount_available_volume_591",
+            "mode_brand": "Bare Nature",
+            "mode_type": "tea",
+            "flavor_set": [
+              "coffee",
+              "peach",
+              "tea"
+            ],
+            "volume_set": [
+              591.0
+            ],
+            "pack_set": [
+              12
+            ],
+            "package_type_set": [],
+            "carbonation_set": [
+              "still"
+            ],
+            "pulp_set": [],
+            "sweetener_set": []
+          }
+        }
+      ]
+    }
+  ],
+  "limitations": "Source inspection and offline category ablation, not external identity verification. No gate changes or additional JEV calls."
+}
