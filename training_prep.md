@@ -211,3 +211,13 @@ Return that file to the prepared setup directory before running the three-track
 preflight. Existing caches are reused only after input/checkpoint/composition
 validation; stale caches fail rather than silently overwrite. Generation writes
 a temporary file and publishes it only after validation. No training is launched.
+
+The automated GPU launcher uses Git for code, the frozen MiniLM checkpoint,
+and prepared embedding inputs, with no input ZIP upload:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/run_colab_embeddings.py
+```
+
+It runs the embedding worker on T4 at batch size 256, verifies the downloaded
+cache checksum, and releases the runtime. Run it only when starting a new job.
