@@ -130,6 +130,11 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         scorer = PairScorer(text is not None).to(cfg.device)
         optimizer = torch.optim.AdamW(list(model.parameters()) + list(scorer.parameters()),
                                       lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
+        scheduler = (torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="max", factor=cfg.lr_factor, patience=cfg.lr_patience,
+            threshold=cfg.early_stopping_threshold, threshold_mode="abs", min_lr=cfg.min_lr)
+            if cfg.lr_scheduler == "plateau" else None)
+        stopping_best, bad_epochs = -1., 0
         logger.info("[graph-phase] features complete listings=%d training_support=%d text_dim=%d parameters=%d",
                     len(records), len(support_records), model.text_dim,
                     sum(parameter.numel() for parameter in model.parameters()) +
@@ -186,6 +191,10 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             model.load_state_dict(restored["model"])
             scorer.load_state_dict(restored["scorer"])
             optimizer.load_state_dict(restored["optimizer"])
+            if scheduler is not None:
+                scheduler.load_state_dict(restored["scheduler"])
+            stopping_best = restored["stopping_best"]
+            bad_epochs = restored["bad_epochs"]
             torch.set_rng_state(restored["torch_rng"].cpu())
             if cfg.device == "cuda" and restored["cuda_rng"] is not None:
                 torch.cuda.set_rng_state_all(restored["cuda_rng"])
@@ -236,7 +245,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         from model_tracks.incremental import ArtifactPublisher
         with ArtifactPublisher(output) as publisher, GraphWandb(cfg.wandb, cfg.track, run_tag, output) as wandb, TrainingProfiler(output / name(cfg.track,'profile'),cfg.device) as profiler:
             wandb.log_config(manifest)
-            for epoch in range(start_epoch + 1, cfg.epochs + 1):
+            completed_epochs = start_epoch
+            epoch_limit = start_epoch if bad_epochs >= cfg.early_stopping_patience else cfg.epochs
+            for epoch in range(start_epoch + 1, epoch_limit + 1):
                 logger.info("[graph-phase] training start epoch=%d/%d train_pairs=%d learning_rate=%s",
                             epoch, cfg.epochs, len(train_pairs), optimizer.param_groups[0]['lr'])
                 started = time.monotonic()
@@ -283,6 +294,16 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 if cfg.device == "cuda":
                     metrics["gpu_allocated_gb"] = torch.cuda.memory_allocated() / 1024**3
                     metrics["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 1024**3
+                completed_epochs = epoch
+                metrics["learning_rate"] = optimizer.param_groups[0]["lr"]
+                if metrics["dev_pr_auc"] > stopping_best + cfg.early_stopping_threshold:
+                    stopping_best, bad_epochs = metrics["dev_pr_auc"], 0
+                else:
+                    bad_epochs += 1
+                if scheduler is not None:
+                    scheduler.step(metrics["dev_pr_auc"])
+                metrics["next_learning_rate"] = optimizer.param_groups[0]["lr"]
+                metrics["early_stopping_bad_epochs"] = bad_epochs
                 previous_best = best_metric
                 improved = metrics["dev_pr_auc"] > best_metric
                 checkpoint_dir = output / "_checkpoints" / cfg.track / f"{run_tag}_f0" / f"checkpoint-{epoch}"
@@ -295,6 +316,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                            "support_text": None if support_text is None else support_text.detach().cpu(),
                            "text_dim": model.text_dim, "model": model.state_dict(),
                            "scorer": scorer.state_dict(), "optimizer": optimizer.state_dict(),
+                           "scheduler": scheduler.state_dict() if scheduler is not None else None,
+                           "stopping_best": stopping_best, "bad_epochs": bad_epochs,
                            "epoch": epoch, "best_metric": best_metric, "best_path": str(best_path),
                            "torch_rng": torch.get_rng_state(), "python_rng": random.getstate(),
                            "numpy_rng": np.random.get_state(),
@@ -329,8 +352,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 publisher.submit(f'checkpoint-{epoch}', [checkpoint_dir,
                     output / name(cfg.track, 'epoch_metrics.jsonl'),
                     output / name(cfg.track, 'best_checkpoint.json')])
+                if bad_epochs >= cfg.early_stopping_patience:
+                    logger.info("[graph-early-stop] epoch=%d patience=%d threshold=%s",
+                                epoch, cfg.early_stopping_patience, cfg.early_stopping_threshold)
+                    break
             logger.info("[graph-selection] training complete completed_epochs=%d selected_checkpoint=%s best_dev_pr_auc=%.6f criterion=max_dev_pr_auc",
-                        cfg.epochs, best_path, best_metric)
+                        completed_epochs, best_path, best_metric)
             completion = None
             if cfg.postprocess:
                 logger.info("[graph-phase] postprocess start selected=%s build_index=%s inference_batch_size=%d report_test=%s",
@@ -371,12 +398,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             wandb.log_artifacts(artifacts)
             write_json(output / name(cfg.track, "graph_worker_result.json"), {
                 "status": "ok", "best_checkpoint": str(best_path), "best_dev_pr_auc": best_metric,
-                "track": cfg.track, "postprocess_complete": bool(completion), "wandb_run_id": wandb.run_id})
+                "track": cfg.track, "completed_epochs": completed_epochs, "early_stopped": bad_epochs >= cfg.early_stopping_patience, "postprocess_complete": bool(completion), "wandb_run_id": wandb.run_id})
             if cfg.dvc.enabled:
                 from graph_tracks.dvc import snapshot
                 logger.info("[graph-dvc] snapshot started track=%s push=%s", cfg.track, cfg.dvc.push)
                 project = snapshot(output, cfg.track, remote=cfg.dvc.remote, push=cfg.dvc.push,
-                                   generation=f"epoch-{cfg.epochs}")
+                                   generation=f"epoch-{completed_epochs}")
                 write_json(output / name(cfg.track, "dvc_result.json"), {
                     "track": cfg.track, "project": str(project), "verified_restore": True, "pushed": cfg.dvc.push})
                 logger.info("[graph-dvc] verified clean restore project=%s", project)
@@ -384,8 +411,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                                    "dvc_project": project.name})
                 wandb.log_artifacts([project / name(cfg.track, "dvc_manifest.json"),
                                      project / (name(cfg.track, "payload") + ".dvc")], "dvc-metadata")
-        write_worker_live_status(target=output / name(cfg.track, "live_status.json"), event="complete", step=cfg.epochs,
-                                max_steps=cfg.epochs, epoch=cfg.epochs, best_metric=best_metric)
+        write_worker_live_status(target=output / name(cfg.track, "live_status.json"), event="complete", step=completed_epochs,
+                                max_steps=cfg.epochs, epoch=completed_epochs, best_metric=best_metric)
         logger.info("[graph-train] complete checkpoint=%s", best_path)
         return best_path
     except BaseException as error:

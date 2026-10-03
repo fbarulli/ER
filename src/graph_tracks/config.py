@@ -56,6 +56,12 @@ class GraphConfig(BaseModel):
     epochs: int = Field(default=10, ge=1)
     learning_rate: float = Field(default=0.001, gt=0)
     weight_decay: float = Field(default=0.0001, ge=0)
+    early_stopping_patience: int = Field(default=3, ge=1)
+    early_stopping_threshold: float = Field(default=0.001, ge=0)
+    lr_scheduler: Literal["plateau", "constant"] = "plateau"
+    lr_patience: int = Field(default=1, ge=0)
+    lr_factor: float = Field(default=0.5, gt=0, lt=1)
+    min_lr: float = Field(default=0.00001, ge=0)
     seed: int = Field(default=1337, ge=0)
     device: Literal["cpu", "cuda"] = "cpu"
     graph_enabled: bool = True

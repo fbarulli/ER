@@ -187,3 +187,10 @@ python -m src.cli.colab --what train --gpu CPU --workers 1 --keep-alive
 | data/prepared/smoke_200/* | prepare_smoke | Colab smoke test |
 | data/prepared/full/worker_1_baseline.pkl.gz | training.train --prepare-bundle | Colab train |
 | data/final_validation.csv | build_final_validation | eval |
+
+GNN and hybrid use AdamW weight decay (`0.0001`), gradient clipping (`1.0`),
+and dev PR-AUC for checkpoint selection. Early stopping requires an improvement
+greater than `0.001` and stops after three unsuccessful epoch evaluations.
+The plateau scheduler halves the learning rate after two unsuccessful evaluations,
+with a floor of `0.00001`. Scheduler and stopping state are checkpointed for resume;
+completion reports record the actual number of epochs.

@@ -9,6 +9,12 @@ output_dim: 128
 epochs: 10
 learning_rate: 0.001
 weight_decay: 0.0001
+early_stopping_patience: 3
+early_stopping_threshold: 0.001
+lr_scheduler: plateau
+lr_patience: 1
+lr_factor: 0.5
+min_lr: 0.00001
 seed: 1337
 device: cpu
 graph_enabled: true

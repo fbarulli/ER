@@ -337,3 +337,30 @@ def test_prepare_rejects_scoped_hold_without_blocking_gtin_peers(tmp_path):
     pd.DataFrame(rows).to_csv(catalog, index=False)
     with pytest.raises(ValueError, match='quarantined identity groups/listings'):
         prepare(catalog, splits, pairs, tmp_path / 'blocked')
+
+
+@pytest.mark.parametrize('hybrid', [False, True])
+def test_plateau_stops_and_resume_retains_control_state(tmp_path, monkeypatch, hybrid):
+    import importlib
+    worker = importlib.import_module('graph_tracks.train')
+    disable_tracking(monkeypatch)
+    monkeypatch.setattr(worker, 'quality', lambda *_: {'dev_pr_auc': 0.5, 'dev_p_at_r95': 0.4})
+    _, _, _, config = inputs(tmp_path, hybrid=hybrid)
+    cfg = yaml.safe_load(config.read_text())
+    cfg.update(epochs=10, postprocess=False)
+    config.write_text(yaml.safe_dump(cfg))
+    selected = train(config, run_tag='plateau')
+    assert selected.parent.name == 'checkpoint-1'
+    output = Path(cfg['output_dir']) / f"{cfg['track']}__plateau"
+    rows = [json.loads(line) for line in (output / name(cfg['track'], 'epoch_metrics.jsonl')).read_text().splitlines()]
+    assert len(rows) == 4
+    assert rows[2]['next_learning_rate'] == pytest.approx(cfg.get('learning_rate', 0.001) * 0.5)
+    last = selected.parent.parent / 'checkpoint-4' / selected.name
+    saved = torch.load(last, weights_only=False)
+    assert saved['bad_epochs'] == 3
+    assert saved['scheduler']['last_epoch'] == 4
+    train(config, run_tag='plateau', resume=last)
+    assert len((output / name(cfg['track'], 'epoch_metrics.jsonl')).read_text().splitlines()) == 4
+    result = json.loads((output / name(cfg['track'], 'graph_worker_result.json')).read_text())
+    assert result['completed_epochs'] == 4
+    assert result['early_stopped'] is True
