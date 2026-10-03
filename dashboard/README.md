@@ -15,6 +15,15 @@ retain their run, artifact, source line, frozen SKU→GTIN mapping and saved
 threshold/checkpoint manifest. JEV rounds, scopes and both orders remain
 separate observations. Gate-derived labels are not presented as human truth.
 
+The attribute gate is leaving the decision path (owner ruling 2026-10-03): it
+is attribute-driven, so it can never be the label source nor a feature; it runs
+in shadow mode only, to compare "model alone" against the gate on real pairs.
+The `/gate` page states the ruling and the active negative-supply mode
+(`training.negative_supply.mode`; default `gate`), whose replacement is the
+real-partner-first lane (`src/training/negative_supply.py`: real partners
+first, minted only to top-up, minted rows training-only). The default stays
+`gate` until the real-vs-minted discriminator and the stratified eval clear.
+
 The attribute × difficulty × masking × generated-data table reads existing
 visibility CSVs and frozen bundle headers. It preserves field hits, modes,
 donor/source payload indices, folds, epochs and presentation records when

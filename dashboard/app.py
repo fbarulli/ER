@@ -598,7 +598,7 @@ def _gate_dimension_evidence_html(left_attrs: str, right_attrs: str, uni) -> str
             groups['conflict'].append((key, lv, rv))
         else:
             groups['agree'].append((key, lv, rv))
-    absent = len(set(uni._registry) - {k for k in set(lparse) | set(rparse) if k != 'unclassified_keys'})
+    absent = len(set(uni.registry) - {k for k in set(lparse) | set(rparse) if k != 'unclassified_keys'})
     if not any(groups.values()):
         return '<p class="muted">No registered dimension carries evidence on either side.</p>'
     def dim_rows(items):
@@ -779,11 +779,41 @@ def gate_decisions():
                                   metrics, _fcompare(compare_rows), evidence,
                                   bucket_verdicts[decision]))
     counts_row = ''.join(_fmetric(counts.get(d, 0), f'{d} pairs') for d in _GATE_BUCKETS)
+    try:
+        from core.common import training_cfg
+
+        ns = training_cfg().negative_supply
+        mode, run_tag, mint_cap = ns.mode, ns.pairs_run_tag, ns.mint_cap
+    except Exception:
+        mode, run_tag, mint_cap = "gate", None, 1.0
+    if mode == "lane":
+        _lane_tail = (
+            f" <strong>Active mode: <code>lane</code></strong> — negatives come from the lane's "
+            f"real partners + minted top-up (run tag <code>{escape(str(run_tag))}</code>, "
+            f"mint_cap {mint_cap:g}); the decisions below are SHADOW comparison columns only."
+        )
+    else:
+        _lane_tail = (
+            " <strong>Active mode: <code>gate</code></strong> — the stored decisions below are "
+            "still the training label source until the mode flips on evidence (real-vs-minted "
+            "discriminator + stratified eval: model-alone vs the gate on real-pair recall and "
+            "false-merge rate), never on the code merely being present."
+        )
+    lane_note = (
+        "<p class='muted'><strong>Decision-path status (owner ruling 2026-10-03):</strong> the "
+        "attribute gate <strong>leaves the decision path</strong> — it is attribute-driven, so it "
+        "can never be the label source nor a feature; it keeps running in <strong>shadow</strong> "
+        "mode only, to compare \"model alone\" against the gate on real pairs. The replacement is "
+        "the real-partner-first negative-supply lane (<code>src/training/negative_supply.py</code>: "
+        "real partners first, minted only to top-up), selected by "
+        "<code>training.negative_supply.mode</code>." + _lane_tail + "</p>"
+    )
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER gate decisions</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}h2{{margin-top:.2rem}}</style></head><body>
-<h1>ER · Gate decisions — original-column evidence</h1>
-<p class="status">{len(g):,} candidate pair gates · {counts.get('proceed', 0):,} proceed · {counts.get('hard_no', 0):,} hard-no · {counts.get('fallback', 0):,} fallback · every fallback pair with full strings, no truncation · deciding clause = <code>gate_reason</code></p>
-<p><strong>Original columns, as exported · no cleaning.</strong> Every sampled pair below is joined back to the raw 13-column feed (dataset.csv via <code>core.common.load_dataset</code>, SSOT column mapping) — not the cleaned/canonical view. The COMPLETE fallback review pool lives at <a href="/gate/fallback"><strong>/gate/fallback</strong></a> — every pair, full strings, no truncation.</p>
-{''.join(findings)}
+ <h1>ER · Gate decisions — original-column evidence</h1>
+ <p class="status">{len(g):,} candidate pair gates · {counts.get('proceed', 0):,} proceed · {counts.get('hard_no', 0):,} hard-no · {counts.get('fallback', 0):,} fallback · every fallback pair with full strings, no truncation · deciding clause = <code>gate_reason</code></p>
+ {lane_note}
+ <p><strong>Original columns, as exported · no cleaning.</strong> Every sampled pair below is joined back to the raw 13-column feed (dataset.csv via <code>core.common.load_dataset</code>, SSOT column mapping) — not the cleaned/canonical view. The COMPLETE fallback review pool lives at <a href="/gate/fallback"><strong>/gate/fallback</strong></a> — every pair, full strings, no truncation.</p>
+ {''.join(findings)}
 <p class="muted"><a href="/">← home</a> · <a href="/datagen">datagen track</a> · <a href="/graphs">graphs track</a></p>
 </body></html>'''
 
