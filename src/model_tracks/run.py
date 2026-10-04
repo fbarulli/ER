@@ -86,12 +86,10 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         from core.common import resolve_model
         setup = (TRAIN_ROOT/cfg.setup_dir).resolve()
         events.emit('baseline_embedding','started',device=cfg.device)
-        baseline = forward_baseline(setup,Path(resolve_model(cfg.text_model)),device=cfg.device)
-        # The baseline model and features are now out of scope. Release this
-        # supervisor's cached allocations before the three child workers
-        # establish their independent CUDA allocators.
+        baseline, baseline_model = forward_baseline(setup,Path(resolve_model(cfg.text_model)),device=cfg.device,return_model=True)
+        # Keep this verified encoder through baseline ablation, then release
+        # supervisor allocations before workers create their CUDA allocators.
         import torch
-        torch.cuda.empty_cache()
         import shutil
         baseline_output = output/'baseline'
         baseline_output.mkdir(exist_ok=True)
@@ -100,9 +98,10 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         if cfg.post_training_ablation:
             from model_tracks.baseline_ablation import forward as forward_baseline_ablation
             events.emit('baseline_ablation','started',device=cfg.device)
-            forward_baseline_ablation(baseline_output,setup,Path(resolve_model(cfg.text_model)),device=cfg.device)
-            torch.cuda.empty_cache()
+            forward_baseline_ablation(baseline_output,setup,Path(resolve_model(cfg.text_model)),device=cfg.device,text_model=baseline_model)
             events.emit('baseline_ablation','completed',device=cfg.device)
+        del baseline_model
+        torch.cuda.empty_cache()
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
     from model_tracks.resume import TRACKS, suite_identity, validate_suite, completed_track

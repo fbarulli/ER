@@ -12,7 +12,7 @@ Rewrite of the training path with everything the 07-series left out:
                   configurable); load_best_model_at_end so the reported
                   metric is the best checkpoint, not the last.
   FULL SETTINGS    warmup_ratio, weight decay, lr scheduler, grad clipping,
-                  bf16 (on CUDA), checkpoints + save_total_limit, seeded
+                  native mixed precision (on CUDA), checkpoints + save_total_limit, seeded
                   everything, save_best_model, per-fold dev/test split.
 
 Group-aware splits throughout: gtin-level (no product straddles a fold),
@@ -20,7 +20,7 @@ and within each fold the train gtins are split again into train/dev for
 early stopping (dev NEVER touches test).
 
 Device: CPU here, CUDA on the Colab VM unchanged — the pipeline reads
-torch.cuda.is_available() and flips bf16/batch-size guidance, nothing else.
+torch.cuda.is_available() and flips precision/batch-size guidance, nothing else.
 
 Usage:
   python src/training/train.py --loss contrastive     (entry; src/training/ is a package)
@@ -4348,6 +4348,9 @@ def train_one_config(
                     )
                     trace_artifact("checkpoint_repo", checkpoint, producer="training.training")
 
+            # T4 can emulate BF16, but has native FP16 tensor cores. Avoid
+            # selecting emulated BF16 from PyTorch's permissive default probe.
+            native_bf16 = on_cuda and torch.cuda.is_bf16_supported(including_emulation=False)
             model_tag = str(model_id).rstrip("/").rsplit("/", 1)[-1]
             args_hf = STArgs(
                 output_dir=str(checkpoint_dir),
@@ -4358,7 +4361,8 @@ def train_one_config(
                 weight_decay=cfg["weight_decay"],
                 lr_scheduler_type=cfg["lr_scheduler"],
                 max_grad_norm=cfg["max_grad_norm"],
-                bf16=on_cuda and torch.cuda.is_bf16_supported(),
+                bf16=native_bf16,
+                fp16=on_cuda and not native_bf16,
                 # early stopping: eval every eval_steps, stop on plateau,
                 # restore the best checkpoint at the end
                 eval_strategy="steps",

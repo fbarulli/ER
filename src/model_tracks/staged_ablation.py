@@ -59,7 +59,7 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None):
     return setup/'ablation_templates'
 
 
-def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_role='selected',saved_text=None):
+def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_role='selected',saved_text=None,graph_encoder=None):
     from core.common import TRAIN_ROOT
     template = setup/'ablation_templates'/track
     request = json.loads((template/'request.json').read_text())
@@ -94,5 +94,5 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
         if saved_text is None and request['settings']['retrieval_catalog'] == 'full':
             saved_text = (output/'text__vectors.npz' if track == 'text' else
                           setup/'shared_minilm__embeddings.npz' if track == 'hybrid' else None)
-        encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model)
+        encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder)
     return path

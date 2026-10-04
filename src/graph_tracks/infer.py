@@ -20,6 +20,7 @@ from graph_tracks.train import write_json
 class GraphEncoder:
     def __init__(self, checkpoint: Path, device='cpu', *, prepared_support=None):
         self.checkpoint = checkpoint
+        self.checkpoint_sha256 = file_hash(checkpoint)
         track = checkpoint_track(checkpoint)
         payload = torch.load(checkpoint, map_location=device, weights_only=False)
         if payload.get('schema') != 'er-graph-checkpoint-v1':
@@ -89,11 +90,15 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         PreparedGraphInputs(plan=prepared_plan, arrays=prepared_arrays).validate_catalog(records)
         if prepared_plan['ids'] != ids or prepared_plan['listings_sha256'] != file_hash(listings):
             raise ValueError('prepared inference population mismatch')
-        support = load_batch(prepared_arrays, 'train', device, prepared_plan['vocabulary'])
+        support = (load_batch(prepared_arrays, 'train', device, prepared_plan['vocabulary'])
+                   if encoder is None else None)
     else:
         support = None
         if device == 'cuda':
             raise ValueError('CUDA inference requires locally prepared graph tensors')
+    if encoder is not None and (encoder.checkpoint_sha256 != file_hash(checkpoint)
+                                or encoder.device != device):
+        raise ValueError('shared graph encoder differs from export checkpoint/device')
     encoder = encoder or GraphEncoder(checkpoint, device, prepared_support=support)
     if prepared_plan is not None and prepared_plan['vocabulary'] != encoder.vocabulary:
         raise ValueError('prepared inference vocabulary differs from checkpoint')
@@ -168,7 +173,7 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
 
 
 def forward_outputs(checkpoint, listings, pair_path, output, cfg, *, text_cache=None,
-                    prepared_plan=None, prepared_arrays=None):
+                    prepared_plan=None, prepared_arrays=None, return_encoder=False):
     """Save GPU forward results for CPU-only analysis after session teardown."""
     from graph_tracks.train import load_pairs
     from graph_tracks.prepared_inputs import load_plan, PLAN
@@ -192,25 +197,21 @@ def forward_outputs(checkpoint, listings, pair_path, output, cfg, *, text_cache=
         raise ValueError('CUDA forward export requires locally prepared pair indices')
     else:
         pair_data = load_pairs(pair_path, records)
-    checkpoint_track(checkpoint)
-    payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
+    from graph_tracks.prepared_inputs import load_batch
+    support = (load_batch(prepared_arrays, 'train', cfg.device, prepared_plan['vocabulary'])
+               if prepared_plan is not None else None)
+    encoder = GraphEncoder(checkpoint, cfg.device, prepared_support=support)
+    del support
     for key, path in [('listings_sha256', listings), ('pairs_sha256', pair_path)]:
-        if payload['manifest'].get(key) != file_hash(path):
+        if encoder.manifest.get(key) != file_hash(path):
             raise ValueError(f'forward export must use checkpoint-bound inputs: {key}')
-    # The export owns graph support. Retain only scorer weights here rather
-    # than another catalog-sized support/text copy during its forward pass.
-    scorer_state, text_dim = payload['scorer'], payload['text_dim']
-    del payload
     inference = export(checkpoint, listings, output, text_cache=text_cache,
                        device=cfg.device, batch_size=cfg.inference_batch_size,
-                       prepared_plan=prepared_plan, prepared_arrays=prepared_arrays)
+                       encoder=encoder, prepared_plan=prepared_plan, prepared_arrays=prepared_arrays)
     if owned_arrays is not None:
         owned_arrays.close()
     track = checkpoint_track(checkpoint)
-    # Scoring needs weights, not graph context; do not reconstruct it.
-    scorer = PairScorer(bool(text_dim)).to(cfg.device).eval()
-    scorer.load_state_dict(scorer_state)
-    del scorer_state
+    scorer = encoder.scorer
     with np.load(inference / name(track, 'vectors.npz'), allow_pickle=False) as cache:
         vectors = torch.as_tensor(cache['embeddings'], device=cfg.device)
     text = None if text_cache is None else torch.as_tensor(
@@ -230,7 +231,7 @@ def forward_outputs(checkpoint, listings, pair_path, output, cfg, *, text_cache=
                     report_test=cfg.report_test, forward_only=True)
     from graph_tracks.artifacts import GraphForwardManifest
     write_json(manifest_path, GraphForwardManifest.model_validate(manifest).model_dump(by_alias=True))
-    return inference
+    return (inference, encoder) if return_encoder else inference
 
 
 def main():

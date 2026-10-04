@@ -107,9 +107,10 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
             checkpoint = Path(json.loads(selected[0].read_text())['path'])
             settings['device'] = cfg.device
             settings.update(cfg.graph_execution_overrides())
-            forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
+            _,selected_graph_encoder = forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
                 output/(track+'__inference'),GraphConfig.model_validate(settings),
-                text_cache=TRAIN_ROOT/settings['text_cache'] if settings.get('text_cache') else None)
+                text_cache=TRAIN_ROOT/settings['text_cache'] if settings.get('text_cache') else None,
+                return_encoder=True)
         events.emit('inference_export','completed',device=cfg.device)
         if cfg.post_training_ablation:
             from model_tracks.staged_ablation import forward as forward_ablation
@@ -117,10 +118,13 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                 from training.validation_inference import resolve_best_checkpoint
                 checkpoint,_ = resolve_best_checkpoint(output)
             events.emit('attribute_ablation_export','started',device=cfg.device)
-            forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device)
+            forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device,
+                graph_encoder=selected_graph_encoder if track != 'text' else None)
             events.emit('attribute_ablation_export','completed',device=cfg.device)
         if track == 'text':
             del selected_text_model
+        else:
+            del selected_graph_encoder
     if track == 'text' and not gpu_only:
         from model_tracks.text_report import complete
         events.emit('postprocess', 'started', report_test=cfg.report_test)

@@ -161,6 +161,14 @@ before the three training workers start. After checkpoint selection, text,
 GNN-only, and hybrid each run their prepared interventions using their own
 selected best checkpoint. Baseline and trained-text results remain separate.
 
+The supervisor reuses the verified baseline MiniLM encoder for token-policy
+validation, baseline export and baseline ablation, then releases it before
+starting workers. Each worker reuses its selected text or graph encoder between
+inference export and ablation; checkpoint/device bindings still apply.
+Text CUDA training uses native BF16 when supported, otherwise FP16 with the
+trainer's gradient scaling (including Tesla T4). CPU training stays float32.
+Batch sizes, early stopping, evaluation and checkpoint retention are unchanged.
+
 Both exports enforce checkpoint/input hashes, float32, finite normalized
 vectors, ID alignment, and atomic publication. Pydantic prepared-input models
 validate token/graph row coverage. Input/config/parser changes require a fresh

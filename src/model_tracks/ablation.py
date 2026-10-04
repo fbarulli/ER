@@ -318,7 +318,7 @@ def load_prepared(request_path, request):
 
 
 @scoped_request
-def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None):
+def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None,graph_encoder=None):
     """Colab inference only; all interventions and texts arrive prepared."""
     import torch
     from model_tracks.embedding_forward import validate_embedding_device
@@ -341,6 +341,8 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         expected_checkpoint = checkpoint_identity(resolve(checkpoint))
         if model is not None and getattr(model,'_er_checkpoint_sha256',None) != expected_checkpoint:
             raise ValueError('shared text model checkpoint differs from frozen request')
+        if model is not None and model.device.type != device:
+            raise ValueError('shared text model device differs from frozen request')
         if model is None:
             model = SentenceTransformer(str(resolve(checkpoint)),device=device,local_files_only=True)
         model.eval()
@@ -391,8 +393,12 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
     if track != 'text':
         from graph_tracks.infer import GraphEncoder
         vocabulary = plan['vocabulary']
-        support = load_batch(arrays,'support',device,vocabulary)
-        encoder = GraphEncoder(resolve(request['checkpoint']),device,prepared_support=support)
+        encoder = graph_encoder
+        if encoder is None:
+            support = load_batch(arrays,'support',device,vocabulary)
+            encoder = GraphEncoder(resolve(request['checkpoint']),device,prepared_support=support)
+        elif encoder.checkpoint_sha256 != file_hash(resolve(request['checkpoint'])) or encoder.device != device:
+            raise ValueError('shared graph encoder differs from frozen checkpoint/device')
         if encoder.vocabulary != vocabulary:
             raise ValueError('prepared vocabulary differs from checkpoint')
         graph_batches = {key:[load_batch(arrays,prefix,device,vocabulary) for prefix in prefixes]

@@ -27,14 +27,14 @@ class BaselineCalibration(BaseModel):
     retraining: Literal[False] = False
 
 
-def forward(output: Path, setup: Path, checkpoint: Path, *, device: str):
+def forward(output: Path, setup: Path, checkpoint: Path, *, device: str, text_model=None):
     """Reuse text interventions and frozen catalog vectors in this suite session."""
     from model_tracks.staged_ablation import forward as forward_staged
     template = json.loads((setup/'ablation_templates/text/request.json').read_text())
     saved = (setup/'shared_minilm__embeddings.npz'
              if template['settings']['retrieval_catalog'] == 'full' else None)
     return forward_staged(output, setup, 'text', checkpoint, device=device,
-                          checkpoint_role='baseline', saved_text=saved)
+                          checkpoint_role='baseline', saved_text=saved, text_model=text_model)
 
 
 def complete(output: Path, setup: Path, *, config: Path | None = None):

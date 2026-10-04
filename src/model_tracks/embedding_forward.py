@@ -36,7 +36,7 @@ class PreparedEmbeddingForward(BaseModel):
     def export_location(self):
         return 'Colab GPU' if self.device == 'cuda' else 'Colab CPU'
 
-    def forward(self):
+    def forward(self, *, model=None):
         import torch
         from sentence_transformers import SentenceTransformer
         from core.encoding_inputs import PreparedTokenInputs, tokenization_policy, load_token_features
@@ -45,7 +45,12 @@ class PreparedEmbeddingForward(BaseModel):
         checkpoint_digest = checkpoint_hash(self.checkpoint)
         if file_hash(self.tokens_path) != self.tokens_sha256:
             raise ValueError('embedding tokens changed before forwarding')
-        model = SentenceTransformer(str(self.checkpoint), device=self.device, local_files_only=True)
+        if model is None:
+            model = SentenceTransformer(str(self.checkpoint), device=self.device, local_files_only=True)
+        elif (getattr(model, '_er_checkpoint_sha256', None) != checkpoint_digest
+              or model.device.type != self.device):
+            raise ValueError('shared embedding model checkpoint/device differs from prepared export')
+        model._er_checkpoint_sha256 = checkpoint_digest
         model.eval()
         if tokenization_policy(model) != self.plan['tokenization']:
             raise ValueError('checkpoint native tokenizer differs from prepared export')
