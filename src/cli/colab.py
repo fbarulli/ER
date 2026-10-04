@@ -4322,25 +4322,26 @@ def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
     )
 
 
-def stop(*, stop_local_owner: bool = False) -> None:
+def stop(*, stop_local_owner: bool = False) -> bool:
+    confirmed = False
     print(f"[stop] tearing down '{SESSION}'")
     # RULING 2026-09-10 (silent-degradation audit): JUSTIFIED-KEEP.
     # stop() runs in main()'s finally — if the lane itself raised, the
     # lane's exception is the root cause and must stay the error the
     # operator sees; raising here would MASK it with a teardown failure
-    # and abort nothing (no local data or pipeline state depends on the
-    # VM being gone). But it must not be silent: an unreleased VM burns
+    # in the finally path. Callers that require confirmed release inspect
+    # the returned boolean before beginning CPU postprocessing. Never hide it: an unreleased VM burns
     # Colab GPU quota until manually reaped, so warn loudly with the
     # consequence + the exact recovery command.
     try:
-        result = colab("stop", "-s", SESSION, check=False)
+        result = colab("stop", "-s", SESSION, check=False, timeout=30)
         if result.returncode:
             print(
                 f"[warn] VM release command returned rc={result.returncode}; "
                 f"stdout={result.stdout[-2000:]!r} stderr={result.stderr[-2000:]!r}",
                 file=sys.stderr,
             )
-        status = colab("sessions", check=False)
+        status = colab("sessions", check=False, timeout=30)
         if SESSION in (status.stdout or ""):
             print(
                 f"[warn] teardown verification still lists '{SESSION}'; "
@@ -4348,6 +4349,7 @@ def stop(*, stop_local_owner: bool = False) -> None:
                 file=sys.stderr,
             )
         elif status.returncode == 0:
+            confirmed = True
             print("[stop] teardown verified: session is no longer listed")
         else:
             print(
@@ -4355,7 +4357,7 @@ def stop(*, stop_local_owner: bool = False) -> None:
                 f"rc={status.returncode}: {status.stderr[-1000:]!r}",
                 file=sys.stderr,
             )
-    except subprocess.SubprocessError as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         print(
             f"[warn] VM release request failed — the VM '{SESSION}' may "
             f"STILL BE LIVE and burning Colab GPU quota until it times "
@@ -4367,6 +4369,7 @@ def stop(*, stop_local_owner: bool = False) -> None:
     if stop_local_owner:
         stop_local_launch_owner()
     print("[stop] VM release requested")
+    return confirmed
 
 
 def main() -> None:

@@ -279,7 +279,20 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
             if marker != {'track': track, 'status': 'ok', 'postprocess_complete': False}:
                 raise ValueError(f'{track} missing verified training-only completion')
     # Release GPU quota before local inference, indexing, reporting or publishing.
-    backend.stop()
+    # stop() is deliberately non-raising for launcher finally blocks. Require
+    # a verified release here so reporting cannot overlap an idle GPU session.
+    import time
+    for release_attempt in range(3):
+        if backend.stop() is True:
+            break
+        if release_attempt < 2:
+            time.sleep(2 * (release_attempt + 1))
+    else:
+        raise RuntimeError(
+            f"Colab session {backend.SESSION!r} termination could not be verified; "
+            f"CPU postprocessing refused. Verified result archive retained at {local}. "
+            f"Release the session with colab stop -s {backend.SESSION} before completing locally."
+        )
     if settings['publish_git'] or settings.get('publish_dvc', False):
         import os
         token = backend._env_value('DVC_API_KEY')
