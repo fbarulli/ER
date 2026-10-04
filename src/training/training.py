@@ -3929,6 +3929,8 @@ def train_one_config(
                 },
             ).parent
             if resume and not any(checkpoint_dir.glob("checkpoint-*/trainer_state.json")):
+                if checkpoint_publication_deferred():
+                    raise FileNotFoundError(f"resume requires downloaded local trainer checkpoints: {checkpoint_dir}")
                 from training.dvc_store import restore_checkpoint
 
                 restore_checkpoint(RESULTS, checkpoint_dir)
@@ -4487,12 +4489,13 @@ def train_one_config(
                     ),
                     multiplier=float(cfg["late_epoch_decay_multiplier"]),
                 ),
-                DvcCheckpointCallback(),
                 EarlyStoppingCallback(
                     early_stopping_patience=cfg["patience"],
                     early_stopping_threshold=cfg["es_threshold"],
                 ),
             ]
+            if not checkpoint_publication_deferred():
+                callbacks.append(DvcCheckpointCallback())
             if (
                 (ann_refresh_enabled or attribute_conflict_refresh_enabled)
                 and loss == "contrastive"
@@ -6040,10 +6043,15 @@ def run_hpo(
         control_plane = create_storage(storage_from_environment())
         print(f"[hpo-control] PostgreSQL study={study_name}", flush=True)
     if args.resume and control_plane is None:
-        from training.dvc_store import restore_checkpoint
+        if checkpoint_publication_deferred():
+            if not study_db.is_file():
+                raise FileNotFoundError(f"resume requires downloaded local Optuna study: {study_db}")
+            print(f"[resume] using local Optuna study: {study_db.name}", flush=True)
+        else:
+            from training.dvc_store import restore_checkpoint
 
-        restore_checkpoint(RESULTS, study_db)
-        print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
+            restore_checkpoint(RESULTS, study_db)
+            print(f"[resume] restored Optuna study from DVC: {study_db.name}", flush=True)
     storage = control_plane or f"sqlite:///{study_db}"
     study = optuna.create_study(
         direction="maximize",
