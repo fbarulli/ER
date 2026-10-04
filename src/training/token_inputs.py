@@ -19,6 +19,7 @@ def checkpoint_policy(model):
 
 def prepare_training_tokens(model, payload, *, batch_size=256):
     """Store unpadded native features once per unique text and prompt."""
+    payload = list(payload)
     policy = checkpoint_policy(model)
     texts = list(dict.fromkeys(payload))
     prompts = list(dict.fromkeys(["", policy.get("prompt") or "", *getattr(model, "prompts", {}).values()]))
@@ -178,6 +179,10 @@ class ObjectiveDataCollator(SentenceTransformerDataCollator):
         # Detect the field structurally rather than treating a
         # list of optional values as a valid batch. If a training
         # row is malformed, direct indexing raises loudly.
+        for name in ("pair_id", "structured_features"):
+            present = [name in row for row in features]
+            if any(present) and not all(present):
+                raise ValueError(f"objective batch has inconsistent {name} metadata")
         if features and "pair_id" in features[0]:
             batch["pair_id"] = torch.tensor(
                 [row["pair_id"] for row in features], dtype=torch.long

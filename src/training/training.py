@@ -3178,7 +3178,12 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
             from sentence_transformers.base.sampler import NoDuplicatesBatchSampler, DefaultBatchSampler
             generator = torch.Generator().manual_seed(seed + fold_i)
             if loss == "mnrl":
-                sampler = NoDuplicatesBatchSampler(ds, batch_size=batch_size, drop_last=False,
+                # Native duplicate checks inspect every non-label column.
+                # Population telemetry would otherwise force all same-population
+                # rows into separate batches and destroy the in-batch pool.
+                from training.token_inputs import TEXT_COLUMNS
+                text_ds = ds.select_columns([name for name in ds.column_names if name in TEXT_COLUMNS])
+                sampler = NoDuplicatesBatchSampler(text_ds, batch_size=batch_size, drop_last=False,
                                                    valid_label_columns=["label"], generator=generator, seed=seed+fold_i)
             else:
                 sampler = DefaultBatchSampler(torch.utils.data.RandomSampler(ds, generator=generator),

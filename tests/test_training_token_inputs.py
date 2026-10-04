@@ -184,3 +184,42 @@ def test_lookup_preserves_internal_mask_holes_and_token_positions():
     assert actual['input_ids'].shape==expected['input_ids'].shape
     torch.testing.assert_close(actual['input_ids'],expected['input_ids'])
     torch.testing.assert_close(actual['attention_mask'],expected['attention_mask'])
+
+
+def test_token_preparation_materializes_iterable_before_fingerprinting():
+    model = Encoder()
+    table = prepare_training_tokens(model, iter(['one', 'two', 'one']))
+    PreparedTokenLookup(model, table, ['one', 'two', 'one'])
+
+
+@pytest.mark.parametrize('metadata,value', [('pair_id', 7), ('structured_features', [[1.], [2.]])])
+def test_collator_rejects_metadata_missing_from_first_row(metadata, value):
+    model = Encoder()
+    collator = ObjectiveDataCollator(preprocess_fn=model.preprocess)
+    rows = [{'anchor': 'one', 'positive': 'two'},
+            {'anchor': 'three', 'positive': 'four', metadata: value}]
+    with pytest.raises(ValueError, match=f'inconsistent {metadata}'):
+        collator(rows)
+
+
+def test_uncontrolled_mnrl_sampler_ignores_shared_population_metadata(monkeypatch):
+    import training.training as trainer
+    original = trainer.load_config
+    def configuration():
+        cfg = copy.deepcopy(original())
+        cfg['training']['batch_sampler']['enabled'] = False
+        cfg['training']['epochs'] = 1
+        return cfg
+    monkeypatch.setattr(trainer, 'load_config', configuration)
+    payload = ['anchor a', 'positive a', 'negative a', 'anchor b', 'positive b', 'negative b']
+    result = trainer._prepare_objective_plan(
+        loss='mnrl', payload=payload, structured_features=np.zeros((6, 2), np.float32),
+        train_all=np.array([[0, 1], [3, 4]]), tr_negs=np.array([[0, 2], [3, 5]]),
+        tr_neg_sources=np.array(['gate', 'gate']), hp_pairs=np.empty((0, 2), int),
+        row_bc=np.array(['a', 'a', 'c', 'b', 'b', 'd']), tr_bc={'a', 'b', 'c', 'd'},
+        use_hp=False, mask_audit=[], hard_negative_mask_audit=[],
+        hard_train=np.empty((0, 2), int), seed=42, fold_i=0)
+    assert result['objective']['dataset']['population'] == ['base', 'base']
+    for plan in result['objective']['sampler'].values():
+        assert len(plan['epochs'][0]) == 1
+        assert sorted(plan['epochs'][0][0]) == [0, 1]
