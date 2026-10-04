@@ -271,7 +271,10 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         train_pairs = torch.tensor(train_pair_indices, device=cfg.device)
         train_labels = torch.tensor(pairs["train"][1], device=cfg.device)
         dev_pairs = torch.tensor(dev_pair_indices, device=cfg.device)
-        support_text = None if vectors is None else torch.as_tensor(vectors[support_indices], device=cfg.device)
+        # Retain the immutable host features for checkpoint serialization rather
+        # than downloading the same support population after every epoch.
+        support_text_cpu = None if vectors is None else torch.as_tensor(vectors[support_indices])
+        support_text = None if support_text_cpu is None else support_text_cpu.to(cfg.device)
         dev_text = None if vectors is None else torch.as_tensor(vectors[dev_indices], device=cfg.device)
         if prepared_arrays is not None:
             prepared_arrays.close()
@@ -316,8 +319,14 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 gradient_parameters.extend((f'scorer.{parameter_name}', parameter)
                                            for parameter_name, parameter in scorer.named_parameters()
                                            if parameter.grad is not None)
-                # One host transfer instead of synchronizing CUDA once per parameter.
-                norm_values = torch.stack([parameter.grad.norm() for _, parameter in gradient_parameters]).detach().cpu().tolist()
+                # Loss telemetry shares the gradient-norm transfer; logging and
+                # persisted metrics reuse these pre-update scalar values.
+                host_values: list[float] = torch.stack([
+                    loss.detach(), classification.detach(), metric.detach(),
+                    *[parameter.grad.norm() for _, parameter in gradient_parameters],
+                ]).detach().cpu().tolist()
+                loss_value, classification_value, metric_value = host_values[:3]
+                norm_values = host_values[3:]
                 gradient_norms = dict(zip((parameter_name for parameter_name, _ in gradient_parameters), norm_values))
                 if not all(np.isfinite(value) for value in gradient_norms.values()):
                     raise RuntimeError("nonfinite gradients")
@@ -332,9 +341,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 with torch.no_grad(), profiler.section('graph/dev_evaluation'):
                     embeddings = model.encode(dev_batch, model.context(support, support_text), dev_text)
                     dev_scores = scorer(embeddings, dev_pairs, dev_text).sigmoid().cpu().numpy()
-                metrics = {"epoch": epoch, "train_loss": loss.item(),
-                           "train_classification_loss": classification.item(),
-                           "train_metric_loss": metric.item(), **quality(pairs["dev"][1], dev_scores),
+                metrics = {"epoch": epoch, "train_loss": loss_value,
+                           "train_classification_loss": classification_value,
+                           "train_metric_loss": metric_value, **quality(pairs["dev"][1], dev_scores),
                            "epoch_seconds": time.monotonic() - started}
                 if cfg.device == "cuda":
                     metrics["gpu_allocated_gb"] = torch.cuda.memory_allocated() / 1024**3
@@ -358,7 +367,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     best_metric, best_path = metrics["dev_pr_auc"], checkpoint
                 payload = {"schema": "er-graph-checkpoint-v1", "manifest": manifest,
                            "vocabulary": vocabulary, "support_records": support_records,
-                           "support_text": None if support_text is None else support_text.detach().cpu(),
+                           "support_text": support_text_cpu,
                            "text_dim": model.text_dim, "model": model.state_dict(),
                            "scorer": scorer.state_dict(), "optimizer": optimizer.state_dict(),
                            "scheduler": scheduler.state_dict() if scheduler is not None else None,
@@ -388,7 +397,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     wandb_url=wandb.run_url, best_checkpoint_step=int(best_path.parent.name.split("-")[-1]),
                     best_metric=best_metric, **{k: v for k, v in metrics.items() if k != "epoch"})
                 logger.info("[graph-train] epoch=%d/%d loss=%.6f classification_loss=%.6f metric_loss=%.6f dev_pr_auc=%.6f dev_precision_at_recall=%.6f seconds=%.3f best=%s selected_checkpoint=%s",
-                            epoch, cfg.epochs, loss.item(), classification.item(), metric.item(),
+                            epoch, cfg.epochs, loss_value, classification_value, metric_value,
                             metrics['dev_pr_auc'], metrics['dev_precision_at_recall'], metrics['epoch_seconds'], improved, best_path)
                 logger.info("[graph-checkpoint] write complete manifest=%s epoch_metrics=%s",
                             checkpoint_dir / name(cfg.track, 'checkpoint_manifest.json'),

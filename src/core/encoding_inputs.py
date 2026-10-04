@@ -3,11 +3,17 @@
 No token truncation or embedding-dimension truncation is permitted. Model
 forward passes consume these features directly, without a second tokenizer.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import inspect
 from collections.abc import Mapping
+from typing import Any, TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+if TYPE_CHECKING:
+    import torch
 
 
 class PreparedTokenInputs(BaseModel):
@@ -159,17 +165,22 @@ def prepare_token_batches(model, texts, arrays, *, batch_size, prefix='text'):
     return {'tokenization':policy,'token_batches':batches,'token_lengths':lengths,'truncated_inputs':0}
 
 
-def load_token_features(arrays, batch, device):
+def load_token_features(
+    arrays: Mapping[str, Any], batch: Mapping[str, Any], device: str | torch.device,
+) -> dict[str, Any]:
     """Load frozen native features without retokenizing or coercing token dtypes."""
     import torch
-    features = {key:torch.as_tensor(arrays[batch['prefix']+'/'+key],device=device)
+    features = {key:torch.as_tensor(arrays[batch['prefix']+'/'+key],device='cpu')
                 for key in batch['keys']}
     constants = batch.get('constants',{})
     if set(constants) & set(features):
         raise ValueError('prepared token constants collide with tensor features')
     features.update(constants)
+    # Frozen inputs are checked before upload: Boolean mask reductions on CUDA
+    # would otherwise force device synchronization for every encoder batch.
     _validate_token_features(features,batch['count'])
-    return features
+    return {key: value.to(device) if isinstance(value, torch.Tensor) else value
+            for key, value in features.items()}
 
 
 def enable_zero_truncation(model):
