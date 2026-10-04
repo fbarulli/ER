@@ -210,3 +210,52 @@ def test_attribute_diff_uses_only_populated_evidence():
     assert outcome["flavor"] is False
     assert outcome["sweetener"] is False
     assert outcome["package_type"] is False
+
+
+def _discriminator_pairs(groups):
+    return pd.DataFrame([
+        {"population": population, "anchor_gtin": group,
+         "anchor_text": "lemon soda", "partner_text": "orange soda", "score": 0.5}
+        for group in groups
+        for population in ("real_partner", "minted_partner")
+    ])
+
+
+def test_discriminator_single_group_is_insufficient():
+    from scripts.negative_supply_discriminator import discriminate
+    report = discriminate(_discriminator_pairs(["same"] * 10))
+    assert report["verdict"] == "insufficient"
+    assert "independent anchor groups" in report["reason"]
+
+
+def test_discriminator_single_class_validation_fold_is_insufficient():
+    from scripts.negative_supply_discriminator import discriminate
+    pairs = _discriminator_pairs(["a"] * 10)
+    pairs.loc[pairs.population == "minted_partner", "anchor_gtin"] = "b"
+    assert discriminate(pairs)["verdict"] == "insufficient"
+
+
+def test_discriminator_missing_gtins_do_not_collapse_to_nan_group():
+    from scripts.negative_supply_discriminator import discriminate
+    pairs = _discriminator_pairs([np.nan] * 10)
+    report = discriminate(pairs)
+    assert report["verdict"] == "not-separable"
+    assert np.isfinite(report["auc_gtin_grouped_cv"])
+
+
+def test_discriminator_cli_reads_config_and_preserves_gtins(tmp_path, monkeypatch):
+    import json
+    import sys
+    from scripts import negative_supply_discriminator as script
+    config = tmp_path / "supply.json"
+    config.write_text(json.dumps({"discriminator": {"min_arm_rows": 2}}))
+    monkeypatch.setenv("EUROMONITOR_NEGATIVE_SUPPLY_SPEC", str(config))
+    pairs = tmp_path / "pairs.csv"
+    _discriminator_pairs(["00123", "00456"]).to_csv(pairs, index=False)
+    def inspect(frame, spec):
+        assert spec.min_arm_rows == 2
+        assert frame.anchor_gtin.iloc[0] == "00123"
+        return {"verdict": "not-separable"}
+    monkeypatch.setattr(script, "discriminate", inspect)
+    monkeypatch.setattr(sys, "argv", ["discriminator", str(pairs)])
+    script.main()

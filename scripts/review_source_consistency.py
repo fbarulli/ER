@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import ast
 import csv
+import json
 from collections import Counter
 from pathlib import Path
 
@@ -76,6 +77,7 @@ def main() -> None:
         raise AuditGuardError("canonical records carry no attribute_consistency_flags column")
     rows: list[dict[str, str]] = []
     counts: Counter[str] = Counter()
+    flagged_gtins: set[str] = set()
     for record in frame.to_dict("records"):
         flags = _parse_flag_cell(record.get("attribute_consistency_flags"))
         defects = sorted(set(flags) & set(SOURCE_DEFECT_FLAGS))
@@ -83,8 +85,12 @@ def main() -> None:
             counts[flag] += 1
         if not defects:
             continue
+        if defects:
+            flagged_gtins.add(str(record.get("gtin", "")))
         for flag in defects:
             rows.append({
+                "dimension": flag,
+                "sku_id": record.get("gtin", ""),
                 "flag": flag,
                 "gtin": record.get("gtin", ""),
                 "canonical": record.get("canonical", ""),
@@ -98,7 +104,7 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     sheet = args.output_dir / "source_defect_sheet.csv"
-    columns = ["flag", "gtin", "canonical", "mode_flavor", "attribute",
+    columns = ["dimension", "sku_id", "flag", "gtin", "canonical", "mode_flavor", "attribute",
                "source_rows", "verdict", "note"]
     with sheet.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
@@ -106,15 +112,15 @@ def main() -> None:
         writer.writerows(rows)
     report = {
         "canonical_records": len(frame),
-        "flagged_gtins": sum(counts.values()),
+        "flagged_gtins": len(flagged_gtins),
         "per_flag": dict(sorted(counts.items())),
         "sheet_rows": len(rows),
         "verdict_key_format": "<flag>|<gtin>",
     }
     (args.output_dir / "review_manifest.json").write_text(
-        __import__("json").dumps(report, indent=2) + "\n"
+        json.dumps(report, indent=2) + "\n"
     )
-    print(__import__("json").dumps(report, indent=2))
+    print(json.dumps(report, indent=2))
     print(f"sheet -> {sheet}")
 
 

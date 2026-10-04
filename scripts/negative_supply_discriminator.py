@@ -72,8 +72,7 @@ def discriminate(pairs: pd.DataFrame, spec=None) -> dict:
 
     spec = spec or DiscriminatorSpec()
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import GroupKFold, cross_val_score
+    from sklearn.model_selection import StratifiedGroupKFold, cross_val_score
 
     real = pairs[
         pairs.population.isin(["base_negative", "real_partner"])
@@ -96,16 +95,30 @@ def discriminate(pairs: pd.DataFrame, spec=None) -> dict:
     y = (arm["population"] == "minted_partner").astype(int).to_numpy()
     groups = []
     for position, row in enumerate(arm.itertuples(index=False)):
-        anchor = str(getattr(row, "anchor_gtin", "") or "").strip()
+        value = getattr(row, "anchor_gtin", "")
+        anchor = "" if pd.isna(value) else str(value).strip()
         groups.append(anchor if anchor else f"__mint__{position}")
     groups = np.asarray(groups)
     model = LogisticRegression(max_iter=spec.max_iter)
-    splitter = GroupKFold(
-        n_splits=min(spec.cv_folds, np.unique(groups).shape[0])
-    )
-    auc = float(cross_val_score(
-        model, X, y, cv=splitter, scoring="roc_auc", groups=groups
-    ).mean())
+    group_count = np.unique(groups).shape[0]
+    if group_count < 2:
+        return {
+            "verdict": "insufficient",
+            "real_rows": int(len(real)), "minted_rows": int(len(minted)),
+            "reason": "need at least two independent anchor groups",
+        }
+    splitter = StratifiedGroupKFold(n_splits=min(spec.cv_folds, group_count))
+    splits = list(splitter.split(X, y, groups))
+    if any(np.unique(y[index]).size < 2 for split in splits for index in split):
+        return {
+            "verdict": "insufficient",
+            "real_rows": int(len(real)), "minted_rows": int(len(minted)),
+            "reason": "grouped CV requires both arms in every training and validation fold",
+        }
+    scores = cross_val_score(model, X, y, cv=splits, scoring="roc_auc", error_score="raise")
+    if not np.isfinite(scores).all():
+        raise ValueError("discriminator grouped CV produced non-finite AUC scores")
+    auc = float(scores.mean())
     model.fit(X, y)
     coefficients = dict(sorted(zip(names, model.coef_[0].round(4)), key=lambda kv: -abs(kv[1])))
     verdict = "SEPARABLE" if auc >= spec.separable_auc else (
@@ -128,16 +141,19 @@ def discriminate(pairs: pd.DataFrame, spec=None) -> dict:
 
 
 def main() -> None:
-    from training.negative_supply import NegativeSupplySpec
+    from training.negative_supply import DiscriminatorSpec, load_spec
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pairs_csv", type=Path, help="emitted pairs.csv")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
-    pairs = pd.read_csv(args.pairs_csv)
+    pairs = pd.read_csv(
+        args.pairs_csv, dtype={"anchor_gtin": str, "partner_gtin": str},
+        keep_default_na=False,
+    )
     # The lane spec owns the thresholds (env EUROMONITOR_NEGATIVE_SUPPLY_SPEC
     # JSON overrides module defaults, exactly like the mining stage).
-    supply_spec = NegativeSupplySpec()
+    supply_spec = load_spec()
     spec = supply_spec.discriminator or DiscriminatorSpec()
     report = discriminate(pairs, spec=spec)
     print(json.dumps(report, indent=2, sort_keys=True))

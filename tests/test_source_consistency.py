@@ -54,3 +54,24 @@ def test_clean_product_has_no_flags():
         "Volume: 330; Flavour: apple; Carbonization: still", "apple juice", {"sugar"}
     )
     assert flags == frozenset()
+
+
+def test_source_review_sheet_supports_verdict_merger_and_counts_gtins(tmp_path, monkeypatch):
+    import csv
+    import json
+    import sys
+    import pandas as pd
+    from scripts import review_source_consistency as script
+    frame = pd.DataFrame([{
+        "gtin": "00123", "canonical": "soda", "attribute": "",
+        "attribute_consistency_flags": {"no_sugar_with_sugar", "no_aspartame_with_aspartame"},
+    }])
+    monkeypatch.setattr(script, "canonical_records_frame", lambda: frame)
+    monkeypatch.setattr(sys, "argv", ["review", "--output-dir", str(tmp_path)])
+    script.main()
+    report = json.loads((tmp_path / "review_manifest.json").read_text())
+    assert report["flagged_gtins"] == 1
+    assert report["sheet_rows"] == 2
+    with (tmp_path / "source_defect_sheet.csv").open() as handle:
+        rows = list(csv.DictReader(handle))
+    assert all(row["dimension"] == row["flag"] and row["sku_id"] == "00123" for row in rows)
