@@ -73,6 +73,9 @@ def prepare_run_plan(bundle,*,loss=None,train_frac=1.,sample=False,seed=SEED):
     )
     if fixed['skipped'] or not fixed['folds']:
         raise ValueError(f'local training plan is not ready: {fixed["skipped"]}')
+    from training.attrition import build_attrition_ledger
+    for fold in fixed['folds']:
+        fold['objective']['attrition_ledger'] = build_attrition_ledger(bundle, fold)
     return {'version':1,'identity':plan_identity(bundle,loss=loss,train_frac=train_frac,sample=sample,seed=seed),
             'holdout':{'train':train_bc,'dev':dev_bc,'test':test_bc},'inputs':fixed}
 

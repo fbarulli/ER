@@ -26,6 +26,7 @@ class AttributeAllocation(BaseModel):
     eligible_anchors: Count
     donor_values: Count
     requested: Count
+    initial_requested: Count
     minted: Count
     masked: Count
     shortfall: Count
@@ -159,7 +160,9 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
     minted_per_field, masked_per_field = Counter(), Counter()
     dedup = set()
     value_cap = max(spec.min_attribute_pairs, math.ceil(target*.03))
-    for field in sorted(eligible_fields, key=lambda f: (len(anchors[f]), f)):
+    anchor_use=Counter()
+    initial_quota=dict(quota)
+    def mint_field(field, budget):
         candidates = list(anchors[field]); rng.shuffle(candidates)
         # Round-robin source entities/vendors: each anchor gets one turn before
         # another variant; no large seller/product group monopolizes a field.
@@ -173,7 +176,8 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
                 if groups[group]: candidates.append(groups[group].pop())
         for variant in range(spec.max_variants_per_anchor_field):
             for a,b in candidates:
-                if minted_per_field[field] >= quota[field]: break
+                if minted_per_field[field] >= budget: break
+                if anchor_use[(a,b,field)] >= spec.max_variants_per_anchor_field: continue
                 source_key = normalize_entity_key(row_bc[a],str(a))
                 attempts = rng.sample(donors[field], min(spec.donor_attempts,len(donors[field])))
                 source_vendor = str(df.iloc[a].get('retailer','')) if a < len(df) else ''
@@ -190,6 +194,7 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
                     copy = len(new_payload);new_payload.append(text);new_bc.append(str(row_bc[a]))
                     minted.append((copy,b));dedup.add((a,b,text));value_use[signature] += 1
                     minted_per_field[field] += 1
+                    anchor_use[(a,b,field)] += 1
                     audits.append(MaskAuditEntry(anchor_payload_idx=a, pair_payload_idx=b,
                         copy_payload_idx=copy, copy_source_payload_idx=b, gtin=str(row_bc[a]),
                         realized_extent=len(fields[b][field])/max(len(original_payload[b].split()),1),
@@ -201,6 +206,22 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
                         fields_after={field:values}).model_dump())
                     break
                 else: rejection['no_safe_donor:'+field] += 1
+    for field in sorted(eligible_fields, key=lambda f: (len(anchors[f]), f)):
+        mint_field(field, quota[field])
+    # Transfer rejected slots to supported fields, retaining a field ceiling.
+    # Keep both the initial and final quotas so this adaptation is auditable.
+    remaining=target-len(minted)
+    if remaining:
+        quota={f:minted_per_field[f] for f in _FIELD_PREFIXES}
+        for field in sorted(eligible_fields,key=lambda f:(-weights[f],f)):
+            room=max(0,math.ceil(target*spec.max_attribute_share)-minted_per_field[field])
+            if not room: continue
+            mint_field(field,minted_per_field[field]+min(remaining,room))
+            quota[field]=minted_per_field[field]
+            remaining=target-len(minted)
+            if not remaining: break
+        if remaining and eligible_fields:
+            quota[eligible_fields[0]] += remaining
     # Mask AFTER minting. Keep the discriminating attribute and all numeric
     # features unchanged; the original clean negative view remains available.
     minted_count = len(minted)
@@ -257,6 +278,7 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
         minted_negatives=minted_count,masked_minted_negatives=len(minted)-minted_count,
         attributes={f:AttributeAllocation(positive_both_observed=positive_support[f],negative_both_observed=negative_support[f],
             eligible_anchors=len(anchors[f]),donor_values=len({tuple(v) for _,v in donors[f]}),requested=quota[f],
+            initial_requested=initial_quota[f],
             minted=minted_per_field[f],masked=masked_per_field[f],shortfall=quota[f]-minted_per_field[f],
             status='eligible' if f in eligible_fields else 'insufficient_comparable_evidence') for f in _FIELD_PREFIXES},
         rejections=dict(rejection),requested_counts=spec.counts.model_dump())

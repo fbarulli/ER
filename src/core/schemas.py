@@ -1473,6 +1473,7 @@ class BalancedAugmentationSpec(BaseModel):
     min_attribute_pairs: int = Field(default=10, ge=1)
     donor_attempts: int = Field(default=64, ge=1)
     max_variants_per_anchor_field: int = Field(default=2, ge=1)
+    max_attribute_share: float = Field(default=.35, gt=0, le=1)
     mask_extent: float = Field(default=.15, gt=0, le=.3)
 
 
