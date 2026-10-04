@@ -47,7 +47,7 @@ def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(worker, 'load_config', lambda _: SimpleNamespace(
         setup_dir='.', text_bundle='bundle', text_model='minilm_l6', epochs=1,
-        device='cpu', report_test=report_test))
+        device='cpu', report_test=report_test, post_training_ablation=False))
     monkeypatch.setattr(training.prepared_bundle, 'load_prepared_bundle',
                         lambda _: (SimpleNamespace(payload_variant='full'), {}))
     monkeypatch.setattr(worker, 'wait_for_start', lambda *_: None)
@@ -55,6 +55,13 @@ def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     monkeypatch.setattr(worker.subprocess, 'run', lambda command, **_: commands.append(command))
     monkeypatch.setattr(model_tracks.text_report, 'complete',
                         lambda output, *_, **__: (output / 'text__report.json').write_text('{}'))
+    # Since the prepared-export contract consolidation, forward() consumes the
+    # request file the training subprocess would have written; this test only
+    # asserts suite controls reach the command, so the export is stubbed.
+    import model_tracks.text_export
+    monkeypatch.setattr(model_tracks.text_export, 'forward',
+                        lambda output, *_, **__: (output / 'text__vectors.npz',
+                                                  SimpleNamespace()))
     monkeypatch.delenv('ER_INCREMENTAL_DVC', raising=False)
     worker.run(tmp_path / 'suite.yaml', 'text', 'test')
     command = commands[0]

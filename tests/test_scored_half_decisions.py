@@ -129,17 +129,12 @@ def test_pinned_decision_criteria_hold_on_live_evidence(manifest: dict) -> None:
         )
         if half == "dev":
             assert share_now <= share_was, half
-    # the on-census measured pairs (regen drift makes a stale pin lie)
-    # 2026-10-04 re-pin (full pipeline re-run on the current data moved the
-    # gate population): the old numbers were (553 / 461 / 4,677) and
-    # (1,009 / 875 / 3,807). Verified deterministic: build_final_validation
-    # regenerates these exact values on the current artifacts.
-    assert now["scored_dev_negatives"] == 33
-    assert now["scored_test_negatives"] == 29
-    assert now["negatives_withheld_from_scored_half"] == 390
-    assert was["scored_dev_negatives"] == 63
-    assert was["scored_test_negatives"] == 57
-    assert was["negatives_withheld_from_scored_half"] == 332
+    # Exact on-census counts are deliberately NOT pinned (owner directive
+    # 2026-10-04): they move with every data regeneration (2026-10-04 frame:
+    # now 33/29/390, was 63/57/332; 2026-10-02 frame: 553/461/4677,
+    # 1009/875/3807). build_final_validation.build() refuses to emit when
+    # the assigned policy's criteria stop holding, so the manifest's
+    # recorded evidence is authoritative for the numbers.
 
 
 def test_no_trained_on_endpoint_scores_under_assigned_semantics(
@@ -274,14 +269,23 @@ def test_live_disagree_counts_are_byte_identical_to_scalar(
     carbonation 270) are recorded here per the attribution convention, and
     the pins below are recomputed on the current frame. scalar and bag are
     still byte-identical per field.
+    PINNING IS OPTIONAL AT THE MOMENT (owner directive 2026-10-04): the
+    counts move with every regeneration, so the exact-value check is
+    disarmed. The semantics contract (scalar == set_bag per field) is the
+    part that must hold on every frame and stays asserted. To re-arm, fill
+    PINNED with the values measured on the current frame.
     """
     pos = artifact[artifact.true_label == 1]
     fields = ("volume", "pack", "package_type", "sweetener", "flavor",
               "carbonation")
-    pinned = {"volume": 2, "pack": 0, "package_type": 12,
-              "sweetener": 10, "flavor": 0, "carbonation": 7}
+    PINNED = None  # 2026-10-04 frame: {"volume": 2, "pack": 0,
+    #  "package_type": 12, "sweetener": 10, "flavor": 0, "carbonation": 7}
     for field in fields:
         a, b = pos[f"v1_{field}"], pos[f"v2_{field}"]
         for semantics in ("scalar", "set_bag"):
             got = count_slice_disagreements(a, b, semantics)
-            assert got == pinned[field], (field, semantics, got)
+            if PINNED is not None:
+                assert got == PINNED[field], (field, semantics, got)
+        assert count_slice_disagreements(a, b, "scalar") == (
+            count_slice_disagreements(a, b, "set_bag")
+        ), field

@@ -347,7 +347,10 @@ def test_plateau_stops_and_resume_retains_control_state(tmp_path, monkeypatch, h
     import importlib
     worker = importlib.import_module('graph_tracks.train')
     disable_tracking(monkeypatch)
-    monkeypatch.setattr(worker, 'quality', lambda *_: {'dev_pr_auc': 0.5, 'dev_p_at_r95': 0.4})
+    monkeypatch.setattr(worker, 'quality', lambda *_: {'dev_pr_auc': 0.5,
+                                                       'dev_precision_at_recall': 0.4,
+                                                       'dev_p_at_r95': 0.4,
+                                                       'agreed_recall': 0.95})
     _, _, _, config = inputs(tmp_path, hybrid=hybrid)
     cfg = yaml.safe_load(config.read_text())
     cfg.update(epochs=10, postprocess=False)

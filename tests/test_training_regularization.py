@@ -612,10 +612,11 @@ class BundleProvenanceTests(unittest.TestCase):
             drifted = copy.deepcopy(real_config)
             drifted["training"]["random_easy_negatives"]["ratio_to_hard"] = 9.99
             # Lenient mode: the drift must stay a loud warning for any bundle
-            # the audits still need to read (prepared_bundle_drift_strict off).
-            drifted["prepared_bundle_drift_strict"] = False
+            # the audits still need to read (PREPARED_BUNDLE_DRIFT_STRICT off).
             with mock.patch.object(
                 core_common, "load_config", return_value=drifted
+            ), mock.patch.dict(
+                "os.environ", {"PREPARED_BUNDLE_DRIFT_STRICT": "0"}
             ):
                 captured = io.StringIO()
                 with redirect_stdout(captured):

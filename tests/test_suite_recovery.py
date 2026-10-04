@@ -42,7 +42,7 @@ def test_recovery_rejects_unlisted_members_before_writing(tmp_path):
     with zipfile.ZipFile(archive, 'a') as source:
         source.writestr('unlisted.txt', 'unexpected')
     restored = tmp_path / 'restored'
-    with pytest.raises(ValueError, match='unlisted'):
+    with pytest.raises(ValueError, match='undeclared or missing members'):
         restore_recovery(archive, restored, 'smoke')
     assert not restored.exists()
 

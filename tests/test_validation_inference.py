@@ -173,19 +173,29 @@ class FinalInferenceContractTests(unittest.TestCase):
             _resolve_final_inference_device(oversized, "cpu")
 
     def test_the_scored_pair_census_closes_and_is_never_hardcoded(self):
-        """Exec-time accounting: the census re-measures artifacts and closes."""
+        """Exec-time accounting: the census re-measures artifacts and closes.
+
+        The census pin lives ONLY in config (audit.source_export_expected_rows);
+        the worker reads it at exec time and must not carry its own hardcoded
+        constant (that is what this test's name guards)."""
         from core.common import training_cfg
-        from training.complete_colab_worker import (  # noqa: F401
-            _EXPECTED_SOURCE_EXPORT_ROWS, _byte_stable_csv_rows,
+        import training.complete_colab_worker as worker
+        from training.complete_colab_worker import (
+            _byte_stable_csv_rows,
             scored_validation_accounting,
         )
         from core.common import F
 
-        self.assertEqual(
-            _EXPECTED_SOURCE_EXPORT_ROWS,
-            int(training_cfg().audit.source_export_expected_rows),
+        self.assertFalse(
+            [n for n in dir(worker) if "EXPECTED_SOURCE_EXPORT" in n.upper()],
+            "the worker module carries a hardcoded census constant",
         )
         census = scored_validation_accounting()
+        # the exec-time census reads the pin from config, not from a module
+        self.assertEqual(
+            census["source_export_rows"],
+            int(training_cfg().audit.source_export_expected_rows),
+        )
         self.assertEqual(
             census["deduped_rows"] + census["dropped_rows"],
             census["source_export_rows"],

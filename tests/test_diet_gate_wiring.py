@@ -8,11 +8,11 @@ _build_local_training_bundles and raises SystemExit on a violated clause,
 and the cached-bundle path refuses a bundle whose gate fails, forcing the
 loud rebuild failure.
 
-TIER 1(e) rides along: prepared_bundle_drift_strict (config/
-training.yaml, env PREPARED_BUNDLE_DRIFT_STRICT wins) turns the loader's
-dead-knob drift WARNING into a hard failure. FALSE is the default so the
-stale pre-rebuild bundle stays loadable and the audit findings stay
-reproducible until the rebuild lands.
+TIER 1(e) rides along: prepared_bundle_drift_strict (required field of the
+training config, config/training.yaml declares it; env
+PREPARED_BUNDLE_DRIFT_STRICT wins) turns the loader's dead-knob drift
+WARNING into a hard failure. The switch is env-driven here so both
+polarities are exercised regardless of the shipped config value.
 """
 
 from __future__ import annotations
@@ -114,7 +114,10 @@ class DietGateVerdictTest(unittest.TestCase):
             captured = io.StringIO()
             with redirect_stdout(captured):
                 verdict = diet_manifest_main([sys.argv[0], str(bundle)])
-            self.assertEqual(verdict, 2)
+            # Since 6b328b2 (2026-10-04): 0 pass, 2 integrity/usage failure,
+            # 3 valid input whose presentation diet misses its thresholds.
+            # Zero negative presentations is the latter.
+            self.assertEqual(verdict, 3)
 
     def test_mnrl_counted_census_passes_both_clauses(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -223,30 +226,37 @@ class PreparedBundleDriftStrictTest(unittest.TestCase):
         return path
 
     def _load_drifted(self, path: Path, *, lenient: bool) -> tuple[object, str]:
+        """A bundle recorded under a drifted masking config.
+
+        The drift signal rides the data config the loader compares against
+        (load_config); the strict switch itself is driven through the
+        documented winning env knob, because its config value lives in the
+        training SSOT (training_cfg().prepared_bundle_drift_strict), not in
+        the data config this helper mocks."""
         real_config = core_common.load_config()
         drifted = copy.deepcopy(real_config)
         drifted["training"]["random_easy_negatives"]["ratio_to_hard"] = 9.99
-        if lenient:
-            drifted["prepared_bundle_drift_strict"] = False
         captured = io.StringIO()
-        with mock.patch.object(core_common, "load_config", return_value=drifted):
+        with mock.patch.object(core_common, "load_config", return_value=drifted), \
+                mock.patch.dict(os.environ, {"PREPARED_BUNDLE_DRIFT_STRICT": "0" if lenient else "1"}):
             with redirect_stdout(captured):
                 try:
                     return load_prepared_bundle(path), captured.getvalue()
                 except ValueError as exc:
                     return None, str(exc)
 
-    def test_config_key_absent_resolves_false(self) -> None:
-        config = copy.deepcopy(core_common.load_config())
-        config.pop("prepared_bundle_drift_strict", None)
-        with mock.patch.object(core_common, "load_config", return_value=config):
-            self.assertFalse(prepared_bundle_drift_strict())
+    def test_resolves_the_training_config_value(self) -> None:
+        """The knob is a required field of the training config
+        (config/training.yaml declares it); the reader returns it verbatim
+        for both polarities."""
+        from types import SimpleNamespace
 
-    def test_config_key_true_resolves_true(self) -> None:
-        config = copy.deepcopy(core_common.load_config())
-        config["prepared_bundle_drift_strict"] = True
-        with mock.patch.object(core_common, "load_config", return_value=config):
-            self.assertTrue(prepared_bundle_drift_strict())
+        for value in (False, True):
+            with mock.patch.object(
+                core_common, "training_cfg",
+                return_value=SimpleNamespace(prepared_bundle_drift_strict=value),
+            ):
+                self.assertEqual(prepared_bundle_drift_strict(), value)
 
     def test_env_flip_is_the_winning_switch(self) -> None:
         os.environ["PREPARED_BUNDLE_DRIFT_STRICT"] = "1"

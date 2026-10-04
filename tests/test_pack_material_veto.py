@@ -30,7 +30,13 @@ PACK_MATERIAL_DIMENSION = "pack_material"
 
 
 def _base_info() -> dict[str, object]:
-    """A pair whose shared critical dimensions all agree/populated."""
+    """A pair whose shared critical dimensions all agree/populated.
+
+    The exact shared canonical name is affirmative identity evidence: since
+    50e2d5d the gate's auto-merge requires at least one positive identity
+    signal (pair_policy.assess_pair -> positive_identity_missing), so the
+    toy pair carries one and the pack_material pins below test the material
+    clause in isolation, not the identity policy."""
     return {
         "volume": {500.0},
         "pack": {1},
@@ -42,6 +48,7 @@ def _base_info() -> dict[str, object]:
         "sweetener_type": set(),
         "sweetening": set(),
         "pulp": set(),
+        "canonical": "acme_soda_500",
     }
 
 
@@ -77,7 +84,11 @@ def test_disjoint_material_pair_vetoes_when_enabled_and_not_when_disabled():
     assert gate["targeted_gate_decision"] == "allow"
     assert gate["targeted_gate_reason"] == "disabled"
 
-    # configured out: audited as a conflict, not spent as a veto
+    # configured out: audited as a conflict, not spent as a veto. Since
+    # 50e2d5d (2026-10-02, postdates this file's 2026-10-01 ruling) an
+    # UN-vetoed conflict on a critical dimension no longer auto-merges:
+    # pair_policy.assess_pair routes it to review, so the decision is
+    # "defer" while the audit columns keep the not-a-veto contract.
     gate = targeted_veto_gate(
         left,
         right,
@@ -89,7 +100,8 @@ def test_disjoint_material_pair_vetoes_when_enabled_and_not_when_disabled():
         },
         **kw,
     )
-    assert gate["targeted_gate_decision"] == "allow"
+    assert gate["targeted_gate_decision"] == "defer"
+    assert gate["targeted_gate_route"] == "human_review"
     assert "pack_material_mismatch" not in str(gate["targeted_gate_reason"])
     assert "pack_material" in str(gate["targeted_critical_conflicts"])
     assert gate["targeted_vetoed_conflicts"] == ""

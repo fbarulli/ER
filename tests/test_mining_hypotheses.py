@@ -416,44 +416,65 @@ def _provenance_blocks() -> dict[str, str]:
         if isinstance(node, ast.FunctionDef) and node.name == "_main_inner"
     )
     wanted: dict[str, ast.stmt] = {}
-    for node in fn.body:
+    index_of: dict[int, int] = {}
+
+    def _record(key: str, node: ast.AST, index: int) -> None:
+        wanted.setdefault(key, node)
+        index_of.setdefault(id(node), index)
+
+    for index, node in enumerate(fn.body):
         text = ast.unparse(node)
         if isinstance(node, ast.Assign):
             target = ast.unparse(node.targets[0])
             if target == "train_neg" and text == "train_neg = neg":
-                wanted["alias"] = node
+                _record("alias", node, index)
             elif target == "neg_sources":
-                wanted["sources_init"] = node
+                _record("sources_init", node, index)
             elif target == "train_neg_sources":
-                wanted["sources_copy"] = node
+                _record("sources_copy", node, index)
             elif target == "balance_train_classes":
-                wanted["balance_flag"] = node
+                _record("balance_flag", node, index)
+        elif isinstance(node, ast.For) and ast.unparse(node.target) == (
+            "(enabled, candidates, source)"
+        ):
+            # The static miners (targeted attribute + cross-brand) append via
+            # ONE data-driven loop; the (enabled, candidates, source) tuples
+            # keep each population's provenance label. Both keys resolve to
+            # the loop so the sandbox execs it exactly once.
+            flat = text.replace("'", '"')
+            if "targeted_attribute_neg" in flat and "targeted_attribute_conflict" in flat \
+                    and "cross_brand_neg" in flat and "cross_brand_conflict" in flat:
+                _record("targeted", node, index)
+                _record("cross_brand", node, index)
         elif isinstance(node, ast.If):
             if ast.unparse(node.test) == "balance_train_classes":
                 # first: this block also mentions train_neg_sources and raises
-                wanted["balance"] = node
-            elif "len(neg_sources) != len(neg)" in text:
-                wanted["guard"] = node
+                _record("balance", node, index)
+            elif ast.unparse(node.test).startswith("len(neg_sources) != len(neg)"):
+                # Match on the TEST, not the body text: the masking block's
+                # text also contains the (nested) alignment check, and a
+                # text match would hand the sandbox the whole mask block.
+                _record("guard", node, index)
             elif "_attr_neg = np.empty" in text:
-                wanted["attr_mine"] = node
-            elif "np.vstack([neg, targeted_attribute_neg])" in text:
-                wanted["targeted"] = node
-            elif "np.vstack([neg, cross_brand_neg])" in text:
-                wanted["cross_brand"] = node
+                _record("attr_mine", node, index)
             elif "np.vstack([neg, _attr_neg])" in text:
-                wanted["attr"] = node
+                _record("attr", node, index)
     order = [
         "alias", "sources_init", "sources_copy", "targeted", "cross_brand",
         "attr_mine", "attr", "guard", "balance_flag", "balance",
     ]
     missing = [key for key in order if key not in wanted]
     assert not missing, f"train.py provenance blocks not found: {missing}"
-    return {key: ast.unparse(wanted[key]) for key in order}
+    # (source index, unparsed text): the sandbox must exec the blocks in
+    # train.py's OWN order — the miner loop feeds the train_neg alias that
+    # follows it, and a stale fixed order silently drops appended rows.
+    return {key: (index_of[id(wanted[key])], ast.unparse(wanted[key]))
+            for key in order}
 
 
 def _run_provenance_case(
-    blocks: dict[str, str], *, n_gate: int, n_targeted: int, n_attr: int,
-    balance: bool, n_pos_pairs: int, n_cross_brand: int = 0,
+    blocks: dict[str, tuple[int, str]], *, n_gate: int, n_targeted: int,
+    n_attr: int, balance: bool, n_pos_pairs: int, n_cross_brand: int = 0,
 ) -> dict:
     """Execute the real blocks in a sandbox namespace for one branch combo."""
     import core.hard_negatives as hard_negatives
@@ -507,11 +528,12 @@ def _run_provenance_case(
         "print": lambda *a, **k: None,
     }
     try:
-        for key in (
-            "alias", "sources_init", "sources_copy", "targeted", "cross_brand",
-            "attr_mine", "attr", "guard", "balance_flag", "balance",
-        ):
-            exec(compile(blocks[key], f"<train.py:{key}>", "exec"), namespace)  # noqa: S102
+        seen: set[str] = set()
+        for index, code in sorted(blocks.values(), key=lambda item: item[0]):
+            if code in seen:  # targeted/cross_brand share the one loop node
+                continue
+            seen.add(code)
+            exec(compile(code, f"<train.py:{index}>", "exec"), namespace)  # noqa: S102
     finally:
         hard_negatives.mine_attribute_conflict_negatives = original
     namespace["_attr_calls"] = calls

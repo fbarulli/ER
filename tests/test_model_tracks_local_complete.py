@@ -9,14 +9,25 @@ from model_tracks.local_complete import complete
 from model_tracks.resume import record_completion
 
 
-def suite(tmp_path, monkeypatch):
+def _manifest(path, track, report_test):
+    """One calibrated track report manifest per the shared honesty contract."""
+    from graph_tracks.report_manifest import build as build_manifest, write as write_manifest
+    write_manifest(path, build_manifest(
+        track=track, checkpoint='checkpoint-1/model.pt',
+        checkpoint_sha256='0' * 64, listings_sha256='1' * 64, pairs_sha256='2' * 64,
+        threshold=0.5, threshold_source='dev_youden', test_reported=bool(report_test),
+        model_selection='dev_pr_auc', retrieval_ks=[10]))
+
+
+def suite(tmp_path, monkeypatch, post_training_ablation=False):
     from core import common
     from graph_tracks import preflight, report
     from model_tracks import text_report
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     cfg = {'setup_dir': 'data/model_tracks/shared',
            'text_bundle': 'data/model_tracks/shared/text.pkl',
-           'publish_git': False, 'publish_dvc': False}
+           'publish_git': False, 'publish_dvc': False,
+           'post_training_ablation': post_training_ablation}
     inline = {'data/model_tracks/suite.yaml': yaml.safe_dump(cfg)}
     for track in ('gnn_only', 'hybrid'):
         settings = {'track': track, 'listings': 'data/model_tracks/shared/prepared/listings.json',
@@ -49,12 +60,14 @@ def suite(tmp_path, monkeypatch):
         assert device == 'cpu'
         calls.append('text')
         (output / 'text__training_report.md').write_text('local text report')
+        _manifest(output / 'text__completion_manifest.json', 'text', report_test)
     def graph(checkpoint, listings, pairs, output, cfg, **kwargs):
         assert checkpoint.read_bytes() == b'trained'
         assert cfg.device == 'cpu'
         assert listings.is_relative_to(tmp_path / 'run/local_inputs')
         calls.append(cfg.track)
         (output / 'report.md').write_text('local graph report')
+        _manifest(output / f'{cfg.track}__report_manifest.json', cfg.track, cfg.report_test)
     monkeypatch.setattr(text_report, 'complete', text)
     monkeypatch.setattr(report, 'complete', graph)
     monkeypatch.setattr(preflight, 'preflight', lambda *_args, **_kwargs: {})
@@ -96,6 +109,7 @@ def test_interrupted_text_report_preserves_future_artifacts(tmp_path, monkeypatc
         # an artifact outside the old fixed allowlist
         (output / 'text__future_artifact.json').write_text(f'attempt {len(attempts)}')
         (output / 'text__training_report.md').write_text(f'attempt {len(attempts)}')
+        _manifest(output / 'text__completion_manifest.json', 'text', report_test)
         if len(attempts) == 1:
             raise RuntimeError('text report interrupted')
     monkeypatch.setattr(text_report, 'complete', flaky)
@@ -114,13 +128,26 @@ def test_interrupted_text_report_preserves_future_artifacts(tmp_path, monkeypatc
 
 def test_completion_runs_configured_post_training_ablation(tmp_path,monkeypatch):
     from model_tracks import local_complete, post_training_ablation
-    from model_tracks.config import SuiteConfig
     calls = []
-    monkeypatch.setattr(post_training_ablation,'run',lambda *args:calls.append(args))
-    cfg = SuiteConfig(setup_dir='setup',text_bundle='bundle',publish_git=False,publish_dvc=False,post_training_ablation=True)
-    artifact = tmp_path/'completed.zip'
-    assert local_complete._publish(artifact,cfg,'run') == artifact
-    assert calls == [(artifact,'run',cfg)]
+    def complete_saved(destination, settings, *, publisher=None):
+        calls.append(('complete', settings))
+        for track in ('text', 'gnn_only', 'hybrid'):
+            folder = destination / track / 'ablation'; folder.mkdir(parents=True)
+            (folder / 'report.json').write_text(json.dumps({
+                'track': track, 'request_sha256': '0' * 64, 'result_sha256': '0' * 64,
+                'threshold': 0.5, 'threshold_provenance': {'dev': True},
+                'threshold_binding': {'track': track, 'checkpoint_sha256': '0' * 64, 'verified': True},
+                'rows': []}))
+        return destination
+    monkeypatch.setattr(post_training_ablation, 'complete_saved', complete_saved)
+    monkeypatch.setattr(post_training_ablation, 'publish_saved',
+                        lambda destination, suite, *, archive: calls.append(('publish', archive)))
+    training_zip, input_zip, _, _ = suite(tmp_path, monkeypatch, post_training_ablation=True)
+    final = local_complete.complete(training_zip, input_zip, 'run')
+    # the ablation runs once, before the publication archive is sealed
+    assert [c[0] for c in calls] == ['complete', 'publish']
+    assert calls[0][1].post_training_ablation is True
+    assert calls[1][1] == final
 
 
 def test_completed_archive_restores_inputs_and_reports_before_publish(tmp_path,monkeypatch):

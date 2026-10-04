@@ -23,9 +23,13 @@ def test_saved_ablation_rejects_calibration_for_other_checkpoint(tmp_path):
     (folder/'vectors.npz').write_bytes(b'exports')
     # The calibration manifest carries the threshold at the top level; that is
     # the shape every report producer writes and the one complete_saved reads.
-    write(track/'text__completion_manifest.json',{'threshold':.5,'threshold_source':'dev_youden',
-        'checkpoint_sha256':'wrong model','summary':[{'split':'dev'}],
-        'vectors_metadata':{'checkpoint_sha256':'wrong model'}})
+    # A full calibrated report whose checkpoint identity misses the selected one.
+    from graph_tracks.report_manifest import build as build_manifest
+    write(track/'text__completion_manifest.json', build_manifest(
+        track='text', checkpoint=str(checkpoint), checkpoint_sha256='f' * 64,
+        listings_sha256='1' * 64, pairs_sha256='2' * 64,
+        threshold=.5, threshold_source='dev_youden', test_reported=False,
+        model_selection='dev_pr_auc', retrieval_ks=[10]))
     with pytest.raises(ValueError,match='calibration differs'):
         auto.complete_saved(tmp_path,SimpleNamespace(ablation_config='unused'))
     assert not (folder/'baseline_threshold.json').exists()

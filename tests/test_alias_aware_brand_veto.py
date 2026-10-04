@@ -74,10 +74,16 @@ def _info(
     carbonation: set[str] = (),
     sweetener: set[str] = (),
     pulp: set[str] = (),
+    canonical: str = "acme_soda_500",
 ) -> dict[str, object]:
     """The gate-info shape targeted_veto_gate consumes (both readers: the
     SET keys for ``critical_attribute_evaluation`` plus the scalar display
-    keys, per the contract test_targeted_ann_gates._info pins)."""
+    keys, per the contract test_targeted_ann_gates._info pins).
+
+    The shared canonical name is affirmative identity evidence: since
+    50e2d5d auto_merge requires a positive identity signal
+    (pair_policy.assess_pair -> positive_identity_missing), so the brand
+    pins below test the alias fold in isolation, not the identity policy."""
     by_key = {
         "pack": pack, "volume": volume, "package_type": package_type,
         "flavor_set": flavor, "carbonation_set": carbonation,
@@ -90,6 +96,7 @@ def _info(
             info["flavor"] = " ".join(sorted(value))
         elif key in {"carbonation_set", "sweetener_set", "pulp_set"}:
             info[key.rsplit("_", 1)[0]] = set(value)
+    info["canonical"] = canonical
     return info
 
 

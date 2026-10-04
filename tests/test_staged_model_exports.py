@@ -9,6 +9,8 @@ from model_tracks import ablation, staged_ablation, text_export
 
 
 def test_staged_graph_binding_rejects_changed_support_before_forward(tmp_path,monkeypatch):
+    import core.common
+    monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     setup = tmp_path/'setup'
     template = setup/'ablation_templates/gnn_only';template.mkdir(parents=True)
     request = {'graph_binding':ablation.digest({'vocabulary':{},'support_records':[]})}
@@ -18,10 +20,12 @@ def test_staged_graph_binding_rejects_changed_support_before_forward(tmp_path,mo
                 'manifest':{'track':'gnn_only'}},checkpoint)
     monkeypatch.setattr(staged_ablation,'encode',lambda *args,**kwargs:pytest.fail('must reject before forward'))
     with pytest.raises(ValueError,match='support/vocabulary'):
-        staged_ablation.forward(checkpoint.parent,setup,'gnn_only',checkpoint)
+        staged_ablation.forward(checkpoint.parent,setup,'gnn_only',checkpoint,device='cuda')
 
 
 def test_bound_request_preserves_prepared_tensor_hash_and_relative_checkpoint(tmp_path,monkeypatch):
+    import core.common
+    monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     setup = tmp_path/'setup';template = setup/'ablation_templates/gnn_only';template.mkdir(parents=True)
     checkpoint = tmp_path/'run/gnn_only/checkpoint.pt';checkpoint.parent.mkdir(parents=True)
     payload = {'vocabulary':{},'support_records':[],'manifest':{'track':'gnn_only'}}
@@ -32,7 +36,7 @@ def test_bound_request_preserves_prepared_tensor_hash_and_relative_checkpoint(tm
     (template/'request.json').write_text(json.dumps(request))
     calls = []
     monkeypatch.setattr(staged_ablation,'encode',lambda *args,**kwargs:calls.append((args,kwargs)))
-    path = staged_ablation.forward(checkpoint.parent,setup,'gnn_only',checkpoint)
+    path = staged_ablation.forward(checkpoint.parent,setup,'gnn_only',checkpoint,device='cuda')
     bound = json.loads(path.read_text())
     assert bound['checkpoint'] == '@suite/gnn_only/checkpoint.pt'
     assert bound['sources'] == {bound['checkpoint']:ablation.file_hash(checkpoint)}
