@@ -1,14 +1,17 @@
-"""Shared SHA256 inventories for prepared-input and result ZIPs."""
+"""Shared SHA256 inventories for prepared-input and result archives."""
 from __future__ import annotations
 import hashlib
 import json
 import os
 import uuid
 import time
+import io
+import tarfile
 from pathlib import Path
 import zipfile
 from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from core.archive_reader import open_archive, zstd_module, archive_sidecar
 
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -55,7 +58,8 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
     for target, source in files.items():
         if source.is_symlink():
             raise ValueError('archive must not include symbolic links')
-        inventory[target] = hashlib.sha256(source.read_bytes()).hexdigest()
+        with source.open('rb') as handle:
+            inventory[target] = hashlib.file_digest(handle, 'sha256').hexdigest()
     inventory.update({target:hashlib.sha256(value.encode()).hexdigest() for target,value in inline.items()})
     for target in [*inventory, manifest_name]:
         if Path(target).is_absolute() or '..' in Path(target).parts:
@@ -65,14 +69,26 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
     candidate = output.with_name(f'{output.name}.partial-{os.getpid()}-{uuid.uuid4().hex}')
     try:
         started = time.monotonic()
-        with zipfile.ZipFile(candidate, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
-            for target, source in files.items():
-                archive.write(source, target)
-            for target, value in inline.items():
-                archive.writestr(target, value)
-            archive.writestr(manifest_name, json.dumps({**metadata, inventory_key:inventory}, indent=2)+'\n')
+        manifest = json.dumps({**metadata, inventory_key:inventory}, indent=2)+'\n'
+        if output.name.endswith('.tar.zst'):
+            with zstd_module().open(candidate, 'xb', level=1) as compressed:
+                with tarfile.open(fileobj=compressed, mode='w|', dereference=True) as archive:
+                    for target, source in files.items():
+                        archive.add(source, arcname=target, recursive=False)
+                    for target, value in {**inline, manifest_name: manifest}.items():
+                        payload = value.encode()
+                        member = tarfile.TarInfo(target)
+                        member.size = len(payload)
+                        archive.addfile(member, io.BytesIO(payload))
+        else:
+            with zipfile.ZipFile(candidate, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
+                for target, source in files.items():
+                    archive.write(source, target)
+                for target, value in inline.items():
+                    archive.writestr(target, value)
+                archive.writestr(manifest_name, manifest)
         # Sources can change while being archived (e.g. checkpoint rotation).
-        # Never publish a ZIP whose bytes disagree with its frozen inventory.
+        # Never publish an archive whose bytes disagree with its frozen inventory.
         timings["compression_seconds"] = time.monotonic() - started
         started = time.monotonic()
         verify_archive(candidate, manifest_name, inventory_key=inventory_key)
@@ -85,7 +101,7 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
     finally:
         candidate.unlink(missing_ok=True)
     if profile:
-        output.with_suffix(".profile.json").write_text(json.dumps({**timings,
+        archive_sidecar(output, ".profile.json").write_text(json.dumps({**timings,
             "timestamp_unix": time.time(), "archive_bytes": output.stat().st_size,
             "source_bytes": sum(source.stat().st_size for source in files.values()),
             "file_count": len(files)}, indent=2) + "\n")
@@ -94,7 +110,7 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
 
 
 def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'files') -> dict[str, Any]:
-    with zipfile.ZipFile(path) as archive:
+    with open_archive(path) as archive:
         if len(set(archive.namelist())) != len(archive.namelist()):
             raise ValueError('duplicate archive members')
         for member in archive.infolist():
@@ -107,6 +123,7 @@ def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'file
         if set(archive.namelist()) != set(inventory) | {manifest_name}:
             raise ValueError('archive has undeclared or missing members')
         for target, expected in inventory.items():
-            if hashlib.sha256(archive.read(target)).hexdigest() != expected:
-                raise ValueError(f'archive integrity mismatch: {target}')
+            with archive.open(target) as handle:
+                if hashlib.file_digest(handle, 'sha256').hexdigest() != expected:
+                    raise ValueError(f'archive integrity mismatch: {target}')
         return metadata

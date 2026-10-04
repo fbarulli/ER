@@ -12,6 +12,7 @@ class SuiteConfig(BaseModel):
     text_model: str = 'minilm_l6'
     epochs: int = Field(default=10, ge=1)
     device: Literal['cpu', 'cuda'] = 'cuda'
+    result_archive_format: Literal['zip', 'tar.zst'] = 'zip'
     schedule: Literal['parallel'] = 'parallel'
     max_parallel: Literal[3] = 3
     gpu_parallel_backend: Literal['mps'] = 'mps'

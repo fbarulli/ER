@@ -19,14 +19,14 @@ def _manifest(path, track, report_test):
         model_selection='dev_pr_auc', retrieval_ks=[10]))
 
 
-def suite(tmp_path, monkeypatch, post_training_ablation=False):
+def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='zip'):
     from core import common
     from graph_tracks import preflight, report
     from model_tracks import text_report
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     cfg = {'setup_dir': 'data/model_tracks/shared',
            'text_bundle': 'data/model_tracks/shared/text.pkl',
-           'publish_git': False, 'publish_dvc': False,
+           'publish_git': False, 'publish_dvc': False, 'result_archive_format': archive_format,
            'post_training_ablation': post_training_ablation}
     inline = {'data/model_tracks/suite.yaml': yaml.safe_dump(cfg)}
     for track in ('gnn_only', 'hybrid'):
@@ -52,7 +52,7 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False):
         if track != 'text':
             (output / f'{track}__best_checkpoint.json').write_text(json.dumps({'path': '/remote/checkpoint-1/model.pt'}))
         record_completion(output, track, postprocess_complete=False)
-    training_zip = write_archive(tmp_path / 'run.training.zip',
+    training_zip = write_archive(tmp_path / f'run.training.{archive_format}',
         {p.relative_to(root).as_posix(): p for p in root.rglob('*') if p.is_file()},
         manifest_name='suite_bundle_manifest.json', metadata={'run_tag': 'run'})
     calls = []
@@ -163,3 +163,13 @@ def test_completed_archive_restores_inputs_and_reports_before_publish(tmp_path,m
     monkeypatch.setattr(local_complete,'_publish',publish)
     assert complete(training_zip,input_zip,'run') == final
     assert calls == ['text','gnn_only','hybrid']
+
+
+def test_zstandard_checkpoints_complete_locally_and_remain_retryable(tmp_path, monkeypatch):
+    training, inputs, calls, _ = suite(tmp_path, monkeypatch, archive_format='tar.zst')
+    final = complete(training, inputs, 'run')
+    assert final.name == 'run.tar.zst'
+    assert verify_archive(final, 'suite_bundle_manifest.json')['postprocess_location'] == 'local CPU'
+    assert calls == ['text', 'gnn_only', 'hybrid']
+    assert complete(training, inputs, 'run') == final
+    assert len(calls) == 3

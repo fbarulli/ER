@@ -1,7 +1,7 @@
 """Complete downloaded training checkpoints on local CPU, then publish."""
 import json
 from pathlib import Path
-import zipfile
+from core.archive_reader import open_archive, archive_sidecar
 
 from core.portable_archive import verify_archive, write_archive, RESULT_ARCHIVE_EXCLUDED_DIRS
 from graph_tracks.data import file_hash
@@ -32,12 +32,12 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
 
     training = verify_archive(training_archive, 'suite_bundle_manifest.json')
     inputs = verify_archive(input_archive, 'model_tracks_package.json')
-    with zipfile.ZipFile(input_archive) as archive:
+    with open_archive(input_archive) as archive:
         settings = SuiteConfig.model_validate(yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
     if training['run_tag'] != run_tag:
         raise ValueError('local completion run mismatch')
     from model_tracks.resume import validate_training_binding
-    with zipfile.ZipFile(training_archive) as archive:
+    with open_archive(training_archive) as archive:
         validate_training_binding(json.loads(archive.read('suite_manifest.json')),
                                   inputs, settings, run_tag)
     # The local report implementation must match the code that produced training.
@@ -46,7 +46,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
             if file_hash(TRAIN_ROOT / relative) != expected:
                 raise ValueError(f'Local completion code/config differs from training: {relative}')
     destination = training_archive.parent / run_tag
-    final = training_archive.parent / f'{run_tag}.zip'
+    final = training_archive.parent / f'{run_tag}.{settings.result_archive_format}'
     if final.exists():
         from model_tracks.resume import validate_completed_suite_archive
         existing = validate_completed_suite_archive(final, run_tag, settings=settings)
@@ -56,14 +56,14 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         # inputs come from the verified original input archive, never a cache.
         if not destination.exists():
             destination.mkdir()
-            with zipfile.ZipFile(final) as archive:
+            with open_archive(final) as archive:
                 for relative in existing['files']:
                     archive.extract(relative,destination)
             (destination/'local_source.json').write_text(json.dumps({
                 'training_archive_sha256':file_hash(training_archive),
                 'input_archive_sha256':file_hash(input_archive)}))
         restored_inputs = destination/'local_inputs'
-        with zipfile.ZipFile(input_archive) as archive:
+        with open_archive(input_archive) as archive:
             for relative in inputs['files']:
                 if relative.startswith('data/model_tracks/'):
                     target = restored_inputs/relative
@@ -81,7 +81,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
             raise ValueError('existing local completion belongs to different inputs')
     else:
         destination.mkdir()
-        with zipfile.ZipFile(training_archive) as archive:
+        with open_archive(training_archive) as archive:
             # Extract only SHA256-inventoried members, never unlisted extras.
             for relative in training['files']:
                 archive.extract(relative, destination)
@@ -90,14 +90,14 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     # Preserve the receipt-carried sidecars in the completed publication.
     import shutil
     for suffix in ('.profile.json', '.dvc_profile.jsonl'):
-        sidecar = training_archive.with_suffix(suffix)
+        sidecar = archive_sidecar(training_archive, suffix)
         if sidecar.is_file():
             metrics = destination / 'resource_profile'
             metrics.mkdir(exist_ok=True)
             shutil.copy2(sidecar, metrics / ('remote_training' + suffix))
     prepared = destination / 'local_inputs'
     prepared.mkdir(exist_ok=True)
-    with zipfile.ZipFile(input_archive) as archive:
+    with open_archive(input_archive) as archive:
         for relative in inputs['files']:
             if relative.startswith('data/model_tracks/'):
                 target = prepared / relative
@@ -195,5 +195,5 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                   metadata={'run_tag': run_tag, **identity, 'postprocess_location': 'local CPU'})
     from model_tracks.resume import validate_completed_suite_archive
     validate_completed_suite_archive(final, run_tag, settings=settings)
-    final.with_suffix('.sha256').write_text(file_hash(final) + '\n')
+    archive_sidecar(final, '.sha256').write_text(file_hash(final) + '\n')
     return _publish(final, settings, run_tag, ablation_done=ablation_done) if publish else final

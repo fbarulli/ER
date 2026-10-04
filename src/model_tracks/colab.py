@@ -6,6 +6,7 @@ import tarfile
 import hashlib
 
 from core.portable_archive import verify_archive
+from core.archive_reader import open_archive, archive_sidecar
 from graph_tracks.data import file_hash
 from model_tracks.package import verify
 
@@ -92,6 +93,7 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
         settings = yaml.safe_load(source.read('data/model_tracks/suite.yaml'))
     from model_tracks.config import SuiteConfig
     settings = SuiteConfig.model_validate(settings).model_dump()
+    result_suffix = '.' + settings['result_archive_format']
     runtime = getattr(backend, 'GPU', None)
     if runtime is not None and settings['device'] != ('cpu' if runtime.upper() == 'CPU' else 'cuda'):
         raise ValueError('packaged suite device differs from requested Colab runtime')
@@ -157,7 +159,7 @@ if {resume_archive is not None!r} and not output_path.exists():
     from model_tracks.package import restore_recovery
     restore_recovery(pathlib.Path({remote_recovery!r}),output_path,{run_tag!r})
 env={{**os.environ,"PYTHONPATH":str(root/"src"),"PYTHONUNBUFFERED":"1", "ER_GPU_TRAINING_ONLY":"1"}}
-result_archive=pathlib.Path({remote_output!r}+".zip")
+result_archive=pathlib.Path({remote_output!r}+{result_suffix!r})
 if result_archive.exists():
     # Collection/publication retry must never restart completed training.
     verified=verify_archive(result_archive,"suite_bundle_manifest.json")
@@ -247,7 +249,7 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
             print(f'Failure diagnostic collection unavailable: {log_error}; inspect local Colab stage log', flush=True)
         raise
     expected = backend._read_remote_text(remote_output+'.sha256').strip()
-    local = RESULTS/'model_tracks'/f'{run_tag}.training.zip'
+    local = RESULTS/'model_tracks'/f'{run_tag}.training{result_suffix}'
     local.parent.mkdir(parents=True,exist_ok=True)
     handoff = None
     if needs_dvc:
@@ -256,19 +258,19 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
         receipt_text = backend._read_remote_text(remote_output + '.publication.json')
         handoff = validate(json.loads(receipt_text), run_tag, expected,
                            common.training_cfg().colab.dvc_remote_url)
-        local.with_suffix('.handoff.json').write_text(receipt_text)
+        archive_sidecar(local, '.handoff.json').write_text(receipt_text)
         print('[tracks] Colab DVC publication verified; release precedes local pull', flush=True)
     else:
         if not local.exists() or file_hash(local) != expected:
-            partial = local.with_suffix('.zip.partial')
-            backend._download_one_remote_file(remote_output+'.zip',partial)
+            partial = local.with_name(local.name + '.partial')
+            backend._download_one_remote_file(remote_output+result_suffix,partial)
             if file_hash(partial) != expected:
                 raise ValueError('all-track result download mismatch; partial retained for diagnosis')
             partial.replace(local)
     # Final publication/collection events occur after the result ZIP snapshot.
     # Retain this separate log with its own remotely computed digest.
     events_remote = remote_output + '.events.jsonl'
-    events_local = local.with_suffix('.events.jsonl')
+    events_local = archive_sidecar(local, '.events.jsonl')
     try:
         events_digest = backend.run_colab_exec_capture(backend.SESSION,
             f'import hashlib, pathlib\np=pathlib.Path({events_remote!r})\n'
@@ -314,7 +316,7 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
         raise ValueError('all-track result collection mismatch')
     manifest = verify_archive(local, 'suite_bundle_manifest.json')
     from model_tracks.resume import TRACKS, validate_archived_track
-    with zipfile.ZipFile(local) as result:
+    with open_archive(local) as result:
         for track in TRACKS:
             validate_archived_track(result, manifest, track, postprocess_complete=False)
     from model_tracks.snapshot_completion import complete

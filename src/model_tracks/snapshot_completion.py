@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from core.portable_archive import Digest, verify_archive
 from graph_tracks.data import file_hash
+from core.archive_reader import archive_sidecar
 
 
 class SnapshotCompletionReceipt(BaseModel):
@@ -92,7 +93,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
         training_archive_sha256=file_hash(training_archive),
         final_archive_sha256=file_hash(final), source_inventory=inventory,
         working_tree_mismatches=mismatches)
-    final.with_suffix('.snapshot_completion.json').write_text(
+    archive_sidecar(final, '.snapshot_completion.json').write_text(
         receipt.model_dump_json(indent=2) + '\n')
     from model_tracks.local_complete import _publish
     return _publish(final, settings, run_tag, ablation_done=True)

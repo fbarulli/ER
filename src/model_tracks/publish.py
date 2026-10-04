@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-import zipfile
+from core.archive_reader import open_archive, archive_sidecar
 
 from core.portable_archive import verify_archive
 
@@ -33,7 +33,7 @@ def persist_results(archive: Path, run_tag: str) -> Path:
     metadata = verify_archive(archive, 'suite_bundle_manifest.json')
     if metadata['run_tag'] != run_tag:
         raise ValueError('publication run mismatch')
-    workspace = archive.with_suffix('.publication')
+    workspace = archive_sidecar(archive, '.publication')
     workspace.mkdir(exist_ok=True)
     payload = workspace / archive.name
     if payload.exists() and file_hash(payload) != file_hash(archive):
@@ -52,7 +52,7 @@ def persist_results(archive: Path, run_tag: str) -> Path:
     index = common.artifact('dvc_publication_manifest', {'run_id': run_tag, 'worker': 1})
     publication = json.loads(index.read_text())
     refs = [index, *(common.TRAIN_ROOT / entry['pointer'] for entry in publication['pointers'])]
-    receipt = archive.with_suffix('.publication.json')
+    receipt = archive_sidecar(archive, '.publication.json')
     receipt.write_text(json.dumps({
         'run_tag': run_tag, 'archive_sha256': file_hash(archive),
         'verified_download': True,
@@ -83,7 +83,7 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False) -> Path:
         with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
             workspace = Path(temporary)
             restored = workspace/'restored'
-            with zipfile.ZipFile(archive) as source:
+            with open_archive(archive) as source:
                 source.extractall(restored)  # path/link validation was done by verify_archive
             staged = workspace/'models'
             staged.mkdir()

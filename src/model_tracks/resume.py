@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 from zipfile import ZipFile
+from core.archive_reader import open_archive
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from core.portable_archive import Digest, RuntimeSnapshot
 from model_tracks.config import SuiteConfig
@@ -88,7 +89,7 @@ def validate_completed_suite_archive(archive: Path, run_tag: str,
     metadata = verify_archive(archive, 'suite_bundle_manifest.json')
     if metadata.get('run_tag') != run_tag:
         raise ValueError('completed archive belongs to a different run')
-    with ZipFile(archive) as bundle:
+    with open_archive(archive) as bundle:
         binding = TrainingInputBinding.model_validate_json(bundle.read('suite_manifest.json'))
         if binding.run_tag != run_tag or settings is not None and binding.settings != settings:
             raise ValueError('completed archive suite configuration differs')
@@ -126,7 +127,7 @@ def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: di
     manifest = verify_archive(archive, 'suite_bundle_manifest.json')
     if manifest.get('run_tag') != run_tag:
         raise ValueError('existing archive belongs to a different suite')
-    with zipfile.ZipFile(archive) as bundle:
+    with open_archive(archive) as bundle:
         archived_suite = json.loads(bundle.read('suite_manifest.json'))
         if archived_suite.get('resume_identity') != identity:
             raise ValueError('existing archive has different suite provenance')

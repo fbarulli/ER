@@ -10,6 +10,7 @@ import sys
 from model_tracks.config import load_config
 from model_tracks.parallel import mps_environment, run_parallel
 from model_tracks.preflight import preflight
+from core.archive_reader import archive_sidecar
 
 
 def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Path:
@@ -25,8 +26,9 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
             raise ValueError('invalid run tag')
         if output.exists() and not resume:
             raise FileExistsError(output)
-        if output.with_suffix('.zip').exists() and not resume:
-            raise FileExistsError(output.with_suffix('.zip'))
+        result_suffix = '.' + load_config(config).result_archive_format
+        if output.with_suffix(result_suffix).exists() and not resume:
+            raise FileExistsError(output.with_suffix(result_suffix))
         if resume and not output.is_dir():
             raise FileNotFoundError('resume output directory does not exist')
         output.mkdir(parents=True, exist_ok=resume)
@@ -172,13 +174,13 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     if getattr(events, 'resource_profile', None):
         events.resource_profile.close()
     events.emit('collection', 'starting', tracks=list(TRACKS), skipped_verified_tracks=skipped)
-    archive_path = output.with_suffix('.zip')
+    archive_path = output.with_suffix('.' + cfg.result_archive_format)
     if archive_path.exists():
         if not resume:
             raise FileExistsError(archive_path)
         from model_tracks.resume import verify_suite_archive
         verify_suite_archive(archive_path, output, run_tag, identity, postprocess_complete=not gpu_only)
-        archive_path.with_suffix('.sha256').write_text(file_hash(archive_path) + '\n')
+        archive_sidecar(archive_path, '.sha256').write_text(file_hash(archive_path) + '\n')
         events.emit('collection', 'verified', archive=str(archive_path), sha256=file_hash(archive_path),
                     reused=True)
         if cfg.dvc_enabled and not gpu_only:
@@ -200,7 +202,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
              and not ('.dvc' in p.relative_to(output).parts and 'cache' in p.relative_to(output).parts)}
     from core.portable_archive import write_archive
     write_archive(archive_path,files,manifest_name='suite_bundle_manifest.json',metadata={'run_tag':run_tag}, profile=cfg.profiling)
-    archive_path.with_suffix('.sha256').write_text(file_hash(archive_path)+'\n')
+    archive_sidecar(archive_path, '.sha256').write_text(file_hash(archive_path)+'\n')
     events.emit('collection', 'complete', archive=str(archive_path), sha256=file_hash(archive_path),
                 bytes=archive_path.stat().st_size)
     if cfg.dvc_enabled and not gpu_only:

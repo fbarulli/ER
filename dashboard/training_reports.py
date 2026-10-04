@@ -8,13 +8,15 @@ import io
 import json
 import stat
 import zipfile
+import tarfile
+from core.archive_reader import open_archive, archive_sidecar
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 router = APIRouter()
 PROJECT = Path(__file__).resolve().parents[1]
-REPORT_ERRORS = (OSError, ValueError, zipfile.BadZipFile, RuntimeError, EOFError)
+REPORT_ERRORS = (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError, RuntimeError, EOFError)
 METRIC_SUFFIXES = (
     'model_evaluation_summary.csv',
     'retrieval_summary.csv',
@@ -54,7 +56,7 @@ DUPLICATE_TREE_SUFFIX = '__payload'
 def collected_events(path):
     if path.is_dir():
         return None
-    sibling = path.with_suffix('.events.jsonl')
+    sibling = archive_sidecar(path, '.events.jsonl')
     return sibling if sibling.is_file() and not sibling.is_symlink() else None
 
 
@@ -105,7 +107,7 @@ def runs():
         for path in sorted(base.iterdir(), reverse=True):
             if not path.resolve().is_relative_to(base.resolve()) or path.is_symlink():
                 continue
-            if path.is_dir() or (path.suffix == '.zip' and '__inputs' not in path.name):
+            if path.is_dir() or (path.name.endswith(('.zip', '.tar.zst')) and '__inputs' not in path.name):
                 key = path.relative_to(PROJECT).as_posix()
                 if path.is_dir() and not any(
                         member.endswith(('.png',) + METRIC_SUFFIXES + ERROR_SUFFIXES
@@ -149,7 +151,7 @@ def entries(path):
                 if p.is_file() and not p.is_symlink() and p.resolve().is_relative_to(path.resolve())
                 and not any(parent.is_symlink() for parent in p.parents if parent.is_relative_to(path))
                 and safe_member(p.relative_to(path).as_posix())]
-    with zipfile.ZipFile(path) as archive:
+    with open_archive(path) as archive:
         members = [info.filename for info in archive.infolist() if safe_member(info.filename)
                 and not info.is_dir() and not stat.S_ISLNK(info.external_attr >> 16)]
     if collected_events(path) is not None and COLLECTED_EVENTS not in members:
@@ -169,7 +171,7 @@ def open_artifact(path, member):
         with local_target(path, member).open('rb') as handle:
             yield handle
         return
-    with zipfile.ZipFile(path) as archive:
+    with open_archive(path) as archive:
         try:
             if stat.S_ISLNK(archive.getinfo(member).external_attr >> 16):
                 raise HTTPException(404, 'Report artifact not found')

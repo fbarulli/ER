@@ -226,6 +226,12 @@ source, or input hashes require a new preparation/run.
 
 ## Outputs and evaluation
 
+New full suites use `result_archive_format: tar.zst`: Zstandard level 1
+compresses the training and final result archives. Existing ZIP results remain
+readable; immutable prepared inputs and recovery archives retain ZIP format.
+SHA-256 inventories and atomic publication apply to both result formats.
+Python before 3.14 uses the configured `backports.zstd` runtime dependency.
+
 Train on train labels; select checkpoints and thresholds on dev; report test
 only after selection. Keep one component split across tracks. GTIN/identity
 links may define truth and split components, but are excluded from blind
