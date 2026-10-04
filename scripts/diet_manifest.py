@@ -123,6 +123,8 @@ def mnrl_presentation_counts(data: dict) -> list[dict]:
     copy_pairs = set()
     twins = set()
     for row in data.get("hard_negative_mask_audit", []):
+        if str(row.get("population", "hard_negative")) != "hard_negative":
+            continue
         copy = int(row["copy_payload_idx"])
         pair = int(row["pair_payload_idx"])
         if _mode(row) == "counterfactual":
@@ -171,7 +173,8 @@ def main(argv: list[str]) -> int:
     neg = data["neg"]
     train_neg = data["train_neg"]
     mask_audit = list(data.get("mask_audit", []))
-    neg_audit = list(data.get("hard_negative_mask_audit", []))
+    neg_audit = [row for row in data.get("hard_negative_mask_audit", [])
+                 if str(row.get("population", "hard_negative")) == "hard_negative"]
 
     pos_views = int(len(pos))
     neg_views = int(len(train_neg))
