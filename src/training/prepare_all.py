@@ -103,6 +103,9 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         env['PYTHONPATH'] = str(root / 'src') + os.pathsep + str(root)
         env['MLFLOW_TRACKING_URI'] = 'off'
         env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / 'shared_base.pkl')
+        if resume_from == 'full_bundle':
+            env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / (
+                'shared_base_resume_' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '.pkl'))
         env.pop('WANDB_API_KEY', None)
         completed = []
         manifest = {'status': 'running', 'resume_from': resume_from,
@@ -114,15 +117,17 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     'negative_supply_run_tag': negative_supply_run_tag,
                     'hybrid_embeddings': 'GPU pending: frozen baseline forward before hybrid training'}
         manifest_path = run_dir / 'manifest.json'
-        if resume_from == 'suite_inputs':
+        if resume_from in {'full_bundle', 'suite_inputs'}:
             previous = json.loads(manifest_path.read_text())
-            if ('full_bundle' not in previous.get('stages', []) or
+            prerequisite = 'graph_inputs' if resume_from == 'full_bundle' else 'full_bundle'
+            if (prerequisite not in previous.get('stages', []) or
                     previous.get('tracks_config') != str(config_path)):
-                raise ValueError('suite_inputs resume requires this run\'s completed graph/text preparation')
+                raise ValueError(f'{resume_from} resume requires this run\'s completed {prerequisite}')
+            remaining = set(STAGES[STAGES.index(resume_from):])
             completed.extend(stage for stage in previous['stages']
-                             if stage not in {'suite_inputs', 'verify_handoff'})
+                             if stage not in remaining)
             manifest.update(previous, status='running', resume_from=resume_from,
-                            stages=completed)
+                            stages=completed, shared_base_payload=env['EUROMONITOR_SHARED_BASE_DATA'])
             manifest.pop('failed_stage', None)
             manifest.pop('error', None)
         def publish():
@@ -139,7 +144,8 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 destination = run_dir / 'before' / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if destination.exists():
-                    raise FileExistsError(destination)
+                    destination = destination.with_name(destination.name + '.' +
+                        datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
                 shutil.move(str(path), str(destination))
         publish()
         try:
@@ -254,7 +260,7 @@ def main():
                         help='three-track configuration (default: config/model_tracks.yaml)')
     parser.add_argument('--negative-supply-run-tag',
                         help='generate and audit the real-first lane; gate mode keeps this diagnostic-only')
-    parser.add_argument('--resume-from', choices=['dedupe', 'validation', 'suite_inputs'], default='dedupe',
+    parser.add_argument('--resume-from', choices=['dedupe', 'validation', 'full_bundle', 'suite_inputs'], default='dedupe',
                         help='validation verifies CSV manifests; suite_inputs reuses the completed graph/text bundle')
     args = parser.parse_args()
     prepare_all(run_dir=args.run_dir, resume_from=args.resume_from,

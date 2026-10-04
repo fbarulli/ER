@@ -64,6 +64,9 @@ the pipeline and records its name and error; inspect its log before resuming.
 If only packaging failed after `full_bundle`, reuse that run with
 `--run-dir <same-directory> --resume-from suite_inputs`; final handoff checks
 still verify the frozen graph, text bundle, CSVs, and checkpoint.
+For text augmentation changes, use `--resume-from full_bundle` in the same
+run to retain graph setup and rebuild the text bundle and package. This uses
+a fresh shared-payload cache and preserves earlier bundle backups.
 
 ### Files produced
 
