@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 
@@ -16,12 +17,20 @@ def mps_environment(root: Path):
     if not control:
         raise RuntimeError('true multi-process GPU parallelism requires NVIDIA MPS in this runtime')
     attempt = uuid.uuid4().hex
-    pipes, logs = root / 'mps_pipe' / attempt, root / 'mps_log' / attempt
-    pipes.mkdir(parents=True, exist_ok=False)
+    # UNIX-domain socket paths have a small fixed limit. A run directory plus
+    # attempt UUID exceeds it on Colab, so keep daemon/client pipes short.
+    pipes = Path(tempfile.mkdtemp(prefix='er-mps-', dir='/tmp'))
+    logs = root / 'mps_log' / attempt
     logs.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, 'CUDA_MPS_PIPE_DIRECTORY': str(pipes.resolve()),
            'CUDA_MPS_LOG_DIRECTORY': str(logs.resolve())}
-    subprocess.run([control, '-d'], env=env, check=True, timeout=30)
+    startup = subprocess.run([control, '-d'], env=env, capture_output=True,
+                             text=True, timeout=30)
+    if startup.returncode:
+        diagnostics = '\n'.join(path.read_text(errors='replace')[-4000:]
+                                for path in logs.glob('*.log') if path.is_file())
+        raise RuntimeError(f'MPS startup failed rc={startup.returncode}; pipes={pipes}; '
+                           f'logs={logs}\n{startup.stdout}\n{startup.stderr}\n{diagnostics}')
     try:
         yield env
     finally:
