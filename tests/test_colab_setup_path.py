@@ -454,7 +454,7 @@ class LauncherOrderTests(unittest.TestCase):
         prewarm = mock.Mock(side_effect=record("prewarm"))
         upload_prewarm = mock.Mock(side_effect=record("upload_prewarm"))
         run_train = mock.Mock(return_value=("run", 1))
-        with mock.patch.object(sys, "argv", ["colab.py", "--what", "train"]), \
+        with mock.patch.object(sys, "argv", ["colab.py", "--what", "train", "--gpu", "CPU"]), \
              mock.patch.object(colab, "start_live_log"), \
              mock.patch.object(colab, "close_live_log"), \
              mock.patch.object(colab, "check_colab_cli"), \
@@ -490,7 +490,7 @@ class LauncherOrderTests(unittest.TestCase):
     def test_a_resumed_run_does_not_prewarm_its_uploads(self):
         """A resumed lane keeps its existing run identity and uploads serially."""
         with mock.patch.object(
-            sys, "argv", ["colab.py", "--what", "train", "--resume-run", "abc"]
+            sys, "argv", ["colab.py", "--what", "train", "--resume-run", "abc", "--gpu", "CPU"]
         ), \
              mock.patch.object(colab, "start_live_log"), \
              mock.patch.object(colab, "close_live_log"), \

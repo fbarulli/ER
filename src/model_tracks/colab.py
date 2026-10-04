@@ -116,7 +116,9 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
                                                for key in ('revision', 'files')):
             raise ValueError('resume package differs from interrupted suite sources or inputs')
     remote_output = f'{backend.REMOTE_ROOT}/results/model_tracks/{run_tag}'
-    needs_dvc = False  # CPU postprocessing and publication run locally after download.
+    needs_dvc = settings['publish_dvc'] or settings['publish_git']
+    if needs_dvc and not backend._env_value('DVC_API_KEY'):
+        raise RuntimeError('DVC_API_KEY is required for Colab result publication')
     auth = backend._remote_auth_env_script(include_wandb=True, force_dvc=needs_dvc)
     script = backend._BOOTSTRAP + auth + f'''
 import hashlib, json, os, pathlib, subprocess, sys, zipfile, tarfile
@@ -170,6 +172,9 @@ else:
     if {resume!r} and output_path.exists():
         command.append("--resume")
     subprocess.run(command,cwd=root,env=env,check=True)
+if {needs_dvc!r}:
+    from model_tracks.dvc_handoff import publish
+    publish(result_archive, {run_tag!r})
 '''
     try:
         backend.run_detached_stage('all_tracks',['/usr/bin/python3','-c',script],
@@ -244,15 +249,22 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
     expected = backend._read_remote_text(remote_output+'.sha256').strip()
     local = RESULTS/'model_tracks'/f'{run_tag}.training.zip'
     local.parent.mkdir(parents=True,exist_ok=True)
-    if not local.exists() or file_hash(local) != expected:
-        partial = local.with_suffix('.zip.partial')
-        backend._download_one_remote_file(remote_output+'.zip',partial)
-        if file_hash(partial) != expected:
-            raise ValueError('all-track result download mismatch; partial retained for diagnosis')
-        partial.replace(local)
-    if file_hash(local)!=expected:
-        raise ValueError('all-track result download mismatch')
-    manifest=verify_archive(local,'suite_bundle_manifest.json')
+    handoff = None
+    if needs_dvc:
+        from core import common
+        from model_tracks.dvc_handoff import validate
+        receipt_text = backend._read_remote_text(remote_output + '.publication.json')
+        handoff = validate(json.loads(receipt_text), run_tag, expected,
+                           common.training_cfg().colab.dvc_remote_url)
+        local.with_suffix('.handoff.json').write_text(receipt_text)
+        print('[tracks] Colab DVC publication verified; release precedes local pull', flush=True)
+    else:
+        if not local.exists() or file_hash(local) != expected:
+            partial = local.with_suffix('.zip.partial')
+            backend._download_one_remote_file(remote_output+'.zip',partial)
+            if file_hash(partial) != expected:
+                raise ValueError('all-track result download mismatch; partial retained for diagnosis')
+            partial.replace(local)
     # Final publication/collection events occur after the result ZIP snapshot.
     # Retain this separate log with its own remotely computed digest.
     events_remote = remote_output + '.events.jsonl'
@@ -273,10 +285,6 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
         print(f'Suite final event log verified: {events_local}', flush=True)
     except Exception as error:
         print(f'Suite final event log unavailable: {error}; archived worker logs remain available', flush=True)
-    from model_tracks.resume import TRACKS, validate_archived_track
-    with zipfile.ZipFile(local) as result:
-        for track in TRACKS:
-            validate_archived_track(result, manifest, track, postprocess_complete=False)
     # Release GPU quota before local inference, indexing, reporting or publishing.
     # stop() is deliberately non-raising for launcher finally blocks. Require
     # a verified release here so reporting cannot overlap an idle GPU session.
@@ -289,7 +297,7 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
     else:
         raise RuntimeError(
             f"Colab session {backend.SESSION!r} termination could not be verified; "
-            f"CPU postprocessing refused. Verified result archive retained at {local}. "
+            f"CPU postprocessing refused. Result handoff retained beside {local}. "
             f"Release the session with colab stop -s {backend.SESSION} before completing locally."
         )
     if settings['publish_git'] or settings.get('publish_dvc', False):
@@ -298,5 +306,16 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
         if not token:
             raise RuntimeError('DVC_API_KEY is required for local suite publication')
         os.environ['DVC_API_KEY'] = token
+    if handoff is not None:
+        from model_tracks.dvc_handoff import pull
+        print('[tracks] Colab released; pulling training results from DVC locally', flush=True)
+        pull(handoff, local)
+    if file_hash(local) != expected:
+        raise ValueError('all-track result collection mismatch')
+    manifest = verify_archive(local, 'suite_bundle_manifest.json')
+    from model_tracks.resume import TRACKS, validate_archived_track
+    with zipfile.ZipFile(local) as result:
+        for track in TRACKS:
+            validate_archived_track(result, manifest, track, postprocess_complete=False)
     from model_tracks.snapshot_completion import complete
     return complete(local, archive, run_tag)

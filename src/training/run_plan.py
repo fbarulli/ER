@@ -79,7 +79,13 @@ def prepare_run_plan(bundle,*,loss=None,train_frac=1.,sample=False,seed=SEED):
 
 def validate_run_plan(bundle,plan,*,loss,train_frac,sample,seed=SEED):
     expected=plan_identity(bundle,loss=loss,train_frac=train_frac,sample=sample,seed=seed)
-    if plan.get('version')!=1 or plan.get('identity')!=expected:
+    identity = dict(plan.get('identity') or {})
+    if sample and identity.get('sample') is True:
+        # A lifecycle smoke consumes its frozen objective rows and device
+        # batches. Unrelated current config edits need not invalidate them.
+        expected.pop('config_sha256')
+        identity.pop('config_sha256', None)
+    if plan.get('version')!=1 or identity!=expected:
         raise ValueError('prepared training row plan differs from loss/train_frac/sample/config/seed/data; rebuild locally')
     if plan['inputs']['skipped'] or not plan['inputs']['folds']:
         raise ValueError('prepared training row plan has failed/skipped folds')

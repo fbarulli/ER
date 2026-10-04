@@ -4813,7 +4813,7 @@ def main() -> None:
         close_live_log()
         release_colab_launch_lock(launch_lock)
 
-    if _DVC_ENABLED:
+    if (suite.dvc_enabled if args.what == "tracks" else _DVC_ENABLED):
         print("\n[done] artifacts persisted to the configured DVC remote")
     else:
         print("\n[done] artifacts retained locally; DVC disabled")

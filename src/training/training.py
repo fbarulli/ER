@@ -4134,7 +4134,10 @@ def train_one_config(
             if cfg["epochs"] > len(fixed_sampler["epochs"]):
                 raise ValueError("requested training epochs exceed locally prepared presentation plan; rebuild locally")
             batch_size = runtime("batch_size_cuda" if on_cuda else "batch_size_cpu")
-            if fixed_sampler["batch_size"] != batch_size:
+            if sample:
+                # Smoke tests exercise the saved CPU/CUDA presentation plan.
+                batch_size = fixed_sampler["batch_size"]
+            elif fixed_sampler["batch_size"] != batch_size:
                 raise ValueError("local presentation batch size differs from configured runtime; rebuild locally")
             if loss in {"contrastive", "mnrl"}:
                 if "pair_id" not in train_ds.column_names or list(train_ds["pair_id"]) != list(range(len(train_ds))):

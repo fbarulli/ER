@@ -136,6 +136,13 @@ per epoch. MNRL duplicate checks inspect text fields, excluding telemetry.
 The GPU worker consumes `FrozenBatchSampler` and native token tables; it
 rejects missing/repeated/out-of-range indices or mismatched batch settings.
 
+Sampled smoke runs reuse their saved objective rows and the selected device's
+saved CPU/CUDA batch size. They permit configuration-hash drift in the row
+plan, while still checking its data, loss, split fraction, sample marker,
+seed, and valid fold structure. Full training retains strict configuration
+and runtime batch-size checks. Smoke still requires a valid prepared plan;
+this exception does not waive package freshness or archive integrity checks.
+
 B/C use the same train-only attribute graph and vocabulary. Training runs one
 full-graph optimization step per epoch, with classification plus cosine
 metric loss. Query/export batching is separate: rows encode independently
@@ -181,6 +188,18 @@ PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
   --gpu T4 --allow-gpu
 ```
 
+The default full workflow is GPU baseline embedding export, all three models,
+inference exports and configured ablations, Colab DVC publication, shutdown,
+local DVC collection, CPU reports, and final publication. Run it with the
+configured T4 default using one command:
+
+```bash
+bash scripts/run_full_training.sh --prepared-input-package <preparation-run>/all_tracks_inputs.zip
+```
+
+`COLAB_GPU` overrides the full-run runtime. `scripts/run_colab_smoke.sh`
+continues to request CPU explicitly.
+
 Use the existing `colab_backend.py` entry point (or installed `er-colab`).
 Both import `cli.colab.main`, sharing the selected runtime with the track
 adapter. `python -m cli.colab` creates a separate `__main__` instance and can
@@ -216,9 +235,13 @@ held-out quality measurements.
 GPU workers own optimization and embedding forward passes. Local CPU
 postprocessing owns scored-pair reports, calibration, HNSW indexes,
 attribute/sparse-neighborhood slices, and configured ablation analysis.
-After verified download, the launcher stops the Colab session before CPU
-reporting. Reports run against the input package's frozen source and config,
-with a receipt recording any subsequent local changes. DVC publishes the
+For publishing suites, Colab pushes the complete training archive to DVC and
+verifies a clean remote pull. The launcher validates and saves the small DVC
+handoff receipt, stops Colab, then pulls and verifies the training archive from
+DVC locally before CPU reporting. Suites with publication disabled collect the
+archive directly before shutdown. The same `colab_backend.py` call owns this
+entire lifecycle; no separate reporting command is required. Reports run against the input package's frozen source and config,
+with a receipt recording any subsequent local changes. After local reports finish, DVC separately publishes the
 completed archive containing every retained training checkpoint and the
 embedding/ablation artifacts. Text checkpoint retention is unlimited;
 inference publication and model ablations use only each track's selected best

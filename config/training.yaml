@@ -156,9 +156,9 @@ colab:
   git_remote_name: "ER"
   remote_root: "/content/EuromonitoR"
   session: "my-highram-session"
-  # CPU-only default for smoke and training launches.  A GPU requires an
-  # explicit command-line override plus --allow-gpu.
-  gpu: "CPU"
+  # Full all-track launches default to GPU; the smoke script requests CPU.
+  # GPU provisioning still requires the launcher's --allow-gpu flag.
+  gpu: "T4"
   # Training workers consume immutable bundles prepared locally.  Keep all
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
