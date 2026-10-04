@@ -62,16 +62,18 @@ def forward(setup,checkpoint):
     from sentence_transformers import SentenceTransformer
     from core.encoding_inputs import tokenization_policy,load_token_features
     request_path = setup/'embedding_inputs.json'
+    request_sha256 = file_hash(request_path)
     request = json.loads(request_path.read_text())
     output = setup/'shared_minilm__embeddings.npz'
-    validate_pending(setup,checkpoint)
     if output.exists():
+        validate_pending(setup,checkpoint)
         validate_result(output,request,request_sha256=file_hash(request_path))
         return output
     if not torch.cuda.is_available():
         raise RuntimeError('frozen suite baseline requires CUDA')
     model = SentenceTransformer(str(checkpoint),device='cuda',local_files_only=True)
     model.eval()
+    validate_pending(setup,checkpoint,native_model=model)
     plan = request['prepared_text']
     if tokenization_policy(model) != plan['tokenization']:
         raise ValueError('GPU baseline tokenizer differs from native local preparation')
@@ -80,7 +82,14 @@ def forward(setup,checkpoint):
         for batch in plan['token_batches']:
             vector = model(load_token_features(arrays,batch,'cuda'))['sentence_embedding']
             chunks.append(torch.nn.functional.normalize(vector,p=2,dim=1).cpu().numpy().astype(np.float32))
-    metadata = {**request['metadata'],'request_sha256':file_hash(request_path),
+    if file_hash(request_path) != request_sha256:
+        raise ValueError('baseline request changed during encoding')
+    if file_hash(setup/'prepared_text.npz') != plan['sha256']:
+        raise ValueError('baseline tokens changed during encoding')
+    for key, value in input_identity(setup, checkpoint).items():
+        if request['metadata'].get(key) != value:
+            raise ValueError('baseline source changed during encoding: ' + key)
+    metadata = {**request['metadata'],'request_sha256':request_sha256,
         'embedding_dtype':'float32','tokenization':plan['tokenization']}
     candidate = output.with_suffix('.npz.partial')
     with candidate.open('wb') as handle:

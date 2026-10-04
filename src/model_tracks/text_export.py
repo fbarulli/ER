@@ -57,6 +57,7 @@ def forward(output,setup,*,return_model=False):
     if not torch.cuda.is_available():
         raise RuntimeError('text export requires CUDA')
     request_path = setup/'text_export_request.json'
+    request_sha256 = file_hash(request_path)
     request = json.loads(request_path.read_text())
     tokens = setup/'prepared_text.npz'
     if file_hash(tokens) != request['tokens_sha256']:
@@ -65,6 +66,7 @@ def forward(output,setup,*,return_model=False):
         if file_hash(path) != request[key]:
             raise ValueError('text export source changed: '+key)
     checkpoint,_ = resolve_best_checkpoint(output)
+    checkpoint_sha256 = checkpoint_hash(checkpoint)
     model = SentenceTransformer(str(checkpoint),device='cuda',local_files_only=True)
     model.eval()
     if tokenization_policy(model) != request['plan']['tokenization']:
@@ -79,11 +81,18 @@ def forward(output,setup,*,return_model=False):
             chunks.append(torch.nn.functional.normalize(vectors,p=2,dim=1).cpu().numpy().astype(np.float32))
     vectors = np.concatenate(chunks)
     metadata = {key:request[key] for key in ('catalog_sha256','listings_sha256','pairs_sha256','text_sha256','composition','composition_implementation_sha256','export_implementation_sha256','token_implementation_sha256')}
-    metadata.update(checkpoint_sha256=checkpoint_hash(checkpoint),request_sha256=file_hash(request_path),
+    if file_hash(request_path) != request_sha256:
+        raise ValueError('text export request changed during encoding')
+    if checkpoint_hash(checkpoint) != checkpoint_sha256 or file_hash(tokens) != request['tokens_sha256']:
+        raise ValueError('text export checkpoint or tokens changed during encoding')
+    metadata.update(checkpoint_sha256=checkpoint_sha256,request_sha256=request_sha256,
         tokenization=request['plan']['tokenization'],export_location='Colab GPU',truncated_inputs=0,embedding_dtype='float32')
     path = output/'text__vectors.npz'
-    with path.open('wb') as handle:
+    candidate = path.with_suffix('.npz.partial')
+    with candidate.open('wb') as handle:
         np.savez_compressed(handle,ids=np.asarray(request['ids'],dtype=str),embeddings=vectors,metadata=json.dumps(metadata,sort_keys=True))
+    validate(candidate, checkpoint, setup)
+    candidate.replace(path)
     model._er_checkpoint_sha256 = metadata['checkpoint_sha256']
     return (path,model) if return_model else path
 
