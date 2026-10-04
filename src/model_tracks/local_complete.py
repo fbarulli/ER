@@ -6,20 +6,25 @@ import zipfile
 from core.portable_archive import verify_archive, write_archive, RESULT_ARCHIVE_EXCLUDED_DIRS
 from graph_tracks.data import file_hash
 
-def _publish(final, settings, run_tag):
+def _publish(final, settings, run_tag, *, ablation_done=False):
     if settings.dvc_enabled:
         from model_tracks.publish import persist_results
         persist_results(final, run_tag)
     if settings.publish_git:
         from model_tracks.publish import materialize
         materialize(final, run_tag, push=True)
-    if settings.post_training_ablation:
+    # Only when the caller had nothing to do here. On the main path the
+    # ablation was already completed once, with its publisher, BEFORE the
+    # archive was written; re-entering here would rewrite report.json after
+    # the fact, so the published directory and the archived copy could
+    # diverge even though the content is meant to be identical.
+    if settings.post_training_ablation and not ablation_done:
         from model_tracks.post_training_ablation import run
         run(final,run_tag,settings)
     return final
 
 
-def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
+def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publish: bool = True) -> Path:
     from core.common import TRAIN_ROOT
     from model_tracks.resume import TRACKS, completed_track, record_completion
     from model_tracks.config import SuiteConfig
@@ -62,7 +67,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
                     if target.exists() and target.read_bytes() != data:
                         raise ValueError('restored prepared input changed: '+relative)
                     target.write_bytes(data)
-        return _publish(final, settings, run_tag)
+        return _publish(final, settings, run_tag, ablation_done=True) if publish else final
     marker = destination / 'local_source.json'
     identity = {'training_archive_sha256': file_hash(training_archive),
                 'input_archive_sha256': file_hash(input_archive)}
@@ -101,6 +106,9 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
             raise ValueError('restored frozen baseline differs from suite GPU export')
         if not cache.exists():
             shutil.copy2(baseline,cache)
+    if settings.post_training_ablation and (destination/'baseline/ablation/request.json').is_file():
+        from model_tracks.baseline_ablation import complete as complete_baseline_ablation
+        complete_baseline_ablation(destination/'baseline',setup,config=TRAIN_ROOT/settings.ablation_config)
     suite = json.loads((destination / 'suite_manifest.json').read_text())
     if suite.get('inputs') != inputs['preflight']:
         raise ValueError('training suite did not use the verified prepared inputs')
@@ -155,9 +163,15 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
                            saved_inference=output/(track+'__inference'))
         record_completion(output, track)
         print(f'[local-postprocess/{track}] complete', flush=True)
+    ablation_done = False
     if settings.post_training_ablation:
-        from model_tracks.post_training_ablation import complete_saved
-        complete_saved(destination,settings)
+        from model_tracks.post_training_ablation import complete_saved, git_publisher
+        # One pass, with the publisher attached, so the reports land in the
+        # archive below exactly as they were published. This used to run
+        # complete_saved here AND again through _publish, the second time
+        # rewriting report.json after the archive was sealed.
+        complete_saved(destination, settings, publisher=git_publisher(settings) if publish else None)
+        ablation_done = True
     suite['postprocess_location'] = 'local CPU'
     (destination / 'suite_manifest.json').write_text(json.dumps(suite, indent=2))
     files = {p.relative_to(destination).as_posix(): p for p in destination.rglob('*')
@@ -166,4 +180,4 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
     write_archive(final, files, manifest_name='suite_bundle_manifest.json',
                   metadata={'run_tag': run_tag, **identity, 'postprocess_location': 'local CPU'})
     final.with_suffix('.sha256').write_text(file_hash(final) + '\n')
-    return _publish(final, settings, run_tag)
+    return _publish(final, settings, run_tag, ablation_done=ablation_done) if publish else final

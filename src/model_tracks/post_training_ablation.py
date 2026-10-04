@@ -18,6 +18,7 @@ def complete_saved(destination,suite,*,publisher=None):
         if not request.is_file() or not result.is_file():
             raise ValueError('suite lacks prepared GPU ablation export: '+track)
         sources = list((destination/track).rglob('text__completion_manifest.json' if track == 'text' else name(track,'report_manifest.json')))
+        sources = [path for path in sources if not any(part.startswith('interrupted-') or '.interrupted-' in part for part in path.parts)]
         if len(sources) != 1:
             raise ValueError('ambiguous baseline calibration manifest: '+track)
         calibration = json.loads(sources[0].read_text())
@@ -58,20 +59,30 @@ def complete_saved(destination,suite,*,publisher=None):
     return receipt
 
 
+def git_publisher(suite):
+    """The git-side ablation publisher for a suite, or None when not publishing.
+
+    Split out of :func:`run` so a caller that must produce the reports BEFORE
+    archiving them can still publish the very same artifacts in one pass,
+    instead of running :func:`complete_saved` twice.
+    """
+    if not suite.publish_git:
+        return None
+    spec = importlib.util.spec_from_file_location(
+        'saved_gpu_ablation_publisher', TRAIN_ROOT / 'scripts/run_colab_ablation.py')
+    module = importlib.util.module_from_spec(spec)
+    import sys
+    sys.path.insert(0, str(TRAIN_ROOT / 'scripts'))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module.persist_result
+
+
 def run(archive, run_tag, suite, *, launcher=None):
     archive_metadata = verify_archive(archive,'suite_bundle_manifest.json')
     destination = archive.parent/run_tag
     if any((destination/track/'ablation/request.json').exists() for track in ('text','gnn_only','hybrid')):
-        publisher = None
-        if suite.publish_git:
-            spec = importlib.util.spec_from_file_location('saved_gpu_ablation_publisher',TRAIN_ROOT/'scripts/run_colab_ablation.py')
-            module = importlib.util.module_from_spec(spec)
-            import sys
-            sys.path.insert(0,str(TRAIN_ROOT/'scripts'))
-            try:
-                spec.loader.exec_module(module)
-            finally:
-                sys.path.pop(0)
-            publisher = module.persist_result
-        return complete_saved(destination,suite,publisher=publisher)
+        return complete_saved(destination,suite,publisher=git_publisher(suite))
     raise ValueError('suite lacks staged GPU ablation exports; rebuild prepared inputs before training')

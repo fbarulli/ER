@@ -756,9 +756,9 @@ training:
   # discriminative-LR groups: per-layer multiplicative decay bottom->top
   # (was an inline 0.9 default in src/training/training._discriminative_groups)
   layer_decay: 0.9
-  # checkpoint retention (HF Trainer save_total_limit): best + last
+  # Retain every resumable checkpoint; publish the finished run through DVC.
   # (was an inline 2 in the STArgs build)
-  save_total_limit: 2
+  save_total_limit: null
   # cross-encoder rerank lane (07e): the stage-2 model's own encode cap
   # (was an inline 512 in src/training/rerank.CrossEncoder)
   rerank_max_length: 512

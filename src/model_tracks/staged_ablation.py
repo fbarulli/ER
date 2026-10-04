@@ -59,7 +59,7 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None):
     return setup/'ablation_templates'
 
 
-def forward(output,setup,track,checkpoint,*,device,text_model=None):
+def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_role='selected',saved_text=None):
     from core.common import TRAIN_ROOT
     template = setup/'ablation_templates'/track
     request = json.loads((template/'request.json').read_text())
@@ -68,12 +68,18 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None):
         actual = digest({'vocabulary':payload['vocabulary'],'support_records':payload['support_records']})
         if actual != request['graph_binding'] or payload['manifest']['track'] != track:
             raise ValueError('selected graph checkpoint differs from frozen local support/vocabulary')
+    if checkpoint_role not in {'selected','baseline'}:
+        raise ValueError('unknown ablation checkpoint role')
     old_checkpoint = request['checkpoint']
-    selected = '@suite/'+checkpoint.relative_to(output.parent).as_posix()
-    request['sources'].pop(old_checkpoint)
-    request['checkpoint'] = selected
-    request['sources'][selected] = checkpoint_identity(checkpoint)
-    request['checkpoint_role'] = 'selected'
+    if checkpoint_role == 'baseline':
+        if track != 'text' or request['sources'][old_checkpoint] != checkpoint_identity(checkpoint):
+            raise ValueError('baseline ablation differs from frozen text checkpoint')
+    else:
+        selected = '@suite/'+checkpoint.relative_to(output.parent).as_posix()
+        request['sources'].pop(old_checkpoint)
+        request['checkpoint'] = selected
+        request['sources'][selected] = checkpoint_identity(checkpoint)
+    request['checkpoint_role'] = checkpoint_role
     folder = output/'ablation';folder.mkdir(parents=True,exist_ok=True)
     shutil.copy2(template/'prepared_inputs.npz',folder/'prepared_inputs.npz')
     path = folder/'request.json'
@@ -83,8 +89,7 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None):
         from model_tracks.ablation import validate_vectors
         validate_vectors(path,vectors)
     else:
-        saved_text = None
-        if request['settings']['retrieval_catalog'] == 'full':
+        if saved_text is None and request['settings']['retrieval_catalog'] == 'full':
             saved_text = (output/'text__vectors.npz' if track == 'text' else
                           setup/'shared_minilm__embeddings.npz' if track == 'hybrid' else None)
         encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model)

@@ -1713,7 +1713,7 @@ class TrainingSpec(BaseModel):
     es_patience: int = Field(ge=1)
     es_threshold: float = Field(ge=0.0)
     layer_decay: float = Field(gt=0.0, le=1.0)
-    save_total_limit: int = Field(ge=1)
+    save_total_limit: int | None = Field(ge=1)
     rerank_max_length: int = Field(ge=8)
     batch_size_cpu: int = Field(ge=1)
     batch_size_cuda: int = Field(ge=1)

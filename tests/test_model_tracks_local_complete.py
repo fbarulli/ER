@@ -128,7 +128,7 @@ def test_completed_archive_restores_inputs_and_reports_before_publish(tmp_path,m
     training_zip,input_zip,calls,_ = suite(tmp_path,monkeypatch)
     final = complete(training_zip,input_zip,'run')
     shutil.rmtree(tmp_path/'run')
-    def publish(archive,settings,run_tag):
+    def publish(archive,settings,run_tag,*,ablation_done=False):
         assert (tmp_path/'run/text/text__training_report.md').is_file()
         assert (tmp_path/'run/local_inputs/data/model_tracks/suite.yaml').is_file()
         return archive

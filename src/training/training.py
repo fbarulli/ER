@@ -1636,6 +1636,10 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             / self.run_tag
             / f"ann_refresh_fold{self.fold_i}_step{state.global_step}.csv"
         )
+        # Refresh cost is a plan-required operational measurement. It spans the
+        # fine-tuned encode, both mining passes and the audit rewrite, so it is
+        # timed around the whole refresh rather than inside any single helper.
+        refresh_started = time.monotonic()
         fine_tuned_emb = encode_finetuned_embeddings(
             model,
             self.payload,
@@ -1849,12 +1853,42 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         self.ann_state["version"] = int(state.global_step)
         self.ann_state["count"] = int(len(pairs))
         self.last_epoch = completed_epoch
+        refresh_seconds = time.monotonic() - refresh_started
+        refresh_timings = (
+            RESULTS
+            / "logs"
+            / self.run_tag
+            / f"refresh_timings_fold{self.fold_i}.json"
+        )
+        timings = []
+        if refresh_timings.is_file():
+            try:
+                timings = json.loads(refresh_timings.read_text())
+            except json.JSONDecodeError:
+                timings = []
+        timings.append(
+            {
+                "step": int(state.global_step),
+                "epoch": float(epoch),
+                "refresh_seconds": float(refresh_seconds),
+                "pairs": int(len(pairs)),
+                "ann_pairs": int(
+                    selected_sources.count("ann_finetuned")
+                ),
+                "attribute_conflict_pairs": int(
+                    selected_sources.count("attribute_conflict")
+                ),
+            }
+        )
+        refresh_timings.parent.mkdir(parents=True, exist_ok=True)
+        refresh_timings.write_text(json.dumps(timings, indent=2) + "\n")
         print(
             f"    [ann-refresh] fold {self.fold_i}: step={state.global_step} "
             f"epoch={epoch:.2f} pairs={len(pairs):,} "
             f"ann={selected_sources.count('ann_finetuned'):,} "
             f"attribute_conflict={selected_sources.count('attribute_conflict'):,} "
             f"band={stats.get('band_lo', lo):.4f}-{stats.get('band_hi', hi):.4f} "
+            f"refresh_seconds={refresh_seconds:.3f} "
             f"audit={audit_path} attr_audit={attr_audit_path}",
             flush=True,
         )
@@ -1878,6 +1912,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
                     "ann_refresh/band_overlap_pct": stats.get("band_overlap_pct"),
                     "ann_refresh/band_lo": stats.get("band_lo"),
                     "ann_refresh/band_hi": stats.get("band_hi"),
+                    "ann_refresh/refresh_seconds": float(refresh_seconds),
                 },
                 step=int(state.global_step),
             )
@@ -4241,7 +4276,7 @@ def train_one_config(
             # none of its knobs (no metric_for_best_model / load_best_model_at_end
             # / callbacks). SentenceTransformerTrainer gives us the full HF
             # contract: EarlyStoppingCallback on the dev evaluator's AP.
-            # Checkpoints KEPT but bounded: save_only_model + save_total_limit=2
+            # Checkpoint retention follows the shared runtime policy.
             # caps disk at ~2x model size (~1 GB L12 / ~180 MB L6) — no explosion,
             # and load_best_model_at_end restores the best epoch. Unique subdir
             # per run_tag so parallel trials never collide.
@@ -4346,7 +4381,7 @@ def train_one_config(
                 load_best_model_at_end=True,
                 save_strategy="steps",
                 save_steps=eval_steps,
-                save_total_limit=int(runtime("save_total_limit")),  # SSOT
+                save_total_limit=runtime("save_total_limit"),  # SSOT; None retains all checkpoints
                 # A resumable checkpoint must retain optimizer, scheduler,
                 # RNG, and trainer state.  Model-only snapshots cannot pick
                 # up a stopped run faithfully.

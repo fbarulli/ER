@@ -299,5 +299,5 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
         if not token:
             raise RuntimeError('DVC_API_KEY is required for local suite publication')
         os.environ['DVC_API_KEY'] = token
-    from model_tracks.local_complete import complete
+    from model_tracks.snapshot_completion import complete
     return complete(local, archive, run_tag)
