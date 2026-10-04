@@ -8,10 +8,10 @@ import sys
 
 import pandas as pd
 
-from core.audit_guard import assert_vocabulary_overlap, self_comparison_control
+from core.audit_guard import ATTRIBUTE_SELF_SAMPLE, assert_vocabulary_overlap, self_comparison_control
 from core.common import DATA_PATH, data_cfg
 from core.manifest import sha256_file
-from core.text import attribute_fields, normalized_attribute_text
+from core.text import attribute_fields
 from core.attribute_universe import attribute_registry
 from core.date_evidence import extract_date_evidence
 if __package__ in (None, ""):
@@ -22,7 +22,10 @@ from scripts.evaluate_gate_logic import wiring_inventory
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--self-sample-size", type=int, default=ATTRIBUTE_SELF_SAMPLE)
     args = parser.parse_args()
+    if args.self_sample_size < 1:
+        parser.error("self sample size must be positive")
     fingerprint = sha256_file(DATA_PATH)
     frame = pd.read_csv(DATA_PATH, **data_cfg().dataset_csv_read.model_dump()).rename(
         columns=data_cfg().column_mapping).fillna("")
@@ -71,7 +74,7 @@ def main():
     assert_vocabulary_overlap(registered, list(keys.keys()), label="feature-capture")
     self_comparison_control(
         lambda a, b: extract_date_evidence(a) == extract_date_evidence(b),
-        list(frame["sku_name_eng"].head(200)), label="feature-capture",
+        list(frame["sku_name_eng"].head(args.self_sample_size)), label="feature-capture",
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")

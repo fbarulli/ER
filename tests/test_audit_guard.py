@@ -155,3 +155,78 @@ def test_guard_dimensions_returns_unmeasured_without_raising() -> None:
     )
     assert len(results) == 2
     assert [r.unmeasured for r in results] == [False, True]
+
+
+@pytest.mark.parametrize("value,total", [(float("nan"), None), (float("inf"), 10), (-1, 10), (11, 10), (1.5, None)])
+def test_not_degenerate_rejects_invalid_measurements(value, total):
+    with pytest.raises(AuditGuardError):
+        assert_not_degenerate("coverage", value, total=total)
+
+
+def test_absent_dimension_is_unmeasured_not_a_vocabulary_failure():
+    result = guard_dimension(**_spec(values=set(), populated=0))
+    assert result.passed and result.unmeasured
+
+
+@pytest.mark.parametrize("populated,total", [(-1, 100), (101, 100), (0, 0)])
+def test_invalid_dimension_coverage_is_hard_failure(populated, total):
+    result = guard_dimension(**_spec(populated=populated, total=total))
+    assert not result.passed and not result.unmeasured
+
+
+def test_parse_gap_census_includes_rare_rows_after_control_sample():
+    from core.audit_guard import self_comparison_parse_gaps
+    evidence = ["equal"] * 200 + ["unparsed"]
+    assert self_comparison_parse_gaps(
+        ["caffeine"], evaluate_status=lambda a, b, name: a,
+        evidence_samples=evidence,
+    ) == {"caffeine": 1}
+
+
+def test_dimension_control_sample_size_can_be_configured():
+    from core.audit_guard import attribute_dimension_guard_specs
+    specs = attribute_dimension_guard_specs(
+        ["caffeine"], values={"caffeine": {"200mg"}}, source_texts=["200mg"],
+        populated={"caffeine": 1}, total=2, evaluate_status=lambda a, b, name: a,
+        evidence_samples=["equal", "different"], sample_size=2,
+    )
+    with pytest.raises(AuditGuardError, match="self-comparison"):
+        guard_dimensions(specs)
+
+
+def test_reading_sheet_keeps_empty_attribute_keys_as_missed_evidence():
+    from scripts.audit_attribute_readings import _key_present
+    assert _key_present("Caffeine: ; Flavor: Lemon", "caffeine")
+
+
+def test_guard_result_rejects_contradictory_outcome():
+    from pydantic import ValidationError
+    from core.audit_guard import DimensionGuardResult
+    with pytest.raises(ValidationError, match="hard failure"):
+        DimensionGuardResult(name="caffeine", passed=False, unmeasured=True)
+
+
+@pytest.mark.parametrize("script", ["audit_attribute_readings", "audit_identity_dimensions"])
+def test_sparse_catalog_cli_publishes_missing_dimension_evidence(tmp_path, monkeypatch, script):
+    import importlib
+    import json
+    import sys
+    import pandas as pd
+    module = importlib.import_module(f"scripts.{script}")
+    dataset = tmp_path / "catalog.csv"
+    pd.DataFrame([
+        {"sku_id": "1", "gtin": "", "retailer": "shop", "sku_name_eng": "Water", "attribute": "Caffeine: "},
+        {"sku_id": "2", "gtin": "", "retailer": "shop", "sku_name_eng": "Water", "attribute": ""},
+    ]).to_csv(dataset, index=False)
+    output = tmp_path / "output"
+    monkeypatch.setattr(sys, "argv", [script, "--dataset", str(dataset), "--output-dir", str(output)])
+    module.main()
+    if script == "audit_attribute_readings":
+        sheet = pd.read_csv(output / "reading_sheet.csv", keep_default_na=False)
+        assert ((sheet.dimension == "Caffeine") & (sheet.state == "key_present_not_extracted")).any()
+        report = json.loads((output / "reading_manifest.json").read_text())
+        assert "Caffeine" in report["unmeasured"]
+    else:
+        report = json.loads((output / "identity_dimensions.json").read_text())
+        assert "Caffeine" in report["unmeasured_dimensions"]
+        assert all(row["same_gtin_difference_rate"] is None for row in report["dimension_evaluation"])

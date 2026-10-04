@@ -16,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.audit_guard import (
+    ATTRIBUTE_SELF_SAMPLE,
     attribute_dimension_guard_specs,
     guard_dimensions,
     self_comparison_parse_gaps,
@@ -33,12 +34,17 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=RESULTS / "identity_dimensions")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--pairs-per-group", type=int, default=20)
+    parser.add_argument("--self-sample-size", type=int, default=ATTRIBUTE_SELF_SAMPLE)
     args = parser.parse_args()
+    if args.self_sample_size < 1:
+        parser.error("self sample size must be positive")
     if args.pairs_per_group < 1 or (args.limit is not None and args.limit < 1):
         parser.error("limits must be positive")
     frame = pd.read_csv(args.dataset, dtype=str, keep_default_na=False, nrows=args.limit)
     if not {"sku_id", "gtin", "attribute", "retailer", "sku_name_eng"} <= set(frame.columns):
         raise ValueError("catalog missing required identity columns")
+    if frame.empty:
+        raise ValueError("catalog is empty")
     if frame.sku_id.duplicated().any():
         raise ValueError("duplicate listing IDs")
     policy = dimension_policy()
@@ -94,7 +100,8 @@ def main() -> None:
     # through the shared spec helper (core.audit_guard). For each: its
     # observed value vocabulary must occur in the source attribute text, a
     # row compared with itself must never report that dimension "different"
-    # or "unparsed", and its coverage must not be exactly 0% or 100% (a
+    # (parser gaps are reported separately), and its coverage must not be
+    # exactly 0% or 100% (a
     # degenerate dimension is reported unmeasured, not silently published).
     def _dimension_status(a, b, name: str) -> str:
         return evaluate_dimensions(a, b)[name]["status"]
@@ -107,6 +114,7 @@ def main() -> None:
         total=len(frame),
         evaluate_status=_dimension_status,
         evidence_samples=evidence,
+        sample_size=args.self_sample_size,
     )
     guard_results = guard_dimensions(guard_specs, label="identity-dimensions")
     unmeasured = [r.name for r in guard_results if r.unmeasured]
@@ -118,9 +126,13 @@ def main() -> None:
         evaluate_status=_dimension_status,
         evidence_samples=evidence,
     )
+    for row in table:
+        if row["dimension"] in unmeasured:
+            for label in ("same_gtin", "different_gtin_same_title"):
+                row[f"{label}_difference_rate"] = None
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(table).to_csv(args.output_dir / "dimension_coverage.csv", index=False)
-    report = {"rows": len(frame), "registered_dimensions": len(policy.attributes),
+    report = {"rows": len(frame), "self_sample_size": args.self_sample_size, "registered_dimensions": len(policy.attributes),
               "observed_dimensions": len(coverage), "unclassified_keys": dict(unknown),
               "column_roles": {name: policy.columns.get(name, "unclassified") for name in frame.columns},
               "malformed_attribute_rows": sum(bool(e.malformed_parts) for e in evidence),

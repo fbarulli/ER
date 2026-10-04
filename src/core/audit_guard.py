@@ -31,16 +31,16 @@ state) so they wrap any audit script or test.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from pydantic import BaseModel, ConfigDict, model_validator
 from typing import Any
+from math import isfinite
 
 
 class AuditGuardError(RuntimeError):
     """A measurement audit failed a fail-closed precondition/postcondition."""
 
 
-@dataclass(frozen=True)
-class DimensionGuardResult:
+class DimensionGuardResult(BaseModel):
     """Per-dimension guard outcome.
 
     ``passed`` is False only for a hard harness failure (empty/mismatched
@@ -51,10 +51,18 @@ class DimensionGuardResult:
     reported rate rather than silently published.
     """
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     name: str
     passed: bool
     unmeasured: bool
     detail: str = ""
+
+    @model_validator(mode="after")
+    def validate_outcome(self):
+        if self.unmeasured and not self.passed:
+            raise ValueError("a hard failure cannot be marked unmeasured")
+        return self
 
 
 def _clean_terms(vocabulary: Iterable[Any]) -> set[str]:
@@ -74,6 +82,8 @@ def assert_vocabulary_overlap(
     ``min_terms`` distinct terms occur — the "exactly 0% overlap" case: a
     vocabulary that matches nothing cannot measure extraction.
     """
+    if min_terms < 1:
+        raise AuditGuardError(f"[{label}] min_terms must be positive")
     terms = _clean_terms(vocabulary)
     if not terms:
         raise AuditGuardError(f"[{label}] vocabulary is empty")
@@ -137,15 +147,21 @@ def assert_not_degenerate(
     Without it, ``value`` is a fraction: 0.0 and 1.0 are rejected. Returns
     the fraction.
     """
+    if not isfinite(float(value)):
+        raise AuditGuardError(f"[{label}] {name}: value must be finite")
     if total is not None:
-        if total <= 0:
+        if not isfinite(float(total)) or total <= 0:
             raise AuditGuardError(
                 f"[{label}] {name}: total must be positive, got {total}"
             )
+        if value < 0 or value > total:
+            raise AuditGuardError(f"[{label}] {name}: count outside [0, total]")
         if value == 0 or value == total:
             raise AuditGuardError(f"[{label}] {name} is degenerate: {value}/{total}")
         return value / total
     fraction = float(value)
+    if fraction < 0 or fraction > 1:
+        raise AuditGuardError(f"[{label}] {name}: fraction outside [0, 1]")
     if fraction == 0.0 or fraction == 1.0:
         raise AuditGuardError(f"[{label}] {name} is degenerate: {fraction}")
     return fraction
@@ -189,21 +205,29 @@ def guard_dimension(
     scored here, so the caller must exclude it rather than report it.
     """
     scoped = f"{label}:{name}"
+    if total <= 0 or populated < 0 or populated > total:
+        return DimensionGuardResult(name=name, passed=False, unmeasured=False,
+                                    detail=f"[{scoped}] invalid coverage: {populated}/{total}")
+    # An absent dimension has no observed vocabulary. That is missing coverage,
+    # not evidence that the audit vocabulary was wired to the wrong corpus.
+    if populated == 0:
+        return DimensionGuardResult(name=name, passed=True, unmeasured=True,
+                                    detail=f"[{scoped}] coverage is degenerate: 0/{total}")
     try:
         assert_vocabulary_overlap(values, source_texts, label=scoped)
     except AuditGuardError as exc:
-        return DimensionGuardResult(name, passed=False, unmeasured=False, detail=str(exc))
+        return DimensionGuardResult(name=name, passed=False, unmeasured=False, detail=str(exc))
     try:
         self_comparison_control(
             self_compare, self_samples, label=scoped, expected=self_expected
         )
     except AuditGuardError as exc:
-        return DimensionGuardResult(name, passed=False, unmeasured=False, detail=str(exc))
+        return DimensionGuardResult(name=name, passed=False, unmeasured=False, detail=str(exc))
     try:
         assert_not_degenerate("coverage", populated, total=total, label=scoped)
     except AuditGuardError as exc:
-        return DimensionGuardResult(name, passed=True, unmeasured=True, detail=str(exc))
-    return DimensionGuardResult(name, passed=True, unmeasured=False)
+        return DimensionGuardResult(name=name, passed=True, unmeasured=True, detail=str(exc))
+    return DimensionGuardResult(name=name, passed=True, unmeasured=False)
 
 
 def guard_dimensions(
@@ -244,6 +268,7 @@ def attribute_dimension_guard_specs(
     total: int,
     evaluate_status: Callable[[Any, Any, str], str],
     evidence_samples: Sequence[Any],
+    sample_size: int = ATTRIBUTE_SELF_SAMPLE,
 ) -> list[dict[str, Any]]:
     """Build the per-dimension guard specs shared by the attribute audits.
 
@@ -255,12 +280,12 @@ def attribute_dimension_guard_specs(
     separately); only "different" — a row disagreeing with itself — is a
     broken comparator and a hard failure.
 
-    Returns spec dicts ready for :func:`guard_dimensions`, plus the
-    parse-gap census over the same sample (dimension -> rows reported
-    "unparsed" against themselves), so every audit reports parser gaps the
-    same way instead of two drifted copies.
+    Returns spec dicts ready for :func:`guard_dimensions`. Parser-gap counts
+    are reported separately by :func:`self_comparison_parse_gaps`.
     """
-    sample = list(evidence_samples)[:ATTRIBUTE_SELF_SAMPLE]
+    if sample_size < 1:
+        raise ValueError("sample_size must be positive")
+    sample = list(evidence_samples)[:sample_size]
     attr_texts = list(source_texts)
     specs: list[dict[str, Any]] = []
     for name in sorted(dimensions):
@@ -291,7 +316,8 @@ def self_comparison_parse_gaps(
     absorbed. Duplicates zero logic: injects the same comparator as
     :func:`attribute_dimension_guard_specs`.
     """
-    sample = list(evidence_samples)[:ATTRIBUTE_SELF_SAMPLE]
+    # A census must include rare gaps beyond the bounded control sample.
+    sample = evidence_samples
     gaps: dict[str, int] = {}
     for name in sorted(dimensions):
         count = sum(

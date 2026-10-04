@@ -11,8 +11,9 @@ manual right/wrong/missed read:
 Every dimension is guarded first (core.audit_guard): its value vocabulary must
 occur in the source text, a row must never compare "different" from itself, and
 coverage must not be exactly 0% or 100%. A dimension that fails a hard guard is
-excluded; a degenerate dimension is marked unmeasured. Nothing is published for
-a dimension whose guard fired.
+excluded; a degenerate dimension is marked unmeasured. Qualitative reading
+rows remain available for unmeasured dimensions so missing extraction can be
+reviewed; they are not accuracy rates.
 
 This script only *produces the sheet*; the verdicts are the human read. It is
 read-only over the dataset.
@@ -29,19 +30,19 @@ from pathlib import Path
 import pandas as pd
 
 from core.audit_guard import (
+    ATTRIBUTE_SELF_SAMPLE,
     attribute_dimension_guard_specs,
     guard_dimensions,
+    self_comparison_parse_gaps,
 )
 from core.common import F, RESULTS
 from core.product_dimensions import dimension_policy, evaluate_dimensions, row_dimensions
-from core.text import normalized_attribute_text
+from core.text import attribute_fields, normalized_attribute_text
 
 
 def _key_present(cell: str, key: str) -> bool:
-    from core.text import attribute_fields
-
     needle = normalized_attribute_text(key)
-    return any(name == needle for name, _ in attribute_fields(cell))
+    return any(name == needle for name, _ in attribute_fields(cell, include_empty=True))
 
 
 def main() -> None:
@@ -51,7 +52,12 @@ def main() -> None:
     parser.add_argument("--per-dimension", type=int, default=100)
     parser.add_argument("--missed-per-dimension", type=int, default=25)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--self-sample-size", type=int, default=ATTRIBUTE_SELF_SAMPLE)
     args = parser.parse_args()
+    if args.self_sample_size < 1:
+        parser.error("self sample size must be positive")
+    if args.per_dimension < 1 or args.missed_per_dimension < 1:
+        parser.error("sample sizes must be positive")
 
     frame = pd.read_csv(args.dataset, dtype=str, keep_default_na=False)
     required = {"sku_id", "retailer", "sku_name_eng", "attribute"}
@@ -86,6 +92,7 @@ def main() -> None:
         total=len(frame),
         evaluate_status=_dimension_status,
         evidence_samples=evidence,
+        sample_size=args.self_sample_size,
     )
     guard_results = guard_dimensions(guard_specs, label="attribute-readings")
     hard_failed = {r.name for r in guard_results if not r.passed}
@@ -95,7 +102,7 @@ def main() -> None:
     order = {index: rank for rank, index in enumerate(rng)}
     rows = []
     for name in sorted(policy.attributes):
-        if name in hard_failed or name in unmeasured:
+        if name in hard_failed:
             continue
         picked = sorted(populated_rows.get(name, []), key=order.get)[: args.per_dimension]
         for index in picked:
@@ -114,12 +121,15 @@ def main() -> None:
         writer.writerows(rows)
     report = {
         "rows": len(frame),
+        "self_sample_size": args.self_sample_size,
         "dimensions": len(policy.attributes),
         "guarded": len(guard_results),
         "hard_failed": sorted(hard_failed),
         "unmeasured": sorted(unmeasured),
         "populated_counts": {name: len(populated_rows.get(name, [])) for name in sorted(policy.attributes)},
         "key_present_not_extracted": {name: len(key_present_rows.get(name, [])) for name in sorted(policy.attributes)},
+        "self_comparison_parse_gaps": self_comparison_parse_gaps(
+            policy.attributes, evaluate_status=_dimension_status, evidence_samples=evidence),
         "sheet_rows": len(rows),
         "per_dimension": args.per_dimension,
         "missed_per_dimension": args.missed_per_dimension,

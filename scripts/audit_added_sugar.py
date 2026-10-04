@@ -36,12 +36,11 @@ def main():
     # no_sugar = 0 and no_added_sugar = 100% of the screen are the INTENDED
     # outcomes of the semantic fix, so a 0%/100% check there would be a false
     # alarm (it fired on the first run and is deliberately not applied).
-    # The guard's vocabulary mirrors the SSOT NO_ADDED_SUGAR_RE spellings this
-    # screen now shares with core.critical_attributes — the audit and the
-    # extractor measure one population.
+    # Use the actual regex matches: a separate phrase list drifts on singular,
+    # plural, word order and whitespace variants supported by the extractor.
     assert_vocabulary_overlap(
-        {"no added sugar", "without added sugar", "no sugars added",
-         "zero sugar added", "0 added sugar"},
+        {match.group(0) for row in rows
+         if (match := NO_ADDED_SUGAR_RE.search(row["sku_name_eng"]))},
         frame["sku_name_eng"], label="added-sugar",
     )
     assert_not_degenerate("screened_rows", len(rows), total=len(frame), label="added-sugar")
