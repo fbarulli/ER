@@ -15,7 +15,8 @@ gpu_graph_aggregation_backend: cuda_segment
 memory_reservations_gb: {}
 gpu_headroom_gb: 2.0
 report_test: false
-publish_git: true
+publish_git: false
+publish_dvc: false
 profiling: true
 
 post_training_ablation: true

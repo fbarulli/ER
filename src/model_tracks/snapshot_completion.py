@@ -27,7 +27,7 @@ class SnapshotCompletionReceipt(BaseModel):
     working_tree_mismatches: list[str]
 
 
-def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
+def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publish: bool = True) -> Path:
     """Run frozen CPU reporting, then publish from the original workspace."""
     from core.common import TRAIN_ROOT
     from model_tracks.config import SuiteConfig
@@ -96,4 +96,4 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
     archive_sidecar(final, '.snapshot_completion.json').write_text(
         receipt.model_dump_json(indent=2) + '\n')
     from model_tracks.local_complete import _publish
-    return _publish(final, settings, run_tag, ablation_done=True)
+    return _publish(final, settings, run_tag, ablation_done=True) if publish else final

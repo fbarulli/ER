@@ -2525,11 +2525,11 @@ def _optuna_env_script() -> str:
 
 
 def _remote_auth_env_script(
-    *, include_optuna: bool = False, include_wandb: bool = True, force_dvc: bool = False,
+    *, include_optuna: bool = False, include_wandb: bool = True,
 ) -> str:
     """Credential exports used by remote subprocess launch cells only."""
     wandb = _wandb_env_script() if include_wandb else ""
-    if not _DVC_ENABLED and not force_dvc:
+    if not _DVC_ENABLED:
         return wandb + (_optuna_env_script() if include_optuna else "")
     key = _env_value("DVC_API_KEY")
     if key:
@@ -4520,8 +4520,6 @@ def main() -> None:
             return
         if suite.device != ('cpu' if args.gpu.upper() == 'CPU' else 'cuda'):
             raise ValueError('suite device and --gpu must agree')
-        if suite.dvc_enabled and not _env_value('DVC_API_KEY'):
-            raise RuntimeError('DVC_API_KEY is required before launching a publishing suite')
         suite_run_tag = args.resume_run or _lane_run_stamp()
         suite_archive = RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.zip'
         if args.resume_run:
@@ -4813,7 +4811,9 @@ def main() -> None:
         close_live_log()
         release_colab_launch_lock(launch_lock)
 
-    if (suite.dvc_enabled if args.what == "tracks" else _DVC_ENABLED):
+    if args.what == "tracks":
+        print("\n[done] compressed results downloaded and completed locally")
+    elif _DVC_ENABLED:
         print("\n[done] artifacts persisted to the configured DVC remote")
     else:
         print("\n[done] artifacts retained locally; DVC disabled")

@@ -189,8 +189,8 @@ PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
 ```
 
 The default full workflow is GPU baseline embedding export, all three models,
-inference exports and configured ablations, Colab DVC publication, shutdown,
-local DVC collection, CPU reports, and final publication. Run it with the
+inference exports and configured ablations, direct compressed archive download,
+SHA256 verification, shutdown, and local CPU reports. Run it with the
 configured T4 default using one command:
 
 ```bash
@@ -211,7 +211,7 @@ one runtime with one control channel and NVIDIA MPS. Use `--prepared-input-packa
 repeating CPU token/tensor preparation. Freshness checks reject changed
 source, configuration, checkpoint, or input bytes before provisioning.
 Without that flag, the launcher prepares a new package from existing local
-CSVs; CSV generation belongs to `training.prepare_all`. Publishing suites require `DVC_API_KEY` before launch.
+CSVs; CSV generation belongs to `training.prepare_all`.
 W&B credentials are only needed for online mode. Install the target
 CPU/CUDA PyTorch runtime and `requirements/graph_tracks.txt` first; the local
 MiniLM model directory must contain valid weights and tokenizer files.
@@ -241,17 +241,12 @@ held-out quality measurements.
 GPU workers own optimization and embedding forward passes. Local CPU
 postprocessing owns scored-pair reports, calibration, HNSW indexes,
 attribute/sparse-neighborhood slices, and configured ablation analysis.
-For publishing suites, Colab pushes the complete training archive to DVC and
-verifies a clean remote pull. The launcher validates and saves the small DVC
-handoff receipt, stops Colab, then pulls and verifies the training archive from
-DVC locally before CPU reporting. Suites with publication disabled collect the
-archive directly before shutdown. The same `colab_backend.py` call owns this
-entire lifecycle; no separate reporting command is required. Reports run against the input package's frozen source and config,
-with a receipt recording any subsequent local changes. After local reports finish, DVC separately publishes the
-completed archive containing every retained training checkpoint and the
-embedding/ablation artifacts. Text checkpoint retention is unlimited;
-inference publication and model ablations use only each track's selected best
-checkpoint. Publication completes after CPU reports are included.
+The launcher downloads the compressed training results directly and verifies
+SHA256 and the archive inventory before shutting down Colab. It then completes
+CPU reports and ablation analysis locally using the input package's frozen source
+and config. The same `colab_backend.py` call owns the whole lifecycle. No DVC
+credentials, upload, pull, or automatic final DVC publication are involved.
+Checkpoints remain in the downloaded archive for local inference and resumption.
 Collected artifacts bind vectors/indexes to encoder, catalog, policy, and
 schema hashes. Record checkpoint selection, losses, exposure, runtime, memory,
 and review failures. Compare model-only behavior and the shadow gate on real
@@ -268,8 +263,8 @@ is not allocated VRAM or measured DRAM bandwidth. Unsupported GPU fields remain
 N/A and CPU monitoring continues when `nvidia-smi` is unavailable.
 
 Archive inventory hashing, compression and verification durations travel in the
-DVC handoff receipt, with timestamped DVC command durations, and are retained in
-the final local result archive under `resource_profile/`. Existing bounded
+archive profiling sidecar. GPU and CPU samples are retained in the final local
+result archive under `resource_profile/`. Existing bounded
 PyTorch traces include profiling overhead and cold-start steps. Sampling does
 not synchronize CUDA or change training, evaluation, checkpoint or ablation
 behavior. Measure sampling overhead before treating profiled throughput as an

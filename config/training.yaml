@@ -184,7 +184,6 @@ colab:
     # Graph-only additions use the same satisfied-package-aware installer.
     graph:
       - "backports.zstd"
-      - "dvc"
       - "pydantic"
       - "PyYAML"
       - "matplotlib"
