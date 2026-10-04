@@ -10,8 +10,13 @@ import pandas as pd
 import yaml
 
 
-def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
+def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config: Path | None = None):
     setup, output = setup.resolve(), output.resolve()
+    from core.common import TRAIN_ROOT
+    from model_tracks.config import load_config
+    parent = load_config(suite_config or TRAIN_ROOT/'config/model_tracks.yaml')
+    if (TRAIN_ROOT/parent.setup_dir).resolve() != setup:
+        raise ValueError('smoke parent suite differs from requested prepared setup')
     from core.common import SEED, training_cfg
     from graph_tracks.data import file_hash
     from graph_tracks.prepare import prepare
@@ -167,10 +172,15 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
         settings.update(device='cpu',epochs=1,report_test=False)
         (output/f'{track}.yaml').write_text(yaml.safe_dump(settings,sort_keys=False))
     from core.common import TRAIN_ROOT
-    text_settings = yaml.safe_load((TRAIN_ROOT/'config/text_track.yaml').read_text())
+    text_source = setup/'text.yaml'
+    if not text_source.is_file():
+        text_source = TRAIN_ROOT/'config/text_track.yaml'
+    text_settings = yaml.safe_load(text_source.read_text())
     text_settings.update(report_test=False)
     (output/'text.yaml').write_text(yaml.safe_dump(text_settings,sort_keys=False))
-    cfg={'setup_dir':str(output),'text_bundle':str(output/'text_prepared.pkl.gz'),'text_model':'minilm_l6',
-         'epochs':1,'device':'cpu','report_test':False,'publish_git':False,'profiling':True}
+    cfg = parent.model_dump()
+    cfg.update(setup_dir=str(output),text_bundle=str(output/'text_prepared.pkl.gz'),
+               epochs=1,device='cpu',report_test=False,publish_git=False,
+               publish_dvc=False,profiling=True)
     (output/'suite.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False))
     return output/'suite.yaml'

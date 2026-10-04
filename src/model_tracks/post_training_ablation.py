@@ -21,14 +21,12 @@ def complete_saved(destination,suite,*,publisher=None):
         if len(sources) != 1:
             raise ValueError('ambiguous baseline calibration manifest: '+track)
         calibration = json.loads(sources[0].read_text())
-        threshold = ([row for row in calibration['summary'] if row['split']=='dev'][0]['threshold']
-                     if track == 'text' else calibration['threshold'])
+        threshold = calibration['threshold']
         document = json.loads(request.read_text())
         with request_context(request):
             checkpoint = resolve(document['checkpoint'])
             selected_identity = checkpoint_identity(checkpoint)
-            calibrated_identity = (calibration.get('vectors_metadata',{}).get('checkpoint_sha256')
-                                   if track == 'text' else calibration.get('checkpoint_sha256'))
+            calibrated_identity = calibration['checkpoint_sha256']
             if calibrated_identity != selected_identity:
                 raise ValueError('baseline calibration differs from selected ablation checkpoint: '+track)
             binding = request.parent/'baseline_threshold.json' 
