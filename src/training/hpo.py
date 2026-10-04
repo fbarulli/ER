@@ -305,7 +305,6 @@ def run_tpe(
     mask_audit: list[dict] | None = None,
     hard_negative_mask_audit: list[dict] | None = None,
     wandb_ctx=None,
-    mlf_ctx=None,
 ) -> None:
     """Optuna TPE lane over the ENTRY-augmented tuple — delegates to
     TRAIN.training.run_hpo.
@@ -368,7 +367,6 @@ def run_tpe(
     run_hpo(
         args,
         (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0),
-        mlf_ctx if mlf_ctx is not None else _mlf_null(),
         cv_folds=None,
         folds_override=folds,
         dev_fraction=args.dev_fraction,
@@ -387,12 +385,3 @@ def run_tpe(
         hard_negative_mask_audit=hard_negative_mask_audit,
         wandb_ctx=wandb_ctx,
     )
-
-
-def _mlf_null():
-    # NOTE (audit 2026-09-09): TRAIN.training re-exports the SSOT
-    # src/core/mlflow_ctx.MlflowCtx — local sqlite by default, =off disables.
-    # The old duplicate (off unless URI set) shadowed the owner mandate.
-    from training.training import MlflowCtx
-
-    return MlflowCtx("hpo")

@@ -43,7 +43,6 @@ paths:
   training_results_dir: "training_results" # verified Colab smoke outputs
   models_dir: "artifacts/models"        # Git-shipped production model bundle
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
-  mlruns_dir: "artifacts/mlruns"        # mlflow backend + artifact store (local)
   logs_dir: "logs"                      # per-step orchestrator logs
   # Training inputs share the versioned root-level data directory with the
   # reference data. Results remain separate and are never inputs by default.

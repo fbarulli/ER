@@ -220,19 +220,15 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
 
 
 def main() -> None:
-    """Entry: everything runs inside one mlflow parent run (local backend
-    + artifact store at artifacts/mlruns — browsable with
-    `mlflow ui --backend-store-uri file:artifacts/mlruns`; MLFLOW_TRACKING_URI
-    overrides, =off disables)."""
-    from core.mlflow_ctx import MlflowCtx
+    """Train with W&B telemetry and local run artifacts."""
     from core.wandb_ctx import WandbCtx
 
     run_name = "hpo" if "--hpo" in sys.argv else "train_gpu"
-    with MlflowCtx(run_name) as _mlf, WandbCtx(run_name) as _wandb:
-        _main_inner(_mlf, _wandb)
+    with WandbCtx(run_name) as _wandb:
+        _main_inner(_wandb)
 
 
-def _main_inner(_mlf, _wandb) -> None:
+def _main_inner(_wandb) -> None:
     # determinism FIRST (2026-10-06): one call before any model/data
     # randomness — masking augmentation, zero-shot encode, fold carving
     # and the grid/tpe sweep lanes (dispatched below, same entry) all
@@ -1446,7 +1442,6 @@ def _main_inner(_mlf, _wandb) -> None:
                 mask_audit=mask_audit,
                 hard_negative_mask_audit=hard_negative_mask_audit,
                 wandb_ctx=_wandb,
-                mlf_ctx=_mlf,
             )
         _write_hard_negative_mask_trace(
             hard_negative_mask_audit,
@@ -1852,15 +1847,10 @@ def _main_inner(_mlf, _wandb) -> None:
                             if isinstance(value, (int, float)) and np.isfinite(value):
                                 robust_metrics[f"validation/robust_slice/{safe_key}/{metric}"] = float(value)
                 if robust_metrics:
-                    _mlf.log_metrics(robust_metrics)
                     _wandb.log_metrics(robust_metrics)
                     _wandb.log_config(
                         {"robust_validation": robust.get("config", {})}
                     )
-                    for filename in robust.get("files", []):
-                        path = report_dir / str(filename)
-                        if path.is_file():
-                            _mlf.log_artifact(path, "robust_validation")
                 print(f"[report] complete report -> {report_dir}", flush=True)
             except Exception:
                 report_dir.mkdir(parents=True, exist_ok=True)
@@ -1880,97 +1870,32 @@ def _main_inner(_mlf, _wandb) -> None:
                     flush=True,
                 )
 
-    # ── mlflow: params + per-fold nested runs (local backend by default) ──
-    _mlf.log_params(
-        {
-            "model": args.model,
-            "split": args.split,
-            "payload": args.payload,
-            "epochs": args.epochs,
-            "lr": args.lr,
-            "loss": args.loss,
-            "mask_frac": args.mask_frac,
-            "band": str(band),
-            "sample": args.sample or "full",
-        }
-    )
     from training.hpo_metrics import numeric_calibration_metrics
 
     for r in ok_rows:
-        with _mlf.nested:
-            _mlf.log_params({"fold": r.get("fold")})
-            fold_metrics = {
-                k: r[k]
-                for k in (
-                    "auc",
-                    "auc_cross",
-                    "acc_at_thr",
-                    "youden_thr",
-                    "pr_auc",
-                    "hits_at_1",
-                    "best_dev_ap",
-                    "final_train_loss",
-                    "s_per_step",
-                    # fixed-threshold metric names are config-derived
-                    # (f"f1_at_{thr:g}") — match by prefix
-                    *[
-                        k
-                        for k in r
-                        if k.startswith(
-                            ("f1_at_", "precision_at_", "recall_at_")
-                        )
-                    ],
-                )
-                if r.get(k) is not None
-            }
-            fold_metrics.update(numeric_calibration_metrics(r))
-            _mlf.log_metrics(fold_metrics)
-            calibration_metrics = numeric_calibration_metrics(r)
-            if r.get("traceback"):
-                continue
-            _wandb.log_metrics(
-                {
-                    **{
-                        f"fold_{r.get('fold')}_{k}": r[k]
-                        for k in (
-                            "auc", "auc_cross", "acc_at_thr", "pr_auc", "hits_at_1",
-                            "best_dev_ap", "final_train_loss", "n_random_easy_neg",
-                            "random_easy_available", "n_masked_pos",
-                            "n_masked_hard_negatives",
-                            *[key for key in r if key.startswith(("f1_at_", "precision_at_", "recall_at_"))],
-                        )
-                        if r.get(k) is not None
-                    },
-                    **{
-                        f"fold_{r.get('fold')}_{key}": value
-                        for key, value in calibration_metrics.items()
-                    },
-                }
-            )
-    if aucs:
-        _mlf.log_metrics(
-            {"mean_auc": float(np.mean(aucs)), "std_auc": float(np.std(aucs))}
-        )
-    calibration_rows = [
-        r
-        for r in ok_rows
-        if np.isfinite(r.get("calibration_rand_index", float("nan")))
-    ]
-    if calibration_rows:
-        _mlf.log_metrics(
+        calibration_metrics = numeric_calibration_metrics(r)
+        if r.get("traceback"):
+            continue
+        _wandb.log_metrics(
             {
-                "mean_calibration_rand_index": float(
-                    np.mean([r["calibration_rand_index"] for r in calibration_rows])
-                ),
-                "mean_calibration_adjusted_rand": float(
-                    np.mean(
-                        [r["calibration_adjusted_rand"] for r in calibration_rows]
+                **{
+                    f"fold_{r.get('fold')}_{k}": r[k]
+                    for k in (
+                        "auc", "auc_cross", "acc_at_thr", "pr_auc", "hits_at_1",
+                        "best_dev_ap", "final_train_loss", "n_random_easy_neg",
+                        "random_easy_available", "n_masked_pos",
+                        "n_masked_hard_negatives",
+                        *[key for key in r if key.startswith(("f1_at_", "precision_at_", "recall_at_"))],
                     )
-                ),
+                    if r.get(k) is not None
+                },
+                **{
+                    f"fold_{r.get('fold')}_{key}": value
+                    for key, value in calibration_metrics.items()
+                },
             }
         )
     if not _REMOTE_TRAINING:
-        _mlf.log_artifact(out)
         _wandb.log_artifact(out, "fold-metrics")
         _log_run_artifacts_to_wandb(
             _wandb,
@@ -2017,10 +1942,6 @@ def _main_inner(_mlf, _wandb) -> None:
 
         report_plots(out, args)
         training_loss_plot(out, args)
-        for png in RESULTS.glob("train_*.png"):
-            _mlf.log_artifact(png)
-        for png in RESULTS.glob("training_loss_*.png"):
-            _mlf.log_artifact(png)
 
     if args.rerank:
         from training.rerank import rerank_stage

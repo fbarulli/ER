@@ -10,7 +10,7 @@ threshold on the rows it scores:
 * brand, category, and attribute slices are reported on every test fold.
 
 The result is deliberately report-oriented: CSVs and plots are written by
-``run_robust_validation`` and the returned dictionaries are JSON/W&B/MLflow
+``run_robust_validation`` and the returned dictionaries are JSON/W&B
 safe summaries.
 """
 

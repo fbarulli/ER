@@ -1418,7 +1418,7 @@ for number in range(1, {workers} + 1):
     wandb_dir = out / "wandb"
     wandb_dir.mkdir(parents=True, exist_ok=True)
     env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
-           "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"), "WANDB_DIR": str(wandb_dir),
+           "WANDB_DIR": str(wandb_dir),
            "WANDB_RUN_NAME": training_name,
            "EUROMONITOR_RUN_ID": training_name,
            "EUROMONITOR_MINING_PROFILE": worker_profile,
@@ -3579,7 +3579,7 @@ print("[worker] resolving versioned checkout inputs", flush=True)
 wandb_dir = out / "wandb"
 wandb_dir.mkdir(parents=True, exist_ok=True)
 env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
-       "EUROMONITOR_RESULTS_DIR": str(out), "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
+       "EUROMONITOR_RESULTS_DIR": str(out),
        "WANDB_DIR": str(wandb_dir),
        "WANDB_RUN_NAME": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_RUN_ID": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
@@ -3789,7 +3789,6 @@ def worker_setup(model_key):
         shutil.copy2(source, target)
     return out, {{
         "EUROMONITOR_RESULTS_DIR": str(out),
-        "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
         "WANDB_RUN_NAME": f"{run_id}_hpo_{{model_key}}",
         "EUROMONITOR_REMOTE_TRAINING": "1",
         "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1",
@@ -3995,7 +3994,6 @@ def run_worker(number, label, command_args, profile, masking_applied):
         "PYTHONUNBUFFERED": "1",
         "PYTHONPATH": str(root / "src"),
         "EUROMONITOR_RESULTS_DIR": str(out),
-        "EUROMONITOR_MLRUNS_DIR": str(out / "mlruns"),
         "WANDB_DIR": str(out / "wandb"),
         "WANDB_RUN_NAME": f"{{base.name}}-{{label}}",
         "EUROMONITOR_RUN_ID": f"{{base.name}}-{{label}}",

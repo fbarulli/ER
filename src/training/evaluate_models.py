@@ -320,7 +320,7 @@ def _youden_thr(scores: np.ndarray, labels: np.ndarray) -> float:
     """Youden-optimal threshold (J = TPR - FPR) over a labeled score set.
 
     LOCAL COPY of TRAIN.training._youden_thr (rerank.py precedent):
-    importing TRAIN.training would drag transformers + the mlflow context
+    importing TRAIN.training would drag transformers and tracking contexts
     into a reporting script, so the 11-line function is copied verbatim.
     HOLDOUT DISCIPLINE: fit this on DEV scores only, then apply the
     returned threshold verbatim to TEST — never on the scores it rates.

@@ -6,11 +6,8 @@ Rewrite of the training path with everything the 07-series left out:
   TRACEBACKS      every failure prints the full chain (traceback.format_exc()
                   into the run log AND the CSV — no silent folds, no
                   "AUC=NaN, moving on").
-  MLFLOW          one parent run per invocation; every fold/arm is a nested
-                  run with params + metrics + the fold CSV artifact; the best
-                  config is registered as a tagged child run.
   OPTUNA          HPO mode (--hpo): TPE over epochs/lr/warmup/band, each trial
-                  a nested MLflow run, best config reported + persisted.
+                  recorded trial, best config reported + persisted.
   EARLY STOPPING  HF EarlyStoppingCallback on the dev AUC (patience
                   configurable); load_best_model_at_end so the reported
                   metric is the best checkpoint, not the last.
@@ -29,8 +26,7 @@ Usage:
   python src/training/train.py --loss contrastive     (entry; src/training/ is a package)
   python src/training/train.py --hpo --n-trials 20    # optuna TPE sweep
   python src/training/train.py --loss triplet --band 0.45-0.80
-  MLFLOW_TRACKING_URI=... uv run ...      # local sqlite default; =off disables
-                                            # (SSOT: src/core/mlflow_ctx.py)
+
 
 Artifacts (results/, SSOT via config/paths.yaml):
   train_<model>_fold_metrics.csv  one row per fold per config (incl. failures
@@ -319,14 +315,7 @@ def require_no_failed_folds(rows: list[dict], *, lane: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MLflow — SSOT src/core/mlflow_ctx (audit 2026-09-09: this module used to carry
-# its own MlflowCtx duplicate with CONFLICTING semantics — "off unless
-# MLFLOW_TRACKING_URI is set" — while the owner mandate (training logs
-# available locally) is lib's: local sqlite by default, =off to disable.
-# The duplicate shadowed the mandate; re-exported here for hpo.py's import.)
-# ═══════════════════════════════════════════════════════════════════════════
 
-from core.mlflow_ctx import MlflowCtx
 from core.ranking_metrics import (
     added_encode_rows,
     build_evaluation_pool,
@@ -5776,7 +5765,6 @@ def train_one_config(
 def run_hpo(
     args,
     data,
-    mlf: MlflowCtx,
     cv_folds: int | None = None,
     folds_override: list[set[str]] | set[str] | None = None,
     dev_fraction: float | None = None,
@@ -5843,164 +5831,152 @@ def run_hpo(
                 _runtime("late_epoch_lr_decay")["multiplier"]
             ),
         }
-        with mlf.nested:
-            mlf.log_params(
-                {
-                    **cfg,
-                    "loss": args.loss,
-                    # hard-positive lane: SSOT knob (training.hard_positives);
-                    # the legacy --no-hard-positives flag no longer exists
-                    "hard_pos": _SSOT_HP,  # training.hard_positives SSOT
-                    "band": args.band,
-                }
+        rows = train_one_config(
+            cfg,
+            loss=args.loss,
+            model_id=args.model,
+            use_hp=_SSOT_HP,
+            band=_band_tuple(args.band),
+            data=data,
+            seed=SEED,
+            on_cuda=torch.cuda.is_available(),
+            cv_folds=cv_folds,
+            run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
+            folds_override=folds_override,
+            dev_fraction=dev_fraction,
+            dev_override=dev_override,
+            selection_mode=selection_mode,
+            neg_pairs=neg_pairs,
+            train_neg_pairs=train_neg_pairs,
+            neg_pair_sources=neg_pair_sources,
+            train_neg_pair_sources=train_neg_pair_sources,
+            dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
+            dynamic_mask_frac=cfg["negative_mask_frac"],
+            dynamic_mask_prob=dynamic_mask_prob,
+            dynamic_mask_lo=dynamic_mask_lo,
+            dynamic_mask_hi=dynamic_mask_hi,
+            mask_audit=mask_audit,
+            hard_negative_mask_audit=hard_negative_mask_audit,
+            wandb_ctx=wandb_ctx,
+        )
+        require_no_failed_folds(rows, lane=f"HPO trial {trial.number}")
+        ok_rows = rows
+        # Persist the actual trial evidence in Optuna. The callback below
+        # mirrors these values to W&B after the trial has committed.
+        _trial_loss = [r.get("final_train_loss") for r in ok_rows if np.isfinite(r.get("final_train_loss", float("nan")))]
+        if _trial_loss:
+            trial.set_user_attr("mean_final_train_loss", float(np.mean(_trial_loss)))
+        _dev_loss_histories = []
+        _train_loss_histories = []
+        for row in ok_rows:
+            try:
+                _dev_loss_histories.append(json.loads(row.get("dev_loss_hist", "[]")))
+                _train_loss_histories.append(json.loads(row.get("train_loss_hist", "[]")))
+            except (TypeError, json.JSONDecodeError):
+                continue
+        _best_dev_losses = [min(v) for v in _dev_loss_histories if v]
+        _final_dev_losses = [v[-1] for v in _dev_loss_histories if v]
+        _overfit_flags = [
+            int(bool(t) and bool(d) and t[-1] < t[0] and d[-1] > min(d))
+            for t, d in zip(_train_loss_histories, _dev_loss_histories, strict=True)
+        ]
+        if _best_dev_losses:
+            trial.set_user_attr("mean_best_dev_loss", float(np.mean(_best_dev_losses)))
+        if _final_dev_losses:
+            trial.set_user_attr("mean_final_dev_loss", float(np.mean(_final_dev_losses)))
+        if _overfit_flags:
+            trial.set_user_attr("overfit_signature_rate", float(np.mean(_overfit_flags)))
+        proxy_rows = [
+            r for r in ok_rows
+            if np.isfinite(r.get("calibration_rand_index", float("nan")))
+        ]
+        if not proxy_rows:
+            raise optuna.TrialPruned(
+                "no fold produced a finite calibrated Rand Index proxy"
             )
-            rows = train_one_config(
-                cfg,
-                loss=args.loss,
-                model_id=args.model,
-                use_hp=_SSOT_HP,
-                band=_band_tuple(args.band),
-                data=data,
-                seed=SEED,
-                on_cuda=torch.cuda.is_available(),
-                cv_folds=cv_folds,
-                run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
-                folds_override=folds_override,
-                dev_fraction=dev_fraction,
-                dev_override=dev_override,
-                selection_mode=selection_mode,
-                neg_pairs=neg_pairs,
-                train_neg_pairs=train_neg_pairs,
-                neg_pair_sources=neg_pair_sources,
-                train_neg_pair_sources=train_neg_pair_sources,
-                dynamic_mask_hard_negatives=dynamic_mask_hard_negatives,
-                dynamic_mask_frac=cfg["negative_mask_frac"],
-                dynamic_mask_prob=dynamic_mask_prob,
-                dynamic_mask_lo=dynamic_mask_lo,
-                dynamic_mask_hi=dynamic_mask_hi,
-                mask_audit=mask_audit,
-                hard_negative_mask_audit=hard_negative_mask_audit,
-                wandb_ctx=wandb_ctx,
+        mean_rand = float(np.mean([r["calibration_rand_index"] for r in proxy_rows]))
+        mean_penalty = float(np.mean([r["collapse_penalty"] for r in proxy_rows]))
+        value = mean_rand - mean_penalty
+        collapse_medians = [
+            float(r["collapse_median_cosine"])
+            for r in proxy_rows
+            if np.isfinite(r.get("collapse_median_cosine", float("nan")))
+        ]
+        collapse_crossing_rates = [
+            float(r["collapse_crossing_rate"])
+            for r in proxy_rows
+            if np.isfinite(r.get("collapse_crossing_rate", float("nan")))
+        ]
+        guardrail = load_config()["collapse_guardrail"]
+        if collapse_medians and max(collapse_medians) > float(guardrail["reject_median"]):
+            raise optuna.TrialPruned(
+                "collapse guardrail rejected trial: "
+                f"median_cosine={max(collapse_medians):.4f}"
             )
-            require_no_failed_folds(rows, lane=f"HPO trial {trial.number}")
-            ok_rows = rows
-            # Persist the actual trial evidence in Optuna. The callback below
-            # mirrors these values to W&B after the trial has committed.
-            _trial_loss = [r.get("final_train_loss") for r in ok_rows if np.isfinite(r.get("final_train_loss", float("nan")))]
-            if _trial_loss:
-                trial.set_user_attr("mean_final_train_loss", float(np.mean(_trial_loss)))
-            _dev_loss_histories = []
-            _train_loss_histories = []
-            for row in ok_rows:
-                try:
-                    _dev_loss_histories.append(json.loads(row.get("dev_loss_hist", "[]")))
-                    _train_loss_histories.append(json.loads(row.get("train_loss_hist", "[]")))
-                except (TypeError, json.JSONDecodeError):
-                    continue
-            _best_dev_losses = [min(v) for v in _dev_loss_histories if v]
-            _final_dev_losses = [v[-1] for v in _dev_loss_histories if v]
-            _overfit_flags = [
-                int(bool(t) and bool(d) and t[-1] < t[0] and d[-1] > min(d))
-                for t, d in zip(_train_loss_histories, _dev_loss_histories, strict=True)
-            ]
-            if _best_dev_losses:
-                trial.set_user_attr("mean_best_dev_loss", float(np.mean(_best_dev_losses)))
-            if _final_dev_losses:
-                trial.set_user_attr("mean_final_dev_loss", float(np.mean(_final_dev_losses)))
-            if _overfit_flags:
-                trial.set_user_attr("overfit_signature_rate", float(np.mean(_overfit_flags)))
-            proxy_rows = [
-                r for r in ok_rows
-                if np.isfinite(r.get("calibration_rand_index", float("nan")))
-            ]
-            if not proxy_rows:
-                raise optuna.TrialPruned(
-                    "no fold produced a finite calibrated Rand Index proxy"
-                )
-            mean_rand = float(np.mean([r["calibration_rand_index"] for r in proxy_rows]))
-            mean_penalty = float(np.mean([r["collapse_penalty"] for r in proxy_rows]))
-            value = mean_rand - mean_penalty
-            collapse_medians = [
-                float(r["collapse_median_cosine"])
-                for r in proxy_rows
-                if np.isfinite(r.get("collapse_median_cosine", float("nan")))
-            ]
-            collapse_crossing_rates = [
-                float(r["collapse_crossing_rate"])
-                for r in proxy_rows
-                if np.isfinite(r.get("collapse_crossing_rate", float("nan")))
-            ]
-            guardrail = load_config()["collapse_guardrail"]
-            if collapse_medians and max(collapse_medians) > float(guardrail["reject_median"]):
-                raise optuna.TrialPruned(
-                    "collapse guardrail rejected trial: "
-                    f"median_cosine={max(collapse_medians):.4f}"
-                )
-            if collapse_crossing_rates and max(collapse_crossing_rates) > float(
+        if collapse_crossing_rates and max(collapse_crossing_rates) > float(
+            guardrail["crossing_rate_ceiling"]
+        ):
+            raise optuna.TrialPruned(
+                "collapse guardrail rejected trial: "
+                f"crossing_rate={max(collapse_crossing_rates):.4f} "
+                f"ceiling={float(guardrail['crossing_rate_ceiling']):.4f}"
+            )
+        proxy_summary = {
+            "mean_calibration_rand_index": mean_rand,
+            "mean_calibration_adjusted_rand": float(
+                np.mean([r["calibration_adjusted_rand"] for r in proxy_rows])
+            ),
+            "mean_calibration_precision_at_threshold": float(
+                np.mean([r["calibration_precision_at_threshold"] for r in proxy_rows])
+            ),
+            "mean_calibration_recall_at_threshold": float(
+                np.mean([r["calibration_recall_at_threshold"] for r in proxy_rows])
+            ),
+            "mean_calibration_over_merge_rate": float(
+                np.mean([r["calibration_over_merge_rate"] for r in proxy_rows])
+            ),
+            "mean_calibration_under_merge_rate": float(
+                np.mean([r["calibration_under_merge_rate"] for r in proxy_rows])
+            ),
+            "mean_calibration_threshold_stable": float(
+                np.mean([r["calibration_threshold_stable"] for r in proxy_rows])
+            ),
+            "mean_collapse_penalty": mean_penalty,
+            "mean_collapse_median_cosine": float(
+                np.mean([r["collapse_median_cosine"] for r in proxy_rows])
+            ),
+            "mean_collapse_p90_cosine": float(
+                np.mean([r["collapse_p90_cosine"] for r in proxy_rows])
+            ),
+            "mean_collapse_cosine_std": float(
+                np.mean([r["collapse_cosine_std"] for r in proxy_rows])
+            ),
+            "mean_collapse_crossing_rate": float(
+                np.mean([r["collapse_crossing_rate"] for r in proxy_rows])
+            ),
+            "collapse_crossing_rate_ceiling": float(
                 guardrail["crossing_rate_ceiling"]
-            ):
-                raise optuna.TrialPruned(
-                    "collapse guardrail rejected trial: "
-                    f"crossing_rate={max(collapse_crossing_rates):.4f} "
-                    f"ceiling={float(guardrail['crossing_rate_ceiling']):.4f}"
-                )
-            proxy_summary = {
-                "mean_calibration_rand_index": mean_rand,
-                "mean_calibration_adjusted_rand": float(
-                    np.mean([r["calibration_adjusted_rand"] for r in proxy_rows])
-                ),
-                "mean_calibration_precision_at_threshold": float(
-                    np.mean([r["calibration_precision_at_threshold"] for r in proxy_rows])
-                ),
-                "mean_calibration_recall_at_threshold": float(
-                    np.mean([r["calibration_recall_at_threshold"] for r in proxy_rows])
-                ),
-                "mean_calibration_over_merge_rate": float(
-                    np.mean([r["calibration_over_merge_rate"] for r in proxy_rows])
-                ),
-                "mean_calibration_under_merge_rate": float(
-                    np.mean([r["calibration_under_merge_rate"] for r in proxy_rows])
-                ),
-                "mean_calibration_threshold_stable": float(
-                    np.mean([r["calibration_threshold_stable"] for r in proxy_rows])
-                ),
-                "mean_collapse_penalty": mean_penalty,
-                "mean_collapse_median_cosine": float(
-                    np.mean([r["collapse_median_cosine"] for r in proxy_rows])
-                ),
-                "mean_collapse_p90_cosine": float(
-                    np.mean([r["collapse_p90_cosine"] for r in proxy_rows])
-                ),
-                "mean_collapse_cosine_std": float(
-                    np.mean([r["collapse_cosine_std"] for r in proxy_rows])
-                ),
-                "mean_collapse_crossing_rate": float(
-                    np.mean([r["collapse_crossing_rate"] for r in proxy_rows])
-                ),
-                "collapse_crossing_rate_ceiling": float(
-                    guardrail["crossing_rate_ceiling"]
-                ),
-                "mean_diagnostic_bridge_edge_count": float(
-                    np.mean([r["diagnostic_bridge_edge_count"] for r in proxy_rows])
-                ),
-                "mean_attribute_conflict_error_rate": float(
-                    np.nanmean([r["attribute_conflict_error_rate"] for r in proxy_rows])
-                ),
-            }
-            trial.set_user_attr("rand_index_objective", value)
-            for key, metric in proxy_summary.items():
-                trial.set_user_attr(key, metric)
-            mlf.log_metrics({"hpo_objective": value, **proxy_summary})
-            # PostgreSQL mode promotes only from the controller after Optuna
-            # commits COMPLETE and a sealed artifact snapshot is READY.
-            if control_plane is None:
-                retain_hpo_champion(
-                    model_id=args.model,
-                    run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
-                    value=value,
-                    folds=[int(r["fold"]) for r in proxy_rows],
-                )
-            return value
+            ),
+            "mean_diagnostic_bridge_edge_count": float(
+                np.mean([r["diagnostic_bridge_edge_count"] for r in proxy_rows])
+            ),
+            "mean_attribute_conflict_error_rate": float(
+                np.nanmean([r["attribute_conflict_error_rate"] for r in proxy_rows])
+            ),
+        }
+        trial.set_user_attr("rand_index_objective", value)
+        for key, metric in proxy_summary.items():
+            trial.set_user_attr(key, metric)
+        # PostgreSQL mode promotes only from the controller after Optuna
+        # commits COMPLETE and a sealed artifact snapshot is READY.
+        if control_plane is None:
+            retain_hpo_champion(
+                model_id=args.model,
+                run_tag=f"{args.model.split('/')[-1]}_t{trial.number}",
+                value=value,
+                folds=[int(r["fold"]) for r in proxy_rows],
+            )
+        return value
 
     sampler = optuna.samplers.TPESampler(seed=SEED)
     # sqlite storage: the sweep SURVIVES session loss — re-running with the same
@@ -6069,7 +6045,7 @@ def run_hpo(
             objective,
             n_trials=remaining,
             n_jobs=args.n_jobs,
-            callbacks=[_optuna_tracking_cb(mlf, wandb_ctx), _persist_study],
+            callbacks=[_optuna_tracking_cb(wandb_ctx), _persist_study],
         )
 
     completed_trials = [
@@ -6127,11 +6103,10 @@ def run_hpo(
     print(f"wrote {out_path}", flush=True)
 
 
-def _optuna_tracking_cb(mlf: MlflowCtx, wandb_ctx):
+def _optuna_tracking_cb(wandb_ctx):
     """Record every completed Optuna trial in local and optional remote logs."""
     def cb(study, trial):
         if trial.state.name == "COMPLETE" and trial.value is not None:
-            mlf.log_metrics({f"trial_{trial.number}_objective": trial.value})
             if wandb_ctx is not None:
                 wandb_ctx.log_metrics(
                     {

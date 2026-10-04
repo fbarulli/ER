@@ -101,7 +101,6 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         smoke_before = {str(path): sha256(path) for path in smoke.rglob('*') if path.is_file()}
         env = os.environ.copy()
         env['PYTHONPATH'] = str(root / 'src') + os.pathsep + str(root)
-        env['MLFLOW_TRACKING_URI'] = 'off'
         env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / 'shared_base.pkl')
         if resume_from == 'full_bundle':
             env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / (

@@ -75,7 +75,7 @@ class PrebuiltWheelTests(unittest.TestCase):
             with mock.patch.object(colab, "REMOTE_ROOT", str(root)):
                 program = _installer_program(
                     colab._runtime_install_command(
-                        ["hnswlib", "mlflow"], prefer_uv=True, wheel_paths=paths
+                        ["hnswlib", "wandb"], prefer_uv=True, wheel_paths=paths
                     )
                 )
             completed = subprocess.run(
@@ -94,7 +94,7 @@ class PrebuiltWheelTests(unittest.TestCase):
             f"the wheel was not passed to the installer: {argv}",
         )
         self.assertNotIn("hnswlib", argv, "the sdist requirement must be dropped")
-        self.assertIn("mlflow", argv)
+        self.assertIn("wandb", argv)
 
     def test_foreign_wheel_is_rejected_and_the_index_is_used(self):
         completed, argv = self._run_with_stub_uv(
@@ -117,7 +117,7 @@ class PrebuiltWheelTests(unittest.TestCase):
             with mock.patch.object(colab, "REMOTE_ROOT", str(root)):
                 program = _installer_program(
                     colab._runtime_install_command(
-                        ["hnswlib", "mlflow"], prefer_uv=True,
+                        ["hnswlib", "wandb"], prefer_uv=True,
                         wheel_paths=["artifacts/wheels/absent.whl"],
                     )
                 )
@@ -618,7 +618,7 @@ class InstallDepsLaneTests(unittest.TestCase):
     def test_full_lane_installs_the_configured_full_list(self):
         installed = self._packages_installed(minimal_runtime=False)
         self.assertEqual(installed, list(colab._RUNTIME_PACKAGES.full))
-        self.assertIn("optuna", installed)
+        self.assertNotIn("optuna", installed)
         self.assertGreater(
             len(colab._RUNTIME_PACKAGES.full), len(colab._RUNTIME_PACKAGES.prepared)
         )

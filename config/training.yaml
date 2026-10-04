@@ -141,7 +141,7 @@ masking_profiles:
     hard_negative_mask_hi: 0.05
 
 # Optional remote mirror. Credentials stay in WANDB_API_KEY, never here.
-# Without that environment variable, runs remain local and MLflow is intact.
+# Without that environment variable, runs remain local with saved artifacts.
 tracking:
   wandb:
     project: "e-r"
@@ -178,8 +178,7 @@ colab:
   # satisfied"), so the deps stage costs what is NOT in the image.  Measured
   # on the 2026-09-15 T4 launch: 19.99 MiB downloaded, 18 distributions
   # installed, and only two top-level items needed work — `hnswlib` (source
-  # build; PyPI publishes no wheel) and full `mlflow` (11.6 MB + its closure).
-  # Tracking now uses skinny plus the explicit SQLite backend dependencies.
+  # build; PyPI publishes no wheel). W&B supplies experiment telemetry.
   # Trim, pin, or drop entries here rather than editing src/cli/colab.py.
   runtime_packages:
     # Graph-only additions use the same satisfied-package-aware installer.
@@ -196,9 +195,6 @@ colab:
       - "pandas"
       - "numpy"
       - "hnswlib"
-      - "mlflow-skinny"
-      - "sqlalchemy"
-      - "alembic"
       - "wandb"
     full:
       - "sentence-transformers"
@@ -209,11 +205,6 @@ colab:
       - "pandas"
       - "numpy"
       - "hnswlib"
-      - "mlflow-skinny"
-      - "sqlalchemy"
-      - "alembic"
-      - "optuna"
-      - "psycopg[binary]"
       - "wandb"
     # Wheels shipped in the repository instead of being compiled on the VM.
     # `hnswlib` publishes no wheel on PyPI, so every fresh VM used to spend

@@ -13,7 +13,7 @@ scipy==1.18.1          # AUDIT 2026-09-09: was MISSING despite hard imports —
                        # report_plots (binomtest/fisher_exact) and
                        # EDA/03 (entropy) crashed the Docker image CMD paths
 pyarrow==25.0.1        # pandas engine compat — no direct import, but a hard
-                       # transitive dep of datasets (>=21) + mlflow (<26);
+                       # transitive dep of datasets (>=21);
                        # pinned so the image stays exact
 pyyaml==6.0.3
 pydantic==2.13.5       # src/core/schemas.py boundary + config contracts
@@ -28,16 +28,6 @@ accelerate==1.14.0     # no direct import, but SentenceTransformerTrainer ->
                        # HF Trainer.__init__ builds Accelerator() unconditionally
                        # (extra-gated upstream, so nothing installs it transitively)
 sentencepiece==0.2.2
-
-# ── experiment tracking / HPO (lazy-imported; both optional at runtime) ─────
-mlflow-skinny==3.15.1
-sqlalchemy==2.1.1     # MlflowCtx local SQLite tracking backend
-alembic==1.20.0       # MLflow SQLite schema migrations
-optuna==4.4.0
-# PostgreSQL driver for the shared Optuna RDBStorage control plane. The
-# binary extra supplies a reproducible wheel on Colab; no database URL or
-# credentials are committed — the launcher reads OPTUNA_STORAGE_URL.
-psycopg[binary]==3.3.5
 
 # ── plots ──────────────────────────────────────────────────────────────────
 matplotlib==3.11.1

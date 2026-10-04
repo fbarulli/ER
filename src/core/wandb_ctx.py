@@ -20,7 +20,7 @@ class WandbCtx:
 
     def __enter__(self):
         if not self.enabled:
-            print("[wandb] disabled: WANDB_API_KEY absent; local MLflow remains active", flush=True)
+            print("[wandb] disabled: WANDB_API_KEY absent; local run artifacts remain available", flush=True)
             return self
         import wandb
         run_name = os.environ.get("WANDB_RUN_NAME", self._name)

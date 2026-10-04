@@ -119,7 +119,7 @@ RUN_UNBOUND = "run-unbound"
 # Runs kept in the file, newest first (whole runs, never a partial one). Five
 # is enough to answer "what happened in the run on disk" and "what did the run
 # before it do" while keeping a trace that is rewritten on every stage bounded;
-# unbounded history is DVC/mlflow's job, not a hand-readable csv's.
+# unbounded history is DVC/W&B's job, not a hand-readable csv's.
 TRACE_RUN_HISTORY = 5
 
 # ── entity sampling budget ─────────────────────────────────────────────────

@@ -25,7 +25,6 @@ from core.common import (
     runtime,
     set_determinism,
 )
-from core.mlflow_ctx import MlflowCtx
 from core.wandb_ctx import WandbCtx
 from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 from training.prepared_bundle import load_prepared_bundle, prepared_holdout
@@ -62,8 +61,8 @@ def main() -> None:
     run_name = str(args.run_tag)
     # W&B is supplementary telemetry.  A checkout-native Colab smoke must
     # remain runnable with the signed-in Colab account alone: its artifacts
-    # and MLflow records are collected by the launcher either way.
-    with MlflowCtx(run_name), WandbCtx(run_name) as wandb_ctx:
+    # are collected by the launcher either way.
+    with WandbCtx(run_name) as wandb_ctx:
         if not wandb_ctx.enabled:
             print("[wandb] disabled; continuing with Colab result collection", flush=True)
         _main(args, wandb_ctx)

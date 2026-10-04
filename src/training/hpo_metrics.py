@@ -300,7 +300,7 @@ CALIBRATION_AGGREGATE_FIELDS = tuple(
 
 
 # The metric keys a calibration row owns. The artifact row (written to the
-# fold-metrics CSV) and the tracking lane (MLflow/W&B) must agree on which
+# fold-metrics CSV) and the tracking lane (W&B) must agree on which
 # keys they scan for non-finite values: they previously spelled this set twice
 # with different prefixes under the single name
 # `calibration_non_finite_count`, so one artifact could call a row dirty while
@@ -332,7 +332,7 @@ def calibration_non_finite_fields(row: dict) -> list[str]:
 # 06-4: the artifact row names WHICH calibration metrics were not finite, but
 # that list is a `str`, so the numeric filter drops it and the tracked count
 # has no cause beside it.  Each named field is re-emitted as a numeric flag so
-# count and cause travel together through MLflow/W&B.  A row that names no
+# count and cause travel together through W&B.  A row that names no
 # field adds no key.
 NON_FINITE_FIELD_METRIC_PREFIX = "calibration_non_finite/"
 
