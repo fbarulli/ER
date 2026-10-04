@@ -145,6 +145,11 @@ not depend on the concurrently fine-tuned Track A checkpoint. After Track A
 selection, its own vectors are exported from the selected checkpoint using
 the already prepared tokens.
 
+When ablations are enabled, the frozen baseline embedding interventions run
+before the three training workers start. After checkpoint selection, text,
+GNN-only, and hybrid each run their prepared interventions using their own
+selected best checkpoint. Baseline and trained-text results remain separate.
+
 Both exports enforce checkpoint/input hashes, float32, finite normalized
 vectors, ID alignment, and atomic publication. Pydantic prepared-input models
 validate token/graph row coverage. Input/config/parser changes require a fresh
@@ -207,6 +212,13 @@ held-out quality measurements.
 GPU workers own optimization and embedding forward passes. Local CPU
 postprocessing owns scored-pair reports, calibration, HNSW indexes,
 attribute/sparse-neighborhood slices, and configured ablation analysis.
+After verified download, the launcher stops the Colab session before CPU
+reporting. Reports run against the input package's frozen source and config,
+with a receipt recording any subsequent local changes. DVC publishes the
+completed archive containing every retained training checkpoint and the
+embedding/ablation artifacts. Text checkpoint retention is unlimited;
+inference publication and model ablations use only each track's selected best
+checkpoint. Publication completes after CPU reports are included.
 Collected artifacts bind vectors/indexes to encoder, catalog, policy, and
 schema hashes. Record checkpoint selection, losses, exposure, runtime, memory,
 and review failures. Compare model-only behavior and the shadow gate on real
