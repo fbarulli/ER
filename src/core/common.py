@@ -335,7 +335,8 @@ def runtime(key: str, default: Any = None) -> Any:
     """SSOT accessor for every training runtime knob (config/training.yaml
     training: block — validated by TrainingSpec at load).
 
-    ONE place to read batch sizes, seq length, eval cadence, dev fraction,
+    Values come from the validated Pydantic TrainingSpec, including legal
+    nullable fields. ONE place to read batch sizes, seq length, eval cadence, dev fraction,
     band edges. Scripts call runtime("batch_size_cpu") etc. — the literal
     lives in config/training.yaml only, never in a script.
 
@@ -346,20 +347,20 @@ def runtime(key: str, default: Any = None) -> Any:
     NO FALLBACKS (owner Q27, audit 2026-09-09): the `default` escape hatch
     (silently returning a caller literal when the key was MISSING) is
     CLOSED. A default may only supply a value when the SSOT defines the
-    key as an explicit YAML null (opt-in "use my default"). A truly
+    key as an explicit YAML null. Without a caller default, a valid nullable
+    field retains None. A truly
     missing key always raises — the literal can never diverge from SSOT.
     """
     tr = _CFG.get("training", {})
     if key in tr:
-        val = tr[key]
+        val = getattr(_TRAIN_CFG.training, key)
+        if hasattr(val, 'model_dump'):
+            val = val.model_dump(mode='python')
         if val is not None:
             return val
         if default is not None:
             return default  # explicit null in YAML = caller's default, opt-in
-        raise KeyError(
-            f"training.{key} is explicitly null in config/training.yaml — "
-            f"either set a value or have the caller pass a default"
-        )
+        return None  # Only schema-approved nullable values reach this point.
     raise KeyError(
         f"training.{key} missing from config/training.yaml — the SSOT must "
         f"define it (no per-script literals allowed)"
