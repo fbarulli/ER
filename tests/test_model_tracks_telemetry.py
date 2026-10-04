@@ -38,7 +38,7 @@ def test_worker_failure_records_traceback_then_reraises(tmp_path, monkeypatch, t
 def test_supervisor_preflight_failure_retains_final_event_log(tmp_path, monkeypatch):
     from model_tracks import run
     from types import SimpleNamespace
-    monkeypatch.setattr(run, 'load_config', lambda _: SimpleNamespace(dvc_enabled=False))
+    monkeypatch.setattr(run, 'load_config', lambda _: SimpleNamespace(dvc_enabled=False, profiling=False))
     def fail(_):
         raise ValueError('stale frozen input')
     monkeypatch.setattr(run, 'preflight', fail)

@@ -347,38 +347,30 @@ def component_index(pos_pairs: np.ndarray, row_bc: np.ndarray) -> np.ndarray:
     """Connected-component id per payload row, deterministic and hash-free.
 
     Union-find over the gtin graph induced by ``pos_pairs`` — the SAME
-    relation ``training.folds.component_folds`` splits on, so a component is
-    the transitive closure of "positive-pair linked".  The id of a row is
-    derived from the lexicographically smallest gtin in its component and
-    from a sorted id table, so the result never depends on dict/set iteration
-    order or on ``PYTHONHASHSEED``.  Rows with an empty gtin get ``-1``
-    (``folds.component_folds`` likewise never makes them graph nodes).
+    relation ``training.folds.component_folds`` splits on, through the same
+    shared :class:`core.disjoint_sets.DisjointSet` primitive the fold lane
+    uses, so a component is the transitive closure of "positive-pair
+    linked".  The id of a row is derived from the lexicographically smallest
+    gtin in its component and from a sorted id table, so the result never
+    depends on dict/set iteration order or on ``PYTHONHASHSEED``.  Rows with
+    an empty gtin get ``-1`` (``folds.component_folds`` likewise never makes
+    them graph nodes).
     """
+    from core.disjoint_sets import DisjointSet
     pos_pairs = np.asarray(pos_pairs, dtype=int).reshape(-1, 2)
     row_bc = np.asarray(row_bc)
-    parent: dict[str, str] = {}
-
-    def find(x: str) -> str:
-        root = x
-        while parent[root] != root:
-            root = parent[root]
-        while parent[x] != root:  # path compression
-            parent[x], x = root, parent[x]
-        return root
-
+    sets = DisjointSet()
     for bc in row_bc:
         node = str(bc)
-        if node and node not in parent:
-            parent[node] = node
+        if node:
+            sets.add(node)
+    nodes = sets.members()
     for left, right in pos_pairs:
         a, b = str(row_bc[int(left)]), str(row_bc[int(right)])
-        if not a or not b or a not in parent or b not in parent:
-            continue
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
+        if a in nodes and b in nodes:
+            sets.union(a, b)
 
-    roots = {node: find(node) for node in parent}
+    roots = {node: sets.find(node) for node in nodes}
     smallest: dict[str, str] = {}
     for node, root in roots.items():
         if root not in smallest or node < smallest[root]:
