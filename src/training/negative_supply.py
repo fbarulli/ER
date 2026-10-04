@@ -814,15 +814,16 @@ class NegativeSupply(BaseModel):
         else:
             anchors_total = int(self.anchor_mask.sum())
             covered_total = len(covered)
+        from core.coverage_contracts import NegativeSupplyCoverage
+        coverage = NegativeSupplyCoverage(
+            anchors_total=anchors_total, anchors_with_real_partner=covered_total,
+            coverage_share=round(covered_total / max(anchors_total, 1), 4),
+        )
         manifest = {
             "schema": "er-negative-supply-v1",
             "run_tag": run_tag,
             "spec": self.spec.model_dump(mode="json"),
-            "coverage": {
-                "anchors_total": anchors_total,
-                "anchors_with_real_partner": covered_total,
-                "coverage_share": round(covered_total / max(anchors_total, 1), 4),
-            },
+            "coverage": coverage.model_dump(mode='json'),
             "populations": frame["population"].value_counts().to_dict(),
             "funnel": self.funnel,
             "pairs_sha256": hashlib.sha256(

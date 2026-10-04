@@ -545,6 +545,9 @@ def build_outputs(
             "threshold_sweep": {"path": str(sweep_path), "sha256": sha256_file(sweep_path)},
         },
     }
+    from core.coverage_contracts import BalancedSamplingManifest
+    manifest = BalancedSamplingManifest.model_validate(manifest).model_dump(
+        mode='json', by_alias=True, exclude_unset=True)
     atomic_write_json(manifest, manifest_path, sort_keys=True)
     return manifest
 

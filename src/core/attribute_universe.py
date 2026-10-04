@@ -496,13 +496,15 @@ class AttributeUniverse(BaseModel):
                 "distinct_value_sets": len(set(sets)) if sets else 0,
             }
         total_pairs = sum(len(v) * (len(v) - 1) // 2 for v in groups.values())
-        return {
+        from core.coverage_contracts import AttributeCensus
+        return AttributeCensus.model_validate({
+            "expected_attributes": set(self.registry),
             "rows": len(frame),
             "valid_gtin_rows": int(valid.sum()),
             "same_gtin_pairs_total": total_pairs,
             "keys": report,
             "unclassified_keys": bucket,
-        }
+        }).model_dump(mode='json')
 
     def _parse_field(self, key: str, raw_value: str):
         """One registered (or unclassified) field value, or None when empty."""
@@ -579,6 +581,10 @@ class AttributeUniverse(BaseModel):
         """
         if census is None:
             census = self.census()
+        from core.coverage_contracts import AttributeCensus, AttributeGenerationBudget
+        census = AttributeCensus.model_validate(
+            {**census, 'expected_attributes': set(self.registry)}
+        ).model_dump(mode='json')
         if min_value_support is None:
             from core.common import training_cfg
 
@@ -630,7 +636,9 @@ class AttributeUniverse(BaseModel):
             }
         if n_pos_target is not None:
             budget = self._allocate_mint_target(budget, int(n_pos_target))
-        return budget
+        validated = AttributeGenerationBudget(expected_attributes=set(self.registry), entries=budget)
+        return {key: entry.model_dump(mode='json', exclude_none=True)
+                for key, entry in validated.entries.items()}
 
     def _supported_value_sets(self, key: str, census: dict, min_value_support: int) -> int:
         """Value-sets whose same-GTIN populated-pair support clears the floor.

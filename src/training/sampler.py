@@ -112,6 +112,12 @@ class ControlledBatchSampler:
         self.groups: dict[str, list[int]] = defaultdict(list)
         for idx, pop in enumerate(populations):
             self.groups[str(pop)].append(idx)
+        from core.coverage_contracts import BatchPopulationCoverage
+        self.coverage = BatchPopulationCoverage(
+            batch_size=batch_size, composition=composition,
+            observed_counts={key: len(rows) for key, rows in self.groups.items()},
+            dataset_rows=len(dataset),
+        )
         missing = set(composition) - set(self.groups)
         if missing:
             raise ValueError(

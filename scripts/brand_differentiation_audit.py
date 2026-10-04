@@ -41,6 +41,7 @@ import pandas as pd
 from core.attribute_conflicts import _string_value_set, _value_set
 from core.critical_attributes import categorical_conflict, volumes_compatible
 from core.common import F, RESULTS, load_dataset_deduped, training_cfg
+from core.coverage_contracts import VendorVariationRow, ProductVariationRow
 
 
 def _listing_card(row: pd.Series, max_listings: int) -> dict | None:
@@ -87,13 +88,13 @@ def within_gtin_noise(df: pd.DataFrame, knobs) -> pd.DataFrame:
             else 0.0
         )
         records.append(
-            {
+            VendorVariationRow.model_validate({
                 "gtin": gtin,
                 "brand": str(frame["brand"].iloc[0]).casefold().strip(),
                 "volume_within_ratio": spread,
                 "pack_within_diversity": len(packs),
                 "n_listings": int(len(frame)),
-            }
+            }).model_dump()
         )
     return pd.DataFrame(
         records, columns=["gtin", "brand", "volume_within_ratio", "pack_within_diversity", "n_listings"]
@@ -141,7 +142,7 @@ def between_gtin_signal(canonical: pd.DataFrame, gate: pd.DataFrame, knobs) -> p
         if med1 is not None and med2 is not None:
             delta = abs(med1 - med2) / max(min(med1, med2), 1.0)
         else:
-            delta = float("nan")  # unknown-vs-known or unknown-vs-unknown
+            delta = None  # unknown-vs-known or unknown-vs-unknown
         if not (c1["pack_set"] and c2["pack_set"]):
             pack_conflict = False
         else:
@@ -151,13 +152,13 @@ def between_gtin_signal(canonical: pd.DataFrame, gate: pd.DataFrame, knobs) -> p
         )
         per_brand_counts[b1] += 1
         rows.append(
-            {
+            ProductVariationRow.model_validate({
                 "brand": b1,
                 "similarity": float(row.similarity),
                 "volume_delta": delta,
                 "pack_conflict": pack_conflict,
                 "flavor_conflict": flavor_conflict,
-            }
+            }).model_dump()
         )
     return pd.DataFrame(
         rows, columns=["brand", "similarity", "volume_delta", "pack_conflict", "flavor_conflict"]

@@ -32,6 +32,9 @@ from __future__ import annotations
 import argparse
 
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from core.coverage_contracts import Count, require_keys
 
 from core.common import F, ensure_parent, load_config
 from core.schemas import (
@@ -64,6 +67,29 @@ ATTRIBUTE_UNAVAILABLE: dict[str, str] = {
         "join to the pair population"
     )
 }
+
+
+class AttributeSeparationCoverage(BaseModel):
+    """Require one summary per registry attribute and account for every pair."""
+    model_config = ConfigDict(extra='forbid')
+    pair_rows: Count
+    summaries: list[SeparationSummaryRow]
+    values: list[SeparationValueRow]
+    unavailable: dict[str, str] = Field(default_factory=lambda: dict(ATTRIBUTE_UNAVAILABLE))
+
+    @model_validator(mode='after')
+    def complete(self):
+        names = [row.attribute for row in self.summaries]
+        require_keys(names, ATTRIBUTE_SOURCES, 'attribute separation')
+        require_keys(self.unavailable, ATTRIBUTE_UNAVAILABLE, 'unavailable attributes')
+        if len(names) != len(set(names)):
+            raise ValueError('duplicate attribute separation summary')
+        for row in self.summaries:
+            if row.n_positive + row.n_negative + row.n_unobservable != self.pair_rows:
+                raise ValueError(f'{row.attribute}: pair coverage does not close')
+        if any(row.attribute not in ATTRIBUTE_SOURCES for row in self.values):
+            raise ValueError('unregistered per-value attribute')
+        return self
 
 
 def separation_spec() -> AttributeSeparationSpec:
@@ -201,6 +227,7 @@ def attribute_separation(
                 ).model_dump()
             )
 
+    AttributeSeparationCoverage(pair_rows=len(population), summaries=summary, values=by_value)
     return (
         pd.DataFrame(summary, columns=list(SEPARATION_SUMMARY_COLUMNS)),
         pd.DataFrame(by_value, columns=list(SEPARATION_VALUE_COLUMNS)).sort_values(

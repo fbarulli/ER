@@ -110,15 +110,17 @@ def prepare_cohort(setup, bundle):
     frame = pd.DataFrame(cohort)
     for column in ('mint_lineage','consumed_example_ids'):
         frame[column] = frame[column].map(lambda value: json.dumps(value, sort_keys=True))
-    frame.fillna('').to_csv(folder/'pairs.csv', index=False)
-    pd.DataFrame(list(rows.values())).fillna('').to_csv(folder/'catalog.csv', index=False)
-    write(folder/'listings.json', {'schema':'er-graph-listings-v1','listings':list(records.values())})
-    write(folder/'coverage.json', {'cohort_sha256':digest(frame.fillna('').to_dict('records')),
+    from core.coverage_contracts import CohortCoverage
+    coverage = CohortCoverage.model_validate({'cohort_sha256':digest(frame.fillna('').to_dict('records')),
         'pair_rows':len(frame), 'minted_endpoints_total':len(audits),
         'minted_endpoints_covered':len(set(node_ids)&set(audits)),
         'by_scope':frame.evaluation_scope.value_counts().to_dict(),
         'by_population':frame.population.value_counts().to_dict(),
+        'by_difficulty':{name:int(frame.difficulty_slice.eq(name).sum())
+                         for name in ('easy','hard','unknown')},
         'unknown_difficulty_policy':'retain unknown; never invent easy/hard labels'})
-    if set(audits)-set(node_ids):
-        raise ValueError('ablation cohort dropped minted endpoints')
+    frame.fillna('').to_csv(folder/'pairs.csv', index=False)
+    pd.DataFrame(list(rows.values())).fillna('').to_csv(folder/'catalog.csv', index=False)
+    write(folder/'listings.json', {'schema':'er-graph-listings-v1','listings':list(records.values())})
+    write(folder/'coverage.json', coverage.model_dump(mode='json'))
     return folder
