@@ -39,14 +39,26 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from core.common import load_config, plot_dpi, rand_matching_cfg, recall_column_suffix
+from core.common import (
+    load_config,
+    plot_dpi,
+    rand_matching_cfg,
+    recall_column_suffix,
+    report_thresholds,
+    retrieval_ks,
+)
 
 # 05-03/06-3: the recall-tied fold-metric column follows the config SSOT
 # (rand_matching.target_recall) with the producer's own helper — a hardcoded
 # recall suffix would silently miss the column of a retuned lane.
 _RECALL_KEY = recall_column_suffix(float(rand_matching_cfg()["target_recall"]))
 _RECALL_THRESHOLD_COL = f"threshold_at_{_RECALL_KEY}_recall"
-REPORT_THRESHOLDS = (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90)
+# 05-03/06-4: both the operating-point ladder and the K ladder now come from
+# config SSOT (evaluation.report_thresholds / evaluation.retrieval_ks).
+# These were inlined as `(1, 5, 10)` at four sites below and as a second copy
+# of sample_balanced_pairs.SWEEP_THRESHOLDS at the top of this module.
+REPORT_THRESHOLDS = report_thresholds()
+_RETRIEVAL_KS = retrieval_ks()
 
 
 def _text(value: object) -> str:
@@ -73,7 +85,18 @@ def _json_list(value) -> list[float]:
 
 
 def _metric_column(columns: list[str], prefix: str) -> str | None:
-    matches = sorted(c for c in columns if c.startswith(prefix))
+    matches = []
+    for column in columns:
+        if not column.startswith(prefix):
+            continue
+        try:
+            threshold = float(column[len(prefix):])
+        except ValueError:
+            continue
+        if 0 < threshold < 1:
+            matches.append(column)
+    if len(matches) > 1:
+        raise ValueError(f"ambiguous operating threshold columns for {prefix}: {matches}")
     return matches[0] if matches else None
 
 
@@ -963,8 +986,9 @@ def generate_report(
     recall_col = _metric_column(list(ok.columns), "recall_at_")
     summary_cols = [
         "fold", "auc", "pr_auc", "average_precision", "acc_at_thr",
-        "hits_at_1", "precision_at_1", "recall_at_1", "precision_at_5",
-        "recall_at_5", "precision_at_10", "recall_at_10", "best_dev_ap",
+        "hits_at_1",
+        *[f"{metric}_at_{k}" for k in _RETRIEVAL_KS for metric in ("precision", "recall")],
+        "best_dev_ap",
         "final_train_loss", "train_s", "fold_s",
     ]
     for column in (f1_col, precision_col, recall_col):
@@ -1114,7 +1138,7 @@ def generate_report(
                 for _, group in part.groupby(source_column, sort=False)
                 if bool((group["label"].astype(int) == 1).any())
             ]
-            for k in (1, 5, 10):
+            for k in _RETRIEVAL_KS:
                 query_hits = []
                 query_precisions = []
                 for group in query_groups:
@@ -1180,7 +1204,7 @@ def generate_report(
                 metric_values = {
                     "hits_at_1": float(group.loc[group["k"].eq(1), "recall_at_k"].iloc[0]),
                 }
-                for k in (1, 5, 10):
+                for k in _RETRIEVAL_KS:
                     hit = group[group["k"].eq(k)]
                     if not hit.empty:
                         metric_values[f"precision_at_{k}"] = float(hit.iloc[0]["precision_at_k"])
@@ -1200,16 +1224,15 @@ def generate_report(
             # Plot the same per-source-query values written to the audit CSV.
             # Keep the historical all-metrics bar layout for easy comparison,
             # but never read the legacy global-pair fields from fold_metrics.
-            rank_names = [
-                "hits_at_1", "precision_at_1", "recall_at_1", "precision_at_5",
-                "recall_at_5", "precision_at_10", "recall_at_10",
-            ]
+            rank_names = ["hits_at_1"]
+            for k in _RETRIEVAL_KS:
+                rank_names.extend([f"precision_at_{k}", f"recall_at_{k}"])
             plot_rows = []
             for fold, group in ranking_df.groupby("fold", sort=True):
                 values = {
                     "hits_at_1": float(group.loc[group["k"].eq(1), "recall_at_k"].iloc[0]),
                 }
-                for k in (1, 5, 10):
+                for k in _RETRIEVAL_KS:
                     hit = group[group["k"].eq(k)].iloc[0]
                     values[f"precision_at_{k}"] = float(hit["precision_at_k"])
                     values[f"recall_at_{k}"] = float(hit["recall_at_k"])
@@ -1248,7 +1271,7 @@ def generate_report(
                 ylabel="candidate recall",
                 title="ANN candidate recall@K (per-source query)",
                 ylim=(0, 1.05),
-                xticks=[1, 5, 10],
+                xticks=list(_RETRIEVAL_KS),
             )
             ax.grid(alpha=0.25)
             ax.legend()

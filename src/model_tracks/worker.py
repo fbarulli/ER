@@ -52,13 +52,15 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
         if setup_manifest.get('smoke'):
             command.extend(['--sample', str(setup_manifest['source_listing_count'])])
     else:
-        settings = yaml.safe_load((setup / f'{track}.yaml').read_text())
+        from graph_tracks.config import GraphConfig, load_config as load_graph_config
+        settings = load_graph_config(setup / f'{track}.yaml', expected_track=track).model_dump()
         settings.update(device=cfg.device, epochs=cfg.epochs, report_test=cfg.report_test,
                         postprocess=not gpu_only,include_inputs=False)
         if cfg.dvc_enabled or gpu_only:
             # The suite publisher owns persistence; avoid a second mutable
             # local DVC snapshot while background uploads are active.
             settings['dvc'] = {**settings.get('dvc', {}), 'enabled': False}
+        settings = GraphConfig.model_validate(settings).model_dump()
         worker_config = output / 'worker.yaml'
         worker_config.write_text(yaml.safe_dump(settings, sort_keys=False))
         events.emit('input_validation', 'configured', device=cfg.device,

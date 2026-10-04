@@ -60,9 +60,13 @@ def load_pairs(path: Path, records: list[dict]) -> dict[str, tuple[np.ndarray, n
 
 
 def quality(labels: np.ndarray, scores: np.ndarray) -> dict[str, float]:
+    from core.common import operating_recall, precision_at_recall_key
     precision, recall, _ = precision_recall_curve(labels, scores)
+    target = operating_recall()
+    measured = float(precision[:-1][recall[:-1] >= target].max())
     return {"dev_pr_auc": float(average_precision_score(labels, scores)),
-            "dev_p_at_r95": float(precision[recall >= .95].max()),
+            "dev_precision_at_recall": measured, "agreed_recall": target,
+            'dev_' + precision_at_recall_key(): measured,
             "dev_positive_pairs": int(labels.sum()), "dev_negative_pairs": int((labels == 0).sum())}
 
 
@@ -383,9 +387,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     step=epoch, max_steps=cfg.epochs, epoch=epoch, wandb_run_id=wandb.run_id,
                     wandb_url=wandb.run_url, best_checkpoint_step=int(best_path.parent.name.split("-")[-1]),
                     best_metric=best_metric, **{k: v for k, v in metrics.items() if k != "epoch"})
-                logger.info("[graph-train] epoch=%d/%d loss=%.6f classification_loss=%.6f metric_loss=%.6f dev_pr_auc=%.6f dev_p_at_r95=%.6f seconds=%.3f best=%s selected_checkpoint=%s",
+                logger.info("[graph-train] epoch=%d/%d loss=%.6f classification_loss=%.6f metric_loss=%.6f dev_pr_auc=%.6f dev_precision_at_recall=%.6f seconds=%.3f best=%s selected_checkpoint=%s",
                             epoch, cfg.epochs, loss.item(), classification.item(), metric.item(),
-                            metrics['dev_pr_auc'], metrics['dev_p_at_r95'], metrics['epoch_seconds'], improved, best_path)
+                            metrics['dev_pr_auc'], metrics['dev_precision_at_recall'], metrics['epoch_seconds'], improved, best_path)
                 logger.info("[graph-checkpoint] write complete manifest=%s epoch_metrics=%s",
                             checkpoint_dir / name(cfg.track, 'checkpoint_manifest.json'),
                             output / name(cfg.track, 'epoch_metrics.jsonl'))

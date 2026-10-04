@@ -2722,9 +2722,9 @@ def run_within_brand_pipeline(
     # ── CONSOLIDATED TRACE: stage 1 writer ────────────────────────────────
     # ONE writer for the whole stage, committed once at the end of the
     # function. The first row records the COLUMN CONTRACT this frame arrived
-    # with — the raw export's names — because the stage that follows consumes a
-    # different contract (see build_training_data) and that handoff used to be
-    # invisible until a KeyError fired somewhere downstream.
+    # with, because the frame is loaded separately from the one stage 2 builds
+    # and that handoff used to be invisible until a KeyError fired somewhere
+    # downstream.
     from core.tracing import TraceRun
 
     trace = TraceRun("data_prep")
@@ -2734,9 +2734,11 @@ def run_within_brand_pipeline(
         required=RAW_EXPORT_REQUIRED_COLUMNS,
         note=(
             "stage 2 (build_training_data) does NOT consume this frame: it "
-            "reloads the deduped dataset through load_dataset_deduped(), whose "
-            "columns are the canonical ones (gtin/title/attributes) — the "
-            "two stages meet at canonical_records.csv + gate_results.csv"
+            "reloads the deduped dataset through load_dataset_deduped(). Both "
+            "stages use the raw export's column names (c698200), so the two "
+            "contracts are identical by construction — they are separate "
+            "datasets joined at canonical_records.csv + gate_results.csv, not "
+            "separate column vocabularies"
         ),
     )
 
@@ -3283,10 +3285,10 @@ def build_training_data(
         contract="canonical dataset (core.common.load_dataset_deduped)",
         required=CANONICAL_DATASET_REQUIRED_COLUMNS,
         note=(
-            "stage 1 (run_within_brand_pipeline) consumes the RAW export "
-            "contract (gtin/sku_name_eng/attribute) — the two stages are joined "
-            "by canonical_records.csv + gate_results.csv, never by passing this "
-            "frame between them"
+            "stage 1 (run_within_brand_pipeline) loads the RAW export "
+            "separately — both stages now share one column vocabulary "
+            "(c698200) and are joined by canonical_records.csv + "
+            "gate_results.csv, never by passing this frame between them"
         ),
     )
     cfg = load_config()

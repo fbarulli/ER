@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 from model_tracks import ablation as a
 
 
@@ -170,10 +171,31 @@ def test_report_evidence_omits_null_key_for_attribute_less_variants(tmp_path,mon
     assert 'null' not in json.dumps([row['current_attribute_evidence'] for row in report['rows']])
 
 
-def test_worker_forbids_cpu(tmp_path):
-    (tmp_path/'request.json').write_text('{}')
-    with pytest.raises(RuntimeError,match='requires CUDA'):
-        a.encode(tmp_path/'request.json',tmp_path/'vectors.npz',device='cpu')
+def test_worker_rejects_an_unsupported_device(tmp_path):
+    """The device guard, as it actually stands.
+
+    This used to assert that the worker forbids CPU. That invariant is gone:
+    SuiteConfig.device is Literal['cpu', 'cuda'] with 'cuda' only as the
+    default, worker.py passes the suite device straight into encode(), and
+    worker.py:121 runs the text report lane on the local CPU path. So CPU is a
+    supported device here and config/model_tracks.yaml picks CUDA only because
+    that is what the Colab run uses.
+
+    What must still hold is that the device is validated against the declared
+    Literal rather than passed through to torch, and that requesting CUDA on a
+    machine without it fails loudly instead of silently timing on CPU. This
+    test also failed for a second, unrelated reason: it wrote '{}' as the
+    request, so encode() reached validate_sources() and raised KeyError
+    'sources' before the device was ever consulted.
+    """
+    from model_tracks.embedding_forward import validate_embedding_device
+
+    assert validate_embedding_device('cpu') == 'cpu'
+    with pytest.raises(Exception, match='cpu|cuda'):
+        validate_embedding_device('tpu')
+    if not torch.cuda.is_available():
+        with pytest.raises(RuntimeError, match='requires CUDA'):
+            validate_embedding_device('cuda')
 
 
 def test_text_worker_loads_and_encodes_once_for_all_variants(tmp_path,monkeypatch):

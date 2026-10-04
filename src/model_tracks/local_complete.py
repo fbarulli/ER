@@ -134,10 +134,10 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                 path.rename(path.with_name(f'interrupted-{time.time_ns()}-{path.name}'))
             text_complete(output, setup, device='cpu', report_test=settings.report_test)
         else:
-            from graph_tracks.config import GraphConfig
+            from graph_tracks.config import GraphConfig, load_config as load_graph_config
             from graph_tracks.preflight import preflight
             from graph_tracks.report import complete as graph_complete
-            config = yaml.safe_load((setup / f'{track}.yaml').read_text())
+            config = load_graph_config(setup / f'{track}.yaml', expected_track=track).model_dump()
             for key in ('listings', 'pairs', 'input_manifest', 'text_cache'):
                 if config.get(key):
                     config[key] = str(prepared / config[key])

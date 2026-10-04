@@ -26,6 +26,10 @@ import pytest
 
 import core.common as common
 import pipeline
+from core.columns import (
+    CANONICAL_DATASET_REQUIRED_COLUMNS,
+    DATA_PREP_REQUIRED_COLUMNS as RAW_EXPORT_REQUIRED_COLUMNS,
+)
 from core.gtin import gtin_validity
 from core.tracing import (
     ENTITY_ROW_CAP,
@@ -445,7 +449,15 @@ def test_two_stage_live_run_covers_every_row_and_every_pair(
     assert "sku_name_eng" in by_stage["data_prep"]["columns"]
     assert by_stage["pairs"]["missing_required"] == []
     assert "gtin" in by_stage["pairs"]["columns"]
-    assert "gtin" not in by_stage["pairs"]["columns"]  # a DIFFERENT contract
+    # The two stages no longer have DIFFERENT column vocabularies. commit
+    # c698200 renamed every column to the raw export's own names, which turned
+    # core.columns.COLUMN_MAPPING into the identity map; both requirement
+    # lists are derived from the single DATA_PREP_REQUIRED_COLUMNS tuple, so
+    # they are now identical by construction. The stages are still separate
+    # datasets (raw export vs deduped dataset) joined at
+    # canonical_records.csv + gate_results.csv -- just not separate contracts.
+    assert by_stage["data_prep"]["columns"] == by_stage["pairs"]["columns"]
+    assert set(RAW_EXPORT_REQUIRED_COLUMNS) == set(CANONICAL_DATASET_REQUIRED_COLUMNS)
 
 
 def test_identity_rejects_a_trace_with_an_unaccounted_row(

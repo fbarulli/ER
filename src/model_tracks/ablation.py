@@ -19,14 +19,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
-from core.common import TRAIN_ROOT
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from core.common import TRAIN_ROOT, retrieval_ks
 from graph_tracks.data import file_hash, load_records, RELATIONS, NUMERIC
 from graph_tracks.text_cache import checkpoint_hash, composition_fingerprint
 
 
+def _default_retrieval_ks() -> tuple[int, ...]:
+    """Inherit evaluation.retrieval_ks unless the lane declares an override."""
+    return retrieval_ks()
+
+
 class Settings(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra='forbid', validate_default=True)
     sample_pairs: int = Field(default=100, ge=1)
     seed: int = 1729
     split: str = 'dev'
@@ -39,9 +44,18 @@ class Settings(BaseModel):
     hnsw_m: int = Field(default=16,ge=1)
     hnsw_ef_construction: int = Field(default=200,ge=1)
     hnsw_ef_search: int = Field(default=100,ge=1)
-    retrieval_ks: list[int] = Field(default_factory=lambda: [1, 5, 10])
+    retrieval_ks: list[StrictInt] = Field(
+        default_factory=lambda: list(_default_retrieval_ks()), min_length=1
+    )
     graph_fields: dict[str, list[str]] = Field(default_factory=dict)
     slice_columns: list[str] = Field(default_factory=list)
+
+
+    @model_validator(mode='after')
+    def check_retrieval(self):
+        if any(k < 1 for k in self.retrieval_ks) or len(set(self.retrieval_ks)) != len(self.retrieval_ks):
+            raise ValueError('retrieval_ks must contain unique positive integers')
+        return self
 
 
 def settings(path=None):

@@ -28,7 +28,9 @@ class GraphEncoder:
             raise ValueError('checkpoint filename/payload track mismatch')
         self.manifest, self.vocabulary = payload['manifest'], payload['vocabulary']
         self.device = device
-        cfg = self.manifest['config']
+        from graph_tracks.config import GraphConfig
+        cfg = GraphConfig.model_validate(self.manifest['config']).model_dump()
+        self.manifest['config'] = cfg
         self.model = AttributeGNN(self.vocabulary, cfg['hidden_dim'], cfg['output_dim'],
                                  payload['text_dim'], cfg['graph_enabled']).to(device)
         self.scorer = PairScorer(bool(payload['text_dim'])).to(device)
@@ -110,15 +112,19 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         for key in keys:
             if metadata.get(key) != encoder.manifest['text_metadata'].get(key):
                 raise ValueError(f'inference text cache mismatch: {key}')
-        if not encoder.manifest['config'].get('allow_unmanifested_inputs', False):
+        if not encoder.manifest['config']['allow_unmanifested_inputs']:
             if any(not metadata.get(key) for key in keys):
                 raise ValueError('inference text cache lacks complete composition provenance')
+    from core.performance import PerformanceRecorder
+    perf = PerformanceRecorder(encoder.manifest['track'])
     if prepared_plan is not None:
         batches = (load_batch(prepared_arrays, prefix, device, encoder.vocabulary)
                    for prefix in prepared_plan['query_batches'])
-        vectors = encoder.encode_prepared(batches, text)
+        with perf.section("encode"):
+            vectors = encoder.encode_prepared(batches, text)
     else:
-        vectors = encoder.encode(records, text, batch_size)
+        with perf.section("encode"):
+            vectors = encoder.encode(records, text, batch_size)
     if len(vectors) != len(ids):
         raise ValueError('graph export embedding/ID population mismatch')
     if owned_arrays is not None:
@@ -143,9 +149,9 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         frame.to_csv(output / name(track, 'pair_scores.csv'), index=False)
     if build_index:
         from training.hnsw_index import PersistentHnswIndex
-        index = PersistentHnswIndex(output / name(track, 'index'), ef_construction=encoder.manifest['config'].get('hnsw_ef_construction', 200),
-                                    M=encoder.manifest['config'].get('hnsw_m', 16),
-                                    ef_search=encoder.manifest['config'].get('hnsw_ef_search', 100))
+        index = PersistentHnswIndex(output / name(track, 'index'), ef_construction=encoder.manifest['config']['hnsw_ef_construction'],
+                                    M=encoder.manifest['config']['hnsw_m'],
+                                    ef_search=encoder.manifest['config']['hnsw_ef_search'])
         index.build(vectors, ids, checkpoint=checkpoint, model_name=encoder.manifest['track'],
                     preprocessing_fingerprint=file_hash(listings))
     write_json(output / name(track, 'export_manifest.json'), {
@@ -155,7 +161,7 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         'track': encoder.manifest['track'], 'graph_context': 'training-listings-only',
         'vector_kind': 'graph-informed', 'ann_reproduces_pair_scorer': False,
         'count': len(ids), 'dimension': vectors.shape[1], 'index_built': build_index,
-        'embedding_dtype': str(vectors.dtype),
+        'embedding_dtype': str(vectors.dtype), 'performance': perf.summary(),
         'id_kind': 'listing_sku_id'})
     return output
 

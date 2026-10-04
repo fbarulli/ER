@@ -516,13 +516,19 @@ class TraceRun:
     ) -> dict[str, object]:
         """Record the COLUMN CONTRACT of the frame a stage received.
 
-        Stage 1 consumes the raw export (``gtin``/``sku_name_eng``/
-        ``attribute``); stage 2 consumes the deduped dataset
-        (``gtin``/``title``/``attributes``). Those two contracts are
-        different, and the handoff between them used to be invisible — a frame
-        with the wrong column names produced a KeyError far from its cause.
-        This row makes the contract, and any missing required column, part of
-        the trace.
+        Stage 1 consumes the raw export and stage 2 consumes the deduped
+        dataset. The two frames are different DATASETS and the handoff between
+        them used to be invisible — a frame with the wrong column names produced
+        a KeyError far from its cause — so this row makes the contract, and any
+        missing required column, part of the trace.
+
+        Since commit c698200 every column carries the raw export's own name
+        (``gtin``/``sku_name_eng``/``attribute``), which made COLUMN_MAPPING the
+        identity map. The two requirement lists are therefore the SAME list
+        today: both are derived from ``DATA_PREP_REQUIRED_COLUMNS``. The rows
+        stay per-stage because the frames are still separately loaded and
+        separately validated, but they no longer distinguish the vocabularies
+        and must not be read as if they did.
         """
         columns = [str(column) for column in frame.columns]
         missing = [name for name in required if name not in columns]

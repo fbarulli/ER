@@ -31,13 +31,14 @@ def package(config: Path, output: Path):
     from core.common import F, TRAIN_ROOT
     cfg = load_config(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
+    from graph_tracks.config import load_text_config
+    text_settings = load_text_config(setup / 'text.yaml').model_dump()
     # All tensors and native tokenizer features are fixed on local CPU before
     # provisioning; selected weights are bound only by the GPU exporter.
     from graph_tracks.prepared_inputs import prepare_training
-    from graph_tracks.config import GraphConfig
-    track_settings = [yaml.safe_load((setup/(track+'.yaml')).read_text()) for track in ('gnn_only','hybrid')]
-    default_batch = GraphConfig.model_fields['inference_batch_size'].default
-    sizes = {settings.get('inference_batch_size',default_batch) for settings in track_settings}
+    from graph_tracks.config import load_config as load_graph_config
+    track_settings = [load_graph_config(setup/(track+'.yaml'), expected_track=track).model_dump() for track in ('gnn_only','hybrid')]
+    sizes = {settings['inference_batch_size'] for settings in track_settings}
     if len(sizes) != 1:
         raise ValueError('shared prepared graph inference batch sizes must agree')
     cache = setup/'shared_minilm__embeddings.npz'
@@ -71,11 +72,12 @@ def package(config: Path, output: Path):
     checks = preflight(config,allow_gpu_pending=True,native_token_model=native_model)
     target = Path('data/model_tracks/shared')
     files = {str(target / p.relative_to(setup)):p for p in setup.rglob('*') if p.is_file()
-             and p.name not in {'gnn_only.yaml','hybrid.yaml'} and p.suffix not in {'.zip'}
+             and p.name not in {'gnn_only.yaml','hybrid.yaml','text.yaml'} and p.suffix not in {'.zip'}
              and p.name not in {'text_prepared.pkl.gz','text_prepared.pkl.gz.json'}}
-    inline = {}
+    text_settings.update(report_test=cfg.report_test)
+    inline = {str(target/'text.yaml'): yaml.safe_dump(text_settings, sort_keys=False)}
     for track in ('gnn_only','hybrid'):
-        settings = yaml.safe_load((setup/f'{track}.yaml').read_text())
+        settings = load_graph_config(setup/f'{track}.yaml', expected_track=track).model_dump()
         for key in ('listings','pairs','input_manifest','text_cache'):
             if settings.get(key):
                 source = (TRAIN_ROOT / settings[key]).resolve()
@@ -114,14 +116,19 @@ def verify_current(path: Path, config: Path):
     metadata = verify(path)
     expected_suite = cfg.model_dump()
     expected_suite.update(setup_dir=str(target), text_bundle=str(target/'text_prepared.pkl.gz'))
+    from graph_tracks.config import load_text_config, load_config as load_graph_config
+    expected_text = load_text_config(setup / 'text.yaml').model_dump()
+    expected_text.update(report_test=cfg.report_test)
     with zipfile.ZipFile(path) as archive:
         if yaml.safe_load(archive.read('data/model_tracks/suite.yaml')) != expected_suite:
             raise ValueError('prepared package suite config changed; regenerate locally')
+        if yaml.safe_load(archive.read(str(target/'text.yaml'))) != expected_text:
+            raise ValueError('prepared package text configuration changed; regenerate locally')
         request = json.loads(archive.read(str(target/'embedding_inputs.json')))
         if request['metadata']['checkpoint_sha256'] != checkpoint_hash(Path(resolve_model(cfg.text_model))):
             raise ValueError('prepared package baseline checkpoint changed')
         for track in ('gnn_only', 'hybrid'):
-            settings = yaml.safe_load((setup/(track+'.yaml')).read_text())
+            settings = load_graph_config(setup/(track+'.yaml'), expected_track=track).model_dump()
             for key in ('listings','pairs','input_manifest','text_cache'):
                 if settings.get(key):
                     settings[key] = str(target/(TRAIN_ROOT/settings[key]).resolve().relative_to(setup))
@@ -135,7 +142,7 @@ def verify_current(path: Path, config: Path):
     bundle = (TRAIN_ROOT/cfg.text_bundle).resolve()
     for name, expected in metadata['files'].items():
         member = Path(name)
-        if member.is_relative_to(target) and member.name not in {'gnn_only.yaml','hybrid.yaml'}:
+        if member.is_relative_to(target) and member.name not in {'gnn_only.yaml','hybrid.yaml','text.yaml'}:
             source = (bundle if member == target/'text_prepared.pkl.gz' else
                       bundle.with_suffix(bundle.suffix+'.json') if member == target/'text_prepared.pkl.gz.json'
                       else setup/member.relative_to(target))

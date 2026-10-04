@@ -56,6 +56,14 @@ def test_identity_ignores_generated_reports_and_portable_suite_paths(tmp_path, m
     setup = tmp_path / 'setup'
     setup.mkdir()
     (setup / 'eligible_catalog.csv').write_text('frozen')
+    import yaml
+    for track in ('gnn_only', 'hybrid'):
+        (setup / (track + '.yaml')).write_text(yaml.safe_dump({
+            'track': track, 'listings': 'data/listings.json', 'pairs': 'data/pairs.csv',
+            'output_dir': 'results/graph_tracks',
+            **({'text_cache': 'data/text.npz'} if track == 'hybrid' else {})}))
+    (setup / 'text.yaml').write_text(yaml.safe_dump({'track': 'text', 'output_dir': 'results/model_tracks'}))
+
     (tmp_path / 'config').mkdir()
     for name in ('training.yaml', 'identity_dimensions.yaml', 'identity_reviews.json', 'vocabulary.json'):
         (tmp_path / 'config' / name).write_text('same')
@@ -66,6 +74,13 @@ def test_identity_ignores_generated_reports_and_portable_suite_paths(tmp_path, m
     (setup / 'preflight.json').write_text('new report')
     (setup / 'suite.yaml').write_text('portable path')
     settings['text_bundle'] = 'new/bundle'
+    assert suite_identity(cfg, inputs, 'run') == before
+    lane = yaml.safe_load((setup / 'text.yaml').read_text())
+    lane['hnsw_m'] = 32
+    (setup / 'text.yaml').write_text(yaml.safe_dump(lane))
+    assert suite_identity(cfg, inputs, 'run') != before
+    lane['hnsw_m'] = 16
+    (setup / 'text.yaml').write_text(yaml.safe_dump(lane))
     assert suite_identity(cfg, inputs, 'run') == before
     (setup / 'eligible_catalog.csv').write_text('changed')
     assert suite_identity(cfg, inputs, 'run') != before

@@ -38,7 +38,7 @@ from typing import Any
 
 import pandas as pd
 
-from core.common import F, load_config
+from core.common import F, load_config, report_thresholds
 
 
 DEFAULT_GATE_INPUT = Path(F["gate_results"])
@@ -47,7 +47,10 @@ DEFAULT_BALANCED_OUTPUT = Path("results/training/balanced_pairs.csv")
 DEFAULT_SAMPLE_OUTPUT = Path("results/training/balanced_pairs_sample_3000.csv")
 DEFAULT_MANIFEST_OUTPUT = Path("results/training/balanced_pairs_sample_manifest.json")
 DEFAULT_SWEEP_OUTPUT = Path("results/training/balanced_pairs_sample_threshold_sweep.csv")
-SWEEP_THRESHOLDS = (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90)
+# 05-03/06-4: was a second hand-typed copy of generate_training_report's
+# REPORT_THRESHOLDS.  Both now resolve the same config SSOT ladder
+# (evaluation.report_thresholds) through core.common.report_thresholds().
+SWEEP_THRESHOLDS = report_thresholds()
 
 REASON_PREFIX_TO_TYPE = (
     # "Pack blocker…" is the training gate's highest-volume hard_no reason

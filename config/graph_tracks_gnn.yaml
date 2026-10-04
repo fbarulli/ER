@@ -32,11 +32,8 @@ postprocess: true
 report_test: true
 build_index: true
 inference_batch_size: 1024
-retrieval_ks:
-- 1
-- 5
-- 10
-- 50
+# retrieval_ks defaults to evaluation.ann_recall_ks in training.yaml.
+# Declare it here only for an intentional lane-specific override.
 hnsw_m: 16
 hnsw_ef_construction: 200
 hnsw_ef_search: 100

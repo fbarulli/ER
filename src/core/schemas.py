@@ -96,6 +96,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    StrictInt,
     StrictStr,
     TypeAdapter,
     ValidationError,
@@ -359,7 +360,7 @@ class UnitsSpec(BaseModel):
     glued_code_max_ml: int = Field(default=25000, ge=1)
 
     @model_validator(mode="after")
-    def _table_is_consistent(cls, v: "UnitsSpec") -> "UnitsSpec":
+    def _table_is_consistent(v: "UnitsSpec") -> "UnitsSpec":
         if v.pack_min >= v.pack_max:
             raise ValueError(
                 f"units.pack_min ({v.pack_min}) must be < pack_max ({v.pack_max})"
@@ -462,7 +463,7 @@ class UrlEvidenceSpec(BaseModel):
     short_code_letters: int = Field(default=3, ge=1)
 
     @model_validator(mode="after")
-    def _vocabularies_are_disjoint(cls, v: "UrlEvidenceSpec") -> "UrlEvidenceSpec":
+    def _vocabularies_are_disjoint(v: "UrlEvidenceSpec") -> "UrlEvidenceSpec":
         overlap = sorted({w.lower() for w in v.path_schema_words} & {u.lower() for u in v.units})
         if overlap:
             raise ValueError(
@@ -570,7 +571,7 @@ class DataConfig(BaseModel):
     embedding_model_keys: list[str] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _column_contracts_are_consistent(cls, v: "DataConfig") -> "DataConfig":
+    def _column_contracts_are_consistent(v: "DataConfig") -> "DataConfig":
         """The column SSOT must agree with itself.
 
         Five ways this could silently rot, all caught at load:
@@ -846,6 +847,45 @@ class UniformitySpec(BaseModel):
     checkpoint_scope: Literal["all", "final"]
 
 
+class GeneralizationSliceSpec(BaseModel):
+    """Generalization/coverage slices required by MODEL_TRACKS_PLAN.md.
+
+    The plan requires unseen, sparse-neighborhood, isolated and
+    missing-field slices alongside the attribute slices. The attribute class
+    universe is deliberately NOT restated here: it remains the single
+    registry in ``training.attribute_separation.ATTRIBUTE_SOURCES``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sparse_neighborhood_max_peers: int = Field(ge=0)
+    observed_split: Literal["dev", "test"]
+
+
+class PairedBootstrapSpec(BaseModel):
+    """Paired bootstrap confidence intervals over the scored pair population.
+
+    Explicitly NOT a repeated-seed contract: the model-track lanes train one
+    checkpoint per split, so a "repeated seeds" column here would be a
+    fabricated claim. These are resampling intervals over pairs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    resamples: int = Field(ge=1)
+    seed: int
+    confidence: float = Field(gt=0.0, lt=1.0)
+
+
+class PerformanceSpec(BaseModel):
+    """Operational-cost instrumentation (latency / memory / refresh)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 class RobustValidationSpec(BaseModel):
     """Repeated leakage-aware validation and error-slice reporting."""
 
@@ -1037,7 +1077,20 @@ class EvaluationSpec(BaseModel):
     component_split_k: int = Field(ge=2)
     dev_fold: int = Field(ge=0)
     test_fold: int = Field(ge=0)
-    retrieval_ks: list[int] = Field(min_length=1)
+    retrieval_ks: list[StrictInt] = Field(min_length=1)
+    # Wider candidate ladder used by the ANN / graph-track lanes, whose HNSW
+    # catalog is large enough for k=50 to be a meaningful reported cutoff.
+    ann_recall_ks: list[StrictInt] = Field(min_length=1)
+    # Declared agreement target for "recall at an agreed precision".
+    operating_precision: float = Field(gt=0.0, lt=1.0)
+    operating_recall: float = Field(gt=0.0, le=1.0)
+    generalization_slices: GeneralizationSliceSpec
+    paired_bootstrap: PairedBootstrapSpec
+    performance: PerformanceSpec
+    # Single declared source for the fixed operating points used by every
+    # threshold-sweep and report lane.  Duplicated as two module constants
+    # (SWEEP_THRESHOLDS / REPORT_THRESHOLDS) before this field existed.
+    report_thresholds: list[float] = Field(min_length=1)
     robust_validation: RobustValidationSpec
     uniformity: UniformitySpec
     attribute_separation: AttributeSeparationSpec
@@ -1065,10 +1118,24 @@ class EvaluationSpec(BaseModel):
                 f"evaluation.dev_fold == test_fold ({self.dev_fold}) — the "
                 f"threshold-fit half and the scored half must be DISJOINT"
             )
+        if any(k < 1 for k in self.retrieval_ks + self.ann_recall_ks):
+            raise ValueError("evaluation retrieval ladders must contain positive integers")
         if self.retrieval_ks != sorted(set(self.retrieval_ks)):
             raise ValueError("evaluation.retrieval_ks must be unique and ascending")
         if 1 not in self.retrieval_ks:
             raise ValueError("evaluation.retrieval_ks must include 1 for Hits@1")
+        if 1 not in self.ann_recall_ks:
+            raise ValueError("evaluation.ann_recall_ks must include 1 for Hits@1")
+        if self.ann_recall_ks != sorted(set(self.ann_recall_ks)):
+            raise ValueError("evaluation.ann_recall_ks must be unique and ascending")
+        if any(t <= 0.0 or t >= 1.0 for t in self.report_thresholds):
+            raise ValueError(
+                "evaluation.report_thresholds must be strictly inside (0, 1)"
+            )
+        if self.report_thresholds != sorted(set(self.report_thresholds)):
+            raise ValueError(
+                "evaluation.report_thresholds must be unique and ascending"
+            )
         return self
 
 
@@ -2496,6 +2563,12 @@ class ColabSpec(BaseModel):
     worker_timeout_seconds: int = Field(ge=60)
     result_download_timeout_seconds: int = Field(ge=60)
     result_download_heartbeat_seconds: int = Field(ge=1, le=300)
+    incremental_sync_seconds: int = Field(ge=1)
+    remote_upload_retries: int = Field(ge=1, le=10)
+    remote_upload_backoff_seconds: int = Field(ge=1)
+    remote_upload_max_backoff_seconds: int = Field(ge=1)
+    checkpoint_manifest_name: str = Field(min_length=1)
+    latest_best_marker: str = Field(min_length=1)
     result_archive_name: str = Field(min_length=1)
     result_manifest_name: str = Field(min_length=1)
     result_download_excluded_dirs: list[str] = Field(min_length=1)
@@ -2516,6 +2589,14 @@ class ColabSpec(BaseModel):
     # ready checkpoint is still published promptly.
     dvc_publish_debounce_seconds: float = Field(gt=0.0, le=600.0)
     final_inference: FinalInferenceSpec
+
+    @field_validator("result_archive_name", "result_manifest_name", "result_events_file",
+                     "dvc_events_file", "checkpoint_manifest_name", "latest_best_marker")
+    @classmethod
+    def artifact_basename(cls, value):
+        if value in {".", ".."} or "/" in value or "\\" in value or not value.strip():
+            raise ValueError("Colab artifact names must be non-empty basenames")
+        return value
 
 
 class DifferentiationAuditSpec(BaseModel):

@@ -444,6 +444,81 @@ def rand_matching_cfg() -> dict:
     return copy.deepcopy(_CFG["rand_matching"])
 
 
+def report_thresholds() -> tuple[float, ...]:
+    """SSOT for the fixed operating points swept by every report lane.
+
+    config/training.yaml evaluation.report_thresholds — validated as unique,
+    ascending and strictly inside (0, 1) by EvaluationSpec at load.
+
+    This list was independently spelled out twice as a module constant:
+    ``SWEEP_THRESHOLDS`` in src/training/sample_balanced_pairs.py and
+    ``REPORT_THRESHOLDS`` in src/training/generate_training_report.py.
+    Same nine values at the time of the audit, but nothing tied them together,
+    so retuning one lane silently left the other reporting stale cutoffs.
+    """
+    return tuple(float(t) for t in _CFG["evaluation"]["report_thresholds"])
+
+
+def retrieval_ks() -> tuple[int, ...]:
+    """SSOT for the persisted Precision@K / Recall@K cutoffs.
+
+    config/training.yaml evaluation.retrieval_ks.  Returned as an immutable
+    tuple because callers used to bake the same three integers into local
+    literals; keeping it a tuple makes accidental list-identity comparison a
+    no-op instead of a silent False.
+    """
+    return tuple(int(k) for k in _CFG["evaluation"]["retrieval_ks"])
+
+
+def ann_retrieval_ks() -> tuple[int, ...]:
+    """SSOT for the ANN / graph-track recall ladder.
+
+    config/training.yaml evaluation.ann_recall_ks.  Wider than
+    ``retrieval_ks()`` because the HNSW catalog makes k=50 a meaningful
+    candidate cutoff. Graph and text lane schemas resolve omitted ladders
+    here. Setup and packaging persist the resolved values for reproducibility;
+    an explicit lane retrieval_ks remains an intentional override.
+    """
+    return tuple(int(k) for k in _CFG["evaluation"]["ann_recall_ks"])
+
+
+def operating_precision() -> float:
+    """SSOT for the declared "recall at an agreed precision" target.
+
+    config/training.yaml evaluation.operating_precision.  MODEL_TRACKS_PLAN.md
+    asks for recall at an *agreed* precision, which only means something if the
+    agreement is a declared, tunable value rather than a literal buried in a
+    metric function.  Reported next to every ``recall_at_precision`` figure so
+    the CSV self-documents what it was measured at.
+    """
+    return float(_CFG["evaluation"]["operating_precision"])
+
+
+def operating_recall() -> float:
+    """SSOT target for precision at an agreed recall across model tracks."""
+    return float(_CFG['evaluation']['operating_recall'])
+
+
+def precision_at_recall_key() -> str:
+    """Keep numeric metric headers honest when the recall target is retuned."""
+    return f"p_at_r{operating_recall() * 100:g}"
+
+
+def generalization_slice_cfg() -> dict:
+    """Slice thresholds for the unseen/sparse/isolated/missing-field report."""
+    return copy.deepcopy(_CFG["evaluation"]["generalization_slices"])
+
+
+def paired_bootstrap_cfg() -> dict:
+    """Paired-bootstrap interval contract (resamples, seed, confidence)."""
+    return copy.deepcopy(_CFG["evaluation"]["paired_bootstrap"])
+
+
+def performance_cfg() -> dict:
+    """Operational-cost instrumentation switch."""
+    return copy.deepcopy(_CFG["evaluation"]["performance"])
+
+
 def band(name: str) -> tuple[float, float]:
     """SSOT accessor for cosine bands (config/training.yaml bands:).
 

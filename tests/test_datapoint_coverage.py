@@ -27,6 +27,7 @@ the coverage computation is pure):
 
 from __future__ import annotations
 
+import ast
 import re
 import unittest
 from pathlib import Path
@@ -91,6 +92,101 @@ def _scan(pattern: re.Pattern[str]) -> set[str]:
     return found
 
 
+def _broadcast_fill_tags() -> set[str]:
+    """Tags broadcast into an object array, following the value back to a literal.
+
+    The four regexes above all require the tag literal to sit next to the
+    call that emits it (``np.full(n, "tag", dtype=object)`` and friends). That
+    misses the idiom train.py:795-806 uses for the two negative-supply lanes::
+
+        for enabled, candidates, source in (
+            (attribute_conflict_enabled, targeted_attribute_neg, "targeted_attribute_conflict"),
+            (cross_brand_enabled, cross_brand_neg, "cross_brand_conflict"),
+        ):
+            ...
+            np.full(len(candidates), source, dtype=object)
+
+    There the literal is a tuple element and the emitter receives a loop
+    variable, so neither regex could see it -- the scan returned an empty set
+    for ``targeted_attribute_conflict`` and ``cross_brand_conflict`` even
+    though both were registered and both reach training. The consequence was
+    silent: ``generate_training_report._datapoint_coverage_section`` treats a
+    registered-but-unscanned tag as never-present and writes phantom
+    zero-presentation rows plus a "never reported at all" warning.
+
+    So this resolves the dataflow instead of guessing at syntax: find object
+    arrays filled from a name, and if that name is a loop variable unpacked
+    from a tuple of tuples, take the string literal sitting in the same
+    position. Only values that actually reach an object-array fill are
+    returned, so unrelated string literals in a producer cannot leak in.
+    """
+    found: set[str] = set()
+    for relative in PRODUCER_FILES:
+        tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))
+        # Names bound as loop variables from a tuple-of-tuples literal, mapped
+        # to the literal at each variable's position.
+        loop_bindings: dict[str, list[str]] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.For):
+                continue
+            targets = (
+                node.target.elts
+                if isinstance(node.target, ast.Tuple)
+                else [node.target]
+            )
+            iterator = node.iter
+            rows = None
+            if isinstance(iterator, ast.Tuple):
+                rows = [el for el in iterator.elts]
+            elif isinstance(iterator, ast.List):
+                rows = [el for el in iterator.elts]
+            if not rows or not all(isinstance(row, ast.Tuple) for row in rows):
+                continue
+            for position, target in enumerate(targets):
+                if not isinstance(target, ast.Name) or position >= len(rows[0].elts):
+                    continue
+                literals = [
+                    row.elts[position]
+                    for row in rows
+                    if position < len(row.elts)
+                    and isinstance(row.elts[position], ast.Constant)
+                    and isinstance(row.elts[position].value, str)
+                ]
+                if literals:
+                    loop_bindings.setdefault(target.id, []).extend(
+                        literal.value for literal in literals
+                    )
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr != "full":
+                continue
+            object_array = any(
+                keyword.arg == "dtype"
+                and isinstance(keyword.value, ast.Name)
+                and keyword.value.id == "object"
+                for keyword in node.keywords
+            )
+            if not object_array or len(node.args) < 2:
+                continue
+            fill = node.args[1]
+            if isinstance(fill, ast.Constant) and isinstance(fill.value, str):
+                found.add(fill.value)
+            elif isinstance(fill, ast.Name) and fill.id in loop_bindings:
+                found.update(loop_bindings[fill.id])
+    return found
+
+
+def _all_producer_tags() -> set[str]:
+    return (
+        _scan(SOURCE_ARRAY_TAG)
+        | _scan(APPENDED_POPULATION_TAG)
+        | _scan(AUDIT_SOURCE_TAG)
+        | _scan(NEG_SOURCE_APPEND_TAG)
+        | _broadcast_fill_tags()
+    )
+
+
 class _CapturingVisibilityLog(unittest.TestCase):
     """Base: capture visibility artifacts instead of writing results/."""
 
@@ -142,12 +238,7 @@ class ProducerTagInventoryTests(_CapturingVisibilityLog):
     """Layer 1 — the registry is derived from the producers."""
 
     def test_every_producer_tag_is_registered(self) -> None:
-        scanned = (
-            _scan(SOURCE_ARRAY_TAG)
-            | _scan(APPENDED_POPULATION_TAG)
-            | _scan(AUDIT_SOURCE_TAG)
-            | _scan(NEG_SOURCE_APPEND_TAG)
-        )
+        scanned = _all_producer_tags()
         registry = set(training.KNOWN_DATAPOINT_POPULATIONS)
         fallbacks = set(training.DATAPOINT_FALLBACK_TAGS)
         self.assertTrue(scanned, "producer scan found no tags at all")
@@ -165,7 +256,7 @@ class ProducerTagInventoryTests(_CapturingVisibilityLog):
 
     def test_targeted_attribute_conflict_is_registered(self) -> None:
         """The exact tag this audit exists to fix."""
-        self.assertIn("targeted_attribute_conflict", _scan(SOURCE_ARRAY_TAG))
+        self.assertIn("targeted_attribute_conflict", _all_producer_tags())
         self.assertIn(
             "targeted_attribute_conflict", training.KNOWN_DATAPOINT_POPULATIONS
         )

@@ -258,6 +258,12 @@ colab:
   worker_timeout_seconds: 14400
   result_download_timeout_seconds: 3600
   result_download_heartbeat_seconds: 15
+  incremental_sync_seconds: 30
+  remote_upload_retries: 3
+  remote_upload_backoff_seconds: 5
+  remote_upload_max_backoff_seconds: 30
+  checkpoint_manifest_name: "checkpoint_manifest.json"
+  latest_best_marker: "latest_best.json"
   result_archive_name: "result_bundle.tar.gz"
   result_manifest_name: "result_bundle_manifest.json"
   result_download_excluded_dirs:
@@ -441,6 +447,48 @@ evaluation:
   # reachable for byte-stability audits.
   slice_agreement: "set_bag"
   retrieval_ks: [1, 5, 10]  # persisted Precision@K / Recall@K cutoffs
+  # ANN/graph-track recall ladder.  Wider than retrieval_ks because the HNSW
+  # catalog is large enough that 50 is a meaningful candidate cutoff; this was
+  # previously a bare pydantic default_factory literal in graph_tracks/config.py
+  # that both graph_tracks_*.yaml had to restate by hand.
+  ann_recall_ks: [1, 5, 10, 50]
+  # "Recall at an agreed precision" (MODEL_TRACKS_PLAN.md evaluation table).
+  # The plan requires the agreement to be a declared value rather than a
+  # floating target; this is it. Reported as recall_at_precision in every
+  # track pair-metric row, alongside the agreed value it was computed at.
+  operating_precision: 0.95
+  # Precision-at-recall target shared by graph/text summaries and bootstrap.
+  operating_recall: 0.95
+  # Generalization slices the plan requires next to the attribute slices:
+  # unseen, sparse-neighborhood, isolated, missing-field.  The attribute class
+  # universe itself is NOT redeclared here - it stays the single registry in
+  # training.attribute_separation.ATTRIBUTE_SOURCES.
+  generalization_slices:
+    # An endpoint is "sparse" when at most this many other catalog listings
+    # share at least one normalized critical attribute value with it.
+    sparse_neighborhood_max_peers: 2
+    # Attribute values observed in this split define "seen".  dev is the
+    # training half, so dev-observed values are what a deployed model has
+    # actually seen.
+    observed_split: dev
+  # Paired bootstrap confidence intervals over the scored pair population.
+  # These are resampling intervals, NOT repeated-training-seed intervals: the
+  # model-track lanes train one checkpoint per split, so reporting seed
+  # replication here would be a fabricated claim.
+  paired_bootstrap:
+    enabled: true
+    resamples: 1000
+    seed: 20251004
+    confidence: 0.95
+  # Operational cost instrumentation (latency / memory / refresh).
+  performance:
+    enabled: true
+  # Fixed operating points every report/sweep lane must share.  This was
+  # duplicated as a module constant in both sample_balanced_pairs.py
+  # (SWEEP_THRESHOLDS) and generate_training_report.py (REPORT_THRESHOLDS);
+  # two independent literals that could only ever drift apart.  Both now
+  # read this list through core.common.report_thresholds().
+  report_thresholds: [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
   robust_validation:
     enabled: true
     n_folds: 5             # repeated held-out folds over SKU/GTIN components

@@ -69,7 +69,8 @@ def forward(output,setup,*,device,return_model=False):
     metadata = {key:request[key] for key in ('catalog_sha256','listings_sha256','pairs_sha256','text_sha256','composition','composition_implementation_sha256','export_implementation_sha256','token_implementation_sha256')}
     metadata.update(checkpoint_sha256=checkpoint_sha256,request_sha256=request_sha256,
         tokenization=request['plan']['tokenization'],export_location=contract.export_location,
-        truncated_inputs=0,embedding_dtype=contract.embedding_dtype)
+        truncated_inputs=0,embedding_dtype=contract.embedding_dtype,
+        performance=model._er_forward_performance)
     path = output/'text__vectors.npz'
     contract.write(path, request['ids'], vectors, metadata, lambda candidate: validate(candidate, checkpoint, setup))
     model._er_checkpoint_sha256 = metadata['checkpoint_sha256']

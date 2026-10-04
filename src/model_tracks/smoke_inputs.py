@@ -17,6 +17,10 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     parent = load_config(suite_config or TRAIN_ROOT/'config/model_tracks.yaml')
     if (TRAIN_ROOT/parent.setup_dir).resolve() != setup:
         raise ValueError('smoke parent suite differs from requested prepared setup')
+    from graph_tracks.config import load_config as load_graph_config, load_text_config
+    graph_settings = {track: load_graph_config(setup/f'{track}.yaml', expected_track=track).model_dump()
+                      for track in ('gnn_only', 'hybrid')}
+    text_settings = load_text_config(setup/'text.yaml').model_dump()
     from core.common import SEED, training_cfg
     from graph_tracks.data import file_hash
     from graph_tracks.prepare import prepare
@@ -165,17 +169,12 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     prepare_text_export(output, checkpoint, batch_size=runtime('batch_size_embed'))
     prepare_baseline(output, checkpoint)
     for track in ('gnn_only','hybrid'):
-        settings=yaml.safe_load((setup/f'{track}.yaml').read_text())
+        settings = graph_settings[track]
         for key in ('listings','pairs','input_manifest','text_cache'):
             if settings.get(key):
                 settings[key]=str(output/Path(settings[key]).relative_to(setup))
         settings.update(device='cpu',epochs=1,report_test=False)
         (output/f'{track}.yaml').write_text(yaml.safe_dump(settings,sort_keys=False))
-    from core.common import TRAIN_ROOT
-    text_source = setup/'text.yaml'
-    if not text_source.is_file():
-        text_source = TRAIN_ROOT/'config/text_track.yaml'
-    text_settings = yaml.safe_load(text_source.read_text())
     text_settings.update(report_test=False)
     (output/'text.yaml').write_text(yaml.safe_dump(text_settings,sort_keys=False))
     cfg = parent.model_dump()

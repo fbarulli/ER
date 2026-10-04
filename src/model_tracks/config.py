@@ -1,13 +1,13 @@
 from pathlib import Path
 from typing import Literal
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 class SuiteConfig(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    setup_dir: str
-    text_bundle: str
+    model_config = ConfigDict(extra='forbid', validate_default=True, allow_inf_nan=False)
+    setup_dir: str = Field(min_length=1)
+    text_bundle: str = Field(min_length=1)
     text_model: str = 'minilm_l6'
     epochs: int = Field(default=10, ge=1)
     device: Literal['cpu', 'cuda'] = 'cuda'
@@ -39,4 +39,8 @@ class SuiteConfig(BaseModel):
 
 
 def load_config(path: Path) -> SuiteConfig:
-    return SuiteConfig.model_validate(yaml.safe_load(path.read_text()))
+    try:
+        return SuiteConfig.model_validate(yaml.safe_load(path.read_text()))
+    except (ValidationError, yaml.YAMLError) as exc:
+        exc.add_note(f"Model-track suite configuration: {path}")
+        raise

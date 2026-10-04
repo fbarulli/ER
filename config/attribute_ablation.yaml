@@ -11,7 +11,7 @@ retrieval_catalog: full
 hnsw_m: 16
 hnsw_ef_construction: 200
 hnsw_ef_search: 100
-retrieval_ks: [1, 5, 10]
+# retrieval_ks inherits evaluation.retrieval_ks; declare only an intentional override.
 # Relation names follow graph_schema(); unsupported attributes are explicit no-ops.
 graph_fields:
   volume: [numeric.volume_ml]

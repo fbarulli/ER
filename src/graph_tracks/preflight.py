@@ -81,8 +81,18 @@ def preflight(config: Path, *, check_device: bool = True) -> dict:
     text_dimension = None if vectors is None else int(vectors.shape[1])
     if check_device and cfg.device == 'cuda' and not torch.cuda.is_available():
         raise RuntimeError('CUDA requested but unavailable')
+    return {'track': cfg.track, 'listings': len(records), 'device': cfg.device,
+            'text_dimension': text_dimension, 'report_test': cfg.report_test,
+            'pairs': {s: {'positive': int(y.sum()), 'negative': int((y == 0).sum())}
+                      for s, (_, y) in pairs.items()},
+            'runtime': runtime_versions(cfg)}
+
+
+def runtime_versions(cfg) -> dict:
+    """Assert dependencies for this lane's actual export/report switches."""
     packages = ['torch', 'numpy', 'pandas', 'pydantic', 'scikit-learn', 'PyYAML']
-    if cfg.build_index:
+    # Reporting builds temporary catalogs even when persistence is disabled.
+    if cfg.build_index or cfg.postprocess:
         packages.append('hnswlib')
     if cfg.postprocess:
         packages.append('matplotlib')
@@ -90,11 +100,7 @@ def preflight(config: Path, *, check_device: bool = True) -> dict:
         packages.append('wandb')
     if cfg.dvc.enabled:
         packages.append('dvc')
-    return {'track': cfg.track, 'listings': len(records), 'device': cfg.device,
-            'text_dimension': text_dimension, 'report_test': cfg.report_test,
-            'pairs': {s: {'positive': int(y.sum()), 'negative': int((y == 0).sum())}
-                      for s, (_, y) in pairs.items()},
-            'runtime': {package: importlib.metadata.version(package) for package in packages}}
+    return {package: importlib.metadata.version(package) for package in packages}
 
 
 def main():

@@ -1160,11 +1160,11 @@ def mine_attribute_conflict_negatives(
     emb: np.ndarray,
     *,
     existing: np.ndarray | None = None,
-    n_target: int = 0,
-    cosine_lo: float = 0.45,
-    cosine_hi: float = 0.95,
-    volume_relative_tolerance: float = 0.0,
-    volume_absolute_tolerance_ml: float = 0.0,
+    n_target: int | None = None,
+    cosine_lo: float | None = None,
+    cosine_hi: float | None = None,
+    volume_relative_tolerance: float | None = None,
+    volume_absolute_tolerance_ml: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mine additional same-brand/category pairs that disagree on attributes.
 
@@ -1180,7 +1180,25 @@ def mine_attribute_conflict_negatives(
     if n_target <= 0 or len(df) == 0:
         return np.empty((0, 2), dtype=int), np.empty((0,), dtype=float)
 
-    from core.common import F
+    from core.common import F, config_section, training_cfg
+    from core.schemas import BandSpec
+    cfg = training_cfg().mining.attribute_conflict
+    configured_lo, configured_hi = (float(x) for x in cfg.band.split('-'))
+    selected = BandSpec.model_validate({
+        'lo': configured_lo if cosine_lo is None else cosine_lo,
+        'hi': configured_hi if cosine_hi is None else cosine_hi,
+    })
+    cosine_lo, cosine_hi = selected.lo, selected.hi
+    n_target = cfg.target if n_target is None else n_target
+    if n_target < 0:
+        raise ValueError('attribute-conflict target must be non-negative')
+    # The refresh path omits these arguments; it must use the same verdict
+    # as initial preparation rather than quietly requiring exact volumes.
+    gate = config_section('gate')
+    if volume_relative_tolerance is None:
+        volume_relative_tolerance = float(gate['vol_tolerance'])
+    if volume_absolute_tolerance_ml is None:
+        volume_absolute_tolerance_ml = float(gate['vol_abs_tolerance'])
 
     canon_path = F["canonical_records"]
     canon = pd.read_csv(canon_path, dtype=str, keep_default_na=False)

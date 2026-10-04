@@ -5,6 +5,33 @@ import json
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
+
+
+def stage_smoke_parent(setup: Path, monkeypatch):
+    """Stage each lane and the explicit parent suite used by projection."""
+    from model_tracks.config import SuiteConfig
+    import model_tracks.text_export
+    import model_tracks.baseline_export
+    for track in ('gnn_only', 'hybrid'):
+        lane = dict(track=track, listings=str(setup/'prepared/listings.json'),
+                    pairs=str(setup/'prepared/pairs.csv'),
+                    input_manifest=str(setup/'prepared/input_manifest.json'),
+                    output_dir=str(setup/'runs'), device='cpu')
+        if track == 'hybrid':
+            lane['text_cache'] = str(setup/'shared_minilm__embeddings.npz')
+        (setup/f'{track}.yaml').write_text(yaml.safe_dump(lane))
+    (setup/'text.yaml').write_text(yaml.safe_dump(dict(track='text', output_dir=str(setup/'runs'))))
+    suite = SuiteConfig(setup_dir=str(setup), text_bundle=str(setup/'text_prepared.pkl.gz'),
+                        device='cpu', epochs=1, publish_git=False, post_training_ablation=False)
+    parent = setup/'parent_suite.yaml'
+    parent.write_text(yaml.safe_dump(suite.model_dump()))
+    prepared = []
+    monkeypatch.setattr(model_tracks.text_export, 'prepare',
+                        lambda *args, **kwargs: prepared.append('text'))
+    monkeypatch.setattr(model_tracks.baseline_export, 'prepare',
+                        lambda *args, **kwargs: prepared.append('baseline'))
+    return parent, prepared
 
 
 @pytest.mark.parametrize('report_test', [False, True])
@@ -59,8 +86,7 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
         {'text_checkpoint': str(checkpoint), 'text_checkpoint_sha256': 'baseline'}))
     if parent_cache == 'present':
         (setup / 'shared_minilm__embeddings.npz').write_bytes(b'mocked cache')
-    for track in ('gnn_only', 'hybrid'):
-        (setup / f'{track}.yaml').write_text(json.dumps({'listings': str(setup / 'prepared/listings.csv')}))
+    parent_config, preparations = stage_smoke_parent(setup, monkeypatch)
     empty_pairs = np.empty((0, 2), dtype=int)
     emb = np.arange(12, dtype=float).reshape(6, 2) if has_embeddings else np.empty((0, 2))
     bundle = dict(df=catalog, payload=['a', 'b', 'c', 'A', 'B', 'C'],
@@ -96,20 +122,16 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
     output_arg = Path('smoke') if relative_paths else output
     if parent_cache == 'checkpoint_changed':
         with pytest.raises(ValueError, match='smoke baseline differs from the parent checkpoint'):
-            prepare_smoke(setup_arg, output_arg, sample=2)
+            prepare_smoke(setup_arg, output_arg, sample=2, suite_config=parent_config)
         assert cache_calls == []
         return
-    prepare_smoke(setup_arg, output_arg, sample=2)
+    prepare_smoke(setup_arg, output_arg, sample=2, suite_config=parent_config)
     import yaml
     for track in ('gnn_only', 'hybrid'):
         settings = yaml.safe_load((output / f'{track}.yaml').read_text())
-        assert settings['listings'] == str(output / 'prepared/listings.csv')
-    if parent_cache == 'absent':
-        assert cache_calls == [((output / 'eligible_catalog.csv', checkpoint,
-                                 output / 'shared_minilm__embeddings.npz'), {'device': 'cpu', 'input_metadata': request['metadata']})]
-        assert pd.read_csv(cache_calls[0][0][0]).sku_id.tolist() == ['a', 'b']
-    else:
-        assert cache_calls == []
+        assert settings['listings'] == str(output / 'prepared/listings.json')
+    assert preparations == ['text', 'baseline']
+    assert cache_calls == [], 'smoke prepares native requests; baseline forward belongs to the worker'
     assert captured['payload'] == ['a', 'b', 'A', 'B', 'C']
     np.testing.assert_array_equal(captured['emb0'], emb[[0, 1, 3, 4, 5]] if has_embeddings else emb)
     assert captured['mask_audit'] == []
@@ -222,8 +244,7 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_hash', lambda _: 'baseline')
     (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint': str(tmp_path/'checkpoint'), 'text_checkpoint_sha256': 'baseline'}))
     (setup / 'shared_minilm__embeddings.npz').write_bytes(b'mocked cache')
-    for track in ('gnn_only', 'hybrid'):
-        (setup / f'{track}.yaml').write_text('{}')
+    parent_config, preparations = stage_smoke_parent(setup, monkeypatch)
     positive = {'anchor_payload_idx': 8, 'pair_payload_idx': 4, 'copy_payload_idx': 9}
     negative = {'anchor_payload_idx': 0, 'pair_payload_idx': 5, 'copy_payload_idx': 8}
     unrelated = {'anchor_payload_idx': 2, 'pair_payload_idx': 7, 'copy_payload_idx': 10}
@@ -254,7 +275,7 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     (setup / 'prepared/input_manifest.json').write_text('{}')
     monkeypatch.setattr(graph_tracks.data, 'load_text_cache', lambda *_: (np.zeros((2, 2)), {}))
     monkeypatch.setattr(graph_tracks.data, 'file_hash', lambda _: 'hash')
-    prepare_smoke(setup, tmp_path / 'smoke', sample=2)
+    prepare_smoke(setup, tmp_path / 'smoke', sample=2, suite_config=parent_config)
     assert captured['df'].sku_id.tolist() == ['a', 'b']
     assert captured['payload'] == ['a', 'b', 'A', 'B', 'C', 'D', 'negative copy', 'positive counterpart']
     assert captured['mask_audit'] == [{'anchor_payload_idx': 6, 'pair_payload_idx': 2, 'copy_payload_idx': 7}]

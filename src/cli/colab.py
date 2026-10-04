@@ -134,18 +134,19 @@ _SMOKE_EPOCHS = _COLAB.smoke_epochs
 _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
 _RESULT_DOWNLOAD_TIMEOUT_SECONDS = _COLAB.result_download_timeout_seconds
 _RESULT_DOWNLOAD_HEARTBEAT_SECONDS = _COLAB.result_download_heartbeat_seconds
-_REMOTE_UPLOAD_RETRIES = 3
+_REMOTE_UPLOAD_RETRIES = _COLAB.remote_upload_retries
 _RESULT_ARCHIVE_NAME = _COLAB.result_archive_name
 _RESULT_MANIFEST_NAME = _COLAB.result_manifest_name
 _RESULT_DOWNLOAD_EXCLUDED_DIRS = frozenset(_COLAB.result_download_excluded_dirs)
+_RESULT_EVENTS_FILE = _COLAB.result_events_file
 # Poll interval for the incremental result sync that runs during training.
 # Small enough that a finished checkpoint is on the laptop well before the run
 # ends, large enough that the remote listing does not compete with the trainer
 # for the control channel.
-_INCREMENTAL_SYNC_SECONDS = 30
+_INCREMENTAL_SYNC_SECONDS = _COLAB.incremental_sync_seconds
 # The trainer writes this file last inside a checkpoint directory, so its
 # presence is what distinguishes a finished checkpoint from one mid-write.
-_CHECKPOINT_MANIFEST_NAME = "checkpoint_manifest.json"
+_CHECKPOINT_MANIFEST_NAME = _COLAB.checkpoint_manifest_name
 # Checkpoints live at
 # ``worker_N/_checkpoints/<model>/<run>_f0/checkpoint-<step>/<file>``, so a
 # checkpoint file is four levels below the ``_checkpoints`` root; that is the
@@ -158,7 +159,7 @@ _CHECKPOINT_LISTING_DEPTH = 4
 _CHECKPOINT_ROOT_NAME = "_checkpoints"
 # Bookkeeping written beside a locally retained checkpoint, recording which
 # remote checkpoint it is and the score that won it the slot.
-_LATEST_BEST_MARKER = "latest_best.json"
+_LATEST_BEST_MARKER = _COLAB.latest_best_marker
 _WORKER_MONITOR_SECONDS = _COLAB.worker_monitor_seconds
 _FINAL_INFERENCE = _COLAB.final_inference
 
@@ -401,7 +402,7 @@ def _result_event(
     event = {"stage": stage, "state": state, **details}
     if worker is not None:
         event["worker"] = int(worker)
-    event_path = root / training_cfg().colab.result_events_file
+    event_path = root / _RESULT_EVENTS_FILE
     with _result_event_lock:
         with event_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, sort_keys=True) + "\n")
@@ -560,9 +561,10 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
     except subprocess.CalledProcessError as e:
         print(f"\n[error] colab command failed: {' '.join(display_cmd)}", file=sys.stderr)
         if e.stdout:
-            print(f"stdout:\n{e.stdout[-1000:]}", file=sys.stderr)
+            print(f"stdout:\n{e.stdout}", file=sys.stderr)
         if e.stderr:
-            print(f"stderr:\n{e.stderr[-1000:]}", file=sys.stderr)
+            print(f"stderr:\n{e.stderr}", file=sys.stderr)
+        traceback.print_exc()
         raise
 
 
@@ -575,7 +577,8 @@ def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             if attempt == _REMOTE_UPLOAD_RETRIES:
                 raise
-            delay = min(30, 5 * attempt)
+            delay = min(_COLAB.remote_upload_max_backoff_seconds,
+                        _COLAB.remote_upload_backoff_seconds * attempt)
             print(
                 f"[upload] retry {attempt}/{_REMOTE_UPLOAD_RETRIES - 1} for {source.name} "
                 f"after transient failure; waiting {delay}s",
@@ -1346,7 +1349,7 @@ for number in range(1, {workers} + 1):
                             "optimizer.pt",
                             "scheduler.pt",
                             "rng_state.pth",
-                            "checkpoint_manifest.json",
+                            {_CHECKPOINT_MANIFEST_NAME!r},
                             "trainer_state.json",
                         )
                         missing = [

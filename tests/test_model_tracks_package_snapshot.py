@@ -16,7 +16,12 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     setup = tmp_path / 'prepared'
     setup.mkdir()
     for track in ('gnn_only', 'hybrid'):
-        (setup / f'{track}.yaml').write_text(yaml.safe_dump({'listings': 'prepared/listings.csv'}))
+        (setup / f'{track}.yaml').write_text(yaml.safe_dump({
+            'track': track, 'listings': 'prepared/listings.csv',
+            'pairs': 'prepared/pairs.csv', 'output_dir': 'results/graph_tracks',
+            **({'text_cache': 'prepared/shared_minilm__embeddings.npz'} if track == 'hybrid' else {})}))
+    (setup / 'pairs.csv').write_text('sku_id1,sku_id2,label,split\n')
+    (setup / 'text.yaml').write_text(yaml.safe_dump({'track': 'text', 'output_dir': 'results/model_tracks'}))
     (setup / 'listings.csv').write_text('sku_id\na\n')
     (setup/'shared_minilm__embeddings.npz').write_bytes(b'preflight validates this mocked cache')
     bundle = setup / 'text_prepared.pkl.gz'
@@ -76,6 +81,9 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
             assert name in metadata['files']
         assert archive.read('src/pipeline.py') == b'# current pipeline\n'
         assert archive.read('scripts/diet_manifest.py') == b'# current diet gate\n'
+        text = yaml.safe_load(archive.read('data/model_tracks/shared/text.yaml'))
+        assert text['report_test'] is False
+        assert text['retrieval_ks'] == list(core.common.ann_retrieval_ks())
         for track in ('gnn_only', 'hybrid'):
             config = yaml.safe_load(archive.read(f'data/model_tracks/shared/{track}.yaml'))
             assert config['device'] == 'cpu'

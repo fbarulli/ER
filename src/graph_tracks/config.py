@@ -4,7 +4,50 @@ from urllib.parse import urlsplit
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, model_validator
+
+
+def _default_ann_recall_ks() -> tuple[int, ...]:
+    """Resolve the ANN ladder from SSOT; missing dependencies/config fail."""
+    from core.common import ann_retrieval_ks
+    return ann_retrieval_ks()
+
+
+class RetrievalConfig(BaseModel):
+    """Shared validated ANN/index contract; explicit lane overrides are allowed."""
+    model_config = ConfigDict(extra="forbid", validate_default=True)
+    retrieval_ks: list[StrictInt] = Field(
+        default_factory=lambda: list(_default_ann_recall_ks()), min_length=1
+    )
+    hnsw_m: int = Field(default=16, ge=2)
+    hnsw_ef_construction: int = Field(default=200, ge=2)
+    hnsw_ef_search: int = Field(default=100, ge=1)
+    report_test: bool = True
+    build_index: bool = True
+
+    @model_validator(mode="after")
+    def check_retrieval(self):
+        if any(k < 1 for k in self.retrieval_ks) or len(set(self.retrieval_ks)) != len(self.retrieval_ks):
+            raise ValueError("retrieval_ks must contain unique positive integers")
+        return self
+
+
+class RetrievalReportContext(RetrievalConfig):
+    """Validated retrieval settings plus the provenance of scored vectors."""
+    checkpoint: Path
+    listings_sha256: str = Field(min_length=1)
+
+    @classmethod
+    def from_config(cls, cfg: RetrievalConfig, checkpoint: Path, listings_sha256: str):
+        return cls.model_validate({
+            **{key: getattr(cfg, key) for key in RetrievalConfig.model_fields},
+            'checkpoint': checkpoint, 'listings_sha256': listings_sha256,
+        })
+
+
+class TextConfig(RetrievalConfig):
+    track: Literal["text"]
+    output_dir: str = Field(min_length=1)
 
 
 class WandbSpec(BaseModel):
@@ -30,8 +73,8 @@ class DvcSpec(BaseModel):
         return self
 
 
-class GraphConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class GraphConfig(RetrievalConfig):
+    model_config = ConfigDict(extra="forbid", validate_default=True)
     track: Literal["gnn_only", "hybrid"]
     listings: str
     pairs: str
@@ -44,13 +87,7 @@ class GraphConfig(BaseModel):
     dvc: DvcSpec = Field(default_factory=DvcSpec)
     include_inputs: bool = True
     postprocess: bool = True
-    report_test: bool = True
-    build_index: bool = True
     inference_batch_size: int = Field(default=1024, ge=1)
-    retrieval_ks: list[int] = Field(default_factory=lambda: [1, 5, 10, 50], min_length=1)
-    hnsw_m: int = Field(default=16, ge=2)
-    hnsw_ef_construction: int = Field(default=200, ge=2)
-    hnsw_ef_search: int = Field(default=100, ge=1)
     hidden_dim: int = Field(default=64, ge=4)
     output_dim: int = Field(default=128, ge=4)
     epochs: int = Field(default=10, ge=1)
@@ -75,12 +112,27 @@ class GraphConfig(BaseModel):
             raise ValueError("hybrid requires text_cache; gnn_only forbids it")
         if self.track == 'gnn_only' and self.text_checkpoint_sha256:
             raise ValueError('gnn_only forbids a text checkpoint reference')
-        if any(k < 1 for k in self.retrieval_ks) or len(set(self.retrieval_ks)) != len(self.retrieval_ks):
-            raise ValueError("retrieval_ks must contain unique positive integers")
         if not all((self.listings, self.pairs, self.output_dir)):
             raise ValueError("input and output paths must not be empty")
         return self
 
 
-def load_config(path: Path) -> GraphConfig:
-    return GraphConfig.model_validate(yaml.safe_load(path.read_text()))
+def load_config(path: Path, *, expected_track: str | None = None) -> GraphConfig:
+    try:
+        cfg = GraphConfig.model_validate(yaml.safe_load(path.read_text()))
+    except (ValidationError, yaml.YAMLError) as exc:
+        exc.add_note(f"Graph lane configuration: {path}")
+        raise
+    if expected_track is not None and cfg.track != expected_track:
+        raise ValueError(f"{path}: expected {expected_track} lane, got {cfg.track}")
+    return cfg
+
+
+def load_text_config(path: Path) -> TextConfig:
+    if not path.is_file():
+        raise FileNotFoundError(f"text lane config {path} is missing; regenerate the track setup")
+    try:
+        return TextConfig.model_validate(yaml.safe_load(path.read_text()))
+    except (ValidationError, yaml.YAMLError) as exc:
+        exc.add_note(f"Text lane configuration: {path}")
+        raise

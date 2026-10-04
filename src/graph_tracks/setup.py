@@ -103,6 +103,11 @@ def setup(output: Path, checkpoint: Path) -> Path:
     from core.identity_policy import POLICY_PATH
     from training.base_data import load_base_data
     from training.folds import derive_holdout
+    from graph_tracks.config import GraphConfig, load_config as load_graph_config, load_text_config
+    templates = {track: load_graph_config(TRAIN_ROOT / f'config/graph_tracks_{template}.yaml',
+                                          expected_track=track).model_dump()
+                 for track, template in [('gnn_only', 'gnn'), ('hybrid', 'hybrid')]}
+    text_template = load_text_config(TRAIN_ROOT / 'config/text_track.yaml').model_dump()
     output = output.resolve()
     if output.exists():
         raise FileExistsError(output)
@@ -151,13 +156,20 @@ def setup(output: Path, checkpoint: Path) -> Path:
         **accounting,
     })
     for track, template in [('gnn_only', 'gnn'), ('hybrid', 'hybrid')]:
-        cfg = yaml.safe_load((TRAIN_ROOT / f'config/graph_tracks_{template}.yaml').read_text())
+        cfg = templates[track].copy()
         cfg.update(listings=str(listings), pairs=str(listings.parent / 'pairs.csv'),
                    input_manifest=str(listings.parent / 'input_manifest.json'), report_test=False)
         if track == 'hybrid':
             cfg['text_cache'] = str(output / 'shared_minilm__embeddings.npz')
             cfg['text_checkpoint_sha256'] = baseline_hash
+        cfg = GraphConfig.model_validate(cfg).model_dump()
         (output / f'{track}.yaml').write_text(yaml.safe_dump(cfg, sort_keys=False))
+    # The text lane gets its own declared retrieval/index contract. It used to
+    # borrow gnn_only.yaml's HNSW settings and recall ladder, so a graph-track
+    # retune silently changed the text track's reported recall@k.
+    text_cfg = text_template.copy()
+    text_cfg.update(report_test=False)
+    (output / 'text.yaml').write_text(yaml.safe_dump(text_cfg, sort_keys=False))
     return output
 
 

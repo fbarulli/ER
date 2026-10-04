@@ -59,6 +59,7 @@ from core.common import (
     ensure_parent,
     kfold_gtins,
     load_config,
+    config_section,
     load_local_sentence_transformer,
     metadata_text,
     pair_auc,
@@ -87,7 +88,7 @@ from core.worker_telemetry import write_worker_live_status
 # cadence happens in the config, once, for every script.
 # NO FALLBACKS (owner Q27): split.cv_folds is hard-indexed — a missing key
 # crashes at import, never a silent 5.
-CV_FOLDS = int(load_config()["split"]["cv_folds"])
+CV_FOLDS = int(config_section("split", "cv_folds"))
 DEV_FRACTION = runtime("dev_fraction")
 BATCH_SIZE_CPU = runtime("batch_size_cpu")
 BATCH_SIZE_CUDA = runtime("batch_size_cuda")
@@ -95,12 +96,12 @@ MAX_TRIPLES = runtime("max_triples")
 EVAL_STEPS_PER_EPOCH = runtime("eval_steps_per_epoch")
 ES_PATIENCE = runtime("es_patience")
 ES_THRESHOLD = runtime("es_threshold")
-_ANN_MINING_CFG = load_config()["mining"]["ann"]
+_ANN_MINING_CFG = config_section("mining", "ann")
 N_TARGET_MINING = int(_ANN_MINING_CFG["target"])
 ANN_MINING_ENABLED = bool(_ANN_MINING_CFG["enabled"])
-MASK_TRACK_PER_EPOCH = bool(load_config()["masking"]["track_per_epoch"])
-TRACK_DATAPOINT_USAGE = bool(load_config()["training"]["track_datapoint_usage"])
-_UNIFORMITY_CFG = load_config()["training"]["uniformity_regularization"]
+MASK_TRACK_PER_EPOCH = bool(config_section("masking", "track_per_epoch"))
+TRACK_DATAPOINT_USAGE = bool(config_section("training", "track_datapoint_usage"))
+_UNIFORMITY_CFG = config_section("training", "uniformity_regularization")
 # ── DATAPOINT POPULATION REGISTRY (SSOT for the coverage audit) ────────────
 # DERIVED FROM THE PRODUCERS, not hand-kept beside them (audit A4-2). Every
 # tag a producer can write into a pair-population list or a negative-source
@@ -264,16 +265,17 @@ class UnregisteredDatapointPopulationError(RuntimeError):
 # declaration the config could not steer (audit 2026-09-09, owner Q27).
 from core.common import hpo_cfg as _hpo_cfg_load
 
-HPO_SPACE = {k: (lo, hi) for k, (lo, hi) in _hpo_cfg_load()["tpe_space"].items()}
+_HPO_SETTINGS = _hpo_cfg_load()
+HPO_SPACE = {k: (lo, hi) for k, (lo, hi) in _HPO_SETTINGS["tpe_space"].items()}
 
 # HPO objective protocol, SSOT: hpo.objective /
 # hpo.selection_skip_test_eval (validated by HpoSpec/ObjectiveSpec at load).
 # Both modes now rank trials on the calibrated direct-assignment Rand proxy;
 # holdout selection still skips the test quarter entirely.
-_HPO_OBJ_TABLE = _hpo_cfg_load()["objective"]
+_HPO_OBJ_TABLE = _HPO_SETTINGS["objective"]
 HPO_OBJECTIVE_HOLDOUT = _HPO_OBJ_TABLE["holdout"]
 HPO_OBJECTIVE_CV = _HPO_OBJ_TABLE["cv"]
-HPO_SKIP_TEST_EVAL = bool(_hpo_cfg_load()["selection_skip_test_eval"])
+HPO_SKIP_TEST_EVAL = bool(_HPO_SETTINGS["selection_skip_test_eval"])
 
 
 class RequiredCalibrationError(RuntimeError):
@@ -514,7 +516,7 @@ def _write_checkpoint_manifest(
             "rng": "rng_state.pth",
         },
     }
-    (checkpoint / "checkpoint_manifest.json").write_text(
+    (checkpoint / training_cfg().colab.checkpoint_manifest_name).write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
@@ -1492,7 +1494,7 @@ class DvcCheckpointCallback(TrainerCallback):
             "optimizer.pt",
             "scheduler.pt",
             "rng_state.pth",
-            "checkpoint_manifest.json",
+            training_cfg().colab.checkpoint_manifest_name,
             "trainer_state.json",
         )
         missing = [name for name in required if not (checkpoint / name).is_file()]
@@ -1612,7 +1614,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
             raise RuntimeError(
                 "FineTunedAnnRefreshCallback was created without the live model"
             )
-        ann_cfg = load_config()["mining"]["ann"]
+        ann_cfg = config_section("mining", "ann")
         attr_cfg = load_config()["mining"]["attribute_conflict"]
         if not bool(ann_cfg["refresh_enabled"]) and not bool(attr_cfg["enabled"]):
             return control
@@ -1862,10 +1864,8 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         )
         timings = []
         if refresh_timings.is_file():
-            try:
-                timings = json.loads(refresh_timings.read_text())
-            except json.JSONDecodeError:
-                timings = []
+            from core.performance import load_refresh_timings
+            timings = load_refresh_timings(refresh_timings)
         timings.append(
             {
                 "step": int(state.global_step),
@@ -3371,28 +3371,24 @@ def prepare_fixed_training_inputs(
         # --quick trains on the first n_folds of the SAME split (folds stay comparable)
         folds = all_folds[:n_folds]
 
-    # mine ONCE outside the fold loop (band is fixed per config); the EVAL
-    # mining band comes from the config SSOT (bands.eval_mining) — was a
-    # hardcoded (0.35, 0.90) inline, a second declaration the config could
-    # not steer. NO FALLBACK (owner Q27): band() raises when the key is
-    # missing — the old "if present else (0.35, 0.90)" branch silently
-    # resurrected the inline literal.
-    # NOTE: the `band` PARAMETER (tuple) shadows lib.common.band() in this
-    # function scope — alias the import.
-    # Profile-selected masking-only runs pass an empty embedding matrix.
-    # Guard on the actual input as well as the import-time default so a
-    # worker profile cannot invoke even an empty ANN audit.
+    # The training band is selected by config/CLI/HPO; the evaluation band
+    # has its own fixed config contract. Share the implementation and reuse
+    # results only when those contracts agree, so retuning training still works.
     if ANN_MINING_ENABLED and emb0.size:
         from core.common import band as _band_helper
+        from core.schemas import BandSpec
+        train_band = BandSpec.model_validate(band)
+        eval_band = BandSpec.model_validate(_band_helper("eval_mining"))
 
-        _eval_band = _band_helper("eval_mining")
-        hard_train_all, _ = mine_hard_negatives(
-            df, emb0, n_target=N_TARGET_MINING, cosine_lo=band[0], cosine_hi=band[1]
-        )
-        hard_eval, _ = mine_hard_negatives(
-            df, emb0, n_target=N_TARGET_MINING,
-            cosine_lo=_eval_band[0], cosine_hi=_eval_band[1],
-        )
+        def mine(selected: BandSpec):
+            pairs, _ = mine_hard_negatives(
+                df, emb0, seed=seed, n_target=N_TARGET_MINING,
+                cosine_lo=selected.lo, cosine_hi=selected.hi,
+            )
+            return pairs
+
+        hard_train_all = mine(train_band)
+        hard_eval = hard_train_all if train_band == eval_band else mine(eval_band)
     else:
         hard_train_all = np.empty((0, 2), dtype=int)
         hard_eval = np.empty((0, 2), dtype=int)
@@ -4504,7 +4500,7 @@ def train_one_config(
                 (ann_refresh_enabled or attribute_conflict_refresh_enabled)
                 and loss == "contrastive"
             ):
-                ann_cfg = load_config()["mining"]["ann"]
+                ann_cfg = config_section("mining", "ann")
                 callbacks.append(
                     FineTunedAnnRefreshCallback(
                         df=df,
@@ -4556,7 +4552,7 @@ def train_one_config(
                         "optimizer.pt",
                         "scheduler.pt",
                         "rng_state.pth",
-                        "checkpoint_manifest.json",
+                        training_cfg().colab.checkpoint_manifest_name,
                         "trainer_state.json",
                     )
                     missing = [name for name in required if not (latest / name).is_file()]
@@ -4567,7 +4563,7 @@ def train_one_config(
                             "to create resumable checkpoints."
                         )
                     from core.model_input import model_input_composition
-                    checkpoint_manifest = json.loads((latest / "checkpoint_manifest.json").read_text())
+                    checkpoint_manifest = json.loads((latest / training_cfg().colab.checkpoint_manifest_name).read_text())
                     if checkpoint_manifest.get("model_input") != model_input_composition().model_dump():
                         raise ValueError("resume checkpoint model input composition mismatch")
                     # Trainer state contains absolute paths from the original

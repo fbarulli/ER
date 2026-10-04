@@ -46,9 +46,16 @@ def test_text_postprocess_reports_artifact_paths_and_calibration(tmp_path, monke
     settings = yaml.safe_load((setup / 'gnn_only.yaml').read_text())
     settings.update(hnsw_ef_construction=20, hnsw_m=4, hnsw_ef_search=10, retrieval_ks=[1])
     (setup / 'gnn_only.yaml').write_text(yaml.safe_dump(settings))
+    # The text lane reads its own staged config, so it must be staged here too.
+    text_settings = {key: settings[key] for key in ('hnsw_ef_construction', 'hnsw_m', 'hnsw_ef_search', 'retrieval_ks')}
+    text_settings.update(track='text', output_dir=str(tmp_path/'out'))
+    (setup / 'text.yaml').write_text(yaml.safe_dump(text_settings))
     output = tmp_path / 'out'
     output.mkdir()
     checkpoint = tmp_path / 'checkpoint-1'
+    # The completion manifest records the checkpoint digest, so the file the
+    # mocked resolver returns has to actually exist on disk.
+    checkpoint.write_bytes(b'selected-checkpoint')
     vectors = np.random.default_rng(0).normal(size=(9, 6)).astype('float32')
     vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
     monkeypatch.setattr(training.validation_inference, 'resolve_best_checkpoint',
@@ -57,7 +64,7 @@ def test_text_postprocess_reports_artifact_paths_and_calibration(tmp_path, monke
     monkeypatch.setattr(model_tracks.text_export, 'validate', export_validation)
     monkeypatch.setattr(training.hnsw_index, 'PersistentHnswIndex', lambda *a, **k: Mock())
     monkeypatch.setattr(graph_tracks.report, '_plots', lambda *a: None)
-    monkeypatch.setattr(graph_tracks.report, 'retrieval_report', lambda *a: {})
+    monkeypatch.setattr(graph_tracks.report, 'retrieval_report', lambda *a, **k: {})
     monkeypatch.setattr(graph_tracks.report_attributes, 'write_reports', lambda *a: None)
     complete(output, setup, device='cpu', report_test=False)
     export_validation.assert_called_once_with(output / 'text__vectors.npz', checkpoint, setup)

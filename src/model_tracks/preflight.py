@@ -26,6 +26,10 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     labels_hash = hashlib.sha256(Path(F['labeled_pairs']).read_bytes()).hexdigest()
     if not is_smoke and setup.get('labeled_pairs_sha256') != labels_hash:
         raise ValueError('graph setup is stale: labeled pairs; rebuild locally before launch')
+    from graph_tracks.config import load_text_config, load_config as load_graph_config
+    for track in ('gnn_only', 'hybrid'):
+        load_graph_config(root / f'{track}.yaml', expected_track=track)
+    load_text_config(root / 'text.yaml')
     model = Path(resolve_model(cfg.text_model))
     if checkpoint_hash(model) != setup['text_checkpoint_sha256']:
         raise ValueError('text baseline differs from frozen hybrid checkpoint')
@@ -43,8 +47,14 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
             raise ValueError('GPU-pending hybrid requires manifested frozen text inputs')
         if hybrid.text_checkpoint_sha256 != pending['checkpoint_sha256']:
             raise ValueError('GPU-pending hybrid checkpoint differs from prepared baseline')
-        checks['hybrid'] = {**checks['gnn_only'],'track':'hybrid','text_dimension':None,
-                            'text_prerequisite':pending}
+        from graph_tracks.preflight import runtime_versions
+        checks['hybrid'] = {
+            'track': 'hybrid', 'listings': checks['gnn_only']['listings'],
+            'pairs': checks['gnn_only']['pairs'], 'device': hybrid.device,
+            'report_test': hybrid.report_test, 'runtime': runtime_versions(hybrid),
+            'text_dimension': None, 'text_prerequisite': pending,
+            'input_population_source': 'shared manifested gnn_only population',
+        }
     else:
         checks['hybrid'] = graph_preflight(root/'hybrid.yaml',check_device=False)
     manifest, bundle = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
