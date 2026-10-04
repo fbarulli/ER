@@ -98,11 +98,14 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
              'PREPARED_BUNDLE_DRIFT_STRICT': '1'},
         capture_output=True, text=True, timeout=120,
     )
-    if diet.returncode:
+    diet_warning = is_smoke and diet.returncode == 3
+    if diet_warning:
+        print('[preflight] WARNING: sampled smoke diet misses training thresholds:\n' + diet.stdout, flush=True)
+    if diet.returncode and not diet_warning:
         raise ValueError('text bundle diet preflight failed:\n' + diet.stdout + diet.stderr)
     return {'text': {'bundle_sha256': manifest.sha256, 'payload': manifest.payload_variant,
                      'masking_profile': manifest.masking_profile, 'rows': manifest.n_df,
-                     'diet': {'status': 'pass', 'log': diet.stdout}},
+                     'diet': {'status': 'warning' if diet_warning else 'pass', 'log': diet.stdout}},
             **checks, 'hybrid_text_mode': 'frozen shared baseline; independent of current text fine-tuning',
             'source_catalog_sha256': source_hash, 'labeled_pairs_sha256': labels_hash,
             'parallel_workers': 3, 'colab_sessions': 1, 'colab_control_channels': 1}

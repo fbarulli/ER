@@ -315,7 +315,7 @@ def main(argv: list[str]) -> int:
     if failures:
         for failure in failures:
             print(f"DIET FAIL: {failure}", flush=True)
-        return 2
+        return 3  # Valid inputs, but the presentation diet misses its thresholds.
     print("DIET PASS", flush=True)
     return 0
 
