@@ -2,20 +2,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Literal
+from typing import Iterable
 
 import torch
+
+from core.execution_policy import OptimizerBackend, ResolvedOptimizerBackend
 from pydantic import BaseModel, ConfigDict
 
 
 class OptimizerExecution(BaseModel):
     model_config = ConfigDict(frozen=True, extra='forbid')
-    backend: Literal['auto', 'foreach', 'fused']
+    backend: OptimizerBackend
+
+    def resolved_backend(self, device: str | torch.device) -> ResolvedOptimizerBackend:
+        if self.backend == 'cuda_fused':
+            return 'fused' if torch.device(device).type == 'cuda' else 'auto'
+        return self.backend
 
     def kwargs(self, device: str | torch.device) -> dict[str, bool]:
-        if self.backend == 'fused' and torch.device(device).type != 'cuda':
+        backend = self.resolved_backend(device)
+        if backend == 'fused' and torch.device(device).type != 'cuda':
             raise ValueError('fused AdamW requires a configured CUDA device')
-        return {} if self.backend == 'auto' else {self.backend: True}
+        return {} if backend == 'auto' else {backend: True}
 
     def validate_restored(self, optimizer: torch.optim.Optimizer) -> None:
         expected = self.kwargs(optimizer.param_groups[0]['params'][0].device)

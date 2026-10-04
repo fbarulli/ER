@@ -50,7 +50,7 @@ def pool(values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor):
 class SegmentTopology:
     """Stable grouping of immutable edges, prepared once outside autograd."""
     order: torch.Tensor
-    lengths: torch.Tensor
+    offsets: torch.Tensor
     version: int | None
     count: int
 
@@ -63,7 +63,8 @@ class SegmentTopology:
             raise ValueError('segment target outside pooling population')
         lengths = torch.bincount(indices, minlength=count)
         order = torch.argsort(indices, stable=True)
-        return cls(order.to(target.device), lengths.to(target.device),
+        offsets = torch.cat([lengths.new_zeros(1), lengths.cumsum(0)])
+        return cls(order.to(target.device), offsets.to(target.device),
                    None if torch.is_inference(target) else target._version, count)
 
 
@@ -76,8 +77,8 @@ def segment_pool(values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor
             target._er_segment_topology = cached
     elif cached is None:
         raise RuntimeError('segment topology must be prepared before graph capture')
-    # Preparation validates integer bounds and constructs exact lengths from
-    # every edge. Skipping repeated length validation avoids CUDA scalar reads.
-    total = torch.segment_reduce(values[cached.order], 'sum', lengths=cached.lengths,
+    # Preparation validates integer bounds and constructs exact offsets from
+    # every edge. Skipping repeated offset validation avoids CUDA scalar reads.
+    total = torch.segment_reduce(values[cached.order], 'sum', offsets=cached.offsets,
                                  axis=0, unsafe=True, initial=0)
     return total / sizes

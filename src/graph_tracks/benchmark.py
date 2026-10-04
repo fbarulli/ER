@@ -50,6 +50,7 @@ def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
     scorer = PairScorer(text is not None).cuda()
     parameters = list(model.parameters()) + list(scorer.parameters())
     from core.gpu_execution import OptimizerExecution
+    from core.execution_policy import resolve_aggregation
     optimizer_policy = OptimizerExecution(backend=(cfg.optimizer_backend if fused_optimizer is None
                                                    else 'fused' if fused_optimizer else 'auto'))
     optimizer = torch.optim.AdamW(parameters, lr=cfg.learning_rate,
@@ -109,8 +110,10 @@ def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
     return {'schema': 'er-graph-gpu-benchmark-v1', 'track': cfg.track,
             'gpu': torch.cuda.get_device_name(), 'torch': str(torch.__version__),
             'cuda': torch.version.cuda, 'compile_inductor': compile_model,
-            'bf16': bf16, 'fused_adamw': optimizer_policy.backend == 'fused',
-            'optimizer_backend': optimizer_policy.backend, 'aggregation_backend': cfg.aggregation_backend,
+            'bf16': bf16, 'fused_adamw': optimizer_policy.resolved_backend('cuda') == 'fused',
+            'optimizer_backend': optimizer_policy.resolved_backend('cuda'),
+            'requested_optimizer_backend': optimizer_policy.backend,
+            'aggregation_backend': resolve_aggregation(cfg.aggregation_backend, 'cuda'),
             'warmup_steps': warmup, 'warmup_seconds': warmup_seconds,
             'measured_steps': steps, 'step_seconds': timings,
             'median_step_seconds': float(torch.tensor(timings).median()),

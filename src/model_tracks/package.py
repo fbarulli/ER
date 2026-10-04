@@ -84,6 +84,7 @@ def package(config: Path, output: Path) -> Path:
                 source = (TRAIN_ROOT / settings[key]).resolve()
                 settings[key] = str(target / source.relative_to(setup))
         settings.update(device=cfg.device, report_test=cfg.report_test)
+        settings.update(cfg.graph_execution_overrides())
         inline[str(target/f'{track}.yaml')] = yaml.safe_dump(settings,sort_keys=False)
     bundle = (TRAIN_ROOT / cfg.text_bundle).resolve()
     files[str(target/'text_prepared.pkl.gz')] = bundle
@@ -134,6 +135,7 @@ def verify_current(path: Path, config: Path):
                 if settings.get(key):
                     settings[key] = str(target/(TRAIN_ROOT/settings[key]).resolve().relative_to(setup))
             settings.update(device=cfg.device, report_test=cfg.report_test)
+            settings.update(cfg.graph_execution_overrides())
             if yaml.safe_load(archive.read(str(target/(track+'.yaml')))) != settings:
                 raise ValueError('prepared package graph configuration changed: '+track)
     sources = runtime_snapshot_files(ablation_config=TRAIN_ROOT/cfg.ablation_config)

@@ -7,7 +7,7 @@ This is a small full-batch baseline, not a neighbor-sampled GraphSAGE package.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from core.execution_policy import AggregationBackend, resolve_aggregation
 
 import torch
 from torch import nn
@@ -28,8 +28,8 @@ def mean_pool(values: torch.Tensor, indices: torch.Tensor, count: int) -> torch.
 class AttributeGNN(nn.Module):
     def __init__(self, vocabulary: dict[str, list[str]], hidden: int = 64,
                  output: int = 128, text_dim: int = 0, graph_enabled: bool = True,
-                 aggregation_backend: Literal['index_add', 'segment'] = 'index_add'):
-        if aggregation_backend not in {'index_add', 'segment'}:
+                 aggregation_backend: AggregationBackend = 'index_add'):
+        if aggregation_backend not in {'index_add', 'segment', 'cuda_segment'}:
             raise ValueError('unknown graph aggregation backend')
         super().__init__()
         self.aggregation_backend = aggregation_backend
@@ -44,7 +44,8 @@ class AttributeGNN(nn.Module):
         self.norm = nn.LayerNorm(hidden)
 
     def pool(self, values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:
-        operation = segment_pool if self.aggregation_backend == 'segment' else pool
+        operation = (segment_pool if resolve_aggregation(self.aggregation_backend, str(values.device)) == 'segment'
+                     else pool)
         return operation(values, target, sizes)
 
     def initial(self, batch: GraphBatch, text: torch.Tensor | None = None) -> torch.Tensor:

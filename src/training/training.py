@@ -4424,7 +4424,8 @@ def train_one_config(
                 groups, weight_decay=cfg["weight_decay"], lr=base_lr,
                 **optimizer_policy.kwargs('cuda' if on_cuda else 'cpu'),
             )
-            print(f'    [optim] backend={optimizer_policy.backend}', flush=True)
+            optimizer_backend = optimizer_policy.resolved_backend('cuda' if on_cuda else 'cpu')
+            print(f'    [optim] policy={optimizer_policy.backend} backend={optimizer_backend}', flush=True)
 
             mnrl_cfg = training_cfg().training
             loss_fn = _make_loss(

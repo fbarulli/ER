@@ -91,6 +91,8 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from core.execution_policy import OptimizerBackend
+
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -1579,7 +1581,7 @@ class TrainingSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Legacy staged configs retain the original AdamW dispatch when omitted.
-    optimizer_backend: Literal['auto', 'foreach', 'fused'] = 'auto'
+    optimizer_backend: OptimizerBackend = 'auto'
 
     class StructuredFeaturesSpec(BaseModel):
         model_config = ConfigDict(extra="forbid")

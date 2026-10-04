@@ -7,6 +7,9 @@ device: cuda
 schedule: parallel
 max_parallel: 3
 gpu_parallel_backend: mps
+# GPU execution overrides are frozen into each packaged graph configuration.
+gpu_optimizer_backend: cuda_fused
+gpu_graph_aggregation_backend: cuda_segment
 # Populate with measured per-worker peaks before enabling GPU overlap.
 memory_reservations_gb: {}
 gpu_headroom_gb: 2.0

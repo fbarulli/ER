@@ -60,6 +60,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
             # The suite publisher owns persistence; avoid a second mutable
             # local DVC snapshot while background uploads are active.
             settings['dvc'] = {**settings.get('dvc', {}), 'enabled': False}
+        settings.update(cfg.graph_execution_overrides())
         settings = GraphConfig.model_validate(settings).model_dump()
         worker_config = output / 'worker.yaml'
         worker_config.write_text(yaml.safe_dump(settings, sort_keys=False))
@@ -105,6 +106,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                 raise ValueError('ambiguous selected graph checkpoint')
             checkpoint = Path(json.loads(selected[0].read_text())['path'])
             settings['device'] = cfg.device
+            settings.update(cfg.graph_execution_overrides())
             forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
                 output/(track+'__inference'),GraphConfig.model_validate(settings),
                 text_cache=TRAIN_ROOT/settings['text_cache'] if settings.get('text_cache') else None)

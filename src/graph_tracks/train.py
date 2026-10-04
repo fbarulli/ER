@@ -150,6 +150,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                              text_dim, cfg.graph_enabled, cfg.aggregation_backend).to(cfg.device)
         scorer = PairScorer(bool(text_dim)).to(cfg.device)
         from core.gpu_execution import GradientStatistics, OptimizerExecution
+        from core.execution_policy import resolve_aggregation
         optimizer_policy = OptimizerExecution(backend=cfg.optimizer_backend)
         optimizer = torch.optim.AdamW(list(model.parameters()) + list(scorer.parameters()),
                                       lr=cfg.learning_rate, weight_decay=cfg.weight_decay,
@@ -176,8 +177,11 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     "augmentation": {"masking": False, "gendata": False,
                                      "hybrid_text": "frozen baseline checkpoint" if cfg.track == 'hybrid' else None},
                     "selection_metric": "dev_pr_auc", "torch_version": str(torch.__version__),
+                    "optimizer_backend": optimizer_policy.resolved_backend(cfg.device),
+                    "aggregation_backend": resolve_aggregation(cfg.aggregation_backend, cfg.device),
                     "implementation_sha256": {p.name: file_hash(p) for p in sorted(Path(__file__).parent.glob("*.py"))} |
-                        {"core/gpu_execution.py": file_hash(TRAIN_ROOT / "src/core/gpu_execution.py")},
+                        {"core/gpu_execution.py": file_hash(TRAIN_ROOT / "src/core/gpu_execution.py"),
+                         "core/execution_policy.py": file_hash(TRAIN_ROOT / "src/core/execution_policy.py")},
                     "resume_checkpoint_sha256": file_hash(resume) if resume else None}
         best_metric, best_path, start_epoch = -1., None, 0
         logger.info("[graph-resume] mode=%s checkpoint=%s target_epochs=%d",

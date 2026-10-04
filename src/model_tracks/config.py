@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Literal
 import yaml
+from core.execution_policy import AggregationBackend, OptimizerBackend
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
@@ -14,6 +15,9 @@ class SuiteConfig(BaseModel):
     schedule: Literal['parallel'] = 'parallel'
     max_parallel: Literal[3] = 3
     gpu_parallel_backend: Literal['mps'] = 'mps'
+    # Missing fields in old suite manifests preserve their original execution.
+    gpu_optimizer_backend: OptimizerBackend = 'auto'
+    gpu_graph_aggregation_backend: AggregationBackend = 'index_add'
     memory_reservations_gb: dict[str, float] = Field(default_factory=dict)
     gpu_headroom_gb: float = Field(default=2.0, ge=0)
     report_test: bool = False
@@ -30,6 +34,12 @@ class SuiteConfig(BaseModel):
         if path.is_absolute() or '..' in path.parts or not path.parts:
             raise ValueError('ablation_config must be a project-relative file path')
         return path.as_posix()
+
+    def graph_execution_overrides(self) -> dict[str, str]:
+        if self.device != 'cuda':
+            return {}
+        return {'optimizer_backend': self.gpu_optimizer_backend,
+                'aggregation_backend': self.gpu_graph_aggregation_backend}
 
     @property
     def dvc_enabled(self) -> bool:

@@ -8,6 +8,9 @@ output_dim: 128
 epochs: 10
 learning_rate: 0.001
 weight_decay: 0.0001
+# Select GPU kernels without changing the standalone CPU execution path.
+optimizer_backend: cuda_fused
+aggregation_backend: cuda_segment
 early_stopping_patience: 3
 early_stopping_threshold: 0.001
 lr_scheduler: plateau
