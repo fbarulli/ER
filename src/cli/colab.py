@@ -905,9 +905,24 @@ payload = {{
 }}
 print(json.dumps(payload), flush=True)
 """
-            payload = _parse_remote_json(
-                run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS)
-            )
+            try:
+                payload = _parse_remote_json(
+                    run_colab_exec_capture(SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS)
+                )
+            except RuntimeError as exc:
+                # A detached trainer outlives a transient log-probe failure.
+                # Preserve its work instead of triggering recovery/teardown,
+                # but never retain an unreachable runtime past the stage budget.
+                detail = str(exc).lower()
+                fatal = ("connection was lost" in detail or
+                         f"session '{SESSION}' not found".lower() in detail)
+                if stage != 'all_tracks' or fatal or time.perf_counter() - poll_started >= timeout:
+                    raise
+                message = f"[{stage}] log/status unavailable; detached training continues: {exc}"
+                _write_training_log(message + "\n")
+                print(message, flush=True)
+                time.sleep(_LOG_POLL_SECONDS)
+                continue
             offset = int(payload["offset"])
             if payload["chunk"]:
                 for line in str(payload["chunk"]).splitlines():
