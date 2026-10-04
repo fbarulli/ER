@@ -6,12 +6,15 @@ This is a small full-batch baseline, not a neighbor-sampled GraphSAGE package.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Literal
+
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from graph_tracks.data import GraphBatch, NUMERIC, RELATIONS
-from graph_tracks.pooling import pool, topology
+from graph_tracks.pooling import pool, segment_pool, topology
 
 
 def mean_pool(values: torch.Tensor, indices: torch.Tensor, count: int) -> torch.Tensor:
@@ -24,8 +27,12 @@ def mean_pool(values: torch.Tensor, indices: torch.Tensor, count: int) -> torch.
 
 class AttributeGNN(nn.Module):
     def __init__(self, vocabulary: dict[str, list[str]], hidden: int = 64,
-                 output: int = 128, text_dim: int = 0, graph_enabled: bool = True):
+                 output: int = 128, text_dim: int = 0, graph_enabled: bool = True,
+                 aggregation_backend: Literal['index_add', 'segment'] = 'index_add'):
+        if aggregation_backend not in {'index_add', 'segment'}:
+            raise ValueError('unknown graph aggregation backend')
         super().__init__()
+        self.aggregation_backend = aggregation_backend
         self.graph_enabled = graph_enabled
         self.text_dim = text_dim
         self.tokens = nn.ModuleDict({r: nn.Embedding(len(vocabulary[r]) + 1, hidden)
@@ -36,13 +43,17 @@ class AttributeGNN(nn.Module):
         self.output = nn.Linear(hidden * 2, output)
         self.norm = nn.LayerNorm(hidden)
 
+    def pool(self, values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:
+        operation = segment_pool if self.aggregation_backend == 'segment' else pool
+        return operation(values, target, sizes)
+
     def initial(self, batch: GraphBatch, text: torch.Tensor | None = None) -> torch.Tensor:
         if bool(self.text_dim) != (text is not None):
             raise ValueError("text input is required only for the hybrid model")
         features = [batch.numeric]
         for relation in RELATIONS:
             value, listing, sizes = topology(batch, relation, dtype=self.tokens[relation].weight.dtype)
-            features.append(pool(self.tokens[relation](value), listing, sizes))
+            features.append(self.pool(self.tokens[relation](value), listing, sizes))
         if text is not None:
             if text.shape != (len(batch.numeric), self.text_dim):
                 raise ValueError("text vector shape mismatch")
@@ -58,7 +69,7 @@ class AttributeGNN(nn.Module):
             listing, value, sizes = topology(
                 support, relation, attribute=True,
                 count=self.tokens[relation].num_embeddings, dtype=h.dtype)
-            states[relation] = F.relu(self.to_attribute[relation](pool(
+            states[relation] = F.relu(self.to_attribute[relation](self.pool(
                 h[listing], value, sizes)))
             # An unknown attribute is not a shared relation.
             states[relation] = states[relation] * (torch.arange(
@@ -74,7 +85,7 @@ class AttributeGNN(nn.Module):
             transformed = self.to_listing[relation](states[relation][value])
             # Autocast may change the linear output dtype. Keep the original
             # pooling arithmetic in that dtype as well.
-            messages.append(pool(transformed, listing, sizes.to(transformed.dtype)))
+            messages.append(self.pool(transformed, listing, sizes.to(transformed.dtype)))
         message = torch.stack(messages).mean(0) if self.graph_enabled else torch.zeros_like(h)
         return F.normalize(self.output(torch.cat([h, message], dim=-1)), dim=-1)
 
@@ -87,9 +98,29 @@ class PairScorer(nn.Module):
 
     def forward(self, embeddings: torch.Tensor, pairs: torch.Tensor,
                 text: torch.Tensor | None = None) -> torch.Tensor:
+        return self.score(embeddings, pairs, text).logits
+
+    @staticmethod
+    def text_cosine(text: torch.Tensor, pairs: torch.Tensor) -> torch.Tensor:
+        text = F.normalize(text, dim=-1)
         left, right = pairs.unbind(1)
-        features = [(embeddings[left] * embeddings[right]).sum(-1)]
-        if text is not None:
-            text = F.normalize(text, dim=-1)
-            features.append((text[left] * text[right]).sum(-1))
-        return self.head(torch.stack(features, dim=1)).squeeze(1)
+        return (text[left] * text[right]).sum(-1)
+
+    def score(self, embeddings: torch.Tensor, pairs: torch.Tensor,
+              text: torch.Tensor | None = None, *, text_cosine: torch.Tensor | None = None) -> PairScores:
+        left, right = pairs.unbind(1)
+        cosine = (embeddings[left] * embeddings[right]).sum(-1)
+        features = [cosine]
+        if text_cosine is None and text is not None:
+            text_cosine = self.text_cosine(text, pairs)
+        if text_cosine is not None:
+            if text_cosine.shape != cosine.shape or text_cosine.device != cosine.device:
+                raise ValueError('prepared text pair cosine differs from graph pairs')
+            features.append(text_cosine)
+        return PairScores(self.head(torch.stack(features, dim=1)).squeeze(1), cosine)
+
+
+@dataclass(frozen=True)
+class PairScores:
+    logits: torch.Tensor
+    cosine: torch.Tensor

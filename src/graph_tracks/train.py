@@ -147,10 +147,13 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         # Only support/dev text is needed on device during optimization.
         text_dim = 0 if vectors is None else vectors.shape[1]
         model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,
-                             text_dim, cfg.graph_enabled).to(cfg.device)
+                             text_dim, cfg.graph_enabled, cfg.aggregation_backend).to(cfg.device)
         scorer = PairScorer(bool(text_dim)).to(cfg.device)
+        from core.gpu_execution import GradientStatistics, OptimizerExecution
+        optimizer_policy = OptimizerExecution(backend=cfg.optimizer_backend)
         optimizer = torch.optim.AdamW(list(model.parameters()) + list(scorer.parameters()),
-                                      lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
+                                      lr=cfg.learning_rate, weight_decay=cfg.weight_decay,
+                                      **optimizer_policy.kwargs(cfg.device))
         scheduler = (torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="max", factor=cfg.lr_factor, patience=cfg.lr_patience,
             threshold=cfg.early_stopping_threshold, threshold_mode="abs", min_lr=cfg.min_lr)
@@ -173,7 +176,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     "augmentation": {"masking": False, "gendata": False,
                                      "hybrid_text": "frozen baseline checkpoint" if cfg.track == 'hybrid' else None},
                     "selection_metric": "dev_pr_auc", "torch_version": str(torch.__version__),
-                    "implementation_sha256": {p.name: file_hash(p) for p in sorted(Path(__file__).parent.glob("*.py"))},
+                    "implementation_sha256": {p.name: file_hash(p) for p in sorted(Path(__file__).parent.glob("*.py"))} |
+                        {"core/gpu_execution.py": file_hash(TRAIN_ROOT / "src/core/gpu_execution.py")},
                     "resume_checkpoint_sha256": file_hash(resume) if resume else None}
         best_metric, best_path, start_epoch = -1., None, 0
         logger.info("[graph-resume] mode=%s checkpoint=%s target_epochs=%d",
@@ -191,6 +195,10 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 raise ValueError("resume track mismatch")
             restored = torch.load(resume, map_location=cfg.device, weights_only=False)
             prior = restored["manifest"]
+            if prior['config'].get('aggregation_backend', 'index_add') != cfg.aggregation_backend:
+                raise ValueError('resume aggregation backend mismatch')
+            if prior['config'].get('optimizer_backend', 'auto') != cfg.optimizer_backend:
+                raise ValueError('resume optimizer backend mismatch')
             for key in ("track", "listings_sha256", "pairs_sha256", "text_cache_sha256", "input_manifest_sha256", "implementation_sha256"):
                 if prior[key] != manifest[key]:
                     raise ValueError(f"resume mismatch: {key}")
@@ -214,6 +222,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             model.load_state_dict(restored["model"])
             scorer.load_state_dict(restored["scorer"])
             optimizer.load_state_dict(restored["optimizer"])
+            optimizer_policy.validate_restored(optimizer)
             if scheduler is not None:
                 scheduler.load_state_dict(restored["scheduler"])
             stopping_best = restored["stopping_best"]
@@ -276,6 +285,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         support_text_cpu = None if vectors is None else torch.as_tensor(vectors[support_indices])
         support_text = None if support_text_cpu is None else support_text_cpu.to(cfg.device)
         dev_text = None if vectors is None else torch.as_tensor(vectors[dev_indices], device=cfg.device)
+        train_text_cosine = None if support_text is None else scorer.text_cosine(support_text, train_pairs)
+        dev_text_cosine = None if dev_text is None else scorer.text_cosine(dev_text, dev_pairs)
         if prepared_arrays is not None:
             prepared_arrays.close()
         logger.info("[graph-performance] encode_population train=%d dev=%d full=%d reason=independent_queries_against_training_only_context",
@@ -304,10 +315,10 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 initial = profiler.call('graph/train_initial', model.initial, support, support_text)
                 states = profiler.call('graph/train_context', model.context, support, support_text, initial=initial)
                 embeddings = profiler.call('graph/train_encode', model.encode, support, states, support_text, initial=initial)
-                logits = profiler.call('graph/pair_score',scorer,embeddings,train_pairs,support_text)
-                classification = F.binary_cross_entropy_with_logits(logits, train_labels)
-                a, b = train_pairs.unbind(1)
-                cos = (embeddings[a] * embeddings[b]).sum(-1)
+                scores = profiler.call('graph/pair_score', scorer.score, embeddings, train_pairs,
+                                       text_cosine=train_text_cosine)
+                classification = F.binary_cross_entropy_with_logits(scores.logits, train_labels)
+                cos = scores.cosine
                 metric = (train_labels * (1 - cos) + (1 - train_labels)
                           * F.relu(cos - cfg.negative_margin)).mean()
                 loss = classification + cfg.metric_weight * metric
@@ -319,11 +330,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 gradient_parameters.extend((f'scorer.{parameter_name}', parameter)
                                            for parameter_name, parameter in scorer.named_parameters()
                                            if parameter.grad is not None)
+                gradient_statistics = GradientStatistics.collect(gradient_parameters)
                 # Loss telemetry shares the gradient-norm transfer; logging and
                 # persisted metrics reuse these pre-update scalar values.
                 host_values: list[float] = torch.stack([
                     loss.detach(), classification.detach(), metric.detach(),
-                    *[parameter.grad.norm() for _, parameter in gradient_parameters],
+                    *gradient_statistics.norms,
                 ]).detach().cpu().tolist()
                 loss_value, classification_value, metric_value = host_values[:3]
                 norm_values = host_values[3:]
@@ -332,7 +344,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     raise RuntimeError("nonfinite gradients")
                 with (output / name(cfg.track, "gradient_metrics.jsonl")).open("a") as handle:
                     handle.write(json.dumps({"epoch": epoch, "parameter_gradient_norms": gradient_norms}) + "\n")
-                torch.nn.utils.clip_grad_norm_(list(model.parameters()) + list(scorer.parameters()), cfg.max_grad_norm)
+                gradient_statistics.clip(cfg.max_grad_norm)
                 profiler.call('graph/optimizer',optimizer.step)
                 logger.info("[graph-phase] dev_evaluation start epoch=%d/%d dev_pairs=%d",
                             epoch, cfg.epochs, len(dev_pairs))
@@ -340,7 +352,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 scorer.eval()
                 with torch.no_grad(), profiler.section('graph/dev_evaluation'):
                     embeddings = model.encode(dev_batch, model.context(support, support_text), dev_text)
-                    dev_scores = scorer(embeddings, dev_pairs, dev_text).sigmoid().cpu().numpy()
+                    dev_scores = scorer.score(embeddings, dev_pairs, text_cosine=dev_text_cosine).logits.sigmoid().cpu().numpy()
                 metrics = {"epoch": epoch, "train_loss": loss_value,
                            "train_classification_loss": classification_value,
                            "train_metric_loss": metric_value, **quality(pairs["dev"][1], dev_scores),

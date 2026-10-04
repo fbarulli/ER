@@ -51,18 +51,18 @@ class PreparedEmbeddingForward(BaseModel):
             raise ValueError('checkpoint native tokenizer differs from prepared export')
         from core.performance import PerformanceRecorder
         perf = PerformanceRecorder('text')
-        chunks = []
-        with np.load(self.tokens_path, allow_pickle=False) as arrays, torch.no_grad(), perf.section("encode"):
+        from model_tracks.embedding_staging import EmbeddingOutputBuffer
+        with np.load(self.tokens_path, allow_pickle=False) as arrays, torch.no_grad(), perf.section("encode"), EmbeddingOutputBuffer(self.row_count, self.device) as outputs:
             PreparedTokenInputs(plan=self.plan, arrays=arrays, row_count=self.row_count)
             for batch in self.plan['token_batches']:
                 vectors = model(load_token_features(arrays, batch, self.device))['sentence_embedding']
-                chunks.append(torch.nn.functional.normalize(vectors, p=2, dim=1).cpu().numpy().astype(self.embedding_dtype))
+                outputs.append(torch.nn.functional.normalize(vectors, p=2, dim=1))
         if (file_hash(self.request_path) != request_hash
                 or file_hash(self.tokens_path) != self.tokens_sha256
                 or checkpoint_hash(self.checkpoint) != checkpoint_digest):
             raise ValueError('embedding inputs changed during forwarding')
         model._er_forward_performance = perf.summary()
-        return np.concatenate(chunks), model, checkpoint_digest, request_hash
+        return outputs.numpy(), model, checkpoint_digest, request_hash
 
     @staticmethod
     def write(output, ids, vectors, metadata, validate):

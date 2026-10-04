@@ -6,6 +6,25 @@ consume explicit objective settings and do not load runtime configuration.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from torch import Tensor
+
+
+@dataclass(frozen=True)
+class ContrastiveTelemetryBatch:
+    """Detached bounded telemetry; no optimizer-facing graph is retained."""
+    payload: Tensor
+    pair_ids: Tensor | None
+    label_count: int
+    negative_count: int
+    selected_count: int
+    counts: tuple[int, int, int, int]
+    maximum_pending_batches: ClassVar[int] = 16
+
+
 def _smoothed_contrastive_losses(
     positive_pairs,
     negative_pairs,
@@ -58,6 +77,7 @@ def _tracking_contrastive_loss(
             super().__init__(*args, **kwargs)
             self._tracking_totals: dict[str, float] = {}
             self._tracking_batches = 0
+            self._pending_telemetry: list[ContrastiveTelemetryBatch] = []
             self._batch_pair_ids = None
             self._batch_structured_features = None
             self._total_negative_pairs = 0
@@ -92,10 +112,10 @@ def _tracking_contrastive_loss(
             )
 
         def set_batch_pair_ids(self, pair_ids) -> None:
-            self._batch_pair_ids = pair_ids.detach().cpu()
+            self._batch_pair_ids = pair_ids.detach()
 
         def set_batch_structured_features(self, features) -> None:
-            self._batch_structured_features = features.detach().cpu()
+            self._batch_structured_features = features.detach()
 
         def set_total_negative_pairs(self, count: int) -> None:
             self._total_negative_pairs = int(count)
@@ -104,6 +124,7 @@ def _tracking_contrastive_loss(
             self._pair_lineage = pair_lineage
 
         def set_epoch(self, epoch: int) -> None:
+            self.flush_tracking()
             self._current_epoch = int(epoch)
 
         def compute_loss_from_embeddings(self, embeddings, labels):
@@ -176,18 +197,47 @@ def _tracking_contrastive_loss(
             # Evaluator forwards are no-grad; only optimizer-facing forwards
             # belong to the backprop attribution window.
             if torch.is_grad_enabled():
-                if batch_pair_ids is not None:
-                    labels_cpu = labels.detach().cpu()
+                scalars = torch.stack([positive_loss.detach(), negative_loss.detach(),
+                                       uniformity_loss.detach(), anti_collapse_loss.detach()])
+                payload = torch.cat([labels.detach().to(scalars.dtype),
+                                     negative_selection.detach().to(scalars.dtype),
+                                     (negative_hinge > 0).detach().to(scalars.dtype), scalars])
+                self._pending_telemetry.append(ContrastiveTelemetryBatch(
+                    payload, batch_pair_ids, len(labels), len(negs), len(negative_pairs),
+                    (len(positive_pairs), len(negative_pairs), len(poss), len(negs))))
+                if len(self._pending_telemetry) >= ContrastiveTelemetryBatch.maximum_pending_batches:
+                    self.flush_tracking()
+
+            return loss_value
+
+        def flush_tracking(self) -> None:
+            if not self._pending_telemetry:
+                return
+            batches = self._pending_telemetry
+            payloads = torch.cat([batch.payload for batch in batches]).cpu()
+            ids = [batch.pair_ids for batch in batches if batch.pair_ids is not None]
+            pair_ids = torch.cat(ids).cpu() if ids else None
+            payload_offset = id_offset = 0
+            for batch in batches:
+                width = batch.label_count + batch.negative_count + batch.selected_count + 4
+                payload = payloads[payload_offset:payload_offset + width]
+                payload_offset += width
+                labels_cpu = payload[:batch.label_count]
+                negative_selection = payload[batch.label_count:batch.label_count + batch.negative_count].bool()
+                margin_active = payload[batch.label_count + batch.negative_count:-4].bool()
+                if batch.pair_ids is not None:
+                    batch_pair_ids = pair_ids[id_offset:id_offset + batch.label_count]
+                    id_offset += batch.label_count
                     negative_ids = batch_pair_ids[labels_cpu == 0]
                     selected_negative_ids = negative_ids[
-                        negative_selection.detach().cpu()
+                        negative_selection
                     ]
                     margin_active_negative_ids = selected_negative_ids[
-                        (negative_hinge > 0).detach().cpu()
+                        margin_active
                     ]
                     backprop_negative_ids = (
                         selected_negative_ids
-                        if smoothing > 0
+                        if float(label_smoothing) > 0
                         else margin_active_negative_ids
                     )
                     for value in negative_ids.tolist():
@@ -236,28 +286,19 @@ def _tracking_contrastive_loss(
                             self._tracking_totals[metric] = (
                                 self._tracking_totals.get(metric, 0.0) + 1.0
                             )
-                values = {
-                    "hard_positive_count": float(len(positive_pairs)),
-                    "hard_negative_count": float(len(negative_pairs)),
-                    "margin_active_negative_count": float(
-                        (negative_hinge > 0).sum().item()
-                    ),
-                    "all_positive_count": float(len(poss)),
-                    "all_negative_count": float(len(negs)),
-                    "positive_loss": float(positive_loss.detach().item()),
-                    "negative_loss": float(negative_loss.detach().item()),
-                    "uniformity_loss": float(uniformity_loss.detach().item()),
-                    "anti_collapse_loss": float(anti_collapse_loss.detach().item()),
-                }
+                positive, negative, all_positive, all_negative = batch.counts
+                values = dict(zip(('positive_loss', 'negative_loss', 'uniformity_loss',
+                                   'anti_collapse_loss'), payload[-4:].tolist()))
+                values.update(hard_positive_count=float(positive), hard_negative_count=float(negative),
+                              margin_active_negative_count=float(margin_active.sum()),
+                              all_positive_count=float(all_positive), all_negative_count=float(all_negative))
                 for key, value in values.items():
-                    self._tracking_totals[key] = (
-                        self._tracking_totals.get(key, 0.0) + value
-                    )
+                    self._tracking_totals[key] = self._tracking_totals.get(key, 0.0) + value
                 self._tracking_batches += 1
-
-            return loss_value
+            self._pending_telemetry = []
 
         def pop_tracking_stats(self) -> dict[str, float]:
+            self.flush_tracking()
             batches = self._tracking_batches
             totals = self._tracking_totals
             self._tracking_totals = {}
@@ -298,6 +339,7 @@ def _tracking_contrastive_loss(
             return result
 
         def coverage_stats(self) -> dict[str, float]:
+            self.flush_tracking()
             selected = len(self._seen_hard_negative_ids)
             active = len(self._seen_margin_active_negative_ids)
             total = self._total_negative_pairs
@@ -317,6 +359,7 @@ def _tracking_contrastive_loss(
 
         def pair_usage_rows(self) -> list[dict]:
             """Return cumulative per-pair usage and gradient attribution."""
+            self.flush_tracking()
             ids = set(self._negative_present_counts)
             ids.update(self._negative_selected_counts)
             ids.update(self._negative_backprop_counts)
@@ -340,6 +383,7 @@ def _tracking_contrastive_loss(
 
         def pair_usage_rows_by_epoch(self) -> list[dict]:
             """Return per-epoch pair presentation/selection/backprop counts."""
+            self.flush_tracking()
             rows = []
             for epoch in sorted(self._per_epoch_counts):
                 for pair_id in sorted(self._per_epoch_counts[epoch]):

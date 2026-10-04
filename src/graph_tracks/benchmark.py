@@ -21,7 +21,7 @@ from graph_tracks.train import load_pairs
 
 
 def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
-              bf16=False, fused_optimizer=False, profile: Path | None = None) -> dict:
+              bf16=False, fused_optimizer: bool | None = None, profile: Path | None = None) -> dict:
     from core.common import TRAIN_ROOT
     if not torch.cuda.is_available():
         raise RuntimeError('GPU benchmark requires CUDA; no CPU timing substituted')
@@ -46,11 +46,14 @@ def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
         text = torch.tensor(vectors, device='cuda')
     support_text = None if text is None else text[support_indices]
     model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,
-                         0 if text is None else text.shape[1], cfg.graph_enabled).cuda()
+                         0 if text is None else text.shape[1], cfg.graph_enabled, cfg.aggregation_backend).cuda()
     scorer = PairScorer(text is not None).cuda()
     parameters = list(model.parameters()) + list(scorer.parameters())
+    from core.gpu_execution import OptimizerExecution
+    optimizer_policy = OptimizerExecution(backend=(cfg.optimizer_backend if fused_optimizer is None
+                                                   else 'fused' if fused_optimizer else 'auto'))
     optimizer = torch.optim.AdamW(parameters, lr=cfg.learning_rate,
-                                  weight_decay=cfg.weight_decay, fused=fused_optimizer)
+                                  weight_decay=cfg.weight_decay, **optimizer_policy.kwargs('cuda'))
     train_pairs = torch.tensor(pairs[0], device='cuda')
     labels = torch.tensor(pairs[1], device='cuda')
     context, encode, score = model.context, model.encode, scorer.forward
@@ -106,7 +109,8 @@ def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
     return {'schema': 'er-graph-gpu-benchmark-v1', 'track': cfg.track,
             'gpu': torch.cuda.get_device_name(), 'torch': str(torch.__version__),
             'cuda': torch.version.cuda, 'compile_inductor': compile_model,
-            'bf16': bf16, 'fused_adamw': fused_optimizer,
+            'bf16': bf16, 'fused_adamw': optimizer_policy.backend == 'fused',
+            'optimizer_backend': optimizer_policy.backend, 'aggregation_backend': cfg.aggregation_backend,
             'warmup_steps': warmup, 'warmup_seconds': warmup_seconds,
             'measured_steps': steps, 'step_seconds': timings,
             'median_step_seconds': float(torch.tensor(timings).median()),
@@ -125,7 +129,7 @@ def main():
     parser.add_argument('--warmup', type=int, default=5)
     parser.add_argument('--compile', action='store_true', dest='compile_model')
     parser.add_argument('--bf16', action='store_true')
-    parser.add_argument('--fused-optimizer', action='store_true')
+    parser.add_argument('--fused-optimizer', action='store_true', default=None)
     parser.add_argument('--profile', type=Path)
     args = parser.parse_args()
     if args.output.exists():

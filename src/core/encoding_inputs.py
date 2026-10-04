@@ -179,7 +179,10 @@ def load_token_features(
     # Frozen inputs are checked before upload: Boolean mask reductions on CUDA
     # would otherwise force device synchronization for every encoder batch.
     _validate_token_features(features,batch['count'])
-    return {key: value.to(device) if isinstance(value, torch.Tensor) else value
+    target = torch.device(device)
+    return {key: (value.pin_memory().to(target, non_blocking=True)
+                  if target.type == 'cuda' else value.to(target))
+            if isinstance(value, torch.Tensor) else value
             for key, value in features.items()}
 
 
