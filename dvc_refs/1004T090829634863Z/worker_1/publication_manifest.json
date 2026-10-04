@@ -1,0 +1,15 @@
+{
+  "schema_version": "1",
+  "run_id": "1004T090829634863Z",
+  "worker": 1,
+  "remote": "https://dagshub.com/fbarulli/ER.dvc",
+  "verified_download": true,
+  "pointers": [
+    {
+      "pointer": "dvc_refs/1004T090829634863Z/worker_1/1004T090829634863Z.zip.dvc",
+      "outputs": [
+        "results/model_tracks/1004T090829634863Z.publication/1004T090829634863Z.zip"
+      ]
+    }
+  ]
+}
