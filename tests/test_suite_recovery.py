@@ -60,6 +60,16 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     from model_tracks import colab
     from graph_tracks.data import file_hash
     monkeypatch.setattr(core.common, 'RESULTS', tmp_path / 'results')
+    monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
+    # Input publication occurs before worker execution regardless of the
+    # suite's result-publication settings. Exercise the real transport builder
+    # under a temporary root and replace its external Git publisher.
+    from model_tracks import publish
+    publications = []
+    def record_publication(paths, message):
+        assert all(path.resolve().is_relative_to(tmp_path.resolve()) for path in paths)
+        publications.append((paths, message))
+    monkeypatch.setattr(publish, 'push_artifacts', record_publication)
     inputs = tmp_path / 'inputs.zip'
     with zipfile.ZipFile(inputs, 'w') as archive:
         archive.writestr('data/model_tracks/suite.yaml',
@@ -98,16 +108,19 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     # 'my-highram-session' not found") instead of this fake. Patch BOTH the
     # attribute and the sys.modules entry (order-independent).
     import cli
-    monkeypatch.setattr(cli, 'colab', backend)
+    monkeypatch.setattr(cli, 'colab', backend, raising=False)
     monkeypatch.setitem(sys.modules, 'cli.colab', backend)
     with pytest.raises(RuntimeError, match='worker failure'):
         colab.run(inputs, 'smoke')
     recovery = tmp_path / 'results/model_tracks/smoke.recovery.zip'
     assert verify_archive(recovery, 'suite_recovery_manifest.json')['input_package'] == metadata
     assert any('recovery_package' in script for script in scripts)
+    assert len(publications) == 1
+    assert publications[0][0][0].is_file()
     monkeypatch.setattr(colab, 'verify', lambda _: {**metadata, 'revision': 'changed'})
     with pytest.raises(ValueError, match='differs from interrupted'):
         colab.run(inputs, 'smoke', resume=True)
+    assert len(publications) == 1  # mismatched resume fails before publication
     backend.GPU = 'T4'
     with pytest.raises(ValueError, match='device differs'):
         colab.run(inputs, 'smoke', resume=True)

@@ -29,7 +29,7 @@ def test_graph_training_reports_decisions_phases_and_test_skip(tmp_path, monkeyp
 
 def test_text_postprocess_reports_artifact_paths_and_calibration(tmp_path, monkeypatch, capsys):
     import pandas as pd
-    import graph_tracks.text_cache
+    import model_tracks.text_export
     import graph_tracks.data
     import graph_tracks.report
     import graph_tracks.report_attributes
@@ -53,13 +53,16 @@ def test_text_postprocess_reports_artifact_paths_and_calibration(tmp_path, monke
     vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
     monkeypatch.setattr(training.validation_inference, 'resolve_best_checkpoint',
                         lambda _: (checkpoint, {'best_metric': .8, 'global_step': 1}))
-    monkeypatch.setattr(graph_tracks.text_cache, 'create_cache', lambda *a, **k: output / 'text__vectors.npz')
-    monkeypatch.setattr(graph_tracks.data, 'load_text_cache', lambda *a, **k: (vectors, {}))
+    export_validation = Mock(return_value=(vectors, {'validated': True}))
+    monkeypatch.setattr(model_tracks.text_export, 'validate', export_validation)
     monkeypatch.setattr(training.hnsw_index, 'PersistentHnswIndex', lambda *a, **k: Mock())
     monkeypatch.setattr(graph_tracks.report, '_plots', lambda *a: None)
     monkeypatch.setattr(graph_tracks.report, 'retrieval_report', lambda *a: {})
     monkeypatch.setattr(graph_tracks.report_attributes, 'write_reports', lambda *a: None)
     complete(output, setup, device='cpu', report_test=False)
+    export_validation.assert_called_once_with(output / 'text__vectors.npz', checkpoint, setup)
+    manifest = json.loads((output / 'text__completion_manifest.json').read_text())
+    assert manifest['vectors_metadata'] == {'validated': True}
     log = capsys.readouterr().out
     for evidence in ('reason=trainer_recorded_best', 'best_metric=0.8', 'vector_export complete',
                      'index_build complete', 'threshold=', 'source=dev_youden',
