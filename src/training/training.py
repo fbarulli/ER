@@ -542,7 +542,6 @@ def _split_safe_random_negative_pairs(
     returned local row indices back to the training payload indices.
     """
     from core.blocking import build_pairs
-    from core.common import training_cfg
 
     split_rows = np.flatnonzero(
         np.isin(row_bc[: len(df)], np.asarray(sorted(split_gtins), dtype=str))
@@ -4438,7 +4437,6 @@ def train_one_config(
                 groups, weight_decay=cfg["weight_decay"], lr=base_lr
             )
 
-            from core.common import training_cfg
             mnrl_cfg = training_cfg().training
             loss_fn = _make_loss(
                 model,
