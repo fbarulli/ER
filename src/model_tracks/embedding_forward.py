@@ -3,15 +3,26 @@ from pathlib import Path
 from typing import ClassVar, Literal
 import json
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from graph_tracks.data import file_hash
 from graph_tracks.text_cache import checkpoint_hash
 
 
+EmbeddingDevice = Literal['cpu', 'cuda']
+
+
+def validate_embedding_device(device):
+    import torch
+    device = TypeAdapter(EmbeddingDevice).validate_python(device)
+    if device == 'cuda' and not torch.cuda.is_available():
+        raise RuntimeError('configured embedding device requires CUDA')
+    return device
+
+
 class PreparedEmbeddingForward(BaseModel):
     model_config = ConfigDict(frozen=True, extra='forbid')
-    device: Literal['cpu', 'cuda']
+    device: EmbeddingDevice
     checkpoint: Path
     request_path: Path
     tokens_path: Path
@@ -29,8 +40,7 @@ class PreparedEmbeddingForward(BaseModel):
         import torch
         from sentence_transformers import SentenceTransformer
         from core.encoding_inputs import PreparedTokenInputs, tokenization_policy, load_token_features
-        if self.device == 'cuda' and not torch.cuda.is_available():
-            raise RuntimeError('configured embedding device requires CUDA')
+        validate_embedding_device(self.device)
         request_hash = file_hash(self.request_path)
         checkpoint_digest = checkpoint_hash(self.checkpoint)
         if file_hash(self.tokens_path) != self.tokens_sha256:

@@ -307,8 +307,8 @@ def load_prepared(request_path, request):
 def encode(request_path, output, *, device='cuda',saved_text=None,text_model=None,saved_candidates=None):
     """Colab inference only; all interventions and texts arrive prepared."""
     import torch
-    if device != 'cuda' or not torch.cuda.is_available():
-        raise RuntimeError('ablation encoding requires CUDA')
+    from model_tracks.embedding_forward import validate_embedding_device
+    device = validate_embedding_device(device)
     if output.exists():
         raise FileExistsError(output)
     request = json.loads(request_path.read_text())
@@ -408,7 +408,7 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
                 score = encoder.scorer(torch.as_tensor(vec,device=device),torch.as_tensor(indices,device=device),
                     None if text is None else torch.as_tensor(text,device=device)).sigmoid().cpu().numpy()
         results.append((vec,score))
-        print(f'[ablation/gpu] prepared inference job={n}/{len(plan["jobs"])}',flush=True)
+        print(f'[ablation/{device}] prepared inference job={n}/{len(plan["jobs"])}',flush=True)
     vectors = [results[job][0] for job in plan['variant_jobs']]
     scores = [results[job][1] for job in plan['variant_jobs']]
     arrays.close()
