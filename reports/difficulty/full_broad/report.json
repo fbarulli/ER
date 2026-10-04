@@ -1,0 +1,585 @@
+{
+  "schema_version": 1,
+  "bundle": "data/prepared/full/worker_1_baseline.pkl.gz",
+  "bundle_sha256": "119e8356738fd350ebefef2c2df615f759d34debe1cadebeb1f14749e6b22209",
+  "definition": {
+    "version": 1,
+    "min_both_observed": 2,
+    "low_text_overlap": 0.25,
+    "high_text_overlap": 0.4,
+    "positive_missing_share": 0.5,
+    "easy_negative_conflicts": 3
+  },
+  "difficulty_kind": "structural proxy; no model scores or errors used",
+  "attributes": [
+    "volume",
+    "pack",
+    "package_type",
+    "flavor",
+    "carbonation",
+    "sweetener_type",
+    "sweetening",
+    "sweetener",
+    "pulp",
+    "package_material",
+    "juice_content"
+  ],
+  "catalog_rows": 62939,
+  "catalog_attribute_rows": {
+    "volume": 56891,
+    "pack": 17502,
+    "package_type": 46828,
+    "flavor": 49608,
+    "carbonation": 51036,
+    "sweetener_type": 23182,
+    "sweetening": 4810,
+    "sweetener": 20819,
+    "pulp": 1278,
+    "package_material": 46300,
+    "juice_content": 55203
+  },
+  "populations": {
+    "original_positive": {
+      "pairs": 24361,
+      "difficulty": {
+        "easy": 10324,
+        "medium": 8076,
+        "hard": 5838,
+        "unknown": 123
+      },
+      "reasons": {
+        "positive_low_text_overlap": 4331,
+        "positive_asymmetric_evidence": 1049,
+        "positive_high_text_overlap": 10324,
+        "positive_attribute_conflict_review": 458,
+        "positive_moderate_text_overlap": 8076,
+        "insufficient_comparable_evidence": 123
+      },
+      "vendor_relation": {
+        "same_vendor": 0,
+        "cross_vendor": 0,
+        "unknown": 24361
+      },
+      "attributes": {
+        "volume": {
+          "both_observed": 22294,
+          "one_observed": 765,
+          "neither_observed": 1302,
+          "conflict": 0
+        },
+        "pack": {
+          "both_observed": 4252,
+          "one_observed": 1184,
+          "neither_observed": 18925,
+          "conflict": 66
+        },
+        "package_type": {
+          "both_observed": 17898,
+          "one_observed": 2707,
+          "neither_observed": 3756,
+          "conflict": 0
+        },
+        "flavor": {
+          "both_observed": 19440,
+          "one_observed": 654,
+          "neither_observed": 4267,
+          "conflict": 0
+        },
+        "carbonation": {
+          "both_observed": 20337,
+          "one_observed": 999,
+          "neither_observed": 3025,
+          "conflict": 0
+        },
+        "sweetener_type": {
+          "both_observed": 11113,
+          "one_observed": 2232,
+          "neither_observed": 11016,
+          "conflict": 0
+        },
+        "sweetening": {
+          "both_observed": 1953,
+          "one_observed": 1172,
+          "neither_observed": 21236,
+          "conflict": 0
+        },
+        "sweetener": {
+          "both_observed": 9675,
+          "one_observed": 2935,
+          "neither_observed": 11751,
+          "conflict": 394
+        },
+        "pulp": {
+          "both_observed": 588,
+          "one_observed": 168,
+          "neither_observed": 23605,
+          "conflict": 0
+        },
+        "package_material": {
+          "both_observed": 18501,
+          "one_observed": 2335,
+          "neither_observed": 3525,
+          "conflict": 0
+        },
+        "juice_content": {
+          "both_observed": 0,
+          "one_observed": 21050,
+          "neither_observed": 3311,
+          "conflict": 0
+        }
+      }
+    },
+    "original_negative": {
+      "pairs": 8092,
+      "difficulty": {
+        "easy": 5788,
+        "medium": 1721,
+        "hard": 574,
+        "unknown": 9
+      },
+      "reasons": {
+        "negative_low_overlap_or_many_conflicts": 5788,
+        "negative_lookalike_few_conflicts": 574,
+        "negative_moderate_distinction": 1721,
+        "insufficient_comparable_evidence": 9
+      },
+      "vendor_relation": {
+        "same_vendor": 0,
+        "cross_vendor": 0,
+        "unknown": 8092
+      },
+      "attributes": {
+        "volume": {
+          "both_observed": 7984,
+          "one_observed": 71,
+          "neither_observed": 37,
+          "conflict": 1058
+        },
+        "pack": {
+          "both_observed": 623,
+          "one_observed": 1372,
+          "neither_observed": 6097,
+          "conflict": 446
+        },
+        "package_type": {
+          "both_observed": 7267,
+          "one_observed": 662,
+          "neither_observed": 163,
+          "conflict": 396
+        },
+        "flavor": {
+          "both_observed": 6069,
+          "one_observed": 367,
+          "neither_observed": 1656,
+          "conflict": 685
+        },
+        "carbonation": {
+          "both_observed": 7634,
+          "one_observed": 244,
+          "neither_observed": 214,
+          "conflict": 32
+        },
+        "sweetener_type": {
+          "both_observed": 2803,
+          "one_observed": 1105,
+          "neither_observed": 4184,
+          "conflict": 241
+        },
+        "sweetening": {
+          "both_observed": 86,
+          "one_observed": 659,
+          "neither_observed": 7347,
+          "conflict": 8
+        },
+        "sweetener": {
+          "both_observed": 2511,
+          "one_observed": 1984,
+          "neither_observed": 3597,
+          "conflict": 72
+        },
+        "pulp": {
+          "both_observed": 129,
+          "one_observed": 657,
+          "neither_observed": 7306,
+          "conflict": 2
+        },
+        "package_material": {
+          "both_observed": 5676,
+          "one_observed": 1888,
+          "neither_observed": 528,
+          "conflict": 1908
+        },
+        "juice_content": {
+          "both_observed": 0,
+          "one_observed": 7200,
+          "neither_observed": 892,
+          "conflict": 0
+        }
+      }
+    },
+    "augmented_positive": {
+      "pairs": 33251,
+      "difficulty": {
+        "easy": 9412,
+        "medium": 8756,
+        "hard": 13620,
+        "unknown": 1463
+      },
+      "reasons": {
+        "positive_low_text_overlap": 7201,
+        "positive_moderate_text_overlap": 8756,
+        "positive_asymmetric_evidence": 5927,
+        "insufficient_comparable_evidence": 1463,
+        "positive_high_text_overlap": 9412,
+        "positive_attribute_conflict_review": 492
+      },
+      "vendor_relation": {
+        "same_vendor": 0,
+        "cross_vendor": 0,
+        "unknown": 33251
+      },
+      "attributes": {
+        "volume": {
+          "both_observed": 23793,
+          "one_observed": 7687,
+          "neither_observed": 1771,
+          "conflict": 0
+        },
+        "pack": {
+          "both_observed": 4599,
+          "one_observed": 2803,
+          "neither_observed": 25849,
+          "conflict": 67
+        },
+        "package_type": {
+          "both_observed": 19490,
+          "one_observed": 8808,
+          "neither_observed": 4953,
+          "conflict": 0
+        },
+        "flavor": {
+          "both_observed": 22265,
+          "one_observed": 5013,
+          "neither_observed": 5973,
+          "conflict": 0
+        },
+        "carbonation": {
+          "both_observed": 21948,
+          "one_observed": 7272,
+          "neither_observed": 4031,
+          "conflict": 0
+        },
+        "sweetener_type": {
+          "both_observed": 12215,
+          "one_observed": 5673,
+          "neither_observed": 15363,
+          "conflict": 0
+        },
+        "sweetening": {
+          "both_observed": 2146,
+          "one_observed": 1983,
+          "neither_observed": 29122,
+          "conflict": 0
+        },
+        "sweetener": {
+          "both_observed": 10378,
+          "one_observed": 6549,
+          "neither_observed": 16324,
+          "conflict": 433
+        },
+        "pulp": {
+          "both_observed": 631,
+          "one_observed": 415,
+          "neither_observed": 32205,
+          "conflict": 0
+        },
+        "package_material": {
+          "both_observed": 19820,
+          "one_observed": 8595,
+          "neither_observed": 4836,
+          "conflict": 0
+        },
+        "juice_content": {
+          "both_observed": 0,
+          "one_observed": 22378,
+          "neither_observed": 10873,
+          "conflict": 0
+        }
+      }
+    },
+    "augmented_negative": {
+      "pairs": 6464,
+      "difficulty": {
+        "easy": 3430,
+        "medium": 1698,
+        "hard": 1287,
+        "unknown": 49
+      },
+      "reasons": {
+        "negative_low_overlap_or_many_conflicts": 3430,
+        "negative_moderate_distinction": 1698,
+        "insufficient_comparable_evidence": 49,
+        "negative_lookalike_few_conflicts": 1287
+      },
+      "vendor_relation": {
+        "same_vendor": 0,
+        "cross_vendor": 0,
+        "unknown": 6464
+      },
+      "attributes": {
+        "volume": {
+          "both_observed": 5832,
+          "one_observed": 481,
+          "neither_observed": 151,
+          "conflict": 1710
+        },
+        "pack": {
+          "both_observed": 691,
+          "one_observed": 817,
+          "neither_observed": 4956,
+          "conflict": 248
+        },
+        "package_type": {
+          "both_observed": 5103,
+          "one_observed": 916,
+          "neither_observed": 445,
+          "conflict": 577
+        },
+        "flavor": {
+          "both_observed": 4834,
+          "one_observed": 400,
+          "neither_observed": 1230,
+          "conflict": 1472
+        },
+        "carbonation": {
+          "both_observed": 5486,
+          "one_observed": 566,
+          "neither_observed": 412,
+          "conflict": 169
+        },
+        "sweetener_type": {
+          "both_observed": 2419,
+          "one_observed": 819,
+          "neither_observed": 3226,
+          "conflict": 288
+        },
+        "sweetening": {
+          "both_observed": 234,
+          "one_observed": 398,
+          "neither_observed": 5832,
+          "conflict": 8
+        },
+        "sweetener": {
+          "both_observed": 2115,
+          "one_observed": 1334,
+          "neither_observed": 3015,
+          "conflict": 155
+        },
+        "pulp": {
+          "both_observed": 119,
+          "one_observed": 351,
+          "neither_observed": 5994,
+          "conflict": 3
+        },
+        "package_material": {
+          "both_observed": 4433,
+          "one_observed": 1350,
+          "neither_observed": 681,
+          "conflict": 1113
+        },
+        "juice_content": {
+          "both_observed": 0,
+          "one_observed": 5365,
+          "neither_observed": 1099,
+          "conflict": 0
+        }
+      }
+    },
+    "consumed_positive": {
+      "pairs": 5532,
+      "difficulty": {
+        "easy": 2374,
+        "medium": 1814,
+        "hard": 1306,
+        "unknown": 38
+      },
+      "reasons": {
+        "positive_high_text_overlap": 2374,
+        "positive_moderate_text_overlap": 1814,
+        "positive_low_text_overlap": 901,
+        "positive_attribute_conflict_review": 69,
+        "positive_asymmetric_evidence": 336,
+        "insufficient_comparable_evidence": 38
+      },
+      "vendor_relation": {
+        "same_vendor": 0,
+        "cross_vendor": 17,
+        "unknown": 5515
+      },
+      "attributes": {
+        "volume": {
+          "both_observed": 5009,
+          "one_observed": 442,
+          "neither_observed": 81,
+          "conflict": 0
+        },
+        "pack": {
+          "both_observed": 892,
+          "one_observed": 164,
+          "neither_observed": 4476,
+          "conflict": 1
+        },
+        "package_type": {
+          "both_observed": 4519,
+          "one_observed": 652,
+          "neither_observed": 361,
+          "conflict": 0
+        },
+        "flavor": {
+          "both_observed": 3838,
+          "one_observed": 279,
+          "neither_observed": 1415,
+          "conflict": 0
+        },
+        "carbonation": {
+          "both_observed": 4682,
+          "one_observed": 513,
+          "neither_observed": 337,
+          "conflict": 0
+        },
+        "sweetener_type": {
+          "both_observed": 1930,
+          "one_observed": 489,
+          "neither_observed": 3113,
+          "conflict": 0
+        },
+        "sweetening": {
+          "both_observed": 268,
+          "one_observed": 141,
+          "neither_observed": 5123,
+          "conflict": 0
+        },
+        "sweetener": {
+          "both_observed": 1766,
+          "one_observed": 648,
+          "neither_observed": 3118,
+          "conflict": 60
+        },
+        "pulp": {
+          "both_observed": 173,
+          "one_observed": 49,
+          "neither_observed": 5310,
+          "conflict": 0
+        },
+        "package_material": {
+          "both_observed": 4085,
+          "one_observed": 688,
+          "neither_observed": 759,
+          "conflict": 6
+        },
+        "juice_content": {
+          "both_observed": 12,
+          "one_observed": 4511,
+          "neither_observed": 1009,
+          "conflict": 2
+        }
+      }
+    },
+    "consumed_negative": {
+      "pairs": 5532,
+      "difficulty": {
+        "easy": 3142,
+        "medium": 848,
+        "hard": 1491,
+        "unknown": 51
+      },
+      "reasons": {
+        "negative_moderate_distinction": 848,
+        "negative_lookalike_few_conflicts": 1491,
+        "negative_low_overlap_or_many_conflicts": 3142,
+        "insufficient_comparable_evidence": 51
+      },
+      "vendor_relation": {
+        "same_vendor": 1215,
+        "cross_vendor": 0,
+        "unknown": 4317
+      },
+      "attributes": {
+        "volume": {
+          "both_observed": 5002,
+          "one_observed": 417,
+          "neither_observed": 113,
+          "conflict": 1199
+        },
+        "pack": {
+          "both_observed": 510,
+          "one_observed": 878,
+          "neither_observed": 4144,
+          "conflict": 251
+        },
+        "package_type": {
+          "both_observed": 4462,
+          "one_observed": 641,
+          "neither_observed": 429,
+          "conflict": 408
+        },
+        "flavor": {
+          "both_observed": 3773,
+          "one_observed": 360,
+          "neither_observed": 1399,
+          "conflict": 759
+        },
+        "carbonation": {
+          "both_observed": 4663,
+          "one_observed": 516,
+          "neither_observed": 353,
+          "conflict": 73
+        },
+        "sweetener_type": {
+          "both_observed": 1768,
+          "one_observed": 691,
+          "neither_observed": 3073,
+          "conflict": 221
+        },
+        "sweetening": {
+          "both_observed": 146,
+          "one_observed": 310,
+          "neither_observed": 5076,
+          "conflict": 5
+        },
+        "sweetener": {
+          "both_observed": 1492,
+          "one_observed": 1077,
+          "neither_observed": 2963,
+          "conflict": 73
+        },
+        "pulp": {
+          "both_observed": 79,
+          "one_observed": 241,
+          "neither_observed": 5212,
+          "conflict": 0
+        },
+        "package_material": {
+          "both_observed": 3761,
+          "one_observed": 1195,
+          "neither_observed": 576,
+          "conflict": 1204
+        },
+        "juice_content": {
+          "both_observed": 1037,
+          "one_observed": 3484,
+          "neither_observed": 1011,
+          "conflict": 0
+        }
+      }
+    }
+  },
+  "notes": [
+    "Catalog coverage measures source-listing encoder evidence, not raw attribute presence.",
+    "Stored pair counts are unique within each label; consumed pairs are objective-weighted.",
+    "Canonical endpoints have unknown vendor; source-copy lineage preserves listing vendors.",
+    "Positive conflicts flag review; difficulty never changes labels.",
+    "Whole-catalog singleton rows have attribute coverage but no pair difficulty.",
+    "Structural thresholds are provisional; model error measurement remains separate."
+  ]
+}
