@@ -48,7 +48,7 @@ def inventory(path: Path):
 
 def snapshot(source: Path, track: str, *, remote=None, push=False, generation="final") -> Path:
     from graph_tracks.config import DvcSpec
-    DvcSpec(remote=remote, push=push)
+    DvcSpec(enabled=True, remote=remote, push=push)
     source = source.resolve()
     project = source / name(track, f'dvc-{generation}')
     if project.exists():

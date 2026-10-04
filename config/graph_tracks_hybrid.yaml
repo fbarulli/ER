@@ -29,7 +29,7 @@ wandb:
   project: e-r
   mode: offline
 dvc:
-  enabled: true
+  enabled: false
   remote: null
   push: false
 postprocess: true

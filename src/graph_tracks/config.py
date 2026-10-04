@@ -59,7 +59,7 @@ class WandbSpec(BaseModel):
 
 class DvcSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    enabled: bool = True
+    enabled: bool = False
     remote: str | None = None
     push: bool = False
 

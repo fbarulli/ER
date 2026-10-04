@@ -97,7 +97,7 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     backend = SimpleNamespace(REMOTE_ROOT='/remote/root', SESSION='session', GPU='CPU',
         GIT_REMOTE_NAME='origin', BRANCH='training', _BOOTSTRAP='', _RESULT_DOWNLOAD_TIMEOUT_SECONDS=30,
         _WORKER_TIMEOUT_SECONDS=30, run_colab_exec_stream=exec_remote,
-        _upload_with_retries=lambda *a, **k: None, _remote_auth_env_script=lambda **k: '',
+        _upload_with_retries=lambda *a, **k: None, _wandb_env_script=lambda: '',
         run_detached_stage=detached, _read_remote_text=lambda _: file_hash(saved),
         _download_one_remote_file=download)
     # `model_tracks.colab.run` does `from cli import colab as backend`, which
