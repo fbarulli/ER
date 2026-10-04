@@ -551,16 +551,26 @@ class NegativeSupply(BaseModel):
         move is tried before the anchor is skipped (reported, not silent).
         """
         self._prepare()
+        gtins = self.df["gtin"].fillna("").astype(str).str.strip().to_numpy()
+        covered_gtins = {gtins[position] for position in covered}
         uncovered = [
             int(position)
             for position, covered_row in
             enumerate(self.anchor_mask.to_numpy())
-            if covered_row and position not in covered
+            if covered_row and (
+                gtins[position] not in covered_gtins
+                if self.spec.mint.entity_level == "gtin" else position not in covered
+            )
         ]
         rows: list[PairRow] = []
-        skipped = {"no_move_surface": 0, "empty_pool": 0, "target_cap": 0}
+        skipped = {"no_move_surface": 0, "empty_pool": 0, "target_cap": 0,
+                   "same_entity": 0, "below_blocker_floor": 0}
+        minted_gtins: set[str] = set()
         moves = self.spec.mint.moves or ("flavor",)
         for sequence, anchor in enumerate(sorted(uncovered)):
+            if self.spec.mint.entity_level == "gtin" and gtins[anchor] in minted_gtins:
+                skipped["same_entity"] += 1
+                continue
             if len(rows) >= self.spec.mint.max_minted:
                 skipped["target_cap"] += 1
                 continue
@@ -610,18 +620,24 @@ class NegativeSupply(BaseModel):
                     edit_to=moved_to,
                 )
             )
+            minted_gtins.add(gtins[anchor])
         rows.sort(key=lambda pair: pair.anchor_row)
         # minted partners get the same blocker cosine so no texture feature
         # separates them from real arms downstream
-        self._score_minted(rows)
+        self._score_pairs(rows)
+        eligible = [pair for pair in rows if pair.score > self.spec.blocker.min_score]
+        skipped["below_blocker_floor"] = len(rows) - len(eligible)
+        rows = eligible
         self.funnel["mint"] = {
             **skipped,
-            "anchors_uncovered": int(len(uncovered)),
+            "anchors_uncovered": (len({gtins[position] for position in uncovered})
+                                  if self.spec.mint.entity_level == "gtin" else len(uncovered)),
+            "uncovered_sku_rows": len(uncovered),
             "minted": len(rows),
         }
         return rows
 
-    def _score_minted(self, rows: list[PairRow]) -> None:
+    def _score_pairs(self, rows: list[PairRow]) -> None:
         if not rows:
             return
         if self._block_vectorizer is None:
@@ -629,7 +645,7 @@ class NegativeSupply(BaseModel):
         # Match real-pair geometry: frozen blocker IDF and the actual anchor,
         # without the quadratic minted-by-catalog intermediate.
         minted = self._block_vectorizer.transform([pair.partner_text for pair in rows])
-        anchors = self._block_matrix[[self._block_anchor_positions[pair.anchor_row] for pair in rows]]
+        anchors = self._block_vectorizer.transform([pair.anchor_text for pair in rows])
         scores = np.asarray(minted.multiply(anchors).sum(axis=1)).ravel()
         for pair, score in zip(rows, scores):
             pair.score = round(float(score), 6)
@@ -757,6 +773,7 @@ class NegativeSupply(BaseModel):
                     partner_text=str(self._texts.iloc[right_row]),
                 )
             )
+        self._score_pairs(rows)
         return rows
 
     # ── emit ─────────────────────────────────────────────────────────────────
@@ -788,15 +805,21 @@ class NegativeSupply(BaseModel):
             self.attach_shadow_gate()
             frame = self.pairs
         frame.to_csv(folder / "pairs.csv", index=False)
-        anchors_total = int(self.anchor_mask.sum())
+        if self.spec.mint.entity_level == "gtin":
+            gtins = self.df["gtin"].fillna("").astype(str).str.strip().to_numpy()
+            anchors_total = len(set(gtins[self.anchor_mask.to_numpy()]))
+            covered_total = len({gtins[position] for position in covered})
+        else:
+            anchors_total = int(self.anchor_mask.sum())
+            covered_total = len(covered)
         manifest = {
             "schema": "er-negative-supply-v1",
             "run_tag": run_tag,
             "spec": self.spec.model_dump(mode="json"),
             "coverage": {
                 "anchors_total": anchors_total,
-                "anchors_with_real_partner": len(covered),
-                "coverage_share": round(len(covered) / max(anchors_total, 1), 4),
+                "anchors_with_real_partner": covered_total,
+                "coverage_share": round(covered_total / max(anchors_total, 1), 4),
             },
             "populations": frame["population"].value_counts().to_dict(),
             "funnel": self.funnel,
