@@ -173,7 +173,7 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
         from graph_tracks.text_cache import create_cache
         create_cache(output/'eligible_catalog.csv', checkpoint,
                      output/'shared_minilm__embeddings.npz', device='cpu',
-                     input_metadata=request['metadata'])
+                     input_metadata={**request['metadata'], 'embedding_dtype': 'float32'})
         (output/'embedding_inputs.json').write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
     for track in ('gnn_only','hybrid'):
         settings=yaml.safe_load((setup/f'{track}.yaml').read_text())
