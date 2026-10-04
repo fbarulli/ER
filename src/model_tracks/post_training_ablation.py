@@ -33,7 +33,9 @@ def complete_saved(destination,suite,*,publisher=None):
                 raise ValueError('baseline calibration differs from selected ablation checkpoint: '+track)
             binding = request.parent/'baseline_threshold.json' 
             write(binding,{'track':track,'checkpoint_sha256':selected_identity,
-                'threshold':threshold,'calibration':calibration,'source_calibration':source_name(sources[0]),
+                'threshold':threshold,'calibration':{'threshold':threshold},
+                'source_calibration':source_name(sources[0]),
+                'source_calibration_sha256':__import__('graph_tracks.data',fromlist=['file_hash']).file_hash(sources[0]),
                 'threshold_source':'saved dev calibration; no refit'})
             previous = request.parent/'report.json'
             report_digest = previous.with_suffix('.sha256')
