@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
 
 import yaml
 
@@ -20,6 +21,12 @@ def publish(archive: Path, run_tag: str) -> Path:
                 archive_size=archive.stat().st_size,
                 remote=common.training_cfg().colab.dvc_remote_url,
                 pointer=(archive.with_suffix('.publication') / (archive.name + '.dvc')).read_text())
+    profile = archive.with_suffix('.profile.json')
+    if profile.is_file():
+        data['archive_profile'] = json.loads(profile.read_text())
+    events = archive.with_suffix('.publication') / common.training_cfg().colab.dvc_events_file
+    if events.is_file():
+        data['dvc_profile_events'] = events.read_text()
     receipt.write_text(json.dumps(data, indent=2) + '\n')
     return receipt
 
@@ -46,7 +53,12 @@ def pull(data: dict, destination: Path) -> Path:
     if not token:
         raise RuntimeError('DVC_API_KEY is required for local training-result pull')
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if 'archive_profile' in data:
+        destination.with_suffix('.profile.json').write_text(json.dumps(data['archive_profile'], indent=2) + '\n')
+    if 'dvc_profile_events' in data:
+        destination.with_suffix('.dvc_profile.jsonl').write_text(data['dvc_profile_events'])
     # An isolated cache forces collection to exercise the durable remote.
+    pull_started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='.training-dvc-pull-', dir=destination.parent) as temporary:
         root = Path(temporary)
         pointer = root / (data['archive_name'] + '.dvc')
@@ -62,4 +74,8 @@ def pull(data: dict, destination: Path) -> Path:
         partial = destination.with_suffix('.zip.partial')
         shutil.copy2(payload, partial)
         partial.replace(destination)
+    with destination.with_suffix('.dvc_profile.jsonl').open('a') as handle:
+        handle.write(json.dumps({'event': 'local_pull_verified',
+            'timestamp_unix': time.time(), 'elapsed_seconds': time.monotonic() - pull_started,
+            'archive_bytes': destination.stat().st_size}) + '\n')
     return destination

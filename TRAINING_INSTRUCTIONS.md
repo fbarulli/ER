@@ -250,3 +250,21 @@ Collected artifacts bind vectors/indexes to encoder, catalog, policy, and
 schema hashes. Record checkpoint selection, losses, exposure, runtime, memory,
 and review failures. Compare model-only behavior and the shadow gate on real
 pairs; thresholds and deployment decisions follow the model plan.
+
+### Resource profiling
+
+With suite `profiling: true`, the supervisor records aggregate GPU activity,
+VRAM, clocks, power and temperature every second and supervisor/descendant CPU
+time, RSS and disk-I/O counters every two seconds, from preflight through all
+embedding, training and ablation forwards. Samples stop and flush before sealing
+the training archive. GPU attribution is device-wide under MPS; memory activity
+is not allocated VRAM or measured DRAM bandwidth. Unsupported GPU fields remain
+N/A and CPU monitoring continues when `nvidia-smi` is unavailable.
+
+Archive inventory hashing, compression and verification durations travel in the
+DVC handoff receipt, with timestamped DVC command durations, and are retained in
+the final local result archive under `resource_profile/`. Existing bounded
+PyTorch traces include profiling overhead and cold-start steps. Sampling does
+not synchronize CUDA or change training, evaluation, checkpoint or ablation
+behavior. Measure sampling overhead before treating profiled throughput as an
+unprofiled production estimate.

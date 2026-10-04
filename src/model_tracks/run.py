@@ -33,6 +33,9 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
         from model_tracks.telemetry import WorkerEvents
         events = WorkerEvents(output, 'suite', run_tag, filename='suite_events.jsonl')
         events.emit('suite', 'starting', resume=resume, config=str(config), output=str(output))
+        from model_tracks.resource_profile import ResourceProfile
+        profile = ResourceProfile(output / 'resource_profile', load_config(config).profiling).start()
+        events.resource_profile = profile
         try:
             archive = _run(config, output, run_tag, resume=resume, events=events)
             events.emit('suite', 'complete', archive=str(archive))
@@ -43,6 +46,7 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
                         failed_phase=events.last_phase, traceback=traceback.format_exc())
             raise
         finally:
+            profile.close()
             # Archive contents precede collection/publication. Preserve their
             # final outcomes beside the archive without rewriting its digest.
             import shutil
@@ -165,6 +169,8 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         for track in TRACKS:
             record_completion(output / track, track)
     (output/'suite_result.json').write_text(json.dumps({'status':'ok', **result}, indent=2)+'\n')
+    if getattr(events, 'resource_profile', None):
+        events.resource_profile.close()
     events.emit('collection', 'starting', tracks=list(TRACKS), skipped_verified_tracks=skipped)
     archive_path = output.with_suffix('.zip')
     if archive_path.exists():
@@ -193,7 +199,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
              and not any(part.endswith('__payload') for part in p.relative_to(output).parts)
              and not ('.dvc' in p.relative_to(output).parts and 'cache' in p.relative_to(output).parts)}
     from core.portable_archive import write_archive
-    write_archive(archive_path,files,manifest_name='suite_bundle_manifest.json',metadata={'run_tag':run_tag})
+    write_archive(archive_path,files,manifest_name='suite_bundle_manifest.json',metadata={'run_tag':run_tag}, profile=cfg.profiling)
     archive_path.with_suffix('.sha256').write_text(file_hash(archive_path)+'\n')
     events.emit('collection', 'complete', archive=str(archive_path), sha256=file_hash(archive_path),
                 bytes=archive_path.stat().st_size)

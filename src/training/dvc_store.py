@@ -22,7 +22,7 @@ _VERIFY_PULL_ARGV_BYTES = 48 * 1024
 
 def _write_dvc_event(source: Path, event: str, **values: object) -> None:
     """Append structured DVC state beside the worker's result bundle."""
-    record = {"event": event, **values}
+    record = {"event": event, "timestamp_unix": time.time(), "monotonic_seconds": time.monotonic(), **values}
     event_path = source / common.training_cfg().colab.dvc_events_file
     event_path.parent.mkdir(parents=True, exist_ok=True)
     with event_path.open("a", encoding="utf-8") as handle:
@@ -52,6 +52,7 @@ def _run(command: list[str], cwd: Path) -> str:
     )
     attempts = cfg.dvc_push_retries if retry_safe else 1
     for attempt in range(1, attempts + 1):
+        attempt_started = time.monotonic()
         _write_dvc_event(
             cwd,
             "command_started",
@@ -99,6 +100,7 @@ def _run(command: list[str], cwd: Path) -> str:
             command=shown,
             attempt=attempt,
             returncode=int(result.returncode),
+            elapsed_seconds=time.monotonic() - attempt_started,
         )
         if result.returncode == 0:
             return result.stdout or ""

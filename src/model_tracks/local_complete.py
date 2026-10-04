@@ -86,6 +86,15 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
             for relative in training['files']:
                 archive.extract(relative, destination)
         marker.write_text(json.dumps(identity))
+    # Transport timings were created after the immutable training ZIP was sealed.
+    # Preserve the receipt-carried sidecars in the completed publication.
+    import shutil
+    for suffix in ('.profile.json', '.dvc_profile.jsonl'):
+        sidecar = training_archive.with_suffix(suffix)
+        if sidecar.is_file():
+            metrics = destination / 'resource_profile'
+            metrics.mkdir(exist_ok=True)
+            shutil.copy2(sidecar, metrics / ('remote_training' + suffix))
     prepared = destination / 'local_inputs'
     prepared.mkdir(exist_ok=True)
     with zipfile.ZipFile(input_archive) as archive:

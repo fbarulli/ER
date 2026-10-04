@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import uuid
+import time
 from pathlib import Path
 import zipfile
 from typing import Annotated, Any
@@ -42,12 +43,14 @@ RESULT_ARCHIVE_EXCLUDED_DIRS = frozenset({
 
 def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
                   metadata: dict[str, Any], inline: dict[str, str] | None = None,
-                  inventory_key: str = 'files') -> Path:
+                  inventory_key: str = 'files', profile: bool = False) -> Path:
     if output.exists():
         raise FileExistsError(output)
     inline = inline or {}
     if set(files) & set(inline) or manifest_name in files or manifest_name in inline:
         raise ValueError('archive member collision')
+    timings = {}
+    started = time.monotonic()
     inventory = {}
     for target, source in files.items():
         if source.is_symlink():
@@ -57,9 +60,11 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
     for target in [*inventory, manifest_name]:
         if Path(target).is_absolute() or '..' in Path(target).parts:
             raise ValueError('unsafe archive path')
+    timings["inventory_hash_seconds"] = time.monotonic() - started
     output.parent.mkdir(parents=True, exist_ok=True)
     candidate = output.with_name(f'{output.name}.partial-{os.getpid()}-{uuid.uuid4().hex}')
     try:
+        started = time.monotonic()
         with zipfile.ZipFile(candidate, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
             for target, source in files.items():
                 archive.write(source, target)
@@ -68,7 +73,10 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
             archive.writestr(manifest_name, json.dumps({**metadata, inventory_key:inventory}, indent=2)+'\n')
         # Sources can change while being archived (e.g. checkpoint rotation).
         # Never publish a ZIP whose bytes disagree with its frozen inventory.
+        timings["compression_seconds"] = time.monotonic() - started
+        started = time.monotonic()
         verify_archive(candidate, manifest_name, inventory_key=inventory_key)
+        timings["verification_seconds"] = time.monotonic() - started
         with candidate.open('rb') as handle:
             os.fsync(handle.fileno())
         # Linking the completed sibling publishes atomically without replacing
@@ -76,6 +84,11 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
         os.link(candidate, output)
     finally:
         candidate.unlink(missing_ok=True)
+    if profile:
+        output.with_suffix(".profile.json").write_text(json.dumps({**timings,
+            "timestamp_unix": time.time(), "archive_bytes": output.stat().st_size,
+            "source_bytes": sum(source.stat().st_size for source in files.values()),
+            "file_count": len(files)}, indent=2) + "\n")
     return output
 
 
