@@ -97,6 +97,50 @@ def verify(path: Path):
     return verify_archive(path,'model_tracks_package.json')
 
 
+def verify_current(path: Path, config: Path):
+    """Reuse a completed CPU package only while local inputs/config stay bound."""
+    import zipfile
+    from core.common import TRAIN_ROOT, F, resolve_model
+    from graph_tracks.data import file_hash
+    from graph_tracks.text_cache import checkpoint_hash
+    cfg = load_config(config)
+    setup = (TRAIN_ROOT/cfg.setup_dir).resolve()
+    target = Path('data/model_tracks/shared')
+    metadata = verify(path)
+    expected_suite = cfg.model_dump()
+    expected_suite.update(setup_dir=str(target), text_bundle=str(target/'text_prepared.pkl.gz'))
+    with zipfile.ZipFile(path) as archive:
+        if yaml.safe_load(archive.read('data/model_tracks/suite.yaml')) != expected_suite:
+            raise ValueError('prepared package suite config changed; regenerate locally')
+        request = json.loads(archive.read(str(target/'embedding_inputs.json')))
+        if request['metadata']['checkpoint_sha256'] != checkpoint_hash(Path(resolve_model(cfg.text_model))):
+            raise ValueError('prepared package baseline checkpoint changed')
+        for track in ('gnn_only', 'hybrid'):
+            settings = yaml.safe_load((setup/(track+'.yaml')).read_text())
+            for key in ('listings','pairs','input_manifest','text_cache'):
+                if settings.get(key):
+                    settings[key] = str(target/(TRAIN_ROOT/settings[key]).resolve().relative_to(setup))
+            settings.update(device=cfg.device, report_test=cfg.report_test)
+            if yaml.safe_load(archive.read(str(target/(track+'.yaml')))) != settings:
+                raise ValueError('prepared package graph configuration changed: '+track)
+    sources = runtime_snapshot_files()
+    for key in ('dataset_deduped','labeled_pairs','canonical_records','gate_results'):
+        source = Path(F[key]).resolve()
+        sources[source.relative_to(TRAIN_ROOT).as_posix()] = source
+    bundle = (TRAIN_ROOT/cfg.text_bundle).resolve()
+    for name, expected in metadata['files'].items():
+        member = Path(name)
+        if member.is_relative_to(target) and member.name not in {'gnn_only.yaml','hybrid.yaml'}:
+            source = (bundle if member == target/'text_prepared.pkl.gz' else
+                      bundle.with_suffix(bundle.suffix+'.json') if member == target/'text_prepared.pkl.gz.json'
+                      else setup/member.relative_to(target))
+            sources[name] = source
+    for name, source in sources.items():
+        if not source.is_file() or metadata['files'].get(name) != file_hash(source):
+            raise ValueError('prepared package source changed: '+name)
+    return metadata
+
+
 def recovery_package(output: Path, destination: Path, run_tag: str, *, input_package: dict | None = None) -> Path:
     """Capture stopped workers' portable state without credentials or caches."""
     manifest = json.loads((output / 'suite_manifest.json').read_text())

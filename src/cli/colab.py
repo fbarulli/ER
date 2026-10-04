@@ -4380,6 +4380,8 @@ def main() -> None:
                     help="what to run on the VM (default: tracks)")
     ap.add_argument('--tracks-config', type=Path, default=None,
                     help='prepared all-track suite; uses the existing Colab lifecycle')
+    ap.add_argument('--prepared-input-package', type=Path, default=None,
+                    help='reuse training.prepare_all all_tracks_inputs.zip after freshness validation')
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
                     f"{_TRAIN_FRAC_DEFAULT:g})")
@@ -4482,6 +4484,8 @@ def main() -> None:
     suite_archive = None
     suite_run_tag = None
     suite_git_inputs = None
+    if args.prepared_input_package is not None and args.what != 'tracks' and args.tracks_config is None:
+        raise ValueError('--prepared-input-package requires an all-track suite')
     if args.what == 'tracks' or args.tracks_config is not None:
         if args.what not in {'tracks','train','smoke'}:
             raise ValueError('--tracks-config applies to train/tracks/smoke only')
@@ -4493,7 +4497,12 @@ def main() -> None:
         suite_config = args.tracks_config or TRAIN_ROOT/'config/model_tracks.yaml'
         suite = load_suite(suite_config)
         if args.preflight_only:
-            print(json.dumps(suite_preflight(suite_config),indent=2))
+            if args.prepared_input_package is not None:
+                from model_tracks.package import verify_current
+                checks = verify_current(args.prepared_input_package, suite_config)['preflight']
+            else:
+                checks = suite_preflight(suite_config)
+            print(json.dumps(checks,indent=2))
             return
         if suite.device != ('cpu' if args.gpu.upper() == 'CPU' else 'cuda'):
             raise ValueError('suite device and --gpu must agree')
@@ -4507,7 +4516,13 @@ def main() -> None:
             from model_tracks.package import verify as verify_suite_package
             verify_suite_package(suite_archive)
         else:
-            suite_archive = suite_package(suite_config, suite_archive)
+            if args.prepared_input_package is not None:
+                from model_tracks.package import verify_current
+                verify_current(args.prepared_input_package, suite_config)
+                suite_archive.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(args.prepared_input_package, suite_archive)
+            else:
+                suite_archive = suite_package(suite_config, suite_archive)
         # Finish immutable input publication before allocating an accelerator.
         # prepare_remote_layout clones the same Git branch below.
         from model_tracks.colab import prepare_git_inputs

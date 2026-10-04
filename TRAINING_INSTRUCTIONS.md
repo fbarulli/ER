@@ -161,14 +161,18 @@ Launch after successful generation:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m cli.colab --what tracks \
-  --tracks-config config/model_tracks.yaml --gpu T4 --allow-gpu
+  --tracks-config config/model_tracks.yaml \
+  --prepared-input-package <preparation-run>/all_tracks_inputs.zip \
+  --gpu T4 --allow-gpu
 ```
 
 The launcher validates the package before accelerator provisioning, saves
 immutable Git input transport, and starts isolated text/GNN/hybrid workers on
-one runtime with one control channel and NVIDIA MPS. Its package call also
-refreshes local frozen tensors/requests; CSV generation belongs to
-`training.prepare_all`. Publishing suites require `DVC_API_KEY` before launch.
+one runtime with one control channel and NVIDIA MPS. Use `--prepared-input-package` to reuse the completed package without
+repeating CPU token/tensor preparation. Freshness checks reject changed
+source, configuration, checkpoint, or input bytes before provisioning.
+Without that flag, the launcher prepares a new package from existing local
+CSVs; CSV generation belongs to `training.prepare_all`. Publishing suites require `DVC_API_KEY` before launch.
 W&B credentials are only needed for online mode. Install the target
 CPU/CUDA PyTorch runtime and `requirements/graph_tracks.txt` first; the local
 MiniLM model directory must contain valid weights and tokenizer files.
