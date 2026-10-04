@@ -59,7 +59,7 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     payload_digest = hashlib.sha256(json.dumps(list(bundle['payload']),ensure_ascii=False).encode()).hexdigest()
     if bundle['training_tokens']['payload_sha256'] != payload_digest or not set(bundle['payload']).issubset(bundle['training_tokens']['texts']):
         raise ValueError('training native tokens differ from frozen payload')
-    validate_run_plan(bundle,bundle['training_plan'],loss=training_cfg().loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
+    validate_run_plan(bundle,bundle['training_plan'],loss=training_cfg().training.loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
     from core.schemas import DataTuple
     DataTuple(n_df=len(bundle['df']), **{key: bundle[key] for key in
               ('payload', 'structured_features', 'row_bc', 'country', 'pos', 'hp_pairs', 'emb0')})
