@@ -96,7 +96,7 @@ def prepare_cohort(setup, bundle):
                 'split':split, 'cohort_id':f'bundle:{name}:{n}', 'population':population,
                 'evaluation_scope':'mint_diagnostic' if lineage else 'bundle_diagnostic',
                 'payload_index1':a, 'payload_index2':b, 'mint_lineage':lineage,
-                'difficulty_slice': 'hard' if any(x.get('target_mode') == 'counterfactual' for x in lineage) else 'unknown',
+                'difficulty_slice': 'unknown',
                 'consumed_example_ids':consumed.get((a,b,label),[])})
     for n, ((a,b,c), population) in enumerate(zip(triples, fold['objective']['dataset']['population'], strict=True)):
         for label, other in ((1,b),(0,c)):
@@ -105,8 +105,25 @@ def prepare_cohort(setup, bundle):
                 'split':'train', 'cohort_id':f'objective:{n}:{label}', 'population':population,
                 'evaluation_scope':'training_diagnostic', 'payload_index1':a,'payload_index2':other,
                 'mint_lineage':[audits[i][1] for i in (a,other) if i in audits],
-                'difficulty_slice':'easy' if 'easy' in population.lower() else 'hard' if 'hard' in population.lower() else 'unknown',
+                'difficulty_slice':'unknown',
                 'consumed_example_ids':[n]})
+    from training.difficulty import DifficultyEndpoint, measure_pair
+    difficulty_endpoints = {}
+    difficulty_pairs = {}
+    for pair in cohort:
+        if 'payload_index1' not in pair:
+            pair['difficulty_reason'] = 'no_frozen_encoder_input'
+            continue
+        a, b = pair['payload_index1'], pair['payload_index2']
+        for index in (a, b):
+            if index not in difficulty_endpoints:
+                difficulty_endpoints[index] = DifficultyEndpoint.from_text(bundle['payload'][index])
+        key = (a, b, int(pair['label']))
+        if key not in difficulty_pairs:
+            difficulty_pairs[key] = measure_pair(difficulty_endpoints[a], difficulty_endpoints[b], key[2])
+        evidence = difficulty_pairs[key]
+        pair.update(difficulty_slice=evidence.difficulty, difficulty_reason=evidence.reason,
+                    difficulty_text_overlap=evidence.text_overlap)
     frame = pd.DataFrame(cohort)
     for column in ('mint_lineage','consumed_example_ids'):
         frame[column] = frame[column].map(lambda value: json.dumps(value, sort_keys=True))
@@ -117,7 +134,7 @@ def prepare_cohort(setup, bundle):
         'by_scope':frame.evaluation_scope.value_counts().to_dict(),
         'by_population':frame.population.value_counts().to_dict(),
         'by_difficulty':{name:int(frame.difficulty_slice.eq(name).sum())
-                         for name in ('easy','hard','unknown')},
+                         for name in ('easy','medium','hard','unknown')},
         'unknown_difficulty_policy':'retain unknown; never invent easy/hard labels'})
     frame.fillna('').to_csv(folder/'pairs.csv', index=False)
     pd.DataFrame(list(rows.values())).fillna('').to_csv(folder/'catalog.csv', index=False)

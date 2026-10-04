@@ -140,14 +140,14 @@ class CohortCoverage(CoverageModel):
     minted_endpoints_covered: Count
     by_scope: dict[str, Count]
     by_population: dict[str, Count]
-    by_difficulty: dict[Literal['easy', 'hard', 'unknown'], Count]
+    by_difficulty: dict[Literal['easy', 'medium', 'hard', 'unknown'], Count]
     unknown_difficulty_policy: str = Field(min_length=1)
 
     @model_validator(mode='after')
     def complete(self):
         if self.minted_endpoints_total != self.minted_endpoints_covered:
             raise ValueError('ablation cohort dropped minted endpoints')
-        require_keys(self.by_difficulty, {'easy', 'hard', 'unknown'}, 'difficulty')
+        require_keys(self.by_difficulty, {'easy', 'medium', 'hard', 'unknown'}, 'difficulty')
         for counts in (self.by_scope, self.by_population, self.by_difficulty):
             if sum(counts.values()) != self.pair_rows:
                 raise ValueError('cohort strata do not account for every pair')

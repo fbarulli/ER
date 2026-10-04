@@ -28,7 +28,7 @@ def test_cohort_requires_unknown_difficulty_and_complete_mint_lineage():
     fields = dict(cohort_sha256='0' * 64, pair_rows=2,
         minted_endpoints_total=1, minted_endpoints_covered=1,
         by_scope={'training_diagnostic': 2}, by_population={'real': 2},
-        by_difficulty={'easy': 1, 'hard': 0, 'unknown': 1},
+        by_difficulty={'easy': 1, 'medium': 0, 'hard': 0, 'unknown': 1},
         unknown_difficulty_policy='retain unknown')
     CohortCoverage(**fields)
     with pytest.raises(ValidationError, match='difficulty.*coverage mismatch'):
