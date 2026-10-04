@@ -4686,7 +4686,9 @@ def main() -> None:
         # for a lane that only needs the configured zero-shot scoring.
         if args.what == 'tracks':
             from model_tracks.colab import run as run_suite
-            run_suite(suite_archive, suite_run_tag, resume=bool(args.resume_run),git_inputs=suite_git_inputs)
+            run_suite(suite_archive, suite_run_tag, resume=bool(args.resume_run),
+                      resume_archive=suite_recovery if args.resume_run and suite_recovery.is_file() else None,
+                      git_inputs=suite_git_inputs)
         elif args.what == "sims":
             run_sims()
         elif args.what == "mixed":
