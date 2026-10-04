@@ -67,6 +67,7 @@ from core.common import (
     recall_column_suffix,
     row_metadata_text,
     runtime,
+    training_cfg,
     trace_artifact,
 )
 from core.schemas import check_labeled_pairs_frame
@@ -4381,7 +4382,7 @@ def train_one_config(
                 load_best_model_at_end=True,
                 save_strategy="steps",
                 save_steps=eval_steps,
-                save_total_limit=runtime("save_total_limit"),  # SSOT; None retains all checkpoints
+                save_total_limit=training_cfg().training.save_total_limit,  # Validated nullable SSOT; retain all when None
                 # A resumable checkpoint must retain optimizer, scheduler,
                 # RNG, and trainer state.  Model-only snapshots cannot pick
                 # up a stopped run faithfully.
