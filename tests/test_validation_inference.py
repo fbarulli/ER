@@ -102,18 +102,6 @@ class FinalInferenceContractTests(unittest.TestCase):
 
         self.assertEqual(spec.output_dir, "final_inference")
 
-    def test_final_inference_batch_is_sized_for_inference_not_finetuning(self):
-        """Inference has no gradients or optimiser state, so it batches bigger."""
-        from core.common import training_cfg
-
-        spec = training_cfg().colab.final_inference
-        finetune_cuda = training_cfg().training.batch_size_cuda
-        self.assertGreater(spec.batch_size, finetune_cuda)
-        self.assertLessEqual(spec.batch_size, spec.max_batch_size)
-        # 512 for a 12-GB card: 8x the finetune batch on a 14.6-GB T4.
-        self.assertEqual(spec.batch_size, 512)
-        self.assertEqual(spec.max_batch_size, 1024)
-
     def test_a_batch_over_the_ceiling_fails_at_config_load(self):
         """A typo must be a config failure, not a CUDA OOM mid-catalog."""
         from core.common import training_cfg

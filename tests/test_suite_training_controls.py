@@ -168,6 +168,21 @@ def test_prepared_trainer_rejects_ignored_guardrail_override(monkeypatch):
         trainer._main(args, SimpleNamespace())
 
 
+def test_prepared_trainer_requires_shared_supervision_by_default(monkeypatch):
+    """Training without the shared binding must be an explicit, recorded choice."""
+    from training import train_prepared as trainer
+
+    monkeypatch.setattr('sys.argv', ['train_prepared', '--bundle', 'bundle.pkl.gz',
+                                     '--device', 'cpu', '--no-report-test'])
+    args = trainer._parse_args()
+    assert args.allow_unshared_supervision is False
+    monkeypatch.setattr(trainer, 'load_config', lambda: {'collapse_guardrail': {'profile': 'configured'}})
+    monkeypatch.setattr(trainer, 'set_determinism', lambda _: None)
+    monkeypatch.setattr(trainer, 'load_prepared_bundle', lambda _: (SimpleNamespace(), {}))
+    with pytest.raises(ValueError, match='requires --shared-training-data'):
+        trainer._main(args, SimpleNamespace())
+
+
 @pytest.mark.parametrize('report_test', [False, True])
 @pytest.mark.parametrize('sample', [False, True])
 def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, report_test, sample):
@@ -175,6 +190,9 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
 
     monkeypatch.setattr('sys.argv', ['train_prepared', '--bundle', 'bundle.pkl.gz',
                                     '--device', 'cpu',
+                                    # this case exercises the test-eval policy,
+                                    # not the shared supervision binding
+                                    '--allow-unshared-supervision',
                                     '--report-test' if report_test else '--no-report-test'])
     args = trainer._parse_args()
     args.sample = 100 if sample else None

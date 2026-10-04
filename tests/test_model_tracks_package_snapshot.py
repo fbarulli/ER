@@ -37,6 +37,11 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     for name in ('run_colab_ablation.py','run_colab_embeddings.py'):
         (tmp_path/'scripts'/name).write_text('# publication source\n')
     (tmp_path/'src/cli/colab.py').write_text('# shared launcher\n')
+    # The semantic family registry is a required packaged input; the suite
+    # checkout excludes results/, so packaging must carry it.
+    semantics = tmp_path / 'results' / 'semantics'
+    semantics.mkdir(parents=True)
+    (semantics / 'family_registry.json').write_text('{"schema": "er-family-registry-v1"}\n')
     config_dir = tmp_path / 'config'
     config_dir.mkdir()
     snapshots = {}
@@ -73,6 +78,16 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     from model_tracks import baseline_export
     monkeypatch.setattr(baseline_export,'prepare',lambda *args,**kwargs:preparations.append('baseline'))
     monkeypatch.setattr(packaging.subprocess, 'run', lambda *_, **__: SimpleNamespace(stdout='revision\n'))
+    # The shared supervision population is built by the real bundle loader; this
+    # case covers packaging, so stub the population and keep its artifacts.
+    from training import prepared_bundle as prepared_bundle_mod
+    from model_tracks import training_data as shared_training_data_mod
+    from model_tracks import shared_graph_data as shared_graph_data_mod
+    shared_stub = SimpleNamespace(fingerprint='a' * 64, examples=[], endpoints=[],
+                                  model_dump_json=lambda **kwargs: '{"schema_version": 1}\n')
+    monkeypatch.setattr(prepared_bundle_mod, 'load_prepared_bundle', lambda _: (SimpleNamespace(), {}))
+    monkeypatch.setattr(shared_training_data_mod, 'from_bundle', lambda *a, **k: shared_stub)
+    monkeypatch.setattr(shared_graph_data_mod, 'prepare_shared_graph', lambda *a, **k: {})
     output = packaging.package(Path('suite.yaml'), tmp_path / 'package.zip')
     assert preparations == ['graph','text','baseline']
     metadata = packaging.verify(output)

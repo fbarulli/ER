@@ -7,6 +7,9 @@ import json
 
 import pandas as pd
 
+from model_tracks.shared_graph_data import CLEAN_BACKUP_SUFFIX
+from model_tracks.training_data import augmentation_node_id, canonical_node_id
+
 
 def prepare_cohort(setup, bundle):
     from graph_tracks.data import load_records
@@ -17,7 +20,7 @@ def prepare_cohort(setup, bundle):
 
     folder = setup / 'ablation_cohort'
     folder.mkdir(parents=True, exist_ok=True)
-    clean = setup.parent / (setup.name + '__clean_shared_inputs')
+    clean = setup.parent / (setup.name + CLEAN_BACKUP_SUFFIX)
     clean_pairs = pd.read_csv(clean / 'pairs.csv', dtype=str, keep_default_na=False)
     catalog = pd.read_csv(setup / 'eligible_catalog.csv', dtype=str, keep_default_na=False)
     rows = catalog.set_index('sku_id', drop=False).to_dict('index')
@@ -46,13 +49,13 @@ def prepare_cohort(setup, bundle):
             record = copy.deepcopy(records.get(node_id) or _record(row_identity(row), node_id))
         elif index < canonical_end:
             gtin = gtins[index-base]
-            node_id = 'canonical:' + gtin
+            node_id = canonical_node_id(gtin)
             row = {'sku_id': node_id, 'gtin': gtin}
             record = _record(_canonical_identity(canonical_rows[gtin]), node_id)
         else:
             parent, audit = audits[index]
             parent_id = endpoint(parent)
-            node_id = f'augmentation:{index}'
+            node_id = augmentation_node_id(index)
             row = {'sku_id': node_id, 'gtin': str(bundle['row_bc'][index])}
             record = _copy_record(records[parent_id], bundle['payload'][index], audit, node_id)
         # Exact frozen input for every bundled endpoint; clean holdout rows keep

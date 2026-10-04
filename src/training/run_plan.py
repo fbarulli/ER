@@ -85,7 +85,12 @@ def validate_run_plan(bundle,plan,*,loss,train_frac,sample,seed=SEED):
     identity = dict(plan.get('identity') or {})
     if sample and identity.get('sample') is True:
         # A lifecycle smoke consumes its frozen objective rows and device
-        # batches. Unrelated current config edits need not invalidate them.
+        # batches. Unrelated current config edits need not invalidate them --
+        # but the relaxation is reported, never silent, so a smoke run is never
+        # mistaken for a config-bound one.
+        print('[run-plan] sample plan: config_sha256 binding RELAXED for a '
+              'lifecycle smoke; frozen objective rows and device batches are '
+              'still verified', flush=True)
         expected.pop('config_sha256')
         identity.pop('config_sha256', None)
     if plan.get('version')!=1 or identity!=expected:

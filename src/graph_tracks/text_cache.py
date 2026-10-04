@@ -28,6 +28,7 @@ def composition_fingerprint():
 def compose_texts(catalog: Path, *, composer=None):
     from core.model_input import build_sku_text, model_input_info
     from core.sku_identity import row_identity
+    from model_tracks.training_data import frozen_endpoint_text
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False, low_memory=False)
     if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
         raise ValueError('catalog requires unique nonempty sku_id')
@@ -35,10 +36,11 @@ def compose_texts(catalog: Path, *, composer=None):
     started = last_progress = time.monotonic()
     print(f'[embeddings/local] composing {len(frame):,} texts on CPU', flush=True)
     for index, (_, row) in enumerate(frame.iterrows(), 1):
-        frozen = str(row.get('frozen_payload', '') or '')
-        if frozen and not str(row.sku_id).startswith(('canonical:', 'augmentation:')):
-            raise ValueError('frozen payload overrides are only valid for shared virtual endpoints')
-        texts.append(frozen if frozen else composer(row.to_dict()) if composer is not None else
+        # Virtualness decides, not cell emptiness: the catalog writes one
+        # shared column, so every listing also carries an empty cell.
+        frozen = frozen_endpoint_text(row.sku_id, row.get('frozen_payload'),
+                                      column_present='frozen_payload' in row.index)
+        texts.append(frozen if frozen is not None else composer(row.to_dict()) if composer is not None else
                      build_sku_text(row, model_input_info(row_identity(row).as_mapping())))
         if index == len(frame) or time.monotonic() - last_progress >= 10:
             print(f'[embeddings/local] texts={index:,}/{len(frame):,} elapsed={time.monotonic()-started:.1f}s', flush=True)

@@ -38,6 +38,8 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--bundle", type=Path, required=True)
     ap.add_argument('--shared-training-data', type=Path)
     ap.add_argument('--training-binding', type=Path)
+    ap.add_argument('--allow-unshared-supervision', action='store_true',
+                    help='train without the shared supervision binding (recorded, off by default)')
     ap.add_argument("--model", default=str(tr["base_model"]))
     ap.add_argument("--epochs", type=int, default=int(tr["epochs"]))
     ap.add_argument("--lr", type=float, default=float(tr["lr"]))
@@ -84,6 +86,19 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
             "Set the profile in config/training.yaml before preparing and launching."
         )
     manifest, bundle = load_prepared_bundle(args.bundle)
+    shared_path = getattr(args, 'shared_training_data', None)
+    binding_path = getattr(args, 'training_binding', None)
+    if bool(shared_path) != bool(binding_path):
+        raise ValueError('shared training data and track binding must be supplied together')
+    if not shared_path and not args.allow_unshared_supervision:
+        # The suite always supplies the binding (model_tracks.worker). Training
+        # without it means the supervision is not the shared population, which
+        # is a deliberate, recorded decision — never a default. Checked before
+        # any other bundle interpretation so the contract fails fast.
+        raise ValueError(
+            'prepared training requires --shared-training-data with '
+            '--training-binding so the supervision is the shared population; '
+            'pass --allow-unshared-supervision to train without it on purpose')
     if args.payload != manifest.payload_variant:
         raise ValueError(
             f"bundle payload={manifest.payload_variant!r} but CLI payload={args.payload!r}"
@@ -143,6 +158,14 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
     binding_path = getattr(args, 'training_binding', None)
     if bool(shared_path) != bool(binding_path):
         raise ValueError('shared training data and track binding must be supplied together')
+    if not shared_path and not args.allow_unshared_supervision:
+        # The suite always supplies the binding (model_tracks.worker). Training
+        # without it means the supervision is not the shared population, which
+        # is a deliberate, recorded decision — never a default.
+        raise ValueError(
+            'prepared training requires --shared-training-data with '
+            '--training-binding so the supervision is the shared population; '
+            'pass --allow-unshared-supervision to train without it on purpose')
     if shared_path:
         from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
         shared = SharedTrainingData.model_validate_json(shared_path.read_text())

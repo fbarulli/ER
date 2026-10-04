@@ -1,5 +1,4 @@
 """One deduplicated prepared-input package for one all-track Colab run."""
-import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -22,6 +21,18 @@ def runtime_snapshot_files(*, ablation_config: Path | None = None) -> dict[str, 
         files[name] = TRAIN_ROOT/name
     for name in ('paths.yaml','training.yaml','identity_dimensions.yaml','identity_reviews.json','vocabulary.json','text_track.yaml','attribute_ablation.yaml'):
         files['config/'+name] = TRAIN_ROOT/'config'/name
+    # The semantic family registry is a REQUIRED frozen input: calibration
+    # refuses to start without it (core.attribute_decision raises rather than
+    # run on an open vocabulary). It lives under results/, which is gitignored
+    # AND excluded from the Colab sparse checkout, so unless it ships in the
+    # package the GPU calibration lane can never find it. Fail here, at package
+    # time, instead of on the remote after provisioning an accelerator.
+    registry = TRAIN_ROOT / 'results' / 'semantics' / 'family_registry.json'
+    if not registry.is_file():
+        raise FileNotFoundError(
+            'semantic family registry missing: run scripts/build_attribute_semantics.py '
+            'before packaging (no silent open-vocabulary gap)')
+    files['results/semantics/family_registry.json'] = registry
     if ablation_config is not None:
         source = Path(ablation_config).resolve()
         files[source.relative_to(TRAIN_ROOT).as_posix()] = source
@@ -38,10 +49,8 @@ def package(config: Path, output: Path) -> Path:
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     from training.prepared_bundle import load_prepared_bundle
     from model_tracks.training_data import (
-        augmentation_node_id,
-        canonical_node_id,
         from_bundle,
-        is_virtual_node,
+        frozen_endpoint_text,
         TrackTrainingBinding,
     )
     from model_tracks.shared_graph_data import prepare_shared_graph
@@ -81,25 +90,13 @@ def package(config: Path, output: Path) -> Path:
                             'implementation':composition_fingerprint()}
     composed,token_cache = {},{}
     # Frozen endpoint text is a CONTRACT, not a hint: a virtual endpoint whose
-    # bundle text is empty is still authoritative, so presence is the test and
-    # the composed bytes are checked against the shared endpoint digest.
-    endpoint_text_sha = {}
-    for endpoint in shared.endpoints:
-        endpoint_text_sha[canonical_node_id(endpoint.source_id) if endpoint.kind == 'canonical'
-                          else augmentation_node_id(endpoint.payload_index)
-                          if endpoint.kind == 'augmentation' else endpoint.source_id] = endpoint.text_sha256
+    # bundle text is empty is still authoritative, so virtualness decides and an
+    # empty cell is a value rather than a reason to recompose. The digest itself
+    # is verified once per endpoint by the shared graph projection.
     def compose(row):
-        frozen = row.get('frozen_payload')
+        frozen = frozen_endpoint_text(row.get('sku_id'), row.get('frozen_payload'),
+                                      column_present='frozen_payload' in row)
         if frozen is not None:
-            node_id = str(row['sku_id'])
-            if not is_virtual_node(node_id):
-                raise ValueError('frozen payload override requires shared virtual endpoint')
-            expected = endpoint_text_sha.get(node_id)
-            actual = hashlib.sha256(str(frozen).encode()).hexdigest()
-            if expected is not None and actual != expected:
-                raise ValueError(
-                    f'frozen payload text for {node_id} does not match the shared '
-                    f'endpoint digest (expected {expected}, got {actual})')
             return frozen
         key = digest({'row':row,'composition':composition_contract})
         if key not in composed:
