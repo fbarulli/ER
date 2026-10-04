@@ -62,6 +62,7 @@ class PreparedBundleManifest(BaseModel):
     static_view_ratio: float = Field(default=0.0, ge=0.0)
     effective_train_ratio: float = Field(default=0.0, ge=0.0)
     ratio_contract_note: str = Field(default="legacy ratio metadata; recompute")
+    augmentation_coverage: dict = Field(default_factory=dict)
 
 
 def _digest(path: Path) -> str:
@@ -213,6 +214,7 @@ def write_prepared_bundle(
     payload_variant: str,
     masking_profile: str,
     holdout_populations: dict[str, list[str]] | None = None,
+    augmentation_coverage: dict | None = None,
     token_checkpoint: str | None = None,
     training_tokens: dict | None = None,
     plan_loss: str | None = None,
@@ -282,6 +284,9 @@ def write_prepared_bundle(
     _validate_bundle_arrays(payload_data)
     if holdout_populations is not None:
         payload_data['holdout_populations'] = holdout_populations
+    if augmentation_coverage is not None:
+        from training.balanced_augmentation import AugmentationCoverage
+        payload_data['augmentation_coverage'] = AugmentationCoverage.model_validate(augmentation_coverage).model_dump(mode='json')
     if token_checkpoint is not None:
         from training.run_plan import prepare_run_plan
         with timing.section('objective_and_epoch_plans'):
@@ -303,6 +308,7 @@ def write_prepared_bundle(
             f"settings ({'enabled' if easy_enabled else 'disabled'}, ratio={easy_ratio:g}) "
             "are a possible contrastive projection and are not guaranteed."
         ),
+        augmentation_coverage=payload_data.get('augmentation_coverage', {}),
         n_df=len(df),
         n_payload=len(payload),
         n_pos=len(pos),

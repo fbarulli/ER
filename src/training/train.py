@@ -1376,7 +1376,7 @@ def _main_inner(_wandb) -> None:
         flush=True,
     )
     print(f"[mint-quality] rejected edits: {dict(mint_rejections)}", flush=True)
-    if args.mask_frac > 0 and bool(mask_cfg["track_visibility"]):
+    if args.mask_frac > 0 and bool(mask_cfg["track_visibility"]) and not balanced_policy.enabled:
         _wvl(_pd.DataFrame([{"reason": key, "count": value} for key, value in mint_rejections.items()]),
              "mint_rejections.csv", run_tag, bool(args.sample))
     timing.mark("splits_mining_balance")
@@ -1441,6 +1441,8 @@ def _main_inner(_wandb) -> None:
             gate_results_csv=(RESULTS / F["gate_results"]).read_bytes(),
             payload_variant=args.payload,
             holdout_populations=frozen_holdout,
+            augmentation_coverage=(balanced_coverage.model_dump(mode='json')
+                if args.mask_frac > 0 and balanced_policy.enabled else None),
             masking_profile=str(mask_cfg["profile"]),
             token_checkpoint=str(args.model),
             plan_loss=args.loss,

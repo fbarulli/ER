@@ -696,6 +696,12 @@ def _mnrl_training_triples_with_populations(
     negatives_by_anchor: dict[int, list[int]] = {}
     for anchor, negative in np.asarray(train_neg, dtype=int).reshape(-1, 2):
         negatives_by_anchor.setdefault(int(anchor), []).append(int(negative))
+    selected_edges = set(map(tuple,np.asarray(train_neg,dtype=int).reshape(-1,2).tolist()))
+    for audit in hard_negative_mask_audit or []:
+        if audit.get('target_mode') == 'counterfactual':
+            source, pair, copy = (int(audit[key]) for key in ('anchor_payload_idx','pair_payload_idx','copy_payload_idx'))
+            if (copy,pair) in selected_edges and pair in positives_by_anchor.get(source,set()):
+                negatives_by_anchor.setdefault(source,[]).append(copy)
 
     triples: list[tuple[tuple[int, int, int], str]] = []
     seen: set[tuple[int, int, int]] = set()

@@ -236,9 +236,19 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
     mask_pairs=np.asarray([(a,b) for a,b in positives if a in usable],dtype=int).reshape(-1,2)
     if len(mask_pairs) < spec.counts.masked_positives:
         raise ValueError(f'positive masking needs {spec.counts.masked_positives} licensed anchors; only {len(mask_pairs)} available')
-    chosen = rng.sample(list(map(tuple,mask_pairs.tolist())),spec.counts.masked_positives)
-    _,new_payload,new_bc,n_mask,pos_audit=augment_pairs(np.asarray(chosen,dtype=int).reshape(-1,2),new_payload,np.asarray(new_bc),
-        frac=1.,seed=seed+1,population='positive',lo=.1,hi=.2)
+    chosen = list(map(tuple,mask_pairs.tolist())); rng.shuffle(chosen)
+    pos_audit=[]
+    for a,b in chosen:
+        if len(pos_audit)>=spec.counts.masked_positives: break
+        masked=context_mask(original_payload[a],'context',spec.mask_extent,rng)
+        if masked is None: continue
+        text,extent=masked;copy=len(new_payload)
+        new_payload.append(text);new_bc.append(str(row_bc[a]))
+        pos_audit.append(MaskAuditEntry(anchor_payload_idx=a,pair_payload_idx=b,copy_payload_idx=copy,
+            gtin=str(row_bc[a]),anchor_text=original_payload[a],masked_text=text,
+            realized_extent=extent,population='positive',target_mode='targeted',
+            generation_variant='masked',fields_hit=[]).model_dump())
+    n_mask=len(pos_audit)
     masked_pairs=np.asarray([(r['copy_payload_idx'],r['pair_payload_idx']) for r in pos_audit],dtype=int).reshape(-1,2)
     final_pos=np.vstack([pos_with_vendors,masked_pairs]) if len(masked_pairs) else pos_with_vendors
     new_features=extend_augmented_features(new_features,new_payload,pos_audit)
