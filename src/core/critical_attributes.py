@@ -33,18 +33,16 @@ CRITICAL_ATTRIBUTE_DIMENSIONS: tuple[str, ...] = (
 # read here WITHOUT importing core.common — this module is loaded while
 # core.common is still importing (common -> schemas -> ... ->
 # attribute_conflicts -> here), so a top-level core.common import would be
-# circular. The reader locates the repo root (config/ + pyproject.toml)
-# exactly like core.common._find_project_root and reads the same file, so the
-# config file remains the single source of truth.
+# circular. Root discovery goes through core.project_root (a leaf with zero
+# core imports), so the env override EUROMONITOR_PROJECT_ROOT is honored
+# EXACTLY as core.common honors it — one root, one vocabulary, everywhere.
 @lru_cache(maxsize=1)
 def _attribute_vocabulary() -> dict:
-    for candidate in Path(__file__).resolve().parents:
-        if (candidate / "config").is_dir() and (candidate / "pyproject.toml").is_file():
-            data = json.loads(
-                (candidate / "config" / "vocabulary.json").read_text(encoding="utf-8")
-            )
-            return data.get("attribute_vocabulary") or {}
-    raise RuntimeError("Could not locate project root for config/vocabulary.json")
+    from core.project_root import find_project_root
+
+    root = find_project_root(Path(__file__).resolve())
+    data = json.loads((root / "config" / "vocabulary.json").read_text(encoding="utf-8"))
+    return data.get("attribute_vocabulary") or {}
 
 
 _VOCAB = _attribute_vocabulary()
@@ -78,15 +76,10 @@ DECLARED_FLAVOR_FIELD_RE = re.compile(r"(?:^|;)\s*flavou?r\s*:\s*([^;]*)", re.IG
 
 def _field_tokens(attribute: object, key: str) -> frozenset[str]:
     """Lowercased comma-split tokens of one `Key:` field in the attribute cell."""
-    found: set[str] = set()
-    for part in str(attribute or "").split(";"):
-        if ":" not in part:
-            continue
-        raw_key, raw_value = part.split(":", 1)
-        if normalized_attribute_text(raw_key) != key:
-            continue
-        found.update(token.strip().lower() for token in raw_value.split(",") if token.strip())
-    return frozenset(found)
+    from core.text import attribute_field_value
+
+    key = normalized_attribute_text(key)
+    return frozenset(attribute_field_value(attribute, key))
 
 
 def _caffeine_positive(values: frozenset[str]) -> bool:
@@ -109,13 +102,19 @@ def _has_caffeine_source(*texts: object) -> bool:
 
 def _without_field(attribute: object, key: str) -> str:
     """Attribute cell minus one `Key:` field (the `Caffeine:` key itself would
-    otherwise always satisfy a caffeine-source search)."""
-    kept = [
+    otherwise always satisfy a caffeine-source search).
+
+    Keeps its own split(';') walk because it reconstructs whole segments —
+    including colon-less ones, which core.text.attribute_fields skips by
+    contract. The KEY normalization is the shared semantics; the segment
+    reconstruction is not expressible over (key, value) pairs.
+    """
+    key = normalized_attribute_text(key)
+    return ";".join(
         part
         for part in str(attribute or "").split(";")
         if not (":" in part and normalized_attribute_text(part.split(":", 1)[0]) == key)
-    ]
-    return ";".join(kept)
+    )
 
 
 def source_consistency_flags(

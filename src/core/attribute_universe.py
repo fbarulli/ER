@@ -357,13 +357,9 @@ class AttributeUniverse(BaseModel):
 
         out: dict[str, object] = {}
         unclassified: set[str] = set()
-        for part in str(cell or "").split(";"):
-            if not part.strip():
-                continue
-            if ":" not in part:
-                continue
-            raw_key, raw_value = part.split(":", 1)
-            key = normalized_attribute_text(raw_key)
+        from core.text import attribute_fields
+
+        for key, raw_value in attribute_fields(cell):
             tokens = tuple(
                 token.strip().lower()
                 for token in raw_value.split(",")
@@ -435,7 +431,7 @@ class AttributeUniverse(BaseModel):
         import pandas as pd
 
         from core.gtin import gtin_validity, normalize_and_validate_gtin
-        from core.text import normalized_attribute_text
+        from core.text import attribute_fields, normalized_attribute_text
 
         frame = self.frame
         gtins = frame["gtin"].fillna("").astype(str)
@@ -447,11 +443,7 @@ class AttributeUniverse(BaseModel):
         unclassified_atoms: dict[str, dict[str, frozenset]] = {}
         conflict_predicate = self._conflict_predicates()
         for idx, cell in frame["attribute"].fillna("").items():
-            for part in str(cell).split(";"):
-                if ":" not in part:
-                    continue
-                raw_key, raw_value = part.split(":", 1)
-                key = normalized_attribute_text(raw_key)
+            for key, raw_value in attribute_fields(cell):
                 value = self._parse_field(key, raw_value)
                 if value is None:
                     continue

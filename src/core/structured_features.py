@@ -101,6 +101,15 @@ def info_from_sets(
     attribute cell (the canonical record stores no such column, so its side
     reads an empty set from absent records — the same omit-when-unobserved
     treatment every categorical field gets).
+
+    ``made_from`` (fcc2c07 `made_from_set`) is deliberately NOT a
+    model-channel field: it is a supporting-review dimension whose
+    consumption is config-owned
+    (rand_matching.targeted_veto_gates.supporting_feature_review_dimensions,
+    read through the gate lane's _universe_value). Adding it here would
+    change the model text token inventory — a feature decision, not a
+    mechanical capture — so the model side stays untouched until that
+    configuration ruling changes.
     """
     return {
         "volume": _as_set(volume, kind="volume"),

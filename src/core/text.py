@@ -496,6 +496,43 @@ def attributes_keys(series: pd.Series, limit: int = 5000) -> Counter:
     return keys
 
 
+def attribute_fields(cell: object) -> list[tuple[str, str]]:
+    """One attributes cell -> [(normalized_key, raw_value), ...], deterministic.
+
+    THE shared semantics for `Key: value` segment parsing (the docstring
+    contract AttributeUniverse.parse spells out): split(';'), key before ':',
+    key normalized through :func:`normalized_attribute_text`, value kept RAW
+    (comma-splitting and lowercasing belong to the caller). Blank segments
+    and segments without ':' are skipped — this is the six-call walk that
+    used to be re-implemented in attribute_universe.parse, the universe
+    census, audit_feature_capture, audit_attribute_readings._key_present and
+    critical_attributes._field_tokens/_without_field; one implementation
+    ends their drift. Callers that must CENSUS malformed segments (they are
+    parser-gap evidence) keep their own walk — see
+    product_dimensions.row_dimensions.
+    """
+    found: list[tuple[str, str]] = []
+    for part in str(cell or "").split(";"):
+        if ":" not in part:
+            continue
+        raw_key, raw_value = part.split(":", 1)
+        if not raw_value.strip():
+            continue
+        found.append((normalized_attribute_text(raw_key), raw_value.strip()))
+    return found
+
+
+def attribute_field_value(cell: object, key: str) -> list[str]:
+    """Raw value tokens of one `Key:` field (stripped, comma-split)."""
+    return [
+        token.strip().lower()
+        for name, raw_value in attribute_fields(cell)
+        if name == normalized_attribute_text(key)
+        for token in raw_value.split(",")
+        if token.strip()
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Noise-probe patterns (used by 01c_sparsity_noise.py — probes, not extraction)
 # ---------------------------------------------------------------------------

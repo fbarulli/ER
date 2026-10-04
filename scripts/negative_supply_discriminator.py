@@ -60,8 +60,17 @@ def _features(frame: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
     return cols, names
 
 
-def discriminate(pairs: pd.DataFrame) -> dict:
-    """Fit and read the separation; the verdict is loud by construction."""
+def discriminate(pairs: pd.DataFrame, spec=None) -> dict:
+    """Fit and read the separation; the verdict is loud by construction.
+
+    Thresholds ride the negative-supply lane's validated spec
+    (DiscriminatorSpec via EUROMONITOR_NEGATIVE_SUPPLY_SPEC JSON) — the same
+    config document that drives mining, so tuning the run-fail gates is a
+    config edit, not a script edit.
+    """
+    from training.negative_supply import DiscriminatorSpec
+
+    spec = spec or DiscriminatorSpec()
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import roc_auc_score
     from sklearn.model_selection import GroupKFold, cross_val_score
@@ -74,11 +83,14 @@ def discriminate(pairs: pd.DataFrame) -> dict:
     for column in ("anchor_gtin", "partner_gtin"):
         if column not in arm.columns:
             arm[column] = ""
-    if arm["population"].nunique() < 2 or len(minted) < 10 or len(real) < 10:
+    if arm["population"].nunique() < 2 or len(minted) < spec.min_arm_rows or len(real) < spec.min_arm_rows:
         return {
             "verdict": "insufficient",
             "real_rows": int(len(real)), "minted_rows": int(len(minted)),
-            "reason": "need >= 10 rows on each arm before the weapon-scale check",
+            "reason": (
+                f"need >= {spec.min_arm_rows} rows on each arm before the "
+                "weapon-scale check"
+            ),
         }
     X, names = _features(arm)
     y = (arm["population"] == "minted_partner").astype(int).to_numpy()
@@ -87,15 +99,17 @@ def discriminate(pairs: pd.DataFrame) -> dict:
         anchor = str(getattr(row, "anchor_gtin", "") or "").strip()
         groups.append(anchor if anchor else f"__mint__{position}")
     groups = np.asarray(groups)
-    model = LogisticRegression(max_iter=2000)
-    splitter = GroupKFold(n_splits=min(5, np.unique(groups).shape[0]))
+    model = LogisticRegression(max_iter=spec.max_iter)
+    splitter = GroupKFold(
+        n_splits=min(spec.cv_folds, np.unique(groups).shape[0])
+    )
     auc = float(cross_val_score(
         model, X, y, cv=splitter, scoring="roc_auc", groups=groups
     ).mean())
     model.fit(X, y)
     coefficients = dict(sorted(zip(names, model.coef_[0].round(4)), key=lambda kv: -abs(kv[1])))
-    verdict = "SEPARABLE" if auc >= 0.90 else (
-        "borderline" if auc >= 0.75 else "not-separable"
+    verdict = "SEPARABLE" if auc >= spec.separable_auc else (
+        "borderline" if auc >= spec.borderline_auc else "not-separable"
     )
     return {
         "verdict": verdict,
@@ -103,17 +117,29 @@ def discriminate(pairs: pd.DataFrame) -> dict:
         "feature_coefficients": coefficients,
         "real_rows": int(len(real)),
         "minted_rows": int(len(minted)),
+        "thresholds": {
+            "separable_auc": spec.separable_auc,
+            "borderline_auc": spec.borderline_auc,
+            "min_arm_rows": spec.min_arm_rows,
+            "cv_folds": spec.cv_folds,
+        },
         "note": REPO_NOTE,
     }
 
 
 def main() -> None:
+    from training.negative_supply import NegativeSupplySpec
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pairs_csv", type=Path, help="emitted pairs.csv")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
     pairs = pd.read_csv(args.pairs_csv)
-    report = discriminate(pairs)
+    # The lane spec owns the thresholds (env EUROMONITOR_NEGATIVE_SUPPLY_SPEC
+    # JSON overrides module defaults, exactly like the mining stage).
+    supply_spec = NegativeSupplySpec()
+    spec = supply_spec.discriminator or DiscriminatorSpec()
+    report = discriminate(pairs, spec=spec)
     print(json.dumps(report, indent=2, sort_keys=True))
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -121,7 +147,7 @@ def main() -> None:
     if report.get("verdict") == "SEPARABLE":
         raise SystemExit(
             "real-vs-minted discriminator: SEPARABLE — fix the generator "
-            "before generating 50k minted rows"
+            f"before minting up to {supply_spec.mint.max_minted:,} partner rows"
         )
 
 

@@ -468,9 +468,14 @@ def extract_packaging_level(title: str) -> set[str]:
 # 2.5%-15%, census-verified); juice content 63,117 rows / 27 numeric bands;
 # carbonization 56,125 rows (prose claims already flow through
 # extract_critical_claims — this section mirrors the value vocabulary);
-# water type 18,850 / naturally derived 28,637 / made from 19,338 (no set
-# field exists — captured for the census→wiring parity check only, never a
-# model-visible field). The veto LIST itself stays config-owned
+# water type 18,850 / naturally derived 28,637 / made from 19,338. Made from
+# now HAS a canonical set column (`made_from_set`, fcc2c07: title+attribute
+# lexicon capture) — but the attribute-cell capture here stays, and it stays
+# a supporting-review (never model-visible) channel: consumption is
+# config-owned (training.yaml
+# rand_matching.targeted_veto_gates.supporting_feature_review_dimensions,
+# read via attribute_conflicts._universe_value "made from"). The veto LIST
+# itself stays config-owned
 # (training.yaml rand_matching.targeted_veto_gates.veto_dimensions) — this
 # capture is evidence, config-owned wiring decides consumption.
 # ═══════════════════════════════════════════════════════════════════════════

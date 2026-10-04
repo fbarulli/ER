@@ -1,7 +1,6 @@
-"""Compare added-sugar title semantics on a fingerprinted source population."""
+"""Screen added-sugar titles with the SSOT regex on a fingerprinted population."""
 import argparse
 import json
-import re
 from pathlib import Path
 
 import pandas as pd
@@ -12,7 +11,7 @@ from core.audit_guard import (
     self_comparison_control,
 )
 from core.common import DATA_PATH, data_cfg
-from core.critical_attributes import extract_critical_claims
+from core.critical_attributes import NO_ADDED_SUGAR_RE, extract_critical_claims
 from core.manifest import sha256_file
 from core.sweetener_values import negated_sweetener_types
 
@@ -26,7 +25,7 @@ def main():
         columns=data_cfg().column_mapping).fillna("")
     rows = []
     for row in frame.to_dict("records"):
-        if re.search(r"\b(?:no|zero|0|without)\s+sugars?\s+added\b", row["sku_name_eng"], re.I):
+        if NO_ADDED_SUGAR_RE.search(row["sku_name_eng"]):
             rows.append({"sku_id": str(row["sku_id"]), "sku_name_eng": row["sku_name_eng"],
                          "claims": sorted(extract_critical_claims(row["sku_name_eng"])["sweetener"]),
                          "negated_ingredients": sorted(negated_sweetener_types(row["sku_name_eng"]))})
@@ -37,8 +36,12 @@ def main():
     # no_sugar = 0 and no_added_sugar = 100% of the screen are the INTENDED
     # outcomes of the semantic fix, so a 0%/100% check there would be a false
     # alarm (it fired on the first run and is deliberately not applied).
+    # The guard's vocabulary mirrors the SSOT NO_ADDED_SUGAR_RE spellings this
+    # screen now shares with core.critical_attributes — the audit and the
+    # extractor measure one population.
     assert_vocabulary_overlap(
-        {"no sugar added", "zero sugar added", "no sugars added"},
+        {"no added sugar", "without added sugar", "no sugars added",
+         "zero sugar added", "0 added sugar"},
         frame["sku_name_eng"], label="added-sugar",
     )
     assert_not_degenerate("screened_rows", len(rows), total=len(frame), label="added-sugar")

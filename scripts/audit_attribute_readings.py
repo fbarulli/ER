@@ -28,18 +28,20 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.audit_guard import guard_dimensions
+from core.audit_guard import (
+    attribute_dimension_guard_specs,
+    guard_dimensions,
+)
 from core.common import F, RESULTS
 from core.product_dimensions import dimension_policy, evaluate_dimensions, row_dimensions
 from core.text import normalized_attribute_text
 
 
 def _key_present(cell: str, key: str) -> bool:
+    from core.text import attribute_fields
+
     needle = normalized_attribute_text(key)
-    for part in str(cell or "").split(";"):
-        if ":" in part and normalized_attribute_text(part.split(":", 1)[0]) == needle:
-            return True
-    return False
+    return any(name == needle for name, _ in attribute_fields(cell))
 
 
 def main() -> None:
@@ -71,21 +73,20 @@ def main() -> None:
                 key_present_rows[name].append(index)
 
     attr_texts = list(frame["attribute"])
-    sample = evidence[:200]
-    guard_specs = [
-        {
-            "name": name,
-            "values": values.get(name, set()),
-            "source_texts": attr_texts,
-            "self_compare": (
-                lambda a, b, _n=name: evaluate_dimensions(a, b)[_n]["status"] != "different"
-            ),
-            "self_samples": sample,
-            "populated": len(populated_rows.get(name, [])),
-            "total": len(frame),
-        }
-        for name in sorted(policy.attributes)
-    ]
+    # Guard specs built through the shared helper (core.audit_guard), same
+    # comparator and sample policy as audit_identity_dimensions.
+    def _dimension_status(a, b, name: str) -> str:
+        return evaluate_dimensions(a, b)[name]["status"]
+
+    guard_specs = attribute_dimension_guard_specs(
+        policy.attributes,
+        values=values,
+        source_texts=attr_texts,
+        populated={name: len(rows) for name, rows in populated_rows.items()},
+        total=len(frame),
+        evaluate_status=_dimension_status,
+        evidence_samples=evidence,
+    )
     guard_results = guard_dimensions(guard_specs, label="attribute-readings")
     hard_failed = {r.name for r in guard_results if not r.passed}
     unmeasured = {r.name for r in guard_results if r.unmeasured}

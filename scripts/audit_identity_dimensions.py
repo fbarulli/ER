@@ -15,7 +15,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.audit_guard import guard_dimensions
+from core.audit_guard import (
+    attribute_dimension_guard_specs,
+    guard_dimensions,
+    self_comparison_parse_gaps,
+)
 from core.common import F, RESULTS
 from core.gtin import normalize_and_validate_gtin
 from core.product_dimensions import dimension_policy, row_dimensions, evaluate_dimensions
@@ -86,46 +90,34 @@ def main() -> None:
             row[f"{label}_both_observed"] = observed
             row[f"{label}_difference_rate"] = stats["different"] / observed if observed else None
         table.append(row)
-    # Fail-closed guards, one per registered dimension (all 37). For each:
-    # its observed value vocabulary must occur in the source attribute text,
-    # a row compared with itself must never report that dimension "different"
+    # Fail-closed guards, one per registered dimension (all 37), built
+    # through the shared spec helper (core.audit_guard). For each: its
+    # observed value vocabulary must occur in the source attribute text, a
+    # row compared with itself must never report that dimension "different"
     # or "unparsed", and its coverage must not be exactly 0% or 100% (a
     # degenerate dimension is reported unmeasured, not silently published).
-    attr_texts = list(frame["attribute"])
-    self_sample = evidence[:200]
+    def _dimension_status(a, b, name: str) -> str:
+        return evaluate_dimensions(a, b)[name]["status"]
 
-    def _self_statuses(name: str) -> list[str]:
-        return [evaluate_dimensions(e, e)[name]["status"] for e in self_sample]
-
-    guard_specs = [
-        {
-            "name": name,
-            # A self-comparison may legitimately be "equal", "unknown" (no
-            # data), or "unparsed" (a real parser gap, reported below). Only
-            # "different" — a row disagreeing with itself — is a broken
-            # comparator and a hard failure.
-            "self_compare": (
-                lambda a, b, _n=name: evaluate_dimensions(a, b)[_n]["status"]
-                != "different"
-            ),
-            "self_samples": self_sample,
-            "values": values.get(name, set()),
-            "source_texts": attr_texts,
-            "populated": coverage.get(name, 0),
-            "total": len(frame),
-        }
-        for name in sorted(policy.attributes)
-    ]
+    guard_specs = attribute_dimension_guard_specs(
+        policy.attributes,
+        values=values,
+        source_texts=list(frame["attribute"]),
+        populated=coverage,
+        total=len(frame),
+        evaluate_status=_dimension_status,
+        evidence_samples=evidence,
+    )
     guard_results = guard_dimensions(guard_specs, label="identity-dimensions")
     unmeasured = [r.name for r in guard_results if r.unmeasured]
     # Parser gaps surfaced by the self-comparison: a dimension whose own value
     # cannot be parsed back (e.g. Caffeine "200+ mg") reports "unparsed"
     # against itself. Reported, never silently absorbed.
-    parse_gaps = {
-        name: statuses.count("unparsed")
-        for name in sorted(policy.attributes)
-        if (statuses := _self_statuses(name)) and statuses.count("unparsed")
-    }
+    parse_gaps = self_comparison_parse_gaps(
+        policy.attributes,
+        evaluate_status=_dimension_status,
+        evidence_samples=evidence,
+    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(table).to_csv(args.output_dir / "dimension_coverage.csv", index=False)
     report = {"rows": len(frame), "registered_dimensions": len(policy.attributes),

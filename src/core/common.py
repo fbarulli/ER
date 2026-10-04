@@ -34,20 +34,9 @@ from typing import Any, Sequence
 
 def _find_project_root() -> Path:
     """Locate the project from stable markers, never a magic parent offset."""
-    override = os.environ.get("EUROMONITOR_PROJECT_ROOT")
-    if override:
-        root = Path(override).expanduser().resolve()
-        if (root / "config").is_dir() and (root / "pyproject.toml").is_file():
-            return root
-        raise RuntimeError(
-            "EUROMONITOR_PROJECT_ROOT must contain config/ and pyproject.toml: "
-            f"{root}"
-        )
-    source_file = Path(__file__).resolve()
-    for candidate in source_file.parents:
-        if (candidate / "config").is_dir() and (candidate / "pyproject.toml").is_file():
-            return candidate
-    raise RuntimeError(f"Could not locate project root from {source_file}")
+    from core.project_root import find_project_root
+
+    return find_project_root(Path(__file__).resolve())
 
 
 TRAIN_ROOT = _find_project_root()
@@ -146,6 +135,41 @@ def _read_vocabulary(path: Path) -> dict:
             raise SystemExit("vocabulary.category_macros keys and values must be non-empty strings")
         if category.strip() == macro.strip():
             raise SystemExit(f"vocabulary.category_macros maps {category!r} to itself")
+    # attribute_vocabulary (fcc2c07): the lexicons behind the identity
+    # extraction (flavor, made-from, caffeine, sugar). A missing/degenerate
+    # key must fail LOUDLY, not silently degrade extraction to zero hits.
+    attributes = vocabulary.get("attribute_vocabulary")
+    if not isinstance(attributes, dict) or not attributes:
+        raise SystemExit("vocabulary.attribute_vocabulary must be a non-empty mapping")
+    _ATTR_VOCAB_LIST_KEYS = (
+        "flavor_lexicon", "declared_flavor_lexicon", "made_from_lexicon",
+        "made_from_phrases", "caffeine_sources", "sugar_ingredients",
+    )
+    for key in _ATTR_VOCAB_LIST_KEYS:
+        values = attributes.get(key)
+        if not isinstance(values, list) or not values or not all(
+            isinstance(value, str) and value.strip() for value in values
+        ):
+            raise SystemExit(
+                f"vocabulary.attribute_vocabulary.{key} must be a non-empty list of strings"
+            )
+    aliases = attributes.get("flavor_aliases")
+    if not isinstance(aliases, dict) or not aliases or not all(
+        isinstance(alias, str) and alias.strip()
+        and isinstance(target, str) and target.strip()
+        for alias, target in aliases.items()
+    ):
+        raise SystemExit(
+            "vocabulary.attribute_vocabulary.flavor_aliases must be a non-empty "
+            "string-to-string mapping"
+        )
+    targets = {target.strip().casefold() for target in aliases.values()}
+    missing = sorted(targets - {value.strip().casefold() for value in attributes["flavor_lexicon"]})
+    if missing:
+        raise SystemExit(
+            "vocabulary.attribute_vocabulary.flavor_aliases targets missing from "
+            f"flavor_lexicon: {missing}"
+        )
     return vocabulary
 
 

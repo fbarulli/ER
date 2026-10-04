@@ -11,7 +11,7 @@ import pandas as pd
 from core.audit_guard import assert_vocabulary_overlap, self_comparison_control
 from core.common import DATA_PATH, data_cfg
 from core.manifest import sha256_file
-from core.text import normalized_attribute_text
+from core.text import attribute_fields, normalized_attribute_text
 from core.attribute_universe import attribute_registry
 from core.date_evidence import extract_date_evidence
 if __package__ in (None, ""):
@@ -29,12 +29,7 @@ def main():
     registered = attribute_registry()
     keys, date_keys = Counter(), Counter()
     for cell in frame["attribute"]:
-        row_keys = set()
-        for part in cell.split(";"):
-            if ":" in part:
-                key, value = part.split(":", 1)
-                if value.strip():
-                    row_keys.add(normalized_attribute_text(key))
+        row_keys = {name for name, raw_value in attribute_fields(cell)}
         keys.update(row_keys)
         date_keys.update(key for key in row_keys if re.search(r"\b(?:date|expiry|expiration|shelf life|best before)\b", key))
     # Screens preserve source strings; numbers and dates alone are not

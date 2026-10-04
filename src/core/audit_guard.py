@@ -225,3 +225,79 @@ def guard_dimensions(
             f"[{label}] {len(failed)}/{len(results)} dimension guard(s) failed:\n  {detail}"
         )
     return results
+
+
+# The attribute self-comparison sample size (a known-positive control should
+# exercise a meaningful slice, not the full corpus). One constant, not a
+# per-script magic number: audit_identity_dimensions and
+# audit_attribute_readings build their guard specs through
+# :func:`attribute_dimension_guard_specs`.
+ATTRIBUTE_SELF_SAMPLE = 200
+
+
+def attribute_dimension_guard_specs(
+    dimensions: Iterable[str],
+    *,
+    values: Mapping[str, Iterable[str]],
+    source_texts: Iterable[str],
+    populated: Mapping[str, int],
+    total: int,
+    evaluate_status: Callable[[Any, Any, str], str],
+    evidence_samples: Sequence[Any],
+) -> list[dict[str, Any]]:
+    """Build the per-dimension guard specs shared by the attribute audits.
+
+    ``evaluate_status(left, right, dimension) -> status`` is the audit's
+    dimension comparator (typically ``core.product_dimensions
+    .evaluate_dimensions(a, b)[dim]["status"])``, injected so this stays a
+    pure no-import helper. A self-comparison may legitimately be "equal",
+    "unknown" (no data), or "unparsed" (a real parser gap, reported
+    separately); only "different" — a row disagreeing with itself — is a
+    broken comparator and a hard failure.
+
+    Returns spec dicts ready for :func:`guard_dimensions`, plus the
+    parse-gap census over the same sample (dimension -> rows reported
+    "unparsed" against themselves), so every audit reports parser gaps the
+    same way instead of two drifted copies.
+    """
+    sample = list(evidence_samples)[:ATTRIBUTE_SELF_SAMPLE]
+    attr_texts = list(source_texts)
+    specs: list[dict[str, Any]] = []
+    for name in sorted(dimensions):
+        specs.append({
+            "name": name,
+            "self_compare": (
+                lambda a, b, _n=name: evaluate_status(a, b, _n) != "different"
+            ),
+            "self_samples": sample,
+            "values": set(values.get(name, ())),
+            "source_texts": attr_texts,
+            "populated": populated.get(name, 0),
+            "total": total,
+        })
+    return specs
+
+
+def self_comparison_parse_gaps(
+    dimensions: Iterable[str],
+    *,
+    evaluate_status: Callable[[Any, Any, str], str],
+    evidence_samples: Sequence[Any],
+) -> dict[str, int]:
+    """Census rows a dimension comparator cannot parse back from itself.
+
+    A dimension whose own value cannot be parsed back (e.g. Caffeine
+    "200+ mg") reports "unparsed" against itself — reported, never silently
+    absorbed. Duplicates zero logic: injects the same comparator as
+    :func:`attribute_dimension_guard_specs`.
+    """
+    sample = list(evidence_samples)[:ATTRIBUTE_SELF_SAMPLE]
+    gaps: dict[str, int] = {}
+    for name in sorted(dimensions):
+        count = sum(
+            evaluate_status(evidence, evidence, name) == "unparsed"
+            for evidence in sample
+        )
+        if count:
+            gaps[name] = count
+    return gaps
