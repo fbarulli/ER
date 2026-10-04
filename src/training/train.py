@@ -840,6 +840,7 @@ def _main_inner(_wandb) -> None:
         neg_sources = np.concatenate([neg_sources, added_sources])
         train_neg, train_neg_sources = neg, neg_sources.copy()
         coverage_path = RESULTS / 'training' / run_tag / 'balanced_augmentation.json'
+        coverage_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(balanced_coverage.model_dump(mode='json'), coverage_path)
         print(f'[balanced-augmentation] {balanced_coverage.model_dump(mode="json")} -> {coverage_path}', flush=True)
     if args.mask_frac > 0 and not balanced_policy.enabled:
