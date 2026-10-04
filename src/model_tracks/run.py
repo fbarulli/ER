@@ -60,12 +60,30 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         inputs = json.loads((TRAIN_ROOT / 'model_tracks_package.json').read_text())['preflight']
     else:
         inputs = preflight(config)
+    # Reject an unusable parallel runtime before the baseline consumes GPU
+    # time. MPS is a required capability for this suite, not a late fallback.
+    if cfg.device == 'cuda':
+        import shutil
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError('CUDA required for all-track GPU run')
+        if not shutil.which('nvidia-cuda-mps-control'):
+            raise RuntimeError('true multi-process GPU parallelism requires NVIDIA MPS in this runtime')
+        free, _ = torch.cuda.mem_get_info()
+        required = sum(cfg.memory_reservations_gb.values()) + cfg.gpu_headroom_gb
+        if cfg.memory_reservations_gb and required * 1024**3 > free:
+            raise RuntimeError('measured combined worker memory exceeds available GPU memory')
     if gpu_only:
         from model_tracks.baseline_export import forward as forward_baseline
         from core.common import resolve_model
         setup = (TRAIN_ROOT/cfg.setup_dir).resolve()
         events.emit('baseline_embedding','started',device='cuda')
         baseline = forward_baseline(setup,Path(resolve_model(cfg.text_model)))
+        # The baseline model and features are now out of scope. Release this
+        # supervisor's cached allocations before the three child workers
+        # establish their independent CUDA allocators.
+        import torch
+        torch.cuda.empty_cache()
         import shutil
         baseline_output = output/'baseline'
         baseline_output.mkdir(exist_ok=True)
