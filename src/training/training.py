@@ -4265,6 +4265,18 @@ def train_one_config(
             class ResumableSentenceTransformerTrainer(SentenceTransformerTrainer):
                 """HF Trainer plus an explicit manifest of all resume state."""
 
+                def add_model_card_callback(self, default_args_dict):
+                    if prepared_tokens is None:
+                        return super().add_model_card_callback(default_args_dict)
+                    from training.token_inputs import model_card_text_dataset
+                    original_train, original_eval = self.train_dataset, self.eval_dataset
+                    try:
+                        self.train_dataset = model_card_text_dataset(original_train)
+                        self.eval_dataset = model_card_text_dataset(original_eval)
+                        return super().add_model_card_callback(default_args_dict)
+                    finally:
+                        self.train_dataset, self.eval_dataset = original_train, original_eval
+
                 def get_batch_sampler(self, dataset, batch_size, drop_last, **kwargs):
                     if "pair_id" in dataset.column_names or loss == "triplet":
                         return FrozenBatchSampler(

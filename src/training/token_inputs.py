@@ -7,10 +7,44 @@ import json
 import time
 import numpy as np
 import torch
+from pydantic import BaseModel, ConfigDict
 
 from core.encoding_inputs import prepare_text_features, tokenization_policy
 
 TEXT_COLUMNS = {"sentence1", "sentence2", "anchor", "positive", "negative"}
+
+
+class PreparedTaskContract(BaseModel):
+    """Tasks that preserve the native features in a frozen token table."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    input_module: str
+    task_independent: bool
+
+    @classmethod
+    def from_model(cls, model):
+        from sentence_transformers.models import Transformer
+        module = model[0]
+        neutral = (type(module) is Transformer
+                   and getattr(module, "transformer_task", None) == "feature-extraction"
+                   and set(getattr(module, "modality_config", {})) == {"text"}
+                   and all(getattr(module, name, None) is None for name in
+                           ("query_length", "document_length", "query_expansion")))
+        return cls(input_module=type(module).__module__ + "." + type(module).__qualname__,
+                   task_independent=neutral)
+
+    def validate_task(self, task):
+        if task is not None and (not self.task_independent or task not in {"query", "document"}):
+            raise ValueError("prepared training tokens do not support task routing; prepare that task explicitly")
+
+
+def model_card_text_dataset(dataset):
+    """Report model inputs without tokenizing population or routing telemetry."""
+    if dataset is None:
+        return None
+    if isinstance(dataset, dict):
+        return type(dataset)({name: model_card_text_dataset(value) for name, value in dataset.items()})
+    columns = [name for name in dataset.column_names if name in TEXT_COLUMNS or name == "label"]
+    return dataset.select_columns(columns)
 
 
 def checkpoint_policy(model):
@@ -52,6 +86,7 @@ def prepare_training_tokens(model, payload, *, batch_size=256):
                 last_progress = time.monotonic()
         variants[prompt] = {"rows": rows, "constants": constants or {}}
     return {"version": 1, "policy": policy, "texts": texts, "variants": variants,
+            "task_contract": PreparedTaskContract.from_model(model).model_dump(),
             "payload_sha256": hashlib.sha256(json.dumps(list(payload), ensure_ascii=False).encode()).hexdigest()}
 
 
@@ -69,6 +104,9 @@ class PreparedTokenLookup:
         if any(text not in self.indices for text in payload):
             raise ValueError("prepared training tokens miss a fixed payload text")
         self.model = model
+        self.task_contract = PreparedTaskContract.from_model(model)
+        if "task_contract" in table and PreparedTaskContract.model_validate(table["task_contract"]) != self.task_contract:
+            raise ValueError("prepared training task contract differs from the native input module")
         self.original = model.preprocess
         self.generated = Counter()
         self.model.preprocess = self.preprocess
@@ -78,8 +116,11 @@ class PreparedTokenLookup:
             self.generated[text] += 1
 
     def preprocess(self, inputs, *args, prompt=None, task=None, **kwargs):
-        if args or task is not None:
+        if args:
             raise ValueError("prepared training tokens do not support task routing; prepare that task explicitly")
+        if task is not None and PreparedTaskContract.from_model(self.model) != self.task_contract:
+            raise ValueError("native task preprocessing changed after prepared-token binding")
+        self.task_contract.validate_task(task)
         prompt = prompt or ""
         if prompt not in self.table["variants"]:
             raise ValueError(f"unprepared native training prompt: {prompt!r}")
@@ -193,4 +234,3 @@ class ObjectiveDataCollator(SentenceTransformerDataCollator):
                 dtype=torch.float32,
             )
         return batch
-
