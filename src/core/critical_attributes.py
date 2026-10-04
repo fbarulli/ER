@@ -42,7 +42,9 @@ def _attribute_vocabulary() -> dict:
 
     root = find_project_root(Path(__file__).resolve())
     data = json.loads((root / "config" / "vocabulary.json").read_text(encoding="utf-8"))
-    return data.get("attribute_vocabulary") or {}
+    from core.attribute_vocabulary import validated_attribute_vocabulary
+
+    return validated_attribute_vocabulary(data)
 
 
 _VOCAB = _attribute_vocabulary()
