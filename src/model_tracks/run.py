@@ -163,9 +163,10 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         else:
             events.emit('publication', 'skipped', reason='publication disabled in suite config')
         return archive_path
+    from core.portable_archive import RESULT_ARCHIVE_EXCLUDED_DIRS
     files = {p.relative_to(output).as_posix(): p for p in output.rglob('*')
              if p.is_file() and not p.is_symlink() and not any(part in
-                 {'wandb', 'mlruns', 'mps_pipe', 'mps_log', '.git'} for part in p.relative_to(output).parts)
+                 RESULT_ARCHIVE_EXCLUDED_DIRS for part in p.relative_to(output).parts)
              and not ('_artifact_publications' in p.relative_to(output).parts and p.suffix != '.json')
              and not any(part.endswith('.publication') for part in p.relative_to(output).parts)
              and p.name not in {'.env','config.local'}

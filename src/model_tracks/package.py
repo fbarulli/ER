@@ -9,16 +9,21 @@ from model_tracks.config import load_config
 from model_tracks.preflight import preflight
 
 
-def runtime_snapshot_files():
+def runtime_snapshot_files(*, ablation_config=None):
     """Shared local source/config overlay for prepared Colab jobs."""
     from core.common import TRAIN_ROOT
     files = {}
     for directory in ('src/graph_tracks','src/model_tracks','src/training','src/core'):
         files.update({p.relative_to(TRAIN_ROOT).as_posix():p for p in (TRAIN_ROOT/directory).glob('*.py')})
-    for name in ('src/pipeline.py','scripts/diet_manifest.py'):
+    for name in ('src/pipeline.py','scripts/diet_manifest.py',
+                 'scripts/run_colab_ablation.py','scripts/run_colab_embeddings.py',
+                 'src/cli/colab.py','src/cli/__init__.py'):
         files[name] = TRAIN_ROOT/name
     for name in ('paths.yaml','training.yaml','identity_dimensions.yaml','identity_reviews.json','vocabulary.json','text_track.yaml','attribute_ablation.yaml'):
         files['config/'+name] = TRAIN_ROOT/'config'/name
+    if ablation_config is not None:
+        source = Path(ablation_config).resolve()
+        files[source.relative_to(TRAIN_ROOT).as_posix()] = source
     return files
 
 
@@ -84,7 +89,7 @@ def package(config: Path, output: Path):
     settings.update(setup_dir=str(target),text_bundle=str(target/'text_prepared.pkl.gz'))
     inline['data/model_tracks/suite.yaml'] = yaml.safe_dump(settings,sort_keys=False)
     # Freeze the same shared runtime overlay used by inference-only jobs.
-    files.update(runtime_snapshot_files())
+    files.update(runtime_snapshot_files(ablation_config=TRAIN_ROOT/cfg.ablation_config))
     for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
         source = Path(F[key]).resolve()
         files[source.relative_to(TRAIN_ROOT).as_posix()] = source
@@ -123,7 +128,7 @@ def verify_current(path: Path, config: Path):
             settings.update(device=cfg.device, report_test=cfg.report_test)
             if yaml.safe_load(archive.read(str(target/(track+'.yaml')))) != settings:
                 raise ValueError('prepared package graph configuration changed: '+track)
-    sources = runtime_snapshot_files()
+    sources = runtime_snapshot_files(ablation_config=TRAIN_ROOT/cfg.ablation_config)
     for key in ('dataset_deduped','labeled_pairs','canonical_records','gate_results'):
         source = Path(F[key]).resolve()
         sources[source.relative_to(TRAIN_ROOT).as_posix()] = source

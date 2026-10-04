@@ -22,18 +22,21 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     bundle = setup / 'text_prepared.pkl.gz'
     bundle.write_bytes(b'prepared snapshot')
     bundle.with_suffix('.gz.json').write_text('{}')
-    for directory in ('graph_tracks', 'model_tracks', 'training', 'core'):
+    for directory in ('graph_tracks', 'model_tracks', 'training', 'core', 'cli'):
         folder = tmp_path / 'src' / directory
         folder.mkdir(parents=True)
         (folder / '__init__.py').write_text('')
     (tmp_path / 'src/pipeline.py').write_text('# current pipeline\n')
     (tmp_path / 'scripts').mkdir()
     (tmp_path / 'scripts/diet_manifest.py').write_text('# current diet gate\n')
+    for name in ('run_colab_ablation.py','run_colab_embeddings.py'):
+        (tmp_path/'scripts'/name).write_text('# publication source\n')
+    (tmp_path/'src/cli/colab.py').write_text('# shared launcher\n')
     config_dir = tmp_path / 'config'
     config_dir.mkdir()
     snapshots = {}
     for name in ('paths.yaml', 'training.yaml', 'identity_dimensions.yaml',
-                 'identity_reviews.json', 'vocabulary.json'):
+                 'identity_reviews.json', 'vocabulary.json', 'text_track.yaml', 'attribute_ablation.yaml'):
         snapshots[f'config/{name}'] = f'current {name}\n'.encode()
         (config_dir / name).write_bytes(snapshots[f'config/{name}'])
     inputs = {}
@@ -44,7 +47,7 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
         path.write_bytes(snapshots[f'data/{key}.csv'])
         inputs[key] = path
     settings = dict(setup_dir='prepared', text_bundle='prepared/text_prepared.pkl.gz',
-                    device='cpu', report_test=False,text_model='minilm_l6',post_training_ablation=False)
+                    device='cpu', report_test=False,text_model='minilm_l6',post_training_ablation=False,ablation_config='config/attribute_ablation.yaml')
     cfg = SimpleNamespace(**settings, model_dump=lambda: settings.copy())
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', inputs)

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import zipfile
 
-from core.portable_archive import verify_archive, write_archive
+from core.portable_archive import verify_archive, write_archive, RESULT_ARCHIVE_EXCLUDED_DIRS
 from graph_tracks.data import file_hash
 
 def _publish(final, settings, run_tag):
@@ -162,7 +162,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
     (destination / 'suite_manifest.json').write_text(json.dumps(suite, indent=2))
     files = {p.relative_to(destination).as_posix(): p for p in destination.rglob('*')
              if p.is_file() and not p.is_symlink()
-             and not {'local_inputs', 'wandb', 'mlruns', '.git', '.dvc'}.intersection(p.relative_to(destination).parts)}
+             and not ({'local_inputs'} | RESULT_ARCHIVE_EXCLUDED_DIRS).intersection(p.relative_to(destination).parts)}
     write_archive(final, files, manifest_name='suite_bundle_manifest.json',
                   metadata={'run_tag': run_tag, **identity, 'postprocess_location': 'local CPU'})
     final.with_suffix('.sha256').write_text(file_hash(final) + '\n')

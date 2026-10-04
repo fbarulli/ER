@@ -1,0 +1,21 @@
+# Standalone text-embedding track lane.
+#
+# This file is the text lane's OWN retrieval/index contract. It previously had
+# none: model_tracks/text_report.py read `gnn_only.yaml` out of the setup
+# directory for its HNSW parameters and its retrieval ladder, so retuning the
+# graph track silently changed the text track's reported recall@k (and vice
+# versa). The two lanes are scored on the same pairs but are separate models,
+# so they get separate declared configs.
+track: text
+output_dir: results/model_tracks
+report_test: true
+build_index: true
+# ANN ladder — the same SSOT the graph lanes declare (evaluation.ann_recall_ks).
+retrieval_ks:
+- 1
+- 5
+- 10
+- 50
+hnsw_m: 16
+hnsw_ef_construction: 200
+hnsw_ef_search: 100

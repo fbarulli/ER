@@ -47,7 +47,7 @@ def complete_saved(destination,suite,*,publisher=None):
                 if validated.get('threshold_binding') != verify_threshold_binding(document,attestation) or validated.get('threshold_provenance') != attestation:
                     raise ValueError('cached ablation calibration binding differs')
             else:
-                validated = report(request,result,threshold,threshold_source=str(binding),save=False)
+                validated = report(request,result,threshold,threshold_source=str(binding),save=False,config=resolve(suite.ablation_config))
         from model_tracks.ablation import save_report
         save_report(request,validated,config=resolve(suite.ablation_config))
         previous.with_suffix('.sha256').write_text(file_hash(previous)+'\n')

@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+import uuid
 
 
 @contextmanager
@@ -14,7 +15,8 @@ def mps_environment(root: Path):
     control = shutil.which('nvidia-cuda-mps-control')
     if not control:
         raise RuntimeError('true multi-process GPU parallelism requires NVIDIA MPS in this runtime')
-    pipes, logs = root / 'mps_pipe', root / 'mps_log'
+    attempt = uuid.uuid4().hex
+    pipes, logs = root / 'mps_pipe' / attempt, root / 'mps_log' / attempt
     pipes.mkdir(parents=True, exist_ok=False)
     logs.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, 'CUDA_MPS_PIPE_DIRECTORY': str(pipes.resolve()),
@@ -24,6 +26,7 @@ def mps_environment(root: Path):
         yield env
     finally:
         subprocess.run([control], input='quit\n', text=True, env=env, check=True, timeout=30)
+        shutil.rmtree(pipes)  # Only this verified-stopped attempt owns these pipes.
 
 
 def wait_for_start(root: Path, track: str, timeout: float = 600):

@@ -120,7 +120,12 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
 
 
 def persist_result(request_path,result,validated,threshold_source,*,publisher=None):
-    handoff = save_report(request_path, validated)
+    handoff = request_path.parent/'report.json'
+    if handoff.exists():
+        if json.dumps(json.loads(handoff.read_text()),sort_keys=True) != json.dumps(validated,sort_keys=True):
+            raise ValueError('saved ablation report differs from validated publication input')
+    else:
+        handoff = save_report(request_path, validated)
     return persist_embeddings(result,handoff,publisher=publisher,
         additional_files={'request.json':request_path,'prepared_inputs.npz':request_path.parent/'prepared_inputs.npz','report.json':request_path.parent/'report.json',
                           'baseline_threshold_report'+resolve(threshold_source).suffix:resolve(threshold_source)},

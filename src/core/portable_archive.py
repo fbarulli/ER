@@ -6,6 +6,12 @@ from pathlib import Path
 import zipfile
 
 
+RESULT_ARCHIVE_EXCLUDED_DIRS = frozenset({
+    '.dvc', '.dvc-cache', '.dvc-site-cache', '.git', '.resume',
+    '_checkpoint_upload_staging', 'wandb', 'mlruns', 'mps_pipe', 'mps_log',
+})
+
+
 def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
                   metadata: dict, inline: dict[str, str] | None = None,
                   inventory_key: str = 'files') -> Path:
@@ -43,6 +49,8 @@ def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'file
             if (member.external_attr >> 16) & 0o170000 == 0o120000:
                 raise ValueError('archive symbolic link')
         metadata = json.loads(archive.read(manifest_name))
+        if set(archive.namelist()) != set(metadata[inventory_key]) | {manifest_name}:
+            raise ValueError('archive has undeclared or missing members')
         for target, expected in metadata[inventory_key].items():
             if hashlib.sha256(archive.read(target)).hexdigest() != expected:
                 raise ValueError(f'archive integrity mismatch: {target}')

@@ -903,13 +903,13 @@ def publish(source: Path, run_id: str, worker: int) -> None:
         if relative.as_posix() in {"canonical_records.csv", "gate_results.csv"}:
             continue
         paths.append(str(relative))
-    if paths:
-        _run(["dvc", "add", *paths], source)
     lock_path = source / ".dvc-push.lock"
     with lock_path.open("w", encoding="utf-8") as lock:
         print(f"[dvc] waiting for worker-local push lock: {lock_path}", flush=True)
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
+            if paths:
+                _run(["dvc", "add", *paths], source)
             _run(["dvc", "push"], source)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
