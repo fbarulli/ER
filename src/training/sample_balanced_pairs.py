@@ -30,43 +30,41 @@ import argparse
 import hashlib
 import json
 import math
-import os
-import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from core.common import F, load_config, report_thresholds
+from core.common import F, artifact, load_config, report_thresholds, training_cfg
+from core.manifest import atomic_write_csv, atomic_write_json, sha256_file
 
 
 DEFAULT_GATE_INPUT = Path(F["gate_results"])
 DEFAULT_SKU_INPUT = Path(F["dataset_deduped"])
-DEFAULT_BALANCED_OUTPUT = Path("results/training/balanced_pairs.csv")
-DEFAULT_SAMPLE_OUTPUT = Path("results/training/balanced_pairs_sample_3000.csv")
-DEFAULT_MANIFEST_OUTPUT = Path("results/training/balanced_pairs_sample_manifest.json")
-DEFAULT_SWEEP_OUTPUT = Path("results/training/balanced_pairs_sample_threshold_sweep.csv")
+# Owned layouts in config/paths.yaml (results_training root) — formerly
+# CWD-relative Path("results/training/...") literals.
+DEFAULT_BALANCED_OUTPUT = artifact("balanced_pairs")
+DEFAULT_SAMPLE_OUTPUT = artifact("balanced_pairs_sample")
+DEFAULT_MANIFEST_OUTPUT = artifact("balanced_pairs_sample_manifest")
+DEFAULT_SWEEP_OUTPUT = artifact("balanced_pairs_sample_threshold_sweep")
 # 05-03/06-4: was a second hand-typed copy of generate_training_report's
 # REPORT_THRESHOLDS.  Both now resolve the same config SSOT ladder
 # (evaluation.report_thresholds) through core.common.report_thresholds().
 SWEEP_THRESHOLDS = report_thresholds()
 
-REASON_PREFIX_TO_TYPE = (
-    # "Pack blocker…" is the training gate's highest-volume hard_no reason
-    # (87,804 of 135,769 committed rows). It was introduced with the shared
-    # critical-attribute gate without being registered here, so this script
-    # raised "Unmatched hard-negative gate_reason values" for 7,967 rows and
-    # the whole balanced-pool lane hard-failed on the current artifacts.
-    # It is a composite reason covering pack/package-type/volume, so it maps
-    # to the composite family rather than to any single dimension.
-    ("Pack blocker:", "pack_blocker"),
-    ("No volume overlap", "volume"),
-    ("No pack overlap", "pack"),
-    ("Flavor mismatch:", "flavor"),
-    ("Critical attribute mismatch:", "critical_attribute"),
-    ("Package type mismatch", "package_type"),
-    ("Package material mismatch", "package_material"),
+# Hard-negative reason -> pool family, READ FROM CONFIG (gate.pair_families):
+# the keys are declared gate-reason NAMES, and the matched text is the
+# configured reason string itself (config/training.yaml gate.reasons), so a
+# wording change moves pool membership with it and an undeclared reason name
+# fails config load. The old hand-typed prefix table is gone — it carried a
+# dead "Flavor mismatch:" entry that matched no gate reason and missed
+# packaging_level_mismatch, a hard_no reason that would have failed the lane
+# on its first such row.
+_gate_spec = training_cfg().gate
+REASON_PREFIX_TO_TYPE = tuple(
+    (getattr(_gate_spec.reasons, name), family)
+    for name, family in _gate_spec.pair_families.items()
 )
 TIME_COLUMN_CANDIDATES = (
     "timestamp",
@@ -83,37 +81,6 @@ TIME_COLUMN_CANDIDATES = (
 def _stable_digest(seed: int, *values: object) -> str:
     payload = "\x1f".join([str(seed), *(str(value) for value in values)])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _atomic_csv(frame: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", prefix=f".{path.name}.", dir=path.parent,
-        encoding="utf-8", newline="", delete=False,
-    ) as handle:
-        temporary = Path(handle.name)
-        frame.to_csv(handle, index=False)
-    os.replace(temporary, path)
-
-
-def _atomic_json(payload: Mapping[str, Any], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", prefix=f".{path.name}.", dir=path.parent,
-        encoding="utf-8", delete=False,
-    ) as handle:
-        temporary = Path(handle.name)
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-    os.replace(temporary, path)
 
 
 def _normalise(value: object) -> str:
@@ -414,8 +381,9 @@ def build_outputs(
     unmatched_counts = negative.loc[negative["pair_type"].isna(), "gate_reason"].value_counts().sort_index().to_dict()
     if unmatched_counts and not allow_unmatched_types:
         raise ValueError(
-            "Unmatched hard-negative gate_reason values; update REASON_PREFIX_TO_TYPE "
-            f"or pass --allow-unmatched-types to exclude and record them: {unmatched_counts}"
+            "Unmatched hard-negative gate_reason values; add a mapping to "
+            f"gate.pair_families in config/training.yaml or pass "
+            f"--allow-unmatched-types to exclude and record them: {unmatched_counts}"
         )
     negative = negative[negative["pair_type"].notna()].copy()
     if positive.empty or negative.empty:
@@ -492,10 +460,10 @@ def build_outputs(
     _assert_pair_contract(balanced)
     _assert_pair_contract(sample, expected_rows=sample_size)
 
-    _atomic_csv(balanced, balanced_path)
-    _atomic_csv(sample, sample_path)
+    atomic_write_csv(balanced, balanced_path, index=False)
+    atomic_write_csv(sample, sample_path, index=False)
     sweep = threshold_sweep(sample["similarity"], sample["true_label"])
-    _atomic_csv(sweep, sweep_path)
+    atomic_write_csv(sweep, sweep_path, index=False)
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "seed": seed,
@@ -522,8 +490,8 @@ def build_outputs(
             "selection": "largest-remainder proportional allocation, then seeded SHA-256 rank",
         },
         "inputs": {
-            "gate_results": {"path": str(gate_path), "sha256": _file_sha256(gate_path), "rows": len(gate)},
-            "sku_data": {"path": str(sku_path), "sha256": _file_sha256(sku_path), "rows": len(sku), "schema": sku_schema},
+            "gate_results": {"path": str(gate_path), "sha256": sha256_file(gate_path), "rows": len(gate)},
+            "sku_data": {"path": str(sku_path), "sha256": sha256_file(sku_path), "rows": len(sku), "schema": sku_schema},
         },
         "accounting": {
             "eligible_positive": len(positive),
@@ -552,12 +520,12 @@ def build_outputs(
             "threshold_sweep": sweep.to_dict(orient="records"),
         },
         "outputs": {
-            "balanced": {"path": str(balanced_path), "sha256": _file_sha256(balanced_path)},
-            "sample": {"path": str(sample_path), "sha256": _file_sha256(sample_path)},
-            "threshold_sweep": {"path": str(sweep_path), "sha256": _file_sha256(sweep_path)},
+            "balanced": {"path": str(balanced_path), "sha256": sha256_file(balanced_path)},
+            "sample": {"path": str(sample_path), "sha256": sha256_file(sample_path)},
+            "threshold_sweep": {"path": str(sweep_path), "sha256": sha256_file(sweep_path)},
         },
     }
-    _atomic_json(manifest, manifest_path)
+    atomic_write_json(manifest, manifest_path, sort_keys=True)
     return manifest
 
 

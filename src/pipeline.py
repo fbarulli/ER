@@ -34,7 +34,7 @@ import pandas as pd
 from core.columns import (
     CANONICAL_DATASET_REQUIRED_COLUMNS as CANONICAL_DATASET_REQUIRED_COLUMNS_REQUIRED,
 )
-from core.columns import DATA_PREP_REQUIRED_COLUMNS, source_row_pairs
+from core.columns import COLUMN_ALIASES, DATA_PREP_REQUIRED_COLUMNS, source_row_pairs
 from core.common import (
     DATA_DIR,
     RESULTS,
@@ -52,6 +52,7 @@ from core.schemas import (
     check_gate_results_frame,
     check_verdict_map,
     require_populated_source_rows,
+    upgrade_canonical_records_frame,
 )
 from ner.ner_product_attributes import extract_title_attributes, parse_attribute_details
 from core.critical_attributes import (
@@ -2244,6 +2245,8 @@ def load_canonical_map() -> dict[str, str]:
         dtype=str,
         keep_default_na=False,
     )
+    df = upgrade_canonical_records_frame(df)
+    check_canonical_records_frame(df)
     from core.identity_policy import exclude_reviewed_rows
     df = exclude_reviewed_rows(df, column="gtin")
     blank = df.index[df["gtin"].astype(str).str.strip().eq("")]
@@ -3339,7 +3342,12 @@ def build_training_data(
         model_frame = df
     elif payload_variant == "title_only":
         model_frame = df.copy()
-        for column in ("attribute", "attr", "description_short_eng", "description_short_eng"):
+        # The descriptor columns blanked for the title-only variant come from
+        # the config column contract (core.columns.COLUMN_ALIASES carries the
+        # raw-export aliases, e.g. "attr" for "attribute") — not a hand-typed
+        # tuple that drifts from paths.yaml.
+        for column in ("attribute", "description_short_eng",
+                       *COLUMN_ALIASES.get("attribute", ())):
             if column in model_frame.columns:
                 model_frame[column] = ""
     else:
@@ -3361,6 +3369,11 @@ def build_training_data(
     canonical_records = pd.read_csv(
         RESULTS / F["canonical_records"], dtype={"gtin": str}, keep_default_na=False
     )
+    # Same read contract as the other canonical lanes: migrate a stale
+    # artifact (core.schemas.upgrade_canonical_records_frame) and validate it
+    # before building the payload — a malformed file fails here, loudly.
+    canonical_records = upgrade_canonical_records_frame(canonical_records)
+    check_canonical_records_frame(canonical_records)
     canonical_record_map = {
         str(row["gtin"]): row.to_dict()
         for _, row in canonical_records.iterrows()

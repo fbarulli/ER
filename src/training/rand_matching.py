@@ -78,6 +78,7 @@ from core.graph_diagnostics import (
 )
 from core.gtin import is_valid_gtin_checksum
 from core.manifest import sha256_file
+from core.ranking_metrics import youden_threshold
 from core.schemas import GTIN_STATUSES, THRESHOLD_TIE_BREAK_CRITERIA
 from core.model_input import (
     build_canonical_text,
@@ -2109,16 +2110,10 @@ def gtin_metrics(
     return rows
 
 
-def _youden_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
-    """Return a Youden-J threshold fitted on one labeled population."""
-    if len(np.unique(labels)) < 2:
-        return float("nan")
-    order = np.argsort(-scores, kind="stable")
-    ordered_labels = labels[order]
-    tpr = np.cumsum(ordered_labels) / max(int(labels.sum()), 1)
-    fpr = np.cumsum(1 - ordered_labels) / max(int((labels == 0).sum()), 1)
-    best = np.flatnonzero((tpr - fpr) == np.max(tpr - fpr))
-    return float(scores[order[best[-1]]])
+# THE Youden cutoff is core.ranking_metrics.youden_threshold (stable sort,
+# first-max tie-break). The private name is kept as a re-export ONLY because
+# hpo_metrics.py imports it from this module; new call sites use the SSOT.
+_youden_threshold = youden_threshold
 
 
 def _threshold_at_recall(
@@ -2378,7 +2373,7 @@ def _alternative_thresholds(
 ) -> dict[str, dict[str, float | str]]:
     scores, labels = _candidate_labels(fit_candidates, fit_truth)
     positives = int(labels.sum())
-    youden_val = _youden_threshold(scores, labels)
+    youden_val = youden_threshold(scores, labels)
     precision_val = _threshold_at_recall(scores, labels, target_recall)
     if positives == 0:
         youden_reason = "no_positives"

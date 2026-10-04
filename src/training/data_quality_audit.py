@@ -12,7 +12,6 @@ explicit ``--input`` path; there is no fallback to a similarly named file.
 from __future__ import annotations
 
 import argparse
-import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -20,15 +19,7 @@ import pandas as pd
 from pipeline import extract_all, normalize_text
 from core.common import COLUMN_MAPPING, DATA_PATH, F, column_profile, ensure_parent
 from core.gtin import normalize_and_validate_gtin
-from core.manifest import count_drop
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+from core.manifest import count_drop, sha256_file
 
 
 def _blank(series: pd.Series) -> pd.Series:
@@ -118,7 +109,7 @@ def audit(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     )
     summary = pd.DataFrame([
         {"metric": "source_path", "value": str(source.resolve()), "detail": "explicit input provenance"},
-        {"metric": "source_sha256", "value": _sha256(source), "detail": "input bytes fingerprint"},
+        {"metric": "source_sha256", "value": sha256_file(source), "detail": "input bytes fingerprint"},
         {"metric": "rows", "value": total, "detail": "no rows were filtered"},
         {"metric": "empty_sku_id_rows", "value": int(_blank(df["sku_id"]).sum()), "detail": "identity-source completeness"},
         {"metric": "duplicate_sku_id_rows", "value": int(df["sku_id"].duplicated(keep=False).sum()), "detail": "raw export duplication; dedupe remains a separate audited step"},

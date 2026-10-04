@@ -58,6 +58,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.common import F, RESULTS, SEED, load_dataset_deduped, training_cfg
+from core.schemas import check_canonical_records_frame, upgrade_canonical_records_frame
 from training.folds import (
     component_ids,
     derive_holdout,
@@ -271,8 +272,12 @@ def _canonical_values() -> dict[str, dict[str, str]]:
     canon = pd.read_csv(
         F["canonical_records"], dtype=str, keep_default_na=False, low_memory=False
     )
-    gtin_col = "gtin" if "gtin" in canon.columns else canon.columns[0]
-    canon["_key"] = canon[gtin_col].map(normalize_gtin)
+    # Same read contract as the pipeline lanes: migrate a stale artifact and
+    # validate before slicing — the column check below makes the old
+    # "first column might be the key" fallback unreachable.
+    canon = upgrade_canonical_records_frame(canon)
+    check_canonical_records_frame(canon)
+    canon["_key"] = canon["gtin"].map(normalize_gtin)
     out: dict[str, dict[str, str]] = {}
     for _, row in canon.iterrows():
         key = row["_key"]

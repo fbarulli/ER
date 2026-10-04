@@ -1578,6 +1578,9 @@ class TrainingSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Legacy staged configs retain the original AdamW dispatch when omitted.
+    optimizer_backend: Literal['auto', 'foreach', 'fused'] = 'auto'
+
     class StructuredFeaturesSpec(BaseModel):
         model_config = ConfigDict(extra="forbid")
 
@@ -1935,6 +1938,19 @@ class AuditSpec(BaseModel):
         return self
 
 
+GATE_PAIR_FAMILIES = frozenset(
+    {
+        "volume",
+        "pack",
+        "flavor",
+        "critical_attribute",
+        "package_type",
+        "package_material",
+        "pack_blocker",
+    }
+)
+
+
 class GateSpec(BaseModel):
     """Three-way-gate decision thresholds (config/training.yaml gate:) — the
     gate's decision table. Formerly signature defaults in
@@ -1988,6 +2004,31 @@ class GateSpec(BaseModel):
         declared_identity_review: str = Field(min_length=1)
 
     reasons: GateReasonsSpec
+    # Hard-negative POOL FAMILY per declared gate reason NAME (config/
+    # training.yaml gate.pair_families). The sample-balanced-pairs lane maps
+    # fired gate reasons onto mining families through this table instead of
+    # a hand-typed prefix copy: keys are reason NAMES, so a renamed reason
+    # fails config load; the matched text is the configured reason string
+    # itself, so a wording change moves pool membership with it.
+    pair_families: dict[str, str]
+
+    @model_validator(mode="after")
+    def _pair_families_are_declared(self) -> "GateSpec":
+        declared = set(self.reasons.model_fields)
+        unknown = sorted(set(self.pair_families) - declared)
+        if unknown:
+            raise ValueError(
+                f"gate.pair_families names undeclared reason(s): {unknown}; "
+                f"declared: {sorted(declared)}"
+            )
+        bad = sorted({family for family in self.pair_families.values()
+                      if family not in GATE_PAIR_FAMILIES})
+        if bad:
+            raise ValueError(
+                f"gate.pair_families unknown family label(s): {bad}; "
+                f"allowed: {sorted(GATE_PAIR_FAMILIES)}"
+            )
+        return self
 
 
 class BandSpec(BaseModel):

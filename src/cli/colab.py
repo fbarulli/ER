@@ -1580,14 +1580,6 @@ print(json.dumps(payload), flush=True)
             syncer.stop()
 
 
-def _sha256_file(path: Path) -> str:
-    """Hash one extracted result for manifest verification."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
 
 def _prepare_remote_result_archive(remote_base: str, workers: int) -> str:
     """Build one manifest-backed archive on the VM before transfer."""
@@ -1746,7 +1738,7 @@ def _verify_result_bundle(root: Path, run_id: str, workers: int) -> ResultBundle
             raise RuntimeError(
                 f"result size mismatch for {key_text}: {size} != {entry.size}"
             )
-        digest = _sha256_file(actual)
+        digest = sha256_file(actual)
         if digest != entry.sha256:
             raise RuntimeError(f"result SHA-256 mismatch for {key_text}")
     actual_paths = {

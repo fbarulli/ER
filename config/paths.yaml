@@ -190,6 +190,29 @@ layouts:
     owner: training.dvc_store
     template: "dvc_refs/{run_id}/worker_{worker}/publication_manifest.json"
     fields: {run_id: str, worker: int}
+  # Sample-balanced-pairs lane (training.sample_balanced_pairs) — the pool,
+  # its fixed-size sample, the run manifest and the threshold sweep were
+  # CWD-relative literals in the module; owned layouts instead.
+  balanced_pairs:
+    root: results_training
+    owner: training.sample_balanced_pairs
+    template: "balanced_pairs.csv"
+    fields: {}
+  balanced_pairs_sample:
+    root: results_training
+    owner: training.sample_balanced_pairs
+    template: "balanced_pairs_sample_3000.csv"
+    fields: {}
+  balanced_pairs_sample_manifest:
+    root: results_training
+    owner: training.sample_balanced_pairs
+    template: "balanced_pairs_sample_manifest.json"
+    fields: {}
+  balanced_pairs_sample_threshold_sweep:
+    root: results_training
+    owner: training.sample_balanced_pairs
+    template: "balanced_pairs_sample_threshold_sweep.csv"
+    fields: {}
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
 # SSOT for EVERY column name in the project (owner ruling 2026-10-01).

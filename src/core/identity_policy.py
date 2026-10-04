@@ -105,11 +105,11 @@ def listing_review_reason(sku_id: object, gtin: object) -> str:
 
 def reviewed_row_mask(frame: pd.DataFrame, *, column: str | None = None) -> pd.Series:
     """Block reviewed source listings without rejecting their consistent GTIN peers."""
-    column = column or ('gtin' if 'gtin' in frame else 'gtin' if 'gtin' in frame else None)
+    column = column or ('gtin' if 'gtin' in frame else None)
     if column is None:
         return pd.Series(False, index=frame.index)
     result = review_mask(frame[column])
-    id_column = 'sku_id' if 'sku_id' in frame else 'sku_id' if 'sku_id' in frame else None
+    id_column = 'sku_id' if 'sku_id' in frame else None
     if id_column:
         from core.gtin import normalize_and_validate_gtin
         keys = normalize_and_validate_gtin(frame[column]).gtin_clean.astype('string').str.zfill(14)
@@ -119,7 +119,7 @@ def reviewed_row_mask(frame: pd.DataFrame, *, column: str | None = None) -> pd.S
 
 
 def exclude_reviewed_rows(frame: pd.DataFrame, *, column: str | None = None) -> pd.DataFrame:
-    column = column or ('gtin' if 'gtin' in frame else 'gtin' if 'gtin' in frame else None)
+    column = column or ('gtin' if 'gtin' in frame else None)
     if column is None:
         return frame.copy()
     frame = apply_identity_links(frame)

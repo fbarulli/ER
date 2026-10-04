@@ -34,6 +34,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from core.disjoint_sets import DisjointSet
 from core.schemas import CalibrationPartition, FoldSets
 
 _GTIN_DIGITS = frozenset("0123456789")
@@ -341,36 +342,21 @@ def component_folds(
     pairwise DISJOINT — a gtin in two folds would put one product in
     train and test at once. Validated on return.
     """
-    parent: dict[str, str] = {}
-
-    def find(x: str) -> str:
-        root = x
-        while parent[root] != root:
-            root = parent[root]
-        while parent[x] != root:  # path compression
-            parent[x], x = root, parent[x]
-        return root
-
-    def union(a: str, b: str) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
+    ds = DisjointSet()
 
     # every gtin in the dataset is a node (singletons included)
     for bc in row_bc:
-        if bc and bc not in parent:
-            parent[bc] = bc
+        if bc:
+            ds.add(bc)
     # union along positive pairs
     for a, b in pos:
         bca, bcb = str(row_bc[a]), str(row_bc[b])
         if bca and bcb:
-            union(bca, bcb)
+            ds.union(bca, bcb)
 
-    # group by root; sort members for deterministic component identity
-    comps: dict[str, set[str]] = {}
-    for bc in parent:
-        comps.setdefault(find(bc), set()).add(bc)
-    comp_list = sorted(comps.values(), key=lambda s: sorted(s))
+    # components canonically ordered by sorted members — deterministic
+    # component identity, independent of union order
+    comp_list = ds.components()
     rng = np.random.default_rng(seed)
     order = rng.permutation(len(comp_list))
     folds: list[set[str]] = [set() for _ in range(k)]
@@ -395,33 +381,17 @@ def component_ids(
     should depend on a particular id's magnitude, only on ids being equal
     for gtins that are linked and different for gtins that are not.
     """
-    parent: dict[str, str] = {}
-
-    def find(x: str) -> str:
-        root = x
-        while parent[root] != root:
-            root = parent[root]
-        while parent[x] != root:
-            parent[x], x = root, parent[x]
-        return root
-
-    def union(a: str, b: str) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
+    ds = DisjointSet()
 
     for bc in row_bc:
-        if bc and bc not in parent:
-            parent[bc] = bc
+        if bc:
+            ds.add(bc)
     for a, b in pos:
         bca, bcb = str(row_bc[a]), str(row_bc[b])
         if bca and bcb:
-            union(bca, bcb)
+            ds.union(bca, bcb)
 
-    comps: dict[str, set[str]] = {}
-    for bc in parent:
-        comps.setdefault(find(bc), set()).add(bc)
-    ordered = sorted(comps.values(), key=lambda s: sorted(s))
+    ordered = ds.components()
     return {bc: i for i, members in enumerate(ordered) for bc in members}
 
 

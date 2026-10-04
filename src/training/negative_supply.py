@@ -50,6 +50,8 @@ from pydantic import (
     model_validator,
 )
 
+from core.disjoint_sets import DisjointSet
+
 # ── population registry (every emitted row carries exactly one) ─────────────
 POPULATION_BASE_POSITIVE = "base_positive"  # real pair, reviewed label 1
 POPULATION_BASE_NEGATIVE = "base_negative"  # real pair, reviewed label 0
@@ -835,42 +837,32 @@ class NegativeSupply(BaseModel):
 
 
 # ── GTIN-grouped split + discriminator ──────────────────────────────────────
-class _UnionFind:
-    def __init__(self) -> None:
-        self._parent: dict[str, str] = {}
-
-    def find(self, item: str) -> str:
-        self._parent.setdefault(item, item)
-        while self._parent[item] != item:
-            self._parent[item] = self._parent[self._parent[item]]
-            item = self._parent[item]
-        return item
-
-    def union(self, left: str, right: str) -> None:
-        left_root, right_root = self.find(left), self.find(right)
-        if left_root != right_root:
-            self._parent[left_root] = right_root
-
-
 def gtin_group_split(frame: pd.DataFrame, *, k: int = 4, seed: int = 1337) -> pd.Series:
     """Deterministic GTIN-grouped bucket index (0..k-1) per pair row.
 
     Entities are union components over the gtin namespace: pairs sharing an
     endpoint share a bucket. Minted synthetic rows carry -1 (never scored;
-    evaluation is real-pairs-only by owner ruling).
+    evaluation is real-pairs-only by owner ruling). Components are ordered
+    canonically (shared core.disjoint_sets), so the bucket assignment depends
+    only on the component PARTITION, never on union order or root labels.
     """
     gtins = frame["anchor_gtin"].astype(str).str.strip()
     partners = frame["partner_gtin"].astype(str).str.strip()
-    groups = _UnionFind()
+    groups = DisjointSet()
     for left, right, minted in zip(gtins, partners, frame["population"]):
         if minted != POPULATION_MINTED_PARTNER and right and left:
             groups.union(left, right)
-    keys = sorted({groups.find(item) for item in gtins if item})
+    components = groups.components()
     rng = np.random.default_rng(seed)
-    fold_of = {key: int(bucket) for key, bucket in zip(keys, rng.permutation(len(keys)) % k)}
+    bucket_of_component = np.asarray(rng.permutation(len(components))) % k
+    fold_of = {
+        item: int(bucket_of_component[index])
+        for index, component in enumerate(components)
+        for item in component
+    }
     out = []
     for left, minted in zip(gtins, frame["population"]):
-        out.append(-1 if minted == POPULATION_MINTED_PARTNER else fold_of.get(groups.find(left), -1))
+        out.append(-1 if minted == POPULATION_MINTED_PARTNER else fold_of.get(left, -1))
     return pd.Series(out, index=frame.index, name="group_fold")
 
 

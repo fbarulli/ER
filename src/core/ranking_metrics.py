@@ -77,6 +77,34 @@ def deprecated_pooled_bare_aliases(ks: Sequence[int]) -> tuple[str, ...]:
         *(f"{metric}_at_{int(k)}" for k in ks for metric in ("precision", "recall")),
     )
 
+
+def youden_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
+    """Youden-J optimal threshold (J = TPR - FPR) over one labeled score set.
+
+    THE Youden cutoff — the training, evaluation, rand-matching,
+    robust-validation and rerank lanes each carried a copy, and the copies
+    disagreed on ties (unstable argsort, first-max, last-max), so the "same"
+    threshold could differ across lanes on a tied J. This one is
+    deterministic: stable descending score order, the FIRST cutoff with
+    maximal J (the HIGHEST score among ties). A single-class population has
+    nothing to fit and returns NaN — callers guard for two classes or handle
+    NaN explicitly.
+
+    HOLDOUT DISCIPLINE: fit on DEV scores, apply the returned threshold
+    verbatim to TEST — never on the scores it rates.
+    """
+    scores = np.asarray(scores, dtype=float)
+    labels = np.asarray(labels)
+    if len(np.unique(labels)) < 2:
+        return float("nan")
+    order = np.argsort(-scores, kind="stable")
+    ordered_labels = labels[order]
+    positives = int(labels.sum())
+    negatives = int((labels == 0).sum())
+    j = np.cumsum(ordered_labels) / positives - np.cumsum(1 - ordered_labels) / negatives
+    return float(scores[order[int(np.argmax(j))]])
+
+
 #: A chance-level scorer's Recall@max(ks) on a pool of ``HEADROOM * max(ks)``
 #: candidates is exactly ``1 / HEADROOM``.  The pool is built with that many
 #: candidates, so the metric has one decade of usable range below 1.0.

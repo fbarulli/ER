@@ -11,6 +11,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from core.common import plot_dpi
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -34,7 +36,7 @@ def main() -> None:
     for bar, value in zip(bars, values.values()):
         ax.text(bar.get_x() + bar.get_width() / 2, min(value + 0.025, 1.02), f"{value:.3f}", ha="center")
     out = args.out or args.report_json.with_name("ann_cluster_quality.png")
-    fig.savefig(out, dpi=160)
+    fig.savefig(out, dpi=plot_dpi())
     plt.close(fig)
     print(out)
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from core import common
+from core.manifest import sha256_file
 
 # The tracking/verify EXCLUSION set — files/dirs whose path parts hit these
 # are skipped in tracking and verification. KEEP the content byte-for-byte.
@@ -115,14 +116,6 @@ def _run(command: list[str], cwd: Path) -> str:
     raise RuntimeError(f"DVC command failed ({result.returncode}): {' '.join(shown)}")
 
 
-def _sha256(path: Path) -> str:
-    import hashlib
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
 
 def _dvc_status_is_clean(output: str) -> bool:
     """Interpret DVC's human-readable clean status without hiding dirtiness."""
@@ -209,7 +202,7 @@ def _verify_clean_pull(source: Path, token: str, remote: str) -> list[dict[str, 
             restored = verify / original.relative_to(source)
             if not restored.is_file():
                 raise RuntimeError(f"DVC pull did not restore {original.name}")
-            expected, actual = _sha256(original), _sha256(restored)
+            expected, actual = sha256_file(original), sha256_file(restored)
             if expected != actual:
                 raise RuntimeError(f"DVC pull hash mismatch for {original.name}")
             result.append({

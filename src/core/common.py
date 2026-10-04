@@ -24,6 +24,7 @@ New accessors:
   resolve_model(key)  registry key -> materialized local bundle, no Hub fallback
 """
 
+import csv
 import json
 import copy
 from decimal import Decimal
@@ -1101,6 +1102,36 @@ def load_raw_export(*, columns: Sequence[str] | None = None) -> pd.DataFrame:
     return _load_source_export(columns)
 
 
+def _count_csv_rows(path: Path) -> int:
+    """Data-row count (header excluded), quote-aware via the csv module so
+    embedded newlines in product text cannot skew the census."""
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        return sum(1 for _ in csv.reader(handle)) - 1
+
+
+def _check_deduped_census_closure() -> None:
+    """Lineage guard (2026-10-02 dataset-loading review residual): the
+    deduped CSV and the removals CSV must close on the approved
+    source-export census. The dedupe stage OWNS this invariant and audits it
+    (dedupe_summary); re-asserting it on every default-path load means a
+    deduped artifact rebuilt out-of-band — a different dedupe run, a
+    half-finished regeneration — is caught at the FIRST downstream consumer
+    instead of silently feeding the whole lane."""
+    removals = F["removals"]
+    if not removals.exists():
+        return  # lane state before the dedupe stage has written removals
+    expected = int(training_cfg().audit.source_export_expected_rows)
+    deduped_rows = _count_csv_rows(F["dataset_deduped"])
+    dropped_rows = _count_csv_rows(removals)
+    if deduped_rows + dropped_rows != expected:
+        raise ValueError(
+            f"deduped-dataset lineage broken: deduped {deduped_rows:,} + "
+            f"removals {dropped_rows:,} != source census {expected:,} — "
+            f"{F['dataset_deduped'].name} does not pair with "
+            f"{removals.name}; re-run src/training/dedupe.py"
+        )
+
+
 def load_dataset_deduped(path: Path | None = None) -> pd.DataFrame:
     """The DEDUPED dataset (06 tiered dedupe) — the matching-stage input.
 
@@ -1113,6 +1144,8 @@ def load_dataset_deduped(path: Path | None = None) -> pd.DataFrame:
     path = Path(path) if path is not None else F["dataset_deduped"]
     if not path.exists():
         raise FileNotFoundError(f"{path} missing — run src/training/dedupe.py first")
+    if path == F["dataset_deduped"]:
+        _check_deduped_census_closure()
     from core.identity_policy import exclude_reviewed_rows
     from core.columns import CANONICAL_COLUMNS
 

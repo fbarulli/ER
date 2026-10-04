@@ -60,7 +60,7 @@ from core.common import (
 )
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 from core.schemas import EVAL_SUMMARY_COLUMNS, check_eval_summary_frame
-from core.ranking_metrics import ranking_at_k
+from core.ranking_metrics import ranking_at_k, youden_threshold
 
 # determinism (2026-10-06): this lane re-fits the Youden threshold and
 # reads embeddings — pin the global RNGs before any of that. The
@@ -316,23 +316,12 @@ df_dev = df.loc[in_dev]
 df_test = df.loc[in_test]
 
 
-def _youden_thr(scores: np.ndarray, labels: np.ndarray) -> float:
-    """Youden-optimal threshold (J = TPR - FPR) over a labeled score set.
-
-    LOCAL COPY of TRAIN.training._youden_thr (rerank.py precedent):
-    importing TRAIN.training would drag transformers and tracking contexts
-    into a reporting script, so the 11-line function is copied verbatim.
-    HOLDOUT DISCIPLINE: fit this on DEV scores only, then apply the
-    returned threshold verbatim to TEST — never on the scores it rates.
-    """
-    order = np.argsort(-scores)
-    tps = np.cumsum(labels[order])
-    fps = np.cumsum(1 - labels[order])
-    tpr = tps / max(int((labels == 1).sum()), 1)
-    fpr = fps / max(int((labels == 0).sum()), 1)
-    j = tpr - fpr
-    k = int(np.argmax(j))
-    return float(scores[order][k])
+# The Youden cutoff is the core.ranking_metrics.youden_threshold SSOT:
+# importing TRAIN.training here would drag transformers and tracking
+# contexts into a reporting script, and the old verbatim local copy could
+# drift from the training lane on the tie-break.
+# HOLDOUT DISCIPLINE: fit on DEV scores only, apply the returned threshold
+# verbatim to TEST — never on the scores it rates.
 
 
 def evaluate_model(
@@ -354,7 +343,7 @@ def evaluate_model(
             "evaluate_model(threshold=None) is the closed self-fit leak: "
             "it would pick the Youden threshold on the SAME labeled set it "
             "scores and inflate accuracy/F1. Fit the threshold on the DEV "
-            "component fold (_youden_thr on df_dev) and pass it in — the "
+            "component fold (youden_threshold on df_dev) and pass it in — the "
             "scored half must never choose its own threshold."
         )
     y_true = df_half[true_col].values
@@ -410,10 +399,10 @@ for model_name, sim_col in MODEL_COLUMNS.items():
         continue
     print(f"\n{'=' * 70}\nMODEL: {model_name}\n{'=' * 70}")
     # HOLDOUT DISCIPLINE: threshold fit on DEV, applied verbatim to TEST.
-    thr = _youden_thr(
+    thr = youden_threshold(
         df_dev[sim_col].to_numpy(), df_dev["true_label"].to_numpy()
     )
-    thr_test_descriptive = _youden_thr(
+    thr_test_descriptive = youden_threshold(
         df_test[sim_col].to_numpy(), df_test["true_label"].to_numpy()
     )
     metrics = evaluate_model(df_test, sim_col, threshold=thr)

@@ -14,6 +14,7 @@ import torch
 from sklearn.metrics import (accuracy_score, average_precision_score, confusion_matrix,
                              precision_recall_fscore_support, precision_recall_curve,
                              roc_auc_score, roc_curve)
+from core.common import plot_dpi
 from core.ranking_metrics import ranking_at_k
 from graph_tracks.artifacts import name
 from graph_tracks.data import file_hash, load_records, load_text_cache
@@ -301,7 +302,7 @@ def _plots(scored, output, track, threshold):
     for axis in axes:
         axis.legend()
     fig.tight_layout()
-    fig.savefig(output / name(track, 'score_distribution_and_pr.png'), dpi=150)
+    fig.savefig(output / name(track, 'score_distribution_and_pr.png'), dpi=plot_dpi())
     plt.close(fig)
 
 

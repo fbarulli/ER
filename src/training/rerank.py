@@ -16,6 +16,7 @@ import numpy as np
 
 from core import common
 from core.common import load_config, pair_auc
+from core.ranking_metrics import youden_threshold
 
 
 def rerank_stage(
@@ -169,13 +170,6 @@ def rerank_stage(
         precision_recall_fscore_support,
     )
 
-    def _youden(scores: np.ndarray, labels: np.ndarray) -> float:
-        order = np.argsort(-scores)
-        tps = np.cumsum(labels[order])
-        fps = np.cumsum(1 - labels[order])
-        j = tps / max((labels == 1).sum(), 1) - fps / max((labels == 0).sum(), 1)
-        return float(scores[order][int(np.argmax(j))])
-
     def report(scores: np.ndarray, dev_scores: np.ndarray) -> dict:
         pr = average_precision_score(y, scores)
         auc = (
@@ -185,7 +179,7 @@ def rerank_stage(
         # No dev pool (CV mode) -> the FIXED SSOT threshold, never a
         # threshold fitted on these test scores.
         if len(dev_scores) and dev_y.size and int((dev_y == 1).sum()) and int((dev_y == 0).sum()):
-            thr = _youden(dev_scores, dev_y)
+            thr = youden_threshold(dev_scores, dev_y)
         else:
             # NO FALLBACK (owner Q27): split.fixed_threshold hard-indexed —
             # was .get(0.55), an inline literal the YAML could diverge from.

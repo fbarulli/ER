@@ -810,7 +810,7 @@ def oracle_youden_discipline() -> None:
     verbatim to TEST — hand-computable case where the dev-optimal and
     test-optimal thresholds DIFFER (a test-fitted threshold would flatter
     the accuracy)."""
-    from training.training import _youden_thr
+    from core.ranking_metrics import youden_threshold
 
     # dev: pos at 0.9/0.6, neg at 0.55/0.2 -> dev Youden picks thr in
     # (0.55, 0.6] ... argmax over sorted-desc scores picks the SMALLEST
@@ -818,7 +818,7 @@ def oracle_youden_discipline() -> None:
     # J at 0.6 = 1.0 - 0.0 (thr 0.6: TP=2, FP=0) -> thr = 0.6
     dev_s = np.array([0.9, 0.6, 0.55, 0.2])
     dev_y = np.array([1, 1, 0, 0])
-    thr = _youden_thr(dev_s, dev_y)
+    thr = youden_threshold(dev_s, dev_y)
     check(
         "dev Youden hand-computed (0.6)",
         abs(thr - 0.6) < 1e-12,
@@ -832,7 +832,7 @@ def oracle_youden_discipline() -> None:
     test_y = np.array([1, 0, 0])
     pred = (test_s >= thr).astype(int)
     acc_honest = float((pred == test_y).mean())
-    thr_test_fit = _youden_thr(test_s, test_y)
+    thr_test_fit = youden_threshold(test_s, test_y)
     pred_fit = (test_s >= thr_test_fit).astype(int)
     acc_fitted = float((pred_fit == test_y).mean())
     check(

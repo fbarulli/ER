@@ -12,7 +12,6 @@ empty evidence and counted in the summary, so coverage loss is visible.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -28,14 +27,7 @@ from ner.ner_product_attributes import (
 )
 from pipeline import clean_sku_text, normalize_text
 from core.common import COLUMN_MAPPING, DATA_PATH, F, ensure_parent
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+from core.manifest import sha256_file
 
 
 def _json(value: object) -> str:
@@ -134,7 +126,7 @@ def build(source: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         )
     summary_rows = [
         {"metric": "source_path", "value": str(source.resolve()), "detail": "explicit input provenance"},
-        {"metric": "source_sha256", "value": _sha256(source), "detail": "input bytes fingerprint"},
+        {"metric": "source_sha256", "value": sha256_file(source), "detail": "input bytes fingerprint"},
         {"metric": "rows", "value": len(evidence), "detail": "all raw rows retained"},
         {"metric": "empty_title_rows", "value": no_title, "detail": "written with empty evidence"},
         {"metric": "catalog_brand_not_found_in_title_rows", "value": no_brand_span, "detail": "written without BRAND span"},

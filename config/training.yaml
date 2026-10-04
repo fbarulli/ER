@@ -350,6 +350,25 @@ gate:
     source_conflict: "Contradictory source attribute evidence"
     supporting_feature_review: "Missing flavor evidence with differing supporting attributes:"
     declared_identity_review: "Declared product identity differs or is incomplete:"
+  # POOL-FAMILY mapping for the sample-balanced-pairs lane: declared gate
+  # reason NAME -> mining family (core.schemas.GateSpec.pair_families).
+  # The lane matches the configured reason strings above (prefix), so a
+  # wording change moves pool membership with it; undeclared names or
+  # unknown family labels fail config load. Reasons without an entry here
+  # raise no balanced-pool rows (the lane fails loud on any OTHER fired
+  # reason it does not map — it never guesses a family).
+  # Complete over every reason three_way_gate can emit with decision=hard_no
+  # (the pool's only input; fallback/proceed reasons never reach it). A
+  # hard_no reason WITHOUT an entry here makes the lane fail loud on the
+  # first unmatched row — coverage is a contract, not a preference.
+  pair_families:
+    pack_blocker: pack_blocker
+    no_volume_overlap: volume
+    no_pack_overlap: pack
+    packaging_level_mismatch: pack
+    categorical_mismatch: critical_attribute
+    package_type_mismatch: package_type
+    package_material_mismatch: package_material
 
 # ── brand-differentiation audit (owner theory 2026-10-01) ──────────────────
 # Does between-GTIN card delta exceed within-GTIN (same product,

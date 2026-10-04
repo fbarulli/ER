@@ -8,13 +8,7 @@ import os
 from pathlib import Path
 import pickle
 
-
-def digest(path):
-    value = hashlib.sha256()
-    with Path(path).open('rb') as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b''):
-            value.update(block)
-    return value.hexdigest()
+from core.manifest import sha256_file
 
 
 def fingerprint(df, variant):
@@ -29,7 +23,7 @@ def fingerprint(df, variant):
                                     'gate_results', 'labeled_pairs', 'number_reference')]
     files += list((root / 'config').glob('*.yaml')) + list((root / 'config').glob('*.json'))
     files += list((root / 'src').rglob('*.py'))
-    inputs = {str(path.resolve()): digest(path) for path in sorted(set(files))}
+    inputs = {str(path.resolve()): sha256_file(path) for path in sorted(set(files))}
     return {'variant': variant, 'columns': list(frame.columns), 'rows': len(frame),
             'frame_sha256': hashlib.sha256(rows).hexdigest(),
             'pandas_version': pd.__version__, 'inputs': inputs}
@@ -67,7 +61,7 @@ def load_base_data(df, *, payload_variant='full', cache_path=None):
             metadata = json.loads(header.read_text())
             if metadata['fingerprint'] != expected:
                 raise ValueError('Stale shared base payload; inputs changed, use a fresh preparation run')
-            if metadata['sha256'] != digest(path):
+            if metadata['sha256'] != sha256_file(path):
                 raise ValueError('Shared base payload checksum mismatch')
             print(f'[shared-base] verified reuse -> {path}', flush=True)
             with path.open('rb') as stream:
@@ -78,7 +72,7 @@ def load_base_data(df, *, payload_variant='full', cache_path=None):
         partial = path.with_suffix(path.suffix + '.partial')
         with partial.open('wb') as stream:
             pickle.dump(data, stream, protocol=pickle.HIGHEST_PROTOCOL)
-        metadata = {'fingerprint': expected, 'sha256': digest(partial)}
+        metadata = {'fingerprint': expected, 'sha256': sha256_file(partial)}
         partial.replace(path)
         temporary = header.with_suffix(header.suffix + '.partial')
         temporary.write_text(json.dumps(metadata, indent=2) + '\n')

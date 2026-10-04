@@ -325,6 +325,7 @@ from core.ranking_metrics import (
     competitors_per_query,
     ranking_at_k_by_query,
     ranking_coverage,
+    youden_threshold,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -936,24 +937,6 @@ def _precision_at_recall(y: np.ndarray, scores: np.ndarray, recall_target: float
     prec = tp / (tp + fp) if (tp + fp) else float("nan")
     rec = tp / n_pos
     return float(prec), float(rec), thr
-
-
-def _youden_thr(scores: np.ndarray, labels: np.ndarray) -> float:
-    """Youden-optimal threshold (J = TPR - FPR) over a labeled score set.
-
-    HOLDOUT DISCIPLINE: call this on the DEV scores, then apply the returned
-    threshold verbatim to the TEST scores — never on the scores it rates
-    (that is the optimistic leak the owner audit removed; the fold rows keep
-    youden_thr_test_descriptive as the leak diagnostic only).
-    """
-    order = np.argsort(-scores)
-    tps = np.cumsum(labels[order])
-    fps = np.cumsum(1 - labels[order])
-    tpr = tps / max(int((labels == 1).sum()), 1)
-    fpr = fps / max(int((labels == 0).sum()), 1)
-    j = tpr - fpr
-    k = int(np.argmax(j))
-    return float(scores[order][k])
 
 
 def _make_loss(
@@ -4333,7 +4316,13 @@ def train_one_config(
                         num_items_in_batch=num_items_in_batch,
                     )
 
+                def _load_optimizer_and_scheduler(self, checkpoint):
+                    super()._load_optimizer_and_scheduler(checkpoint)
+                    optimizer_policy.validate_restored(self.optimizer)
+
                 def _save_checkpoint(self, model, trial):
+                    if hasattr(self.loss, 'flush_tracking'):
+                        self.loss.flush_tracking()
                     super()._save_checkpoint(model, trial)
                     checkpoint = (
                         Path(self._get_output_dir(trial=trial))
@@ -4429,9 +4418,13 @@ def train_one_config(
 
             from torch import optim
 
+            from core.gpu_execution import OptimizerExecution
+            optimizer_policy = OptimizerExecution(backend=training_cfg().training.optimizer_backend)
             optimizer = optim.AdamW(
-                groups, weight_decay=cfg["weight_decay"], lr=base_lr
+                groups, weight_decay=cfg["weight_decay"], lr=base_lr,
+                **optimizer_policy.kwargs('cuda' if on_cuda else 'cpu'),
             )
+            print(f'    [optim] backend={optimizer_policy.backend}', flush=True)
 
             mnrl_cfg = training_cfg().training
             loss_fn = _make_loss(
@@ -5260,7 +5253,7 @@ def train_one_config(
                 np.ones(len(dev_pos_s)), np.zeros(len(dev_neg_s))
             ]
 
-            _thr = _youden_thr(_dev_all, _dev_y)
+            _thr = youden_threshold(_dev_all, _dev_y)
             _pred_at_thr = (_all >= _thr).astype(int)
             _acc = float(
                 ((_y == 1) & (_pred_at_thr == 1)).sum()
@@ -5409,7 +5402,7 @@ def train_one_config(
                 # scores — reported ONLY as the leak diagnostic (how much
                 # the old protocol flattered itself), never as the ship point
                 "youden_thr": _thr,
-                "youden_thr_test_descriptive": _youden_thr(_all, _y),
+                "youden_thr_test_descriptive": youden_threshold(_all, _y),
                 "acc_at_thr": _acc,
                 "pr_auc": _pr_auc,
                 # 07-schema: AP under the same name the plots expect

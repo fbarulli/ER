@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.common import F, load_dataset_deduped
 from core.gtin import is_valid_gtin_checksum
+from core.manifest import atomic_write_csv
 from core.schemas import (
     CROSS_COUNTRY_PAIR_COLUMNS,
     CrossCountryPairRow,
@@ -156,9 +157,7 @@ def write_manifest(output_path: Path) -> pd.DataFrame:
     """Build and atomically write the configured manifest."""
     manifest = build_manifest(load_dataset_deduped())
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output_path.with_name(f"{output_path.name}.tmp")
-    manifest.to_csv(temporary, index=False)
-    temporary.replace(output_path)
+    atomic_write_csv(manifest, output_path, index=False)
     return manifest
 
 

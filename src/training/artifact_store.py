@@ -8,20 +8,12 @@ never mistake a partial upload for a finished run.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 
 from core.common import training_cfg
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+from core.manifest import sha256_file
 
 
 def publish(source: Path, run_id: str, worker: int) -> str:
@@ -53,7 +45,7 @@ def publish(source: Path, run_id: str, worker: int) -> str:
         "run_id": run_id,
         "worker": worker,
         "files": [
-            {"path": str(p.relative_to(source)), "bytes": p.stat().st_size, "sha256": _sha256(p)}
+            {"path": str(p.relative_to(source)), "bytes": p.stat().st_size, "sha256": sha256_file(p)}
             for p in sorted(files)
         ],
     }

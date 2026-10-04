@@ -28,6 +28,10 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, roc_auc_score
 
+from core.common import plot_dpi
+from core.disjoint_sets import DisjointSet
+from core.ranking_metrics import youden_threshold
+
 DEFAULT_DIMENSIONS = ("brand", "category", "attribute")
 METRIC_COLUMNS = (
     "repeat",
@@ -109,28 +113,6 @@ def _stable_seed(seed: int, repeat: int) -> int:
     return int(digest[:8], 16)
 
 
-class _UnionFind:
-    def __init__(self) -> None:
-        self.parent: dict[str, str] = {}
-
-    def add(self, value: str) -> None:
-        self.parent.setdefault(value, value)
-
-    def find(self, value: str) -> str:
-        self.add(value)
-        root = value
-        while self.parent[root] != root:
-            root = self.parent[root]
-        while self.parent[value] != root:
-            self.parent[value], value = root, self.parent[value]
-        return root
-
-    def union(self, left: str, right: str) -> None:
-        left_root, right_root = self.find(left), self.find(right)
-        if left_root != right_root:
-            self.parent[right_root] = left_root
-
-
 def _endpoint_keys(row: pd.Series, side: str) -> tuple[str, ...]:
     keys: list[str] = []
     for field in ("sku_id", "gtin"):
@@ -162,7 +144,7 @@ def _fold_assignment(
     resulting *pair* folds and retries another seed when a candidate violates
     the hard class-support contract.
     """
-    union_find = _UnionFind()
+    union_find = DisjointSet()
     row_keys: list[tuple[str, ...]] = []
     for _, row in pairs.iterrows():
         keys = _endpoint_keys(row, "a") + _endpoint_keys(row, "b")
@@ -174,10 +156,7 @@ def _fold_assignment(
             for key in keys[1:]:
                 union_find.union(keys[0], key)
 
-    components: dict[str, set[str]] = {}
-    for key in union_find.parent:
-        components.setdefault(union_find.find(key), set()).add(key)
-    ordered = sorted(components.values(), key=lambda group: sorted(group))
+    ordered = union_find.components()
 
     # Only rows fully inside a component can ever be test rows for that
     # component.  Crossing negatives deliberately remain unassigned.
@@ -302,16 +281,7 @@ def _strict_fold_assignment(
     )
 
 
-def _youden_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
-    order = np.argsort(-scores, kind="stable")
-    ordered_labels = labels[order]
-    positives = max(int(labels.sum()), 1)
-    negatives = max(int((labels == 0).sum()), 1)
-    j = (
-        np.cumsum(ordered_labels) / positives
-        - np.cumsum(1 - ordered_labels) / negatives
-    )
-    return float(scores[order[int(np.argmax(j))]])
+
 
 
 def _metrics(part: pd.DataFrame, threshold: float | None) -> dict[str, object]:
@@ -477,7 +447,7 @@ def run_robust_validation(
             train = frame.loc[train_mask]
             test = frame.loc[test_mask]
             threshold = (
-                _youden_threshold(
+                youden_threshold(
                     train["score"].to_numpy(dtype=float),
                     train["label"].to_numpy(dtype=int),
                 )
@@ -605,7 +575,7 @@ def run_robust_validation(
         )
         ax.grid(axis="y", alpha=0.25)
         fig.tight_layout()
-        fig.savefig(out / "robust_validation_fold_metrics.png", dpi=150)
+        fig.savefig(out / "robust_validation_fold_metrics.png", dpi=plot_dpi())
         plt.close(fig)
 
     ok_operating = operating_frame[operating_frame["status"].eq("ok")]
@@ -629,7 +599,7 @@ def run_robust_validation(
         ax.legend(loc="lower left")
         fig = ax.get_figure()
         fig.tight_layout()
-        fig.savefig(out / "robust_validation_operating_points.png", dpi=150)
+        fig.savefig(out / "robust_validation_operating_points.png", dpi=plot_dpi())
         plt.close(fig)
 
     if not slice_frame.empty:
@@ -663,7 +633,7 @@ def run_robust_validation(
             axis.set_title(f"Worst supported {dimension} slices")
             axis.grid(axis="x", alpha=0.25)
         fig.tight_layout()
-        fig.savefig(out / "robust_validation_slice_errors.png", dpi=150)
+        fig.savefig(out / "robust_validation_slice_errors.png", dpi=plot_dpi())
         plt.close(fig)
     else:
         aggregate_slices = pd.DataFrame(

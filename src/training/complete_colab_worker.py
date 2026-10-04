@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,7 +14,8 @@ from core.portable_archive import Digest
 
 import pandas as pd
 
-from core.common import F, TRAIN_ROOT, trace_artifact, training_cfg
+from core.common import F, TRAIN_ROOT, plot_dpi, trace_artifact, training_cfg
+from core.manifest import sha256_file
 from training.validation_inference import resolve_best_checkpoint, threshold_assignment_metrics
 
 # ── scored-pair validation census (2026-10-01 contract) ─────────────────────
@@ -61,9 +61,9 @@ class ScoredValidationAccounting(BaseModel):
 
 def _byte_stable_csv_rows(path: Path) -> int:
     """Count CSV rows once, asserting the file's bytes stayed identical."""
-    digest_before = _sha256(path)
+    digest_before = sha256_file(path)
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    if _sha256(path) != digest_before:
+    if sha256_file(path) != digest_before:
         raise RuntimeError(f"{path} changed while it was being read")
     return len(frame)
 
@@ -106,18 +106,10 @@ def scored_validation_accounting() -> dict[str, object]:
     }).model_dump()
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def _csv_identity(path: Path) -> dict[str, object]:
-    before = _sha256(path)
+    before = sha256_file(path)
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    if _sha256(path) != before:
+    if sha256_file(path) != before:
         raise RuntimeError(f"{path} changed while provenance was being read")
     return CsvIdentity.model_validate({
         "path": str(path.resolve()),
@@ -220,7 +212,7 @@ def _write_sku_reports(predictions_path: Path, output_dir: Path) -> None:
     ax.legend()
     fig.tight_layout()
     plot_path = output_dir / "sku_score_distribution.png"
-    fig.savefig(plot_path, dpi=160)
+    fig.savefig(plot_path, dpi=plot_dpi())
     plt.close(fig)
     for path in (metrics_path, summary_path, plot_path):
         trace_artifact("final_inference", path, producer="training.complete_colab_worker")
