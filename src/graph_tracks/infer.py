@@ -78,12 +78,13 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         raise FileExistsError(output)
     records = load_records(listings, require_training=False)
     ids = [r['sku_id'] for r in records]
-    from graph_tracks.prepared_inputs import PLAN, load_plan, load_batch
+    from graph_tracks.prepared_inputs import PLAN, load_plan, load_batch, PreparedGraphInputs
     owned_arrays = None
     if prepared_plan is None and (listings.parent / PLAN).is_file():
         prepared_plan, prepared_arrays = load_plan(listings)
         owned_arrays = prepared_arrays
     if prepared_plan is not None:
+        PreparedGraphInputs(plan=prepared_plan, arrays=prepared_arrays).validate_catalog(records)
         if prepared_plan['ids'] != ids or prepared_plan['listings_sha256'] != file_hash(listings):
             raise ValueError('prepared inference population mismatch')
         support = load_batch(prepared_arrays, 'train', device, prepared_plan['vocabulary'])
@@ -118,6 +119,8 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         vectors = encoder.encode_prepared(batches, text)
     else:
         vectors = encoder.encode(records, text, batch_size)
+    if len(vectors) != len(ids):
+        raise ValueError('graph export embedding/ID population mismatch')
     if owned_arrays is not None:
         owned_arrays.close()
     track = encoder.manifest['track']

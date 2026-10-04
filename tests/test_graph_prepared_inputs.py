@@ -8,6 +8,48 @@ from graph_tracks.prepared_inputs import prepare_training, load_plan, load_batch
 from test_graph_tracks import inputs, population, disable_tracking
 
 
+@pytest.mark.parametrize('mutation', ['missing', 'reordered', 'repeated', 'wrong_pairs', 'wrong_labels'])
+def test_prepared_catalog_rejects_lost_or_misaligned_rows(tmp_path, mutation):
+    from graph_tracks.prepared_inputs import PreparedGraphInputs
+    from graph_tracks.train import load_pairs
+    listings, pairs, _, _ = inputs(tmp_path)
+    prepare_training(listings, pairs, batch_size=2)
+    plan, archive = load_plan(listings, pairs)
+    arrays = {key: archive[key].copy() for key in archive.files}
+    archive.close()
+    if mutation == 'missing':
+        plan['query_batches'].pop()
+    elif mutation == 'reordered':
+        plan['query_batches'].reverse()
+    elif mutation == 'repeated':
+        plan['query_batches'].append(plan['query_batches'][-1])
+    elif mutation == 'wrong_pairs':
+        arrays['train/catalog_pairs'][0] = arrays['train/catalog_pairs'][0][::-1]
+    else:
+        arrays['train/labels'][0] = 1 - arrays['train/labels'][0]
+    with pytest.raises(ValueError, match='prepared graph'):
+        PreparedGraphInputs(plan=plan, arrays=arrays).validate_catalog(
+            population(), load_pairs(pairs, population()))
+
+
+def test_graph_only_export_rejects_partial_embeddings(tmp_path, monkeypatch):
+    from graph_tracks.train import train
+    from graph_tracks.infer import export, GraphEncoder
+    import yaml
+    disable_tracking(monkeypatch)
+    listings, _, _, config = inputs(tmp_path)
+    settings = yaml.safe_load(config.read_text())
+    settings.update(postprocess=False, epochs=1)
+    config.write_text(yaml.safe_dump(settings))
+    checkpoint = train(config, run_tag='partial')
+    encoder = GraphEncoder(checkpoint)
+    monkeypatch.setattr(GraphEncoder, 'encode', lambda *args, **kwargs: np.ones((1, 8), dtype=np.float32))
+    destination = tmp_path/'export'
+    with pytest.raises(ValueError, match='embedding/ID population'):
+        export(checkpoint, listings, destination, encoder=encoder)
+    assert not destination.exists()
+
+
 def test_prepared_graph_matches_values_and_gradients(tmp_path):
     listings, pairs, _, _ = inputs(tmp_path)
     prepare_training(listings, pairs, batch_size=2)

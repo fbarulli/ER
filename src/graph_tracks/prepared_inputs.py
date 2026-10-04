@@ -1,5 +1,6 @@
 """CPU preparation and hash-bound transfer of immutable graph topology."""
 import json
+from pydantic import BaseModel, ConfigDict, model_validator
 from pathlib import Path
 import numpy as np
 import torch
@@ -8,6 +9,58 @@ from graph_tracks.pooling import topology
 
 PLAN = 'graph_plan.json'
 ARRAYS = 'graph_inputs.npz'
+
+
+class PreparedGraphInputs(BaseModel):
+    """Trace catalog rows through immutable query batches and split pair indices."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra='forbid')
+
+    plan: dict
+    arrays: object
+
+    @model_validator(mode='after')
+    def validate_batches(self):
+        self.validate_catalog()
+        return self
+
+    def validate_catalog(self, records=None, pair_data=None):
+        ids = self.plan['ids']
+        if not ids or len(set(ids)) != len(ids):
+            raise ValueError('prepared graph IDs must be unique and nonempty')
+        if records is not None and ids != [r['sku_id'] for r in records]:
+            raise ValueError('prepared graph ID order mismatch')
+        start = 0
+        for prefix in self.plan['query_batches']:
+            if prefix != f'query/{start}':
+                raise ValueError('prepared graph query batch order/coverage mismatch')
+            numeric = self.arrays[prefix+'/numeric']
+            if numeric.ndim != 2 or len(numeric) == 0:
+                raise ValueError('prepared graph query batch must contain rows')
+            start += len(numeric)
+        if start != len(ids):
+            raise ValueError('prepared graph query batch population mismatch')
+        if records is None or 'populations' not in self.plan:
+            return
+        for split in ('train', 'dev', 'test'):
+            population = self.plan['populations'][split]
+            if population != [i for i, r in enumerate(records) if r['split'] == split]:
+                raise ValueError('prepared graph split population mismatch')
+            local = self.arrays[split+'/pairs']
+            catalog = self.arrays[split+'/catalog_pairs']
+            labels = self.arrays[split+'/labels']
+            if (local.dtype != np.int64 or local.ndim != 2 or local.shape[1] != 2
+                    or catalog.dtype != np.int64 or catalog.shape != local.shape
+                    or labels.dtype != np.float32 or labels.shape != (len(local),)
+                    or not np.isin(labels, [0., 1.]).all()
+                    or np.any(local < 0) or np.any(local >= len(population))):
+                raise ValueError('prepared graph pair dtype/shape/bounds mismatch')
+            mapped = np.asarray(population, dtype=np.int64)[local]
+            if not np.array_equal(mapped, catalog):
+                raise ValueError('prepared graph local/catalog pair mapping mismatch')
+            if pair_data is not None and (not np.array_equal(catalog, pair_data[split][0])
+                                         or not np.array_equal(labels, pair_data[split][1])):
+                raise ValueError('prepared graph pairs differ from source labels/endpoints')
 
 
 def save_batch(arrays, prefix, batch, vocabulary):
@@ -130,7 +183,18 @@ def load_plan(listings: Path, pairs: Path | None = None):
             raise ValueError(f'prepared graph mismatch: {key}')
     if pairs is not None and plan.get('pairs_sha256') != file_hash(pairs):
         raise ValueError('prepared graph pair mismatch')
-    return plan, np.load(path.parent/ARRAYS, allow_pickle=False)
+    arrays = np.load(path.parent/ARRAYS, allow_pickle=False)
+    try:
+        records = load_records(listings, require_training=pairs is not None)
+        pair_data = None
+        if pairs is not None:
+            from graph_tracks.train import load_pairs
+            pair_data = load_pairs(pairs, records)
+        PreparedGraphInputs(plan=plan, arrays=arrays).validate_catalog(records, pair_data)
+    except Exception:
+        arrays.close()
+        raise
+    return plan, arrays
 
 
 def main():
