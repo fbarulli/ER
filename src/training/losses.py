@@ -199,7 +199,7 @@ def _tracking_contrastive_loss(
             if torch.is_grad_enabled():
                 scalars = torch.stack([positive_loss.detach(), negative_loss.detach(),
                                        uniformity_loss.detach(), anti_collapse_loss.detach()])
-                payload = torch.cat([labels.detach().to(scalars.dtype),
+                payload = torch.cat([labels.detach().ne(0).to(scalars.dtype),
                                      negative_selection.detach().to(scalars.dtype),
                                      (negative_hinge > 0).detach().to(scalars.dtype), scalars])
                 self._pending_telemetry.append(ContrastiveTelemetryBatch(
@@ -222,6 +222,8 @@ def _tracking_contrastive_loss(
                 width = batch.label_count + batch.negative_count + batch.selected_count + 4
                 payload = payloads[payload_offset:payload_offset + width]
                 payload_offset += width
+                # Encode the original zero-label predicate rather than casting
+                # arbitrary labels through a possibly BF16 telemetry dtype.
                 labels_cpu = payload[:batch.label_count]
                 negative_selection = payload[batch.label_count:batch.label_count + batch.negative_count].bool()
                 margin_active = payload[batch.label_count + batch.negative_count:-4].bool()
