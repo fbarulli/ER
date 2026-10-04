@@ -51,7 +51,7 @@ def test_failed_stage_stops_preparation_and_retains_smoke(tmp_path,monkeypatch):
     from model_tracks.config import SuiteConfig
     monkeypatch.setattr('model_tracks.config.load_config', lambda path: SuiteConfig(
         setup_dir='data/track_setup', text_bundle='data/track_setup/text_prepared.pkl.gz'))
-    monkeypatch.setattr(preparation, 'preparation_provenance', lambda *args: {'source':'test'})
+    monkeypatch.setattr(preparation, 'preparation_provenance', lambda *args: {'source':'0' * 64})
     smoke=tmp_path/'data/prepared/smoke_200/pairs.csv'
     smoke.parent.mkdir(parents=True);smoke.write_text('existing smoke bytes')
     calls=[]

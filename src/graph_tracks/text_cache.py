@@ -12,7 +12,8 @@ from graph_tracks.data import file_hash
 def composition_fingerprint():
     """Fingerprint the local composition code and all shipped parser config."""
     from core.common import TRAIN_ROOT
-    files = list((TRAIN_ROOT / 'src/core').glob('*.py'))
+    files = list((TRAIN_ROOT / 'src/core').rglob('*.py'))
+    files += list((TRAIN_ROOT / 'src/ner').rglob('*.py'))
     files += [TRAIN_ROOT / 'src/graph_tracks/text_cache.py', TRAIN_ROOT / 'src/pipeline.py']
     files += [TRAIN_ROOT / 'config' / name for name in (
         'paths.yaml', 'training.yaml', 'identity_dimensions.yaml',

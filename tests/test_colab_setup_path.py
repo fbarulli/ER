@@ -147,13 +147,14 @@ class BundleCacheTests(unittest.TestCase):
             dataset.write_bytes(b"unchanged dataset")
             inputs = {
                 name: root / f"{name}.csv"
-                for name in ("labeled_pairs", "canonical_records", "gate_results")
+                for name in ("labeled_pairs", "canonical_records", "gate_results", "number_reference")
             }
             for path in inputs.values():
                 path.write_bytes(b"original")
             with mock.patch.object(colab, "F", {**colab.F, **inputs}), \
                  mock.patch.object(colab, "_CACHE_PREPARED_BUNDLES", True), \
-                 mock.patch.object(colab, "_tree_digest", return_value="unchanged"):
+                 mock.patch.object(colab, "_tree_digest", return_value="unchanged"), \
+                 mock.patch.object(colab, "_bundle_model_digest", return_value="model-checkpoint"):
                 def cache_path():
                     return colab._bundle_cache_dir(
                         profiles=["baseline"], model_key="model", sample=None,
@@ -167,6 +168,8 @@ class BundleCacheTests(unittest.TestCase):
                         self.assertNotEqual(original, cache_path())
                         path.write_bytes(b"original")
                         self.assertEqual(original, cache_path())
+                with mock.patch.object(colab, "_bundle_model_digest", return_value="updated-model"):
+                    self.assertNotEqual(original, cache_path())
 
     def _fixture(self, temporary: str):
         root = Path(temporary)

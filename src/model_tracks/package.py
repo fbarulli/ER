@@ -9,12 +9,12 @@ from model_tracks.config import load_config
 from model_tracks.preflight import preflight
 
 
-def runtime_snapshot_files(*, ablation_config=None):
+def runtime_snapshot_files(*, ablation_config: Path | None = None) -> dict[str, Path]:
     """Shared local source/config overlay for prepared Colab jobs."""
     from core.common import TRAIN_ROOT
     files = {}
-    for directory in ('src/graph_tracks','src/model_tracks','src/training','src/core'):
-        files.update({p.relative_to(TRAIN_ROOT).as_posix():p for p in (TRAIN_ROOT/directory).glob('*.py')})
+    files.update({path.relative_to(TRAIN_ROOT).as_posix(): path
+                  for path in (TRAIN_ROOT / 'src').rglob('*.py')})
     for name in ('src/pipeline.py','scripts/diet_manifest.py',
                  'scripts/run_colab_ablation.py','scripts/run_colab_embeddings.py',
                  'src/cli/colab.py','src/cli/__init__.py'):
@@ -24,10 +24,11 @@ def runtime_snapshot_files(*, ablation_config=None):
     if ablation_config is not None:
         source = Path(ablation_config).resolve()
         files[source.relative_to(TRAIN_ROOT).as_posix()] = source
-    return files
+    from core.portable_archive import RuntimeSnapshot
+    return RuntimeSnapshot(files=files).files
 
 
-def package(config: Path, output: Path):
+def package(config: Path, output: Path) -> Path:
     from core.common import F, TRAIN_ROOT
     cfg = load_config(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()

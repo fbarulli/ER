@@ -30,7 +30,8 @@ def suite(tmp_path, monkeypatch):
                               manifest_name='model_tracks_package.json', metadata={'preflight': inputs})
     root = tmp_path / 'remote'
     root.mkdir()
-    (root / 'suite_manifest.json').write_text(json.dumps({'run_tag': 'run', 'inputs': inputs, 'config': cfg}))
+    (root / 'suite_manifest.json').write_text(json.dumps({'run_tag': 'run', 'inputs': inputs, 'config': cfg,
+        'resume_identity': {'implementation': {}}}))
     for track in ('text', 'gnn_only', 'hybrid'):
         output = root / track
         output.mkdir()

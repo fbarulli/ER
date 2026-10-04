@@ -36,9 +36,13 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         settings = SuiteConfig.model_validate(yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
     if training['run_tag'] != run_tag:
         raise ValueError('local completion run mismatch')
+    from model_tracks.resume import validate_training_binding
+    with zipfile.ZipFile(training_archive) as archive:
+        validate_training_binding(json.loads(archive.read('suite_manifest.json')),
+                                  inputs, settings, run_tag)
     # The local report implementation must match the code that produced training.
     for relative, expected in inputs['files'].items():
-        if relative.startswith(('src/', 'config/', 'scripts/')):
+        if relative.startswith(('src/', 'config/', 'scripts/')) or relative == settings.ablation_config:
             if file_hash(TRAIN_ROOT / relative) != expected:
                 raise ValueError(f'Local completion code/config differs from training: {relative}')
     destination = training_archive.parent / run_tag

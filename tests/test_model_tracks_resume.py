@@ -67,7 +67,11 @@ def test_identity_ignores_generated_reports_and_portable_suite_paths(tmp_path, m
     (tmp_path / 'config').mkdir()
     for name in ('training.yaml', 'identity_dimensions.yaml', 'identity_reviews.json', 'vocabulary.json'):
         (tmp_path / 'config' / name).write_text('same')
-    settings = dict(setup_dir='setup', text_bundle='old/bundle', epochs=1)
+    settings = dict(setup_dir='setup', text_bundle='old/bundle', epochs=1,
+                    ablation_config='config/attribute_ablation.yaml')
+    monkeypatch.setattr('model_tracks.package.runtime_snapshot_files',
+        lambda **kwargs: {path.relative_to(tmp_path).as_posix():path
+                          for path in (tmp_path/'config').glob('*')})
     cfg = SimpleNamespace(**settings, model_dump=lambda: settings.copy())
     inputs = {'text': dict(bundle_sha256='sha', payload='full', masking_profile='baseline', rows=1)}
     before = suite_identity(cfg, inputs, 'run')
@@ -109,3 +113,43 @@ print('resumed text')
     assert result['workers'] == ['text']
     log = (tmp_path / 'text__worker.log').read_text()
     assert 'previous attempt' in log and 'resumed text' in log
+
+
+def test_suite_archive_reuse_requires_current_worker_generation(tmp_path):
+    from core.portable_archive import write_archive
+    from model_tracks.resume import TRACKS, verify_suite_archive
+    output = tmp_path / 'run'
+    output.mkdir()
+    identity = {'run_tag': 'run', 'inputs': {'sha': 'original'}}
+    (output / 'suite_manifest.json').write_text(json.dumps({'resume_identity': identity}))
+    for track in TRACKS:
+        folder = output / track
+        folder.mkdir()
+        (folder / 'checkpoint.bin').write_bytes(b'original')
+        record_completion(folder, track, postprocess_complete=False)
+    archive = tmp_path / 'run.zip'
+    write_archive(archive, {path.relative_to(output).as_posix(): path
+                           for path in output.rglob('*') if path.is_file()},
+                  manifest_name='suite_bundle_manifest.json', metadata={'run_tag': 'run'})
+    verify_suite_archive(archive, output, 'run', identity, postprocess_complete=False)
+    (output / 'text/checkpoint.bin').write_bytes(b'retrained')
+    record_completion(output / 'text', 'text', postprocess_complete=False)
+    with pytest.raises(ValueError, match='stale worker artifacts'):
+        verify_suite_archive(archive, output, 'run', identity, postprocess_complete=False)
+
+
+def test_archive_is_not_published_when_source_changes_during_write(tmp_path, monkeypatch):
+    import zipfile
+    from core.portable_archive import write_archive
+    source = tmp_path / 'checkpoint.bin'
+    source.write_bytes(b'original')
+    output = tmp_path / 'run.zip'
+    original_write = zipfile.ZipFile.write
+    def mutate(self, filename, *args, **kwargs):
+        source.write_bytes(b'changed')
+        return original_write(self, filename, *args, **kwargs)
+    monkeypatch.setattr(zipfile.ZipFile, 'write', mutate)
+    with pytest.raises(ValueError, match='archive integrity mismatch'):
+        write_archive(output, {'checkpoint.bin':source}, manifest_name='manifest.json', metadata={})
+    assert not output.exists()
+    assert not list(tmp_path.glob('*.partial-*'))

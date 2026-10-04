@@ -16,9 +16,11 @@ import shutil
 import subprocess
 import sys
 from typing import Literal
+from collections.abc import Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 import yaml
+from core.portable_archive import Digest
 
 STAGES = ('dedupe', 'cross_country_pairs', 'number_reference', 'verify_reference',
         'canonical_and_gates', 'gate_census', 'labeled_pairs', 'validation',
@@ -27,7 +29,7 @@ STAGES = ('dedupe', 'cross_country_pairs', 'number_reference', 'verify_reference
 
 class PreparedFile(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    sha256: Digest
     bytes: StrictInt = Field(ge=0)
 
 
@@ -43,8 +45,8 @@ class PreparationState(BaseModel):
     tracks_config: str
     negative_supply_mode: Literal['gate', 'lane']
     negative_supply_run_tag: str = Field(pattern=r'^[A-Za-z0-9_-]+$')
-    provenance: dict[str, str]
-    smoke_original: dict[str, str]
+    provenance: dict[str, Digest]
+    smoke_original: dict[str, Digest]
     reusable_outputs: dict[str, PreparedFile] = Field(default_factory=dict)
 
     @model_validator(mode='after')
@@ -56,7 +58,7 @@ class PreparationState(BaseModel):
         return self
 
 
-def preparation_provenance(root, suite_config, checkpoint):
+def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Path) -> dict[str, str]:
     """Pin source, owning configs, raw input and baseline checkpoint content."""
     from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH
     from graph_tracks.text_cache import checkpoint_hash
@@ -78,7 +80,7 @@ def preparation_provenance(root, suite_config, checkpoint):
     return identity
 
 
-def verify_reusable_outputs(entries):
+def verify_reusable_outputs(entries: dict[str, PreparedFile]) -> None:
     if not entries:
         raise ValueError('Resume has no verified prepared outputs; regenerate inputs')
     for path, entry in entries.items():
@@ -86,7 +88,7 @@ def verify_reusable_outputs(entries):
             raise ValueError(f'Stale prepared resume input: {path}')
 
 
-def sha256(path):
+def sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
@@ -94,7 +96,7 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def verify_stage_manifest(path, *, required_inputs=()):
+def verify_stage_manifest(path: str | Path, *, required_inputs: Sequence[str | Path] = ()) -> None:
     from core.manifest import source_tree_sha256
     from core.schemas import StageManifest
     from core.tracing import trace_path
@@ -118,7 +120,7 @@ def verify_stage_manifest(path, *, required_inputs=()):
             raise ValueError(f'Stale prerequisite: {entry.path}')
 
 
-def refresh_gate_census(gate_csv, config_path, report_path):
+def refresh_gate_census(gate_csv: Path, config_path: Path, report_path: Path) -> dict[str, int]:
     import pandas as pd
     from core.manifest import atomic_write_json, atomic_write_text
     from core.schemas import RandMatchingSpec

@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class SuiteConfig(BaseModel):
@@ -21,7 +21,15 @@ class SuiteConfig(BaseModel):
     publish_git: bool = True
     profiling: bool = False
     post_training_ablation: bool = False
-    ablation_config: str = 'config/attribute_ablation.yaml'
+    ablation_config: str = Field(default='config/attribute_ablation.yaml', min_length=1)
+
+    @field_validator('ablation_config')
+    @classmethod
+    def portable_ablation_path(cls, value: str) -> str:
+        path = Path(value)
+        if path.is_absolute() or '..' in path.parts or not path.parts:
+            raise ValueError('ablation_config must be a project-relative file path')
+        return path.as_posix()
 
     @property
     def dvc_enabled(self) -> bool:

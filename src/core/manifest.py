@@ -267,17 +267,9 @@ def _environment(seed: int | None) -> dict[str, str]:
             env["git_sha"] = sha
     except (OSError, subprocess.SubprocessError):
         pass  # git absent — "unknown" is the documented fallback
-    digests = []
-    for cfg_path in (CONFIG_PATH, TRAINING_CONFIG_PATH):
-        try:
-            digests.append(sha256_file(cfg_path))
-        except OSError:
-            digests = []
-            break
-    if digests:
-        env["config_sha256"] = hashlib.sha256(
-            "|".join(digests).encode()
-        ).hexdigest()
+    # Configuration is required provenance, even when Git metadata is unavailable.
+    digests = [sha256_file(path) for path in (CONFIG_PATH, TRAINING_CONFIG_PATH)]
+    env['config_sha256'] = hashlib.sha256('|'.join(digests).encode()).hexdigest()
     if seed is not None:
         env["seed"] = str(seed)
     return env

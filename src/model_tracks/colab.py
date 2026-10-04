@@ -273,11 +273,10 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
         print(f'Suite final event log verified: {events_local}', flush=True)
     except Exception as error:
         print(f'Suite final event log unavailable: {error}; archived worker logs remain available', flush=True)
+    from model_tracks.resume import TRACKS, validate_archived_track
     with zipfile.ZipFile(local) as result:
-        for track in ('text', 'gnn_only', 'hybrid'):
-            marker = json.loads(result.read(f'{track}/track_complete.json'))
-            if marker != {'track': track, 'status': 'ok', 'postprocess_complete': False}:
-                raise ValueError(f'{track} missing verified training-only completion')
+        for track in TRACKS:
+            validate_archived_track(result, manifest, track, postprocess_complete=False)
     # Release GPU quota before local inference, indexing, reporting or publishing.
     # stop() is deliberately non-raising for launcher finally blocks. Require
     # a verified release here so reporting cannot overlap an idle GPU session.

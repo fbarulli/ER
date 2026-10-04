@@ -25,6 +25,8 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
             raise ValueError('invalid run tag')
         if output.exists() and not resume:
             raise FileExistsError(output)
+        if output.with_suffix('.zip').exists() and not resume:
+            raise FileExistsError(output.with_suffix('.zip'))
         if resume and not output.is_dir():
             raise FileNotFoundError('resume output directory does not exist')
         output.mkdir(parents=True, exist_ok=resume)
@@ -115,7 +117,9 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         if cfg.memory_reservations_gb and required * 1024**3 > free:
             raise RuntimeError('measured combined worker memory exceeds available GPU memory')
     if not resume:
-        (output / 'suite_manifest.json').write_text(json.dumps({
+        from core.manifest import atomic_write_text
+        from model_tracks.resume import TrainingInputBinding
+        manifest = TrainingInputBinding.model_validate({
         'run_tag':run_tag, 'config':cfg.model_dump(), 'inputs':inputs, 'hardware':hardware,
         'resume_identity': identity,
         'worker_responsibility':('GPU train and checkpoint; local CPU owns postprocessing and reports'
@@ -123,7 +127,9 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         'supervisor_responsibility':'barrier, MPS, child lifetime, collection',
         'shared_inputs':'read-only; text bundle CSVs materialized in text worker output',
         'hybrid_text_checkpoint':'frozen prepared baseline; no dependency on concurrent text worker'
-    }, indent=2) + '\n')
+        })
+        atomic_write_text(output / 'suite_manifest.json',
+                          manifest.model_dump_json(indent=2, by_alias=True) + '\n')
     skipped = [track for track in TRACKS if resume and completed_track(output / track, track,
                                                                    postprocess_complete=not gpu_only)]
     for track in skipped:
@@ -146,18 +152,18 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     else:
         result = run_parallel(commands, output, env, resume=resume)
     result['skipped_verified_tracks'] = skipped
-    # Every worker must finish its report before the shared run is complete.
+    # Validate the current artifact generation, not just completion markers.
     for track in TRACKS:
-        marker = json.loads((output/track/'track_complete.json').read_text())
-        if marker != {'track':track, 'status':'ok', 'postprocess_complete':not gpu_only}:
+        if not completed_track(output / track, track, postprocess_complete=not gpu_only):
             raise ValueError(f'incomplete track: {track}')
     (output/'suite_result.json').write_text(json.dumps({'status':'ok', **result}, indent=2)+'\n')
     events.emit('collection', 'starting', tracks=list(TRACKS), skipped_verified_tracks=skipped)
     archive_path = output.with_suffix('.zip')
     if archive_path.exists():
-        from core.portable_archive import verify_archive
-        if not resume or verify_archive(archive_path, 'suite_bundle_manifest.json').get('run_tag') != run_tag:
-            raise ValueError('existing archive belongs to a different suite')
+        if not resume:
+            raise FileExistsError(archive_path)
+        from model_tracks.resume import verify_suite_archive
+        verify_suite_archive(archive_path, output, run_tag, identity, postprocess_complete=not gpu_only)
         archive_path.with_suffix('.sha256').write_text(file_hash(archive_path) + '\n')
         events.emit('collection', 'verified', archive=str(archive_path), sha256=file_hash(archive_path),
                     reused=True)

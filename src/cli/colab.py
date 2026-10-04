@@ -2930,15 +2930,15 @@ _BUNDLE_CACHE_DIRNAME = "_cache"
 # on any of them must invalidate the cache: a stale bundle would train on data
 # the operator did not ask for, which is the silent-staleness defect class this
 # repository treats as a bug rather than an inconvenience.
-_BUNDLE_SOURCE_DIRS = ("src/core", "src/training")
-_BUNDLE_SOURCE_FILES = ("src/pipeline.py",)
+_BUNDLE_SOURCE_DIRS = ("src",)
+_BUNDLE_SOURCE_FILES = ("scripts/diet_manifest.py",)
 
 
 def _tree_digest() -> str:
     """Digest every config file and bundle-producing source file."""
     digest = hashlib.sha256()
     paths = sorted(
-        [path for name in _BUNDLE_SOURCE_DIRS for path in (TRAIN_ROOT / name).glob("*.py")]
+        [path for name in _BUNDLE_SOURCE_DIRS for path in (TRAIN_ROOT / name).rglob("*.py")]
         + [TRAIN_ROOT / name for name in _BUNDLE_SOURCE_FILES]
         + sorted((TRAIN_ROOT / "config").glob("*"))
     )
@@ -2948,6 +2948,11 @@ def _tree_digest() -> str:
         digest.update(path.relative_to(TRAIN_ROOT).as_posix().encode("utf-8"))
         digest.update(sha256_file(path).encode("ascii"))
     return digest.hexdigest()
+
+
+def _bundle_model_digest(model_key: str) -> str:
+    from graph_tracks.text_cache import checkpoint_hash
+    return checkpoint_hash(Path(resolve_model(model_key)))
 
 
 def _bundle_cache_dir(
@@ -2965,6 +2970,7 @@ def _bundle_cache_dir(
         {
             "profiles": list(profiles),
             "model": model_key,
+            "model_checkpoint_sha256": _bundle_model_digest(model_key),
             "sample": sample,
             "payload": payload,
             "collapsed_guardrail": _COLLAPSE_GUARDRAIL_PROFILE,
@@ -2974,7 +2980,7 @@ def _bundle_cache_dir(
             # edits made since the previous build.
             "frozen_inputs_sha256": {
                 name: sha256_file(Path(F[name]))
-                for name in ("labeled_pairs", "canonical_records", "gate_results")
+                for name in ("labeled_pairs", "canonical_records", "gate_results", "number_reference")
             },
             "sources_sha256": _tree_digest(),
         },

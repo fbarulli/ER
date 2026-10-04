@@ -45,24 +45,21 @@ def package(config: Path, output: Path, *, device: str = 'cuda') -> Path:
     report_attributes = (TRAIN_ROOT / cfg.listings).resolve().parent / FILENAME
     if report_attributes.is_file():
         files[(base / FILENAME).as_posix()] = report_attributes
-    for source in sorted((TRAIN_ROOT / 'src/graph_tracks').glob('*.py')):
-        files[source.relative_to(TRAIN_ROOT).as_posix()] = source
-    utility = TRAIN_ROOT / 'src/core/portable_archive.py'
-    files[utility.relative_to(TRAIN_ROOT).as_posix()] = utility
-    profiler = TRAIN_ROOT / 'src/core/training_profiler.py'
-    files[profiler.relative_to(TRAIN_ROOT).as_posix()] = profiler
+    from model_tracks.package import runtime_snapshot_files
+    files.update(runtime_snapshot_files())
     dependency = TRAIN_ROOT / 'requirements/graph_tracks.txt'
     files[dependency.relative_to(TRAIN_ROOT).as_posix()] = dependency
     revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=TRAIN_ROOT,
                               capture_output=True, text=True, check=True).stdout.strip()
-    configuration = yaml.safe_dump(settings, sort_keys=False)
+    from graph_tracks.config import GraphConfig
+    configuration = yaml.safe_dump(GraphConfig.model_validate(settings).model_dump(), sort_keys=False)
     config_target = (base / 'worker.yaml').as_posix()
     manifest = {'schema': 'er-graph-worker-package-v1', 'base_git_revision': revision,
                 'track': cfg.track, 'local_preflight': checks,
                 'target_device': device, 'target_runtime_verified': False}
     readme = (
         f'Check out ER revision {revision}, then extract this ZIP into that checkout.\n'
-        'The ZIP includes the graph worker source overlay, hashed in package_manifest.json.\n'
+        'The ZIP includes the shared runtime source/config overlay, hashed in package_manifest.json.\n'
         'Install PyTorch for the target runtime and requirements/graph_tracks.txt.\n'
         'Verify files before use:\n'
         f'PYTHONPATH=src python -m graph_tracks.worker_package --verify {base}/package_manifest.json\n'

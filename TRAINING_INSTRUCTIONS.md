@@ -1,7 +1,8 @@
 # ER training and data generation
 
 This is the single operational guide for preparation, training, and artifact
-collection. Model selection and experiment design remain in
+collection. Entry points and shared contracts are mapped in
+[COLAB_SURFACE_MAP.md](COLAB_SURFACE_MAP.md). Model selection and experiment design remain in
 [MODEL_TRACKS_PLAN.md](MODEL_TRACKS_PLAN.md). Updated 2026-10-04.
 
 ## The three models

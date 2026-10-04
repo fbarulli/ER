@@ -9,20 +9,20 @@ import sys
 import tempfile
 import zipfile
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from core.portable_archive import verify_archive
+from core.portable_archive import Digest, verify_archive
 from graph_tracks.data import file_hash
 
 
 class SnapshotCompletionReceipt(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
 
-    run_tag: str
-    input_archive_sha256: str
-    training_archive_sha256: str
-    final_archive_sha256: str
-    source_inventory: dict[str, str]
+    run_tag: str = Field(pattern=r'^[A-Za-z0-9_-]+$')
+    input_archive_sha256: Digest
+    training_archive_sha256: Digest
+    final_archive_sha256: Digest
+    source_inventory: dict[str, Digest]
     working_tree_mismatches: list[str]
 
 
@@ -38,16 +38,19 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
     inputs = verify_archive(input_archive, 'model_tracks_package.json')
     if training['run_tag'] != run_tag:
         raise ValueError('snapshot completion run mismatch')
+    with zipfile.ZipFile(input_archive) as archive:
+        settings = SuiteConfig.model_validate(
+            yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
     inventory = {relative: digest for relative, digest in inputs['files'].items()
                  if relative.startswith(('src/', 'config/', 'scripts/'))}
+    if settings.ablation_config in inputs['files']:
+        inventory[settings.ablation_config] = inputs['files'][settings.ablation_config]
     if not inventory or 'src/model_tracks/local_complete.py' not in inventory:
         raise ValueError('prepared inputs lack the frozen completion runtime')
     mismatches = [relative for relative, expected in inventory.items()
                   if not (TRAIN_ROOT / relative).is_file()
                   or file_hash(TRAIN_ROOT / relative) != expected]
     with zipfile.ZipFile(input_archive) as archive:
-        settings = SuiteConfig.model_validate(
-            yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
         with tempfile.TemporaryDirectory(prefix='er-suite-completion-') as temporary:
             snapshot = Path(temporary)
             for relative in inventory:
