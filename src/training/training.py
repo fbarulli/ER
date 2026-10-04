@@ -3167,6 +3167,8 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
     epochs = int(load_config()["training"]["epochs"])
     packed = {}
     for device, batch_size in (("cpu", BATCH_SIZE_CPU), ("cuda", BATCH_SIZE_CUDA)):
+        device_started = time.perf_counter()
+        print(f"[plan-sampler] start device={device} batch_size={batch_size} rows={len(ds):,} epochs={epochs}", flush=True)
         if bs_cfg["enabled"]:
             weights = bs_cfg.get("compositions_by_loss", {}).get(loss, bs_cfg["composition"])
             composition = resolve_composition(weights, sampler_populations, batch_size)
@@ -3190,12 +3192,15 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
                                                 batch_size=batch_size, drop_last=False)
         epoch_batches = []
         for epoch in range(epochs):
+            epoch_started = time.perf_counter()
             if hasattr(sampler, "set_epoch"):
                 sampler.set_epoch(epoch)
             batches = [list(map(int, batch)) for batch in sampler]
             if sorted(index for batch in batches for index in batch) != list(range(len(ds))):
                 raise ValueError("local objective plan sampler did not account for every training row")
             epoch_batches.append(batches)
+            print(f"[plan-sampler] device={device} epoch={epoch + 1}/{epochs} batches={len(batches):,} seconds={time.perf_counter() - epoch_started:.2f}", flush=True)
+        print(f"[plan-sampler] complete device={device} seconds={time.perf_counter() - device_started:.2f}", flush=True)
         packed[device] = {"batch_size": batch_size, "epochs": epoch_batches}
     objective["sampler"] = packed
     return {"objective": objective}

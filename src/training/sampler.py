@@ -144,7 +144,10 @@ class ControlledBatchSampler:
         while any(queues.values()):
             batch = []
             texts = set()
+            exhausted = set()
             for pop in self._template:
+                if pop in exhausted:
+                    continue
                 queue = queues[pop]
                 for _ in range(len(queue)):
                     index = queue.popleft()
@@ -154,6 +157,10 @@ class ControlledBatchSampler:
                     batch.append(index)
                     texts.update(self._text_hashes[index])
                     break
+                else:
+                    # Texts only accumulate within this batch: a population
+                    # with no eligible row cannot fill another slot here.
+                    exhausted.add(pop)
             # A duplicate may prevent full composition. It stays in its queue
             # for a later batch; every index is eventually presented once.
             if not batch:
