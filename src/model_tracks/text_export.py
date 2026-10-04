@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 from graph_tracks.data import file_hash, load_records, load_text_cache
 from graph_tracks.text_cache import checkpoint_hash, compose_texts, composition_fingerprint, texts_hash
+from model_tracks.embedding_forward import PreparedEmbeddingForward
 
 
 def prepare_tokens(checkpoint,texts,arrays,*,batch_size,cache=None):
@@ -25,9 +26,9 @@ def prepare_tokens(checkpoint,texts,arrays,*,batch_size,cache=None):
     return plan
 
 
-def prepare(setup, checkpoint, *, batch_size=256,composer=None,token_cache=None):
-    from sentence_transformers import SentenceTransformer
-    from core.encoding_inputs import prepare_token_batches
+def prepare(setup, checkpoint, *, batch_size=None,composer=None,token_cache=None):
+    from core.common import runtime
+    batch_size = runtime("batch_size_embed") if batch_size is None else batch_size
     from core.model_input import model_input_composition
     ids,texts = compose_texts(setup/'eligible_catalog.csv',composer=composer)
     if set(ids) != {r['sku_id'] for r in load_records(setup/'prepared/listings.json')}:
@@ -49,13 +50,8 @@ def prepare(setup, checkpoint, *, batch_size=256,composer=None,token_cache=None)
     return setup/'text_export_request.json'
 
 
-def forward(output,setup,*,return_model=False,device="cuda"):
-    import torch
-    from sentence_transformers import SentenceTransformer
-    from core.encoding_inputs import PreparedTokenInputs, tokenization_policy, load_token_features
+def forward(output,setup,*,device,return_model=False):
     from training.validation_inference import resolve_best_checkpoint
-    if device == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError('text export requires CUDA')
     request_path = setup/'text_export_request.json'
     request_sha256 = file_hash(request_path)
     request = json.loads(request_path.read_text())
@@ -66,33 +62,16 @@ def forward(output,setup,*,return_model=False,device="cuda"):
         if file_hash(path) != request[key]:
             raise ValueError('text export source changed: '+key)
     checkpoint,_ = resolve_best_checkpoint(output)
-    checkpoint_sha256 = checkpoint_hash(checkpoint)
-    model = SentenceTransformer(str(checkpoint),device=device,local_files_only=True)
-    model.eval()
-    if tokenization_policy(model) != request['plan']['tokenization']:
-        raise ValueError('selected checkpoint native tokenizer differs from prepared export')
-    chunks = []
-    with np.load(tokens,allow_pickle=False) as arrays,torch.no_grad():
-        PreparedTokenInputs(plan=request['plan'], arrays=arrays, row_count=len(request['ids']))
-        for batch in request['plan']['token_batches']:
-            # Native features were frozen locally; never tokenize on the GPU.
-            features = load_token_features(arrays,batch,device)
-            vectors = model(features)['sentence_embedding']
-            chunks.append(torch.nn.functional.normalize(vectors,p=2,dim=1).cpu().numpy().astype(np.float32))
-    vectors = np.concatenate(chunks)
+    contract = PreparedEmbeddingForward(device=device, checkpoint=checkpoint,
+        request_path=request_path, tokens_path=tokens, plan=request['plan'],
+        row_count=len(request['ids']), tokens_sha256=request['tokens_sha256'])
+    vectors, model, checkpoint_sha256, request_sha256 = contract.forward()
     metadata = {key:request[key] for key in ('catalog_sha256','listings_sha256','pairs_sha256','text_sha256','composition','composition_implementation_sha256','export_implementation_sha256','token_implementation_sha256')}
-    if file_hash(request_path) != request_sha256:
-        raise ValueError('text export request changed during encoding')
-    if checkpoint_hash(checkpoint) != checkpoint_sha256 or file_hash(tokens) != request['tokens_sha256']:
-        raise ValueError('text export checkpoint or tokens changed during encoding')
     metadata.update(checkpoint_sha256=checkpoint_sha256,request_sha256=request_sha256,
-        tokenization=request['plan']['tokenization'],export_location='Colab GPU' if device == 'cuda' else 'Colab CPU',truncated_inputs=0,embedding_dtype='float32')
+        tokenization=request['plan']['tokenization'],export_location=contract.export_location,
+        truncated_inputs=0,embedding_dtype=contract.embedding_dtype)
     path = output/'text__vectors.npz'
-    candidate = path.with_suffix('.npz.partial')
-    with candidate.open('wb') as handle:
-        np.savez_compressed(handle,ids=np.asarray(request['ids'],dtype=str),embeddings=vectors,metadata=json.dumps(metadata,sort_keys=True))
-    validate(candidate, checkpoint, setup)
-    candidate.replace(path)
+    contract.write(path, request['ids'], vectors, metadata, lambda candidate: validate(candidate, checkpoint, setup))
     model._er_checkpoint_sha256 = metadata['checkpoint_sha256']
     return (path,model) if return_model else path
 
@@ -108,6 +87,6 @@ def validate(path,checkpoint,setup):
             ('token_implementation_sha256',file_hash(__import__('core.encoding_inputs',fromlist=['x']).__file__))]:
         if metadata.get(key) != expected:
             raise ValueError('saved GPU text export mismatch: '+key)
-    if metadata.get('export_location') not in {'Colab GPU', 'Colab CPU'} or metadata.get('truncated_inputs') != 0 or not np.allclose(np.linalg.norm(vectors,axis=1),1,atol=1e-4):
+    if metadata.get('export_location') not in {'Colab GPU', 'Colab CPU'} or metadata.get('truncated_inputs') != 0 or not np.allclose(np.linalg.norm(vectors,axis=1),1,atol=PreparedEmbeddingForward.normalization_atol):
         raise ValueError('saved GPU text export contract mismatch')
     return vectors,metadata

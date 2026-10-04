@@ -59,7 +59,7 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None):
     return setup/'ablation_templates'
 
 
-def forward(output,setup,track,checkpoint,*,text_model=None,device="cuda"):
+def forward(output,setup,track,checkpoint,*,device,text_model=None):
     from core.common import TRAIN_ROOT
     template = setup/'ablation_templates'/track
     request = json.loads((template/'request.json').read_text())

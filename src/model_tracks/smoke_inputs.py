@@ -161,8 +161,9 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
     prepare_text_export(output, checkpoint, batch_size=runtime('batch_size_embed'))
     request_path = prepare_baseline(output, checkpoint)
     request = json.loads(request_path.read_text())
+    from model_tracks.embedding_forward import PreparedEmbeddingForward
     cache_metadata = {**request['metadata'], 'request_sha256': file_hash(request_path),
-                      'embedding_dtype': 'float32'}
+                      'embedding_dtype': PreparedEmbeddingForward.embedding_dtype}
     parent_cache = setup/'shared_minilm__embeddings.npz'
     if parent_cache.exists():
         vectors, metadata = load_text_cache(parent_cache, request['ids'])

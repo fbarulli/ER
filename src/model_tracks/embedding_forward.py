@@ -1,0 +1,62 @@
+"""Shared contract for forwarding frozen native tokens on the suite device."""
+from pathlib import Path
+from typing import ClassVar, Literal
+import json
+import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
+
+from graph_tracks.data import file_hash
+from graph_tracks.text_cache import checkpoint_hash
+
+
+class PreparedEmbeddingForward(BaseModel):
+    model_config = ConfigDict(frozen=True, extra='forbid')
+    device: Literal['cpu', 'cuda']
+    checkpoint: Path
+    request_path: Path
+    tokens_path: Path
+    plan: dict
+    row_count: int = Field(gt=0)
+    tokens_sha256: str
+    embedding_dtype: ClassVar[str] = 'float32'
+    normalization_atol: ClassVar[float] = 1e-4
+
+    @property
+    def export_location(self):
+        return 'Colab GPU' if self.device == 'cuda' else 'Colab CPU'
+
+    def forward(self):
+        import torch
+        from sentence_transformers import SentenceTransformer
+        from core.encoding_inputs import PreparedTokenInputs, tokenization_policy, load_token_features
+        if self.device == 'cuda' and not torch.cuda.is_available():
+            raise RuntimeError('configured embedding device requires CUDA')
+        request_hash = file_hash(self.request_path)
+        checkpoint_digest = checkpoint_hash(self.checkpoint)
+        if file_hash(self.tokens_path) != self.tokens_sha256:
+            raise ValueError('embedding tokens changed before forwarding')
+        model = SentenceTransformer(str(self.checkpoint), device=self.device, local_files_only=True)
+        model.eval()
+        if tokenization_policy(model) != self.plan['tokenization']:
+            raise ValueError('checkpoint native tokenizer differs from prepared export')
+        chunks = []
+        with np.load(self.tokens_path, allow_pickle=False) as arrays, torch.no_grad():
+            PreparedTokenInputs(plan=self.plan, arrays=arrays, row_count=self.row_count)
+            for batch in self.plan['token_batches']:
+                vectors = model(load_token_features(arrays, batch, self.device))['sentence_embedding']
+                chunks.append(torch.nn.functional.normalize(vectors, p=2, dim=1).cpu().numpy().astype(self.embedding_dtype))
+        if (file_hash(self.request_path) != request_hash
+                or file_hash(self.tokens_path) != self.tokens_sha256
+                or checkpoint_hash(self.checkpoint) != checkpoint_digest):
+            raise ValueError('embedding inputs changed during forwarding')
+        return np.concatenate(chunks), model, checkpoint_digest, request_hash
+
+    @staticmethod
+    def write(output, ids, vectors, metadata, validate):
+        candidate = output.with_suffix('.npz.partial')
+        with candidate.open('wb') as handle:
+            np.savez_compressed(handle, ids=np.asarray(ids, dtype=str), embeddings=vectors,
+                                metadata=json.dumps(metadata, sort_keys=True))
+        validate(candidate)
+        candidate.replace(output)
+        return output

@@ -78,7 +78,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         from core.common import resolve_model
         setup = (TRAIN_ROOT/cfg.setup_dir).resolve()
         events.emit('baseline_embedding','started',device=cfg.device)
-        baseline = forward_baseline(setup,Path(resolve_model(cfg.text_model)))
+        baseline = forward_baseline(setup,Path(resolve_model(cfg.text_model)),device=cfg.device)
         # The baseline model and features are now out of scope. Release this
         # supervisor's cached allocations before the three child workers
         # establish their independent CUDA allocators.

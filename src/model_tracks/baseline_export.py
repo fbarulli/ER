@@ -6,6 +6,7 @@ import numpy as np
 from graph_tracks.data import file_hash,load_records
 from graph_tracks.text_cache import compose_texts,texts_hash
 from training.prepare_embeddings import input_identity,validate_result
+from model_tracks.embedding_forward import PreparedEmbeddingForward
 
 
 def prepare(setup,checkpoint,*,composer=None):
@@ -56,11 +57,8 @@ def validate_pending(setup,checkpoint,*,native_model=None):
         'request_sha256':file_hash(path),'token_sha256':file_hash(tokens)}
 
 
-def forward(setup,checkpoint):
+def forward(setup,checkpoint,*,device):
     """GPU supervisor runs once before hybrid workers train; no CPU composition."""
-    import torch
-    from sentence_transformers import SentenceTransformer
-    from core.encoding_inputs import tokenization_policy,load_token_features
     request_path = setup/'embedding_inputs.json'
     request_sha256 = file_hash(request_path)
     request = json.loads(request_path.read_text())
@@ -69,31 +67,17 @@ def forward(setup,checkpoint):
         validate_pending(setup,checkpoint)
         validate_result(output,request,request_sha256=file_hash(request_path))
         return output
-    if not torch.cuda.is_available():
-        raise RuntimeError('frozen suite baseline requires CUDA')
-    model = SentenceTransformer(str(checkpoint),device='cuda',local_files_only=True)
-    model.eval()
-    validate_pending(setup,checkpoint,native_model=model)
+    validate_pending(setup,checkpoint)
     plan = request['prepared_text']
-    if tokenization_policy(model) != plan['tokenization']:
-        raise ValueError('GPU baseline tokenizer differs from native local preparation')
-    chunks = []
-    with np.load(setup/'prepared_text.npz',allow_pickle=False) as arrays,torch.no_grad():
-        for batch in plan['token_batches']:
-            vector = model(load_token_features(arrays,batch,'cuda'))['sentence_embedding']
-            chunks.append(torch.nn.functional.normalize(vector,p=2,dim=1).cpu().numpy().astype(np.float32))
-    if file_hash(request_path) != request_sha256:
-        raise ValueError('baseline request changed during encoding')
-    if file_hash(setup/'prepared_text.npz') != plan['sha256']:
-        raise ValueError('baseline tokens changed during encoding')
+    contract = PreparedEmbeddingForward(device=device, checkpoint=checkpoint,
+        request_path=request_path, tokens_path=setup/'prepared_text.npz', plan=plan,
+        row_count=len(request['ids']), tokens_sha256=plan['sha256'])
+    vectors, model, _, request_sha256 = contract.forward()
+    del model
     for key, value in input_identity(setup, checkpoint).items():
         if request['metadata'].get(key) != value:
             raise ValueError('baseline source changed during encoding: ' + key)
     metadata = {**request['metadata'],'request_sha256':request_sha256,
-        'embedding_dtype':'float32','tokenization':plan['tokenization']}
-    candidate = output.with_suffix('.npz.partial')
-    with candidate.open('wb') as handle:
-        np.savez_compressed(handle,ids=np.asarray(request['ids'],dtype=str),embeddings=np.concatenate(chunks),metadata=json.dumps(metadata,sort_keys=True))
-    validate_result(candidate,request,request_sha256=file_hash(request_path))
-    candidate.replace(output)
-    return output
+        'embedding_dtype':contract.embedding_dtype,'tokenization':plan['tokenization']}
+    return contract.write(output, request['ids'], vectors, metadata,
+        lambda candidate: validate_result(candidate,request,request_sha256=request_sha256))
