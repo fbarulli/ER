@@ -12,13 +12,12 @@ population / target_mode). Rows without a target_mode predate the swap lane
 and count as "random". Labels are never inspected: masked/swapped copies
 keep their anchor's label by construction (positives stay 1, negatives 0).
 
-MNRL accounting (loss == "mnrl"): the gate counts only the populations the
-loss actually trains. Swap hard-negative copies are omitted by
-training._mnrl_training_triples_with_populations (by design), so they are
-excluded from neg_aug_views. Masked-positive copies only train when their
-source anchor has an explicit negative in the training pool; copies without
-one are dead rows and are excluded from the positive view count (real
-survival). Non-MNRL losses train every retained view and are unchanged.
+MNRL accounting uses the frozen objective triples when available. Each actual
+triple presents one positive and one negative. Negative augmentation is traced
+from the hard-negative audit coordinates, including source-anchored twins;
+masked-positive triples do not become augmented-negative presentations. Legacy
+bundles without a frozen plan are counted through the production triple builder
+and clearly labeled as an unsplit census.
 
 Usage: diet_manifest.py BUNDLE_PATH
 Exit 0 PASS, exit 2 FAIL naming the exact violated threshold.
@@ -119,6 +118,44 @@ def effective_neg_aug_views(
     )
 
 
+def mnrl_presentation_counts(data: dict) -> list[dict]:
+    """Count actual objective rows, distinguishing negative augmentation lineage."""
+    copy_pairs = set()
+    twins = set()
+    for row in data.get("hard_negative_mask_audit", []):
+        copy = int(row["copy_payload_idx"])
+        pair = int(row["pair_payload_idx"])
+        if _mode(row) == "counterfactual":
+            twins.add((int(row["anchor_payload_idx"]), pair, copy))
+        else:
+            copy_pairs.add((copy, pair))
+    plan = data.get("training_plan")
+    if plan is not None:
+        if plan.get("identity", {}).get("loss") != "mnrl":
+            raise ValueError("frozen objective loss differs from MNRL diet")
+        if plan["inputs"].get("skipped") or not plan["inputs"].get("folds"):
+            raise ValueError("MNRL diet requires a complete frozen objective")
+        objectives = []
+        for fold in plan["inputs"]["folds"]:
+            objective = fold["objective"]
+            triples = objective["triples"]
+            dataset = objective["dataset"]
+            if any(len(dataset[key]) != len(triples) for key in ("anchor", "positive", "negative")):
+                raise ValueError("frozen MNRL triple and dataset rows differ")
+            objectives.append((fold["fold_i"], triples, "frozen objective"))
+    else:
+        from training.training import _mnrl_training_triples_with_populations
+        rows = _mnrl_training_triples_with_populations(
+            data["pos"], data["train_neg"], mask_audit=data.get("mask_audit", []),
+            hard_negative_mask_audit=data.get("hard_negative_mask_audit", []))
+        objectives = [("unsplit", [triple for triple, _ in rows], "production triple census (no frozen plan)")]
+    return [{"fold": fold, "source": source, "presentations": len(triples),
+             "negative_augmented": sum((int(a), int(n)) in copy_pairs or
+                                       (int(a), int(p), int(n)) in twins
+                                       for a, p, n in triples)}
+            for fold, triples, source in objectives]
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(f"usage: {Path(argv[0]).name} BUNDLE_PATH", file=sys.stderr)
@@ -210,7 +247,27 @@ def main(argv: list[str]) -> int:
             flush=True,
         )
 
+    actual_folds = []
+    if loss == "mnrl":
+        try:
+            actual_folds = mnrl_presentation_counts(data)
+        except (KeyError, ValueError) as exc:
+            print(f"DIET FAIL: invalid frozen MNRL objective: {exc}", flush=True)
+            return 2
+        for counts in actual_folds:
+            print(f"[diet] MNRL fold={counts['fold']} source={counts['source']} "
+                  f"actual_triples={counts['presentations']:,} "
+                  f"negative_augmented={counts['negative_augmented']:,}", flush=True)
+        surviving_pos_views = projected_neg_views = projected_neg_presentations = sum(
+            counts["presentations"] for counts in actual_folds)
+        neg_aug_views = sum(counts["negative_augmented"] for counts in actual_folds)
     failures: list[str] = []
+    for counts in actual_folds:
+        total = counts["presentations"]
+        if not total or counts["negative_augmented"] / total < diet_min_neg_aug_frac:
+            failures.append(f"MNRL fold {counts['fold']} augmented-negative presentations "
+                            f"{counts['negative_augmented']}/{total} below "
+                            f"diet_min_neg_aug_frac={diet_min_neg_aug_frac}")
     neg_aug_frac = (
         neg_aug_views / projected_neg_presentations if projected_neg_presentations else float("nan")
     )
@@ -229,8 +286,8 @@ def main(argv: list[str]) -> int:
         flush=True,
     )
     print(
-        f"[diet] bundle-only pos_views={pos_views:,} (surviving {surviving_pos_views:,}) "
-        f"/ neg_views={neg_views:,} = {pos_neg_ratio:.4f} (informational)",
+        f"[diet] bundle-only pos_views={pos_views:,} "
+        f"/ neg_views={neg_views:,} = {pos_views / neg_views if neg_views else float('nan'):.4f} (informational)",
         flush=True,
     )
     print(
@@ -248,7 +305,7 @@ def main(argv: list[str]) -> int:
         )
     if not ratio_ok:
         failures.append(
-            f"bundle pos_neg_view_ratio {effective_ratio:.4f} > "
+            f"actual pos_neg_view_ratio {effective_ratio:.4f} > "
             f"diet_max_pos_neg_view_ratio {diet_max_pos_neg_view_ratio:.4f} "
             f"(bundle-only {pos_neg_ratio:.4f})"
         )
