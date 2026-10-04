@@ -166,6 +166,10 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
                 settings[key]=str(output/Path(settings[key]).relative_to(setup))
         settings.update(device='cpu',epochs=1,report_test=False)
         (output/f'{track}.yaml').write_text(yaml.safe_dump(settings,sort_keys=False))
+    from core.common import TRAIN_ROOT
+    text_settings = yaml.safe_load((TRAIN_ROOT/'config/text_track.yaml').read_text())
+    text_settings.update(report_test=False)
+    (output/'text.yaml').write_text(yaml.safe_dump(text_settings,sort_keys=False))
     cfg={'setup_dir':str(output),'text_bundle':str(output/'text_prepared.pkl.gz'),'text_model':'minilm_l6',
          'epochs':1,'device':'cpu','report_test':False,'publish_git':False,'profiling':True}
     (output/'suite.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False))

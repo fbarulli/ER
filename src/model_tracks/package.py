@@ -17,7 +17,7 @@ def runtime_snapshot_files():
         files.update({p.relative_to(TRAIN_ROOT).as_posix():p for p in (TRAIN_ROOT/directory).glob('*.py')})
     for name in ('src/pipeline.py','scripts/diet_manifest.py'):
         files[name] = TRAIN_ROOT/name
-    for name in ('paths.yaml','training.yaml','identity_dimensions.yaml','identity_reviews.json','vocabulary.json'):
+    for name in ('paths.yaml','training.yaml','identity_dimensions.yaml','identity_reviews.json','vocabulary.json','text_track.yaml','attribute_ablation.yaml'):
         files['config/'+name] = TRAIN_ROOT/'config'/name
     return files
 
