@@ -93,7 +93,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
         events.emit('inference_export','started',device=cfg.device)
         if track == 'text':
             from model_tracks.text_export import forward
-            _,selected_text_model = forward(output,setup,return_model=True)
+            _,selected_text_model = forward(output,setup,return_model=True,device=cfg.device)
         else:
             from graph_tracks.config import GraphConfig
             from graph_tracks.infer import forward_outputs
@@ -102,7 +102,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
             if len(selected) != 1:
                 raise ValueError('ambiguous selected graph checkpoint')
             checkpoint = Path(json.loads(selected[0].read_text())['path'])
-            settings['device'] = 'cuda'
+            settings['device'] = cfg.device
             forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
                 output/(track+'__inference'),GraphConfig.model_validate(settings),
                 text_cache=TRAIN_ROOT/settings['text_cache'] if settings.get('text_cache') else None)
@@ -112,11 +112,11 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
             if track == 'text':
                 from training.validation_inference import resolve_best_checkpoint
                 checkpoint,_ = resolve_best_checkpoint(output)
-            events.emit('attribute_ablation_export','started',device='cuda')
-            forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None)
+            events.emit('attribute_ablation_export','started',device=cfg.device)
+            forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device)
             if track == 'text':
                 del selected_text_model
-            events.emit('attribute_ablation_export','completed',device='cuda')
+            events.emit('attribute_ablation_export','completed',device=cfg.device)
     if track == 'text' and not gpu_only:
         from model_tracks.text_report import complete
         events.emit('postprocess', 'started', report_test=cfg.report_test)

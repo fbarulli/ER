@@ -77,7 +77,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         from model_tracks.baseline_export import forward as forward_baseline
         from core.common import resolve_model
         setup = (TRAIN_ROOT/cfg.setup_dir).resolve()
-        events.emit('baseline_embedding','started',device='cuda')
+        events.emit('baseline_embedding','started',device=cfg.device)
         baseline = forward_baseline(setup,Path(resolve_model(cfg.text_model)))
         # The baseline model and features are now out of scope. Release this
         # supervisor's cached allocations before the three child workers
@@ -88,7 +88,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         baseline_output = output/'baseline'
         baseline_output.mkdir(exist_ok=True)
         shutil.copy2(baseline,baseline_output/baseline.name)
-        events.emit('baseline_embedding','completed',device='cuda')
+        events.emit('baseline_embedding','completed',device=cfg.device)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
     from model_tracks.resume import TRACKS, suite_identity, validate_suite, completed_track
