@@ -796,6 +796,15 @@ def _mnrl_training_triples_with_populations(
             continue
         if pair_i not in positives_by_anchor.get(source_i, set()):
             continue
+        if audit.get('copy_source_payload_idx') == pair_i:
+            # Compare a canonical-derived twin to its clean canonical parent.
+            # The listing remains the licensed positive, while vendor wording
+            # cannot dilute the minimal attribute distinction on the negative.
+            triple = (pair_i, source_i, copy_i)
+            if triple not in seen:
+                seen.add(triple)
+                triples.append((triple, 'twin'))
+            continue
         for positive_i in sorted(positives_by_anchor.get(source_i, set())):
             triple = (source_i, positive_i, copy_i)
             if triple not in seen:
@@ -2140,7 +2149,7 @@ def _build_payload_metadata(
         )
     canonical_map = _load_canonical_metadata()
     copy_sources = {
-        int(item["copy_payload_idx"]): int(item["anchor_payload_idx"])
+        int(item["copy_payload_idx"]): int(item.get("copy_source_payload_idx") if item.get("copy_source_payload_idx") is not None else item["anchor_payload_idx"])
         for item in list(mask_audit or []) + list(hard_negative_mask_audit or [])
         if item.get("copy_payload_idx") is not None
         and item.get("anchor_payload_idx") is not None

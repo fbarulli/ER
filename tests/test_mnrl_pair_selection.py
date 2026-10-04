@@ -12,6 +12,14 @@ from training.training import (
 )
 
 
+def test_canonical_twin_compares_with_clean_canonical_parent():
+    triples = _build_mnrl_training_triples(np.array([[0, 1]]), np.array([[2, 1]]),
+        mask_audit=[], hard_negative_mask_audit=[{
+            'anchor_payload_idx': 0, 'pair_payload_idx': 1, 'copy_payload_idx': 2,
+            'copy_source_payload_idx': 1, 'target_mode': 'counterfactual'}])
+    assert triples == [(1, 0, 2)]
+
+
 def test_augmented_negative_keeps_its_copy_as_anchor_and_source_positive() -> None:
     positives = np.array([[1, 2], [10, 11]])
     negatives = np.array([[1, 3], [20, 3], [21, 4], [99, 3], [10, 11]])
