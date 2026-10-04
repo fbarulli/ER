@@ -19,7 +19,7 @@ above. That handoff is pinned in the trace by each stage's column-contract row.
 from __future__ import annotations
 
 
-from core.common import DATA_PATH, SEED, F, load_raw_export
+from core.common import DATA_PATH, SEED, F, CONFIG_PATH, VOCABULARY_CONFIG_PATH, load_raw_export
 from core.manifest import begin_manifest, finish_manifest
 from core.tracing import trace_path
 from pipeline import run_within_brand_pipeline
@@ -30,7 +30,7 @@ def main() -> None:
     # raw export is hashed now (53MB, chunked) so the record pins exactly
     # what this stage read. Seed = the SSOT seed; the pipeline is
     # deterministic, no RNG is consumed.
-    manifest = begin_manifest("data_prep", inputs=[DATA_PATH], seed=SEED)
+    manifest = begin_manifest("data_prep", inputs=[DATA_PATH, CONFIG_PATH, VOCABULARY_CONFIG_PATH, F["number_reference"]], seed=SEED)
     df = load_raw_export()
     pairs, canon = run_within_brand_pipeline(df)
     print(f"pairs: {len(pairs):,} | canonical records: {len(canon):,}")

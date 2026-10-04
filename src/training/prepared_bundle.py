@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from core.schemas import TrainingSpec
 
@@ -50,8 +50,8 @@ class PreparedBundleManifest(BaseModel):
     # easy-negative quota the bundle was built under. config/ can drift
     # after a build (ratio_to_hard moves the diet verdict without touching
     # a byte), so the manifest pins what was true at build time and the
-    # loader warns loudly on drift. Optional: pre-feature bundles load
-    # with an empty record and skip the check.
+    # loader rejects drift in strict mode. Older headers without provenance
+    # require regeneration in strict mode.
     masking_config: dict = Field(default_factory=dict)
     easy_config: dict = Field(default_factory=dict)
     # Ratio contracts (audit 2026-09-28): the train-time arithmetic the
@@ -72,23 +72,17 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-_PREPARED_BUNDLE_DRIFT_STRICT_TRUTHY = {"1", "true", "yes", "on"}
-
-
 def prepared_bundle_drift_strict() -> bool:
-    """The prepared_bundle_drift_strict switch (default FALSE).
-
-    Env PREPARED_BUNDLE_DRIFT_STRICT wins when set; otherwise the
-    prepared_bundle_drift_strict key in config/training.yaml. TRUE hard-fails
-    load_prepared_bundle on a bundle built under deleted/drifted masking
-    knobs instead of warning; keep FALSE until the bundle rebuild lands.
-    """
+    """Read the declared bundle policy; reject malformed environment overrides."""
     raw = os.environ.get("PREPARED_BUNDLE_DRIFT_STRICT")
     if raw is not None:
-        return raw.strip().lower() in _PREPARED_BUNDLE_DRIFT_STRICT_TRUTHY
-    from core.common import load_config
-
-    return bool(load_config().get("prepared_bundle_drift_strict", False))
+        try:
+            return TypeAdapter(bool).validate_python(raw.strip())
+        except ValueError as exc:
+            exc.add_note('Environment setting PREPARED_BUNDLE_DRIFT_STRICT')
+            raise
+    from core.common import training_cfg
+    return training_cfg().prepared_bundle_drift_strict
 
 
 def prepared_holdout(data: dict, split_cfg: dict, *, seed: int):
@@ -387,6 +381,11 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
             f"active={active.model_dump()}. Re-prepare the bundle; the frozen "
             "payload strings are not the text the active composition produces."
         )
+    if not manifest.masking_config or not manifest.easy_config:
+        detail = f'{path} lacks masking/easy-negative provenance; regenerate the bundle'
+        if prepared_bundle_drift_strict():
+            raise ValueError(f'[bundle-drift] STRICT: {detail}')
+        print(f'[bundle-drift] WARNING: {detail}', flush=True)
     if manifest.masking_config or manifest.easy_config:
         from core.common import load_config, masking_cfg
 

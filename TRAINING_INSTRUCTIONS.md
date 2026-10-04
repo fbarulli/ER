@@ -64,9 +64,12 @@ the pipeline and records its name and error; inspect its log before resuming.
 If only packaging failed after `full_bundle`, reuse that run with
 `--run-dir <same-directory> --resume-from suite_inputs`; final handoff checks
 still verify the frozen graph, text bundle, CSVs, and checkpoint.
-For text augmentation changes, use `--resume-from full_bundle` in the same
-run to retain graph setup and rebuild the text bundle and package. This uses
-a fresh shared-payload cache and preserves earlier bundle backups.
+Use `--resume-from full_bundle` only to retry an interrupted bundle stage
+with unchanged source, configuration, raw input, and checkpoint. Resume verifies
+the saved graph/CSV inventory and the original smoke baseline. Configuration
+or source changes require a fresh preparation run; older run manifests without
+these provenance fields also require regeneration. Bundle retries use a fresh
+shared-payload cache and preserve earlier bundle backups.
 
 ### Files produced
 

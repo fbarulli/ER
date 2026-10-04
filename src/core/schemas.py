@@ -2701,7 +2701,7 @@ class TrainingConfig(BaseModel):
     # training.prepared_bundle hard-fails a bundle built under drifted
     # masking config instead of warning. Env PREPARED_BUNDLE_DRIFT_STRICT
     # wins over this key.
-    prepared_bundle_drift_strict: bool = False
+    prepared_bundle_drift_strict: bool
     # The NER lane's legacy settings live under the training SSOT too. Their
     # shape is intentionally open while the older standalone scripts are
     # retired; core.common owns parsing/path expansion for every consumer.

@@ -37,6 +37,7 @@ import pandas as pd
 
 from core.common import (
     SEED,
+    TRAINING_CONFIG_PATH,
     F,
     ensure_parent,
     load_config,
@@ -64,7 +65,7 @@ def main() -> None:
     # Seed: the SSOT seed (lib.common.SEED) — this stage is deterministic
     # (no RNG consumed), recorded so the manifest's environment block
     # pins which seed the lane runs under.
-    manifest = begin_manifest("labeled_pairs", inputs=[gate_csv], seed=SEED)
+    manifest = begin_manifest("labeled_pairs", inputs=[gate_csv, TRAINING_CONFIG_PATH], seed=SEED)
 
     g = pd.read_csv(
         gate_csv,

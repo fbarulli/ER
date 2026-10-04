@@ -51,6 +51,7 @@ import pandas as pd
 from core.common import (
     CONFIG_PATH,
     TRAINING_CONFIG_PATH,
+    TRAIN_ROOT,
     _path,
     training_cfg,
 )
@@ -230,11 +231,25 @@ def _file_entry(path: Path) -> dict[str, Any]:
     }
 
 
+def source_tree_sha256() -> str:
+    """Content identity of executable source, including uncommitted edits."""
+    root = Path(TRAIN_ROOT)
+    digest = hashlib.sha256()
+    paths = set((root / 'src').rglob('*.py')) | set((root / 'scripts').rglob('*.py'))
+    for path in sorted(paths):
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(b'\0')
+        digest.update(sha256_file(path).encode())
+        digest.update(b'\n')
+    return digest.hexdigest()
+
+
 def _environment(seed: int | None) -> dict[str, str]:
     env: dict[str, str] = {
         "git_sha": "unknown",
         "config_sha256": "unknown",
         "host": platform.node(),
+        "source_sha256": source_tree_sha256(),
     }
     try:
         head = subprocess.run(

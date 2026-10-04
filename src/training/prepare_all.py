@@ -15,10 +15,75 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+import yaml
 
 STAGES = ('dedupe', 'cross_country_pairs', 'number_reference', 'verify_reference',
         'canonical_and_gates', 'gate_census', 'labeled_pairs', 'validation',
           'graph_inputs', 'full_bundle', 'suite_inputs', 'verify_handoff')
+
+
+class PreparedFile(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    bytes: StrictInt = Field(ge=0)
+
+
+class PreparationState(BaseModel):
+    """Persisted resume contract; old unverified states require regeneration."""
+    model_config = ConfigDict(extra='allow', allow_inf_nan=False)
+    status: Literal['running', 'complete', 'failed', 'deferred']
+    resume_from: Literal['dedupe', 'validation', 'full_bundle', 'suite_inputs']
+    training_started: Literal[False]
+    smoke_updated: Literal[False]
+    stages: list[str]
+    run_dir: str
+    tracks_config: str
+    negative_supply_mode: Literal['gate', 'lane']
+    negative_supply_run_tag: str = Field(pattern=r'^[A-Za-z0-9_-]+$')
+    provenance: dict[str, str]
+    smoke_original: dict[str, str]
+    reusable_outputs: dict[str, PreparedFile] = Field(default_factory=dict)
+
+    @model_validator(mode='after')
+    def check_stages(self):
+        if len(self.stages) != len(set(self.stages)) or set(self.stages) - set(STAGES) - {'negative_supply', 'discriminator'}:
+            raise ValueError('Preparation stages must be unique known stages')
+        if self.status == 'complete' and 'verify_handoff' not in self.stages:
+            raise ValueError('Complete preparation requires verified handoff')
+        return self
+
+
+def preparation_provenance(root, suite_config, checkpoint):
+    """Pin source, owning configs, raw input and baseline checkpoint content."""
+    from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH
+    from graph_tracks.text_cache import checkpoint_hash
+    paths = set((root / 'src').rglob('*.py')) | set((root / 'scripts').rglob('*.py'))
+    paths.update((root / 'config').glob('*.yaml'))
+    paths.update([Path(CONFIG_PATH), Path(TRAINING_CONFIG_PATH),
+                  Path(VOCABULARY_CONFIG_PATH), Path(suite_config), Path(DATA_PATH)])
+    identity = {}
+    for path in sorted(paths):
+        if path.resolve() == Path(TRAINING_CONFIG_PATH).resolve():
+            # This run measures the census itself; it is output, not a setting.
+            config = yaml.safe_load(path.read_text())
+            config['rand_matching'].pop('gate_census_pin', None)
+            identity[str(path.resolve())] = hashlib.sha256(
+                json.dumps(config, sort_keys=True).encode()).hexdigest()
+        else:
+            identity[str(path.resolve())] = sha256(path)
+    identity['text_checkpoint'] = checkpoint_hash(Path(checkpoint))
+    return identity
+
+
+def verify_reusable_outputs(entries):
+    if not entries:
+        raise ValueError('Resume has no verified prepared outputs; regenerate inputs')
+    for path, entry in entries.items():
+        if Path(path).stat().st_size != entry.bytes or sha256(path) != entry.sha256:
+            raise ValueError(f'Stale prepared resume input: {path}')
 
 
 def sha256(path):
@@ -29,38 +94,62 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def verify_stage_manifest(path):
-    manifest = json.loads(Path(path).read_text())
-    if manifest['status'] != 'complete':
+def verify_stage_manifest(path, *, required_inputs=()):
+    from core.manifest import source_tree_sha256
+    from core.schemas import StageManifest
+    from core.tracing import trace_path
+    try:
+        manifest = StageManifest.model_validate_json(Path(path).read_text())
+    except ValueError as exc:
+        exc.add_note(f'Preparation prerequisite manifest: {path}')
+        raise
+    if manifest.status != 'complete':
         raise ValueError(f'Incomplete prerequisite: {path}')
-    for entry in manifest['inputs'] + manifest['outputs']:
-        if sha256(entry['path']) != entry['sha256']:
-            raise ValueError(f'Stale prerequisite: {entry["path"]}')
+    if required_inputs and manifest.environment.get('source_sha256') != source_tree_sha256():
+        raise ValueError(f'Prerequisite source changed or was not recorded: {path}; regenerate inputs')
+    recorded_inputs = {Path(entry.path).resolve() for entry in manifest.inputs}
+    if set(Path(item).resolve() for item in required_inputs) - recorded_inputs:
+        raise ValueError(f'Prerequisite lacks current config/reference provenance: {path}; regenerate inputs')
+    for entry in manifest.inputs + manifest.outputs:
+        # The consolidated trace is append-only across stages, not frozen input.
+        if Path(entry.path).resolve() == trace_path().resolve():
+            continue
+        if sha256(entry.path) != entry.sha256:
+            raise ValueError(f'Stale prerequisite: {entry.path}')
 
 
 def refresh_gate_census(gate_csv, config_path, report_path):
     import pandas as pd
-    frame = pd.read_csv(gate_csv, dtype={'gtin1': str, 'gtin2': str})
-    if frame.duplicated(['gtin1', 'gtin2']).any():
+    from core.manifest import atomic_write_json, atomic_write_text
+    from core.schemas import RandMatchingSpec
+    frame = pd.read_csv(gate_csv, dtype={'gtin1': str, 'gtin2': str}, keep_default_na=False)
+    if frame[['gtin1', 'gtin2']].apply(lambda column: column.str.strip().eq('')).any().any():
+        raise ValueError('Empty gate pair endpoint')
+    if frame.gtin1.eq(frame.gtin2).any():
+        raise ValueError('Gate census contains self-pairs')
+    identities = frame[['gtin1', 'gtin2']].apply(lambda row: tuple(sorted(row)), axis=1)
+    if identities.duplicated().any():
         raise ValueError('Duplicate candidate pairs')
     if set(frame.gate_decision) - {'hard_no', 'proceed', 'fallback'}:
         raise ValueError('Unknown gate decisions')
     counts = {'total_pairs': len(frame), **{
         key: int(frame.gate_decision.eq(key).sum())
         for key in ('hard_no', 'proceed', 'fallback')}}
+    counts = RandMatchingSpec.GateCensusPinSpec.model_validate(counts).model_dump()
     pattern = r'(  gate_census_pin:\n)(    total_pairs: \d+\n    hard_no: \d+\n    proceed: \d+\n    fallback: \d+\n)'
     text, n = re.subn(pattern, lambda match: match.group(1) + ''.join(
         f'    {key}: {value}\n' for key, value in counts.items()), Path(config_path).read_text())
     if n != 1:
         raise ValueError('Expected exactly one configured gate census')
-    Path(report_path).write_text(json.dumps(counts, indent=2) + '\n')
-    Path(config_path).write_text(text)
+    atomic_write_json(counts, report_path)
+    atomic_write_text(config_path, text)
     return counts
 
 
 def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 negative_supply_run_tag=None):
-    from core.common import F, RESULTS, TRAIN_ROOT, TRAINING_CONFIG_PATH, resolve_model, training_cfg
+    requested_negative_supply_run_tag = negative_supply_run_tag
+    from core.common import F, RESULTS, TRAIN_ROOT, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, resolve_model, training_cfg
     from model_tracks.config import load_config as load_suite
     root = Path(TRAIN_ROOT)
     config_path = Path(tracks_config or root / 'config/model_tracks.yaml').resolve()
@@ -91,7 +180,9 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             raise RuntimeError('Another training preparation is already running') from None
         if resume_from == 'validation':
             for name in ('data_prep', 'labeled_pairs'):
-                verify_stage_manifest(RESULTS / 'manifests' / (name + '.json'))
+                verify_stage_manifest(RESULTS / 'manifests' / (name + '.json'),
+                    required_inputs=([CONFIG_PATH, VOCABULARY_CONFIG_PATH, F['number_reference']]
+                                     if name == 'data_prep' else [TRAINING_CONFIG_PATH]))
         checkpoint = resolve_model(suite.text_model)
         setup = (root / suite.setup_dir).resolve()
         text_bundle = (root / suite.text_bundle).resolve()
@@ -101,10 +192,8 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         smoke_before = {str(path): sha256(path) for path in smoke.rglob('*') if path.is_file()}
         env = os.environ.copy()
         env['PYTHONPATH'] = str(root / 'src') + os.pathsep + str(root)
-        env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / 'shared_base.pkl')
-        if resume_from == 'full_bundle':
-            env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / (
-                'shared_base_resume_' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '.pkl'))
+        env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / (
+            'shared_base_' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '.pkl'))
         env.pop('WANDB_API_KEY', None)
         completed = []
         manifest = {'status': 'running', 'resume_from': resume_from,
@@ -114,10 +203,23 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     'tracks_config': str(config_path),
                     'negative_supply_mode': lane.mode,
                     'negative_supply_run_tag': negative_supply_run_tag,
+                    'provenance': preparation_provenance(root, config_path, checkpoint),
+                    'smoke_original': smoke_before, 'reusable_outputs': {},
                     'hybrid_embeddings': 'GPU pending: frozen baseline forward before hybrid training'}
         manifest_path = run_dir / 'manifest.json'
         if resume_from in {'full_bundle', 'suite_inputs'}:
-            previous = json.loads(manifest_path.read_text())
+            previous_state = PreparationState.model_validate_json(manifest_path.read_text())
+            previous = previous_state.model_dump(mode='json')
+            if previous_state.run_dir != str(run_dir):
+                raise ValueError('Preparation manifest belongs to another run directory')
+            if requested_negative_supply_run_tag and requested_negative_supply_run_tag != previous_state.negative_supply_run_tag:
+                raise ValueError('Resume negative-supply run tag differs from the saved run')
+            negative_supply_run_tag = previous_state.negative_supply_run_tag
+            if previous_state.provenance != manifest['provenance']:
+                raise ValueError('Preparation source/config/raw input/checkpoint changed; regenerate inputs')
+            if previous_state.smoke_original != smoke_before:
+                raise ValueError('Smoke files changed since this preparation began')
+            verify_reusable_outputs(previous_state.reusable_outputs)
             prerequisite = 'graph_inputs' if resume_from == 'full_bundle' else 'full_bundle'
             if (prerequisite not in previous.get('stages', []) or
                     previous.get('tracks_config') != str(config_path)):
@@ -131,7 +233,8 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             manifest.pop('error', None)
         def publish():
             temporary = manifest_path.with_suffix('.tmp')
-            temporary.write_text(json.dumps(manifest, indent=2) + '\n')
+            state = PreparationState.model_validate(manifest)
+            temporary.write_text(state.model_dump_json(indent=2) + '\n')
             temporary.replace(manifest_path)
         def run(name, arguments, *, check=True):
             print(f'[prepare] {name} -> {run_dir / (name + ".log")}', flush=True)
@@ -206,6 +309,8 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     run(name, ['-m', 'model_tracks.package', '--config', str(config_path),
                                '--output', str(suite_archive)])
                 else:
+                    if preparation_provenance(root, config_path, checkpoint) != manifest['provenance']:
+                        raise ValueError('Preparation source/config/raw input/checkpoint changed during the run')
                     from training.prepared_bundle import load_prepared_bundle
                     from graph_tracks.text_cache import checkpoint_hash
                     header, prepared = load_prepared_bundle(bundle)
@@ -241,6 +346,15 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                                            for path in paths}
                     manifest['bundle'] = header.model_dump(mode='json')
                     manifest['smoke_unchanged_verified'] = True
+                if name in {'graph_inputs', 'full_bundle'}:
+                    reusable = [Path(F[key]) for key in ('dataset_deduped', 'canonical_records',
+                                'gate_results', 'labeled_pairs', 'final_validation', 'validation_fold_map')]
+                    reusable += [path for path in setup.rglob('*') if path.is_file()]
+                    if name == 'full_bundle':
+                        reusable += [bundle, bundle.with_suffix(bundle.suffix + '.json'), text_bundle,
+                                     text_bundle.with_suffix(text_bundle.suffix + '.json')]
+                    manifest['reusable_outputs'] = {str(path): {
+                        'sha256': sha256(path), 'bytes': path.stat().st_size} for path in reusable}
                 completed.append(name)
                 publish()
             manifest['status'] = 'complete'
