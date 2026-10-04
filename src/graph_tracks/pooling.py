@@ -69,6 +69,12 @@ class SegmentTopology:
 
 
 def segment_pool(values: torch.Tensor, target: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:
+    if values.ndim != 2 or target.ndim != 1 or values.shape[0] != target.shape[0]:
+        raise ValueError('segment values must match the prepared edge population')
+    if sizes.ndim != 2 or sizes.shape[1] != 1:
+        raise ValueError('segment denominators must have one value per pooled row')
+    if values.device != target.device or sizes.device != values.device:
+        raise ValueError('segment values, topology, and denominators must share a device')
     cached = getattr(target, '_er_segment_topology', None)
     if not torch.compiler.is_compiling():
         version = None if torch.is_inference(target) else target._version
