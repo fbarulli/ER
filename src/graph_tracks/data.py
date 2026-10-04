@@ -28,8 +28,8 @@ RELATIONS, NUMERIC = graph_schema()
 SPLITS = {"train", "dev", "test"}
 
 
-def file_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def file_hash(path: Path | str) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def load_records(path: Path, *, require_training: bool = True) -> list[dict]:

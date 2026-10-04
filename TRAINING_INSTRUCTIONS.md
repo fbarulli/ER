@@ -61,6 +61,9 @@ letters, digits, underscores, and hyphens.
 The generator reuses one verified base payload within the run in gate mode.
 Existing smoke inputs are checked for unchanged bytes. A stage failure stops
 the pipeline and records its name and error; inspect its log before resuming.
+If only packaging failed after `full_bundle`, reuse that run with
+`--run-dir <same-directory> --resume-from suite_inputs`; final handoff checks
+still verify the frozen graph, text bundle, CSVs, and checkpoint.
 
 ### Files produced
 

@@ -114,6 +114,17 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     'negative_supply_run_tag': negative_supply_run_tag,
                     'hybrid_embeddings': 'GPU pending: frozen baseline forward before hybrid training'}
         manifest_path = run_dir / 'manifest.json'
+        if resume_from == 'suite_inputs':
+            previous = json.loads(manifest_path.read_text())
+            if ('full_bundle' not in previous.get('stages', []) or
+                    previous.get('tracks_config') != str(config_path)):
+                raise ValueError('suite_inputs resume requires this run\'s completed graph/text preparation')
+            completed.extend(stage for stage in previous['stages']
+                             if stage not in {'suite_inputs', 'verify_handoff'})
+            manifest.update(previous, status='running', resume_from=resume_from,
+                            stages=completed)
+            manifest.pop('failed_stage', None)
+            manifest.pop('error', None)
         def publish():
             temporary = manifest_path.with_suffix('.tmp')
             temporary.write_text(json.dumps(manifest, indent=2) + '\n')
@@ -243,8 +254,8 @@ def main():
                         help='three-track configuration (default: config/model_tracks.yaml)')
     parser.add_argument('--negative-supply-run-tag',
                         help='generate and audit the real-first lane; gate mode keeps this diagnostic-only')
-    parser.add_argument('--resume-from', choices=['dedupe', 'validation'], default='dedupe',
-                        help='validation requires verified current CSV stage manifests')
+    parser.add_argument('--resume-from', choices=['dedupe', 'validation', 'suite_inputs'], default='dedupe',
+                        help='validation verifies CSV manifests; suite_inputs reuses the completed graph/text bundle')
     args = parser.parse_args()
     prepare_all(run_dir=args.run_dir, resume_from=args.resume_from,
                 tracks_config=args.tracks_config, negative_supply_run_tag=args.negative_supply_run_tag)
