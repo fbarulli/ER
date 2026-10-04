@@ -29,7 +29,11 @@ SPLITS = {"train", "dev", "test"}
 
 
 def file_hash(path: Path | str) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    path = Path(path)
+    if path.is_dir():
+        from graph_tracks.text_cache import checkpoint_hash
+        return checkpoint_hash(path)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def load_records(path: Path, *, require_training: bool = True) -> list[dict]:
