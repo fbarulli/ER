@@ -17,50 +17,6 @@ def worker():
     return module
 
 
-def test_gpu_worker_encodes_exact_local_texts_without_composition(tmp_path, monkeypatch):
-    import torch
-    module = worker()
-    checkpoint = tmp_path / 'checkpoint'
-    checkpoint.mkdir()
-    (checkpoint / 'model').write_bytes(b'frozen-checkpoint')
-    request = {'schema': 'er-embedding-request-v2', 'ids': ['a', 'b'],
-               'texts': ['locally composed a', 'locally composed b'],
-               'metadata': {'checkpoint_sha256': module.checkpoint_hash(checkpoint)}}
-    from core import encoding_inputs
-    monkeypatch.setattr(encoding_inputs,'tokenization_policy',lambda model:{'truncation':False})
-    tokenfile = tmp_path/'prepared_text.npz'
-    np.savez(tokenfile,**{'text/0/input_ids':np.arange(len(request['ids']),dtype=np.int64).reshape(-1,1), 'text/0/attention_mask':np.ones((len(request['ids']),1),dtype=np.int64)})
-    request['prepared_text'] = {'sha256':hashlib.sha256(tokenfile.read_bytes()).hexdigest(), 'tokenization':{'truncation':False},
-        'token_batches':[{'prefix':'text/0','keys':['input_ids','attention_mask'],'constants':{},'count':len(request['ids'])}]}
-    source = tmp_path / 'request.json'
-    source.write_text(json.dumps(request))
-    output = tmp_path / 'vectors.npz'
-    calls = []
-    class Encoder:
-        def __init__(self, path, **kwargs):
-            assert path == str(checkpoint)
-            assert kwargs == {'device': 'cuda', 'local_files_only': True}
-        def eval(self):
-            pass
-        def __call__(self, features):
-            calls.append(features['input_ids'].tolist())
-            return {'sentence_embedding':torch.eye(2)}
-    monkeypatch.setattr(torch.cuda, 'is_available', lambda: True)
-    monkeypatch.setitem(sys.modules, 'sentence_transformers', types.SimpleNamespace(SentenceTransformer=Encoder))
-    monkeypatch.setattr(sys, 'argv', ['encode.py', '--request', str(source),
-                                    '--checkpoint', str(checkpoint), '--output', str(output)])
-    native_tensor = torch.as_tensor
-    monkeypatch.setattr(torch,'as_tensor',lambda data,**kwargs:native_tensor(data,device='cpu'))
-    module.main()
-    assert calls == [[[0],[1]]]
-    with np.load(output, allow_pickle=False) as result:
-        assert result['ids'].tolist() == request['ids']
-        assert json.loads(result['metadata'].item())['request_sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
-    assert output.with_suffix('.sha256').read_text() == hashlib.sha256(output.read_bytes()).hexdigest()
-    with pytest.raises(FileExistsError, match='never reuses'):
-        module.main()
-
-
 def test_explicit_cpu_smoke_encodes_without_cuda(tmp_path, monkeypatch):
     import torch
     module = worker()

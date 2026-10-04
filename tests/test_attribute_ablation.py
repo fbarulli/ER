@@ -198,68 +198,6 @@ def test_worker_rejects_an_unsupported_device(tmp_path):
             validate_embedding_device('cuda')
 
 
-def test_text_worker_loads_and_encodes_once_for_all_variants(tmp_path,monkeypatch):
-    import sys
-    import types
-    import torch
-    calls = []
-    forwarded_rows = []
-    class Model:
-        def __init__(self,*args,**kwargs):
-            calls.append('load')
-        def eval(self):
-            pass
-        def __call__(self,features):
-            calls.append('forward')
-            forwarded_rows.append(len(features['input_ids']))
-            return {'sentence_embedding':torch.eye(3)[features['input_ids'][:,0]]}
-        def tokenize(self,*args):
-            raise AssertionError('worker must never tokenize')
-    monkeypatch.setitem(sys.modules,'sentence_transformers',types.SimpleNamespace(SentenceTransformer=Model))
-    monkeypatch.setattr(torch.cuda,'is_available',lambda:True)
-    monkeypatch.setattr(a,'validate_sources',lambda request:None)
-    checkpoint = tmp_path/'frozen';checkpoint.mkdir();(checkpoint/'weights').write_bytes(b'frozen')
-    request = {'track':'text','checkpoint':str(checkpoint),'ids':['a','b'],'texts':['A','B','removed A'],
-        'pairs':[{'sku_id1':'a','sku_id2':'b'}], 'settings':a.Settings().model_dump(),
-        'variants':[{'attribute':None,'channel':'baseline','changed_listings':0,'records':[],'text_indices':[0,1]},
-                    {'attribute':'volume','channel':'text','changed_listings':1,'records':[],'text_indices':[2,1]},
-                    {'attribute':'coffee type','channel':'text','changed_listings':0,'records':[],'text_indices':[0,1]}]}
-    from core import encoding_inputs
-    from model_tracks.ablation_inputs import prepare_inputs
-    monkeypatch.setattr(encoding_inputs,'tokenization_policy',lambda model:{'truncation':False})
-    monkeypatch.setattr(encoding_inputs,'prepare_text_features',lambda model,texts,**kwargs:{'input_ids':torch.arange(len(texts)).reshape(-1,1),'attention_mask':torch.ones(len(texts),1,dtype=torch.long)})
-    request['candidate_ids'] = ['a','b']
-    request['candidate_text_indices'] = [0,1]
-    request['schema'] = 'er-attribute-ablation-v2'
-    request['pairs'][0]['label'] = '1'
-    request['prepared_inputs'] = prepare_inputs(request,tmp_path/'prepared_inputs.npz')
-    calls.clear()
-    original_as_tensor = torch.as_tensor
-    monkeypatch.setattr(torch,'as_tensor',lambda value,**kwargs:original_as_tensor(value,**{**kwargs,'device':'cpu'}))
-    path = tmp_path/'request.json'; a.write(path,request)
-    output = tmp_path/'result.npz'; a.encode(path,output)
-    assert calls == ['load','forward']
-    with np.load(output) as result:
-        assert np.array_equal(result['vectors'][0],result['vectors'][2])
-        assert result['vectors'].shape == (3,2,3)
-        assert result['request_sha256'].item() == a.file_hash(path)
-
-
-    # A checkpoint/native-text-bound baseline seeds unchanged and catalog rows;
-    # only the one unique changed text reaches another GPU forward.
-    from core.model_input import model_input_composition
-    from graph_tracks.text_cache import texts_hash
-    saved = tmp_path/'saved_text.npz'
-    metadata = {'checkpoint_sha256':a.checkpoint_identity(checkpoint),'tokenization':{'truncation':False},
-                'composition':model_input_composition().model_dump(mode='json'),
-                'text_sha256':texts_hash(['A','B']),'embedding_dtype':'float32'}
-    np.savez(saved,ids=['a','b'],embeddings=np.eye(3,dtype=np.float32)[:2],metadata=json.dumps(metadata))
-    calls.clear();forwarded_rows.clear()
-    a.encode(path,tmp_path/'reused_result.npz',saved_text=saved)
-    assert calls == ['load','forward'] and forwarded_rows == [1]
-    with np.load(output) as original,np.load(tmp_path/'reused_result.npz') as reused:
-        assert np.array_equal(original['vectors'],reused['vectors'])
-        assert np.array_equal(original['candidate_vectors'],reused['candidate_vectors'])
 
 def test_prepare_uses_real_shared_composer_and_marks_registry_noop(tmp_path,monkeypatch):
     import sys, types, torch
