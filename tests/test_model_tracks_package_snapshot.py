@@ -53,7 +53,8 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
         inputs[key] = path
     settings = dict(setup_dir='prepared', text_bundle='prepared/text_prepared.pkl.gz',
                     device='cpu', report_test=False,text_model='minilm_l6',post_training_ablation=False,ablation_config='config/attribute_ablation.yaml')
-    cfg = SimpleNamespace(**settings, model_dump=lambda: settings.copy())
+    cfg = SimpleNamespace(**settings, model_dump=lambda: settings.copy(),
+                          graph_execution_overrides=lambda: {})
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', inputs)
     monkeypatch.setattr(packaging, 'load_config', lambda _: cfg)

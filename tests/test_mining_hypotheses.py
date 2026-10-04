@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from core.common import training_cfg
 from core.hard_negatives import (
     MiningFunnel,
     flavor_variant_product_name,
@@ -365,8 +366,14 @@ def _run_pool(tmp_path: Path, gate_path: Path, size: int = 3000) -> dict:
 
 
 def test_composite_pack_blocker_reason_is_registered() -> None:
-    """"Pack blocker:" must map to a family, not abort the lane."""
-    assert ("Pack blocker:", "pack_blocker") in REASON_PREFIX_TO_TYPE
+    """"Pack blocker" must map to a family, not abort the lane.
+
+    The table is config-driven (gate.pair_families): the entry is the
+    CONFIGURED reason string, not a hand-typed prefix, so a wording change
+    in config/training.yaml moves the registration with it."""
+    gate = training_cfg().gate
+    assert (gate.reasons.pack_blocker, "pack_blocker") in REASON_PREFIX_TO_TYPE
+    assert _reason_type(gate.reasons.pack_blocker) == "pack_blocker"
     assert _reason_type("Pack blocker: pack size, package type, or volume mismatch") == (
         "pack_blocker"
     )

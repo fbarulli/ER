@@ -57,8 +57,7 @@ SWEEP_THRESHOLDS = report_thresholds()
 # the keys are declared gate-reason NAMES, and the matched text is the
 # configured reason string itself (config/training.yaml gate.reasons), so a
 # wording change moves pool membership with it and an undeclared reason name
-# fails config load. The old hand-typed prefix table is gone — it carried a
-# dead "Flavor mismatch:" entry that matched no gate reason and missed
+# fails config load. The old hand-typed prefix table is gone — it missed
 # packaging_level_mismatch, a hard_no reason that would have failed the lane
 # on its first such row.
 _gate_spec = training_cfg().gate
@@ -66,6 +65,24 @@ REASON_PREFIX_TO_TYPE = tuple(
     (getattr(_gate_spec.reasons, name), family)
     for name, family in _gate_spec.pair_families.items()
 )
+
+# Legacy gate wording from BEFORE the shared critical-attribute gate: no
+# current gate run emits these, but reason-keyed audits and historical
+# artifacts still carry them, so the lane keeps them classifiable. Deliberate
+# module constant, not config: there is no declared gate reason to bind it
+# to, and it must stay a closed, reviewed list. Checked against the configured
+# table so a legacy prefix can never shadow (or be shadowed by) a configured
+# reason string.
+LEGACY_REASON_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("Flavor mismatch:", "flavor"),
+)
+for _legacy_prefix, _legacy_family in LEGACY_REASON_PREFIXES:
+    for _configured, _configured_family in REASON_PREFIX_TO_TYPE:
+        if _configured.startswith(_legacy_prefix) or _legacy_prefix.startswith(_configured):
+            raise ValueError(
+                f"legacy reason prefix {(_legacy_prefix, _legacy_family)!r} "
+                f"collides with configured reason {(_configured, _configured_family)!r}"
+            )
 TIME_COLUMN_CANDIDATES = (
     "timestamp",
     "event_time",
@@ -215,8 +232,11 @@ def _enrich_distribution_strata(
 
 
 def _reason_type(reason: object) -> str | None:
-    text = str(reason).strip()
-    return next((family for prefix, family in REASON_PREFIX_TO_TYPE if text.startswith(prefix)), None)
+    text = str(reason)
+    # Configured reasons first (the current gate contract); the reviewed
+    # legacy list only reaches wording no configured reason can claim.
+    table = (*REASON_PREFIX_TO_TYPE, *LEGACY_REASON_PREFIXES)
+    return next((family for prefix, family in table if text.startswith(prefix)), None)
 
 
 def _largest_remainder(
