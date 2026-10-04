@@ -527,10 +527,15 @@ def attribute_fields(cell: object, *, include_empty: bool = False) -> list[tuple
 
 def attribute_field_value(cell: object, key: str) -> list[str]:
     """Raw value tokens of one `Key:` field (stripped, comma-split)."""
+    # Hoisted: the wanted key is normalized ONCE per call, not once per cell
+    # segment. Callers ask for many keys of the same cell (see
+    # critical_attributes._field_tokens), and this predicate used to re-fold an
+    # already-normalized key for every segment of every one of those calls.
+    wanted = normalized_attribute_text(key)
     return [
         token.strip().lower()
         for name, raw_value in attribute_fields(cell)
-        if name == normalized_attribute_text(key)
+        if name == wanted
         for token in raw_value.split(",")
         if token.strip()
     ]

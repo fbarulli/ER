@@ -452,15 +452,30 @@ def build_sku_texts(
         "pack": set(),
         "package_type": set(),
     }
+    from tqdm import tqdm
+
+    structured_span = tqdm(
+        zip(title, attrs, descriptions, strict=True),
+        total=len(title),
+        unit="row",
+        desc="sku-structured",
+        disable=None,
+    )
     infos = [
         model_input_info(sku_structured_info(t, a, d))
         if structured_enabled
         else {k: set(v) for k, v in empty_info.items()}
-        for t, a, d in zip(title, attrs, descriptions, strict=True)
+        for t, a, d in structured_span
     ]
     texts = [
         build_sku_text(row, info)
-        for (_, row), info in zip(frame.iterrows(), infos, strict=True)
+        for (_, row), info in tqdm(
+            zip(frame.iterrows(), infos, strict=True),
+            total=len(frame),
+            unit="row",
+            desc="sku-text",
+            disable=None,
+        )
     ]
     return texts, infos
 

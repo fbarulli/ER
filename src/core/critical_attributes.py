@@ -164,7 +164,16 @@ def extract_made_from_tokens(*values: object) -> frozenset[str]:
 
 
 def extract_flavor_tokens(*values: object) -> frozenset[str]:
-    text = normalized_attribute_text(*values)
+    return flavor_tokens_from_text(normalized_attribute_text(*values))
+
+
+def flavor_tokens_from_text(text: str) -> frozenset[str]:
+    """Flavor tokens from ALREADY normalized text.
+
+    normalized_attribute_text is idempotent over its own output alphabet, so a
+    caller that already folded the text (extract_critical_claims does) must not
+    pay to fold it again — that re-fold was 116k wasted calls over full titles.
+    """
     return frozenset(
         FLAVOR_ALIASES.get(token, token)
         for token in text.split()
@@ -316,7 +325,7 @@ def extract_critical_claims(*values: object) -> dict[str, frozenset[str]]:
     )
 
     return {
-        "flavor": extract_flavor_tokens(text) | extract_declared_flavor_tokens(*values),
+        "flavor": flavor_tokens_from_text(text) | extract_declared_flavor_tokens(*values),
         "carbonation": frozenset(carbonation),
         "sweetener": frozenset(sweetener),
         "pulp": frozenset(pulp),
@@ -397,6 +406,7 @@ __all__ = [
     "extract_description_claims",
     "extract_declared_flavor_tokens",
     "extract_flavor_tokens",
+    "flavor_tokens_from_text",
     "normalized_attribute_text",
     "sweetener_conflict",
     "volumes_compatible",
