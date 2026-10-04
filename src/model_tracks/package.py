@@ -141,3 +141,16 @@ def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(source.read(member))
     return output
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    print(package(args.config, args.output))
+
+
+if __name__ == '__main__':
+    main()

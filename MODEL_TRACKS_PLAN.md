@@ -278,97 +278,18 @@ examining test results. Select models on dev; report test once. A graph track
 must improve the chosen objective without unacceptable retrieval recall,
 critical-slice, or runtime regressions. No track is presumed to win.
 
-## Colab training integration
+## Preparation and training instructions
 
-Initial code review: 2026-09-30. The findings below record the original planning
-review. The shared `--what tracks` route now uses the existing session and
-dependency lifecycle, a pinned source overlay, isolated workers and a
-consolidated verified result archive. CPU Colab verification is in progress.
+Use [TRAINING_INSTRUCTIONS.md](TRAINING_INSTRUCTIONS.md) as the single
+operational guide. It owns the one-command CSV/input generation, active
+negative-supply mode, offline batch preparation, frozen hybrid embedding
+request, GPU lifecycle, verification, and artifact inventory.
 
-### Current lifecycle and reusable components
-
-`colab_backend.py` delegates to `src/cli/colab.py`. The launcher provisions a
-session, checks out the configured repository/branch, installs dependencies,
-validates model files, and starts detached training workers. Workers have
-separate output directories and live logs/status. Results are downloaded in a
-verified archive; completed best checkpoints also have an incremental sync
-path. The launcher tears down the VM in `finally` unless CPU keep-alive was
-explicitly requested. GPU selection requires `--allow-gpu`, and GPU keep-alive
-is refused by the current launcher.
-
-There are two prepared-input paths:
-
-- The default single-worker full train, with no model/sample/resume override,
-  selects `colab.full_prepared_bundles` from the remote Git checkout.
-- Customized training can build bundles locally, cache them by input content,
-  and upload them. `_build_local_training_bundles` invokes
-  `training.train --prepare-bundle`; Colab consumes them through
-  `training.train_prepared`.
-
-Standard remote preparation is disabled in config. Preparing data locally and
-training remotely should remain the model for all three tracks. However,
-checkout-native bundles bypass a local rebuild: their manifests must also
-pass the experiment's freshness and diet checks.
-
-Successful worker completion can invoke `training.complete_colab_worker`, which
-resolves a text checkpoint and runs `predict_items` for catalog inference.
-Full-catalog inference can include trained-on listings; it is an operational
-output, not automatically held-out evaluation. Shared dev/test evaluation
-must retain the fold-map exclusions from this plan.
-
-### Findings to address before the three-track launches
-
-| Area | Current behavior | Required work |
-|---|---|---|
-| Remote source | Fetches/checks out the configured `training` branch | Pin and record an immutable commit for each experiment; ensure local bundle producers and remote consumers are compatible |
-| Split assumptions | Lifecycle preflight and config still reference the old 5k sample/complement; default full training has a separate checkout-input path | Migrate preflight, uploads, completion provenance, launchers, and tests to the final split contract |
-| Bundle checks | Local rebuild validates bundle shape; inspected builder does not execute the diet gate | Gate newly built, cached, and checkout-native inputs before training; apply text diet rules to A/C, and define separate graph exposure checks for B |
-| Track dispatch | Trainer selection and model-file verification assume text models | Add validated track dispatch and track-specific preparation, verification, training, and completion adapters |
-| Dependencies | Config owns `prepared`/`full` package lists; graph dependencies are absent | Add a graph runtime profile and test graph-library compatibility against the actual Colab Python/PyTorch/CUDA versions |
-| Completion | Calls text-specific `predict_items` and plots cosine scores | Add graph/hybrid inference adapters and model-specific scoring reports; reuse common provenance and evaluation |
-| Checkpoint collection | Finds Transformer-style checkpoint directories and `trainer_state.json` | Give graph/hybrid checkpoints a compatible manifest/selection contract or generalize collection; verify the selected model is actually downloaded |
-| Resume | Inspected resume restoration uses DVC pointers; config has `dvc_enabled: false` | Provide and test a local-artifact upload/restore path or explicitly reject unsupported resume; persist optimizer, scheduler, RNG, and sampler state |
-| Tracking | Prepared trainer continues when W&B is disabled | Keep artifact collection and local records sufficient; fix stale launcher comments claiming W&B is mandatory |
-
-Local uncommitted changes are not transmitted by a remote branch checkout.
-Before running an experiment, the intended code must be available at the
-pinned remote revision, and artifact manifests must identify that revision.
-
-### Colab workload per track
-
-| Track | Prepare locally | Run on Colab | Retrieve and verify |
-|---|---|---|---|
-| A | Text bundles, labels, split, augmentation audits | MiniLM training, checkpoint evaluation, final encoding/inference | Text checkpoint, telemetry, vectors/index as configured, scored results |
-| B | Typed graph, structured feature vocabulary, labels/split, graph census | GNN training with neighbor sampling, graph inference and evaluation | GNN checkpoint/state, vocabulary/schema, embeddings/index, graph manifest, reports |
-| C0 | Same graph plus checkpoint-bound frozen A0 text-vector cache | Graph layer and fusion training, hybrid inference/evaluation | Graph/fusion checkpoint, exact text-checkpoint reference, cache hashes, vectors/indexes, reports |
-| C1 | Graph plus text inputs; immutable feature/split manifests | Joint fine-tuning only after C0 is validated | Both encoder states, regenerated vectors/indexes, complete provenance |
-
-Owner direction: all three trainers run in parallel in one Colab VM, with one
-control channel and isolated subprocess outputs. CUDA uses NVIDIA MPS to allow
-overlapping GPU work; the supervisor rejects an unavailable MPS backend.
-Existing `dual-train` remains a separate text-only route. Measure combined host
-RAM and GPU memory with per-worker profiler traces before throughput tuning.
-C0 uses the locally prepared cache bound to the exact frozen A0 checkpoint.
-
-### Colab readiness checks
-
-1. Local preflight for each track: validate commit/input compatibility, split,
-   manifests, dependencies, and outputs before provisioning.
-2. Small real-data runtime smoke: train, select a checkpoint, infer, download,
-   verify, and tear down for A, B, and C. Use a graph sample that retains usable
-   neighborhoods; the current text smoke population is not automatically a
-   representative graph smoke. Smoke inference is not a quality benchmark.
-3. Interruption/resume smoke: verify model and optimizer/sampler state restore
-   and prevent cross-track or cross-manifest reuse.
-4. Verify preservation of the selected checkpoint and required manifests
-   before normal teardown. Exercise failure handling and incremental recovery;
-   automatic teardown makes artifact collection part of correctness.
-5. Full run: publish runtime, peak memory, throughput, graph sampling coverage,
-   transfer size/time, and the shared quality report for each track.
-
-Track-specific CLI flags and graph worker entry points are proposed work, not
-existing runnable commands. Do not use the old pinned full-training launcher
-unchanged for this experiment.
+`training.prepare_all` prepares all three tracks. B/C currently implement
+full-batch typed two-hop aggregation; neighbor sampling remains a planned
+extension. Hybrid baseline vectors are generated from locally frozen tokens
+on the shared GPU before hybrid training. A new negative-supply CSV does not
+activate that lane or automatically create graph augmentations.
 
 ## Build sequence and completion checkpoints
 

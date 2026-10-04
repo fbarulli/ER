@@ -1,254 +1,198 @@
-# ER training instructions — all three model tracks
+# ER training and data generation
 
-Consolidated from `MODEL_TRACKS_PLAN.md`, `src/graph_tracks/README.md`,
-`DATA_TRAIN_FLOW.md`, `requirements/graph_tracks.txt` and `config/model_tracks.yaml`.
-Status: preparation, smoke and dispatch are wired; GPU/full-data runs remain pending.
+This is the single operational guide for preparation, training, and artifact
+collection. Model selection and experiment design remain in
+[MODEL_TRACKS_PLAN.md](MODEL_TRACKS_PLAN.md). Updated 2026-10-04.
 
-## Tracks
+## The three models
 
-| Track | Resource | Representation | Retrieval | Final scoring |
-|---|---|---|---|---|
-| A — current text model | MiniLM-L6 product-text embeddings | Existing HNSW ANN | Existing scoring; optional attribute-aware reranking |
-| B — `gnn_only` | Learned graph embeddings from structured attributes | HNSW over GNN embeddings | GNN similarity or learned pair scorer |
-| C — hybrid | MiniLM vectors + structured features + graph context | Start with existing text ANN | Learned fusion scorer |
+| Track | Model inputs | What is trained |
+|---|---|---|
+| A: text | MiniLM-L6 text plus the configured structured channel | Current MiniLM model; shipped loss is MNRL |
+| B: `gnn_only` | Structured attributes, numeric features, typed attribute relations | Graph encoder and pair scorer; no MiniLM vectors or text-derived edges |
+| C: `hybrid` | The same structured graph plus exact frozen A0 MiniLM vectors | Graph encoder and fusion/pair scorer; the baseline MiniLM stays frozen |
 
-ANN is a retrieval algorithm, not an embedding model; all tracks may use it.
-GNN-only means NO MiniLM features/scores/text-derived edges. `sid_graph.py` /
-`sid_hybrid.py` are not the implementation of B or C.
+ANN/HNSW retrieves vectors; it is not a fourth model. SID/RQ-VAE are outside
+this plan. The current graph implementation is full-batch typed two-hop mean
+aggregation in PyTorch. Neighbor-sampled GraphSAGE and joint MiniLM/GNN
+fine-tuning are later experiments, not current preparation requirements.
 
-## Requirements
+## One command generates the training inputs
 
-### Environment
+Run from `ER` with the local environment and model files installed:
 
-- Python 3.12/3.14.6, `torch==2.14.0` installed FIRST for the target CPU/CUDA
-  runtime (no silent CPU fallback when CUDA is requested).
-- Graph profile install:
+```bash
+PYTHONPATH=src .venv/bin/python -m training.prepare_all
+```
 
-  ```bash
-  .venv/bin/python -m pip install -r requirements/graph_tracks.txt
-  ```
+The entry point is [src/training/prepare_all.py](src/training/prepare_all.py).
+It rebuilds the CSVs, all three tracks' offline inputs, and one verified
+`all_tracks_inputs.zip`. It does not start training or provision Colab.
+A timestamped directory under `results/training_prep/` contains stage logs,
+`manifest.json`, the package, and backups of replaced setup/bundle/lane files.
+The manifest records the exact output paths, sizes, and SHA-256 hashes.
 
-  Pins: `hnswlib 0.8.0`, `sentence-transformers`, `wandb`, `dvc`, `matplotlib`.
-  No torch-geometric, no MLflow.
-- W&B: shipped configs use project `e-r`, mode `offline`. Online needs
-  `WANDB_API_KEY`; `disabled` for tests. Credentials are never config values.
-- DVC: enabled locally by default. Remote push is opt-in via
-  `dvc: {enabled: true, remote: <path>, push: true}`. DagsHub uses
-  `DVC_API_KEY`; HTTP basic auth uses `DVC_HTTP_USER`/`DVC_HTTP_PASSWORD`.
-  Missing DVC credentials fail BEFORE launch on full runs.
-- Run everything from ER with `PYTHONPATH=src` and `.venv/bin/python`.
+`config/model_tracks.yaml` chooses the setup directory, text bundle, text
+model, epochs, ablation preparation, and GPU dispatch settings. Override it
+with `--tracks-config <yaml>`. Model and epoch settings must agree with
+`config/training.yaml`; preparation rejects incompatible settings before
+rebuilding data. `--run-dir <directory>` chooses the preparation log directory.
+`--negative-supply-run-tag <tag>` chooses the diagnostic lane output directory;
+otherwise preparation uses its run directory's name. Tags must use only
+letters, digits, underscores, and hyphens.
 
-### Data prerequisites
+### Generation order
 
-- Offline pipeline: raw export → `src/training/data_prep.py`
-  (`run_within_brand_pipeline`) → `canonical_records.csv` + `gate_results.csv`
-  → `pipeline.build_training_data` (positive/negative mining) → masking
-  augmentation → component-safe split via `training.folds.derive_holdout`.
-- Component-safe split shared across ALL tracks; never change splits between
-  tracks. Train on train labels, select on dev, report test once.
-- Identity links used to derive the split are not automatically allowed as
-  model-input edges; label/gtin leakage is forbidden in graph inputs.
-- Track-specific Colab workload (`MODEL_TRACKS_PLAN.md`):
+1. Deduplicate `dataset.csv`, retaining representative identity and removal accounting.
+2. Build cross-country hard-positive pairs and the numeric-token reference; verify reference bytes.
+3. Rebuild canonical records and gate results with the current extractors,
+   vocabulary, reviewed identity policy, made-from evidence, and source-consistency flags.
+4. Refresh the measured gate census in `config/training.yaml`, then rebuild labeled pairs.
+5. Generate real-first negative-supply pairs and run the grouped real-vs-minted discriminator.
+6. Rebuild final validation and the component fold map.
+7. Build the shared eligible catalog, listing split map, clean graph pairs,
+   graph features, lineage, and graph census.
+8. Build the full text bundle, augmentation lineage, native training tokens,
+   fixed objective datasets, and CPU/CUDA presentation plans for every epoch.
+9. Prepare graph tensors and query batches, native text export tokens, the
+   frozen-baseline embedding request, and configured ablation templates.
+10. Validate all three tracks together and package the immutable source/config/input overlay.
 
-  | Track | Prepare locally | Run on Colab | Retrieve and verify |
-  |---|---|---|---|
-  | A | Text bundles, labels, split, augmentation audits | MiniLM training, checkpoint evaluation, final encoding/inference | Text checkpoint, telemetry, vectors/index, scored results |
-  | B | Typed graph, feature vocabulary, labels/split, graph census | GNN training with sampling, graph inference/eval | GNN checkpoint, vocab/schema, embeddings/index, manifest, reports |
-  | C0 | Same graph + checkpoint-bound frozen A0 text cache | Graph layer + fusion training, hybrid inference/eval | Fusion checkpoint, exact checkpoint ref, cache hashes, reports |
+The generator reuses one verified base payload within the run in gate mode.
+Existing smoke inputs are checked for unchanged bytes. A stage failure stops
+the pipeline and records its name and error; inspect its log before resuming.
 
-## Required input files
+### Files produced
 
-All prepared inputs already exist in `data/track_setup/`.
+Default paths below are resolved through configuration; the run manifest is
+the authoritative inventory.
 
-### Tracks B and C (graph workers)
-
-| File | Purpose |
+| Artifact | Purpose |
 |---|---|
-| `data/track_setup/prepared/listings.json` | Listing features/text (graph nodes) |
-| `data/track_setup/prepared/pairs.csv` | Labeled pairs: `sku_id1,sku_id2,label,split` (the only required CSV) |
-| `data/track_setup/prepared/input_manifest.json` | Hashes binding catalog/splits/pairs/lineage; workers reject stale inputs |
-| `data/track_setup/prepared/graph_plan.json` | Binds listing ID order, train-only vocab, numeric schema, pooling topology to source hashes |
-| `data/track_setup/prepared/graph_inputs.npz` | Pre-tensorized int64 edges/pairs + float32 numerics — MUST exist for CUDA training/inference; CPU synthetic smoke may tensorize on the fly |
-| `data/track_setup/prepared/pair_lineage.json` | Pair provenance (validated in preflight) |
-| `data/track_setup/prepared/report_attributes.json` | Attribute slice definitions for reporting |
-| `config/graph_tracks_gnn.yaml` / `config/graph_tracks_hybrid.yaml` | Track configs (curated copies: `data/track_setup/{gnn_only,hybrid}.yaml`) |
-| `config/identity_reviews.json`, `config/vocabulary.json` | Policy files referenced by caches/manifests |
+| `data/dataset_deduped.csv`, `data/sku_to_rep.csv` | Catalog and raw-listing-to-representative mapping |
+| Configured dedupe summary, offer-group, removal, and conflict CSVs | Closed row accounting and review evidence |
+| `data/second04_pairs_positive.csv` | Cross-country positive candidates; consumer verifies volume agreement |
+| `data/number_tokens_reference.csv` | Number/name interpretation reference |
+| `data/canonical_records.csv`, `data/gate_results.csv` | Current extracted attributes and gate evidence |
+| `data/labeled_pairs.csv` | Real entity-pair labels under the active threshold policy |
+| `results/negative_supply/<tag>/pairs.csv` and `manifest.json` | Real partners, minted top-ups, edited-positive controls, lineage, and coverage |
+| Preparation `discriminator.json` | Real-vs-minted separation verdict |
+| `data/final_validation.csv`, configured validation fold-map CSV | Shared component-safe validation population and split accounting |
+| `data/track_setup/eligible_catalog.csv`, `listing_splits.csv`, `listing_pairs.csv` | Retained graph/text-export catalog, listing assignments, clean graph supervision |
+| `data/track_setup/prepared/listings.json`, `pairs.csv`, `input_manifest.json` | Graph descriptors, pair rows, and source bindings |
+| Graph `pair_lineage.json`, `report_attributes.json`, `graph_census.json` | Provenance and reporting dimensions |
+| `data/track_setup/prepared/graph_plan.json`, `graph_inputs.npz` | Train-only vocabulary, full training/dev tensors, pair mappings, and complete query batches |
+| `data/prepared/full/worker_1_baseline.pkl.gz` plus sidecar | Full text training bundle, native tokens, fixed datasets, and frozen epoch batches |
+| Configured text-bundle path, default `data/track_setup/text_prepared.pkl.gz` plus sidecar | Suite copy of the same text bundle |
+| `data/track_setup/prepared_text.npz`, `text_export_request.json` | Locally composed and tokenized text for selected-checkpoint export |
+| `data/track_setup/embedding_inputs.json` | Frozen A0 hybrid embedding request, bound to tokens/checkpoint/catalog |
+| `data/track_setup/ablation_templates/` | Offline intervention text, tokens, graph tensors, and per-track requests when enabled |
+| Preparation `all_tracks_inputs.zip` | Verified portable input package for the three-track run |
 
-Track C additionally requires the frozen text cache (below); `gnn_only`
-FORBIDS a `text_cache` (`src/graph_tracks/config.py:74-75`).
+### Which negative-generation approach is active?
 
-Generation CSVs (kept for provenance / re-prepare): `eligible_catalog.csv`,
-`listing_splits.csv` (`sku_id,split`), `listing_pairs.csv`
-(`sku_id1,sku_id2,label,split`). Both pair endpoints must belong to the
-declared split; train and dev need both positives and negatives.
+`config/training.yaml` currently ships `negative_supply.mode: gate`.
+The new lane is generated and audited on every preparation run, but that
+setting keeps it diagnostic-only: generating a CSV does not switch training.
+The active text path retains gate hard negatives and configured additional
+miners. Graph tracks start from clean labeled listing pairs plus trusted
+same-entity positive chains, as specified by the model plan.
 
-### Track C only — frozen MiniLM cache (produce BEFORE training)
+The experimental lane blocks real different-GTIN candidates first, measures
+anchors with a real one-attribute-different partner, and mints at most one
+whitelisted volume/flavor move for an uncovered anchor. Its JSON spec can be
+supplied with `EUROMONITOR_NEGATIVE_SUPPLY_SPEC`; the same spec governs mining
+and discriminator thresholds. GTINs are read as strings, preserving zeros.
+
+With `mode: lane`, `pairs_run_tag` is mandatory. The generator rebuilds that
+lane before any consumer; text training replaces gate-derived negatives and
+keeps minted partners training-only. A `SEPARABLE` discriminator verdict
+stops lane-mode preparation. In gate mode it is recorded as a diagnostic
+failure while the active gate preparation continues. `insufficient` means
+there is not enough grouped evidence; it is not a successful safety result.
+
+Lane activation still requires real-pair quality evidence and graph-specific
+supervision work for a comparable all-track lane experiment. Text edits or
+minted text partners are not automatically graph augmentations. Do not
+claim shared new-lane supervision for B/C from a text-only mode switch.
+
+## Offline batching and hybrid embeddings
+
+Text objective datasets and every epoch's batches are fixed locally for CPU
+and CUDA batch sizes. Controlled population weights come from
+`training.batch_sampler`; exhausted populations redistribute slots and smaller
+batches preserve remaining rows. Every objective row must occur exactly once
+per epoch. MNRL duplicate checks inspect text fields, excluding telemetry.
+The GPU worker consumes `FrozenBatchSampler` and native token tables; it
+rejects missing/repeated/out-of-range indices or mismatched batch settings.
+
+B/C use the same train-only attribute graph and vocabulary. Training runs one
+full-graph optimization step per epoch, with classification plus cosine
+metric loss. Query/export batching is separate: rows encode independently
+against fixed training context, with complete ordered coverage.
+
+Local preparation creates the hybrid embedding request and native tokens,
+not the final baseline vectors. At the beginning of the shared GPU run,
+`model_tracks.baseline_export.forward` encodes the exact frozen A0 checkpoint
+into `shared_minilm__embeddings.npz` before releasing hybrid training. It does
+not depend on the concurrently fine-tuned Track A checkpoint. After Track A
+selection, its own vectors are exported from the selected checkpoint using
+the already prepared tokens.
+
+Both exports enforce checkpoint/input hashes, float32, finite normalized
+vectors, ID alignment, and atomic publication. Pydantic prepared-input models
+validate token/graph row coverage. Input/config/parser changes require a fresh
+preparation; cached vectors must pass current provenance checks.
+
+## Resume and launch
+
+If the CSV stages completed and their current manifests verify, continue the
+remaining preparation with a fresh log directory:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m graph_tracks.text_cache \
-  --catalog data/track_setup/eligible_catalog.csv \
-  --checkpoint artifacts/models/all-MiniLM-L6-v2 \
-  --output data/track_setup/shared_minilm__embeddings.npz
+PYTHONPATH=src .venv/bin/python -m training.prepare_all --resume-from validation
 ```
 
-- Cache must come from the EXACT frozen A0 checkpoint; the NPZ carries
-  checkpoint/model-input/catalog/identity-policy hashes.
-- Hybrid training checks provenance against the prepared manifest, not just
-  vector dimensions. Extra IDs allowed; production training requires the same
-  source catalog fingerprint.
-- Validated by `graph_tracks.preflight` before training.
+This rechecks canonical/label manifests, regenerates the diagnostic lane,
+and rebuilds validation, setup, bundles, tensors, requests, and package.
+It is not a training-checkpoint resume.
 
-### Track A (text/ANN)
-
-- `data/track_setup/text_prepared.pkl.gz` (+ `.json` sidecar) — prepared text
-  bundle; upstream: `data/canonical_records.csv`, `data/gate_results.csv`,
-  deduped dataset (`load_dataset_deduped`), `config/training_ANN.yaml`.
-
-### 3-track Colab dispatch
-
-`config/model_tracks.yaml` references the above: `setup_dir:
-data/track_setup`, `text_bundle: data/track_setup/text_prepared.pkl.gz`;
-`epochs: 10`, `device: cuda`, `schedule: parallel`, `max_parallel: 3`,
-`gpu_parallel_backend: mps`, `profiling: true`, `report_test: false`,
-`publish_git: true`.
-
-## Steps
-
-### Step 0 — shared setup (all tracks, no training)
-
-```bash
-PYTHONPATH=src .venv/bin/python -m graph_tracks.setup --output data/track_setup
-PYTHONPATH=src .venv/bin/python -m graph_tracks.preflight \
-  --config data/track_setup/gnn_only.yaml
-PYTHONPATH=src .venv/bin/python -m graph_tracks.preflight \
-  --config data/track_setup/hybrid.yaml
-```
-
-Setup builds listing assignments via the shared `derive_holdout` entry point,
-records the local text checkpoint, exclusions and graph census, and creates the
-per-track configs with test reporting disabled.
-
-### Step 0b — regenerate graph tensors if missing
-
-```bash
-PYTHONPATH=src .venv/bin/python -m graph_tracks.prepared_inputs \
-  --listings data/track_setup/prepared/listings.json \
-  --pairs data/track_setup/prepared/pairs.csv
-```
-
-### Step 1 — embed (Track C prerequisite)
-
-Run the `graph_tracks.text_cache` command above, then re-run prefights.
-
-### Step 2 — train
-
-```bash
-PYTHONPATH=src .venv/bin/python -m graph_tracks.train \
-  --config config/graph_tracks_gnn.yaml --run-tag experiment-001
-PYTHONPATH=src .venv/bin/python -m graph_tracks.train \
-  --config config/graph_tracks_hybrid.yaml --run-tag experiment-001
-```
-
-- Architecture: small two-layer relation-aware full-batch GraphSAGE
-  (listing → attribute → listing) in plain PyTorch, categorical embeddings +
-  numeric projections, 128–256 output dims, metric learning (contrastive/
-  triplet) on verified positives and hard negatives, seed-controlled sampling,
-  training-only negative mining.
-- Track A: MiniLM/MNRL training per `config/training_ANN.yaml` with the
-  prepared bundle and controlled batch sampler (optional).
-- Each worker outputs to `<output_dir>/<track>__<run_tag>` (or
-  `$EUROMONITOR_RESULTS_DIR`); per-epoch losses/dev metrics, gradient norms,
-  heartbeats, integrity-marked checkpoints and DVC snapshot generations.
-- Resume: `graph_tracks.train --config <updated>.yaml --run-tag
-  <tag>-resumed --resume <checkpoint>/<track>__graph_model.pt` (restores
-  model/scorer/optimizer/RNG; hashes and config must match).
-
-### Step 3 — Colab 3-track launch (all parallel on one VM)
+Launch after successful generation:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m cli.colab --what tracks \
-  --tracks-config config/model_tracks.yaml
+  --tracks-config config/model_tracks.yaml --gpu T4 --allow-gpu
 ```
 
-- One control channel, isolated subprocess workers/outputs, NVIDIA MPS for
-  GPU overlap (supervisor rejects unavailable MPS).
-- Default path: single-worker full train via `colab.full_prepared_bundles`
-  from the pinned remote checkout. Customized training: build bundles
-  locally (`training.train --prepare-bundle`) and upload.
-- Teardown happens in `finally` unless CPU keep-alive was requested; GPU
-  keep-alive is refused; GPU selection requires `--allow-gpu`.
+The launcher validates the package before accelerator provisioning, saves
+immutable Git input transport, and starts isolated text/GNN/hybrid workers on
+one runtime with one control channel and NVIDIA MPS. Its package call also
+refreshes local frozen tensors/requests; CSV generation belongs to
+`training.prepare_all`. Publishing suites require `DVC_API_KEY` before launch.
+W&B credentials are only needed for online mode. Install the target
+CPU/CUDA PyTorch runtime and `requirements/graph_tracks.txt` first; the local
+MiniLM model directory must contain valid weights and tokenizer files.
 
-### Step 4 — post-training artifacts (automatic)
+CPU-only preparation preflight permits the declared GPU-pending hybrid cache.
+A direct hybrid-worker preflight before that cache exists cannot pass.
+Do not run the old manual CPU-cache command as a prerequisite for this suite.
 
-- Normalized vectors + HNSW indexes bound to provenance.
-- Dev-fitted Youden threshold; test labels never select checkpoints.
-- Metrics: ROC-AUC, PR-AUC, P@R95, accuracy, precision/recall/F1, confusion
-  counts, pooled pair-ranking stats, attribute-availability slices,
-  score/PR plots, within-split ANN retrieval reports.
-- Portable packages:
+For interrupted training, use the launcher's `--resume-run <tag>` with the
+original prepared package and verified recovery archive. Changed config,
+source, or input hashes require a new preparation/run.
 
-  ```bash
-  PYTHONPATH=src .venv/bin/python -m graph_tracks.worker_package \
-    --config data/track_setup/gnn_only.yaml --output results/gnn_worker_setup.zip
-  PYTHONPATH=src .venv/bin/python -m graph_tracks.bundle \
-    --source results/graph_tracks/hybrid__experiment-001 \
-    --output /path/hybrid__experiment-001.zip
-  ```
+## Outputs and evaluation
 
-- Standalone inference/reporting:
+Train on train labels; select checkpoints and thresholds on dev; report test
+only after selection. Keep one component split across tracks. GTIN/identity
+links may define truth and split components, but are excluded from blind
+model features and graph edges. Synthetic/masked probes do not replace real
+held-out quality measurements.
 
-  ```bash
-  PYTHONPATH=src .venv/bin/python -m graph_tracks.infer \
-    --checkpoint <ckpt>/<track>__graph_model.pt --listings <query_listings.json> \
-    --output /path/export --build-index        # hybrid adds: --text-cache <npz>
-  PYTHONPATH=src .venv/bin/python -m graph_tracks.report \
-    --config config/graph_tracks_hybrid.yaml \
-    --checkpoint <ckpt>/<track>__graph_model.pt --output /path/reports
-  ```
-
-  Exported vector/index IDs are listing `sku_id`s, not GTINs. HNSW cosine
-  search does not reproduce the learned pair scorer.
-
-## Colab blockers to resolve before full launches
-
-- Pin and record an immutable repo commit per experiment (local uncommitted
-  changes are not transmitted; local bundle producers and remote consumers
-  must be compatible at that revision).
-- Migrated split contract everywhere (no old 3k/5k sample paths; do not use
-  `run_ann_full_data.py` unchanged).
-- Diet/freshness gates on cached AND checkout-native bundles.
-- Graph dependencies in the Colab profile; verify against Colab
-  Python/PyTorch/CUDA.
-- Graph/hybrid completion adapters (text-only `predict_items` is not enough)
-  and checkpoint-collection contract for graph checkpoints.
-- Resume: persist optimizer/scheduler/RNG/sampler state or explicitly reject.
-
-## Verification
-
-```bash
-PYTHONPATH=src .venv/bin/python -m pytest tests/test_graph_tracks.py -q
-PYTHONPATH=src WANDB_SILENT=true WANDB_CONSOLE=off .venv/bin/python \
-  scripts/smoke_graph_tracks.py --output /tmp/new-graph-smoke
-```
-
-Smoke uses the real local MiniLM checkpoint, both CPU workers, real offline
-W&B, complete inference/reports, and DVC push + independent clean pull.
-Synthetic inputs — perfect metrics are NOT quality evidence.
-
-## Build sequence and completion checkpoints
-
-1. **Shared contract + A0:** validation migration, telemetry/diet blockers,
-   current checkpoint captured, baseline results published.
-2. **A1 + graph census:** attribute scoring tested; shared graph constructed
-   and audited. No expensive graph training on unaudited edges.
-3. **B baseline:** GNN training/inference + HNSW integration; attribute-only
-   (`graph_enabled: false`), one/two-hop and shuffled-edge controls.
-4. **C0 baseline:** graph layer over frozen A0 embeddings; fusion evaluated
-   against the attribute-aware text baseline.
-5. **Controlled extensions** (pretrained GNN transfer, extra relations,
-   retrieval fusion, joint fine-tuning) only as separately named experiments.
-6. **Selection:** one comparison report — quality, uncertainty, failure
-   examples, resource costs, deployment recommendation.
-
-Done = all three tracks have reproducible checkpoints, inference artifacts and
-comparable evaluation reports.
+GPU workers own optimization and embedding forward passes. Local CPU
+postprocessing owns scored-pair reports, calibration, HNSW indexes,
+attribute/sparse-neighborhood slices, and configured ablation analysis.
+Collected artifacts bind vectors/indexes to encoder, catalog, policy, and
+schema hashes. Record checkpoint selection, losses, exposure, runtime, memory,
+and review failures. Compare model-only behavior and the shadow gate on real
+pairs; thresholds and deployment decisions follow the model plan.

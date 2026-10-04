@@ -1000,9 +1000,9 @@ def main() -> None:
     supply = NegativeSupply(
         spec=load_spec(args.spec),
         df=load_dataset_deduped(),
-        canonical=pd.read_csv(str(Path(F["canonical_records"]))),
-        gates=pd.read_csv(str(Path(F["gate_results"]))),
-        labeled=pd.read_csv(str(Path(F["labeled_pairs"]))),
+        canonical=pd.read_csv(F["canonical_records"], dtype=str, keep_default_na=False),
+        gates=pd.read_csv(F["gate_results"], dtype={"gtin1": str, "gtin2": str}, keep_default_na=False),
+        labeled=pd.read_csv(F["labeled_pairs"], dtype={"gtin1": str, "gtin2": str}, keep_default_na=False),
     )
     manifest = supply.emit(args.run_tag)
     print(json.dumps({"coverage": manifest["coverage"],
