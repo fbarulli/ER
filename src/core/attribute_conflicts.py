@@ -614,19 +614,15 @@ def _universe_value(record: Mapping[str, object], key: str, spec) -> object:
             return frozenset(_string_value_set(value, kind="pack type"))
         return _universe_evidence_of(record).get(key, frozenset())
     if key == "made from":
-        # Mirror the carbonization pattern (canonical set column FIRST, the
-        # universe_evidence capture rides behind it): the title+attribute
-        # lexicon channel (fcc2c07 `made_from_set`) is a SUPERSET of the
-        # declared `Made From:` attribute-cell capture — a title that names
-        # an ingredient the declared field omits must reach the
-        # supporting-review lane, which is exactly the dimension it exists
-        # for. Old canonical records without the column resolve to the
-        # attribute-cell capture; absence of both is absent evidence.
-        value = (
-            record.get("made_from_set")
-            or _universe_evidence_of(record).get(key) or ()
+        # The title lexicon is closed, while declared ingredients are open
+        # vocabulary. Preserve both channels: a recognized title ingredient
+        # must not hide a declared ingredient outside the lexicon.
+        return frozenset(
+            _string_value_set(record.get("made_from_set"), kind="made from")
+            | _string_value_set(
+                _universe_evidence_of(record).get(key), kind="made from"
+            )
         )
-        return frozenset(_string_value_set(value, kind="made from"))
     evidence = record.get("universe_evidence")
     if not isinstance(evidence, Mapping):
         return frozenset()

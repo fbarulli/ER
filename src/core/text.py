@@ -496,7 +496,7 @@ def attributes_keys(series: pd.Series, limit: int = 5000) -> Counter:
     return keys
 
 
-def attribute_fields(cell: object) -> list[tuple[str, str]]:
+def attribute_fields(cell: object, *, include_empty: bool = False) -> list[tuple[str, str]]:
     """One attributes cell -> [(normalized_key, raw_value), ...], deterministic.
 
     THE shared semantics for `Key: value` segment parsing (the docstring
@@ -510,13 +510,16 @@ def attribute_fields(cell: object) -> list[tuple[str, str]]:
     ends their drift. Callers that must CENSUS malformed segments (they are
     parser-gap evidence) keep their own walk — see
     product_dimensions.row_dimensions.
+
+    Empty values are excluded from populated evidence by default; key-presence
+    audits can retain explicit blank declarations with ``include_empty=True``.
     """
     found: list[tuple[str, str]] = []
     for part in str(cell or "").split(";"):
         if ":" not in part:
             continue
         raw_key, raw_value = part.split(":", 1)
-        if not raw_value.strip():
+        if not include_empty and not raw_value.strip():
             continue
         found.append((normalized_attribute_text(raw_key), raw_value.strip()))
     return found

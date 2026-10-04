@@ -154,7 +154,10 @@ def extract_made_from_tokens(*values: object) -> frozenset[str]:
     """
     text = normalized_attribute_text(*values)
     found = {token for token in text.split() if token in MADE_FROM_LEXICON}
-    found.update(phrase for phrase in MADE_FROM_PHRASES if phrase in text)
+    found.update(
+        phrase for phrase in MADE_FROM_PHRASES
+        if re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text)
+    )
     return frozenset(found)
 
 
