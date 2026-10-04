@@ -1,4 +1,5 @@
 """One deduplicated prepared-input package for one all-track Colab run."""
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -36,7 +37,13 @@ def package(config: Path, output: Path) -> Path:
     cfg = load_config(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     from training.prepared_bundle import load_prepared_bundle
-    from model_tracks.training_data import from_bundle, TrackTrainingBinding
+    from model_tracks.training_data import (
+        augmentation_node_id,
+        canonical_node_id,
+        from_bundle,
+        is_virtual_node,
+        TrackTrainingBinding,
+    )
     from model_tracks.shared_graph_data import prepare_shared_graph
     _, bundle = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
     shared = from_bundle(bundle)
@@ -73,11 +80,27 @@ def package(config: Path, output: Path) -> Path:
     composition_contract = {'spec':model_input_composition().model_dump(mode='json'),
                             'implementation':composition_fingerprint()}
     composed,token_cache = {},{}
+    # Frozen endpoint text is a CONTRACT, not a hint: a virtual endpoint whose
+    # bundle text is empty is still authoritative, so presence is the test and
+    # the composed bytes are checked against the shared endpoint digest.
+    endpoint_text_sha = {}
+    for endpoint in shared.endpoints:
+        endpoint_text_sha[canonical_node_id(endpoint.source_id) if endpoint.kind == 'canonical'
+                          else augmentation_node_id(endpoint.payload_index)
+                          if endpoint.kind == 'augmentation' else endpoint.source_id] = endpoint.text_sha256
     def compose(row):
-        if row.get('frozen_payload'):
-            if not str(row['sku_id']).startswith(('canonical:', 'augmentation:')):
+        frozen = row.get('frozen_payload')
+        if frozen is not None:
+            node_id = str(row['sku_id'])
+            if not is_virtual_node(node_id):
                 raise ValueError('frozen payload override requires shared virtual endpoint')
-            return row['frozen_payload']
+            expected = endpoint_text_sha.get(node_id)
+            actual = hashlib.sha256(str(frozen).encode()).hexdigest()
+            if expected is not None and actual != expected:
+                raise ValueError(
+                    f'frozen payload text for {node_id} does not match the shared '
+                    f'endpoint digest (expected {expected}, got {actual})')
+            return frozen
         key = digest({'row':row,'composition':composition_contract})
         if key not in composed:
             series = pd.Series(row)
@@ -87,7 +110,7 @@ def package(config: Path, output: Path) -> Path:
     timing.mark('text_export')
     if cfg.post_training_ablation:
         from model_tracks.staged_ablation import prepare_suite
-        prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache)
+        prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache,bundle=bundle)
         timing.mark('ablation_suite')
     from model_tracks.baseline_export import prepare as prepare_baseline
     prepare_baseline(setup,Path(resolve_model(cfg.text_model)),composer=compose)

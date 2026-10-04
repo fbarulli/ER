@@ -8,12 +8,18 @@ from graph_tracks.text_cache import checkpoint_hash
 from model_tracks.ablation import prepare, settings, write, resolve, digest, checkpoint_identity, encode, request_context
 
 
-def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None):
+def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=None):
     """Fix native tokens and vocabulary/support topology before training exists."""
     from core.model_input import model_input_composition
     from core.timing import Timing
     timing = Timing('model_tracks.ablation_prepare')
     cfg = settings(config)
+    cohort = None
+    if cfg.coverage == 'all':
+        if bundle is None:
+            raise ValueError('exhaustive ablation requires the prepared training bundle')
+        from model_tracks.ablation_cohort import prepare_cohort
+        cohort = prepare_cohort(setup, bundle)
     cfg.output_dir = str(setup/'ablation_templates')
     frozen_config = setup/'ablation_settings.yaml'
     write_config = __import__('yaml').safe_dump(cfg.model_dump())
@@ -33,11 +39,16 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None):
                 'text_metadata':{'checkpoint_sha256':checkpoint_hash(baseline),'composition':model_input_composition().model_dump(mode='json')}},
                 'vocabulary':vocabulary,'support_records':support}
             torch.save(payload,checkpoint)
-        path = prepare(setup/'eligible_catalog.csv',setup/'prepared/pairs.csv',checkpoint,track=track,
-            listings=setup/'prepared/listings.json' if track != 'text' else None,
+        path = prepare(cohort/'catalog.csv' if cohort else setup/'eligible_catalog.csv',
+            cohort/'pairs.csv' if cohort else setup/'prepared/pairs.csv',checkpoint,track=track,
+            listings=(cohort/'listings.json' if cohort else setup/'prepared/listings.json') if track != 'text' else None,
             text_checkpoint=baseline if track == 'hybrid' else None,config=frozen_config,
             composer=composer,token_cache=token_cache)
         request = json.loads(path.read_text())
+        if track == 'text':
+            common_cohort = (request['cohort_sha256'], request['coverage'])
+        elif (request['cohort_sha256'], request['coverage']) != common_cohort:
+            raise ValueError('all models must ablate exactly the same cohort and attributes')
         request['graph_binding'] = digest({'vocabulary':vocabulary,'support_records':support}) if track != 'text' else None
         # Anchor prepared sources to the package setup; checkpoint binding later
         # introduces a suite-relative selected weight, preserving frozen inputs.
@@ -96,7 +107,7 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
         from model_tracks.ablation import validate_vectors
         validate_vectors(path,vectors)
     else:
-        if saved_text is None and request['settings']['retrieval_catalog'] == 'full':
+        if saved_text is None and request['settings']['retrieval_catalog'] == 'full' and request['settings'].get('coverage') != 'all':
             saved_text = (output/'text__vectors.npz' if track == 'text' else
                           setup/'shared_minilm__embeddings.npz' if track == 'hybrid' else None)
         encode(path,vectors,device=device,saved_text=saved_text,text_model=text_model,graph_encoder=graph_encoder)

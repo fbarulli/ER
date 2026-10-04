@@ -1,5 +1,7 @@
 # Frozen-checkpoint inference only. Preparation and reporting run locally.
 sample_pairs: 100
+coverage: all  # Exhaustive clean, minted supply and frozen objective pairs; no cap.
+uniform_channels: true  # Same text/graph/both interventions; unsupported channels are no-ops.
 seed: 1729
 split: dev
 batch_size: 64

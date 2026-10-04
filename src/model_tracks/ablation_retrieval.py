@@ -25,22 +25,21 @@ class RetrievalComparison:
 
     def ranks(self, queries):
         # Only compare queries against candidates; never construct catalog².
-        pair_ranks = []
-        query_scores = {}
-        for a,b in self.pairs:
-            values = []
-            for source,target in ((a,b),(b,a)):
-                if source not in query_scores:
-                    scores = queries[source] @ self.vectors.T
-                    scores[self.endpoints[source]] = -np.inf
-                    query_scores[source] = scores
-                scores = query_scores[source]
+        pair_ranks = [[None, None] for _ in self.pairs]
+        targets = {}
+        for n,(a,b) in enumerate(self.pairs):
+            for side,source,target in ((0,a,b),(1,b,a)):
+                targets.setdefault(source, []).append((n, side, target))
+        candidate_order = np.arange(len(self.vectors))
+        for source, requested in targets.items():
+            scores = queries[source] @ self.vectors.T
+            scores[self.endpoints[source]] = -np.inf
+            for n, side, target in requested:
                 target_index = self.endpoints[target]
                 value = scores[target_index]
                 rank = 1+np.count_nonzero(scores > value)+np.count_nonzero(
-                    (scores == value)&(np.arange(len(scores)) < target_index))
-                values.append(int(rank))
-            pair_ranks.append(values)
+                    (scores == value)&(candidate_order < target_index))
+                pair_ranks[n][side] = int(rank)
         return pair_ranks
 
     def ann_hits(self, queries):

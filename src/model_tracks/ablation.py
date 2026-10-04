@@ -33,6 +33,8 @@ def _default_retrieval_ks() -> tuple[int, ...]:
 class Settings(BaseModel):
     model_config = ConfigDict(extra='forbid', validate_default=True)
     sample_pairs: int = Field(default=100, ge=1)
+    coverage: str = 'sampled'
+    uniform_channels: bool = False
     seed: int = 1729
     split: str = 'dev'
     batch_size: int = Field(default=256, ge=1)
@@ -53,6 +55,8 @@ class Settings(BaseModel):
 
     @model_validator(mode='after')
     def check_retrieval(self):
+        if self.coverage not in {'sampled', 'all'}:
+            raise ValueError('coverage must be sampled or all')
         if any(k < 1 for k in self.retrieval_ks) or len(set(self.retrieval_ks)) != len(self.retrieval_ks):
             raise ValueError('retrieval_ks must contain unique positive integers')
         return self
@@ -128,6 +132,15 @@ def write(path, value):
 def declaration_removed(row, attribute):
     from core.text import normalized_attribute_text
     result = dict(row)
+    if result.get('frozen_payload'):
+        from training.masking import field_of
+        fields = {'volume': {'volume'}, 'count per unit': {'pack'},
+            'flavour': {'flavor'}, 'carbonization': {'carbonation'},
+            'sweetener': {'sweetener', 'sweetener_type', 'sweetening'},
+            'pack type': {'package_type'}, 'pack material type': {'package_material'},
+            'juice content': {'juice_content'}}.get(attribute, set())
+        result['frozen_payload'] = ' '.join(token for token in result['frozen_payload'].split()
+                                             if field_of(token) not in fields)
     result['attribute'] = ';'.join(part for part in str(row.get('attribute', '')).split(';')
         if ':' not in part or normalized_attribute_text(part.split(':', 1)[0]) != attribute)
     return result
@@ -148,6 +161,10 @@ def sample_pairs(frame, cfg):
     required = {'sku_id1', 'sku_id2', 'label', 'split'}
     if not required.issubset(frame.columns):
         raise ValueError(f'pairs require {sorted(required)}')
+    if cfg.coverage == 'all':
+        if frame.empty or not frame.label.isin(['0', '1']).all():
+            raise ValueError('full ablation requires binary labeled pairs')
+        return frame.to_dict('records')
     if cfg.split not in {'dev', 'test'}:
         raise ValueError('ablation requires an explicit held-out dev or test split')
     frame = frame[frame.split == cfg.split].copy()
@@ -218,13 +235,15 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
     if len(set(attributes)) != len(attributes) or set(attributes)-attribute_registry().keys():
         raise ValueError('attributes must be unique registry keys')
     records = {r['sku_id']: r for r in load_records(listings)} if listings else {}
-    if listings and any(i not in records or records[i]['split'] != cfg.split for i in ids):
+    if listings and any(i not in records or (cfg.coverage != 'all' and records[i]['split'] != cfg.split) for i in ids):
         raise ValueError('graph endpoints must belong to the selected held-out split')
     for pair in chosen:
         a, b = (rows[pair[k]] for k in ('sku_id1', 'sku_id2'))
         pair['gtin1'], pair['gtin2'] = a.get('gtin'), b.get('gtin')
-        pair['current_attribute_evidence'] = engine().evaluate(canonical_attribute_info(a),
-            canonical_attribute_info(b), left_raw=a, right_raw=b).as_dict()
+        pair['current_attribute_evidence'] = ({} if a.get('frozen_payload') or b.get('frozen_payload') else
+            engine().evaluate(canonical_attribute_info(a), canonical_attribute_info(b), left_raw=a, right_raw=b).as_dict())
+        if a.get('frozen_payload') or b.get('frozen_payload'):
+            pair['evidence_scope'] = 'frozen payload; raw-row evidence unavailable'
         for axis in cfg.slice_columns:
             pair.setdefault(axis, None)
     texts, lookup = [], {}
@@ -234,6 +253,8 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
             texts.append(text)
         return lookup[text]
     def compose(row):
+        if row.get('frozen_payload'):
+            return row['frozen_payload']
         if composer is not None:
             return composer(row)
         return build_sku_text(pd.Series(row), model_input_info(row_identity(row).as_mapping()))
@@ -253,9 +274,10 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         if baseline_text:
             for n,i in enumerate(ids):
                 changed_row = declaration_removed(rows[i],attribute)
-                altered_text.append(baseline_text[n] if changed_row['attribute'] == rows[i].get('attribute','') else intern(compose(changed_row)))
+                altered_text.append(baseline_text[n] if changed_row == rows[i] else intern(compose(changed_row)))
         altered_records = [graph_removed(r, cfg.graph_fields.get(attribute, [])) for r in baseline_records]
-        for channel in (['text'] if track == 'text' else ['graph'] if track == 'gnn_only' else ['text', 'graph', 'both']):
+        for channel in (['text', 'graph', 'both'] if cfg.uniform_channels else
+                        ['text'] if track == 'text' else ['graph'] if track == 'gnn_only' else ['text', 'graph', 'both']):
             ti = altered_text if channel in {'text', 'both'} else baseline_text
             gr = altered_records if channel in {'graph', 'both'} else baseline_records
             changed = sum((bool(ti) and ti[n] != baseline_text[n]) or
@@ -281,6 +303,12 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         'checkpoint':source_name(checkpoint), 'text_checkpoint':source_name(text_checkpoint) if text_checkpoint else None,
         'candidate_ids':candidate_ids,'candidate_text_indices':candidate_text,'candidate_records':candidate_records,
         'ids':ids, 'texts':texts, 'pairs':chosen, 'variants':variants,
+        'cohort_sha256':digest(chosen),
+        'coverage':{'mode':cfg.coverage, 'pair_rows':len(chosen),
+            'by_scope':pd.Series([p.get('evaluation_scope', p['split']) for p in chosen]).value_counts().to_dict(),
+            'by_label':pd.Series([p['label'] for p in chosen]).value_counts().to_dict(),
+            'by_population':pd.Series([p.get('population') or 'real' for p in chosen]).value_counts().to_dict(),
+            'attributes':attributes, 'uniform_channels':cfg.uniform_channels},
         'intervention':'declared attribute removed; title/brand and training graph context fixed',
         'retrieval_scope':f'fixed {cfg.retrieval_catalog} catalog; query-only interventions; incomplete known-positive truth',
         'missing_axes':[a for a in cfg.slice_columns if all(p.get(a) is None or p.get(a) == '' for p in chosen)]}
@@ -604,6 +632,8 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
                 'changed_listings':variant['changed_listings'], 'baseline_score':float(scores[0,p]),
                 'ablated_score':float(scores[n,p]), 'score_delta':float(scores[n,p]-scores[0,p]),
                 'decision_flip':bool((scores[n,p]>=threshold)!=(scores[0,p]>=threshold)),
+                'baseline_error':bool((scores[0,p]>=threshold) != (pair['label']=='1')),
+                'ablated_error':bool((scores[n,p]>=threshold) != (pair['label']=='1')),
                 'embedding_cosine_delta':[float(1-np.dot(vectors[0,i],vectors[n,i])) for i in endpoints],
                 'baseline_ranks':baseline_ranks[p], 'ablated_ranks':rank[p],
                 'ann_baseline_hits':ann_baseline[p], 'ann_ablated_hits':ann_ablated[p],
@@ -618,6 +648,7 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
         'threshold_source':str(threshold_source), 'threshold_provenance':threshold_provenance, 'threshold_binding':threshold_binding, 'split':cfg.split, 'sample_pairs':npairs,
         'intervention':request['intervention'],'retrieval_scope':request['retrieval_scope'],
         'missing_axes':request['missing_axes'], 'retrieval_catalog_count':len(candidate_ids),
+        'cohort_sha256':request.get('cohort_sha256'), 'coverage':request.get('coverage'),
         'retrieval_intervention':'query only; fixed candidates', 'rows':rows}
     validate_sources(request)
     if frozen_threshold(threshold_source, threshold) != threshold_provenance:
