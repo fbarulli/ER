@@ -810,7 +810,39 @@ def _main_inner(_wandb) -> None:
             ])
     train_neg = neg
     train_neg_sources = neg_sources.copy()
-    if args.mask_frac > 0:
+    # Freeze identity components before selecting any attribute donor. Copies
+    # inherit existing entities and cannot redefine the parent split.
+    frozen_holdout = None
+    donor_scope = None
+    canonical_scope = set(range(len(df), len(payload)))
+    from collections import Counter as _MintCounter
+    mint_rejections = _MintCounter()
+    if args.split == "holdout":
+        train_bc, dev_bc, test_bc = derive_holdout(pos, row_bc, split_cfg, seed=SEED)
+        frozen_holdout = {role: sorted(values) for role, values in
+                          zip(("train", "dev", "test"), (train_bc, dev_bc, test_bc))}
+        donor_scope = {i for i,value in enumerate(row_bc) if str(value) in train_bc}
+    elif args.mask_frac > 0 and (swap_value_frac or hard_negative_swap_value_frac or counterfactual_frac):
+        raise ValueError("static attribute transplants require a frozen holdout; prepare each CV fold separately")
+    from core.schemas import BalancedAugmentationSpec
+    balanced_policy = BalancedAugmentationSpec.model_validate(mask_cfg['balanced_augmentation'])
+    if args.sample and balanced_policy.sample_counts is not None:
+        balanced_policy = balanced_policy.model_copy(update={'counts':balanced_policy.sample_counts})
+    if args.mask_frac > 0 and balanced_policy.enabled:
+        from training.balanced_augmentation import augment_balanced
+        from core.manifest import atomic_write_json
+        before_neg = len(neg)
+        pos, neg, payload, row_bc, structured_features, mask_audit, hard_negative_mask_audit, balanced_coverage = augment_balanced(
+            pos=pos, neg=neg, payload=payload, row_bc=row_bc, features=structured_features,
+            df=df, train_indices=donor_scope, canonical_indices=canonical_scope,
+            spec=balanced_policy, seed=SEED)
+        added_sources = np.full(len(neg)-before_neg, 'counterfactual', dtype=object)
+        neg_sources = np.concatenate([neg_sources, added_sources])
+        train_neg, train_neg_sources = neg, neg_sources.copy()
+        coverage_path = RESULTS / 'training' / run_tag / 'balanced_augmentation.json'
+        atomic_write_json(balanced_coverage.model_dump(mode='json'), coverage_path)
+        print(f'[balanced-augmentation] {balanced_coverage.model_dump(mode="json")} -> {coverage_path}', flush=True)
+    if args.mask_frac > 0 and not balanced_policy.enabled:
         from training.masking import (
             augment_hard_negatives,
             augment_positives,
@@ -849,6 +881,9 @@ def _main_inner(_wandb) -> None:
             pool_size=n_pre_mask_pos,
             symmetric=True,
             entity_keys=entity_keys,
+            allowed_payload_indices=donor_scope,
+            coherent_prose=True,
+            rejection_counts=mint_rejections,
             max_field_share=swap_max_field_share,
             max_value_share=swap_max_value_share,
             shared_value_counts=_shared_value_counts,
@@ -979,6 +1014,9 @@ def _main_inner(_wandb) -> None:
             pool_size=n_pre_mask_neg,
             symmetric=False,
             entity_keys=entity_keys,
+            allowed_payload_indices=donor_scope,
+            coherent_prose=True,
+            rejection_counts=mint_rejections,
             max_field_share=swap_max_field_share,
             max_value_share=swap_max_value_share,
             shared_value_counts=_shared_value_counts,
@@ -1056,6 +1094,10 @@ def _main_inner(_wandb) -> None:
             seed=SEED + 5,
             pool_size=n_pre_mask_pos,
             entity_keys=entity_keys,
+            allowed_payload_indices=donor_scope,
+            coherent_prose=True,
+            canonical_indices=canonical_scope,
+            rejection_counts=mint_rejections,
             max_field_share=swap_max_field_share,
             max_value_share=swap_max_value_share,
             shared_value_counts=_shared_value_counts,
@@ -1124,7 +1166,7 @@ def _main_inner(_wandb) -> None:
     # split under the banner of another share; the banner below prints the
     # CONFIGURED shares.
     if args.split == "holdout":
-        train_bc, dev_bc, test_bc = derive_holdout(pos, row_bc, split_cfg, seed=SEED)
+        train_bc, dev_bc, test_bc = (set(frozen_holdout[role]) for role in ("train", "dev", "test"))
         folds_override = test_bc  # single-set: train = all others
         dev_override = dev_bc
         from core.hard_negatives import pairs_in_set
@@ -1239,7 +1281,7 @@ def _main_inner(_wandb) -> None:
     n_class_balance_shortfall = 0
     n_class_balance_discarded_base = 0
     n_class_balance_discarded_aug = 0
-    if balance_train_classes:
+    if balance_train_classes and not balanced_policy.enabled:
         target = len(pos)
         if target and not len(train_neg):
             raise RuntimeError(
@@ -1332,6 +1374,10 @@ def _main_inner(_wandb) -> None:
         "cross_brand_conflict source in this fold's negative pool)",
         flush=True,
     )
+    print(f"[mint-quality] rejected edits: {dict(mint_rejections)}", flush=True)
+    if args.mask_frac > 0 and bool(mask_cfg["track_visibility"]):
+        _wvl(_pd.DataFrame([{"reason": key, "count": value} for key, value in mint_rejections.items()]),
+             "mint_rejections.csv", run_tag, bool(args.sample))
     timing.mark("splits_mining_balance")
 
     # masked anchors extend the row-index space beyond df; every df-indexed
@@ -1393,6 +1439,7 @@ def _main_inner(_wandb) -> None:
             canonical_records_csv=(RESULTS / F["canonical_records"]).read_bytes(),
             gate_results_csv=(RESULTS / F["gate_results"]).read_bytes(),
             payload_variant=args.payload,
+            holdout_populations=frozen_holdout,
             masking_profile=str(mask_cfg["profile"]),
             token_checkpoint=str(args.model),
             plan_loss=args.loss,

@@ -12,7 +12,19 @@ from typing import Literal
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
-from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding
+from model_tracks.training_data import (
+    AUGMENTATION_PREFIX,
+    SharedTrainingData,
+    TrackTrainingBinding,
+    augmentation_node_id,
+    canonical_node_id,
+)
+
+# Directory suffix holding the immutable clean catalog/evaluation that every
+# projection rebuild starts from. Named here so a rename cannot orphan an
+# existing backup and silently snapshot already-projected inputs.
+CLEAN_BACKUP_SUFFIX = '__clean_shared_inputs'
+TRACKS = ('gnn_only', 'hybrid')
 
 
 class SharedGraphProjection(BaseModel):
@@ -99,12 +111,16 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     old_manifest = json.loads(manifest_path.read_text())
     if old_manifest.get('shared_training_data_sha256') == shared_hash:
         try:
+            # Every track binding, not just one: the cached projection is
+            # returned as the contract for the whole suite.
+            for track in TRACKS:
+                validate_projection(setup, shared, track=track)
             return validate_projection(setup, shared, track='gnn_only').model_dump(mode='json', by_alias=True)
         except (ValueError, FileNotFoundError):
             pass
     # Preserve the original clean catalog/evaluation before the first projection.
     # Rebuilding a different contract always starts from those immutable inputs.
-    backup_root = setup.parent / (setup.name + '__clean_shared_inputs')
+    backup_root = setup.parent / (setup.name + CLEAN_BACKUP_SUFFIX)
     backup_root.mkdir(parents=True, exist_ok=True)
     backups = {setup / 'eligible_catalog.csv': backup_root / 'eligible_catalog.csv',
                setup / 'listing_splits.csv': backup_root / 'listing_splits.csv',
@@ -131,7 +147,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
         raise ValueError('shared graph bundle layout mismatch')
     copies = {}
     for audit in (*bundle['mask_audit'], *bundle['hard_negative_mask_audit']):
-        copies[int(audit['copy_payload_idx'])] = (int(audit['anchor_payload_idx']), audit)
+        copies[int(audit['copy_payload_idx'])] = (int(audit.get('copy_source_payload_idx') if audit.get('copy_source_payload_idx') is not None else audit['anchor_payload_idx']), audit)
         if audit.get('copy_pair_payload_idx') is not None:
             copies[int(audit['copy_pair_payload_idx'])] = (int(audit['pair_payload_idx']), audit)
     parents = {}
@@ -150,13 +166,14 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
                 record = _record(row_identity(row), source_id)
         elif index < canonical_end:
             entity = gtins[index - shared.source_rows]
-            record = _record(_canonical_identity(canonical_map[entity]), 'canonical:' + entity)
+            record = _record(_canonical_identity(canonical_map[entity]), canonical_node_id(entity))
         else:
             raise ValueError('copy parent must be an original listing or canonical')
         parents[index] = record
         return record
 
     node_map, virtual_counts = {}, {'canonical': 0, 'augmentation': 0, 'added_listing': 0}
+    missing_report_fields: dict[str, int] = {}
     from training.attribute_separation import ATTRIBUTE_SOURCES
     for endpoint in shared.endpoints:
         index = endpoint.payload_index
@@ -166,7 +183,7 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
             parent, audit = copies[index]
             if parent != endpoint.parent_index:
                 raise ValueError('shared graph augmentation parent mismatch')
-            node_id = f'augmentation:{index}'
+            node_id = augmentation_node_id(index)
             record = _copy_record(parent_record(parent), bundle['payload'][index], audit, node_id)
         else:
             record = copy.deepcopy(parent_record(index))
@@ -188,13 +205,39 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
         row.update(sku_id=node_id, gtin=endpoint.entity)
         catalog_rows.append(row)
         if node_id not in report_ids:
-            report_rows.append({'sku_id': node_id, 'attribute': {
-                key: record['numeric'].get('volume_ml' if key == 'volume' else key,
-                                           record['attribute'].get(key, []))
-                for key in ATTRIBUTE_SOURCES}})
+            projected_attributes = {}
+            for key in ATTRIBUTE_SOURCES:
+                graph_key = 'volume_ml' if key == 'volume' else key
+                if graph_key in record['numeric']:
+                    projected_attributes[key] = record['numeric'][graph_key]
+                elif key in record['attribute']:
+                    projected_attributes[key] = record['attribute'][key]
+                else:
+                    # Never invent an empty feature: a dimension absent from
+                    # BOTH channels is unmeasured, and silently writing [] would
+                    # look like a measured zero to every downstream reader.
+                    missing_report_fields[f'{node_id}:{key}'] = (
+                        missing_report_fields.get(f'{node_id}:{key}', 0) + 1)
+            report_rows.append({'sku_id': node_id, 'attribute': projected_attributes})
             report_ids.add(node_id)
+    if missing_report_fields:
+        print(
+            f'[shared-graph] {len(missing_report_fields)} report attribute(s) absent '
+            f'from both numeric and attribute channels and recorded unmeasured: '
+            f'{sorted(missing_report_fields)[:5]}',
+            flush=True,
+        )
     clean_pairs = pd.read_csv(backup_root / 'pairs.csv', dtype=str, keep_default_na=False)
     evaluation = clean_pairs[clean_pairs.split != 'train'].copy()
+    superseded_train_pairs = int((clean_pairs.split == 'train').sum())
+    virtual_counts['superseded_clean_train_pairs'] = superseded_train_pairs
+    virtual_counts['unmeasured_report_fields'] = len(missing_report_fields)
+    print(
+        f'[shared-graph] replacing {superseded_train_pairs:,} clean train pair(s) '
+        f'with {len(shared.examples):,} shared example(s); '
+        f'{len(evaluation):,} evaluation pair(s) preserved',
+        flush=True,
+    )
     evaluation_hash = _hash_rows(_pair_rows(evaluation))
     projected = [dict(example_id=row['example_id'], sku_id1=node_map[str(row['payload_index1'])],
                       sku_id2=node_map[str(row['payload_index2'])], label=str(row['label']), split='train')
@@ -234,7 +277,17 @@ def prepare_shared_graph(setup: Path, bundle: dict, shared: SharedTrainingData) 
     if lineage_path.exists() and (not clean_lineage.exists() or not old_manifest.get('shared_training_data_sha256')):
         clean_lineage.write_bytes(lineage_path.read_bytes())
     lineage = json.loads(clean_lineage.read_text()) if clean_lineage.exists() else {'schema': 'er-graph-pair-lineage-v1', 'pairs': []}
-    lineage['pairs'] = [row for row in lineage['pairs'] if row['split'] != 'train'] + [
+    retained_lineage = [row for row in lineage['pairs'] if row['split'] != 'train']
+    if len(retained_lineage) != len(evaluation):
+        # The evaluation pairs themselves survive in pairs.csv, so an empty or
+        # short lineage would pass the manifest hash check while silently
+        # dropping dev/test provenance. Refuse instead.
+        raise ValueError(
+            f'clean pair lineage covers {len(retained_lineage):,} of '
+            f'{len(evaluation):,} clean evaluation pair(s); rebuild the clean '
+            'graph inputs so provenance is retained'
+        )
+    lineage['pairs'] = retained_lineage + [
         {**row, 'origins': [{'kind': 'shared_frozen_objective', 'example_id': row['example_id'],
                            'shared_training_data_sha256': shared_hash}]} for row in projected]
     lineage.update(listing_pairs_sha256=file_hash(setup / 'listing_pairs.csv'),
@@ -282,8 +335,8 @@ def validate_projection(setup: Path, shared: SharedTrainingData, *, track: str):
         raise ValueError('shared graph endpoint projection mismatch')
     for endpoint in shared.endpoints:
         expected_id = (endpoint.source_id if endpoint.kind == 'listing' else
-                       'canonical:' + endpoint.source_id if endpoint.kind == 'canonical' else
-                       f'augmentation:{endpoint.payload_index}')
+                       canonical_node_id(endpoint.source_id) if endpoint.kind == 'canonical' else
+                       augmentation_node_id(endpoint.payload_index))
         if projection.node_map[str(endpoint.payload_index)] != expected_id:
             raise ValueError('shared graph stable endpoint ID mismatch')
     pairs = pd.read_csv(setup / 'prepared/pairs.csv', dtype=str, keep_default_na=False)

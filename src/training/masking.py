@@ -19,6 +19,7 @@ from __future__ import annotations
 import random
 
 import numpy as np
+from tqdm import tqdm
 
 from core.common import load_config, training_cfg
 from core.schemas import MaskingResult
@@ -77,7 +78,7 @@ def extend_augmented_features(features, payload, audit):
     cfg = training_cfg().training.structured_features
     copies = {}
     for row in audit:
-        pairs = [(row["copy_payload_idx"], row["anchor_payload_idx"])]
+        pairs = [(row["copy_payload_idx"], row.get("copy_source_payload_idx") if row.get("copy_source_payload_idx") is not None else row["anchor_payload_idx"])]
         if row.get("copy_pair_payload_idx") is not None:
             pairs.append((row["copy_pair_payload_idx"], row["pair_payload_idx"]))
         for destination, source in pairs:
@@ -277,7 +278,7 @@ def augment_pairs(
     base = len(payload)
     effective_lo = _MASK_LO if lo is None else float(lo)
     effective_hi = _MASK_HI if hi is None else float(hi)
-    for i in mask_idx:
+    for i in tqdm(mask_idx, unit="pair", desc="mask", disable=None):
         a, b = int(pos[i][0]), int(pos[i][1])
         if target_fields is None:
             masked, extent = mask_text(payload[a], mask_prob, rng, lo=lo, hi=hi)
@@ -384,7 +385,7 @@ def augment_declaration_dropout(
     out_payload: list[str] = []
     out_bc: list[str] = []
     audit: list[dict] = []
-    for i in picked:
+    for i in tqdm(picked, unit="pair", desc="dropout", disable=None):
         a, b = int(pairs[i][0]), int(pairs[i][1])
         surfaces = _field_surfaces(payload[a])
         if not surfaces:
@@ -661,6 +662,96 @@ def _splice_field(text: str, field: str, donor_tokens: list[str]) -> str:
     return " ".join(out)
 
 
+
+def _coherent_splice_field(text: str, field: str, donor_tokens: list[str]) -> str | None:
+    """Rewrite supported prose evidence together with its structured tail.
+
+    Source-span parsers own numeric evidence and the shared critical-claim
+    extractor owns lexical aliases. Ambiguous edits emit nothing.
+    """
+    import re
+    from core.critical_attributes import extract_critical_claims, extract_flavor_tokens
+
+    surfaces = _field_surfaces(text)
+    old = surfaces.get(field, [])
+    if not old:
+        return text
+    prefixes = _FIELD_PREFIXES[field]
+    def values(tokens):
+        return {token[len(next(p for p in prefixes if token.startswith(p))):] for token in tokens}
+    before, after = values(old), values(donor_tokens)
+    prose = " ".join(token for token in text.split() if field_of(token) is None and not token.startswith("[FIELD_"))
+    rewritten = prose
+    if field in {"volume", "pack"}:
+        if len(before) != 1 or len(after) != 1:
+            return None
+        old_number = float(next(iter(before)).replace("_", "."))
+        new_number = float(next(iter(after)).replace("_", "."))
+        if field == "volume":
+            from core.text import extract_volume_evidence
+            from core.unit_canonicalization import canonical_volume_ml
+            evidence = [r for r in extract_volume_evidence(prose) if r['role'] == 'package_volume']
+            if any(abs(canonical_volume_ml(r['value'], r['unit']) - old_number) > 1 for r in evidence):
+                return None
+            spans = [(r['start'], r['end'], f"{new_number:g}ml") for r in evidence]
+        else:
+            from pipeline import extract_pack_evidence
+            evidence = [r for r in extract_pack_evidence(prose) if r['role'] == 'unit_count']
+            if any(r['count'] != old_number or r.get('hierarchy_ambiguous') for r in evidence):
+                return None
+            spans = []
+            for r in evidence:
+                match = re.search(r"\d+", r['raw_match'])
+                if match is None or float(match.group()) != old_number:
+                    return None
+                spans.append((r['start'] + match.start(), r['start'] + match.end(), f"{new_number:g}"))
+        for start,end,replacement in sorted(set(spans), reverse=True):
+            rewritten = rewritten[:start] + replacement + rewritten[end:]
+        # A bare retained count can be dosage/marketing evidence. We cannot
+        # assert which number should change without an attributed span.
+        from core.text import _unit_spec
+        forms = ({old_number} if field == 'pack' else
+                 {old_number / unit.ml_per_unit for unit in _unit_spec().volume})
+        if old_number != new_number and any(re.search(r"(?<![a-z0-9.,])" + re.escape(f"{value:g}") + r"(?![a-z0-9.,])", rewritten) for value in forms):
+            return None
+    elif field in {"flavor", "carbonation", "sweetener", "pulp"}:
+        def claims(value):
+            return set(extract_flavor_tokens(value)) if field == 'flavor' else set(extract_critical_claims(value)[field])
+        # Only a complete, unambiguous source claim may be transplanted.
+        observed = claims(prose)
+        if observed - before:
+            return None
+        words = prose.split()
+        hits = [i for i,word in enumerate(words) if claims(word) & before]
+        if observed and not hits:
+            return None
+        if hits:
+            first = hits[0]
+            rewritten = ' '.join(' '.join(value.replace('_',' ') for value in sorted(after)) if i == first else word for i,word in enumerate(words) if i not in hits or i == first)
+        if claims(rewritten) & (before - after):
+            return None
+        donor_surface = ' '.join(value.replace('_', ' ') for value in sorted(after))
+        if any(re.search(r'(?<![a-z0-9])' + re.escape(value.replace('_',' ')) + r'(?![a-z0-9])', rewritten, re.I) and not re.search(r'(?<![a-z0-9])' + re.escape(value.replace('_',' ')) + r'(?![a-z0-9])', donor_surface, re.I) for value in before - after):
+            return None
+    else:
+        # Literal descriptor cues can be removed exactly; compound or
+        # implicit claims are left to review rather than guessed.
+        from core.structured_features import sku_info
+        observed = set(sku_info(prose, "", "").get(field, set()))
+        if observed - before:
+            return None
+        for value in sorted(before, key=len, reverse=True):
+            rewritten = re.sub(r"(?<![a-z0-9])" + re.escape(value.replace('_', ' ')) + r"(?![a-z0-9])", ' '.join(value.replace('_',' ') for value in sorted(after)), rewritten, flags=re.I)
+        # The shared extractor also sees plural/alias package cues which
+        # literal substitutions cannot safely rewrite.
+        if set(sku_info(rewritten, "", "").get(field, set())) & (before - after):
+            return None
+    # Recompose the structured tail in its original order; every other
+    # field survives byte-for-byte, including fields outside graph_schema.
+    tail = _splice_field(' '.join(token for token in text.split() if field_of(token) is not None or token.startswith('[FIELD_')), field, donor_tokens)
+    return ' '.join((rewritten, tail)).strip()
+
+
 def augment_value_swaps(
     pairs: np.ndarray,
     payload: list[str],
@@ -680,6 +771,9 @@ def augment_value_swaps(
     field_quota_shares: dict[str, float] | None = None,
     row_retailer: np.ndarray | None = None,
     attribute_augment: dict[str, dict] | None = None,
+    allowed_payload_indices: set[int] | None = None,
+    coherent_prose: bool = False,
+    rejection_counts: Counter[str] | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Append copies whose structured VALUE was transplanted from a donor pair.
 
@@ -745,6 +839,10 @@ def augment_value_swaps(
     """
     import math
 
+    def rejected(reason):
+        if rejection_counts is not None:
+            rejection_counts[reason] += 1
+
     if max_field_share is not None and not 0.0 < max_field_share <= 1.0:
         raise ValueError("max_field_share must be in (0, 1]")
     if max_value_share is not None and not 0.0 < max_value_share <= 1.0:
@@ -760,6 +858,10 @@ def augment_value_swaps(
             n_added=0, audit=[],
         )
         return res.pos, res.payload, res.row_bc, res.n_added, audit
+    donor_pool = [j for j in range(pool) if allowed_payload_indices is None or all(int(v) in allowed_payload_indices for v in pairs[j])]
+    if not donor_pool:
+        rejected("no_train_donors")
+        return np.asarray(pairs), list(payload), np.asarray(row_bc), 0, []
     rng = random.Random(seed)
     n_pick = int(pool * min(frac, 1.0))
     picked = rng.sample(range(pool), n_pick) if n_pick else []
@@ -800,14 +902,17 @@ def augment_value_swaps(
     _pop_frac_key = "pos_frac" if population == "positive" else "neg_frac"
     _ret = np.asarray(row_retailer, dtype=object) if row_retailer is not None else None
     extra = []
-    for i in picked:
+    for i in tqdm(picked, unit="pair", desc="swap", disable=None):
         a, b = int(pairs[i][0]), int(pairs[i][1])
+        if allowed_payload_indices is not None and (a not in allowed_payload_indices or b not in allowed_payload_indices):
+            rejected("anchor_outside_train")
+            continue
         anchor_fields = _field_surfaces(payload[a])
         anchor_entities = {entities[a], entities[b]}
         chosen: tuple[str, list[str], list[str] | None, int, int] | None = None
         for _attempt in range(14):
             _relaxed_retailer = _ret is None or _attempt >= 10
-            j = rng.randrange(pool)
+            j = rng.choice(donor_pool)
             if j == i:
                 continue
             c, d = int(pairs[j][0]), int(pairs[j][1])
@@ -858,10 +963,12 @@ def augment_value_swaps(
             chosen = (field, donor_anchor[field], donor_pair.get(field), c, d)
             break
         if chosen is None:
+            rejected("no_eligible_donor_field")
             continue
         field, donor_a_tokens, donor_b_tokens, c, d = chosen
-        swapped_anchor = _splice_field(payload[a], field, donor_a_tokens)
-        if swapped_anchor == payload[a]:
+        swapped_anchor = (_coherent_splice_field if coherent_prose else _splice_field)(payload[a], field, donor_a_tokens)
+        if swapped_anchor is None or swapped_anchor == payload[a]:
+            rejected("ambiguous_or_unchanged_prose")
             continue
         anchor_toks = len(payload[a].split())
         extent = round(len(anchor_fields[field]) / max(anchor_toks, 1), 4)
@@ -873,8 +980,9 @@ def augment_value_swaps(
         new_bc.append(str(row_bc[a]))
         if symmetric:
             assert donor_b_tokens is not None
-            swapped_pair = _splice_field(payload[b], field, donor_b_tokens)
-            if swapped_pair == payload[b] or swapped_pair == swapped_anchor:
+            swapped_pair = (_coherent_splice_field if coherent_prose else _splice_field)(payload[b], field, donor_b_tokens)
+            if swapped_pair is None or swapped_pair == payload[b] or swapped_pair == swapped_anchor:
+                rejected("ambiguous_or_identical_positive_counterpart")
                 new_payload.pop()
                 new_bc.pop()
                 continue
@@ -908,6 +1016,12 @@ def augment_value_swaps(
                 "masked_text": swapped_anchor,
                 "population": population,
                 "target_mode": "swap_values",
+                "coherent_prose": coherent_prose,
+                "donor_split": "train" if allowed_payload_indices is not None else None,
+                "donor_anchor_entity": str(row_bc[c]),
+                "donor_pair_entity": str(row_bc[d]),
+                "fields_before": {field: _field_surfaces(payload[a]).get(field, [])},
+                "fields_after": {field: _field_surfaces(swapped_anchor).get(field, [])},
                 "fields_hit": [field],
                 "donor_anchor_payload_idx": c,
                 "donor_pair_payload_idx": d,
@@ -980,7 +1094,9 @@ def mint_swap_counterpart_positives(
         positive_i = int(candidates[0])
         if not 0 <= positive_i < len(payload):
             continue
-        counterpart_text = _splice_field(payload[positive_i], field, donor_tokens)
+        counterpart_text = (_coherent_splice_field if row.get("coherent_prose") else _splice_field)(payload[positive_i], field, donor_tokens)
+        if counterpart_text is None:
+            continue
         if counterpart_text == payload[positive_i]:
             # The source positive carries NO token for the transplanted field,
             # so the transplant cannot contradict it — it is silent where the
@@ -1014,6 +1130,12 @@ def mint_swap_counterpart_positives(
                 "masked_text": counterpart_text,
                 "population": "swap_counterpart",
                 "target_mode": "swap_values",
+                "coherent_prose": bool(row.get("coherent_prose")),
+                "donor_split": row.get("donor_split"),
+                "donor_anchor_entity": row.get("donor_anchor_entity"),
+                "donor_pair_entity": row.get("donor_pair_entity"),
+                "fields_before": {field: _field_surfaces(payload[positive_i]).get(field, [])},
+                "fields_after": {field: _field_surfaces(counterpart_text).get(field, [])},
                 "fields_hit": [field],
                 "donor_anchor_payload_idx": int(donor_i),
                 "donor_pair_payload_idx": row.get("donor_pair_payload_idx"),
@@ -1039,6 +1161,10 @@ def augment_counterfactual_twins(
     field_quota_shares: dict[str, float] | None = None,
     row_retailer: np.ndarray | None = None,
     attribute_augment: dict[str, dict] | None = None,
+    allowed_payload_indices: set[int] | None = None,
+    coherent_prose: bool = False,
+    rejection_counts: Counter[str] | None = None,
+    canonical_indices: set[int] | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, int, list[dict]]:
     """Mint minimal-flip negatives from positive pairs: (A1', A2) labeled 0.
 
@@ -1072,6 +1198,10 @@ def augment_counterfactual_twins(
     """
     import math
 
+    def rejected(reason):
+        if rejection_counts is not None:
+            rejection_counts[reason] += 1
+
     if max_field_share is not None and not 0.0 < max_field_share <= 1.0:
         raise ValueError("max_field_share must be in (0, 1]")
     if max_value_share is not None and not 0.0 < max_value_share <= 1.0:
@@ -1087,6 +1217,10 @@ def augment_counterfactual_twins(
             n_added=0, audit=[],
         )
         return res.pos, res.payload, res.row_bc, res.n_added, audit
+    donor_pool = [j for j in range(pool) if allowed_payload_indices is None or all(int(v) in allowed_payload_indices for v in pairs[j])]
+    if not donor_pool:
+        rejected("no_train_donors")
+        return np.asarray(pairs), list(payload), np.asarray(row_bc), 0, []
     rng = random.Random(seed)
     n_pick = int(pool * min(frac, 1.0))
     picked = rng.sample(range(pool), n_pick) if n_pick else []
@@ -1122,8 +1256,11 @@ def augment_counterfactual_twins(
     _aug = attribute_augment or {}
     _ret = np.asarray(row_retailer, dtype=object) if row_retailer is not None else None
     extra = []
-    for i in picked:
+    for i in tqdm(picked, unit="pair", desc="twins", disable=None):
         a, b = int(pairs[i][0]), int(pairs[i][1])
+        if allowed_payload_indices is not None and (a not in allowed_payload_indices or b not in allowed_payload_indices):
+            rejected("anchor_outside_train")
+            continue
         anchor_fields = _field_surfaces(payload[a])
         pair_fields = _field_surfaces(payload[b])
         agreed = sorted(
@@ -1139,7 +1276,7 @@ def augment_counterfactual_twins(
         chosen: tuple[str, list[str], int, int] | None = None
         for _attempt in range(14):
             _relaxed_retailer = _ret is None or _attempt >= 10
-            j = rng.randrange(pool)
+            j = rng.choice(donor_pool)
             if j == i:
                 continue
             c, d = int(pairs[j][0]), int(pairs[j][1])
@@ -1186,10 +1323,13 @@ def augment_counterfactual_twins(
             chosen = (field, donor_anchor[field], c, d)
             break
         if chosen is None:
+            rejected("no_eligible_donor_field")
             continue
         field, donor_tokens, c, d = chosen
-        flipped = _splice_field(payload[a], field, donor_tokens)
-        if flipped == payload[a] or flipped == payload[b]:
+        copy_source = b if coherent_prose and canonical_indices is not None and b in canonical_indices else a
+        flipped = (_coherent_splice_field if coherent_prose else _splice_field)(payload[copy_source], field, donor_tokens)
+        if flipped is None or flipped == payload[a] or flipped == payload[b]:
+            rejected("ambiguous_or_unchanged_prose")
             continue
         anchor_toks = len(payload[a].split())
         extent = round(len(anchor_fields[field]) / max(anchor_toks, 1), 4)
@@ -1209,10 +1349,17 @@ def augment_counterfactual_twins(
                 "configured_mask_lo": None,
                 "configured_mask_hi": None,
                 "mask_prob": None,
-                "anchor_text": payload[a],
+                "anchor_text": payload[copy_source],
+                "copy_source_payload_idx": copy_source,
                 "masked_text": flipped,
                 "population": "hard_negative",
                 "target_mode": "counterfactual",
+                "coherent_prose": coherent_prose,
+                "donor_split": "train" if allowed_payload_indices is not None else None,
+                "donor_anchor_entity": str(row_bc[c]),
+                "donor_pair_entity": str(row_bc[d]),
+                "fields_before": {field: _field_surfaces(payload[copy_source]).get(field, [])},
+                "fields_after": {field: _field_surfaces(flipped).get(field, [])},
                 "fields_hit": [field],
                 "donor_anchor_payload_idx": c,
                 "donor_pair_payload_idx": d,

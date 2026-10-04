@@ -3165,6 +3165,14 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
             raise ValueError("MNRL needs anchor-positive-negative training triples")
         populations = _build_mnrl_triple_populations(train_all, tr_negs, mask_audit=mask_audit,
                                                     hard_negative_mask_audit=hard_negative_mask_audit)
+        balanced_policy = training_cfg().masking.balanced_augmentation
+        if balanced_policy.enabled:
+            from training.balanced_augmentation import balance_objective
+            copy_ids = {int(row[key]) for row in [*(mask_audit or []),*(hard_negative_mask_audit or [])]
+                        for key in ('copy_payload_idx','copy_pair_payload_idx') if row.get(key) is not None}
+            triples, populations, balance_coverage = balance_objective(
+                triples,populations,copy_ids,balanced_policy.original_objective_share)
+            objective['balance_coverage'] = balance_coverage.model_dump(mode='json')
         dataset = {"anchor": [payload[a] for a, b, c in triples],
                    "positive": [payload[b] for a, b, c in triples],
                    "negative": [payload[c] for a, b, c in triples],

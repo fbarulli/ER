@@ -9,6 +9,48 @@ from typing import Literal
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# Stable node-ID contract for virtual (non-source) endpoints. These prefixes
+# are read by the ANN catalog filter, the packaged text exporter and the graph
+# projection validator, so they live here as the single definition instead of
+# being repeated as literals that could drift apart silently.
+CANONICAL_PREFIX = 'canonical:'
+AUGMENTATION_PREFIX = 'augmentation:'
+VIRTUAL_PREFIXES = (CANONICAL_PREFIX, AUGMENTATION_PREFIX)
+
+
+def canonical_node_id(gtin: str) -> str:
+    return CANONICAL_PREFIX + str(gtin)
+
+
+def augmentation_node_id(payload_index: int) -> str:
+    return f'{AUGMENTATION_PREFIX}{payload_index}'
+
+
+def is_virtual_node(sku_id: object) -> bool:
+    """Virtual supervision endpoints are not products in the ANN catalog."""
+    return str(sku_id).startswith(VIRTUAL_PREFIXES)
+
+
+FROZEN_TEXT_COLUMN = 'frozen_payload'
+
+
+def frozen_endpoint_text(sku_id: object, value: object, *, column_present: bool) -> str | None:
+    """Authoritative frozen text for a shared virtual endpoint, else None.
+
+    The CSV lane writes one shared column, so an ordinary listing also carries
+    an EMPTY ``frozen_payload`` cell: absence cannot be read as "not present",
+    or every listing would look like a frozen endpoint. Virtualness decides,
+    and for a virtual endpoint the cell is authoritative even when empty (an
+    empty frozen text is a real value, never a reason to recompose).
+    """
+    if not is_virtual_node(sku_id):
+        if column_present and str(value or '').strip():
+            raise ValueError('frozen payload overrides are only valid for shared virtual endpoints')
+        return None
+    if not column_present:
+        raise ValueError(f'shared virtual endpoint {sku_id} has no {FROZEN_TEXT_COLUMN} column')
+    return '' if value is None else str(value)
+
 
 class TrainingEndpoint(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
@@ -112,7 +154,7 @@ def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
         raise ValueError('canonical endpoint ordering differs from bundled records')
     copies = {}
     for audit in (*bundle['mask_audit'], *bundle['hard_negative_mask_audit']):
-        mappings = [(audit['copy_payload_idx'], audit['anchor_payload_idx'])]
+        mappings = [(audit['copy_payload_idx'], audit.get('copy_source_payload_idx') if audit.get('copy_source_payload_idx') is not None else audit['anchor_payload_idx'])]
         if audit.get('copy_pair_payload_idx') is not None:
             mappings.append((audit['copy_pair_payload_idx'], audit['pair_payload_idx']))
         for child, parent in mappings:
@@ -125,7 +167,16 @@ def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
     plan = bundle['training_plan']
     if plan['identity']['loss'] != 'mnrl':
         raise ValueError('shared training contract currently requires frozen MNRL triples')
-    fold = plan['inputs']['folds'][fold_index]
+    folds = plan['inputs']['folds']
+    if not folds:
+        raise ValueError('shared training contract requires a frozen training fold')
+    if not 0 <= fold_index < len(folds):
+        raise ValueError(
+            f'fold_index {fold_index} is outside the frozen training plan '
+            f'({len(folds)} fold(s)); the shared population must name the fold '
+            'actually being trained'
+        )
+    fold = folds[fold_index]
     objective = fold['objective']
     triples = objective['triples']
     populations = objective['dataset']['population']
@@ -142,7 +193,7 @@ def from_bundle(bundle: dict, *, fold_index: int = 0) -> SharedTrainingData:
             raise ValueError('shared training endpoint crosses the frozen split')
         kind = 'listing' if index < source_rows else 'canonical' if index < canonical_end else 'augmentation'
         source_id = (str(bundle['df'].iloc[index].sku_id) if kind == 'listing' else
-                     gtins[index-source_rows] if kind == 'canonical' else f'augmentation:{index}')
+                     gtins[index-source_rows] if kind == 'canonical' else augmentation_node_id(index))
         endpoints.append(TrainingEndpoint(payload_index=index, kind=kind, entity=entity,
             source_id=source_id, parent_index=copies.get(index),
             text_sha256=hashlib.sha256(bundle['payload'][index].encode()).hexdigest()))
@@ -171,5 +222,4 @@ class TrackTrainingBinding(BaseModel):
 
 def retrieval_indices(records: list[dict]) -> list[int]:
     """Virtual supervision endpoints are not products in the ANN catalog."""
-    return [index for index, row in enumerate(records)
-            if not row['sku_id'].startswith(('canonical:', 'augmentation:'))]
+    return [index for index, row in enumerate(records) if not is_virtual_node(row['sku_id'])]

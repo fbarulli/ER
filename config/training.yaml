@@ -15,6 +15,23 @@ sim_columns:
 # ── masking augmentation ────────────────────────────────────────────────────
 masking:
   enabled: true
+  balanced_augmentation:
+    enabled: true
+    counts:
+      minted_negatives: 12000
+      masked_minted_negatives: 6000
+      masked_positives: 1200
+      vendor_variation_positives: 300
+    sample_counts:
+      minted_negatives: 100
+      masked_minted_negatives: 50
+      masked_positives: 10
+      vendor_variation_positives: 5
+    original_objective_share: 0.50
+    min_attribute_pairs: 10
+    donor_attempts: 64
+    max_variants_per_anchor_field: 2
+    mask_extent: 0.15
   profile: baseline
   frac: 0.80          # fraction of positive anchors masked when enabled
   mask_hard_negatives: true  # enable dynamic masking on label-0 training pairs

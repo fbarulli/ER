@@ -1446,6 +1446,36 @@ class DeclarationDropoutSpec(BaseModel):
         return self
 
 
+class AugmentationCounts(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    minted_negatives: int = Field(ge=0)
+    masked_minted_negatives: int = Field(ge=0)
+    masked_positives: int = Field(ge=0)
+    vendor_variation_positives: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def negative_first(self):
+        if self.masked_minted_negatives > self.minted_negatives:
+            raise ValueError('one masked variant per minted negative requires masked <= minted')
+        if self.masked_positives + self.vendor_variation_positives > self.minted_negatives + self.masked_minted_negatives:
+            raise ValueError('configured positive augmentation exceeds negative augmentation')
+        return self
+
+
+class BalancedAugmentationSpec(BaseModel):
+    """Train-only attribute allocation, then minting, then safe masking."""
+    model_config = ConfigDict(extra='forbid')
+    enabled: bool = False
+    counts: AugmentationCounts = Field(default_factory=lambda: AugmentationCounts(
+        minted_negatives=0, masked_minted_negatives=0, masked_positives=0, vendor_variation_positives=0))
+    sample_counts: AugmentationCounts | None = None
+    original_objective_share: float = Field(default=.5, ge=.3, lt=1)
+    min_attribute_pairs: int = Field(default=10, ge=1)
+    donor_attempts: int = Field(default=64, ge=1)
+    max_variants_per_anchor_field: int = Field(default=2, ge=1)
+    mask_extent: float = Field(default=.15, gt=0, le=.3)
+
+
 class MaskingSpec(BaseModel):
     """Masking augmentation contract (config/training.yaml masking:)."""
 
@@ -1498,6 +1528,7 @@ class MaskingSpec(BaseModel):
     # first (91.4% of real duplicates are cross-retailer); after 10 strict
     # tries the donor loop relaxes so rich lanes never mint nothing.
     cross_retailer_donors: bool = False
+    balanced_augmentation: BalancedAugmentationSpec = Field(default_factory=BalancedAugmentationSpec)
     # Declaration-dropout lane: attribute cells differ in 100% of same-GTIN
     # groups — each retailer declares a different partial key subset. Copies
     # the anchor and removes min_drop..max_drop random declared groups;
@@ -3127,6 +3158,14 @@ class MaskAuditEntry(BaseModel):
     # indices the transplanted value was copied from, and — for symmetric
     # positive swaps, which append a counterpart copy as well as an anchor
     # copy — the counterpart copy's payload index.
+    coherent_prose: bool = False
+    generation_variant: Literal['minted', 'minted_masked', 'vendor_variation', 'masked'] | None = None
+    copy_source_payload_idx: int | None = Field(default=None, ge=0)
+    donor_split: Literal["train"] | None = None
+    donor_anchor_entity: str | None = None
+    donor_pair_entity: str | None = None
+    fields_before: dict[str, list[str]] = Field(default_factory=dict)
+    fields_after: dict[str, list[str]] = Field(default_factory=dict)
     donor_anchor_payload_idx: int | None = Field(default=None, ge=0)
     donor_pair_payload_idx: int | None = Field(default=None, ge=0)
     copy_pair_payload_idx: int | None = Field(default=None, ge=0)

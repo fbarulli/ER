@@ -58,7 +58,7 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
                     continue
                 needed = set()
                 for key, value in row.items():
-                    if not key.endswith('_payload_idx') or key.startswith('copy_') or value is None:
+                    if not key.endswith('_payload_idx') or key in {'copy_payload_idx', 'copy_pair_payload_idx'} or value is None:
                         continue
                     index = int(value)
                     listing = (str(bundle['df'].iloc[index].sku_id) if index < ndf
@@ -121,12 +121,12 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         for field in audits:
             deferred=[]
             for row in pending[field]:
-                sources=[int(v) for k,v in row.items() if k.endswith('_payload_idx') and not k.startswith('copy_') and v is not None]
+                sources=[int(v) for k,v in row.items() if k.endswith('_payload_idx') and k not in {'copy_payload_idx', 'copy_pair_payload_idx'} and v is not None]
                 if not all(i in supervised for i in sources):
                     deferred.append(row)
                     continue
                 audits[field].append(dict(row))
-                copies={int(v) for k,v in row.items() if k.startswith('copy_') and k.endswith('_payload_idx') and v is not None}
+                copies={int(v) for k,v in row.items() if k in {'copy_payload_idx', 'copy_pair_payload_idx'} and k.endswith('_payload_idx') and v is not None}
                 retained.update(copies)
                 supervised.update(copies)
                 progress=True
