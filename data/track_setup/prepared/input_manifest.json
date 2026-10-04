@@ -1,5 +1,5 @@
 {
-  "augmentation": "not_applicable: graph track uses fixed labels without generated/masked pairs",
+  "augmentation": "not_applicable: fixed graph pairs; no masking/gendata pipeline",
   "catalog_sha256": "851f014e5fe600a625005dfe7b6d5076bd1e0614ad225d200ace6002bf52baaf",
   "excluded_model_inputs": [
     "gtin",
@@ -10,12 +10,12 @@
   "identity_dimensions_sha256": "6cf653b52b11a1128db1867f484c0dee649cddc639863e67444eee962398aa1d",
   "identity_extractor": "core.sku_identity.row_identity",
   "identity_policy_sha256": "0c176f054d0e66ad957f9238605d05cb7ef7ed717cfaecbcefd114b2ce52f62c",
-  "listings_sha256": "3ebcc7f52da0b405300f7cad81dd49ae2f144842bdd0010dba271b5646977d29",
+  "listings_sha256": "09dcb91aec506e496b94e1f0cd8e94172618e7b9f8c6037248f039225b06be3a",
   "numeric": [
     "volume_ml",
     "pack"
   ],
-  "pair_lineage_sha256": "1c8e9d61a6e50747d3cfd6dd352944c75604d8a769dcb25301353f9c33c39534",
+  "pair_lineage_sha256": "adf212c1b9e81096673a1606dd6f76ad61570e7d0415d492b155f91414fd5255",
   "pair_trace": {
     "missing_axes": [
       "difficulty",
@@ -24,9 +24,9 @@
       "masking"
     ],
     "source_trace_columns": [],
-    "status": "reconstructed_from_verified_source"
+    "status": "source_bound"
   },
-  "pairs_sha256": "151b7d3a07476c616e862bae735597f1b41c38b49faf25099dd9550b6f5d6bf5",
+  "pairs_sha256": "a05a5a903892ed5b2c03a46ff140ddc08298b934ebadf2c7b2b470b3b72ad291",
   "relations": [
     "brand",
     "flavor",
@@ -38,7 +38,7 @@
     "package_type",
     "package_material"
   ],
-  "report_attributes_sha256": "47ce18bcd94706f5368ba063621c553ef89767f5ffd13ccf893af4b0b8a4ac61",
+  "report_attributes_sha256": "865acaab179a6c3a297536db7944e8a6fe6ba7c7726bfc7450c06d4d6001f9f0",
   "schema": "er-graph-inputs-v1",
-  "splits_sha256": "d7910672c3253a350446cf4990c99a4ba3ef7523dd9f79d1acd95f7a3459e1a4"
+  "splits_sha256": "3c10ab7af35d2ddaaa919d530cb5006589550753b67e5230a89454b5f88151a2"
 }
