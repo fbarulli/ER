@@ -98,15 +98,11 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
                           ks=tuple(cfg.retrieval_ks))
     print(f"[text-phase] retrieval start splits={list(scores)} ks={cfg.retrieval_ks}", flush=True)
     retrieval = retrieval_report(records, vectors, pairs, reports, 'text', retrieval_cfg, perf=perf)
-    from core.performance import summarize_profiler_directory, summarize_refresh_timings
-    from graph_tracks.artifacts import name
+    from core.performance import summarize_profiler_tree, summarize_refresh_timings
     # Refresh is measured by the trainer; adopt it so it is not reported missing.
     perf.adopt('refresh', summarize_refresh_timings(output / 'logs').get('refresh', {}))
     performance = perf.summary()
-    # The graph trainers write a profile directory next to the run; pick it up
-    # when the lane produced one so the operator table is reported, not orphaned.
-    for candidate in (output / name('text', 'profile'), setup / name('text', 'profile')):
-        performance.update(summarize_profiler_directory(candidate))
+    performance.update(summarize_profiler_tree(output / 'profiles'))
     perf.write_payload(reports / 'text__performance.json', performance)
     (output / 'text__training_report.md').write_text(
         '# Text track\n\nSelected checkpoint: ' + str(checkpoint) + '\n\n'

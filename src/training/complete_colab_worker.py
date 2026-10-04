@@ -10,6 +10,9 @@ from pathlib import Path
 import subprocess
 import sys
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from core.portable_archive import Digest
+
 import pandas as pd
 
 from core.common import F, TRAIN_ROOT, trace_artifact, training_cfg
@@ -26,7 +29,34 @@ from training.validation_inference import resolve_best_checkpoint, threshold_ass
 #   scored pairs   data/final_validation.csv (files.final_validation binding)
 #                  = the scored-pair final-inference population
 #   train side     deduped rows minus the validation fold 2+3 entities
-_EXPECTED_SOURCE_EXPORT_ROWS = 71_623
+
+
+class CsvIdentity(BaseModel):
+    model_config = ConfigDict(extra='forbid', frozen=True)
+    path: str
+    rows: int = Field(ge=0)
+    columns: list[str]
+    bytes: int = Field(ge=0)
+    sha256: Digest
+
+
+class ScoredValidationAccounting(BaseModel):
+    model_config = ConfigDict(extra='forbid', frozen=True)
+    source_export_rows: int = Field(gt=0)
+    deduped_rows: int = Field(ge=0)
+    dropped_rows: int = Field(ge=0)
+    train_side_rows: int = Field(ge=0)
+    validation_entity_rows: int = Field(ge=0)
+    scored_pair_rows: int = Field(ge=0)
+    scored_population_path: str
+
+    @model_validator(mode='after')
+    def close_populations(self):
+        if self.deduped_rows + self.dropped_rows != self.source_export_rows:
+            raise ValueError('source census does not close')
+        if self.train_side_rows + self.validation_entity_rows != self.deduped_rows:
+            raise ValueError('train and validation populations do not close')
+        return self
 
 
 def _byte_stable_csv_rows(path: Path) -> int:
@@ -46,11 +76,6 @@ def scored_validation_accounting() -> dict[str, object]:
       deduped_rows + dropped_rows == the source-export census pin
     """
     source_export_rows = int(training_cfg().audit.source_export_expected_rows)
-    if source_export_rows != _EXPECTED_SOURCE_EXPORT_ROWS:
-        raise ValueError(
-            f"audit.source_export_expected_rows {source_export_rows} does not "
-            f"match the scored-pair census pin {_EXPECTED_SOURCE_EXPORT_ROWS}"
-        )
     deduped_rows = _byte_stable_csv_rows(F["dataset_deduped"])
     dropped_rows = _byte_stable_csv_rows(F["removals"])
     if deduped_rows + dropped_rows != source_export_rows:
@@ -59,8 +84,9 @@ def scored_validation_accounting() -> dict[str, object]:
             f"{dropped_rows:,} != source census {source_export_rows:,}"
         )
     fold_map = pd.read_csv(F["validation_fold_map"], dtype=str, keep_default_na=False)
+    n_folds = training_cfg().split.holdout_component_folds
     validation_gtins = set(
-        fold_map.loc[fold_map["fold"].isin(("2", "3")), "gtin"]
+        fold_map.loc[fold_map["fold"].isin((str(n_folds - 2), str(n_folds - 1))), "gtin"]
     )
     deduped = pd.read_csv(F["dataset_deduped"], dtype=str, keep_default_na=False,
                           usecols=["gtin"])
@@ -69,7 +95,7 @@ def scored_validation_accounting() -> dict[str, object]:
     if train_side_rows + validation_entity_rows != deduped_rows:
         raise ValueError("scored-pair accounting: train side does not close")
     scored_pair_rows = _byte_stable_csv_rows(F["final_validation"])
-    return {
+    return ScoredValidationAccounting.model_validate({
         "source_export_rows": source_export_rows,
         "deduped_rows": deduped_rows,
         "dropped_rows": dropped_rows,
@@ -77,7 +103,7 @@ def scored_validation_accounting() -> dict[str, object]:
         "validation_entity_rows": validation_entity_rows,
         "scored_pair_rows": scored_pair_rows,
         "scored_population_path": str(F["final_validation"]),
-    }
+    }).model_dump()
 
 
 def _sha256(path: Path) -> str:
@@ -89,14 +115,17 @@ def _sha256(path: Path) -> str:
 
 
 def _csv_identity(path: Path) -> dict[str, object]:
+    before = _sha256(path)
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    return {
+    if _sha256(path) != before:
+        raise RuntimeError(f"{path} changed while provenance was being read")
+    return CsvIdentity.model_validate({
         "path": str(path.resolve()),
         "rows": int(len(frame)),
         "columns": list(frame.columns),
         "bytes": path.stat().st_size,
-        "sha256": _sha256(path),
-    }
+        "sha256": before,
+    }).model_dump()
 
 
 def _resolve_final_inference_device(cfg, override: str | None) -> str:
@@ -141,6 +170,7 @@ def _resolve_final_inference_device(cfg, override: str | None) -> str:
 
 def _write_input_provenance(
     *, scored_population: Path, training_csv: Path, output_dir: Path,
+    predictions_path: Path, sample: int | None,
 ) -> Path:
     """Scored-pair provenance (2026-10-01 contract): input census + identity.
 
@@ -154,6 +184,8 @@ def _write_input_provenance(
         "schema": "final-inference-provenance-v2-scored-pairs",
         "scored_pair_population": _csv_identity(scored_population),
         "training_input": _csv_identity(training_csv),
+        "predictions_output": _csv_identity(predictions_path),
+        "requested_sample": sample,
         "validation_accounting": scored_validation_accounting(),
     }
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -233,9 +265,9 @@ def complete_worker(
         )
         _write_sku_reports(predictions_path, output_dir)
         _write_input_provenance(
-            scored_population=F["final_validation"],
+            scored_population=validation_input,
             training_csv=training_input,
-            output_dir=output_dir,
+            output_dir=output_dir, predictions_path=predictions_path, sample=sample,
         )
     else:
         print("[final-inference] disabled by configuration", flush=True)

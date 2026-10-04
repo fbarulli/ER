@@ -83,7 +83,8 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str) -> Path:
                             str(input_archive), run_tag, str(result)],
                            cwd=snapshot, env=env, check=True)
             final = Path(json.loads(result.read_text())['final'])
-    completed = verify_archive(final, 'suite_bundle_manifest.json')
+    from model_tracks.resume import validate_completed_suite_archive
+    completed = validate_completed_suite_archive(final, run_tag, settings=settings)
     if completed.get('run_tag') != run_tag:
         raise ValueError('snapshot completion produced a different run')
     receipt = SnapshotCompletionReceipt(

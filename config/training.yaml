@@ -467,10 +467,9 @@ evaluation:
     # An endpoint is "sparse" when at most this many other catalog listings
     # share at least one normalized critical attribute value with it.
     sparse_neighborhood_max_peers: 2
-    # Attribute values observed in this split define "seen".  dev is the
-    # training half, so dev-observed values are what a deployed model has
-    # actually seen.
-    observed_split: dev
+    # Only actual training-support values define "seen"; holdout values
+    # cannot establish exposure during training.
+    observed_split: train
   # Paired bootstrap confidence intervals over the scored pair population.
   # These are resampling intervals, NOT repeated-training-seed intervals: the
   # model-track lanes train one checkpoint per split, so reporting seed

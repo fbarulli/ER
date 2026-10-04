@@ -67,7 +67,8 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False) -> Path:
     from graph_tracks.data import file_hash
     from training.validation_inference import resolve_best_checkpoint
     import torch
-    metadata = verify_archive(archive,'suite_bundle_manifest.json')
+    from model_tracks.resume import validate_completed_suite_archive
+    metadata = validate_completed_suite_archive(archive, run_tag)
     if metadata['run_tag'] != run_tag:
         raise ValueError('publication run mismatch')
     destination = TRAIN_ROOT/'artifacts/models/tracks'/run_tag

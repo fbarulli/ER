@@ -91,7 +91,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     events.emit('training', 'started', includes_graph_postprocess=track != 'text')
     subprocess.run(command, cwd=TRAIN_ROOT, env=os.environ.copy(), check=True)
     events.emit('training', 'completed', includes_graph_postprocess=track != 'text')
-    if gpu_only:
+    if gpu_only or track == 'text' or cfg.post_training_ablation:
         events.emit('inference_export','started',device=cfg.device)
         if track == 'text':
             from model_tracks.text_export import forward
@@ -116,9 +116,9 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                 checkpoint,_ = resolve_best_checkpoint(output)
             events.emit('attribute_ablation_export','started',device=cfg.device)
             forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device)
-            if track == 'text':
-                del selected_text_model
             events.emit('attribute_ablation_export','completed',device=cfg.device)
+        if track == 'text':
+            del selected_text_model
     if track == 'text' and not gpu_only:
         from model_tracks.text_report import complete
         events.emit('postprocess', 'started', report_test=cfg.report_test)

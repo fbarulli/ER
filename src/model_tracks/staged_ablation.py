@@ -63,6 +63,8 @@ def forward(output,setup,track,checkpoint,*,device,text_model=None,checkpoint_ro
     from core.common import TRAIN_ROOT
     template = setup/'ablation_templates'/track
     request = json.loads((template/'request.json').read_text())
+    # Bind the actual staged setup for both direct suites and portable workers.
+    request['portable_setup'] = setup.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
     if track != 'text':
         payload = torch.load(checkpoint,map_location='cpu',weights_only=False)
         actual = digest({'vocabulary':payload['vocabulary'],'support_records':payload['support_records']})

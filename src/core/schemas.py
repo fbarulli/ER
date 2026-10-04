@@ -859,7 +859,7 @@ class GeneralizationSliceSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sparse_neighborhood_max_peers: int = Field(ge=0)
-    observed_split: Literal["dev", "test"]
+    observed_split: Literal["train"]
 
 
 class PairedBootstrapSpec(BaseModel):

@@ -16,7 +16,7 @@ by ``training.attribute_separation``):
 
 ``unseen``
     The endpoint carries at least one critical attribute value that appears on
-    no listing in the *observed* split (dev -- the training half). This is the
+    no listing in the training-support split (train). This is the
     plan's "unseen values ... include examples of cross-flavor/cross-pack
     neighborhoods": a value the model has provably never been trained on.
 ``sparse_neighborhood``
@@ -76,20 +76,20 @@ def classify(records: list[dict]) -> dict[str, set[str]]:
     observed_split = str(cfg["observed_split"])
     values = _normalized_values(records)
 
-    observed: set[str] = set()
+    observed: set[tuple[str, str]] = set()
     for record in records:
         if record.get("split") != observed_split:
             continue
-        for attribute_values in values[record["sku_id"]].values():
-            observed |= attribute_values
+        for attribute, attribute_values in values[record["sku_id"]].items():
+            observed.update((attribute, value) for value in attribute_values)
 
     # peer[s] = number of OTHER listings sharing at least one attribute value
-    inverted: dict[str, set[str]] = {}
-    own_values: dict[str, set[str]] = {}
+    inverted: dict[tuple[str, str], set[str]] = {}
+    own_values: dict[str, set[tuple[str, str]]] = {}
     for sku, per_attribute in values.items():
-        mine: set[str] = set()
-        for attribute_values in per_attribute.values():
-            mine |= attribute_values
+        mine: set[tuple[str, str]] = set()
+        for attribute, attribute_values in per_attribute.items():
+            mine.update((attribute, value) for value in attribute_values)
         own_values[sku] = mine
         for value in mine:
             inverted.setdefault(value, set()).add(sku)

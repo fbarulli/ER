@@ -263,6 +263,15 @@ def summarize_profiler_directory(directory: Path) -> dict:
     return {"torch_profile": block}
 
 
+def summarize_profiler_tree(directory: Path) -> dict:
+    """Preserve each trainer fold profile with its own source provenance."""
+    directory = Path(directory)
+    roots = {path.parent for filename in ('profile_manifest.json', 'operator_summary.txt')
+             for path in directory.rglob(filename)}
+    profiles = [summarize_profiler_directory(path)['torch_profile'] for path in sorted(roots)]
+    return {'torch_profiles': profiles} if profiles else {}
+
+
 class OperatorTiming(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
     name: str = Field(min_length=1)

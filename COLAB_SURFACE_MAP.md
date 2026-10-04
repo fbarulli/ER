@@ -12,12 +12,14 @@ generation is currently deferred.
 | Graph/text lane configuration | `graph_tracks.config.GraphConfig`, `TextConfig`, `RetrievalConfig` from staged lane YAMLs |
 | Source overlay | `model_tracks.package.runtime_snapshot_files` and `core.portable_archive.RuntimeSnapshot`; includes every Python source under `src/` |
 | Suite and standalone graph packaging | Shared runtime snapshot and `core.portable_archive.write_archive` / `verify_archive` |
-| GPU forwarding | `PreparedEmbeddingForward`, native-token identity, checkpoint and request hashes |
-| Worker completion | `TrackCompletion`, `TrackInventory`; the same validators govern current files, downloaded archives and suite recovery |
+| GPU forwarding | `PreparedEmbeddingForward`, `GraphExportManifest`, `GraphForwardManifest`; native-token/catalog identity, checkpoint, request and saved-score hashes |
+| Worker completion | `TrackCompletion`, `TrackInventory`; `validate_completed_suite_archive` additionally verifies calibrated report/ablation semantics before reuse and deployment |
 | Training-to-report binding | `TrainingInputBinding`, `RuntimeBinding`, suite config, preflight identity and exact source inventory |
 | Pair/retrieval reports | Shared graph report functions, `RetrievalReportContext`, `TrackReportManifest`, config-owned operating targets |
-| Measurements | `SectionTiming`, `RefreshTiming`, `PerformanceSummary`, `ProfilerMetadata` |
-| Saved ablation | `ablation.Settings`, staged input contracts and saved dev-threshold/checkpoint binding |
+| Generalization slices | `GeneralizationSliceSpec`: train-only exposure; attribute-qualified values for unseen and neighborhood membership |
+| Native final-inference provenance | `CsvIdentity`, `ScoredValidationAccounting`; actual input and prediction hashes/row counts, with explicit sampling |
+| Measurements | `SectionTiming`, `RefreshTiming`, `PerformanceSummary`, `ProfilerMetadata`; closed graph profile and actual text fold profile trees feed CPU reports |
+| Saved ablation | `ablation.Settings`, `SavedAblationReport`, `AblationThresholdIdentity`, `SavedCalibration`; calibrated reports are computed once, inventoried and published from sealed bytes |
 | Publication | Existing suite/graph/native publishers consume verified immutable generations; their storage formats remain explicit |
 
 `colab_backend.py` delegates to `cli.colab.main`. The default `--what tracks`

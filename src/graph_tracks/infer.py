@@ -154,7 +154,8 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
                                     ef_search=encoder.manifest['config']['hnsw_ef_search'])
         index.build(vectors, ids, checkpoint=checkpoint, model_name=encoder.manifest['track'],
                     preprocessing_fingerprint=file_hash(listings))
-    write_json(output / name(track, 'export_manifest.json'), {
+    from graph_tracks.artifacts import GraphExportManifest
+    write_json(output / name(track, 'export_manifest.json'), GraphExportManifest.model_validate({
         'schema': 'er-graph-export-v1', 'checkpoint_sha256': file_hash(checkpoint),
         'listings_sha256': file_hash(listings), 'vectors_sha256': file_hash(output / name(track, 'vectors.npz')),
         'text_cache_sha256': file_hash(text_cache) if text_cache else None,
@@ -162,7 +163,7 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         'vector_kind': 'graph-informed', 'ann_reproduces_pair_scorer': False,
         'count': len(ids), 'dimension': vectors.shape[1], 'index_built': build_index,
         'embedding_dtype': str(vectors.dtype), 'performance': perf.summary(),
-        'id_kind': 'listing_sku_id'})
+        'id_kind': 'listing_sku_id'}).model_dump(by_alias=True))
     return output
 
 
@@ -227,7 +228,8 @@ def forward_outputs(checkpoint, listings, pair_path, output, cfg, *, text_cache=
     manifest = json.loads(manifest_path.read_text())
     manifest.update(pairs_sha256=file_hash(pair_path), split_scores_sha256=file_hash(score_path),
                     report_test=cfg.report_test, forward_only=True)
-    write_json(manifest_path, manifest)
+    from graph_tracks.artifacts import GraphForwardManifest
+    write_json(manifest_path, GraphForwardManifest.model_validate(manifest).model_dump(by_alias=True))
     return inference
 
 

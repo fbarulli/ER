@@ -75,7 +75,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         required = sum(cfg.memory_reservations_gb.values()) + cfg.gpu_headroom_gb
         if cfg.memory_reservations_gb and required * 1024**3 > free:
             raise RuntimeError('measured combined worker memory exceeds available GPU memory')
-    if gpu_only:
+    if gpu_only or cfg.post_training_ablation:
         from model_tracks.baseline_export import forward as forward_baseline
         from core.common import resolve_model
         setup = (TRAIN_ROOT/cfg.setup_dir).resolve()
@@ -156,6 +156,14 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     for track in TRACKS:
         if not completed_track(output / track, track, postprocess_complete=not gpu_only):
             raise ValueError(f'incomplete track: {track}')
+    if cfg.post_training_ablation and not gpu_only:
+        from model_tracks.baseline_ablation import complete as complete_baseline
+        from model_tracks.post_training_ablation import complete_saved
+        from model_tracks.resume import record_completion
+        complete_baseline(output / 'baseline', setup, config=TRAIN_ROOT / cfg.ablation_config)
+        complete_saved(output, cfg)
+        for track in TRACKS:
+            record_completion(output / track, track)
     (output/'suite_result.json').write_text(json.dumps({'status':'ok', **result}, indent=2)+'\n')
     events.emit('collection', 'starting', tracks=list(TRACKS), skipped_verified_tracks=skipped)
     archive_path = output.with_suffix('.zip')
@@ -168,9 +176,9 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         events.emit('collection', 'verified', archive=str(archive_path), sha256=file_hash(archive_path),
                     reused=True)
         if cfg.dvc_enabled and not gpu_only:
-            from model_tracks.publish import persist_results
+            from model_tracks.local_complete import _publish
             events.emit('publication', 'starting', archive=str(archive_path))
-            persist_results(archive_path, run_tag)
+            _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
             events.emit('publication', 'complete')
         else:
             events.emit('publication', 'skipped', reason='publication disabled in suite config')
@@ -190,9 +198,9 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     events.emit('collection', 'complete', archive=str(archive_path), sha256=file_hash(archive_path),
                 bytes=archive_path.stat().st_size)
     if cfg.dvc_enabled and not gpu_only:
-        from model_tracks.publish import persist_results
+        from model_tracks.local_complete import _publish
         events.emit('publication', 'starting', archive=str(archive_path))
-        persist_results(archive_path, run_tag)
+        _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
         events.emit('publication', 'complete')
     else:
         events.emit('publication', 'skipped', reason='publication disabled in suite config')

@@ -403,6 +403,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     break
             logger.info("[graph-selection] training complete completed_epochs=%d selected_checkpoint=%s best_dev_pr_auc=%.6f criterion=max_dev_pr_auc",
                         completed_epochs, best_path, best_metric)
+            # Flush the measured operator trace before CPU reporting consumes it.
+            profiler.close()
             completion = None
             if cfg.postprocess:
                 logger.info("[graph-phase] postprocess start selected=%s build_index=%s inference_batch_size=%d report_test=%s",

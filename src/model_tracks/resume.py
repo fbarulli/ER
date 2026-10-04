@@ -80,6 +80,44 @@ def validate_archived_track(bundle: ZipFile, manifest: dict[str, Any], track: Tr
     return inventory
 
 
+def validate_completed_suite_archive(archive: Path, run_tag: str,
+                                     *, settings: SuiteConfig | None = None) -> dict[str, Any]:
+    """Validate CPU completion semantics as well as ZIP byte integrity."""
+    from core.portable_archive import verify_archive
+    from graph_tracks.report_manifest import TrackReportManifest
+    metadata = verify_archive(archive, 'suite_bundle_manifest.json')
+    if metadata.get('run_tag') != run_tag:
+        raise ValueError('completed archive belongs to a different run')
+    with ZipFile(archive) as bundle:
+        binding = TrainingInputBinding.model_validate_json(bundle.read('suite_manifest.json'))
+        if binding.run_tag != run_tag or settings is not None and binding.settings != settings:
+            raise ValueError('completed archive suite configuration differs')
+        for track in TRACKS:
+            inventory = validate_archived_track(bundle, metadata, track, postprocess_complete=True)
+            suffix = ('text__completion_manifest.json' if track == 'text'
+                      else track + '__report_manifest.json')
+            reports = [relative for relative in inventory.files
+                       if Path(relative).name == suffix
+                       and not any(part.startswith('interrupted-') or '.interrupted-' in part
+                                   for part in Path(relative).parts)]
+            if len(reports) != 1:
+                raise ValueError('completed archive lacks one calibrated track report: ' + track)
+            report = TrackReportManifest.model_validate_json(bundle.read(track + '/' + reports[0]))
+            if report.track != track or report.test_reported and not binding.settings.report_test:
+                raise ValueError('completed archive report configuration differs: ' + track)
+            if binding.settings.post_training_ablation:
+                from model_tracks.post_training_ablation import SavedAblationReport
+                path = 'ablation/report.json'
+                if path not in inventory.files:
+                    raise ValueError('completed archive lacks saved ablation: ' + track)
+                ablation = SavedAblationReport.model_validate_json(bundle.read(track + '/' + path))
+                if (ablation.track != track or ablation.threshold != report.threshold
+                        or ablation.threshold_binding.track != track
+                        or ablation.threshold_binding.checkpoint_sha256 != report.checkpoint_sha256):
+                    raise ValueError('completed archive ablation calibration differs: ' + track)
+    return metadata
+
+
 def verify_suite_archive(archive: Path, output: Path, run_tag: str, identity: dict[str, Any],
                          *, postprocess_complete: bool) -> dict[str, Any]:
     """Reuse only an archive containing the verified current worker generation."""

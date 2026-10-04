@@ -159,7 +159,9 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
             output / name(track, 'inference'), cfg, text_cache=text_cache)
     else:
         inference = Path(saved_inference)
-    manifest = json.loads((inference / name(track, 'export_manifest.json')).read_text())
+    from graph_tracks.artifacts import GraphForwardManifest
+    manifest = GraphForwardManifest.model_validate_json(
+        (inference / name(track, 'export_manifest.json')).read_text()).model_dump(by_alias=True)
     if manifest.get('track') != track or not manifest.get('forward_only'):
         raise ValueError('saved graph inference track/forward contract mismatch')
     for key, path in [('checkpoint_sha256', checkpoint), ('listings_sha256', listings),
@@ -167,11 +169,15 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
                       ('split_scores_sha256', inference / name(track, 'split_scores.npz'))]:
         if manifest.get(key) != file_hash(path):
             raise ValueError(f'saved graph inference mismatch: {key}')
+    if cfg.report_test and not manifest['report_test']:
+        raise ValueError('saved graph forward omitted requested test scores')
     perf.adopt('encode', manifest.get('performance', {}).get('sections', {}).get('encode', {}))
     with np.load(inference / name(track, 'vectors.npz'), allow_pickle=False) as cache:
         if cache['ids'].astype(str).tolist() != [r['sku_id'] for r in records]:
             raise ValueError('saved graph inference ID order mismatch')
         vectors = cache['embeddings']
+    if vectors.shape != (manifest['count'], manifest['dimension']):
+        raise ValueError('saved graph catalog vector shape differs from manifest')
     if vectors.dtype != np.float32 or not np.isfinite(vectors).all() or not np.allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-4):
         raise ValueError('saved graph inference vector dtype/norm mismatch')
     scores = {}
@@ -239,7 +245,10 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     performance = perf.summary()
     # TrainingProfiler is opt-in and writes next to the run; fold it in so the
     # operator table is not left sitting unread in the run directory.
-    performance.update(summarize_profiler_directory(output / name(track, 'profile')))
+    profile = next((parent / name(track, 'profile') for parent in checkpoint.parents
+                    if (parent / name(track, 'profile')).is_dir()), None)
+    if profile is not None:
+        performance.update(summarize_profiler_directory(profile))
     write_manifest(report_dir / name(track, 'report_manifest.json'), build_manifest(
         track=track, checkpoint=checkpoint, checkpoint_sha256=file_hash(checkpoint),
         listings_sha256=file_hash(listings), pairs_sha256=file_hash(pair_path),
