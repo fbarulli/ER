@@ -166,11 +166,16 @@ It is not a training-checkpoint resume.
 Launch after successful generation:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m cli.colab --what tracks \
+PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
   --tracks-config config/model_tracks.yaml \
   --prepared-input-package <preparation-run>/all_tracks_inputs.zip \
   --gpu T4 --allow-gpu
 ```
+
+Use the existing `colab_backend.py` entry point (or installed `er-colab`).
+Both import `cli.colab.main`, sharing the selected runtime with the track
+adapter. `python -m cli.colab` creates a separate `__main__` instance and can
+make the adapter read the default CPU setting despite a requested GPU.
 
 The launcher validates the package before accelerator provisioning, saves
 immutable Git input transport, and starts isolated text/GNN/hybrid workers on

@@ -293,6 +293,10 @@ activate that lane or automatically create graph augmentations.
 
 ## Build sequence and completion checkpoints
 
+Use the `colab_backend.py` or installed `er-colab` launch command in
+[TRAINING_INSTRUCTIONS.md](TRAINING_INSTRUCTIONS.md); it shares the selected
+runtime with the all-track adapter.
+
 1. **Shared contract + A0:** finish validation migration and telemetry/diet
    blockers, capture the current checkpoint, and publish baseline results.
 2. **A1 + graph census:** test attribute scoring; construct and audit the shared
