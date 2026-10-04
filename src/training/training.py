@@ -1436,6 +1436,11 @@ class LateEpochLrDecayCallback(TrainerCallback):
         return control
 
 
+def checkpoint_publication_deferred() -> bool:
+    """One flag parser for checkpoint publication owned by the run finisher."""
+    return os.environ.get("EUROMONITOR_DISABLE_DVC_CHECKPOINTS", "0").lower() in {"1", "true", "yes"}
+
+
 class DvcCheckpointCallback(TrainerCallback):
     """Stage immutable checkpoints and publish them together at train end."""
 
@@ -1474,8 +1479,8 @@ class DvcCheckpointCallback(TrainerCallback):
 
         if not state.is_world_process_zero:
             return control
-        if os.environ.get("EUROMONITOR_DISABLE_DVC_CHECKPOINTS"):
-            print("    [checkpoint-dvc] skipped: disabled for HPO retention mode", flush=True)
+        if checkpoint_publication_deferred():
+            print("    [checkpoint-dvc] deferred: publication handled after run completion", flush=True)
             return control
         if not os.environ.get("DVC_API_KEY"):
             print("    [checkpoint-dvc] skipped: DVC_API_KEY absent", flush=True)
@@ -6033,7 +6038,7 @@ def run_hpo(
     )
     if remaining:
         def _persist_study(*_args) -> None:
-            if os.environ.get("EUROMONITOR_DISABLE_DVC_CHECKPOINTS"):
+            if checkpoint_publication_deferred():
                 return
             if not os.environ.get("DVC_API_KEY"):
                 return
