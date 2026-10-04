@@ -34,7 +34,7 @@ def inputs(tmp_path, monkeypatch):
     def create(catalog, checkpoint, output, **kwargs):
         calls.append(kwargs)
         with output.open('wb') as handle:
-            np.savez(handle, ids=np.asarray(['a', 'b']), embeddings=np.ones((2, 3), dtype='float32') / np.sqrt(3),
+            np.savez(handle, ids=np.asarray(['a', 'b']), embeddings=np.full((2, 3), 1 / np.sqrt(3), dtype='float32'),
                      metadata=json.dumps(kwargs['input_metadata']))
     monkeypatch.setattr(job, 'create_cache', create)
     return setup, checkpoint, calls
@@ -110,7 +110,7 @@ def test_invalid_gpu_result_cannot_be_accepted(tmp_path, monkeypatch, ids, vecto
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     request = job.prepare_request(setup, checkpoint)
     candidate = tmp_path / 'candidate.npz'
-    np.savez(candidate, ids=ids, embeddings=np.asarray(vectors), metadata=json.dumps(request['metadata']))
+    np.savez(candidate, ids=ids, embeddings=np.asarray(vectors, dtype='float32'), metadata=json.dumps(request['metadata']))
     with pytest.raises(ValueError):
         job.validate_result(candidate, request)
 

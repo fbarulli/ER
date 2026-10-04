@@ -6,6 +6,45 @@ forward passes consume these features directly, without a second tokenizer.
 import hashlib
 import json
 import inspect
+from collections.abc import Mapping
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class PreparedTokenInputs(BaseModel):
+    """Frozen native tokens and their ordered row provenance for an export."""
+
+    plan: Mapping
+    arrays: Mapping
+    row_count: int = Field(strict=True, ge=1)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra='forbid')
+
+    @model_validator(mode='after')
+    def validate_inputs(self):
+        self.validate_contract()
+        return self
+
+    def validate_contract(self):
+        if self.row_count < 1 or self.plan.get('truncated_inputs') != 0:
+            raise ValueError('prepared tokens require a nonempty untruncated population')
+        policy = self.plan['tokenization']
+        if policy.get('truncation') is not False or policy.get('truncate_dim') is not None:
+            raise ValueError('prepared token policy requires zero truncation')
+        count, lengths = 0, []
+        prefixes = set()
+        for batch in self.plan['token_batches']:
+            if batch['start'] != count or batch['count'] < 1 or batch['prefix'] in prefixes:
+                raise ValueError('prepared token row order or batch provenance differs')
+            prefixes.add(batch['prefix'])
+            features = load_token_features(self.arrays, batch, 'cpu')
+            batch_lengths = features['attention_mask'].sum(-1).tolist()
+            if any(length > policy['input_token_limit'] for length in batch_lengths):
+                raise ValueError('prepared tokens exceed native token limit')
+            lengths.extend(batch_lengths)
+            count += batch['count']
+        if count != self.row_count or lengths != self.plan.get('token_lengths'):
+            raise ValueError('prepared token population or recorded lengths differ')
+        return count
 
 
 def tokenization_policy(model):
@@ -95,6 +134,10 @@ def prepare_text_features(model, texts, *, policy=None):
 
 def prepare_token_batches(model, texts, arrays, *, batch_size, prefix='text'):
     """One shared policy for ordinary embeddings and text/hybrid ablations."""
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+        raise ValueError('token batch_size must be a positive integer')
+    if not texts:
+        raise ValueError('token preparation requires a nonempty population')
     import torch
     policy = tokenization_policy(model)
     import time

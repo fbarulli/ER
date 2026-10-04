@@ -124,6 +124,48 @@ def test_native_training_calls_are_guarded_against_truncation():
         model.preprocess(['one two three four'],prompt='')
 
 
+@pytest.mark.parametrize('corruption', ['missing', 'reordered', 'duplicate', 'lengths', 'overlong'])
+def test_prepared_token_contract_rejects_lost_or_misattributed_rows(corruption):
+    from core.encoding_inputs import PreparedTokenInputs, prepare_token_batches
+    arrays = {}
+    plan = prepare_token_batches(NativeEncoder(), ['one', 'two three'], arrays, batch_size=1)
+    assert PreparedTokenInputs(plan=plan, arrays=arrays, row_count=2).row_count == 2
+    if corruption == 'missing':
+        plan['token_batches'].pop()
+    elif corruption == 'reordered':
+        plan['token_batches'].reverse()
+    elif corruption == 'duplicate':
+        plan['token_batches'][1]['prefix'] = plan['token_batches'][0]['prefix']
+    elif corruption == 'lengths':
+        plan['token_lengths'][0] += 1
+    else:
+        plan['tokenization']['input_token_limit'] = 3
+    with pytest.raises(ValueError, match='prepared token'):
+        PreparedTokenInputs(plan=plan, arrays=arrays, row_count=2)
+
+
+def test_embedding_fingerprint_tracks_pipeline_parser_changes(tmp_path, monkeypatch):
+    from core import common
+    from graph_tracks.text_cache import composition_fingerprint
+    monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
+    for directory in ('src/core', 'src/graph_tracks', 'config'):
+        (tmp_path / directory).mkdir(parents=True)
+    for path in ('src/core/model_input.py', 'src/graph_tracks/text_cache.py', 'src/pipeline.py',
+                 'config/paths.yaml', 'config/training.yaml', 'config/identity_dimensions.yaml',
+                 'config/identity_reviews.json', 'config/vocabulary.json'):
+        (tmp_path / path).write_text('initial')
+    before = composition_fingerprint()
+    (tmp_path / 'src/pipeline.py').write_text('changed extraction behavior')
+    assert composition_fingerprint() != before
+
+
+@pytest.mark.parametrize('batch_size', [0, -1, True])
+def test_invalid_token_batch_size_fails_before_silent_empty_plan(batch_size):
+    from core.encoding_inputs import prepare_token_batches
+    with pytest.raises(ValueError, match='positive integer'):
+        prepare_token_batches(NativeEncoder(), ['one'], {}, batch_size=batch_size)
+
+
 def test_cross_encoder_rejects_complete_overlength_pairs_before_predict():
     from core.encoding_inputs import enable_cross_encoder_zero_truncation
     calls = []

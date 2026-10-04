@@ -109,8 +109,8 @@ def test_pending_baseline_validates_native_tokens_without_cache_or_model(tmp_pat
                       'text/0/attention_mask':np.ones((1,2),dtype=np.int64)})
     request = {'schema':'er-embedding-request-v2','ids':['a'],'texts':['fixed'],
         'metadata':{'checkpoint_sha256':'frozen','text_sha256':baseline_export.texts_hash(['fixed'])},
-        'prepared_text':{'sha256':ablation.file_hash(tokens),'truncated_inputs':0,
-            'tokenization':{'input_token_limit':512},'token_batches':[
+        'prepared_text':{'sha256':ablation.file_hash(tokens),'truncated_inputs':0,'token_lengths':[2],
+            'tokenization':{'input_token_limit':512,'truncation':False,'truncate_dim':None},'token_batches':[
                 {'prefix':'text/0','keys':['input_ids','attention_mask'],'constants':{},'start':0,'count':1}]}}
     (setup/'embedding_inputs.json').write_text(json.dumps(request))
     monkeypatch.setattr(baseline_export,'input_identity',lambda *args:{'checkpoint_sha256':'frozen'})

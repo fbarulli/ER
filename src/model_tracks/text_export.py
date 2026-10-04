@@ -52,7 +52,7 @@ def prepare(setup, checkpoint, *, batch_size=256,composer=None,token_cache=None)
 def forward(output,setup,*,return_model=False):
     import torch
     from sentence_transformers import SentenceTransformer
-    from core.encoding_inputs import tokenization_policy, load_token_features
+    from core.encoding_inputs import PreparedTokenInputs, tokenization_policy, load_token_features
     from training.validation_inference import resolve_best_checkpoint
     if not torch.cuda.is_available():
         raise RuntimeError('text export requires CUDA')
@@ -71,6 +71,7 @@ def forward(output,setup,*,return_model=False):
         raise ValueError('selected checkpoint native tokenizer differs from prepared export')
     chunks = []
     with np.load(tokens,allow_pickle=False) as arrays,torch.no_grad():
+        PreparedTokenInputs(plan=request['plan'], arrays=arrays, row_count=len(request['ids']))
         for batch in request['plan']['token_batches']:
             # Native features were frozen locally; never tokenize on the GPU.
             features = load_token_features(arrays,batch,'cuda')

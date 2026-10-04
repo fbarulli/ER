@@ -27,7 +27,7 @@ def prepare(setup,checkpoint,*,composer=None):
 
 
 def validate_pending(setup,checkpoint,*,native_model=None):
-    from core.encoding_inputs import load_token_features,tokenization_policy
+    from core.encoding_inputs import PreparedTokenInputs,tokenization_policy
     if native_model is None:
         from sentence_transformers import SentenceTransformer
         native_model = SentenceTransformer(str(checkpoint),device='cpu',local_files_only=True)
@@ -49,17 +49,9 @@ def validate_pending(setup,checkpoint,*,native_model=None):
         raise ValueError('pending baseline tokenizer differs from configured native checkpoint')
     if file_hash(tokens) != plan['sha256'] or plan.get('truncated_inputs') != 0:
         raise ValueError('pending baseline native tokens changed')
-    count = 0
     with np.load(tokens,allow_pickle=False) as arrays:
-        for batch in plan['token_batches']:
-            if batch['start'] != count:
-                raise ValueError('pending baseline token row order differs')
-            features = load_token_features(arrays,batch,'cpu')
-            if (features['attention_mask'].sum(-1) > plan['tokenization']['input_token_limit']).any():
-                raise ValueError('pending baseline exceeds native token limit')
-            count += batch['count']
-    if count != len(request['ids']):
-        raise ValueError('pending baseline token population differs')
+        prepared = PreparedTokenInputs(plan=plan, arrays=arrays, row_count=len(request['ids']))
+        count = prepared.row_count
     return {'status':'prepared GPU pending','rows':count,'checkpoint_sha256':expected['checkpoint_sha256'],
         'request_sha256':file_hash(path),'token_sha256':file_hash(tokens)}
 
