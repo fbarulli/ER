@@ -1,6 +1,6 @@
 {
-  "augmentation": "not_applicable: fixed graph pairs; no masking/gendata pipeline",
-  "catalog_sha256": "851f014e5fe600a625005dfe7b6d5076bd1e0614ad225d200ace6002bf52baaf",
+  "augmentation": "shared frozen text objective; masked, swapped and counterfactual endpoints retained",
+  "catalog_sha256": "ce1618a0c1f67e2144a3e8bbc7c9269d340fe9d0085806e4a8fa772a60efd939",
   "excluded_model_inputs": [
     "gtin",
     "verified identity edges",
@@ -10,12 +10,12 @@
   "identity_dimensions_sha256": "6cf653b52b11a1128db1867f484c0dee649cddc639863e67444eee962398aa1d",
   "identity_extractor": "core.sku_identity.row_identity",
   "identity_policy_sha256": "0c176f054d0e66ad957f9238605d05cb7ef7ed717cfaecbcefd114b2ce52f62c",
-  "listings_sha256": "09dcb91aec506e496b94e1f0cd8e94172618e7b9f8c6037248f039225b06be3a",
+  "listings_sha256": "b4ade0f83967f5b29d5fa29b148e8b26c10ff43d933d64f6db899a23d2c00634",
   "numeric": [
     "volume_ml",
     "pack"
   ],
-  "pair_lineage_sha256": "adf212c1b9e81096673a1606dd6f76ad61570e7d0415d492b155f91414fd5255",
+  "pair_lineage_sha256": "b2733303042c1f81219ce68a64fc7fe4ca918d30bbe56b89a97aa705861c29b8",
   "pair_trace": {
     "missing_axes": [
       "difficulty",
@@ -26,7 +26,7 @@
     "source_trace_columns": [],
     "status": "source_bound"
   },
-  "pairs_sha256": "a05a5a903892ed5b2c03a46ff140ddc08298b934ebadf2c7b2b470b3b72ad291",
+  "pairs_sha256": "28272c06cfe59884ae0ddb15a53dd1ed2f33be20d20f653f17f139d5cd6e9478",
   "relations": [
     "brand",
     "flavor",
@@ -38,7 +38,9 @@
     "package_type",
     "package_material"
   ],
-  "report_attributes_sha256": "865acaab179a6c3a297536db7944e8a6fe6ba7c7726bfc7450c06d4d6001f9f0",
+  "report_attributes_sha256": "a140534360ddf81f69ee4d1d6e19fb7a6c91354794642030f211759911aff99a",
   "schema": "er-graph-inputs-v1",
-  "splits_sha256": "3c10ab7af35d2ddaaa919d530cb5006589550753b67e5230a89454b5f88151a2"
+  "shared_training_data_sha256": "48381a6b965695641493ff50233e30b112408b741d5536da4509ca5ed69d137d",
+  "shared_training_projection_sha256": "be2b06586337cddc1d55892d642422c46a824b70867364513da147a5e75bcc57",
+  "splits_sha256": "23eaa0a983f82def31331310842e17f76c7130fadb28486f2d42a181e2411120"
 }

@@ -1,5 +1,5 @@
 {
-  "augmentation": "not_applicable: graph track uses fixed labels without generated/masked pairs",
+  "augmentation": "shared frozen text objective; masked, swapped and counterfactual endpoints retained",
   "excluded_unassigned_listings": 35119,
   "git_revision": "dcfb5d6fc88850335539a5fda73c352d2a4ecb09",
   "identity_policy_sha256": "0c176f054d0e66ad957f9238605d05cb7ef7ed717cfaecbcefd114b2ce52f62c",
@@ -10,7 +10,7 @@
     "gendata",
     "masking"
   ],
-  "negative_policy": "same-split labeled negatives only",
+  "negative_policy": "exact shared training negatives; unchanged clean evaluation negatives",
   "pair_counts": {
     "dev": {
       "0": 33,
@@ -21,13 +21,14 @@
       "1": 2836
     },
     "train": {
-      "0": 154,
-      "1": 5615
+      "0": 5532,
+      "1": 5532
     }
   },
-  "pair_protocol": "first listing per labeled entity plus same-entity positive chains",
+  "pair_protocol": "shared frozen training objective; clean listing-only dev/test evaluation",
   "schema": "er-track-setup-v1",
   "seed": 42,
+  "shared_training_data_sha256": "48381a6b965695641493ff50233e30b112408b741d5536da4509ca5ed69d137d",
   "skipped_labels": {
     "cross_split_negative": 390,
     "untrusted_identity_chain_listings": 3459

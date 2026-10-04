@@ -10,14 +10,14 @@
     "emit_singleton_pack_token": false
   },
   "n_df": 62939,
-  "n_payload": 120649,
-  "n_pos": 57611,
+  "n_payload": 120650,
+  "n_pos": 57612,
   "n_neg": 14556,
   "n_train_neg": 14556,
   "n_labeled_pairs_bytes": 23628,
   "n_canonical_records_bytes": 75617511,
   "n_gate_results_bytes": 29695066,
-  "sha256": "ed5a3d7610baea22f3c668edcfed195153314ce47022de4c9861db816587f17b",
+  "sha256": "119e8356738fd350ebefef2c2df615f759d34debe1cadebeb1f14749e6b22209",
   "masking_config": {
     "enabled": true,
     "profile": "baseline",
@@ -101,7 +101,7 @@
     "candidate_pool_size": 10000
   },
   "ratio_to_hard": 1.0,
-  "static_view_ratio": 3.9578867820829897,
-  "effective_train_ratio": 3.9578867820829897,
+  "static_view_ratio": 3.9579554822753504,
+  "effective_train_ratio": 3.9579554822753504,
   "ratio_contract_note": "Guaranteed bundle-only view ratio 3.958; easy-negative settings (enabled, ratio=1) are a possible contrastive projection and are not guaranteed."
 }
