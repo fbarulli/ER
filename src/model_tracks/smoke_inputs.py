@@ -13,7 +13,7 @@ import yaml
 def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
     setup, output = setup.resolve(), output.resolve()
     from core.common import SEED, training_cfg
-    from graph_tracks.data import file_hash, load_text_cache
+    from graph_tracks.data import file_hash
     from graph_tracks.prepare import prepare
     from graph_tracks.train import write_json
     from training.folds import normalize_gtin
@@ -149,7 +149,6 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
     manifest=json.loads((setup/'setup_manifest.json').read_text())
     manifest.update(smoke=True,source_listing_count=sample,parent_setup_sha256=file_hash(setup/'setup_manifest.json'))
     write_json(output/'setup_manifest.json',manifest)
-    from training.prepare_embeddings import validate_prepared_provenance
     checkpoint = Path(manifest['text_checkpoint'])
     from graph_tracks.text_cache import checkpoint_hash
     if checkpoint_hash(checkpoint) != manifest['text_checkpoint_sha256']:
@@ -159,32 +158,7 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100):
     from model_tracks.text_export import prepare as prepare_text_export
     from model_tracks.baseline_export import prepare as prepare_baseline
     prepare_text_export(output, checkpoint, batch_size=runtime('batch_size_embed'))
-    request_path = prepare_baseline(output, checkpoint)
-    request = json.loads(request_path.read_text())
-    from model_tracks.embedding_forward import PreparedEmbeddingForward
-    cache_metadata = {**request['metadata'], 'request_sha256': file_hash(request_path),
-                      'embedding_dtype': PreparedEmbeddingForward.embedding_dtype,
-                      'tokenization': request['prepared_text']['tokenization']}
-    parent_cache = setup/'shared_minilm__embeddings.npz'
-    if parent_cache.exists():
-        vectors, metadata = load_text_cache(parent_cache, request['ids'])
-        parent_manifest = json.loads((setup/'prepared/input_manifest.json').read_text())
-        validate_prepared_provenance(parent_cache, metadata, parent_manifest)
-        parent_request = json.loads((setup/'embedding_inputs.json').read_text())
-        parent_texts = dict(zip(parent_request['ids'], parent_request['texts']))
-        if any(parent_texts[key] != text for key, text in zip(request['ids'], request['texts'])):
-            raise ValueError('smoke composed texts differ from validated parent cache')
-        metadata = {**cache_metadata, 'parent_cache_sha256': file_hash(parent_cache)}
-        np.savez_compressed(output/'shared_minilm__embeddings.npz',
-                            ids=np.asarray(request['ids'], dtype=str), embeddings=vectors,
-                            metadata=json.dumps(metadata))
-        (output/'embedding_inputs.json').write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
-    else:
-        from graph_tracks.text_cache import create_cache
-        create_cache(output/'eligible_catalog.csv', checkpoint,
-                     output/'shared_minilm__embeddings.npz', device='cpu',
-                     input_metadata=cache_metadata)
-        (output/'embedding_inputs.json').write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
+    prepare_baseline(output, checkpoint)
     for track in ('gnn_only','hybrid'):
         settings=yaml.safe_load((setup/f'{track}.yaml').read_text())
         for key in ('listings','pairs','input_manifest','text_cache'):
