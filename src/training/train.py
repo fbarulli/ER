@@ -779,7 +779,6 @@ def _main_inner(_mlf, _wandb) -> None:
     # gate (scripts/diet_manifest.py) sees the same augmented views the
     # trainer presents. Labels are untouched: every copy stays label 0.
     # The dynamic per-presentation path (training.py) is separate and unchanged.
-    train_neg = neg
     # Keep provenance aligned with every negative row before any fold split.
     # The baseline resolved gate population is immutable; supplemental
     # miners append their own source label rather than collapsing into a
@@ -791,6 +790,21 @@ def _main_inner(_mlf, _wandb) -> None:
         if data.get("neg_source")
         else np.full(len(neg), "gate", dtype=object)
     )
+    # Join all static real-negative populations BEFORE augmentation. Leaving
+    # the targeted/cross-brand lanes until after masking made their rows
+    # bypass every negative augmentation lane and diluted the actual MNRL
+    # presentation diet. Miners already resolve original payload endpoints;
+    # augmentation inherits their identity/fold lineage and source label.
+    for enabled, candidates, source in (
+        (attribute_conflict_enabled, targeted_attribute_neg, "targeted_attribute_conflict"),
+        (cross_brand_enabled, cross_brand_neg, "cross_brand_conflict"),
+    ):
+        if enabled and len(candidates):
+            neg = np.vstack([neg, candidates]) if len(neg) else candidates.copy()
+            neg_sources = np.concatenate([
+                neg_sources, np.full(len(candidates), source, dtype=object)
+            ])
+    train_neg = neg
     train_neg_sources = neg_sources.copy()
     if args.mask_frac > 0:
         from training.masking import (
@@ -1153,42 +1167,6 @@ def _main_inner(_mlf, _wandb) -> None:
     emb0 = np.empty((0, 0), dtype=np.float32)
     if not mining_enabled:
         print("[mining] disabled by config; skipping ANN and supplemental mining", flush=True)
-
-    # Static targeted candidates come from the existing gate similarity and
-    # shared critical-attribute evaluator. They are available to every loss,
-    # including MNRL; dynamic cosine refresh remains contrastive-only.
-    if attribute_conflict_enabled and len(targeted_attribute_neg):
-        neg = np.vstack([neg, targeted_attribute_neg]) if len(neg) else targeted_attribute_neg
-        train_neg = (
-            np.vstack([train_neg, targeted_attribute_neg])
-            if len(train_neg)
-            else targeted_attribute_neg.copy()
-        )
-        targeted_sources = np.full(
-            len(targeted_attribute_neg), "targeted_attribute_conflict", dtype=object
-        )
-        neg_sources = np.concatenate([neg_sources, targeted_sources])
-        train_neg_sources = np.concatenate([train_neg_sources, targeted_sources])
-
-    # Static cross-brand candidates: brands differ, every other critical
-    # attribute agrees (mined in build_training_data from the canonical
-    # records). They are the ONLY negatives in the population where brand is
-    # the discriminating evidence, so they join BOTH the eval and the training
-    # negative pools exactly like the targeted lane — a label-0 pair that is
-    # never scored cannot make brand learnable, and a pair that is only scored
-    # cannot.
-    if cross_brand_enabled and len(cross_brand_neg):
-        neg = np.vstack([neg, cross_brand_neg]) if len(neg) else cross_brand_neg
-        train_neg = (
-            np.vstack([train_neg, cross_brand_neg])
-            if len(train_neg)
-            else cross_brand_neg.copy()
-        )
-        cross_sources = np.full(
-            len(cross_brand_neg), "cross_brand_conflict", dtype=object
-        )
-        neg_sources = np.concatenate([neg_sources, cross_sources])
-        train_neg_sources = np.concatenate([train_neg_sources, cross_sources])
 
     # Supplemental dynamic mining uses the same dimension contract after a
     # fine-tuned embedding population exists.
