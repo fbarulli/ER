@@ -273,7 +273,7 @@ colab:
     - "_checkpoints"
   worker_monitor_seconds: 15
   dvc_enabled: false
-  # One lane-level DVC publisher is separate from trainer/HPO workers.
+  # Legacy local DVC tools only; Colab never enables this backend.
   dvc_workers: 1
   # DVC's internal content-transfer jobs. This controls parallel object
   # transfers inside one DVC command; it is not another trainer process.
@@ -824,7 +824,7 @@ training:
   # discriminative-LR groups: per-layer multiplicative decay bottom->top
   # (was an inline 0.9 default in src/training/training._discriminative_groups)
   layer_decay: 0.9
-  # Retain every resumable checkpoint; publish the finished run through DVC.
+  # Retain every resumable checkpoint in downloaded training results.
   # (was an inline 2 in the STArgs build)
   save_total_limit: null
   # cross-encoder rerank lane (07e): the stage-2 model's own encode cap

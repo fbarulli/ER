@@ -68,3 +68,19 @@ def test_suite_runtime_does_not_require_dvc_distribution(monkeypatch):
         return 'installed'
     monkeypatch.setattr(preflight.importlib.metadata, 'version', version)
     assert 'dvc' not in preflight.runtime_versions(cfg, require_dvc=False)
+
+
+def test_remote_auth_never_requests_dvc_credentials(monkeypatch):
+    from cli import colab
+    monkeypatch.setattr(colab, '_wandb_env_script', lambda: '')
+    monkeypatch.setattr(colab, '_optuna_env_script', lambda: '')
+    monkeypatch.setattr(colab, '_env_value', lambda key: (_ for _ in ()).throw(AssertionError(key)))
+    source = colab._remote_auth_env_script(include_optuna=True)
+    scope = {'os': type('FakeOS', (), {'environ': {}})()}
+    exec(source, scope)
+    assert scope['os'].environ == {'EUROMONITOR_DISABLE_DVC_CHECKPOINTS': '1', 'ER_INCREMENTAL_DVC': '0'}
+
+def test_colab_hpo_rejects_dvc_before_any_launch():
+    from cli import colab
+    with pytest.raises(ValueError, match='local/none persistence'):
+        colab.run_hpo(persistence='dvc')

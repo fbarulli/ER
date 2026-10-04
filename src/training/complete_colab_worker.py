@@ -1,4 +1,4 @@
-"""Complete a successful Colab worker: validate, then publish through DVC."""
+"""Complete a successful Colab worker: generate validation outputs for download."""
 
 from __future__ import annotations
 
@@ -222,7 +222,7 @@ def complete_worker(
     *, source: Path, run_id: str, worker: int, validation_input: Path,
     validation_source: Path | None = None,
     training_input: Path | None = None,
-    publish_dvc: bool = True, device: str | None = None,
+    publish_dvc: bool = False, device: str | None = None,
     sample: int | None = None,
 ) -> None:
     cfg = training_cfg().colab.final_inference
@@ -263,10 +263,6 @@ def complete_worker(
         )
     else:
         print("[final-inference] disabled by configuration", flush=True)
-    if publish_dvc:
-        from training.dvc_store import publish
-
-        publish(source, run_id, worker)
 
 
 def main() -> None:
@@ -294,7 +290,7 @@ def main() -> None:
         validation_input=args.validation_input,
         validation_source=args.validation_source,
         training_input=args.training_input,
-        publish_dvc=not args.skip_dvc,
+        publish_dvc=False,
         device=args.device,
         sample=args.sample,
     )

@@ -62,7 +62,7 @@ class ValidationInferenceTests(unittest.TestCase):
                 source=Path(temporary) / "worker", run_id="run", worker=2,
                 validation_input=Path("sample.csv"),
                 validation_source=Path("source.csv"),
-                training_input=Path("training.csv"), publish_dvc=True,
+                training_input=Path("training.csv"), publish_dvc=False,
                 # The shipped config REQUIRES cuda for final inference (a
                 # silent CPU fallback is refused). This test only exercises the
                 # completion ordering and runs on a CPU box, so it asks for CPU
@@ -70,7 +70,7 @@ class ValidationInferenceTests(unittest.TestCase):
                 # whole point of the override existing.
                 device="cpu",
             )
-        self.assertEqual(events, ["sku", "reports", "provenance", "dvc"])
+        self.assertEqual(events, ["sku", "reports", "provenance"])
 
 
 class FinalInferenceContractTests(unittest.TestCase):

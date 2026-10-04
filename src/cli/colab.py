@@ -121,9 +121,6 @@ _CACHE_PREPARED_BUNDLES = bool(_COLAB.cache_prepared_bundles)
 _MASKING_ENABLED = training_cfg().masking.enabled
 _MASKING_PROFILE = str(training_cfg().masking.profile)
 _COLLAPSE_GUARDRAIL_PROFILE = str(training_cfg().collapse_guardrail.profile)
-_DVC_ENABLED = bool(_COLAB.dvc_enabled)
-_DVC_WORKERS = _COLAB.dvc_workers if _DVC_ENABLED else 0
-_DVC_DISABLED_FLAG = "0" if _DVC_ENABLED else "1"
 _LOG_POLL_SECONDS = _COLAB.log_poll_seconds
 _LOG_POLL_INITIAL_SECONDS = float(_COLAB.log_poll_initial_seconds)
 _PROBE_TIMEOUT_SECONDS = _COLAB.probe_timeout_seconds
@@ -338,7 +335,7 @@ def training_lifecycle_preflight(
             ["train", "write_success_status", "download", "teardown"]
             if train_only else
             ["train", "resolve_best_checkpoint", "heldout_sku_inference",
-             "dvc_publish", "write_success_status", "download", "teardown"]
+             "write_success_status", "download", "teardown"]
         ),
     }
 
@@ -959,30 +956,8 @@ print(json.dumps(payload), flush=True)
         ) from exc
 
 
-def _resume_pointer_payload(run_id: str, workers: int) -> dict[str, dict[str, str]]:
-    """Load locally mirrored DVC pointers without exposing cache internals."""
-    payload: dict[str, dict[str, str]] = {}
-    for number in range(1, workers + 1):
-        pointer_dir = TRAINING_RESULTS / run_id / f"worker_{number}" / ".resume"
-        pointers = {
-            path.name: base64.b64encode(path.read_bytes()).decode("ascii")
-            for path in pointer_dir.glob("*.dvc")
-        } if pointer_dir.is_dir() else {}
-        if not pointers:
-            raise FileNotFoundError(
-                f"no locally mirrored DVC resume pointer for {run_id} worker {number}"
-            )
-        payload[str(number)] = pointers
-    return payload
 
 
-def _mirror_resume_pointers(run_id: str, pointers: dict[str, dict[str, str]]) -> None:
-    """Persist DVC pointers locally as the launcher tails remote workers."""
-    for worker, entries in pointers.items():
-        pointer_dir = TRAINING_RESULTS / run_id / f"worker_{worker}" / ".resume"
-        pointer_dir.mkdir(parents=True, exist_ok=True)
-        for name, encoded in entries.items():
-            (pointer_dir / name).write_bytes(base64.b64decode(encoded))
 
 
 def _format_bytes(value: int) -> str:
@@ -1097,30 +1072,8 @@ def _download_file_with_visibility(
     return received
 
 
-def _hpo_resume_pointer_payload() -> dict[str, str]:
-    """Load locally mirrored HPO pointers for a fresh Colab VM."""
-    if not _HPO_RESUME_DIR.is_dir():
-        return {}
-    return {
-        path.relative_to(_HPO_RESUME_DIR).as_posix(): base64.b64encode(
-            path.read_bytes()
-        ).decode("ascii")
-        for path in sorted(_HPO_RESUME_DIR.rglob("*.dvc"))
-        if path.is_file()
-    }
 
 
-def _mirror_hpo_resume_pointers() -> None:
-    """Mirror HPO DVC pointers before the VM is torn down, even on failure."""
-    remote_dir = f"{REMOTE_ROOT}/results"
-    names = [name for name in _list_remote(remote_dir) if "/.resume/" in name]
-    for name in names:
-        rel = Path(name).relative_to(remote_dir)
-        local = _HPO_RESUME_DIR / rel
-        local.parent.mkdir(parents=True, exist_ok=True)
-        colab("download", "-s", SESSION, name, str(local), timeout=600)
-    if names:
-        print(f"[resume] mirrored {len(names)} HPO DVC pointer(s) -> {_HPO_RESUME_DIR}", flush=True)
 
 
 def run_detached_train_and_tail(args: list[str]) -> None:
@@ -1156,7 +1109,7 @@ with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
 print(json.dumps({{"pid": child.pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
 """
     print("[run] starting detached train.py on the VM; streaming its remote log ...", flush=True)
-    # Resume bootstrap restores each worker's checkpoint through DVC before
+    # Resume validates each worker's local checkpoint before
     # it emits the launch JSON.  A full checkpoint pull can legitimately take
     # longer than the short probe budget, so use the configured worker
     # timeout for this one-time preflight.
@@ -1266,7 +1219,6 @@ def run_parallel_train_and_tail(
         if prepared_bundles is not None or remote_checkout_inputs
         else 'for name in (F["canonical_records"], F["gate_results"], F["labeled_pairs"]):'
     )
-    resume_pointers = _resume_pointer_payload(run_id, workers) if resume_run else {}
     launch = _BOOTSTRAP + _remote_auth_env_script(
         # train_prepared is deliberately remote-only and refuses to run
         # without W&B.  A Git-shipped bundle changes transport, not tracking.
@@ -1278,7 +1230,6 @@ root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
 run_id = base.name.removeprefix("concurrent_train_")
 base.mkdir(parents=True, exist_ok={bool(resume_run)!r})
-resume_pointers = {resume_pointers!r}
 run_labels = {run_labels!r}
 worker_losses = {worker_losses!r}
 masking_profiles = {masking_profiles!r}
@@ -1301,11 +1252,6 @@ for number in range(1, {workers} + 1):
     print(f"[resume-preflight] worker {{number}}: preparing {{out}}", flush=True)
     if {bool(resume_run)!r}:
         out.mkdir(exist_ok=True)
-        pointer_dir = out / ".resume"
-        pointer_dir.mkdir(exist_ok=True)
-        for name, encoded in resume_pointers[str(number)].items():
-            (pointer_dir / name).write_bytes(base64.b64decode(encoded))
-        print(f"[resume-preflight] worker {{number}}: pointer files written", flush=True)
         {remote_input_loop}
             relative = name.relative_to(root / "results")
             source = root / "results" / relative
@@ -1315,61 +1261,9 @@ for number in range(1, {workers} + 1):
                     raise FileNotFoundError(f"resume worker input missing: {{source}}")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
-        try:
-            from training.dvc_store import restore_pointer
-            pointers = sorted(pointer_dir.glob("*.dvc"))
-            if not pointers:
-                raise RuntimeError(
-                    f"[resume-preflight] worker {{number}} has no DVC resume pointer; "
-                    "the previous checkpoint cannot be restored"
-                )
-            restored_checkpoint = False
-            for pointer in pointers:
-                print(f"[resume-preflight] worker {{number}}: restoring {{pointer.name}}", flush=True)
-                outputs = restore_pointer(out, pointer)
-                print(f"[resume-preflight] worker {{number}}: DVC pull complete", flush=True)
-                checkpoint_outputs = [
-                    path for path in outputs
-                    if "_checkpoints" in path.relative_to(out).parts
-                ]
-                if checkpoint_outputs:
-                    restored_checkpoint = True
-                    for checkpoint_root in checkpoint_outputs:
-                        candidates = sorted(
-                            checkpoint_root.glob("checkpoint-*"),
-                            key=lambda path: int(path.name.removeprefix("checkpoint-")),
-                        )
-                        if not candidates:
-                            raise RuntimeError(
-                                f"[resume-preflight] restored checkpoint root is empty: "
-                                f"{{checkpoint_root}}"
-                            )
-                        latest = candidates[-1]
-                        required = (
-                            "optimizer.pt",
-                            "scheduler.pt",
-                            "rng_state.pth",
-                            {_CHECKPOINT_MANIFEST_NAME!r},
-                            "trainer_state.json",
-                        )
-                        missing = [
-                            name for name in required if not (latest / name).is_file()
-                        ]
-                        if missing:
-                            raise RuntimeError(
-                                f"[resume-preflight] {{latest}} is not resumable; "
-                                f"missing {{', '.join(missing)}}"
-                            )
-            if not restored_checkpoint:
-                raise RuntimeError(
-                    f"[resume-preflight] worker {{number}} restored no checkpoint "
-                    "pointer; refusing to start training"
-                )
-            print(f"[resume-preflight] worker {{number}}: restored {{len(pointers)}} pointer(s)", flush=True)
-        except BaseException:
-            print(f"[resume-preflight] worker {{number}} traceback:", flush=True)
-            traceback.print_exc()
-            raise
+        checkpoints = list(out.rglob("checkpoint-*/trainer_state.json"))
+        if not checkpoints:
+            raise FileNotFoundError(f"[resume-preflight] worker {{number}} has no local checkpoint; restore downloaded checkpoint files before resuming")
     else:
         out.mkdir()
         if {remote_bundles is None and not remote_checkout_inputs!r}:
@@ -1409,11 +1303,10 @@ for number in range(1, {workers} + 1):
         completion_args.extend(["--sample", str(inference_sample)])
     if inference_device is not None:
         completion_args.extend(["--device", inference_device])
-    if not { _DVC_ENABLED!r}:
-        completion_args.append("--skip-dvc")
+    completion_args.append("--skip-dvc")
     completion_command = " ".join(shlex.quote(part) for part in completion_args)
     completion_clause = (
-        f'if [ "$rc" -eq 0 ]; then echo "[worker-process] training complete; running validation inference and final DVC publication"; {{completion_command}}; rc=$?; fi; '
+        f'if [ "$rc" -eq 0 ]; then echo "[worker-process] training complete; running validation inference"; {{completion_command}}; rc=$?; fi; '
         if {final_inference!r} else ""
     )
     log_path, status_path = out / "training.log", out / "training.status"
@@ -1425,7 +1318,7 @@ for number in range(1, {workers} + 1):
            "WANDB_RUN_NAME": training_name,
            "EUROMONITOR_RUN_ID": training_name,
            "EUROMONITOR_MINING_PROFILE": worker_profile,
-           "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": {_DVC_DISABLED_FLAG!r}}}
+           "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1"}}
     live_status_path.write_text(json.dumps({{
         "updated_at": time.time(), "event": "launched", "step": 0,
         "wandb_run_name": env["WANDB_RUN_NAME"],
@@ -1457,7 +1350,7 @@ for number in range(1, {workers} + 1):
 print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
 """
     print(f"[run] starting {workers} isolated full-data trainers; streaming all worker logs ...", flush=True)
-    # Resume bootstrap restores each worker's checkpoint through DVC before
+    # Resume validates each worker's local checkpoint before
     # it emits the launch JSON. A full checkpoint pull can legitimately take
     # longer than the short probe budget, so use the configured worker
     # timeout for this one-time preflight.
@@ -1502,11 +1395,6 @@ for number in range(1, {workers} + 1):
             payload["live"][key] = json.loads(live_status_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
-    pointer_dir = out / ".resume"
-    payload["resume"][key] = {{
-        path.name: base64.b64encode(path.read_bytes()).decode("ascii")
-        for path in pointer_dir.glob("*.dvc")
-    }} if pointer_dir.is_dir() else {{}}
 payload["done"] = all(value is not None for value in payload["status"].values())
 print(json.dumps(payload), flush=True)
 """
@@ -1537,7 +1425,6 @@ print(json.dumps(payload), flush=True)
                 time.sleep(_LOG_POLL_SECONDS)
                 continue
             offsets = {str(key): int(value) for key, value in payload["offsets"].items()}
-            _mirror_resume_pointers(run_id, payload["resume"])
             for worker, live in payload["live"].items():
                 signature = json.dumps(live, sort_keys=True)
                 if live_signatures.get(worker) == signature:
@@ -1796,7 +1683,7 @@ class _IncrementalResultSync:
     """Keep the newest *best* checkpoint on the laptop while training runs.
 
     The end-of-run download is one archive transferred after the whole
-    lifecycle (train -> inference -> DVC publish) has collapsed to a single
+    lifecycle (train -> inference -> archive download) has collapsed to a single
     moment, so the multi-GB checkpoint set is dead time at the end.  Training
     writes a new ``checkpoint-<step>`` directory steadily, and each directory
     is immutable once written, so the best one can be held locally as it
@@ -2079,20 +1966,6 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
         flush=True,
     )
 
-def _publish_local_hpo_model_snapshot(generation: Path, model_dir: Path) -> None:
-    """Publish one HPO model snapshot through the DVC publisher lane."""
-    from training.hpo_persistence import best_effort_dvc_publish, build_snapshot
-
-    snapshot = build_snapshot(
-        generation=generation,
-        sequence=time.time_ns(),
-        optuna_db=None,
-        include=[model_dir],
-        scope=model_dir.name,
-    )
-    if not best_effort_dvc_publish(snapshot):
-        raise RuntimeError(f"local HPO DVC publication failed: {snapshot}")
-    print(f"[hpo-durability-local] published {model_dir.name}", flush=True)
 
 
 def publish_local_hpo_results(run_id: str, persistence: str) -> None:
@@ -2117,43 +1990,7 @@ def publish_local_hpo_results(run_id: str, persistence: str) -> None:
                 sorted(model_dir.glob("*_fold*_random_easy_scores.csv")),
             )
             print(f"[report-local] HPO {model_dir.name}: report generated", flush=True)
-    if persistence != "dvc":
-        print(f"[hpo-dvc] skipped: persistence={persistence}", flush=True)
-        return
-
-    env = _local_auth_env()
-    previous = {key: os.environ.get(key) for key in ("DVC_API_KEY", "DAGSHUB_USER_TOKEN")}
-    try:
-        for key in ("DVC_API_KEY", "DAGSHUB_USER_TOKEN"):
-            if key in env:
-                os.environ[key] = env[key]
-        model_dirs = [
-            model_dir
-            for model_dir in sorted((generation / "models").iterdir())
-            if model_dir.is_dir()
-        ]
-        print(
-            f"[hpo-dvc] publishing with {_DVC_WORKERS} DVC worker(s); "
-            "HPO model/trial workers remain separate",
-            flush=True,
-        )
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(
-            max_workers=_DVC_WORKERS, thread_name_prefix="hpo-dvc"
-        ) as pool:
-            futures = [
-                pool.submit(_publish_local_hpo_model_snapshot, generation, model_dir)
-                for model_dir in model_dirs
-            ]
-            for future in futures:
-                future.result()
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+    print("[report-local] HPO results retained locally", flush=True)
 
 
 def start_live_log() -> None:
@@ -2529,17 +2366,9 @@ def _remote_auth_env_script(
 ) -> str:
     """Credential exports used by remote subprocess launch cells only."""
     wandb = _wandb_env_script() if include_wandb else ""
-    if not _DVC_ENABLED:
-        return wandb + (_optuna_env_script() if include_optuna else "")
-    key = _env_value("DVC_API_KEY")
-    if key:
-        print("[dvc] DVC_API_KEY loaded from local .env and injected into VM process")
-        dvc = f"os.environ['DVC_API_KEY'] = {key!r}\nos.environ['DAGSHUB_USER_TOKEN'] = {key!r}\n"
-    else:
-        print("[dvc] DVC_API_KEY absent from .env; durable DVC upload will fail")
-        dvc = ""
-    optuna = _optuna_env_script() if include_optuna else ""
-    return wandb + optuna + dvc
+    return ("os.environ['EUROMONITOR_DISABLE_DVC_CHECKPOINTS'] = '1'\n"
+            "os.environ['ER_INCREMENTAL_DVC'] = '0'\n"
+            + wandb + (_optuna_env_script() if include_optuna else ""))
 
 
 def run_data_prep() -> None:
@@ -3585,7 +3414,7 @@ env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
        "WANDB_RUN_NAME": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_RUN_ID": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_MINING_PROFILE": {run_label if run_label in ("mining_enabled", "masking_only") else ""!r},
-       "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": {_DVC_DISABLED_FLAG!r}}}
+       "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1"}}
 if {prepare_remote_labeled_pairs!r}:
     calibration = out / "training" / "labeled_pairs.csv"
     if not calibration.is_file():
@@ -3623,11 +3452,10 @@ if inference_sample is not None:
     completion.extend(["--sample", str(inference_sample)])
 if inference_device is not None:
     completion.extend(["--device", inference_device])
-if not { _DVC_ENABLED!r}:
-    completion.append("--skip-dvc")
+completion.append("--skip-dvc")
 if run_completion:
     print("[worker] starting final validation inference", flush=True)
-    print("[train] training complete; running validation inference and final DVC publication", flush=True)
+    print("[train] training complete; running validation inference", flush=True)
     with log_path.open("a", encoding="utf-8", buffering=1) as log_file:
         process = subprocess.Popen(
             completion, cwd=root, env=env, stdout=subprocess.PIPE,
@@ -3688,6 +3516,8 @@ def run_hpo(
     """Sweep every configured backbone, then evaluate and rerank each winner."""
     mode = mode or _HPO_MODE
     persistence = persistence or _HPO_PERSISTENCE
+    if persistence not in {"local", "none"}:
+        raise ValueError("Colab HPO supports local/none persistence only")
     print(
         f"[run] round-robin HPO (mode={mode}, model_workers={_HPO_WORKERS}, "
         f"trial_jobs={trial_jobs}, resume={resume}, persistence={persistence}) ..."
@@ -3697,7 +3527,6 @@ def run_hpo(
         + "_" + uuid.uuid4().hex[:8]
     )
     mask_effect_flag = "--mask-effect" if _MASK_EFFECT_AFTER_TRAIN else "--no-mask-effect"
-    resume_pointers = _hpo_resume_pointer_payload() if resume else {}
     script = _BOOTSTRAP + _remote_auth_env_script(include_optuna=True) + f"""
 import concurrent.futures, json, os, pathlib, shutil, subprocess, sys, time
 from datetime import datetime, timezone
@@ -3714,39 +3543,15 @@ hpo_base = list(base)
 hpo_base.extend(["--n-jobs", str({trial_jobs})])
 if {resume!r}:
     hpo_base.append("--resume")
-resume_pointers = {resume_pointers!r}
 model_keys = hpo_cfg()["models"]
 required = {{"epochs", "lr", "warmup_ratio", "weight_decay"}}
 mode = "{mode}"
 workers = {_HPO_WORKERS}
 
-for relative, encoded in resume_pointers.items():
-    target = root / "results" / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(__import__("base64").b64decode(encoded))
-
 if {resume!r}:
-    from training.dvc_store import restore_pointer
-    pointers = sorted(
-        path for path in (root / "results").rglob("*.dvc")
-        if path.parent.name == ".resume"
-    )
-    if not pointers:
-        raise RuntimeError(
-            "[resume-preflight] no HPO DVC resume pointers are available; "
-            "the previous Optuna database/checkpoints cannot be restored"
-        )
-    restored_db = False
-    for pointer in pointers:
-        source = pointer.parent.parent
-        restore_pointer(source, pointer)
-        restored_db = restored_db or pointer.name.endswith(".optuna.db.dvc")
-    if not restored_db:
-        raise RuntimeError(
-            "[resume-preflight] restored HPO pointers but no Optuna database "
-            "pointer was found; refusing to start the sweep"
-        )
-    print(f"[resume-preflight] restored {{len(pointers)}} HPO pointer(s)", flush=True)
+    databases = list((root / "results").rglob("*.optuna.db"))
+    if not databases:
+        raise FileNotFoundError("[resume-preflight] no local Optuna database; restore downloaded HPO files before resuming")
 
 def run_logged(args, label, extra_env=None):
     log_path = hpo_root / "logs" / (
@@ -3843,23 +3648,14 @@ archive = pathlib.Path(shutil.make_archive(
 print(f"[hpo-archive] {{archive}}", flush=True)
 print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank_model": "{_RERANK_MODEL}"}}, sort_keys=True), flush=True)
 """
-    try:
-        run_colab_exec_stream(SESSION, script, timeout=8 * 3600 * 3, log_name="training_hpo")
-        remote_archive = f"{REMOTE_ROOT}/results/hpo_runs/{run_id}.tar.gz"
-        local_archive = TRAINING_RESULTS / "hpo_runs" / f"{run_id}.tar.gz"
-        local_archive.parent.mkdir(parents=True, exist_ok=True)
-        colab("download", "-s", SESSION, remote_archive, str(local_archive), timeout=3600)
-        local_root = TRAINING_RESULTS / "hpo_runs"
-        shutil.unpack_archive(local_archive, local_root, format="gztar")
-        print(f"[hpo-archive] preserved -> {local_root / run_id}", flush=True)
-    finally:
-        # The VM is normally stopped by main() immediately after this
-        # returns/raises. Keep the pointer files locally so a later
-        # --resume-hpo can restore the DVC objects on a fresh VM.
-        try:
-            _mirror_hpo_resume_pointers()
-        except Exception as exc:
-            print(f"[warn] could not mirror HPO resume pointers: {exc}", file=sys.stderr, flush=True)
+    run_colab_exec_stream(SESSION, script, timeout=8 * 3600 * 3, log_name="training_hpo")
+    remote_archive = f"{REMOTE_ROOT}/results/hpo_runs/{run_id}.tar.gz"
+    local_archive = TRAINING_RESULTS / "hpo_runs" / f"{run_id}.tar.gz"
+    local_archive.parent.mkdir(parents=True, exist_ok=True)
+    colab("download", "-s", SESSION, remote_archive, str(local_archive), timeout=3600)
+    local_root = TRAINING_RESULTS / "hpo_runs"
+    shutil.unpack_archive(local_archive, local_root, format="gztar")
+    print(f"[hpo-archive] preserved -> {local_root / run_id}", flush=True)
     return run_id
 
 
@@ -4449,7 +4245,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--hpo-persistence",
-        choices=["dvc", "local", "none"],
+        choices=["local", "none"],
         default=_HPO_PERSISTENCE,
         help="HPO durability backend (default from config/training.yaml)",
     )
@@ -4494,6 +4290,8 @@ def main() -> None:
         help="train and collect artifacts without post-training validation inference",
     )
     args = ap.parse_args()
+    if args.what == "hpo" and args.hpo_persistence not in {"local", "none"}:
+        raise ValueError("Colab HPO supports local/none persistence only")
 
     suite_archive = None
     suite_run_tag = None
@@ -4590,37 +4388,35 @@ def main() -> None:
         ), indent=2, sort_keys=True))
         return
 
-    dvc_jobs = int(training_cfg().colab.dvc_jobs)
     if args.what == "train":
         print(
             f"[workers] lane=train trainers={args.workers} "
-            f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
+            "result_transport=direct",
             flush=True,
         )
     elif args.what == "dual-train":
         print(
             f"[workers] lane=dual-train matcher_loss={args.loss} ann_loss=mnrl "
-            f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
+            "result_transport=direct",
             flush=True,
         )
     elif args.what == "smoke":
         print(
             f"[workers] lane=smoke trainers={_SMOKE_WORKERS} "
-            f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
+            "result_transport=direct",
             flush=True,
         )
     elif args.what == "hpo":
         print(
             f"[workers] lane=hpo model_workers={_HPO_WORKERS} "
-            f"trial_jobs={args.hpo_jobs} dvc_publishers={_DVC_WORKERS} "
-            f"dvc_transfer_jobs={dvc_jobs}",
+            f"trial_jobs={args.hpo_jobs} result_transport=direct",
             flush=True,
         )
     elif args.what == "mixed":
         print(
             f"[workers] lane=mixed train_workers={_MIXED_TRAIN_WORKERS} "
             f"zero_shot_workers={_MIXED_SIMS_WORKERS} "
-            f"dvc_publishers={_DVC_WORKERS} dvc_transfer_jobs={dvc_jobs}",
+            "result_transport=direct",
             flush=True,
         )
 
@@ -4813,10 +4609,8 @@ def main() -> None:
 
     if args.what == "tracks":
         print("\n[done] compressed results downloaded and completed locally")
-    elif _DVC_ENABLED:
-        print("\n[done] artifacts persisted to the configured DVC remote")
     else:
-        print("\n[done] artifacts retained locally; DVC disabled")
+        print("\n[done] artifacts downloaded locally")
 
 
 if __name__ == "__main__":
