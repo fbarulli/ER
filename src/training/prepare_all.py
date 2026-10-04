@@ -203,6 +203,7 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                         shutil.copy2(bundle.with_suffix(bundle.suffix + '.json'),
                                      text_bundle.with_suffix(text_bundle.suffix + '.json'))
                 elif name == 'suite_inputs':
+                    archive(suite_archive, suite_archive.name)
                     run(name, ['-m', 'model_tracks.package', '--config', str(config_path),
                                '--output', str(suite_archive)])
                 else:
