@@ -1,11 +1,11 @@
 """CPU preparation and hash-bound transfer of immutable graph topology."""
 import json
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pathlib import Path
 import numpy as np
 import torch
 from graph_tracks.data import GraphBatch, RELATIONS, NUMERIC, file_hash, fit_vocabulary, load_records, tensorize
-from graph_tracks.pooling import topology
+from graph_tracks.pooling import SegmentTopology, move_batch, topology
 
 PLAN = 'graph_plan.json'
 ARRAYS = 'graph_inputs.npz'
@@ -63,6 +63,60 @@ class PreparedGraphInputs(BaseModel):
                 raise ValueError('prepared graph pairs differ from source labels/endpoints')
 
 
+class PreparedPoolingInputs(BaseModel):
+    """CPU-validated pooling direction and stable, exact segment partition."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra='forbid')
+    source: np.ndarray
+    target: np.ndarray
+    sizes: np.ndarray
+    order: np.ndarray
+    offsets: np.ndarray
+    count: int = Field(ge=0, strict=True)
+
+    @model_validator(mode='after')
+    def validate_topology(self):
+        source, target, sizes, order, offsets = (
+            self.source, self.target, self.sizes, self.order, self.offsets)
+        if (source.dtype != np.int64 or target.dtype != np.int64
+                or source.ndim != 1 or target.shape != source.shape
+                or sizes.dtype != np.float32 or sizes.shape != (self.count, 1)
+                or np.any(target < 0) or np.any(target >= self.count)):
+            raise ValueError('prepared graph pooling dtype/shape/bounds mismatch')
+        lengths = np.bincount(target, minlength=self.count)
+        if not np.array_equal(sizes[:, 0], np.maximum(lengths, 1)):
+            raise ValueError('prepared graph pooling denominators differ from edge counts')
+        if (order.dtype != np.int64 or order.shape != target.shape
+                or offsets.dtype != np.int64 or offsets.shape != (self.count + 1,)
+                or np.any(order < 0) or np.any(order >= len(target))
+                or not np.array_equal(np.bincount(order, minlength=len(target)),
+                                      np.ones(len(target), dtype=np.int64))):
+            raise ValueError('prepared graph segment order must be an exact edge permutation')
+        ordered = target[order]
+        if (np.any(ordered[1:] < ordered[:-1])
+                or np.any((ordered[1:] == ordered[:-1]) & (order[1:] < order[:-1]))
+                or not np.array_equal(offsets, np.concatenate(([0], np.cumsum(lengths))))):
+            raise ValueError('prepared graph segments must preserve stable edge order and exact offsets')
+        return self
+
+    @classmethod
+    def from_arrays(cls, arrays, stem: str, count: int) -> "PreparedPoolingInputs":
+        source, target, sizes = [arrays[stem+'/'+key] for key in ('source', 'target', 'sizes')]
+        segment_keys = [stem+'/'+key for key in ('segment_order', 'segment_offsets')]
+        present = [key in arrays for key in segment_keys]
+        if any(present) and not all(present):
+            raise ValueError('prepared graph segment metadata is incomplete')
+        if all(present):
+            order, offsets = [arrays[key] for key in segment_keys]
+        else:
+            # Older hash-bound packages are compatible: derive their missing
+            # integer metadata on CPU, before uploading any topology.
+            segment = SegmentTopology.prepare(torch.as_tensor(target), count)
+            order, offsets = segment.order.numpy(), segment.offsets.numpy()
+        return cls(source=source, target=target, sizes=sizes, order=order,
+                   offsets=offsets, count=count)
+
+
 def save_batch(arrays, prefix, batch, vocabulary):
     arrays[prefix+'/numeric'] = batch.numeric.numpy()
     for relation, (listing, value) in batch.edges.items():
@@ -74,13 +128,16 @@ def save_batch(arrays, prefix, batch, vocabulary):
             stem = prefix+'/'+relation+('/attribute' if attribute else '/listing_pool')
             for key, tensor in zip(('source', 'target', 'sizes'), (source, target, sizes)):
                 arrays[stem+'/'+key] = tensor.numpy()
+            segment = target._er_segment_topology
+            arrays[stem+'/segment_order'] = segment.order.numpy()
+            arrays[stem+'/segment_offsets'] = segment.offsets.numpy()
 
 
 def load_batch(arrays, prefix, device, vocabulary):
     numeric = arrays[prefix+'/numeric']
     if numeric.dtype != np.float32 or numeric.ndim != 2 or numeric.shape[1] != len(NUMERIC)*3 or not np.isfinite(numeric).all():
         raise ValueError('prepared graph numeric dtype/schema mismatch')
-    batch = GraphBatch(torch.as_tensor(numeric, device=device), {})
+    batch = GraphBatch(torch.as_tensor(numeric), {})
     batch._pool_topology = {}
     for relation in RELATIONS:
         edge_arrays = [arrays[prefix+'/'+relation+'/'+key] for key in ('listing', 'value')]
@@ -89,21 +146,28 @@ def load_batch(arrays, prefix, device, vocabulary):
         left, right = edge_arrays
         if left.ndim != 1 or right.shape != left.shape or np.any(left < 0) or np.any(left >= len(numeric)) or np.any(right < 0) or np.any(right > len(vocabulary[relation])):
             raise ValueError('prepared graph edge shape/bounds mismatch')
-        listing, value = [torch.as_tensor(a, device=device) for a in edge_arrays]
+        listing, value = [torch.as_tensor(a) for a in edge_arrays]
         batch.edges[relation] = (listing, value)
-        signature = (id(listing), listing._version, id(value), value._version)
+        signature = (id(listing), None if torch.is_inference(listing) else listing._version,
+                     id(value), None if torch.is_inference(value) else value._version)
         for attribute in (False, True):
             count = len(vocabulary[relation])+1 if attribute else len(numeric)
             stem = prefix+'/'+relation+('/attribute' if attribute else '/listing_pool')
-            tensors = [torch.as_tensor(arrays[stem+'/'+key], device=device) for key in ('source', 'target', 'sizes')]
-            if tensors[0].dtype != torch.long or tensors[1].dtype != torch.long or tensors[2].dtype != torch.float32:
-                raise ValueError('prepared graph pooling dtype mismatch')
-            source, target, sizes = [arrays[stem+'/'+key] for key in ('source', 'target', 'sizes')]
-            source_count = len(numeric) if attribute else len(vocabulary[relation])+1
-            if source.ndim != 1 or target.shape != source.shape or sizes.shape != (count, 1) or not np.isfinite(sizes).all() or np.any(sizes < 1) or np.any(source < 0) or np.any(source >= source_count) or np.any(target < 0) or np.any(target >= count):
-                raise ValueError('prepared graph pooling shape/bounds mismatch')
-            batch._pool_topology[(relation, attribute, count, torch.float32)] = (signature, *tensors, listing, value)
-    return batch
+            prepared = PreparedPoolingInputs.from_arrays(arrays, stem, count)
+            valid = right != 0
+            expected_source, expected_target = ((left[valid], right[valid]) if attribute
+                                                else (right, left))
+            if (not np.array_equal(prepared.source, expected_source)
+                    or not np.array_equal(prepared.target, expected_target)):
+                raise ValueError('prepared graph pooling direction differs from membership edges')
+            source, target, sizes = [torch.as_tensor(a) for a in
+                                     (prepared.source, prepared.target, prepared.sizes)]
+            target._er_segment_topology = SegmentTopology(
+                torch.as_tensor(prepared.order), torch.as_tensor(prepared.offsets),
+                None if torch.is_inference(target) else target._version, count)
+            batch._pool_topology[(relation, attribute, count, torch.float32)] = (
+                signature, source, target, sizes, listing, value)
+    return move_batch(batch, device)
 
 
 def prepare_training(listings: Path, pairs: Path, output: Path | None = None, *, batch_size=1024):

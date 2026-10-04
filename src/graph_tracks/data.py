@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -84,6 +84,8 @@ class GraphBatch:
     numeric: torch.Tensor
     # Each relation is (listing index, value index); zero is unknown/missing.
     edges: dict[str, tuple[torch.Tensor, torch.Tensor]]
+    _pool_topology: dict[tuple[str, bool, int, torch.dtype], tuple] = field(
+        default_factory=dict, init=False, repr=False)
 
 
 def tensorize(records: list[dict], vocabulary: dict[str, list[str]], device: str) -> GraphBatch:
@@ -107,9 +109,14 @@ def tensorize(records: list[dict], vocabulary: dict[str, list[str]], device: str
             indices = sorted({lookup.get(v, 0) for v in values}) or [0]
             source.extend([i] * len(indices))
             target.extend(indices)
-        edges[relation] = (torch.tensor(source, dtype=torch.long, device=device),
-                           torch.tensor(target, dtype=torch.long, device=device))
-    return GraphBatch(torch.tensor(numbers, dtype=torch.float32, device=device), edges)
+        edges[relation] = (torch.tensor(source, dtype=torch.long),
+                           torch.tensor(target, dtype=torch.long))
+    # Dynamic inference and benchmark batches follow the same CPU-first
+    # topology contract as persisted prepared inputs.
+    from graph_tracks.pooling import move_batch, prime_batch
+    batch = GraphBatch(torch.tensor(numbers, dtype=torch.float32), edges)
+    prime_batch(batch, vocabulary)
+    return move_batch(batch, device)
 
 
 def load_text_cache(path: Path, ids: list[str]) -> tuple[np.ndarray, dict]:
