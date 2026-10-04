@@ -71,13 +71,13 @@ the authoritative inventory.
 |---|---|
 | `data/dataset_deduped.csv`, `data/sku_to_rep.csv` | Catalog and raw-listing-to-representative mapping |
 | Configured dedupe summary, offer-group, removal, and conflict CSVs | Closed row accounting and review evidence |
-| `data/second04_pairs_positive.csv` | Cross-country positive candidates; consumer verifies volume agreement |
+| `results/training/second04_pairs_positive.csv` | Cross-country positive candidates; consumer verifies volume agreement |
 | `data/number_tokens_reference.csv` | Number/name interpretation reference |
 | `data/canonical_records.csv`, `data/gate_results.csv` | Current extracted attributes and gate evidence |
 | `data/labeled_pairs.csv` | Real entity-pair labels under the active threshold policy |
 | `results/negative_supply/<tag>/pairs.csv` and `manifest.json` | Real partners, minted top-ups, edited-positive controls, lineage, and coverage |
 | Preparation `discriminator.json` | Real-vs-minted separation verdict |
-| `data/final_validation.csv`, configured validation fold-map CSV | Shared component-safe validation population and split accounting |
+| `data/final_validation.csv`, `results/training/validation_fold_map.csv` | Shared component-safe validation population and split accounting |
 | `data/track_setup/eligible_catalog.csv`, `listing_splits.csv`, `listing_pairs.csv` | Retained graph/text-export catalog, listing assignments, clean graph supervision |
 | `data/track_setup/prepared/listings.json`, `pairs.csv`, `input_manifest.json` | Graph descriptors, pair rows, and source bindings |
 | Graph `pair_lineage.json`, `report_attributes.json`, `graph_census.json` | Provenance and reporting dimensions |

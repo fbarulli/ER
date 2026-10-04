@@ -321,12 +321,12 @@ def _donor_pool(
     canonical: pd.DataFrame, dimension: str, exclude: frozenset[str]
 ) -> tuple[str, ...]:
     """Sorted unique corpus atoms usable as move targets (token-shaped only)."""
-    atoms = re.compile(r"[a-z0-9_]+")
+    atoms = re.compile(r"\d+(?:\.\d+)?" if dimension == "volume" else r"[a-z0-9_]+")
     return tuple(
         sorted(
             value
             for value in _dimension_pool(canonical, dimension)
-            if value not in exclude and atoms.fullmatch(value) and value.isalnum()
+            if value not in exclude and atoms.fullmatch(value)
         )
     )
 
@@ -366,6 +366,11 @@ class NegativeSupply(BaseModel):
     _records_by_gtin: Mapping = PrivateAttr(default_factory=dict)
     _texts: pd.Series | None = PrivateAttr(default=None)
     _rng: np.random.Generator | None = PrivateAttr(default=None)
+    _rows_by_gtin: dict[str, int] | None = PrivateAttr(default=None)
+    _donor_pools: dict[str, tuple[str, ...]] = PrivateAttr(default_factory=dict)
+    _block_vectorizer: object = PrivateAttr(default=None)
+    _block_matrix: object = PrivateAttr(default=None)
+    _block_anchor_positions: dict[int, int] = PrivateAttr(default_factory=dict)
 
     @field_validator("df")
     @classmethod
@@ -397,6 +402,10 @@ class NegativeSupply(BaseModel):
                 str(row["gtin"]).strip(): row
                 for row in self.canonical.to_dict("records")
             }
+        if self._rows_by_gtin is None:
+            self._rows_by_gtin = {}
+            for position, gtin in enumerate(self.df["gtin"].fillna("").astype(str).str.strip()):
+                self._rows_by_gtin.setdefault(gtin, position)
         if self._texts is None:
             self._texts = finalized_texts(self.df)
         if self._rng is None:
@@ -418,13 +427,12 @@ class NegativeSupply(BaseModel):
 
     def _row_by_gtin(self, gtin: str) -> int | None:
         self._prepare()
-        matches = [
-            position
-            for position, value in
-            self.df["gtin"].fillna("").astype(str).str.strip().items()
-            if value == gtin
-        ]
-        return int(matches[0]) if matches else None
+        return self._rows_by_gtin.get(gtin)
+
+    def _donors(self, dimension: str, exclude: frozenset[str]) -> tuple[str, ...]:
+        if dimension not in self._donor_pools:
+            self._donor_pools[dimension] = _donor_pool(self.canonical, dimension, frozenset())
+        return tuple(value for value in self._donor_pools[dimension] if value not in exclude)
 
     # ── stage 1: blocking ────────────────────────────────────────────────────
     def block(self) -> pd.DataFrame:
@@ -444,12 +452,20 @@ class NegativeSupply(BaseModel):
             return self.candidates
         vectorizer = TfidfVectorizer(sublinear_tf=True)
         matrix = vectorizer.fit_transform(pool_texts)
+        self._block_vectorizer = vectorizer
+        self._block_matrix = matrix
+        self._block_anchor_positions = {int(anchor): index for index, anchor in enumerate(anchors)}
         rows: list[tuple[int, int, float]] = []
         chunk_rows = self.spec.blocker.chunk_rows
         for start in range(0, len(anchors), chunk_rows):
             chunk = (matrix[start:start + chunk_rows] @ matrix.T).toarray()
             chunk = chunk.astype(np.float32)
-            local = np.argsort(-chunk, axis=1)[:, :top_k]
+            # Exclude duplicate listings before allocating the top-k budget.
+            for position in range(len(chunk)):
+                chunk[position, gtins == gtins[start + position]] = -np.inf
+            limit = min(top_k, len(anchors))
+            local = np.argpartition(-chunk, limit - 1, axis=1)[:, :limit]
+            local = np.take_along_axis(local, np.argsort(-np.take_along_axis(chunk, local, axis=1), axis=1), axis=1)
             for position, nearest in enumerate(local):
                 for column in nearest:
                     score = float(chunk[position, column])
@@ -538,7 +554,7 @@ class NegativeSupply(BaseModel):
         uncovered = [
             int(position)
             for position, covered_row in
-            self.anchor_mask.items()
+            enumerate(self.anchor_mask.to_numpy())
             if covered_row and position not in covered
         ]
         rows: list[PairRow] = []
@@ -564,7 +580,7 @@ class NegativeSupply(BaseModel):
             moved_to = ""
             for move in attempted:
                 atoms = set(_text_atoms(str(self._texts.iloc[anchor]), move))
-                pool = _donor_pool(self.canonical, move, exclude=frozenset(atoms))
+                pool = self._donors(move, exclude=frozenset(atoms))
                 if not pool:
                     skipped["empty_pool"] += 1
                     continue
@@ -608,14 +624,13 @@ class NegativeSupply(BaseModel):
     def _score_minted(self, rows: list[PairRow]) -> None:
         if not rows:
             return
-        from sklearn.feature_extraction.text import TfidfVectorizer
-
-        corpus = list(self._texts.iloc[self.anchor_mask.to_numpy()].tolist())
-        corpus.extend(pair.partner_text for pair in rows)
-        matrix = TfidfVectorizer(sublinear_tf=True).fit_transform(corpus)
-        base = matrix[: len(corpus) - len(rows)]
-        minted = matrix[len(corpus) - len(rows):]
-        scores = (minted @ base.T).max(axis=1).toarray().ravel()
+        if self._block_vectorizer is None:
+            self.block()
+        # Match real-pair geometry: frozen blocker IDF and the actual anchor,
+        # without the quadratic minted-by-catalog intermediate.
+        minted = self._block_vectorizer.transform([pair.partner_text for pair in rows])
+        anchors = self._block_matrix[[self._block_anchor_positions[pair.anchor_row] for pair in rows]]
+        scores = np.asarray(minted.multiply(anchors).sum(axis=1)).ravel()
         for pair, score in zip(rows, scores):
             pair.score = round(float(score), 6)
 
@@ -637,7 +652,7 @@ class NegativeSupply(BaseModel):
                 atoms = set(
                     _text_atoms(str(self._texts.iloc[left_row]), move)
                 ) | set(_text_atoms(str(self._texts.iloc[right_row]), move))
-                pool = _donor_pool(self.canonical, move, exclude=frozenset(atoms))
+                pool = self._donors(move, exclude=frozenset(atoms))
                 if not pool:
                     continue
                 moved_to = pool[int(self._rng.integers(len(pool)))]
