@@ -10,9 +10,10 @@ import stat
 import zipfile
 import tarfile
 from core.archive_reader import open_archive, archive_sidecar
+from model_tracks import archive_verification
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 
 router = APIRouter()
 PROJECT = Path(__file__).resolve().parents[1]
@@ -403,6 +404,35 @@ def _ablation_report_html(report):
         out.append('</table>')
     rows = report.get('rows')
     if isinstance(rows, list) and rows:
+        flips = [r for r in rows if isinstance(r, dict) and r.get('decision_flip')]
+        if flips:
+            out.append(f'<h4>Decision flips ({len(flips)} of {len(rows)} rows)</h4>'
+                       '<p>Pairs whose decision changed when the declared attribute was '
+                       'removed. Gate reason is unrecorded on these rows in the current '
+                       'reporter; evidence, masking and variant are the available context.</p>'
+                       '<div class="scroll"><table><tr><th>attribute</th><th>channel</th>'
+                       '<th>pair (gtin)</th><th>pair (sku)</th><th>label</th><th>split</th>'
+                       '<th>score delta</th><th>baseline / ablated</th><th>evidence</th>'
+                       '<th>masking</th><th>variant</th><th>changed listings</th>'
+                       '<th>target mode</th></tr>')
+            for r in sorted(flips, key=lambda item: (str(item.get('attribute')),
+                                                     str(item.get('gtin1')),
+                                                     str(item.get('gtin2')))):
+                out.append(
+                    f'<tr><td>{escape(str(r.get("attribute")))}</td>'
+                    f'<td>{escape(str(r.get("channel")))}</td>'
+                    f'<td>{escape(str(r.get("gtin1")))}/{escape(str(r.get("gtin2")))}</td>'
+                    f'<td>{escape(str(r.get("sku_id1")))}/{escape(str(r.get("sku_id2")))}</td>'
+                    f'<td>{escape(str(r.get("label")))}</td>'
+                    f'<td>{escape(str(r.get("split")))}</td>'
+                    f'<td>{escape(_cell(r.get("score_delta")))}</td>'
+                    f'<td>{escape(_cell(r.get("baseline_score")))}/{escape(_cell(r.get("ablated_score")))}</td>'
+                    f'<td>{escape(_cell(r.get("current_attribute_evidence")))}</td>'
+                    f'<td>{escape(str(r.get("masking_profile")))}</td>'
+                    f'<td>{escape(str(r.get("generation_variant")))}</td>'
+                    f'<td>{escape(str(r.get("changed_listings")))}</td>'
+                    f'<td>{escape(str(r.get("target_mode")))}</td></tr>')
+            out.append('</table></div>')
         out.append(f'<h4>Per-row deltas ({len(rows)})</h4><div class="scroll">')
         out.append(table(_csv_frame(json.dumps(rows))))
         out.append('</div>')
@@ -578,6 +608,52 @@ def _performance_html(performance):
     return ''.join(out)
 
 
+def _verification_html(result):
+    """The archived post-download verification outcome, with the failure inline."""
+    status = str(result.get('status', 'unknown'))
+    color = {'verified': '#1a7f37', 'failed': '#cf222e', 'unreadable': '#9a6700'}.get(status, '#57606a')
+    body = (f'<details open><summary style="color:{color};font-weight:600">'
+            f'Archive verification: {escape(status)} '
+            f'({escape(str(result.get("verified_at", "unknown")))})</summary>')
+    sha = result.get('zip_sha256') or {}
+    if sha.get('match') is True:
+        body += '<p>sha256 sidecar: match</p>'
+    elif sha.get('match') is False:
+        body += (f'<p style="color:#cf222e">sha256 sidecar: MISMATCH — expected '
+                 f'{escape(str(sha.get("expected")))} · actual {escape(str(sha.get("actual")))}</p>')
+    else:
+        body += '<p>sha256 sidecar: not present</p>'
+    if result.get('error'):
+        body += f'<pre style="overflow:auto">{escape(str(result["error"]))}</pre>'
+    tracks = result.get('tracks') or {}
+    if tracks:
+        body += ('<table><tr><th>track</th><th>report</th><th>threshold</th>'
+                 '<th>checkpoint sha256</th><th>test reported</th><th>ablation</th></tr>')
+        for track, entry in tracks.items():
+            ablation = 'bound' if entry.get('ablation') else '—'
+            body += (f'<tr><td>{escape(str(track))}</td><td>{escape(str(entry.get("report")))}</td>'
+                     f'<td>{escape(str(entry.get("threshold")))}</td>'
+                     f'<td>{escape(str(entry.get("checkpoint_sha256")))}</td>'
+                     f'<td>{escape(str(entry.get("test_reported")))}</td><td>{ablation}</td></tr>')
+        body += '</table>'
+    body += '</details>'
+    return body
+
+
+@router.get('/training/verify')
+def verify_run(run: str):
+    """Re-verify a downloaded suite archive and record the outcome as a sidecar."""
+    available = runs()
+    if run not in available:
+        raise HTTPException(404, 'Training run not found')
+    path = available[run]
+    if path.is_dir():
+        raise HTTPException(400, 'Verification applies to downloaded suite archives, not local run folders')
+    result = archive_verification.verification_result(path)
+    archive_verification.write_verification(path, result)
+    return RedirectResponse('/training?' + urlencode({'run': run}), status_code=302)
+
+
 @router.get('/training', response_class=HTMLResponse)
 def training(run: str | None = None):
     available = runs()
@@ -593,6 +669,18 @@ def training(run: str | None = None):
     else:
         body += f'<form><label>Run <select name="run">{options}</select></label> <button>Show reports</button></form>'
         path = available[selected]
+        if not path.is_dir():
+            # Post-download verification outcome: the sealing-time contract
+            # was checked on the machine that wrote the archive; this sidecar
+            # records the re-check of the bytes that actually arrived.
+            verification = archive_verification.load_verification(path)
+            if verification is None:
+                verify_url = '/training/verify?' + urlencode({'run': selected})
+                body += (f'<p><a href="{escape(verify_url, quote=True)}">Verify archive</a> — re-checks the '
+                         f'sha256 sidecar and the sealing-time contract, then records the outcome as '
+                         f'{escape(archive_sidecar(path, ".verification.json").name)}.</p>')
+            else:
+                body += _verification_html(verification)
         try:
             members = entries(path)
         except REPORT_ERRORS:
