@@ -4120,8 +4120,15 @@ def train_one_config(
             fixed_sampler = objective_plan["sampler"][device_key]
             if cfg["epochs"] > len(fixed_sampler["epochs"]):
                 raise ValueError("requested training epochs exceed locally prepared presentation plan; rebuild locally")
-            batch_size = fixed_sampler["batch_size"]
-            controlled_sampler = FrozenBatchSampler(fixed_sampler["epochs"])
+            batch_size = runtime("batch_size_cuda" if on_cuda else "batch_size_cpu")
+            if fixed_sampler["batch_size"] != batch_size:
+                raise ValueError("local presentation batch size differs from configured runtime; rebuild locally")
+            if loss in {"contrastive", "mnrl"}:
+                if "pair_id" not in train_ds.column_names or list(train_ds["pair_id"]) != list(range(len(train_ds))):
+                    raise ValueError("local objective pair IDs must map every training row in order; rebuild locally")
+            controlled_sampler = FrozenBatchSampler(
+                fixed_sampler["epochs"], expected_rows=len(train_ds), batch_size=batch_size
+            )
             n_steps_per_epoch = max(1, len(controlled_sampler))
             warmup_steps = int(sum(len(batches) for batches in fixed_sampler["epochs"][:cfg["epochs"]]) * cfg["warmup_ratio"])
             eval_steps = max(1, n_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
@@ -4255,7 +4262,10 @@ def train_one_config(
 
                 def get_batch_sampler(self, dataset, batch_size, drop_last, **kwargs):
                     if "pair_id" in dataset.column_names or loss == "triplet":
-                        return FrozenBatchSampler(fixed_sampler["epochs"])
+                        return FrozenBatchSampler(
+                            fixed_sampler["epochs"], expected_rows=len(dataset),
+                            batch_size=fixed_sampler["batch_size"],
+                        )
                     return super().get_batch_sampler(dataset, batch_size, drop_last, **kwargs)
 
                 def compute_loss(

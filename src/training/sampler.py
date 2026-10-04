@@ -206,7 +206,24 @@ def resolve_composition(weights, populations, batch_size):
 
 class FrozenBatchSampler:
     """GPU worker presentation order prepared locally for every epoch."""
-    def __init__(self, epochs):
+    def __init__(self, epochs, *, expected_rows=None, batch_size=None):
+        if not epochs:
+            raise ValueError('local presentation plan has no training epochs')
+        if batch_size is not None and (not isinstance(batch_size, int) or batch_size < 1):
+            raise ValueError('local presentation plan has invalid batch size')
+        for batches in epochs:
+            if not batches or any(not batch for batch in batches):
+                raise ValueError('local presentation plan has an empty training epoch or batch')
+            if batch_size is not None and any(len(batch) > batch_size for batch in batches):
+                raise ValueError('local presentation batch exceeds configured batch size')
+            indices = [index for batch in batches for index in batch]
+            if any(not isinstance(index, (int, np.integer)) or isinstance(index, bool) or index < 0
+                   for index in indices):
+                raise ValueError('local presentation plan has invalid row indices')
+            if len(set(indices)) != len(indices):
+                raise ValueError('local presentation plan repeats training rows')
+            if expected_rows is not None and sorted(indices) != list(range(expected_rows)):
+                raise ValueError('local presentation plan must cover every training row exactly once')
         self.epochs = epochs
         self.epoch = 0
     def set_epoch(self, epoch):
