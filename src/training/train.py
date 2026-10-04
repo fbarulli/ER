@@ -530,6 +530,10 @@ def _main_inner(_wandb) -> None:
     lo, hi = (float(x) for x in args.band.split("-"))
     band = (lo, hi)
 
+    from core.timing import Timing
+
+    timing = Timing("train.data_path")
+
     if args.dataset is None:
         df = load_dataset_deduped()
     else:
@@ -541,6 +545,7 @@ def _main_inner(_wandb) -> None:
     if args.sample:
         df = df.head(args.sample).reset_index(drop=True)
         print(f"SAMPLE MODE: first {args.sample} rows", flush=True)
+    timing.mark("dataset_load")
     # run_tag (owner ruling): every varying axis — model, payload variant,
     # train fraction, split, AND sample mode — is part of every artifact
     # name this run touches (fold metrics, pair dumps, checkpoints,
@@ -570,6 +575,7 @@ def _main_inner(_wandb) -> None:
         data["pos"],
         data["neg"],
     )
+    timing.mark("base_data")
     # Retailer per payload row, for the cross-retailer donor precedence the
     # duplicate census asked for (91.4% of real same-GTIN duplicates are
     # cross-retailer). Sku rows carry their import retailer; the canonical
@@ -755,6 +761,8 @@ def _main_inner(_wandb) -> None:
             "no positives resolved — check canonical_records.csv GTINs "
             "vs dataset_deduped.csv gtins"
         )
+
+    timing.mark("pair_census")
 
     # ── masking augmentation (src/training/masking.py, config-driven) ──
     # Owner's masking augmentation, corrected for MNRL semantics: the original
@@ -1098,6 +1106,8 @@ def _main_inner(_wandb) -> None:
                 flush=True,
             )
 
+    timing.mark("augmentation")
+
     # ── COMPONENT-AWARE SPLITS ──────────────────────────────────────────────
     # UNEXPECTED-BEHAVIOR FIX: pipeline positives connect TWO DIFFERENT
     # gtins, so gtin-level folds straddle pairs (one endpoint per
@@ -1322,6 +1332,7 @@ def _main_inner(_wandb) -> None:
         "cross_brand_conflict source in this fold's negative pool)",
         flush=True,
     )
+    timing.mark("splits_mining_balance")
 
     # masked anchors extend the row-index space beyond df; every df-indexed
     # side array must cover them (row_bc/payload/emb0 already do; country
@@ -1356,6 +1367,7 @@ def _main_inner(_wandb) -> None:
             flush=True,
         )
 
+    timing.mark("country_pad")
     data = (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0)
 
     if args.prepare_bundle is not None:
@@ -1393,6 +1405,8 @@ def _main_inner(_wandb) -> None:
             f"{manifest.n_pos:,} positives, {manifest.n_neg:,} negatives)",
             flush=True,
         )
+        timing.mark("bundle_write")
+        timing.dump_if_requested()
         return
 
     # ── HPO lanes: second07 fixed grid / second08 optuna TPE ───────────────

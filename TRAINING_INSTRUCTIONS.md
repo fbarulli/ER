@@ -32,6 +32,24 @@ It rebuilds the CSVs, all three tracks' offline inputs, and one verified
 A timestamped directory under `results/training_prep/` contains stage logs,
 `manifest.json`, the package, and backups of replaced setup/bundle/lane files.
 The manifest records the exact output paths, sizes, and SHA-256 hashes.
+It also records stage start/end timestamps, elapsed seconds, and failure
+status in `timings.json` and `manifest.json`. Stage and substep messages append
+to a shared `timings.log` in the run directory. Each subprocess also writes
+detailed substep timings to `<stage>.timing.json`; nested components retain their own
+metrics. Timings are saved incrementally, including completed substeps before
+a failure. Live `[timing]` messages identify stage starts and finishes.
+Colab initialization writes a separate root-level `colab_setup_timing.log`
+with CLI checks, provisioning, handshake, checkout, dependency installation,
+uploads, and runtime checks, including periodic elapsed-time updates. It stops
+when initialization completes or fails and excludes model training timings.
+
+Use this single preparation command for the complete embedding, baseline
+ablation, three model tracks, and final ablation workflow. It prepares all
+tokens, graph tensors, query batches, and training epoch batches locally;
+embedding forward passes and model training run on the GPU. CPU smoke uses
+batch size 32. Full GPU text training, embedding export, evaluation, and
+attribute ablation use batch size 64. Hybrid embedding batching retains its
+existing setting; graph optimization remains full-batch.
 
 `config/model_tracks.yaml` chooses the setup directory, text bundle, text
 model, epochs, ablation preparation, and GPU dispatch settings. Override it
@@ -105,8 +123,13 @@ the authoritative inventory.
 The new lane is generated and audited on every preparation run, but that
 setting keeps it diagnostic-only: generating a CSV does not switch training.
 The active text path retains gate hard negatives and configured additional
-miners. Graph tracks start from clean labeled listing pairs plus trusted
-same-entity positive chains, as specified by the model plan.
+miners. During packaging, `SharedTrainingData` freezes the actual MNRL
+objective into `shared_training_data.json`. Text, graph, and hybrid validate
+the same example IDs, endpoint lineage, labels, multiplicity, and fingerprint.
+Graph adapters add canonical and augmented nodes and project each shared
+triplet into its positive and negative pair presentations. Clean listing-only
+dev/test pairs retain their original scope. ANN indexes use the real listing
+catalog and exclude these virtual supervision nodes.
 
 The experimental lane blocks real different-GTIN candidates first, measures
 anchors with a real one-attribute-different partner, and mints at most one
@@ -121,10 +144,10 @@ stops lane-mode preparation. In gate mode it is recorded as a diagnostic
 failure while the active gate preparation continues. `insufficient` means
 there is not enough grouped evidence; it is not a successful safety result.
 
-Lane activation still requires real-pair quality evidence and graph-specific
-supervision work for a comparable all-track lane experiment. Text edits or
-minted text partners are not automatically graph augmentations. Do not
-claim shared new-lane supervision for B/C from a text-only mode switch.
+Lane activation still requires real-pair quality evidence. The shared-data
+adapter projects the frozen text objective, including changed canonical and
+copy features, into both graph tracks. Packaging rejects missing endpoints,
+changed labels, stale fingerprints, or dropped repeated relationships.
 
 ## Offline batching and hybrid embeddings
 
@@ -135,6 +158,10 @@ batches preserve remaining rows. Every objective row must occur exactly once
 per epoch. MNRL duplicate checks inspect text fields, excluding telemetry.
 The GPU worker consumes `FrozenBatchSampler` and native token tables; it
 rejects missing/repeated/out-of-range indices or mismatched batch settings.
+The local packaging preflight also checks both device plans for every requested
+epoch, including batch sizes and exact objective row coverage. Missing or stale
+plans fail locally before Colab provisioning; regenerate them with
+`PYTHONPATH=src .venv/bin/python -m training.prepare_all`.
 
 Sampled smoke runs reuse their saved objective rows and the selected device's
 saved CPU/CUDA batch size. They permit configuration-hash drift in the row
@@ -220,6 +247,13 @@ repeating CPU token/tensor preparation. Freshness checks reject changed
 source, configuration, checkpoint, or input bytes before provisioning.
 Without that flag, the launcher prepares a new package from existing local
 CSVs; CSV generation belongs to `training.prepare_all`.
+Prepared suite checkout uses a depth-one, blob-filtered clone and selects
+runtime source/configuration/scripts, wheels, the selected model, and only
+the current immutable input transport. Historical result bundles and raw
+datasets stay out of the checkout. The package's exact source revision is
+fetched separately at depth one before its frozen files are restored; a
+separate training branch is unnecessary. Legacy lanes retain a full working
+tree. Checkout durations remain in `colab_setup_timing.log`.
 W&B credentials are only needed for online mode. Install the target
 CPU/CUDA PyTorch runtime and `requirements/graph_tracks.txt` first; the local
 MiniLM model directory must contain valid weights and tokenizer files.

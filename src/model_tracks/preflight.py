@@ -58,7 +58,7 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     else:
         checks['hybrid'] = graph_preflight(root/'hybrid.yaml',check_device=False,require_dvc=False)
     manifest, bundle = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
-    from training.run_plan import validate_run_plan
+    from training.run_plan import validate_run_plan, validate_epoch_batches
     from training.token_inputs import validate_training_tokens
     if 'training_tokens' not in bundle or 'training_plan' not in bundle:
         raise ValueError('text bundle lacks fixed native tokens/training row plan; rebuild locally')
@@ -70,6 +70,27 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     if bundle['training_tokens']['payload_sha256'] != payload_digest or not set(bundle['payload']).issubset(bundle['training_tokens']['texts']):
         raise ValueError('training native tokens differ from frozen payload')
     validate_run_plan(bundle,bundle['training_plan'],loss=training_cfg().training.loss,train_frac=1.,sample=bool(is_smoke),seed=SEED)
+    from core.common import runtime
+    batch_sizes = {device: int(runtime('batch_size_' + device)) for device in ('cpu', 'cuda')}
+    if is_smoke:
+        # Lifecycle smokes retain their saved batch settings, like the worker.
+        saved = bundle['training_plan']['inputs']['folds'][0]['objective']['sampler']
+        batch_sizes = {device: saved[device]['batch_size'] for device in batch_sizes}
+    validate_epoch_batches(bundle['training_plan'], epochs=cfg.epochs, batch_sizes=batch_sizes)
+    from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
+    from model_tracks.shared_graph_data import validate_projection
+    shared = SharedTrainingData.model_validate_json((root / 'shared_training_data.json').read_text())
+    if from_bundle(bundle).fingerprint != shared.fingerprint:
+        raise ValueError('suite shared training data differs from frozen text objective')
+    text_binding = TrackTrainingBinding.model_validate_json((root / 'text_training_binding.json').read_text())
+    if text_binding.track != 'text':
+        raise ValueError('text training binding has wrong track')
+    text_binding.validate_data(shared)
+    for track in ('gnn_only', 'hybrid'):
+        validate_projection(root, shared, track=track)
+    shared_summary = {'sha256': shared.fingerprint, 'examples': len(shared.examples),
+                      'endpoints': len(shared.endpoints), 'graph_pair_rows': len(shared.pair_rows()),
+                      'tracks': ['text', 'gnn_only', 'hybrid']}
     from core.schemas import DataTuple
     DataTuple(n_df=len(bundle['df']), **{key: bundle[key] for key in
               ('payload', 'structured_features', 'row_bc', 'country', 'pos', 'hp_pairs', 'emb0')})
@@ -113,7 +134,8 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
         print('[preflight] WARNING: sampled smoke diet misses training thresholds:\n' + diet.stdout, flush=True)
     if diet.returncode and not diet_warning:
         raise ValueError('text bundle diet preflight failed:\n' + diet.stdout + diet.stderr)
-    return {'text': {'bundle_sha256': manifest.sha256, 'payload': manifest.payload_variant,
+    return {'shared_training_data': shared_summary,
+            'text': {'bundle_sha256': manifest.sha256, 'payload': manifest.payload_variant,
                      'masking_profile': manifest.masking_profile, 'rows': manifest.n_df,
                      'diet': {'status': 'warning' if diet_warning else 'pass', 'log': diet.stdout}},
             **checks, 'hybrid_text_mode': 'frozen shared baseline; independent of current text fine-tuning',

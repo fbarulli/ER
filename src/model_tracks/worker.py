@@ -42,6 +42,8 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                     report_test=cfg.report_test, bundle=str(cfg.text_bundle),
                     payload=manifest.payload_variant)
         command = [sys.executable, '-m', 'training.train_prepared', '--bundle', cfg.text_bundle,
+                   '--shared-training-data', str(setup / 'shared_training_data.json'),
+                   '--training-binding', str(setup / 'text_training_binding.json'),
                    '--model', cfg.text_model, '--epochs', str(cfg.epochs),
                    '--payload', manifest.payload_variant, '--run-tag', run_tag,
                    '--device', cfg.device,

@@ -53,6 +53,8 @@ def checkpoint_policy(model):
 
 def prepare_training_tokens(model, payload, *, batch_size=256):
     """Store unpadded native features once per unique text and prompt."""
+    from core.timing import Timing
+    timing = Timing('training.native_tokens')
     payload = list(payload)
     policy = checkpoint_policy(model)
     texts = list(dict.fromkeys(payload))
@@ -85,6 +87,7 @@ def prepare_training_tokens(model, payload, *, batch_size=256):
                 print(f"[training tokens/local] prompt={prompt!r} prepared={min(start + batch_size, len(texts)):,}/{len(texts):,} truncated=0", flush=True)
                 last_progress = time.monotonic()
         variants[prompt] = {"rows": rows, "constants": constants or {}}
+        timing.mark('prompt_' + str(prompts.index(prompt)))
     return {"version": 1, "policy": policy, "texts": texts, "variants": variants,
             "task_contract": PreparedTaskContract.from_model(model).model_dump(),
             "payload_sha256": hashlib.sha256(json.dumps(list(payload), ensure_ascii=False).encode()).hexdigest()}

@@ -92,10 +92,28 @@ class AttributeGNN(nn.Module):
 
 
 class PairScorer(nn.Module):
-    """Trainable graph cosine calibration, with a direct text path in hybrid."""
+    """Trainable cosine calibration; new training keeps similarity monotonic.
+
+    State-dict keys remain unchanged so historical checkpoints retain their
+    original scores when loaded for inference.
+    """
     def __init__(self, hybrid: bool):
         super().__init__()
         self.head = nn.Linear(2 if hybrid else 1, 1)
+        nn.init.constant_(self.head.weight, 1.0 / self.head.in_features)
+        nn.init.zeros_(self.head.bias)
+
+    @torch.no_grad()
+    def project_similarity_weights(self) -> None:
+        """Project after optimizer updates, never silently during inference."""
+        self.head.weight.clamp_(min=0.0)
+
+    def calibration_metrics(self) -> dict:
+        weights = self.head.weight.detach().flatten().cpu().tolist()
+        return {"policy": "nonnegative_similarity_weights_v1",
+                "graph_cosine_weight": weights[0],
+                "text_cosine_weight": weights[1] if len(weights) > 1 else None,
+                "bias": self.head.bias.detach().cpu().item()}
 
     def forward(self, embeddings: torch.Tensor, pairs: torch.Tensor,
                 text: torch.Tensor | None = None) -> torch.Tensor:

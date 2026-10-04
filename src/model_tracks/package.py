@@ -30,8 +30,23 @@ def runtime_snapshot_files(*, ablation_config: Path | None = None) -> dict[str, 
 
 def package(config: Path, output: Path) -> Path:
     from core.common import F, TRAIN_ROOT
+    from core.timing import Timing
+
+    timing = Timing("model_tracks.package")
     cfg = load_config(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
+    from training.prepared_bundle import load_prepared_bundle
+    from model_tracks.training_data import from_bundle, TrackTrainingBinding
+    from model_tracks.shared_graph_data import prepare_shared_graph
+    _, bundle = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
+    shared = from_bundle(bundle)
+    (setup / 'shared_training_data.json').write_text(shared.model_dump_json(indent=2) + '\n')
+    text_binding = TrackTrainingBinding(track='text', shared_data_sha256=shared.fingerprint,
+        example_ids=[row.example_id for row in shared.examples],
+        endpoint_indices=[row.payload_index for row in shared.endpoints])
+    (setup / 'text_training_binding.json').write_text(text_binding.model_dump_json(indent=2) + '\n')
+    prepare_shared_graph(setup, bundle, shared)
+    timing.mark('shared_training_population')
     from graph_tracks.config import load_text_config
     text_settings = load_text_config(setup / 'text.yaml').model_dump()
     # All tensors and native tokenizer features are fixed on local CPU before
@@ -44,6 +59,7 @@ def package(config: Path, output: Path) -> Path:
         raise ValueError('shared prepared graph inference batch sizes must agree')
     cache = setup/'shared_minilm__embeddings.npz'
     prepare_training(setup/'prepared/listings.json',setup/'prepared/pairs.csv',batch_size=sizes.pop())
+    timing.mark('graph_prepare')
     from model_tracks.text_export import prepare as prepare_text_export
     from core.common import resolve_model
     from core.common import runtime
@@ -58,19 +74,27 @@ def package(config: Path, output: Path) -> Path:
                             'implementation':composition_fingerprint()}
     composed,token_cache = {},{}
     def compose(row):
+        if row.get('frozen_payload'):
+            if not str(row['sku_id']).startswith(('canonical:', 'augmentation:')):
+                raise ValueError('frozen payload override requires shared virtual endpoint')
+            return row['frozen_payload']
         key = digest({'row':row,'composition':composition_contract})
         if key not in composed:
             series = pd.Series(row)
             composed[key] = build_sku_text(series,model_input_info(row_identity(series).as_mapping()))
         return composed[key]
     prepare_text_export(setup,Path(resolve_model(cfg.text_model)),batch_size=runtime('batch_size_embed'),composer=compose,token_cache=token_cache)
+    timing.mark('text_export')
     if cfg.post_training_ablation:
         from model_tracks.staged_ablation import prepare_suite
         prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache)
+        timing.mark('ablation_suite')
     from model_tracks.baseline_export import prepare as prepare_baseline
     prepare_baseline(setup,Path(resolve_model(cfg.text_model)),composer=compose)
+    timing.mark('baseline_export')
     native_model = next(value for key,value in token_cache.items() if key[0] == 'model')
     checks = preflight(config,allow_gpu_pending=True,native_token_model=native_model)
+    timing.mark('preflight')
     target = Path('data/model_tracks/shared')
     files = {str(target / p.relative_to(setup)):p for p in setup.rglob('*') if p.is_file()
              and p.name not in {'gnn_only.yaml','hybrid.yaml','text.yaml'} and p.suffix not in {'.zip'}
@@ -98,8 +122,11 @@ def package(config: Path, output: Path) -> Path:
         source = Path(F[key]).resolve()
         files[source.relative_to(TRAIN_ROOT).as_posix()] = source
     revision = subprocess.run(['git','rev-parse','HEAD'],cwd=TRAIN_ROOT,capture_output=True,text=True,check=True).stdout.strip()
-    return write_archive(output,files,inline=inline,manifest_name='model_tracks_package.json',
-                         metadata={'schema':'er-model-tracks-package-v1','revision':revision,'preflight':checks})
+    archive = write_archive(output,files,inline=inline,manifest_name='model_tracks_package.json',
+                            metadata={'schema':'er-model-tracks-package-v1','revision':revision,'preflight':checks})
+    timing.mark('archive_write')
+    timing.dump_if_requested()
+    return archive
 
 
 def verify(path: Path):
@@ -108,7 +135,7 @@ def verify(path: Path):
 
 def verify_current(path: Path, config: Path):
     """Reuse a completed CPU package only while local inputs/config stay bound."""
-    import zipfile
+    from core.archive_reader import open_archive
     from core.common import TRAIN_ROOT, F, resolve_model
     from graph_tracks.data import file_hash
     from graph_tracks.text_cache import checkpoint_hash
@@ -121,7 +148,7 @@ def verify_current(path: Path, config: Path):
     from graph_tracks.config import load_text_config, load_config as load_graph_config
     expected_text = load_text_config(setup / 'text.yaml').model_dump()
     expected_text.update(report_test=cfg.report_test)
-    with zipfile.ZipFile(path) as archive:
+    with open_archive(path) as archive:
         if yaml.safe_load(archive.read('data/model_tracks/suite.yaml')) != expected_suite:
             raise ValueError('prepared package suite config changed; regenerate locally')
         if yaml.safe_load(archive.read(str(target/'text.yaml'))) != expected_text:

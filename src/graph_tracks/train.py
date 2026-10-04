@@ -30,10 +30,11 @@ from graph_tracks.model import AttributeGNN, PairScorer
 
 def load_pairs(path: Path, records: list[dict]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-    if set(frame.columns) != {"sku_id1", "sku_id2", "label", "split"}:
-        raise ValueError("pairs columns must be sku_id1, sku_id2, label, split")
+    columns = {"sku_id1", "sku_id2", "label", "split"}
+    if set(frame.columns) not in (columns, columns | {'example_id'}):
+        raise ValueError("pairs columns must be sku_id1, sku_id2, label, split, with optional example_id")
     ids = {r["sku_id"]: i for i, r in enumerate(records)}
-    seen = set()
+    seen, example_ids = {}, set()
     rows = {s: ([], []) for s in ("train", "dev", "test")}
     for row in frame.itertuples(index=False):
         if row.label not in {"0", "1"} or row.split not in rows:
@@ -46,9 +47,16 @@ def load_pairs(path: Path, records: list[dict]) -> dict[str, tuple[np.ndarray, n
         if records[i]["split"] != row.split or records[j]["split"] != row.split:
             raise ValueError("pair crosses split boundary or contains a trained-on endpoint")
         key = tuple(sorted((i, j)))
+        example_id = getattr(row, 'example_id', '')
+        if example_id:
+            if row.split != 'train' or example_id in example_ids:
+                raise ValueError('example_id must uniquely identify a training relationship')
+            example_ids.add(example_id)
         if key in seen:
-            raise ValueError("duplicate or conflicting pair")
-        seen.add(key)
+            previous_label, repeated_training = seen[key]
+            if previous_label != row.label or not (example_id and repeated_training):
+                raise ValueError("duplicate or conflicting pair")
+        seen[key] = (row.label, bool(example_id))
         rows[row.split][0].append((i, j))
         rows[row.split][1].append(float(row.label))
     result = {s: (np.asarray(p, dtype=np.int64).reshape(-1, 2),
@@ -149,6 +157,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,
                              text_dim, cfg.graph_enabled, cfg.aggregation_backend).to(cfg.device)
         scorer = PairScorer(bool(text_dim)).to(cfg.device)
+        logger.info("[graph-scorer] initialization=%s", json.dumps(scorer.calibration_metrics()))
         from core.gpu_execution import GradientStatistics, OptimizerExecution
         from core.execution_policy import resolve_aggregation
         optimizer_policy = OptimizerExecution(backend=cfg.optimizer_backend)
@@ -183,6 +192,11 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         {"core/gpu_execution.py": file_hash(TRAIN_ROOT / "src/core/gpu_execution.py"),
                          "core/execution_policy.py": file_hash(TRAIN_ROOT / "src/core/execution_policy.py")},
                     "resume_checkpoint_sha256": file_hash(resume) if resume else None}
+        if input_manifest and input_manifest.get('shared_training_data_sha256'):
+            manifest['augmentation'] = {
+                'source': 'shared frozen training objective',
+                'shared_training_data_sha256': input_manifest['shared_training_data_sha256'],
+                'hybrid_text': 'frozen baseline checkpoint' if cfg.track == 'hybrid' else None}
         best_metric, best_path, start_epoch = -1., None, 0
         logger.info("[graph-resume] mode=%s checkpoint=%s target_epochs=%d",
                     'resume' if resume else 'fresh', resume, cfg.epochs)
@@ -350,6 +364,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     handle.write(json.dumps({"epoch": epoch, "parameter_gradient_norms": gradient_norms}) + "\n")
                 gradient_statistics.clip(cfg.max_grad_norm)
                 profiler.call('graph/optimizer',optimizer.step)
+                scorer.project_similarity_weights()
                 logger.info("[graph-phase] dev_evaluation start epoch=%d/%d dev_pairs=%d",
                             epoch, cfg.epochs, len(dev_pairs))
                 model.eval()
@@ -361,6 +376,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                            "train_classification_loss": classification_value,
                            "train_metric_loss": metric_value, **quality(pairs["dev"][1], dev_scores),
                            "epoch_seconds": time.monotonic() - started}
+                metrics["scorer_calibration"] = scorer.calibration_metrics()
+                logger.info("[graph-scorer] epoch=%d calibration=%s",
+                            epoch, json.dumps(metrics["scorer_calibration"]))
                 if cfg.device == "cuda":
                     metrics["gpu_allocated_gb"] = torch.cuda.memory_allocated() / 1024**3
                     metrics["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 1024**3

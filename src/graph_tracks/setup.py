@@ -99,6 +99,8 @@ def listing_contract(catalog, labels, populations):
 
 
 def setup(output: Path, checkpoint: Path) -> Path:
+    from core.timing import Timing
+    timing = Timing('graph_tracks.setup')
     from core.common import F, SEED, TRAIN_ROOT, load_dataset_deduped, training_cfg
     from core.identity_policy import POLICY_PATH
     from training.base_data import load_base_data
@@ -115,11 +117,13 @@ def setup(output: Path, checkpoint: Path) -> Path:
     baseline_hash = checkpoint_hash(checkpoint)
     catalog = load_dataset_deduped().fillna('')
     data = load_base_data(catalog, payload_variant='full')
+    timing.mark('checkpoint_catalog_and_base_data')
     train, dev, test = derive_holdout(data['pos'], data['row_bc'],
                                     dict(training_cfg().split), seed=SEED)
     labels = pd.read_csv(F['labeled_pairs'], dtype=str, keep_default_na=False)
     frame, assignments, pairs, accounting = listing_contract(
         catalog, labels, {'train': train, 'dev': dev, 'test': test})
+    timing.mark('splits_and_listing_contract')
     # Validate before publishing any setup artifacts.
     from graph_tracks.train import load_pairs
     load_pairs_from = [{'sku_id': r.sku_id, 'split': r.split}
@@ -134,10 +138,12 @@ def setup(output: Path, checkpoint: Path) -> Path:
                'listing_pairs_sha256':file_hash(output / 'listing_pairs.csv'),
                'source_labels_sha256':file_hash(F['labeled_pairs'])})
     load_pairs(output / 'listing_pairs.csv', load_pairs_from)
+    timing.mark('validate_and_write_pairs')
     listings = prepare(output / 'eligible_catalog.csv', output / 'listing_splits.csv',
                        output / 'listing_pairs.csv', output / 'prepared')
     records = load_records(listings)
     write_json(output / 'graph_census.json', census(records, fit_vocabulary(records)))
+    timing.mark('graph_features_and_census')
     import subprocess
     revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=TRAIN_ROOT,
                               capture_output=True, text=True, check=True).stdout.strip()
@@ -170,6 +176,7 @@ def setup(output: Path, checkpoint: Path) -> Path:
     text_cfg = text_template.copy()
     text_cfg.update(report_test=False)
     (output / 'text.yaml').write_text(yaml.safe_dump(text_cfg, sort_keys=False))
+    timing.mark('hashes_manifest_and_track_configs')
     return output
 
 

@@ -198,6 +198,10 @@ def extract_pack_evidence(title: str) -> list[dict]:
     patterns = (
         ("nested", rf"{number}\s*[x×]\s*(\d+)\s*(?:{containers}\s*)?(?:[x×]|/)\s*\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
         ("multiplier", rf"{number}\s*[x×]\s*(?:pack\s*)?\d+(?:[.,]\d+|[.,]\s+\d{{1,2}})?{multiplier_tail}", "unit_count"),
+        # Retail titles also use a terminal count without a unit size:
+        # "Hip Pop - Blueberry Ginger - kombucha - 12x". Restrict it to
+        # a suffix; model codes and unfinished size multipliers stay unknown.
+        ("multiplier", rf"{number}\s*[x×]\s*[)\]]?\s*$", "unit_count"),
         ("pack_of", rf"\b(?:packs?|packages?)\s+of\s*{count_token}\b", "unit_count"),
         ("pack_of", rf"\bcases?\s+of\s*{count_token}\b", "unit_count"),
         ("count", rf"{number}\s*[- ]?\s*(?:pcs?|pieces?|packs?|packages?|pk|units?|ct|count)\b", "unit_count"),
@@ -2745,6 +2749,10 @@ def run_within_brand_pipeline(
         ),
     )
 
+    from core.timing import Timing
+
+    timing = Timing("data_prep.pipeline")
+
     # NaN/empty GTINs must NOT form a group: 41,545 rows (58% of the corpus)
     # share gtin=NaN and used to collapse into ONE canonical record with an
     # arbitrary mode-brand — poisoning canonical_records.csv AND the global
@@ -2845,6 +2853,8 @@ def run_within_brand_pipeline(
         brand_rows = {gtin: rows_by_gtin[gtin] for gtin in gtins}
         brand_idf_map[brand] = NgramIDF(brand_rows)
 
+    timing.mark("guards_grouping_idf")
+
     # Generate canonical records
     canonical_records = []
     from tqdm import tqdm
@@ -2869,6 +2879,7 @@ def run_within_brand_pipeline(
         record["source_rows"] = row["source_rows"]
         canonical_records.append(record)
     df_canon = pd.DataFrame(canonical_records)
+    timing.mark("canonical_cards")
 
     # ── CONSOLIDATED TRACE: the row identity closes here ──────────────────
     # Every GS1-valid row is either promoted to its gtin's canonical record or
@@ -2955,6 +2966,8 @@ def run_within_brand_pipeline(
         detail={"ledger": veto_eligibility_ledger()},
         source="core.attribute_universe census + config/training.yaml (both read-only)",
     )
+
+    timing.mark("pre_gate_census")
 
     # Brand blocking
     candidate_pairs = set()
@@ -3065,6 +3078,7 @@ def run_within_brand_pipeline(
                 ),
             }
         )
+    timing.mark("gate_loop")
     results_df = pd.DataFrame(results)
 
     # TRAIN_GPU writes ONLY inside its own tree (lib.common RESULTS —
@@ -3107,6 +3121,7 @@ def run_within_brand_pipeline(
 
     atomic_write_csv(df_canon, RESULTS / F["canonical_records"], index=False)
     atomic_write_csv(results_df, RESULTS / F["gate_results"], index=False)
+    timing.mark("csv_write")
     # ── CONSOLIDATED TRACE: gate stage ─────────────────────────────────────
     # One CSV carries the whole story: run-scope funnels (candidate census →
     # decision census → complete reason census), one exact group row per
@@ -3246,6 +3261,7 @@ def run_within_brand_pipeline(
         f"gate decisions: {vis_counts}",
         flush=True,
     )
+    timing.dump_if_requested()
 
     return results_df, df_canon
 
@@ -3321,12 +3337,20 @@ def build_training_data(
     thr_pos = float(cfg["pairs"]["proceed_sim_threshold"])
     thr_neg = float(cfg["pairs"]["hardneg_sim_threshold"])
 
+    from tqdm import tqdm
+
+    from core.timing import Timing
+
+    timing = Timing("pipeline.build_training_data")
+    timing.mark("config_and_trace")
+
     canon_map = load_canonical_map()
     gates = pd.read_csv(
         RESULTS / F["gate_results"],
         dtype={"gtin1": str, "gtin2": str},
         keep_default_na=False,
     )
+    timing.mark("read_gate_results")
 
     bc = df["gtin"].fillna("").astype(str).str.strip()
     title = df["sku_name_eng"].fillna("")
@@ -3355,6 +3379,7 @@ def build_training_data(
     sku_texts, sku_structured = build_sku_texts(
         model_frame, structured_enabled=structured_enabled
     )
+    timing.mark("sku_texts")
 
     # ── payload: sku rows + canonical entries (in sorted-gtin order) ──
     payload = list(sku_texts)
@@ -3376,19 +3401,38 @@ def build_training_data(
     check_canonical_records_frame(canonical_records)
     canonical_record_map = {
         str(row["gtin"]): row.to_dict()
-        for _, row in canonical_records.iterrows()
+        for _, row in tqdm(
+            canonical_records.iterrows(),
+            total=len(canonical_records),
+            unit="record",
+            desc="canon-records",
+            disable=None,
+        )
     }
     canon_structured = [
         model_input_info(canonical_structured_info(canonical_record_map.get(g, {})))
         if structured_enabled
         else {"volume": set(), "pack": set(), "package_type": set()}
-        for g in canon_gtins
+        for g in tqdm(
+            canon_gtins,
+            total=len(canon_gtins),
+            unit="canon",
+            desc="canon-info",
+            disable=None,
+        )
     ]
     canon_texts = [
         build_canonical_text(canonical_record_map.get(g, {}), info)
-        for g, info in zip(canon_gtins, canon_structured, strict=True)
+        for g, info in tqdm(
+            zip(canon_gtins, canon_structured, strict=True),
+            total=len(canon_gtins),
+            unit="canon",
+            desc="canon-text",
+            disable=None,
+        )
     ]
     payload.extend(canon_texts)
+    timing.mark("canonical_payload")
 
     # The structured tail is appended LAST, so at max_seq_length it is the
     # first thing truncated. Measure the assembled payload and record it, so a
@@ -3452,6 +3496,7 @@ def build_training_data(
         if i not in empty_sku and j not in empty_canon_idx
     ]
     pos = np.array(pos_pairs, dtype=int).reshape(-1, 2)
+    timing.mark("pairs_and_similarity")
 
     # ── representative row per GTIN (longest title — most signal) ──
     # UNEXPECTED-BEHAVIOR FIX: the old code sorted titles
@@ -3463,11 +3508,18 @@ def build_training_data(
     seen: set[str] = set()
     gtin_to_row: dict[str, int] = {}
     bc_arr = bc.to_numpy() if hasattr(bc, "to_numpy") else list(bc)
-    for i in order:
+    for i in tqdm(
+        order,
+        total=len(order),
+        unit="row",
+        desc="canon-row",
+        disable=None,
+    ):
         g = bc_arr[i]
         if g and g not in seen:
             seen.add(g)
             gtin_to_row[g] = i
+    timing.mark("representative_row")
 
     # ── negatives: gate hard-no pairs (both directions) ──
     # A hard_no gate decision is not sufficient for training: separate GTINs
@@ -3993,6 +4045,8 @@ def build_training_data(
         f"[trace] pairs steps written -> {trace_path()} | {_kinds}",
         flush=True,
     )
+    timing.mark("pairs_and_mining")
+    timing.dump_if_requested()
     # Contract preserved: the caller receives the TrainingData bundle. The
     # trace stage runs BEFORE this return (it was previously unreachable dead
     # code placed after it), and the dump is built once and reused.

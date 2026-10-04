@@ -1,7 +1,6 @@
 """All-track adapter; provisioning, locks, polling and teardown stay in cli.colab."""
 import json
 from pathlib import Path
-import zipfile
 import tarfile
 import hashlib
 
@@ -16,7 +15,7 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publ
     from core.common import TRAIN_ROOT
     from model_tracks.publish import push_artifacts
     verify(archive)
-    files = {'inputs.zip':archive}
+    files = {'inputs.tar.zst':archive}
     if resume_archive is not None:
         recovery = verify_archive(resume_archive,'suite_recovery_manifest.json')
         if recovery.get('run_tag') != run_tag:
@@ -88,7 +87,7 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
     from cli import colab as backend
     from core.common import RESULTS, TRAIN_ROOT
     metadata = verify(archive)
-    with zipfile.ZipFile(archive) as source:
+    with open_archive(archive) as source:
         import yaml
         settings = yaml.safe_load(source.read('data/model_tracks/suite.yaml'))
     from model_tracks.config import SuiteConfig
@@ -120,7 +119,7 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
     remote_output = f'{backend.REMOTE_ROOT}/results/model_tracks/{run_tag}'
     auth = backend._wandb_env_script()
     script = backend._BOOTSTRAP + auth + f'''
-import hashlib, json, os, pathlib, subprocess, sys, zipfile, tarfile
+import hashlib, json, os, pathlib, subprocess, sys, tarfile
 root=pathlib.Path({backend.REMOTE_ROOT!r})
 archive_path=pathlib.Path({remote_zip!r})
 transport=pathlib.Path({remote_inputs!r})
@@ -128,10 +127,10 @@ if hashlib.sha256(transport.read_bytes()).hexdigest() != {file_hash(git_inputs)!
     raise ValueError("cloned Git input transport mismatch")
 archive_path.parent.mkdir(parents=True,exist_ok=True)
 with tarfile.open(transport,'r:gz') as package:
-    expected_members={{'inputs.zip'}} | ({{'recovery.zip'}} if {resume_archive is not None!r} else set())
+    expected_members={{'inputs.tar.zst'}} | ({{'recovery.zip'}} if {resume_archive is not None!r} else set())
     if set(package.getnames()) != expected_members:
         raise ValueError("cloned Git input inventory mismatch")
-    for member_name,destination in [('inputs.zip',archive_path),('recovery.zip',pathlib.Path({remote_recovery!r}))]:
+    for member_name,destination in [('inputs.tar.zst',archive_path),('recovery.zip',pathlib.Path({remote_recovery!r}))]:
         if member_name not in expected_members:
             continue
         member=package.getmember(member_name)
@@ -142,9 +141,13 @@ with tarfile.open(transport,'r:gz') as package:
             shutil.copyfileobj(source,target)
 if hashlib.sha256(archive_path.read_bytes()).hexdigest() != {file_hash(archive)!r}:
     raise ValueError("prepared all-track Git input mismatch")
-subprocess.run(["git","fetch",{backend.GIT_REMOTE_NAME!r},{backend.BRANCH!r}],cwd=root,check=True)
+# The immutable package can predate its transport publication commit. Fetch
+# only that revision: a depth-one branch checkout need not contain its parent.
+subprocess.run(["git","fetch","--depth=1","--filter=blob:none","--no-tags",
+                {backend.GIT_REMOTE_NAME!r},{metadata['revision']!r}],cwd=root,check=True)
 subprocess.run(["git","checkout","--detach",{metadata['revision']!r}],cwd=root,check=True)
-with zipfile.ZipFile(archive_path) as archive:
+from core.archive_reader import open_archive
+with open_archive(archive_path) as archive:
     for member in archive.infolist():
         if not (root/member.filename).resolve().is_relative_to(root.resolve()):
             raise ValueError("unsafe input package member")

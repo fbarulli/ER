@@ -199,6 +199,9 @@ _COLAB_CLI_CONFIG = _COLAB_CLI_STATE_DIR / "sessions.json"
 _COLAB_CLI_ENTRYPOINT = Path(__file__).with_name("colab_cli_entry.py")
 LIVE_LOG_PATH: Path | None = None
 TRAINING_LOG_PATH: Path | None = None
+SETUP_TIMING_LOG_PATH: Path | None = None
+_setup_timing_active = False
+_setup_timing_lock = threading.Lock()
 _live_log = None
 _training_log = None
 _training_log_lock = threading.Lock()
@@ -431,16 +434,22 @@ def _record_remote_run(remote_base: str, *, workers: int, lane: str) -> None:
 def _colab_timing(kind: str, name: str):
     """Emit monotonic wall times to stdout and the launcher's durable transcript."""
     started = time.perf_counter()
-    print(f"[timing] {kind}={name} state=started", flush=True)
+    def emit(message):
+        print(message, flush=True)
+        if _setup_timing_active and SETUP_TIMING_LOG_PATH is not None:
+            with _setup_timing_lock:
+                with SETUP_TIMING_LOG_PATH.open('a', encoding='utf-8') as handle:
+                    handle.write(message + '\n')
+
+    emit(f"[timing] {kind}={name} state=started")
     state = "completed"
     stopped = threading.Event()
 
     def report_wait():
         while not stopped.wait(30):
-            print(
+            emit(
                 f"[timing] {kind}={name} state=running "
                 f"elapsed_seconds={time.perf_counter() - started:.3f}",
-                flush=True,
             )
 
     heartbeat = threading.Thread(target=report_wait, daemon=True)
@@ -454,7 +463,14 @@ def _colab_timing(kind: str, name: str):
         stopped.set()
         heartbeat.join()
         elapsed = time.perf_counter() - started
-        print(f"[timing] {kind}={name} state={state} elapsed_seconds={elapsed:.3f}", flush=True)
+        emit(f"[timing] {kind}={name} state={state} elapsed_seconds={elapsed:.3f}")
+        if kind == 'step' and name == 'initialization':
+            _finish_setup_timing()
+
+
+def _finish_setup_timing():
+    global _setup_timing_active
+    _setup_timing_active = False
 
 
 def _timed_colab(kind: str):
@@ -2053,10 +2069,14 @@ def start_live_log() -> None:
     """Start the root-level live Colab log, replacing the prior run's log."""
     global LIVE_LOG_PATH, TRAINING_LOG_PATH, _live_log, _training_log
     global _original_stdout, _original_stderr
+    global SETUP_TIMING_LOG_PATH, _setup_timing_active
     if _live_log is not None:
         _live_log.close()
     LIVE_LOG_PATH = F["colab_live_log"]
     TRAINING_LOG_PATH = F["colab_training_log"]
+    SETUP_TIMING_LOG_PATH = LIVE_LOG_PATH.with_name('colab_setup_timing.log')
+    SETUP_TIMING_LOG_PATH.write_text('', encoding='utf-8')
+    _setup_timing_active = True
     _live_log = LIVE_LOG_PATH.open("w", encoding="utf-8")
     _training_log = TRAINING_LOG_PATH.open("w", encoding="utf-8")
     _original_stdout = sys.stdout
@@ -2068,6 +2088,7 @@ def start_live_log() -> None:
 
 def close_live_log() -> None:
     global _live_log, _training_log, _original_stdout, _original_stderr
+    _finish_setup_timing()
     if _live_log is not None:
         sys.stdout = _original_stdout or sys.stdout
         sys.stderr = _original_stderr or sys.stderr
@@ -2219,8 +2240,18 @@ def ensure_session() -> None:
 
 
 @_timed_colab("step")
-def prepare_remote_layout(*, minimal_runtime: bool = False) -> None:
-    """Restore the configured branch using the established Colab checkout flow."""
+def prepare_remote_layout(*, minimal_runtime: bool = False, sparse_paths: tuple[str, ...] = ()) -> None:
+    """Fetch a shallow prepared runtime, selecting only this suite's inputs."""
+    if sparse_paths and not minimal_runtime:
+        raise ValueError('sparse checkout requires a prepared runtime')
+    patterns = ['/src/', '/config/', '/scripts/', '/artifacts/wheels/',
+                '/pyproject.toml', '/requirements.txt', '/colab_backend.py']
+    for value in sparse_paths:
+        path = Path(value)
+        if (path.is_absolute() or '..' in path.parts or not path.parts
+                or any(char in value for char in '\n\r\\*?[]!')):
+            raise ValueError('runtime checkout path must be repository-relative')
+        patterns.append('/' + path.as_posix())
     script = f"""
 import pathlib, shutil, subprocess, time
 
@@ -2239,6 +2270,14 @@ def run_git(command, **kwargs):
 
 root = pathlib.Path({REMOTE_ROOT!r})
 remote_name = {GIT_REMOTE_NAME!r}
+sparse_patterns = {patterns if sparse_paths else []!r}
+minimal_runtime = {minimal_runtime!r}
+def configure_sparse():
+    if sparse_patterns:
+        run_git(['git', 'sparse-checkout', 'set', '--no-cone', '--stdin'],
+                input='\\n'.join(sparse_patterns) + '\\n', text=True, cwd=root, check=True)
+    else:
+        run_git(['git', 'sparse-checkout', 'disable'], cwd=root, check=False)
 if root.exists() and not (root / ".git").is_dir():
     shutil.rmtree(root)
 if (root / ".git").is_dir():
@@ -2257,22 +2296,22 @@ if (root / ".git").is_dir():
                 f"configured git remote {{remote_name!r}} is absent in {{root}}; "
                 f"available remotes={{remotes}}"
             )
-    # A prior sparse/detached runtime must be returned to the stable branch
-    # checkout used by the original Colab launcher before control cells import
-    # project modules from REMOTE_ROOT/src.
-    run_git(["git", "sparse-checkout", "disable"], cwd=root, check=False)
-    run_git(["git", "fetch", remote_name, {BRANCH!r}], cwd=root, check=True)
+    fetch_options = ['--depth=1', '--filter=blob:none', '--no-tags'] if minimal_runtime else []
+    run_git(["git", "fetch", *fetch_options, remote_name, {BRANCH!r}], cwd=root, check=True)
+    configure_sparse()
     run_git(
-        ["git", "checkout", "-B", {BRANCH!r}, remote_name + "/" + {BRANCH!r}],
+        ["git", "checkout", "-B", {BRANCH!r}, 'FETCH_HEAD'],
         cwd=root,
         check=True,
     )
-    run_git(["git", "pull", "--ff-only", remote_name, {BRANCH!r}], cwd=root, check=True)
 else:
     root.parent.mkdir(parents=True, exist_ok=True)
-    run_git(["git", "clone", "--origin", remote_name,
+    clone_options = ['--depth=1', '--single-branch', '--filter=blob:none', '--no-tags'] if minimal_runtime else []
+    run_git(["git", "clone", *clone_options, '--no-checkout', "--origin", remote_name,
          "--branch", {BRANCH!r},
          {REPOSITORY!r}, str(root)], check=True)
+    configure_sparse()
+    run_git(['git', 'checkout', {BRANCH!r}], cwd=root, check=True)
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
     path.mkdir(parents=True, exist_ok=True)
 print("[repo] ready", {REPOSITORY!r}, "branch", {BRANCH!r},
@@ -4273,7 +4312,7 @@ def main() -> None:
     ap.add_argument('--tracks-config', type=Path, default=None,
                     help='prepared all-track suite; uses the existing Colab lifecycle')
     ap.add_argument('--prepared-input-package', type=Path, default=None,
-                    help='reuse training.prepare_all all_tracks_inputs.zip after freshness validation')
+                    help='reuse a training.prepare_all all_tracks_inputs package (.tar.zst) after freshness validation')
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
                     f"{_TRAIN_FRAC_DEFAULT:g})")
@@ -4401,7 +4440,7 @@ def main() -> None:
         if suite.device != ('cpu' if args.gpu.upper() == 'CPU' else 'cuda'):
             raise ValueError('suite device and --gpu must agree')
         suite_run_tag = args.resume_run or _lane_run_stamp()
-        suite_archive = RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.zip'
+        suite_archive = RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.tar.zst'
         if args.resume_run:
             if not suite_archive.is_file():
                 raise FileNotFoundError(f'resume requires the original prepared input package: {suite_archive}')
@@ -4547,7 +4586,13 @@ def main() -> None:
                 # the VM then idle-terminates instead of burning accelerator quota
                 # indefinitely.
                 stop_keep_alive_daemon(reason=f"GPU lane ({GPU}) must never be retained")
-            prepare_remote_layout(minimal_runtime=prepared_train_runtime)
+            if suite_git_inputs is not None:
+                from core.common import resolve_model
+                runtime_paths = tuple(path.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
+                                      for path in (suite_git_inputs, Path(resolve_model(suite.text_model))))
+                prepare_remote_layout(minimal_runtime=True, sparse_paths=runtime_paths)
+            else:
+                prepare_remote_layout(minimal_runtime=prepared_train_runtime)
             if args.what == 'tracks':
                 install_deps(minimal_runtime=True, graph_runtime=True)
             else:

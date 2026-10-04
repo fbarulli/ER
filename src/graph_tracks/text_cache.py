@@ -35,7 +35,10 @@ def compose_texts(catalog: Path, *, composer=None):
     started = last_progress = time.monotonic()
     print(f'[embeddings/local] composing {len(frame):,} texts on CPU', flush=True)
     for index, (_, row) in enumerate(frame.iterrows(), 1):
-        texts.append(composer(row.to_dict()) if composer is not None else
+        frozen = str(row.get('frozen_payload', '') or '')
+        if frozen and not str(row.sku_id).startswith(('canonical:', 'augmentation:')):
+            raise ValueError('frozen payload overrides are only valid for shared virtual endpoints')
+        texts.append(frozen if frozen else composer(row.to_dict()) if composer is not None else
                      build_sku_text(row, model_input_info(row_identity(row).as_mapping())))
         if index == len(frame) or time.monotonic() - last_progress >= 10:
             print(f'[embeddings/local] texts={index:,}/{len(frame):,} elapsed={time.monotonic()-started:.1f}s', flush=True)

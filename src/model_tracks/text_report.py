@@ -52,7 +52,9 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
         from training.hnsw_index import PersistentHnswIndex
         index = PersistentHnswIndex(output / 'text__index', ef_construction=cfg.hnsw_ef_construction,
                                    M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
-        index.build(vectors, [r['sku_id'] for r in records], checkpoint=checkpoint,
+        from model_tracks.training_data import retrieval_indices
+        catalog_indices = retrieval_indices(records)
+        index.build(vectors[catalog_indices], [records[i]['sku_id'] for i in catalog_indices], checkpoint=checkpoint,
                     model_name='text', preprocessing_fingerprint=file_hash(listings))
         perf.record('index_build', time.monotonic() - index_started)
         print(f"[text-phase] index_build complete path={output / 'text__index'} seconds={time.monotonic() - index_started:.3f}", flush=True)

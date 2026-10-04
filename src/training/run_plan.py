@@ -90,3 +90,27 @@ def validate_run_plan(bundle,plan,*,loss,train_frac,sample,seed=SEED):
     if plan['inputs']['skipped'] or not plan['inputs']['folds']:
         raise ValueError('prepared training row plan has failed/skipped folds')
     return plan
+
+
+def validate_epoch_batches(plan, *, epochs, batch_sizes):
+    """Check frozen CPU sampler output before provisioning the GPU worker."""
+    for fold in plan['inputs']['folds']:
+        objective = fold['objective']
+        dataset = objective['dataset']
+        sizes = {len(values) for values in dataset.values()}
+        if len(sizes) != 1:
+            raise ValueError('prepared objective columns differ in length; rebuild locally')
+        rows = sizes.pop()
+        if rows == 0:
+            raise ValueError('prepared objective has no training rows; rebuild locally')
+        for device, batch_size in batch_sizes.items():
+            sampler = objective.get('sampler', {}).get(device, {})
+            batches_by_epoch = sampler.get('epochs', [])
+            if sampler.get('batch_size') != batch_size or len(batches_by_epoch) < epochs:
+                raise ValueError(f'prepared {device} batch size/epochs differ; rebuild locally')
+            for batches in batches_by_epoch[:epochs]:
+                if any(not batch or len(batch) > batch_size for batch in batches):
+                    raise ValueError(f'prepared {device} batch shape invalid; rebuild locally')
+                indices = [index for batch in batches for index in batch]
+                if any(type(index) is not int for index in indices) or sorted(indices) != list(range(rows)):
+                    raise ValueError(f'prepared {device} epoch must cover every objective row exactly once; rebuild locally')

@@ -36,6 +36,8 @@ def _parse_args() -> argparse.Namespace:
     split = cfg["split"]
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bundle", type=Path, required=True)
+    ap.add_argument('--shared-training-data', type=Path)
+    ap.add_argument('--training-binding', type=Path)
     ap.add_argument("--model", default=str(tr["base_model"]))
     ap.add_argument("--epochs", type=int, default=int(tr["epochs"]))
     ap.add_argument("--lr", type=float, default=float(tr["lr"]))
@@ -137,6 +139,19 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         raise ValueError("prepared bundle lacks local training row plan; rebuild locally before GPU training")
     plan = validate_run_plan(bundle, bundle["training_plan"], loss=args.loss,
                              train_frac=args.train_frac, sample=bool(args.sample), seed=SEED)
+    shared_path = getattr(args, 'shared_training_data', None)
+    binding_path = getattr(args, 'training_binding', None)
+    if bool(shared_path) != bool(binding_path):
+        raise ValueError('shared training data and track binding must be supplied together')
+    if shared_path:
+        from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
+        shared = SharedTrainingData.model_validate_json(shared_path.read_text())
+        binding = TrackTrainingBinding.model_validate_json(binding_path.read_text())
+        if binding.track != 'text' or from_bundle(bundle).fingerprint != shared.fingerprint:
+            raise ValueError('text frozen objective differs from shared training data')
+        binding.validate_data(shared)
+        print(f'[shared-training/text] examples={len(shared.examples)} endpoints={len(shared.endpoints)} '
+              f'sha256={shared.fingerprint}', flush=True)
     train_bc, dev_bc, test_bc = (plan["holdout"][key] for key in ("train", "dev", "test"))
     print(
         f"[prepared-bundle] loaded {args.bundle} "

@@ -223,6 +223,8 @@ def write_prepared_bundle(
 
     from core.common import load_config, masking_cfg
     from core.model_input import model_input_spec
+    from core.timing import Timing
+    timing = Timing('training.bundle')
 
     recorded_masking = masking_cfg(str(masking_profile))
     _validate_augmented_features(
@@ -265,12 +267,14 @@ def write_prepared_bundle(
         "payload_variant": payload_variant,
         "masking_profile": masking_profile,
     }
+    timing.mark('validate_and_materialize')
     if token_checkpoint is not None:
         from core.common import load_local_sentence_transformer
         from training.token_inputs import prepare_training_tokens
         token_model = load_local_sentence_transformer(str(token_checkpoint), device="cpu")
         training_tokens = prepare_training_tokens(token_model, payload)
         del token_model
+        timing.mark('native_training_tokens')
     if training_tokens is not None:
         from training.token_inputs import validate_training_tokens
         validate_training_tokens(training_tokens)
@@ -280,9 +284,11 @@ def write_prepared_bundle(
         payload_data['holdout_populations'] = holdout_populations
     if token_checkpoint is not None:
         from training.run_plan import prepare_run_plan
-        payload_data["training_plan"] = prepare_run_plan(payload_data, loss=plan_loss, train_frac=plan_train_frac, sample=plan_sample)
+        with timing.section('objective_and_epoch_plans'):
+            payload_data["training_plan"] = prepare_run_plan(payload_data, loss=plan_loss, train_frac=plan_train_frac, sample=plan_sample)
     with gzip.open(path, "wb", compresslevel=6) as handle:
         pickle.dump(payload_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    timing.mark('validate_and_compress_bundle')
     manifest = PreparedBundleManifest(
         payload_variant=payload_variant,
         masking_profile=masking_profile,
@@ -310,6 +316,7 @@ def write_prepared_bundle(
     path.with_suffix(path.suffix + ".json").write_text(
         manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
+    timing.mark('hash_and_write_manifest')
     return manifest
 
 

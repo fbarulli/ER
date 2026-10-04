@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import time
 import subprocess
 import sys
 from typing import Literal
@@ -150,6 +151,7 @@ def refresh_gate_census(gate_csv: Path, config_path: Path, report_path: Path) ->
 
 def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 negative_supply_run_tag=None):
+    from core.timing import emit_timing
     requested_negative_supply_run_tag = negative_supply_run_tag
     from core.common import F, RESULTS, TRAIN_ROOT, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, resolve_model, training_cfg
     from model_tracks.config import load_config as load_suite
@@ -238,11 +240,25 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             state = PreparationState.model_validate(manifest)
             temporary.write_text(state.model_dump_json(indent=2) + '\n')
             temporary.replace(manifest_path)
+            timing_path = run_dir / 'timings.json'
+            timing_temporary = timing_path.with_suffix('.tmp')
+            timing_temporary.write_text(json.dumps({
+                'status': manifest['status'],
+                'stages': manifest.get('stage_metrics', {}),
+                'total_stage_seconds': round(sum(manifest.get('stage_seconds', {}).values()), 3),
+            }, indent=2) + '\n')
+            timing_temporary.replace(timing_path)
         def run(name, arguments, *, check=True):
             print(f'[prepare] {name} -> {run_dir / (name + ".log")}', flush=True)
+            env['ER_TIMING_OUT'] = str(run_dir / (name + '.timing.json'))
+            env['ER_TIMING_LOG'] = str(run_dir / 'timings.log')
             with (run_dir / (name + '.log')).open('w') as log:
-                return subprocess.run([sys.executable, *arguments], cwd=root, env=env,
-                                      stdout=log, stderr=subprocess.STDOUT, check=check)
+                result = subprocess.run([sys.executable, *arguments], cwd=root, env=env,
+                                        stdout=log, stderr=subprocess.STDOUT, check=False)
+            manifest['stage_metrics'][name]['returncode'] = result.returncode
+            if check:
+                result.check_returncode()
+            return result
         def archive(path, name):
             if path.exists():
                 destination = run_dir / 'before' / name
@@ -258,6 +274,13 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 stages[stages.index('validation'):stages.index('validation')] = ['negative_supply', 'discriminator']
             first = 'negative_supply' if resume_from == 'validation' else resume_from
             for name in stages[stages.index(first):]:
+                stage_started = time.monotonic()
+                manifest.setdefault('stage_metrics', {})[name] = {
+                    'status': 'running', 'started_at': datetime.now(timezone.utc).isoformat(),
+                    'detail_path': str(run_dir / (name + '.timing.json')),
+                }
+                emit_timing(f'[timing] prepare.{name} state=started', path=run_dir / 'timings.log')
+                publish()
                 if name == 'dedupe':
                     run(name, ['-m', 'training.dedupe'])
                 elif name == 'cross_country_pairs':
@@ -358,12 +381,23 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     manifest['reusable_outputs'] = {str(path): {
                         'sha256': sha256(path), 'bytes': path.stat().st_size} for path in reusable}
                 completed.append(name)
+                elapsed = round(time.monotonic() - stage_started, 3)
+                manifest.setdefault('stage_seconds', {})[name] = elapsed
+                manifest['stage_metrics'][name].update(status='complete', seconds=elapsed,
+                    finished_at=datetime.now(timezone.utc).isoformat())
+                emit_timing(f'[timing] prepare.{name} state=completed elapsed_seconds={elapsed:.3f}', path=run_dir / 'timings.log')
                 publish()
             manifest['status'] = 'complete'
             publish()
             print(f'[prepare] complete -> {manifest_path}', flush=True)
             return manifest_path
         except BaseException as error:
+            if name in manifest.get('stage_metrics', {}):
+                elapsed = round(time.monotonic() - stage_started, 3)
+                manifest.setdefault('stage_seconds', {})[name] = elapsed
+                manifest['stage_metrics'][name].update(status='failed', seconds=elapsed,
+                    finished_at=datetime.now(timezone.utc).isoformat())
+                emit_timing(f'[timing] prepare.{name} state=failed elapsed_seconds={elapsed:.3f}', path=run_dir / 'timings.log')
             manifest.update(status='failed', failed_stage=name, error=str(error))
             publish()
             raise

@@ -97,7 +97,8 @@ def retrieval_report(records, vectors, pairs, output, track, cfg, *, perf=None):
             positive = indices[labels == 1]
             if not len(positive):
                 continue
-            targets = [i for i, r in enumerate(records) if r['split'] == split]
+            from model_tracks.training_data import retrieval_indices
+            targets = [i for i in retrieval_indices(records) if records[i]['split'] == split]
             relevant = {}
             for left, right in positive:
                 relevant.setdefault(int(left), set()).add(int(right))
@@ -198,7 +199,9 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         index_started = time.monotonic()
         index = PersistentHnswIndex(index_path, ef_construction=cfg.hnsw_ef_construction,
             M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
-        index.build(vectors, [r['sku_id'] for r in records], checkpoint=checkpoint,
+        from model_tracks.training_data import retrieval_indices
+        catalog_indices = retrieval_indices(records)
+        index.build(vectors[catalog_indices], [records[i]['sku_id'] for i in catalog_indices], checkpoint=checkpoint,
                     model_name=track, preprocessing_fingerprint=file_hash(listings))
         perf.record('index_build', time.monotonic() - index_started)
     progress('saved_forward_validated', shape=list(vectors.shape), inference=str(inference))

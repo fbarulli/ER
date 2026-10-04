@@ -11,6 +11,8 @@ from model_tracks.ablation import prepare, settings, write, resolve, digest, che
 def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None):
     """Fix native tokens and vocabulary/support topology before training exists."""
     from core.model_input import model_input_composition
+    from core.timing import Timing
+    timing = Timing('model_tracks.ablation_prepare')
     cfg = settings(config)
     cfg.output_dir = str(setup/'ablation_templates')
     frozen_config = setup/'ablation_settings.yaml'
@@ -22,6 +24,7 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None):
     graph_arrays.close()
     support = [records[n] for n in graph_plan['populations']['train']]
     vocabulary = graph_plan['vocabulary']
+    timing.mark('load_support_and_vocabulary')
     for track in ('text','gnn_only','hybrid'):
         checkpoint = baseline
         if track != 'text':
@@ -51,11 +54,13 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None):
         target.mkdir(parents=True,exist_ok=True)
         shutil.copy2(path.parent/'prepared_inputs.npz',target/'prepared_inputs.npz')
         write(target/'request.json',request)
+        timing.mark(track + '_tokens_tensors_and_request')
     # Generated content-addressed staging directories are temporary; retain one
     # fixed template per track and avoid shipping duplicate tensors.
     for path in (setup/'ablation_templates').iterdir():
         if path.is_dir() and path.name not in {'text','gnn_only','hybrid'}:
             shutil.rmtree(path)
+    timing.mark('cleanup_staging')
     return setup/'ablation_templates'
 
 

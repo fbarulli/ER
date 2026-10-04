@@ -38,6 +38,16 @@ def load_inputs(cfg):
                 '(relations/numeric derive from core.sku_identity.graph_schema); '
                 're-run local graph setup before launch')
     records = load_records(resolve(cfg.listings))
+    if manifest is not None and manifest.get('shared_training_data_sha256'):
+        from model_tracks.training_data import SharedTrainingData
+        from model_tracks.shared_graph_data import validate_projection
+        setup = resolve(cfg.listings).parent.parent
+        shared = SharedTrainingData.model_validate_json((setup / 'shared_training_data.json').read_text())
+        if shared.fingerprint != manifest['shared_training_data_sha256']:
+            raise ValueError('graph shared training data fingerprint mismatch')
+        if file_hash(setup / 'shared_training_projection.json') != manifest.get('shared_training_projection_sha256'):
+            raise ValueError('graph shared training projection fingerprint mismatch')
+        validate_projection(setup, shared, track=cfg.track)
     if manifest is not None and manifest.get('pair_lineage_sha256'):
         if file_hash(resolve(cfg.listings).parent / 'pair_lineage.json') != manifest['pair_lineage_sha256']:
             raise ValueError('prepared pair lineage mismatch')
