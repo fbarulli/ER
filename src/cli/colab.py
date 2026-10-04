@@ -43,8 +43,8 @@ from __future__ import annotations
 
 import argparse
 import base64
-from contextlib import nullcontext
-from functools import lru_cache
+from contextlib import contextmanager, nullcontext
+from functools import lru_cache, wraps
 import fcntl
 import hashlib
 import json
@@ -427,6 +427,56 @@ def _record_remote_run(remote_base: str, *, workers: int, lane: str) -> None:
     print(f"[run] remote metadata recorded -> {root / 'remote_run.json'}", flush=True)
 
 
+@contextmanager
+def _colab_timing(kind: str, name: str):
+    """Emit monotonic wall times to stdout and the launcher's durable transcript."""
+    started = time.perf_counter()
+    print(f"[timing] {kind}={name} state=started", flush=True)
+    state = "completed"
+    stopped = threading.Event()
+
+    def report_wait():
+        while not stopped.wait(30):
+            print(
+                f"[timing] {kind}={name} state=running "
+                f"elapsed_seconds={time.perf_counter() - started:.3f}",
+                flush=True,
+            )
+
+    heartbeat = threading.Thread(target=report_wait, daemon=True)
+    heartbeat.start()
+    try:
+        yield
+    except BaseException:
+        state = "failed"
+        raise
+    finally:
+        stopped.set()
+        heartbeat.join()
+        elapsed = time.perf_counter() - started
+        print(f"[timing] {kind}={name} state={state} elapsed_seconds={elapsed:.3f}", flush=True)
+
+
+def _timed_colab(kind: str):
+    def decorate(function):
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            name = function.__name__
+            if name == "colab" and args:
+                name = f"cli.{args[0]}"
+            elif name == "run_colab_exec_stream":
+                name = f"exec.{kwargs.get('log_name') or 'unlabelled'}"
+            elif name == "run_detached_stage" and args:
+                name = f"detached.{args[0]}"
+            elif name == "_upload_with_retries" and args:
+                name = f"upload.{Path(args[0]).name}"
+            with _colab_timing(kind, name):
+                return function(*args, **kwargs)
+        return wrapped
+    return decorate
+
+
+@_timed_colab("step")
 def check_colab_cli() -> None:
     """Ensure the colab CLI is installed and authenticated."""
     try:
@@ -474,6 +524,7 @@ def _colab_launch_lock_is_held(lock_path: Path) -> bool:
         handle.close()
 
 
+@_timed_colab("step")
 def acquire_colab_launch_lock():
     """Prevent independent launchers from sharing and tearing down one VM.
 
@@ -549,6 +600,7 @@ def _serialize_colab_control(function):
 
 
 @_serialize_colab_control
+@_timed_colab("event")
 def colab(*args: str, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess:
     """Run a Colab CLI subcommand through the shared safe entrypoint."""
     display_cmd = ["colab", *args]
@@ -565,6 +617,7 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
         raise
 
 
+@_timed_colab("event")
 def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
     """Retry transient Colab upload/control-channel failures."""
     for attempt in range(1, _REMOTE_UPLOAD_RETRIES + 1):
@@ -583,6 +636,7 @@ def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
             )
             time.sleep(delay)
 @_serialize_colab_control
+@_timed_colab("event")
 def run_colab_exec_stream(
     session: str,
     script: str,
@@ -722,6 +776,7 @@ def run_colab_exec_stream(
 
 
 @_serialize_colab_control
+@_timed_colab("event")
 def run_colab_exec_capture(
     session: str, script: str, timeout: int, *, training_output: bool = False,
 ) -> str:
@@ -823,6 +878,7 @@ def _parse_remote_json(output: str) -> dict:
     raise RuntimeError(f"remote log probe returned no JSON: {clean_output[-1000:]}")
 
 
+@_timed_colab("event")
 def run_detached_stage(stage: str, command_expr: list[str], timeout: int) -> None:
     """Run a VM stage outside the notebook kernel and stream its durable log."""
     # Two launches can occur within the same UTC second (especially after a
@@ -2025,6 +2081,7 @@ def close_live_log() -> None:
         _original_stderr = None
 
 
+@_timed_colab("step")
 def _verify_session_handshake() -> None:
     """Fail before checkout if the CLI cannot execute on the VM."""
     try:
@@ -2041,6 +2098,7 @@ def _verify_session_handshake() -> None:
     print(f"[session] control-channel handshake passed: {heartbeat.strip()}")
 
 
+@_timed_colab("step")
 def _forget_cached_session() -> None:
     """Drop only this launcher's stale local session record before reprovisioning."""
     if not _COLAB_CLI_CONFIG.is_file():
@@ -2102,6 +2160,7 @@ def keep_alive_daemon_pids() -> list[int]:
     return sorted(found)
 
 
+@_timed_colab("step")
 def stop_keep_alive_daemon(*, reason: str) -> int:
     """Stop this session's keep-alive daemon and report how many were stopped.
 
@@ -2136,6 +2195,7 @@ def stop_keep_alive_daemon(*, reason: str) -> int:
     return len(pids)
 
 
+@_timed_colab("step")
 def ensure_session() -> None:
     """Provision and verify the session before any training stage starts."""
     r = colab("sessions", check=False)
@@ -2158,22 +2218,36 @@ def ensure_session() -> None:
     _verify_session_handshake()
 
 
+@_timed_colab("step")
 def prepare_remote_layout(*, minimal_runtime: bool = False) -> None:
     """Restore the configured branch using the established Colab checkout flow."""
     script = f"""
-import pathlib, shutil, subprocess
+import pathlib, shutil, subprocess, time
+
+def run_git(command, **kwargs):
+    name = "git." + command[1]
+    started = time.perf_counter()
+    print(f"[checkout] event={{name}} state=started", flush=True)
+    try:
+        result = subprocess.run(command, **kwargs)
+    except BaseException:
+        print(f"[checkout] event={{name}} state=failed elapsed_seconds={{time.perf_counter() - started:.3f}}", flush=True)
+        raise
+    print(f"[checkout] event={{name}} state={{'completed' if result.returncode == 0 else 'failed'}} elapsed_seconds={{time.perf_counter() - started:.3f}}", flush=True)
+    return result
+
 
 root = pathlib.Path({REMOTE_ROOT!r})
 remote_name = {GIT_REMOTE_NAME!r}
 if root.exists() and not (root / ".git").is_dir():
     shutil.rmtree(root)
 if (root / ".git").is_dir():
-    remotes = subprocess.run(
+    remotes = run_git(
         ["git", "remote"], cwd=root, check=True, capture_output=True, text=True
     ).stdout.split()
     if remote_name not in remotes:
         if remote_name != "origin" and "origin" in remotes:
-            subprocess.run(
+            run_git(
                 ["git", "remote", "rename", "origin", remote_name],
                 cwd=root,
                 check=True,
@@ -2186,17 +2260,17 @@ if (root / ".git").is_dir():
     # A prior sparse/detached runtime must be returned to the stable branch
     # checkout used by the original Colab launcher before control cells import
     # project modules from REMOTE_ROOT/src.
-    subprocess.run(["git", "sparse-checkout", "disable"], cwd=root, check=False)
-    subprocess.run(["git", "fetch", remote_name, {BRANCH!r}], cwd=root, check=True)
-    subprocess.run(
+    run_git(["git", "sparse-checkout", "disable"], cwd=root, check=False)
+    run_git(["git", "fetch", remote_name, {BRANCH!r}], cwd=root, check=True)
+    run_git(
         ["git", "checkout", "-B", {BRANCH!r}, remote_name + "/" + {BRANCH!r}],
         cwd=root,
         check=True,
     )
-    subprocess.run(["git", "pull", "--ff-only", remote_name, {BRANCH!r}], cwd=root, check=True)
+    run_git(["git", "pull", "--ff-only", remote_name, {BRANCH!r}], cwd=root, check=True)
 else:
     root.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "clone", "--origin", remote_name,
+    run_git(["git", "clone", "--origin", remote_name,
          "--branch", {BRANCH!r},
          {REPOSITORY!r}, str(root)], check=True)
 for path in [root / "artifacts" / "data", root / "artifacts" / "results"]:
@@ -2276,6 +2350,7 @@ raise SystemExit(subprocess.call(command))
     return f"[sys.executable, '-c', {program!r}]"
 
 
+@_timed_colab("step")
 def install_deps(*, minimal_runtime: bool = False, graph_runtime: bool = False) -> None:
     packages = list(
         _RUNTIME_PACKAGES.prepared if minimal_runtime else _RUNTIME_PACKAGES.full
@@ -2302,6 +2377,7 @@ def install_deps(*, minimal_runtime: bool = False, graph_runtime: bool = False) 
     )
 
 
+@_timed_colab("step")
 def log_gpu_profile() -> None:
     """Record the runtime hardware before training, including CPU smoke runs."""
     script = """import torch
@@ -2371,6 +2447,7 @@ def _remote_auth_env_script(
             + wandb + (_optuna_env_script() if include_optuna else ""))
 
 
+@_timed_colab("step")
 def run_data_prep() -> None:
     """Regenerate the derived CSVs on the VM (byte-deterministic replay).
 
@@ -2392,6 +2469,7 @@ for step in ("src/training/dedupe.py", "src/training/build_second04_pairs.py", "
     run_colab_exec_stream(SESSION, script, timeout=1800, log_name="data_prep")
 
 
+@_timed_colab("step")
 def verify_remote_models(model_keys: list[str]) -> None:
     """Validate the Git-shipped model bundles before starting any worker."""
     keys = sorted(set(model_keys))
@@ -2444,6 +2522,7 @@ print(
     )
 
 
+@_timed_colab("step")
 def verify_training_inputs() -> None:
     """Use frozen CSV inputs and materialize derived calibration input."""
     print("[data] validating frozen training CSVs from the cloned branch ...")
@@ -2673,6 +2752,7 @@ class _BundlePrewarm:
 _BUNDLE_PREWARM: _BundlePrewarm | None = None
 
 
+@_timed_colab("step")
 def start_local_bundle_prewarm(**request) -> None:
     """Build this lane's prepared bundles while the VM installs its runtime."""
     global _BUNDLE_PREWARM
@@ -3173,6 +3253,7 @@ class _ValidationUploadPrewarm:
 _VALIDATION_UPLOAD_PREWARM: _ValidationUploadPrewarm | None = None
 
 
+@_timed_colab("step")
 def start_validation_upload_prewarm() -> str:
     """Begin this lane's validation uploads; returns the run id they belong to."""
     global _VALIDATION_UPLOAD_PREWARM
@@ -3217,6 +3298,7 @@ def drain_validation_upload_prewarm() -> None:
             )
 
 
+@_timed_colab("step")
 def release_validation_upload_prewarm() -> None:
     """Let the prewarmed upload start, now that the session can accept it."""
     prewarm = _VALIDATION_UPLOAD_PREWARM
@@ -4437,58 +4519,59 @@ def main() -> None:
     local_hpo_run: str | None = None
 
     try:
-        prepared_train_runtime = args.what in {"train", "dual-train", "tracks"}
-        # The local bundle build is pure local CPU work over immutable local
-        # inputs, so start it before the VM is even provisioned: it then runs
-        # under the remote checkout, install, model check, and profile instead
-        # of after them.  run_train joins this exact build (or rebuilds when
-        # the request differs).
-        bundle_request = None if args.what == 'tracks' else _lane_bundle_request(args)
-        if bundle_request is not None:
-            start_local_bundle_prewarm(**bundle_request)
-        # The validation CSVs are read here and pushed to the VM, so they do
-        # not have to wait for the dependency install to finish.  A resumed
-        # run keeps its existing identity and uploads serially.
-        if bundle_request is not None and not args.resume_run:
-            start_validation_upload_prewarm()
-        ensure_session()
-        # The session exists now, so the prewarmed upload can run for real.  It
-        # travels alongside prepare_remote_layout/install_deps below instead of
-        # after them, which is the whole point of starting it early.
-        release_validation_upload_prewarm()
-        if GPU.upper() != "CPU":
-            # Backstop, not the primary release: the launcher's own teardown
-            # still runs in `finally`.  A GPU VM must never be left held open
-            # by its own daemon if this process dies, so the daemon is stopped
-            # now that provisioning is done and the launcher owns the run --
-            # the VM then idle-terminates instead of burning accelerator quota
-            # indefinitely.
-            stop_keep_alive_daemon(reason=f"GPU lane ({GPU}) must never be retained")
-        prepare_remote_layout(minimal_runtime=prepared_train_runtime)
-        if args.what == 'tracks':
-            install_deps(minimal_runtime=True, graph_runtime=True)
-        else:
-            install_deps(minimal_runtime=prepared_train_runtime)
-        if args.what in {"train", "dual-train", "smoke", "mixed"}:
-            required_models = [
-                args.model or str(training_cfg().training.base_model)
-            ]
-        elif args.what == "hpo":
-            required_models = list(hpo_cfg()["models"])
-            required_models.append(str(sweep_cfg()["rerank_model"]))
-        elif args.what == "sims":
-            required_models = [_SIMS_MODEL]
-        else:
-            required_models = []
-        if required_models:
-            verify_remote_models(required_models)
-        log_gpu_profile()
-        if args.refresh_data and prepared_train_runtime:
-            raise ValueError("--refresh-data is incompatible with local-prepared GPU training")
-        if args.refresh_data:
-            run_data_prep()
-        elif args.what != "smoke" and not prepared_train_runtime:
-            verify_training_inputs()
+        with _colab_timing("step", "initialization"):
+            prepared_train_runtime = args.what in {"train", "dual-train", "tracks"}
+            # The local bundle build is pure local CPU work over immutable local
+            # inputs, so start it before the VM is even provisioned: it then runs
+            # under the remote checkout, install, model check, and profile instead
+            # of after them.  run_train joins this exact build (or rebuilds when
+            # the request differs).
+            bundle_request = None if args.what == 'tracks' else _lane_bundle_request(args)
+            if bundle_request is not None:
+                start_local_bundle_prewarm(**bundle_request)
+            # The validation CSVs are read here and pushed to the VM, so they do
+            # not have to wait for the dependency install to finish.  A resumed
+            # run keeps its existing identity and uploads serially.
+            if bundle_request is not None and not args.resume_run:
+                start_validation_upload_prewarm()
+            ensure_session()
+            # The session exists now, so the prewarmed upload can run for real.  It
+            # travels alongside prepare_remote_layout/install_deps below instead of
+            # after them, which is the whole point of starting it early.
+            release_validation_upload_prewarm()
+            if GPU.upper() != "CPU":
+                # Backstop, not the primary release: the launcher's own teardown
+                # still runs in `finally`.  A GPU VM must never be left held open
+                # by its own daemon if this process dies, so the daemon is stopped
+                # now that provisioning is done and the launcher owns the run --
+                # the VM then idle-terminates instead of burning accelerator quota
+                # indefinitely.
+                stop_keep_alive_daemon(reason=f"GPU lane ({GPU}) must never be retained")
+            prepare_remote_layout(minimal_runtime=prepared_train_runtime)
+            if args.what == 'tracks':
+                install_deps(minimal_runtime=True, graph_runtime=True)
+            else:
+                install_deps(minimal_runtime=prepared_train_runtime)
+            if args.what in {"train", "dual-train", "smoke", "mixed"}:
+                required_models = [
+                    args.model or str(training_cfg().training.base_model)
+                ]
+            elif args.what == "hpo":
+                required_models = list(hpo_cfg()["models"])
+                required_models.append(str(sweep_cfg()["rerank_model"]))
+            elif args.what == "sims":
+                required_models = [_SIMS_MODEL]
+            else:
+                required_models = []
+            if required_models:
+                verify_remote_models(required_models)
+            log_gpu_profile()
+            if args.refresh_data and prepared_train_runtime:
+                raise ValueError("--refresh-data is incompatible with local-prepared GPU training")
+            if args.refresh_data:
+                run_data_prep()
+            elif args.what != "smoke" and not prepared_train_runtime:
+                verify_training_inputs()
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
         # (run_train was unconditional) — hours of unintended GPU quota
         # for a lane that only needs the configured zero-shot scoring.
