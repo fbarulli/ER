@@ -33,7 +33,7 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
     model = Path(resolve_model(cfg.text_model))
     if checkpoint_hash(model) != setup['text_checkpoint_sha256']:
         raise ValueError('text baseline differs from frozen hybrid checkpoint')
-    checks = {'gnn_only':graph_preflight(root/'gnn_only.yaml',check_device=False)}
+    checks = {'gnn_only':graph_preflight(root/'gnn_only.yaml',check_device=False,require_dvc=False)}
     if allow_gpu_pending and not (root/'shared_minilm__embeddings.npz').exists():
         from model_tracks.baseline_export import validate_pending
         from graph_tracks.config import load_config as graph_config
@@ -51,12 +51,12 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
         checks['hybrid'] = {
             'track': 'hybrid', 'listings': checks['gnn_only']['listings'],
             'pairs': checks['gnn_only']['pairs'], 'device': hybrid.device,
-            'report_test': hybrid.report_test, 'runtime': runtime_versions(hybrid),
+            'report_test': hybrid.report_test, 'runtime': runtime_versions(hybrid,require_dvc=False),
             'text_dimension': None, 'text_prerequisite': pending,
             'input_population_source': 'shared manifested gnn_only population',
         }
     else:
-        checks['hybrid'] = graph_preflight(root/'hybrid.yaml',check_device=False)
+        checks['hybrid'] = graph_preflight(root/'hybrid.yaml',check_device=False,require_dvc=False)
     manifest, bundle = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
     from training.run_plan import validate_run_plan
     from training.token_inputs import validate_training_tokens

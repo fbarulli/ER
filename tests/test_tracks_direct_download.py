@@ -55,3 +55,16 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
         return
     assert colab.run(inputs, 'run', git_inputs=transport) == 'final.zip'
     assert events == ['train', 'download', 'stop'] + ['validate'] * 3 + [('complete', {'publish': False})]
+
+
+def test_suite_runtime_does_not_require_dvc_distribution(monkeypatch):
+    from types import SimpleNamespace
+    from graph_tracks import preflight
+    cfg = SimpleNamespace(build_index=False, postprocess=False,
+                          wandb=SimpleNamespace(mode='disabled'),
+                          dvc=SimpleNamespace(enabled=True))
+    def version(package):
+        assert package != 'dvc'
+        return 'installed'
+    monkeypatch.setattr(preflight.importlib.metadata, 'version', version)
+    assert 'dvc' not in preflight.runtime_versions(cfg, require_dvc=False)

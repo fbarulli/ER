@@ -73,7 +73,7 @@ def load_inputs(cfg):
     return manifest, records, pairs, vectors, metadata
 
 
-def preflight(config: Path, *, check_device: bool = True) -> dict:
+def preflight(config: Path, *, check_device: bool = True, require_dvc: bool = True) -> dict:
     cfg = load_config(config)
     if not cfg.input_manifest or cfg.allow_unmanifested_inputs:
         raise ValueError('production preflight requires manifested inputs')
@@ -85,10 +85,10 @@ def preflight(config: Path, *, check_device: bool = True) -> dict:
             'text_dimension': text_dimension, 'report_test': cfg.report_test,
             'pairs': {s: {'positive': int(y.sum()), 'negative': int((y == 0).sum())}
                       for s, (_, y) in pairs.items()},
-            'runtime': runtime_versions(cfg)}
+            'runtime': runtime_versions(cfg, require_dvc=require_dvc)}
 
 
-def runtime_versions(cfg) -> dict:
+def runtime_versions(cfg, *, require_dvc: bool = True) -> dict:
     """Assert dependencies for this lane's actual export/report switches."""
     packages = ['torch', 'numpy', 'pandas', 'pydantic', 'scikit-learn', 'PyYAML']
     # Reporting builds temporary catalogs even when persistence is disabled.
@@ -98,7 +98,7 @@ def runtime_versions(cfg) -> dict:
         packages.append('matplotlib')
     if cfg.wandb.mode != 'disabled':
         packages.append('wandb')
-    if cfg.dvc.enabled:
+    if require_dvc and cfg.dvc.enabled:
         packages.append('dvc')
     return {package: importlib.metadata.version(package) for package in packages}
 
