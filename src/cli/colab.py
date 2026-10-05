@@ -1519,13 +1519,12 @@ print(json.dumps(payload), flush=True)
                       (" | " + " | ".join(metrics) if metrics else "") +
                       (f" | W&B {live['wandb_url']}" if live.get("wandb_url") else ""), flush=True)
             for worker, chunk in payload["chunks"].items():
-                # Forward the complete worker log. Detached workers write to the
-                # remote file; keep it out of the root system log to avoid a
-                # second copy of the worker's training log.
-                with _LiveLogSuppressed():
-                    for line in str(chunk).splitlines():
-                        _write_training_log(f"[worker {worker}] {line}\n")
-                        print(f"[worker {worker}] {line}", flush=True)
+                # Forward the complete worker log to both transcripts: the root
+                # system log is the single chronological record of every Colab
+                # stage, and training.log is the trainer-only view.
+                for line in str(chunk).splitlines():
+                    _write_training_log(f"[worker {worker}] {line}\n")
+                    print(f"[worker {worker}] {line}", flush=True)
             if payload["done"]:
                 failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
                 if failed:
@@ -4556,6 +4555,10 @@ def main() -> None:
     local_training_run: tuple[str, int] | None = None
     local_mixed_run: tuple[str, int] | None = None
     local_hpo_run: str | None = None
+    # Only a clean exit through the end of the try body may announce success.
+    # The teardown below runs for every outcome, so without this flag a failed
+    # launch would still print [done] and make the transcript read as success.
+    completed = False
 
     try:
         with _colab_timing("step", "initialization"):
@@ -4713,6 +4716,7 @@ def main() -> None:
         if local_hpo_run is not None:
             print("[hpo] publishing snapshots on local CPU ...", flush=True)
             publish_local_hpo_results(local_hpo_run, args.hpo_persistence)
+        completed = True
     except BaseException:
         print(
             "[launcher] traceback before teardown; result transfer is incomplete:",
@@ -4732,13 +4736,20 @@ def main() -> None:
         # the concurrent bundle build writing into a closing log file.
         drain_local_bundle_prewarm()
         drain_validation_upload_prewarm()
+        # Announce completion while the tee is still installed; closing first
+        # would send this to the terminal only and leave the transcript ending
+        # at the last teardown line.  Suppressed on failure, which already
+        # reported a traceback above, so [done] stays a success signal.
+        if completed:
+            print(
+                "\n[done] compressed results downloaded and completed locally"
+                if args.what == "tracks" else "\n[done] artifacts downloaded locally",
+                flush=True,
+            )
+        else:
+            print("\n[failed] launch did not complete successfully", flush=True)
         close_live_log()
         release_colab_launch_lock(launch_lock)
-
-    if args.what == "tracks":
-        print("\n[done] compressed results downloaded and completed locally")
-    else:
-        print("\n[done] artifacts downloaded locally")
 
 
 if __name__ == "__main__":

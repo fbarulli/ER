@@ -48,8 +48,12 @@ def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     monkeypatch.setattr(worker, 'load_config', lambda _: SimpleNamespace(
         setup_dir='.', text_bundle='bundle', text_model='minilm_l6', epochs=1,
         device='cpu', report_test=report_test, post_training_ablation=False))
-    monkeypatch.setattr(training.prepared_bundle, 'load_prepared_bundle',
-                        lambda _: (SimpleNamespace(payload_variant='full'), {}))
+    # The worker reads only the bundle's sidecar manifest to build its command;
+    # the trainer performs the full verified load after the barrier. Loading the
+    # whole bundle here cost ~19s and made the text worker the barrier straggler.
+    monkeypatch.setattr(training.prepared_bundle, 'PreparedBundleManifest',
+                        SimpleNamespace(model_validate_json=lambda *_, **__: SimpleNamespace(
+                            payload_variant='full')))
     monkeypatch.setattr(worker, 'wait_for_start', lambda *_: None)
     commands = []
     monkeypatch.setattr(worker.subprocess, 'run', lambda command, **_: commands.append(command))

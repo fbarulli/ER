@@ -25,6 +25,10 @@ def input_identity(setup: Path, checkpoint: Path) -> dict:
         'checkpoint_sha256': checkpoint_hash(checkpoint),
         'composition': model_input_composition().model_dump(mode='json'),
         'composition_implementation_sha256': composition_fingerprint(),
+        # create_cache records the dtype it wrote, so the identity contract has to
+        # name it too; otherwise the request omits the key and the cache builder
+        # compares None against 'float32' and refuses its own output.
+        'embedding_dtype': 'float32',
         'input_manifest_sha256': file_hash(setup / 'prepared/input_manifest.json'),
         'listings_sha256': file_hash(setup / 'prepared/listings.json'),
     }

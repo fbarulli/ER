@@ -67,7 +67,12 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         from core.common import TRAIN_ROOT
         inputs = json.loads((TRAIN_ROOT / 'model_tracks_package.json').read_text())['preflight']
     else:
-        inputs = preflight(config)
+        # When this suite exports the baseline itself, the hybrid text cache is a
+        # declared pending input at preflight time: it is produced by the export
+        # a few lines below.  Verifying it as missing-and-bound-to-a-checked
+        # embedding request is what lets preflight run before the export instead
+        # of demanding bytes that do not exist yet.
+        inputs = preflight(config, allow_gpu_pending=cfg.post_training_ablation)
     # Reject an unusable parallel runtime before the baseline consumes GPU
     # time. MPS is a required capability for this suite, not a late fallback.
     if cfg.device == 'cuda':
