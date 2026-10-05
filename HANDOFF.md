@@ -463,3 +463,26 @@ difficulty is anti-collapse machinery; over-softening risks clustering
 collapse, unverified hardness risks false-negative shattering — both modes
 must be telemetered in every arm.
 
+
+## 9. STANDING OPERATIONAL RULES (established 2026-10-05, owner directives)
+
+1. ORCHESTRATOR WRITES NO CODE: all coding is delegated to agents; the
+   orchestrator plans, launches, merges on verified PASS, and pushes.
+2. NO FINAL SELF-APPROVAL: every batch is verified cold by an agent that
+   has not seen the code; failures loop back fix->re-verify until PASS.
+3. NO src/ EDITS IN A TREE WHILE ITS BUNDLE RUNS (mid-run source changes
+   break composition fingerprints -> fail-loud kill; proven twice).
+4. ONE TOKEN PHASE PER BOX: the ablation prepare/token phase peaks
+   ~17.6GB RSS; concurrent token phases OOM-kill (proven via dmesg).
+5. CONFIG SINGLE-WRITER: one agent session owns config edits per tree;
+   concurrent writers race the audit pins (proven). Worktrees give each
+   agent its own config where isolation is needed.
+6. BUILDS ONLY UNDER SYSTEMD UNITS (not scopes, not bare processes):
+   journald-recorded, absolute WorkingDirectory, absolute paths, immune
+   to tool-session teardown; VMs always launched/stopped with the
+   keep-alive semantics the owner requested.
+7. MINIMAL-SAMPLE FIRST: testing.csv (35-row fixture) is the byte-diff
+   bed; full builds are for evidence, not iteration.
+8. NEVER EDIT WORKING CODE IN PLACE (proven regression risk): new
+   behavior lands in a new file; the old lane stays until the new one is
+   verified; cleanup is a separate commit.
