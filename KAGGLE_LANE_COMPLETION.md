@@ -142,9 +142,19 @@ which use staged fakes only).
 - `git push -u origin kaggle-lane` after EACH green commit (owner push-
   often directive): fast-forward only.
 
-## 2. Commits evidencing this contract (append as they land)
+## 2. Commits evidencing this contract
 
-(to be appended granularly)
+- `639d4ce` docs: reconstructed lane intent + completion contract (this file).
+- `5e214f4` feat(schema): additive KaggleSpec + `kaggle:` root field.
+- `cb0e499` config: additive kaggle SSOT block (slug/export_csvs/staging/contract).
+- `4f28797` feat(lane): src/cli/kaggle_lane.py + kaggle_backend.py shim.
+- `539c486` test: tests/test_kaggle_lane.py — 21 offline pins.
+- `41e3495` docs: KAGGLE_LANE.md runbook + status update.
+
+Statuses: S1 [x] S2 [x] S3 [x] S4 [x] S5 [x] S6 [~] (colab-lane staged tests
++ config tests green: 109 passed; fresh-verifier checklist pending — no Task
+tool in this agent, verifier prompt handed to the orchestrator in the
+final report).
 
 ## 3. Open questions for the owner
 
