@@ -40,8 +40,13 @@ Branches: `identity-residual-investigation`, then `identity-regex-repairs`
    inner/outer packaging before promoting any normalization rule.
 3. Carbonation: 184 carbonated/still conflicts. Compare explicit source prose,
    ingredient declarations and same-GTIN peers; do not vote by duplicated rows.
-4. Apparent strong agreement: 33 of the 261 negative residuals share image URLs;
-   12 share listing URLs. Validate variant-selector and shared-image failures.
+4. Apparent strong agreement: DONE 2026-10-05 — the 37 identical-name pairs among
+   the 261 negatives (33 shared image, 14 shared URL) were hand-audited field by
+   field across all 13 columns (`negative_missing_probe.py`, 340 missing cells:
+   282 absent everywhere, 58 flagged of which 3 are true gaps). Verdicts in
+   `NEGATIVE_AGREEMENT_AUDIT.md`: R0218/R0038/R0127/R0129/R0174-178/R0096-105
+   keep-distinct CORRECT (real sibling variants); 11 pairs are duplicate listings
+   under pseudo-looking GTINs needing GS1-registry checks before any merge.
 5. Largest untrusted-title groups: Allyouneedfresh true fruits (22 rows, 160
    conflicting pairs), Chronodrive natural mineral water (14/83), Walmart DECAF
    Cold Brew (17/82). Retain distinct evidence until source-backed repair.
