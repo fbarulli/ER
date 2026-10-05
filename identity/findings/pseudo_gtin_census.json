@@ -1,0 +1,5794 @@
+{
+ "brands_with_gtins": 1656,
+ "distinct_gtins": 13250,
+ "brands_flagged": 235,
+ "flagged": [
+  {
+   "brand": "fun",
+   "total_gtins": 45,
+   "family_prefix": "731",
+   "family_count": 14,
+   "outlier_prefixes": {
+    "641": 13,
+    "735": 9,
+    "703": 6,
+    "570": 3
+   },
+   "outlier_gtins": 31,
+   "outlier_retailers": {
+    "S-kaupat": 9,
+    "Willys": 4,
+    "Coop.dk MAD": 3,
+    "K Ruoka": 3,
+    "Meny": 3,
+    "Hemk\u00f6p": 3
+   },
+   "sample_outlier_gtins": [
+    "5701018045711",
+    "5701018051569",
+    "5701020997329",
+    "6417800031822",
+    "6417800031839",
+    "6417802363198",
+    "6417802363211",
+    "6417802367196"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "tang",
+   "total_gtins": 33,
+   "family_prefix": "075",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "068": 6,
+    "074": 3,
+    "100": 3,
+    "070": 3,
+    "072": 3,
+    "073": 2,
+    "063": 1,
+    "076": 1,
+    "060": 1,
+    "030": 1,
+    "373": 1,
+    "010": 1
+   },
+   "outlier_gtins": 26,
+   "outlier_retailers": {
+    "amazon": 13,
+    "Walmart": 9,
+    "Kroger": 4
+   },
+   "sample_outlier_gtins": [
+    "0100142899385",
+    "0308133313166",
+    "0604015877215",
+    "0637769186708",
+    "0681000028050",
+    "0689128699077",
+    "0689139216843",
+    "0689823010726"
+   ],
+   "marketplace_outliers": 22,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "god morgon",
+   "total_gtins": 61,
+   "family_prefix": "731",
+   "family_count": 38,
+   "outlier_prefixes": {
+    "641": 14,
+    "570": 9
+   },
+   "outlier_gtins": 23,
+   "outlier_retailers": {
+    "S-kaupat": 11,
+    "K Ruoka": 5,
+    "mat.se": 4,
+    "Willys": 1,
+    "Coop": 1,
+    "ICA": 1
+   },
+   "sample_outlier_gtins": [
+    "5705001111230",
+    "5705001111520",
+    "5705001150000",
+    "5705001150109",
+    "5705010069492",
+    "5705010069508",
+    "5705010069515",
+    "5705010069539"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "rainbow",
+   "total_gtins": 81,
+   "family_prefix": "641",
+   "family_count": 60,
+   "outlier_prefixes": {
+    "643": 11,
+    "734": 10
+   },
+   "outlier_gtins": 21,
+   "outlier_retailers": {
+    "S-kaupat": 21
+   },
+   "sample_outlier_gtins": [
+    "6438460009204",
+    "6438460009211",
+    "6438460355011",
+    "6438460355028",
+    "6438460623424",
+    "6438460727658",
+    "6438460727702",
+    "6438460790812"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "meijer",
+   "total_gtins": 43,
+   "family_prefix": "071",
+   "family_count": 24,
+   "outlier_prefixes": {
+    "070": 19
+   },
+   "outlier_gtins": 19,
+   "outlier_retailers": {
+    "meijer": 19
+   },
+   "sample_outlier_gtins": [
+    "0708820038004",
+    "0708820039018",
+    "0708820039940",
+    "0708820039957",
+    "0708820063624",
+    "0708820297609",
+    "0708820301368",
+    "0708820301450"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "dubbelfrisss",
+   "total_gtins": 52,
+   "family_prefix": "872",
+   "family_count": 33,
+   "outlier_prefixes": {
+    "871": 19
+   },
+   "outlier_gtins": 19,
+   "outlier_retailers": {
+    "Coop": 14,
+    "Jan Linders": 3,
+    "Albert Heijn": 2
+   },
+   "sample_outlier_gtins": [
+    "8713300040448",
+    "8713300041865",
+    "8713300042558",
+    "8713300042633",
+    "8713300051505",
+    "8713300051529",
+    "8713300051567",
+    "8713300051574"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "hal new york",
+   "total_gtins": 35,
+   "family_prefix": "064",
+   "family_count": 16,
+   "outlier_prefixes": {
+    "085": 12,
+    "073": 5,
+    "061": 2
+   },
+   "outlier_gtins": 19,
+   "outlier_retailers": {
+    "amazon": 16,
+    "Target": 2,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0615629327751",
+    "0615629484607",
+    "0732623744268",
+    "0736983891518",
+    "0736983891532",
+    "0736983891549",
+    "0736983891563",
+    "0855036005006"
+   ],
+   "marketplace_outliers": 16,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "cool best",
+   "total_gtins": 66,
+   "family_prefix": "872",
+   "family_count": 48,
+   "outlier_prefixes": {
+    "871": 18
+   },
+   "outlier_gtins": 18,
+   "outlier_retailers": {
+    "Coop": 14,
+    "Jan Linders": 2,
+    "Albert Heijn": 1,
+    "Vomar": 1
+   },
+   "sample_outlier_gtins": [
+    "8713300048475",
+    "8713300048659",
+    "8713300048666",
+    "8713300049663",
+    "8713300049670",
+    "8713300049694",
+    "8713300049717",
+    "8713300049731"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "fruity king",
+   "total_gtins": 35,
+   "family_prefix": "400",
+   "family_count": 18,
+   "outlier_prefixes": {
+    "871": 8,
+    "404": 5,
+    "081": 4
+   },
+   "outlier_gtins": 17,
+   "outlier_retailers": {
+    "Coop": 13,
+    "Walmart": 2,
+    "H-E-B": 2
+   },
+   "sample_outlier_gtins": [
+    "0813513010158",
+    "0813513010172",
+    "0813513010189",
+    "0813513010233",
+    "4049377017415",
+    "4049377017514",
+    "4049377017521",
+    "4049377017538"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "fun light",
+   "total_gtins": 30,
+   "family_prefix": "731",
+   "family_count": 13,
+   "outlier_prefixes": {
+    "703": 8,
+    "641": 6,
+    "735": 3
+   },
+   "outlier_gtins": 17,
+   "outlier_retailers": {
+    "Spar": 6,
+    "S-kaupat": 5,
+    "Meny": 2,
+    "Hemk\u00f6p": 2,
+    "kauppahalli24.fi": 1,
+    "Willys": 1
+   },
+   "sample_outlier_gtins": [
+    "6417802360210",
+    "6417802361194",
+    "6417802361217",
+    "6417802390194",
+    "6417802390590",
+    "6417802390699",
+    "7039010552523",
+    "7039010552592"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "x-tra",
+   "total_gtins": 33,
+   "family_prefix": "734",
+   "family_count": 16,
+   "outlier_prefixes": {
+    "641": 8,
+    "643": 5,
+    "730": 4
+   },
+   "outlier_gtins": 17,
+   "outlier_retailers": {
+    "S-kaupat": 9,
+    "Coop": 4,
+    "Food Market Herkku": 4
+   },
+   "sample_outlier_gtins": [
+    "6414893504462",
+    "6414893504493",
+    "6414893504981",
+    "6414893505018",
+    "6415712502638",
+    "6415712509163",
+    "6415712610333",
+    "6415712610371"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "garant",
+   "total_gtins": 63,
+   "family_prefix": "734",
+   "family_count": 47,
+   "outlier_prefixes": {
+    "731": 15,
+    "500": 1
+   },
+   "outlier_gtins": 16,
+   "outlier_retailers": {
+    "Hemk\u00f6p": 10,
+    "mat.se": 2,
+    "MatHem": 2,
+    "Willys": 2
+   },
+   "sample_outlier_gtins": [
+    "5000396030372",
+    "7311041050507",
+    "7311041050514",
+    "7311043000401",
+    "7311043000418",
+    "7311043000517",
+    "7311043002948",
+    "7311043002955"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "proviva",
+   "total_gtins": 41,
+   "family_prefix": "735",
+   "family_count": 25,
+   "outlier_prefixes": {
+    "734": 10,
+    "731": 6
+   },
+   "outlier_gtins": 16,
+   "outlier_retailers": {
+    "mat.se": 10,
+    "Willys": 4,
+    "MatHem": 1,
+    "ICA": 1
+   },
+   "sample_outlier_gtins": [
+    "7310867008402",
+    "7310867008624",
+    "7310867008631",
+    "7310867008761",
+    "7310867578394",
+    "7310867578912",
+    "7340073300014",
+    "7340073300168"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "cult",
+   "total_gtins": 22,
+   "family_prefix": "574",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "641": 6,
+    "735": 6,
+    "571": 4
+   },
+   "outlier_gtins": 16,
+   "outlier_retailers": {
+    "Food Market Herkku": 4,
+    "Hemk\u00f6p": 4,
+    "REMA 1000": 2,
+    "K Ruoka": 2,
+    "MatHem": 2,
+    "Coop.dk MAD": 1
+   },
+   "sample_outlier_gtins": [
+    "5710176001835",
+    "5710176002030",
+    "5710176002740",
+    "5710176004867",
+    "6413600227052",
+    "6413600227069",
+    "6413600227076",
+    "6413600227083"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "harmless harvest",
+   "total_gtins": 27,
+   "family_prefix": "085",
+   "family_count": 12,
+   "outlier_prefixes": {
+    "081": 10,
+    "067": 2,
+    "099": 2,
+    "063": 1
+   },
+   "outlier_gtins": 15,
+   "outlier_retailers": {
+    "amazon": 8,
+    "Walmart": 5,
+    "Wholefoods": 1,
+    "safeway": 1
+   },
+   "sample_outlier_gtins": [
+    "0633610753105",
+    "0673276830413",
+    "0673276830420",
+    "0810068900040",
+    "0810068900064",
+    "0810068900231",
+    "0810068900316",
+    "0810068900361"
+   ],
+   "marketplace_outliers": 13,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "stewart's",
+   "total_gtins": 21,
+   "family_prefix": "068",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "066": 4,
+    "076": 3,
+    "035": 2,
+    "030": 1,
+    "061": 1,
+    "065": 1,
+    "081": 1,
+    "072": 1
+   },
+   "outlier_gtins": 14,
+   "outlier_retailers": {
+    "amazon": 14
+   },
+   "sample_outlier_gtins": [
+    "0304628333862",
+    "0352154328098",
+    "0352154328128",
+    "0612637259920",
+    "0655457687740",
+    "0664533280287",
+    "0664533280324",
+    "0664533280386"
+   ],
+   "marketplace_outliers": 14,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "cure hydration",
+   "total_gtins": 30,
+   "family_prefix": "085",
+   "family_count": 16,
+   "outlier_prefixes": {
+    "086": 11,
+    "073": 2,
+    "040": 1
+   },
+   "outlier_gtins": 14,
+   "outlier_retailers": {
+    "Thrive Market": 4,
+    "CVS": 3,
+    "safeway": 2,
+    "Kroger": 2,
+    "amazon": 1,
+    "Saks Fifth Avenue": 1
+   },
+   "sample_outlier_gtins": [
+    "0400017088655",
+    "0732623607372",
+    "0732623734016",
+    "0860000623308",
+    "0860000623339",
+    "0860000623346",
+    "0860000623353",
+    "0860001535655"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "vio",
+   "total_gtins": 27,
+   "family_prefix": "544",
+   "family_count": 14,
+   "outlier_prefixes": {
+    "500": 8,
+    "410": 3,
+    "904": 2
+   },
+   "outlier_gtins": 13,
+   "outlier_retailers": {
+    "Rewe": 11,
+    "Edeka": 2
+   },
+   "sample_outlier_gtins": [
+    "4100590121607",
+    "4100590153332",
+    "41005958",
+    "5000112599008",
+    "5000112599053",
+    "5000112622553",
+    "5000112622713",
+    "5000112622720"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "may tea",
+   "total_gtins": 36,
+   "family_prefix": "312",
+   "family_count": 23,
+   "outlier_prefixes": {
+    "841": 8,
+    "541": 4,
+    "366": 1
+   },
+   "outlier_gtins": 13,
+   "outlier_retailers": {
+    "El Corte Ingl\u00e9s": 6,
+    "Hipercor": 2,
+    "Intermarche": 2,
+    "Delhaize": 1,
+    "Cdiscount": 1,
+    "Carrefour": 1
+   },
+   "sample_outlier_gtins": [
+    "3665816003972",
+    "5410221205460",
+    "5410221306143",
+    "5410221306150",
+    "5410221308819",
+    "8414100363644",
+    "8414100363743",
+    "8414100363842"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "jardin bio",
+   "total_gtins": 26,
+   "family_prefix": "328",
+   "family_count": 13,
+   "outlier_prefixes": {
+    "345": 11,
+    "347": 1,
+    "376": 1
+   },
+   "outlier_gtins": 13,
+   "outlier_retailers": {
+    "Carrefour": 8,
+    "Intermarche": 2,
+    "Auchandrive": 1,
+    "Courses U": 1,
+    "Auchan": 1
+   },
+   "sample_outlier_gtins": [
+    "3456300000931",
+    "3456300002430",
+    "3456300002492",
+    "3456300002508",
+    "3456300004946",
+    "3456300007862",
+    "3456300009224",
+    "3456300013658"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "mysoda",
+   "total_gtins": 22,
+   "family_prefix": "643",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "326": 6,
+    "641": 5,
+    "300": 1,
+    "366": 1
+   },
+   "outlier_gtins": 13,
+   "outlier_retailers": {
+    "Carrefour": 8,
+    "S-kaupat": 5
+   },
+   "sample_outlier_gtins": [
+    "3001991053652",
+    "3265261466188",
+    "3265261466195",
+    "3265261466201",
+    "3265261472813",
+    "3265261472929",
+    "3265261472943",
+    "3666373834481"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "r\u00f6merquelle",
+   "total_gtins": 25,
+   "family_prefix": "202",
+   "family_count": 13,
+   "outlier_prefixes": {
+    "903": 12
+   },
+   "outlier_gtins": 12,
+   "outlier_retailers": {
+    "Billa": 11,
+    "dm": 1
+   },
+   "sample_outlier_gtins": [
+    "9031100000448",
+    "9031100000479",
+    "9031100003685",
+    "90311185",
+    "90311260",
+    "90311291",
+    "90311307",
+    "90311390"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "clearly canadian",
+   "total_gtins": 16,
+   "family_prefix": "076",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "066": 4,
+    "073": 4,
+    "064": 1,
+    "075": 1,
+    "622": 1,
+    "082": 1
+   },
+   "outlier_gtins": 12,
+   "outlier_retailers": {
+    "amazon": 9,
+    "Kroger": 2,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0642222854308",
+    "0664790000543",
+    "0664790000611",
+    "0664790000857",
+    "0664790000925",
+    "0732773990102",
+    "0732773990126",
+    "0732773990157"
+   ],
+   "marketplace_outliers": 10,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "buddha bubbles boba",
+   "total_gtins": 22,
+   "family_prefix": "064",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "078": 7,
+    "061": 2,
+    "071": 1,
+    "051": 1,
+    "097": 1
+   },
+   "outlier_gtins": 12,
+   "outlier_retailers": {
+    "amazon": 10,
+    "Kmart": 2
+   },
+   "sample_outlier_gtins": [
+    "0513370116146",
+    "0617529932783",
+    "0617529932998",
+    "0711841963682",
+    "0784672206433",
+    "0784672206501",
+    "0784672206518",
+    "0784672206617"
+   ],
+   "marketplace_outliers": 10,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "nos",
+   "total_gtins": 29,
+   "family_prefix": "081",
+   "family_count": 18,
+   "outlier_prefixes": {
+    "071": 2,
+    "088": 2,
+    "035": 2,
+    "076": 1,
+    "067": 1,
+    "074": 1,
+    "645": 1,
+    "079": 1
+   },
+   "outlier_gtins": 11,
+   "outlier_retailers": {
+    "amazon": 9,
+    "Walmart": 1,
+    "Target": 1
+   },
+   "sample_outlier_gtins": [
+    "0352154327299",
+    "0352154327954",
+    "0670739360241",
+    "0711403644950",
+    "0711403680477",
+    "0749004114824",
+    "0769553414220",
+    "0796520501836"
+   ],
+   "marketplace_outliers": 10,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "stirrings",
+   "total_gtins": 31,
+   "family_prefix": "081",
+   "family_count": 20,
+   "outlier_prefixes": {
+    "078": 9,
+    "076": 2
+   },
+   "outlier_gtins": 11,
+   "outlier_retailers": {
+    "amazon": 7,
+    "Harris Teeter": 3,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0761994324090",
+    "0761994324403",
+    "0780994810686",
+    "0780999000655",
+    "0780999000945",
+    "0780999003410",
+    "0780999003519",
+    "0780999003618"
+   ],
+   "marketplace_outliers": 7,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "bawls",
+   "total_gtins": 22,
+   "family_prefix": "063",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "106": 4,
+    "071": 3,
+    "622": 2,
+    "073": 1,
+    "206": 1
+   },
+   "outlier_gtins": 11,
+   "outlier_retailers": {
+    "Kroger": 6,
+    "amazon": 5
+   },
+   "sample_outlier_gtins": [
+    "0710051617217",
+    "0710051617248",
+    "0710051617255",
+    "0732623602834",
+    "10637910000041",
+    "10637910000232",
+    "10637910027833",
+    "10637910325618"
+   ],
+   "marketplace_outliers": 5,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "rise brewing co",
+   "total_gtins": 23,
+   "family_prefix": "086",
+   "family_count": 12,
+   "outlier_prefixes": {
+    "085": 5,
+    "081": 2,
+    "380": 2,
+    "046": 2
+   },
+   "outlier_gtins": 11,
+   "outlier_retailers": {
+    "Walmart": 4,
+    "amazon": 3,
+    "Kroger": 2,
+    "safeway": 1,
+    "Target": 1
+   },
+   "sample_outlier_gtins": [
+    "0460350098629",
+    "0460390348647",
+    "0818762001803",
+    "0818762001810",
+    "0850018249225",
+    "0850018249232",
+    "0850018249249",
+    "0850018249256"
+   ],
+   "marketplace_outliers": 7,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "coop",
+   "total_gtins": 17,
+   "family_prefix": "641",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "734": 5,
+    "702": 4,
+    "800": 1,
+    "570": 1
+   },
+   "outlier_gtins": 11,
+   "outlier_retailers": {
+    "Coop": 5,
+    "Food Market Herkku": 4,
+    "Coop.dk MAD": 2
+   },
+   "sample_outlier_gtins": [
+    "5700383990008",
+    "7025110073785",
+    "7025110171344",
+    "7025110183019",
+    "7025150012102",
+    "7340191101692",
+    "7340191151079",
+    "7340191151109"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "proud source",
+   "total_gtins": 21,
+   "family_prefix": "085",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "075": 4,
+    "073": 2,
+    "081": 1,
+    "076": 1,
+    "066": 1,
+    "019": 1,
+    "074": 1
+   },
+   "outlier_gtins": 11,
+   "outlier_retailers": {
+    "Walmart": 9,
+    "Kroger": 2
+   },
+   "sample_outlier_gtins": [
+    "0198717100493",
+    "0668723034889",
+    "0732623761524",
+    "0739781523438",
+    "0747519482230",
+    "0751901631939",
+    "0751901886438",
+    "0752697964546"
+   ],
+   "marketplace_outliers": 9,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "duskin",
+   "total_gtins": 17,
+   "family_prefix": "506",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "072": 5,
+    "075": 4,
+    "071": 2
+   },
+   "outlier_gtins": 11,
+   "outlier_retailers": {
+    "amazon": 11
+   },
+   "sample_outlier_gtins": [
+    "0719943614648",
+    "0719943614655",
+    "0720061306452",
+    "0720061306469",
+    "0720061306476",
+    "0720061382142",
+    "0720061382180",
+    "0758391122367"
+   ],
+   "marketplace_outliers": 11,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "thick & easy",
+   "total_gtins": 25,
+   "family_prefix": "069",
+   "family_count": 14,
+   "outlier_prefixes": {
+    "072": 2,
+    "081": 2,
+    "076": 1,
+    "012": 1,
+    "031": 1,
+    "100": 1,
+    "060": 1,
+    "042": 1,
+    "010": 1
+   },
+   "outlier_gtins": 11,
+   "outlier_retailers": {
+    "Walmart": 7,
+    "amazon": 3,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0100403031103",
+    "0125113320071",
+    "0310094334128",
+    "0422415213019",
+    "0605352475935",
+    "0728925620607",
+    "0728925620836",
+    "0764442286209"
+   ],
+   "marketplace_outliers": 10,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "culture pop",
+   "total_gtins": 23,
+   "family_prefix": "085",
+   "family_count": 12,
+   "outlier_prefixes": {
+    "064": 7,
+    "073": 2,
+    "622": 2
+   },
+   "outlier_gtins": 11,
+   "outlier_retailers": {
+    "amazon": 7,
+    "Kroger": 4
+   },
+   "sample_outlier_gtins": [
+    "0642709072287",
+    "0642709072362",
+    "0642709076476",
+    "0642709076483",
+    "0642709076490",
+    "0642709085829",
+    "0642709085836",
+    "0732623607327"
+   ],
+   "marketplace_outliers": 7,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "aspire",
+   "total_gtins": 20,
+   "family_prefix": "086",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "871": 3,
+    "071": 3,
+    "085": 2,
+    "506": 1,
+    "505": 1
+   },
+   "outlier_gtins": 10,
+   "outlier_retailers": {
+    "Target": 3,
+    "Albert Heijn": 2,
+    "amazon": 2,
+    "Tesco": 1,
+    "da": 1,
+    "Hy-Vee": 1
+   },
+   "sample_outlier_gtins": [
+    "0715834473134",
+    "0715834473141",
+    "0715834473189",
+    "0850015419201",
+    "0850015419768",
+    "5051162853954",
+    "5060225570035",
+    "8718781830007"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "gus",
+   "total_gtins": 20,
+   "family_prefix": "068",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "073": 6,
+    "089": 3,
+    "087": 1
+   },
+   "outlier_gtins": 10,
+   "outlier_retailers": {
+    "amazon": 7,
+    "peapod": 1,
+    "safeway": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0736983894168",
+    "0736983894199",
+    "0736983894229",
+    "0736983894267",
+    "0736983894304",
+    "0736983894311",
+    "0870616959197",
+    "0890763000016"
+   ],
+   "marketplace_outliers": 8,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "eldorado",
+   "total_gtins": 27,
+   "family_prefix": "703",
+   "family_count": 17,
+   "outlier_prefixes": {
+    "731": 7,
+    "734": 3
+   },
+   "outlier_gtins": 10,
+   "outlier_retailers": {
+    "mat.se": 3,
+    "Hemk\u00f6p": 3,
+    "Willys": 2,
+    "Spar": 2
+   },
+   "sample_outlier_gtins": [
+    "7311041004371",
+    "7311041005989",
+    "7311041005996",
+    "7311041031650",
+    "7311041040751",
+    "7311041062340",
+    "7311041062364",
+    "7340083468308"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "raak",
+   "total_gtins": 24,
+   "family_prefix": "872",
+   "family_count": 14,
+   "outlier_prefixes": {
+    "873": 10
+   },
+   "outlier_gtins": 10,
+   "outlier_retailers": {
+    "Coop": 6,
+    "Albert Heijn": 3,
+    "Dirk": 1
+   },
+   "sample_outlier_gtins": [
+    "87330991",
+    "87331004",
+    "87331011",
+    "87331028",
+    "87338652",
+    "87338669",
+    "87342673",
+    "87342680"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "co-op",
+   "total_gtins": 22,
+   "family_prefix": "500",
+   "family_count": 12,
+   "outlier_prefixes": {
+    "641": 4,
+    "734": 3,
+    "570": 1,
+    "502": 1,
+    "643": 1
+   },
+   "outlier_gtins": 10,
+   "outlier_retailers": {
+    "S-kaupat": 5,
+    "Food Market Herkku": 3,
+    "Osuma": 1,
+    "Co-op": 1
+   },
+   "sample_outlier_gtins": [
+    "50248407",
+    "5700382287642",
+    "6415712507800",
+    "6415712507824",
+    "6415712507831",
+    "6415712507855",
+    "6438574028504",
+    "7340191150881"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "aloevine",
+   "total_gtins": 23,
+   "family_prefix": "089",
+   "family_count": 13,
+   "outlier_prefixes": {
+    "081": 10
+   },
+   "outlier_gtins": 10,
+   "outlier_retailers": {
+    "amazon": 8,
+    "H-E-B": 2
+   },
+   "sample_outlier_gtins": [
+    "0818645010298",
+    "0818645010465",
+    "0818645010472",
+    "0818645010991",
+    "0818645011004",
+    "0818645011028",
+    "0818645011226",
+    "0818645011240"
+   ],
+   "marketplace_outliers": 8,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "nantucket nectars",
+   "total_gtins": 19,
+   "family_prefix": "068",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "072": 8,
+    "601": 1,
+    "078": 1
+   },
+   "outlier_gtins": 10,
+   "outlier_retailers": {
+    "amazon": 4,
+    "H-E-B": 2,
+    "Walmart": 2,
+    "Hy-Vee": 1,
+    "safeway": 1
+   },
+   "sample_outlier_gtins": [
+    "0726284000016",
+    "0726284000023",
+    "0726284000047",
+    "0726284000122",
+    "0726284000153",
+    "0726284000597",
+    "0726284000627",
+    "0726284000894"
+   ],
+   "marketplace_outliers": 6,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "bossen",
+   "total_gtins": 17,
+   "family_prefix": "085",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "081": 5,
+    "601": 3,
+    "075": 1,
+    "082": 1
+   },
+   "outlier_gtins": 10,
+   "outlier_retailers": {
+    "amazon": 6,
+    "Walmart": 4
+   },
+   "sample_outlier_gtins": [
+    "0754262746731",
+    "0813622021830",
+    "0813622021892",
+    "0813622021915",
+    "0813622022912",
+    "0813622022998",
+    "0829381407280",
+    "6010743762794"
+   ],
+   "marketplace_outliers": 10,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "nuun",
+   "total_gtins": 19,
+   "family_prefix": "081",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "608": 3,
+    "074": 2,
+    "073": 2,
+    "075": 2,
+    "085": 1
+   },
+   "outlier_gtins": 10,
+   "outlier_retailers": {
+    "Kroger": 9,
+    "iHerb": 1
+   },
+   "sample_outlier_gtins": [
+    "0732623624768",
+    "0732623624775",
+    "0749569289661",
+    "0749569289784",
+    "0751035720172",
+    "0751035746677",
+    "0853868001814",
+    "60811660020633"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "super drink",
+   "total_gtins": 31,
+   "family_prefix": "085",
+   "family_count": 22,
+   "outlier_prefixes": {
+    "064": 7,
+    "079": 2
+   },
+   "outlier_gtins": 9,
+   "outlier_retailers": {
+    "amazon": 9
+   },
+   "sample_outlier_gtins": [
+    "0642709032496",
+    "0642709032519",
+    "0642709032526",
+    "0642709032618",
+    "0642709034117",
+    "0642709049951",
+    "0642709049975",
+    "0798993466353"
+   ],
+   "marketplace_outliers": 9,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "sunny delight",
+   "total_gtins": 23,
+   "family_prefix": "841",
+   "family_count": 14,
+   "outlier_prefixes": {
+    "366": 8,
+    "425": 1
+   },
+   "outlier_gtins": 9,
+   "outlier_retailers": {
+    "Carrefour": 6,
+    "Intermarche": 2,
+    "El Corte Ingl\u00e9s": 1
+   },
+   "sample_outlier_gtins": [
+    "3661138600424",
+    "3661138600448",
+    "3661138600554",
+    "3661138600561",
+    "3661138600585",
+    "3661138600622",
+    "3661138600639",
+    "3661138600929"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "roar",
+   "total_gtins": 17,
+   "family_prefix": "085",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "081": 4,
+    "062": 2,
+    "380": 2,
+    "082": 1
+   },
+   "outlier_gtins": 9,
+   "outlier_retailers": {
+    "amazon": 5,
+    "Kroger": 2,
+    "Loblaws": 1,
+    "safeway": 1
+   },
+   "sample_outlier_gtins": [
+    "0628250053210",
+    "0628250053265",
+    "0810015720028",
+    "0810015720783",
+    "0810015720875",
+    "0810015721094",
+    "0826653943651",
+    "3804078283894"
+   ],
+   "marketplace_outliers": 5,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "cortas",
+   "total_gtins": 16,
+   "family_prefix": "073",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "074": 2,
+    "068": 2,
+    "035": 1,
+    "030": 1,
+    "314": 1,
+    "066": 1,
+    "064": 1
+   },
+   "outlier_gtins": 9,
+   "outlier_retailers": {
+    "amazon": 6,
+    "Kroger": 1,
+    "Target": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0302683211866",
+    "0352937490134",
+    "0649456079835",
+    "0664697917685",
+    "0683615451377",
+    "0683615451414",
+    "0741587333432",
+    "0741587333487"
+   ],
+   "marketplace_outliers": 7,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "frostie",
+   "total_gtins": 24,
+   "family_prefix": "079",
+   "family_count": 15,
+   "outlier_prefixes": {
+    "380": 5,
+    "065": 2,
+    "064": 1,
+    "075": 1
+   },
+   "outlier_gtins": 9,
+   "outlier_retailers": {
+    "Kroger": 5,
+    "amazon": 4
+   },
+   "sample_outlier_gtins": [
+    "0647679993358",
+    "0655457795636",
+    "0655457981688",
+    "0758218415269",
+    "3804078253088",
+    "3804078253095",
+    "3804078253101",
+    "3804078253118"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "perfect hydration",
+   "total_gtins": 13,
+   "family_prefix": "085",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "081": 4,
+    "064": 2,
+    "080": 1,
+    "073": 1,
+    "046": 1
+   },
+   "outlier_gtins": 9,
+   "outlier_retailers": {
+    "amazon": 3,
+    "Walmart": 3,
+    "CVS": 2,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0462485669552",
+    "0642135624777",
+    "0642135624791",
+    "0732623662845",
+    "0808226611761",
+    "0810031200092",
+    "0810031200566",
+    "0810031201105"
+   ],
+   "marketplace_outliers": 6,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "3d",
+   "total_gtins": 16,
+   "family_prefix": "086",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "085": 5,
+    "070": 3,
+    "208": 1
+   },
+   "outlier_gtins": 9,
+   "outlier_retailers": {
+    "amazon": 3,
+    "H-E-B": 2,
+    "Harris Teeter": 1,
+    "Hy-Vee": 1,
+    "Carethy": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0702823648055",
+    "0702823648062",
+    "0702823653967",
+    "0850003560007",
+    "0850003560014",
+    "0850003560526",
+    "0850003560571",
+    "0850003560830"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "lifeaid",
+   "total_gtins": 14,
+   "family_prefix": "085",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "081": 4,
+    "079": 2,
+    "308": 1,
+    "380": 1
+   },
+   "outlier_gtins": 8,
+   "outlier_retailers": {
+    "Kroger": 2,
+    "Target": 2,
+    "Harris Teeter": 1,
+    "H-E-B": 1,
+    "amazon": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0796520501737",
+    "0796520501744",
+    "0810047240570",
+    "0810047240891",
+    "0810047240969",
+    "0810047241386",
+    "30857886006296",
+    "3804078266781"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "live",
+   "total_gtins": 21,
+   "family_prefix": "081",
+   "family_count": 13,
+   "outlier_prefixes": {
+    "060": 4,
+    "085": 3,
+    "089": 1
+   },
+   "outlier_gtins": 8,
+   "outlier_retailers": {
+    "Kroger": 6,
+    "H-E-B": 2
+   },
+   "sample_outlier_gtins": [
+    "0601960567390",
+    "0601960567420",
+    "0601960605719",
+    "0601960605801",
+    "0850029903796",
+    "0850029903802",
+    "0850029903833",
+    "0890704002253"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "bionade",
+   "total_gtins": 14,
+   "family_prefix": "401",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "404": 3,
+    "370": 3,
+    "405": 2
+   },
+   "outlier_gtins": 8,
+   "outlier_retailers": {
+    "Greenweez": 6,
+    "Delhaize": 1,
+    "Fiksu Ruoka": 1
+   },
+   "sample_outlier_gtins": [
+    "3700749304953",
+    "3700749304960",
+    "3700749304977",
+    "4049205023670",
+    "4049205023724",
+    "4049205023779",
+    "4053400200859",
+    "4053400200873"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "jimmy's",
+   "total_gtins": 19,
+   "family_prefix": "400",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "501": 8
+   },
+   "outlier_gtins": 8,
+   "outlier_retailers": {
+    "Tesco": 4,
+    "Sainsbury's": 3,
+    "Asda": 1
+   },
+   "sample_outlier_gtins": [
+    "5010102001589",
+    "5010102001619",
+    "5010102001640",
+    "5010102001879",
+    "5010102001978",
+    "5018045913181",
+    "5018045913587",
+    "5018045913877"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "weider",
+   "total_gtins": 19,
+   "family_prefix": "404",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "841": 5,
+    "599": 2,
+    "085": 1
+   },
+   "outlier_gtins": 8,
+   "outlier_retailers": {
+    "Carethy": 6,
+    "El Corte Ingl\u00e9s": 2
+   },
+   "sample_outlier_gtins": [
+    "0854255008850",
+    "5999076228607",
+    "5999076232000",
+    "8410885071262",
+    "8414192311974",
+    "8414192312124",
+    "8414192312131",
+    "8414192312377"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ekstr\u00f6m/\u00f6nos",
+   "total_gtins": 20,
+   "family_prefix": "731",
+   "family_count": 12,
+   "outlier_prefixes": {
+    "641": 7,
+    "072": 1
+   },
+   "outlier_gtins": 8,
+   "outlier_retailers": {
+    "S-kaupat": 3,
+    "K Ruoka": 2,
+    "kauppahalli24.fi": 2,
+    "amazon": 1
+   },
+   "sample_outlier_gtins": [
+    "0721866639752",
+    "6417802344241",
+    "6417802345248",
+    "6417802345262",
+    "6417802346245",
+    "6417802346269",
+    "6417802348249",
+    "6417802586245"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ralph's",
+   "total_gtins": 14,
+   "family_prefix": "075",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "079": 5,
+    "070": 2,
+    "067": 1
+   },
+   "outlier_gtins": 8,
+   "outlier_retailers": {
+    "amazon": 8
+   },
+   "sample_outlier_gtins": [
+    "0675595958953",
+    "0703791718245",
+    "0703791718252",
+    "0796258273197",
+    "0796258273258",
+    "0796258273326",
+    "0796258273845",
+    "0796258274026"
+   ],
+   "marketplace_outliers": 8,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "cheerwine",
+   "total_gtins": 13,
+   "family_prefix": "081",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "064": 2,
+    "030": 2,
+    "084": 1,
+    "068": 1,
+    "088": 1,
+    "065": 1
+   },
+   "outlier_gtins": 8,
+   "outlier_retailers": {
+    "amazon": 8
+   },
+   "sample_outlier_gtins": [
+    "0304827040097",
+    "0304827040103",
+    "0640081094347",
+    "0640081094378",
+    "0659359065019",
+    "0682670933118",
+    "0847808004591",
+    "0880291545097"
+   ],
+   "marketplace_outliers": 8,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "healthy people",
+   "total_gtins": 18,
+   "family_prefix": "872",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "871": 8
+   },
+   "outlier_gtins": 8,
+   "outlier_retailers": {
+    "Coop": 5,
+    "Bol.com": 2,
+    "Vomar": 1
+   },
+   "sample_outlier_gtins": [
+    "8717677032235",
+    "8717677032273",
+    "8717677034246",
+    "8717677035007",
+    "8717677035021",
+    "8717677035045",
+    "8717677035069",
+    "8717677035083"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "tum e",
+   "total_gtins": 17,
+   "family_prefix": "088",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "081": 6,
+    "065": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "amazon": 7
+   },
+   "sample_outlier_gtins": [
+    "0659359457524",
+    "0810132092435",
+    "0810132092442",
+    "0810132092466",
+    "0810132092480",
+    "0810132092497",
+    "0810132092510"
+   ],
+   "marketplace_outliers": 7,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "rivella",
+   "total_gtins": 28,
+   "family_prefix": "871",
+   "family_count": 21,
+   "outlier_prefixes": {
+    "761": 7
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Edeka": 3,
+    "Migros": 3,
+    "Auchan": 1
+   },
+   "sample_outlier_gtins": [
+    "7610097111072",
+    "7610097111270",
+    "7610097112079",
+    "7610097120340",
+    "7610097126342",
+    "7610097200189",
+    "7610097200257"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "mi wadi",
+   "total_gtins": 20,
+   "family_prefix": "501",
+   "family_count": 13,
+   "outlier_prefixes": {
+    "539": 6,
+    "504": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Tesco": 4,
+    "SuperValu": 3
+   },
+   "sample_outlier_gtins": [
+    "50414079",
+    "5391521832139",
+    "5391521832566",
+    "5391521840417",
+    "5391521840615",
+    "5391521840622",
+    "5391521840653"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "alkaline88",
+   "total_gtins": 18,
+   "family_prefix": "085",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "081": 2,
+    "622": 2,
+    "030": 1,
+    "073": 1,
+    "061": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Kroger": 3,
+    "Harris Teeter": 1,
+    "Sam's Club": 1,
+    "amazon": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0304827076997",
+    "0615888960935",
+    "0732623659616",
+    "0810050330565",
+    "0810050330572",
+    "6220171971204",
+    "6220171971310"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "stumptown",
+   "total_gtins": 15,
+   "family_prefix": "085",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "018": 2,
+    "061": 2,
+    "067": 2,
+    "084": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Walmart": 4,
+    "Kroger": 2,
+    "amazon": 1
+   },
+   "sample_outlier_gtins": [
+    "0180626000216",
+    "0180626000377",
+    "0615888989264",
+    "0615888989295",
+    "0673276821404",
+    "0673276851340",
+    "0840121600099"
+   ],
+   "marketplace_outliers": 5,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "harboe",
+   "total_gtins": 23,
+   "family_prefix": "570",
+   "family_count": 16,
+   "outlier_prefixes": {
+    "571": 7
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Fotex": 4,
+    "Hemk\u00f6p": 2,
+    "Bol.com": 1
+   },
+   "sample_outlier_gtins": [
+    "5711018000054",
+    "5711018000115",
+    "5711018023244",
+    "5711018024142",
+    "5711018026160",
+    "5711018029826",
+    "5711018034059"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "thick- it",
+   "total_gtins": 20,
+   "family_prefix": "089",
+   "family_count": 13,
+   "outlier_prefixes": {
+    "069": 3,
+    "100": 3,
+    "063": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "amazon": 4,
+    "Walmart": 2,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0637390910871",
+    "0696850027054",
+    "0696850027191",
+    "0696850027207",
+    "10072058610576",
+    "10072058619586",
+    "10072058619722"
+   ],
+   "marketplace_outliers": 6,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "wellsley farms",
+   "total_gtins": 12,
+   "family_prefix": "060",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "080": 3,
+    "073": 2,
+    "088": 1,
+    "068": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "amazon": 7
+   },
+   "sample_outlier_gtins": [
+    "0685987085433",
+    "0738577912197",
+    "0738577913552",
+    "0804090217252",
+    "0804090218785",
+    "0804090218884",
+    "0888670037515"
+   ],
+   "marketplace_outliers": 7,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "eska",
+   "total_gtins": 18,
+   "family_prefix": "067",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "076": 5,
+    "063": 1,
+    "088": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "amazon": 5,
+    "Walmart": 2
+   },
+   "sample_outlier_gtins": [
+    "0634740013701",
+    "0769553420498",
+    "0769553420504",
+    "0769553420511",
+    "0769553420931",
+    "0769553420962",
+    "0880025906941"
+   ],
+   "marketplace_outliers": 7,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "bruce cost",
+   "total_gtins": 19,
+   "family_prefix": "068",
+   "family_count": 12,
+   "outlier_prefixes": {
+    "085": 3,
+    "067": 1,
+    "034": 1,
+    "018": 1,
+    "065": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "amazon": 4,
+    "Walmart": 3
+   },
+   "sample_outlier_gtins": [
+    "0185687878958",
+    "0344500186391",
+    "0656346622392",
+    "0671194202954",
+    "0855235002011",
+    "0855235002028",
+    "0855235002813"
+   ],
+   "marketplace_outliers": 7,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "calpico",
+   "total_gtins": 12,
+   "family_prefix": "085",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "063": 2,
+    "075": 2,
+    "067": 1,
+    "074": 1,
+    "073": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "amazon": 6,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0637549326546",
+    "0637549459329",
+    "0674895160349",
+    "0732623605378",
+    "0747988827877",
+    "0759548090126",
+    "0759548090133"
+   ],
+   "marketplace_outliers": 6,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "wandering bear",
+   "total_gtins": 19,
+   "family_prefix": "085",
+   "family_count": 12,
+   "outlier_prefixes": {
+    "086": 4,
+    "049": 1,
+    "108": 1,
+    "074": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Target": 2,
+    "amazon": 2,
+    "Kroger": 2,
+    "peapod": 1
+   },
+   "sample_outlier_gtins": [
+    "0492840400551",
+    "0746155812975",
+    "0860534000101",
+    "0860534000125",
+    "0860534000163",
+    "0860534000194",
+    "10860534000191"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "the organics by red bull",
+   "total_gtins": 12,
+   "family_prefix": "904",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "202": 3,
+    "900": 2,
+    "843": 1,
+    "061": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Spar": 3,
+    "Carrefour": 2,
+    "Alcampo": 1,
+    "Harris Teeter": 1
+   },
+   "sample_outlier_gtins": [
+    "0611269373226",
+    "2020003794988",
+    "2020004273420",
+    "2020004556264",
+    "8437007277005",
+    "9002490239008",
+    "9002490239015"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "r\u00e5",
+   "total_gtins": 11,
+   "family_prefix": "703",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "735": 4,
+    "739": 2,
+    "702": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "S-kaupat": 3,
+    "K Ruoka": 2,
+    "Shop Apotheke": 1,
+    "Coop": 1
+   },
+   "sample_outlier_gtins": [
+    "7025445906000",
+    "7350088710548",
+    "7350088711170",
+    "7350088711415",
+    "7350088711705",
+    "7391603140129",
+    "7391603140396"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "recess",
+   "total_gtins": 17,
+   "family_prefix": "085",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "064": 2,
+    "073": 2,
+    "108": 1,
+    "380": 1,
+    "066": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Kroger": 4,
+    "amazon": 2,
+    "Target": 1
+   },
+   "sample_outlier_gtins": [
+    "0642709046899",
+    "0642709046912",
+    "0664697917067",
+    "0732623628988",
+    "0732623628995",
+    "10850019179238",
+    "3804078282439"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "planet drinks",
+   "total_gtins": 12,
+   "family_prefix": "376",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "841": 3,
+    "068": 2,
+    "843": 1,
+    "801": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Carrefour": 7
+   },
+   "sample_outlier_gtins": [
+    "0682430179503",
+    "0682430179701",
+    "8011087136416",
+    "8410470181185",
+    "8410470181284",
+    "8410470181581",
+    "8437012412026"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "frannie's",
+   "total_gtins": 18,
+   "family_prefix": "074",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "070": 4,
+    "076": 3
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "amazon": 4,
+    "Walmart": 3
+   },
+   "sample_outlier_gtins": [
+    "0703694617096",
+    "0703694617102",
+    "0703694617713",
+    "0705715572698",
+    "0766204450217",
+    "0766204450231",
+    "0766204450262"
+   ],
+   "marketplace_outliers": 7,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "x- gamer",
+   "total_gtins": 14,
+   "family_prefix": "506",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "734": 7
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "CDON.COM": 5,
+    "Bol.com": 2
+   },
+   "sample_outlier_gtins": [
+    "7340158202127",
+    "7340158202134",
+    "7340158202158",
+    "7340158202165",
+    "7340158202394",
+    "7340158202431",
+    "7340158202479"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "pathwater",
+   "total_gtins": 16,
+   "family_prefix": "081",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "086": 2,
+    "085": 2,
+    "074": 2,
+    "073": 1
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Kroger": 3,
+    "Giant Eagle": 1,
+    "Rite Aid": 1,
+    "Walmart": 1,
+    "Target": 1
+   },
+   "sample_outlier_gtins": [
+    "0732623626670",
+    "0746155802389",
+    "0746155802792",
+    "0850013500086",
+    "0850013500109",
+    "0867801000109",
+    "0867801000130"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "the juice company",
+   "total_gtins": 22,
+   "family_prefix": "408",
+   "family_count": 15,
+   "outlier_prefixes": {
+    "406": 7
+   },
+   "outlier_gtins": 7,
+   "outlier_retailers": {
+    "Aldi": 7
+   },
+   "sample_outlier_gtins": [
+    "4061459790016",
+    "4061459979169",
+    "4061459979176",
+    "4061459979183",
+    "4061459979190",
+    "4061461702809",
+    "4061462019128"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "moju",
+   "total_gtins": 13,
+   "family_prefix": "961",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "506": 5,
+    "962": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Sainsbury's": 6
+   },
+   "sample_outlier_gtins": [
+    "5060490010274",
+    "5060490010502",
+    "5060490010526",
+    "5060490010694",
+    "5060490010861",
+    "96202296"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "navitas",
+   "total_gtins": 10,
+   "family_prefix": "081",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "085": 3,
+    "075": 2,
+    "074": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Kroger": 2,
+    "meijer": 1,
+    "Thrive Market": 1,
+    "amazon": 1,
+    "iHerb": 1
+   },
+   "sample_outlier_gtins": [
+    "0741533913787",
+    "0751035734223",
+    "0751035749814",
+    "0858847000376",
+    "0858847000550",
+    "0858847000871"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "hiball energy",
+   "total_gtins": 14,
+   "family_prefix": "085",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "089": 5,
+    "314": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "amazon": 3,
+    "CVS": 2,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0897351000229",
+    "0897351000526",
+    "0897351000625",
+    "0897351000823",
+    "0897351000830",
+    "3142834132292"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "maine root",
+   "total_gtins": 12,
+   "family_prefix": "086",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "068": 5,
+    "081": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "amazon": 5,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0680332581455",
+    "0680332581493",
+    "0680332581523",
+    "0680332581530",
+    "0680332582445",
+    "0810161207695"
+   ],
+   "marketplace_outliers": 6,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "jelly belly",
+   "total_gtins": 12,
+   "family_prefix": "081",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "085": 4,
+    "506": 2
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Kroger": 3,
+    "amazon": 1,
+    "Jumbo Supermarkten": 1,
+    "Coop": 1
+   },
+   "sample_outlier_gtins": [
+    "0859801007004",
+    "0859801007028",
+    "0859801007141",
+    "0859801007486",
+    "5060318662418",
+    "5060318662494"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "mezzo mix",
+   "total_gtins": 13,
+   "family_prefix": "544",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "500": 3,
+    "077": 1,
+    "903": 1,
+    "202": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Rewe": 4,
+    "amazon": 1,
+    "Spar": 1
+   },
+   "sample_outlier_gtins": [
+    "0778554612160",
+    "2020005428997",
+    "5000112548327",
+    "5000112563108",
+    "5000112580501",
+    "90343889"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "deit",
+   "total_gtins": 14,
+   "family_prefix": "410",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "401": 3,
+    "200": 2,
+    "400": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Rewe": 4,
+    "Mytime.de": 2
+   },
+   "sample_outlier_gtins": [
+    "2000442355377",
+    "2000442355414",
+    "4001325088410",
+    "4019313006025",
+    "4019313006117",
+    "4019313006421"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "waldquelle",
+   "total_gtins": 13,
+   "family_prefix": "900",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "202": 5,
+    "401": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Spar": 5,
+    "Rewe": 1
+   },
+   "sample_outlier_gtins": [
+    "2020000589006",
+    "2020002912222",
+    "2020003779640",
+    "2020003779688",
+    "2020005433434",
+    "4015016002067"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "mer",
+   "total_gtins": 13,
+   "family_prefix": "544",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "500": 4,
+    "903": 2
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Willys": 3,
+    "Hemk\u00f6p": 2,
+    "mat.se": 1
+   },
+   "sample_outlier_gtins": [
+    "5000112640465",
+    "5000112645446",
+    "5000112647754",
+    "5000112654141",
+    "90375897",
+    "90375910"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "aa",
+   "total_gtins": 18,
+   "family_prefix": "872",
+   "family_count": 12,
+   "outlier_prefixes": {
+    "873": 4,
+    "542": 2
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Albert Heijn": 2,
+    "Bol.com": 2,
+    "Coop": 1,
+    "Vomar": 1
+   },
+   "sample_outlier_gtins": [
+    "5425015366876",
+    "5425015367033",
+    "87333824",
+    "87342710",
+    "87351989",
+    "87365290"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "kutztown",
+   "total_gtins": 14,
+   "family_prefix": "076",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "070": 6
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "amazon": 6
+   },
+   "sample_outlier_gtins": [
+    "0703694611766",
+    "0703694611773",
+    "0703694611780",
+    "0703694611810",
+    "0703694611834",
+    "0703694611858"
+   ],
+   "marketplace_outliers": 6,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "optimum nutrition",
+   "total_gtins": 16,
+   "family_prefix": "074",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "079": 4,
+    "506": 1,
+    "650": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Target": 4,
+    "SuperValu": 1,
+    "Shop Pharmacie": 1
+   },
+   "sample_outlier_gtins": [
+    "0796520501843",
+    "0796520501850",
+    "0796520501874",
+    "0796520501911",
+    "5060751990758",
+    "65060751990774"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "taksi",
+   "total_gtins": 21,
+   "family_prefix": "872",
+   "family_count": 15,
+   "outlier_prefixes": {
+    "871": 6
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Coop": 5,
+    "Jan Linders": 1
+   },
+   "sample_outlier_gtins": [
+    "8713300042855",
+    "8713300044286",
+    "8713300069456",
+    "8713300069463",
+    "8713300069906",
+    "8713300069920"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "k\u00f6e",
+   "total_gtins": 13,
+   "family_prefix": "085",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "081": 4,
+    "380": 2
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "amazon": 2,
+    "Kroger": 2,
+    "Rite Aid": 1,
+    "safeway": 1
+   },
+   "sample_outlier_gtins": [
+    "0810031200689",
+    "0810031200702",
+    "0810031201181",
+    "0810031201204",
+    "3804078263124",
+    "3804078263155"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "royal bliss",
+   "total_gtins": 13,
+   "family_prefix": "544",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "540": 2,
+    "903": 2,
+    "423": 1,
+    "421": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Carrefour": 4,
+    "Auchan": 1,
+    "El Corte Ingl\u00e9s": 1
+   },
+   "sample_outlier_gtins": [
+    "42104629",
+    "42358381",
+    "54001565",
+    "54001701",
+    "90377693",
+    "90377709"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "sierra cazorla",
+   "total_gtins": 13,
+   "family_prefix": "842",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "843": 6
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "El Corte Ingl\u00e9s": 4,
+    "Hipercor": 2
+   },
+   "sample_outlier_gtins": [
+    "8436011295210",
+    "8436011295227",
+    "8436011295258",
+    "8436011295418",
+    "8436011296019",
+    "8436011296033"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "s pellegrino",
+   "total_gtins": 10,
+   "family_prefix": "800",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "072": 3,
+    "060": 3
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Kroger": 6
+   },
+   "sample_outlier_gtins": [
+    "0601958172698",
+    "0601958172728",
+    "0601958172766",
+    "0723522450268",
+    "0723522450992",
+    "0723522451005"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "black rifle",
+   "total_gtins": 19,
+   "family_prefix": "081",
+   "family_count": 13,
+   "outlier_prefixes": {
+    "084": 4,
+    "097": 1,
+    "061": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "amazon": 4,
+    "Walmart": 2
+   },
+   "sample_outlier_gtins": [
+    "0613412075384",
+    "0840461202939",
+    "0840461202946",
+    "0840461202953",
+    "0840461202960",
+    "0970977918144"
+   ],
+   "marketplace_outliers": 6,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "sanzo",
+   "total_gtins": 13,
+   "family_prefix": "084",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "086": 4,
+    "073": 2
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Thrive Market": 3,
+    "Kroger": 2,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0732623633272",
+    "0732623633333",
+    "0860000352901",
+    "0860000352918",
+    "0860000352925",
+    "0860000352949"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "taika",
+   "total_gtins": 12,
+   "family_prefix": "086",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "085": 4,
+    "073": 1,
+    "046": 1
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "Vitacost": 2,
+    "amazon": 1,
+    "Thrive Market": 1,
+    "Kroger": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0463559297824",
+    "0732623770106",
+    "0850031083004",
+    "0850031083011",
+    "0850031083042",
+    "0850031083059"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "javy",
+   "total_gtins": 16,
+   "family_prefix": "078",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "085": 4,
+    "070": 2
+   },
+   "outlier_gtins": 6,
+   "outlier_retailers": {
+    "amazon": 5,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0705514329967",
+    "0705514330185",
+    "0850057798067",
+    "0850057798074",
+    "0850057798098",
+    "0850057798456"
+   ],
+   "marketplace_outliers": 5,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "barsmith",
+   "total_gtins": 13,
+   "family_prefix": "074",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "076": 2,
+    "061": 1,
+    "063": 1,
+    "066": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Walmart": 3,
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0614362707226",
+    "0632434306689",
+    "0665138201523",
+    "0760194262621",
+    "0760194274150"
+   ],
+   "marketplace_outliers": 5,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "crazy tiger",
+   "total_gtins": 11,
+   "family_prefix": "376",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "355": 3,
+    "841": 1,
+    "805": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Carrefour": 3,
+    "Alcampo": 1,
+    "Esselunga a Casa": 1
+   },
+   "sample_outlier_gtins": [
+    "3551720206823",
+    "3551720206854",
+    "3551720208773",
+    "8057192005230",
+    "8410470000004"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "sambazon",
+   "total_gtins": 9,
+   "family_prefix": "081",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "079": 3,
+    "078": 1,
+    "308": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Target": 3,
+    "amazon": 1,
+    "Vitacost": 1
+   },
+   "sample_outlier_gtins": [
+    "0789603939305",
+    "0796520502017",
+    "0796520502024",
+    "0796520502031",
+    "30818411000714"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "deep riverrock",
+   "total_gtins": 12,
+   "family_prefix": "501",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "502": 5
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Asda": 2,
+    "SuperValu": 2,
+    "Tesco": 1
+   },
+   "sample_outlier_gtins": [
+    "5026791442008",
+    "5026791542203",
+    "5026791543002",
+    "5026791543507",
+    "5026791562584"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "starbucks frappuccino vanilla",
+   "total_gtins": 10,
+   "family_prefix": "010",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "079": 1,
+    "080": 1,
+    "571": 1,
+    "099": 1,
+    "091": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "amazon": 2,
+    "Walmart": 2,
+    "Rewe": 1
+   },
+   "sample_outlier_gtins": [
+    "0796762808045",
+    "0804090204825",
+    "0915953021616",
+    "0994289255810",
+    "5711953148538"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "isostar",
+   "total_gtins": 10,
+   "family_prefix": "317",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "761": 4,
+    "859": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Atida": 3,
+    "Cdiscount": 1,
+    "Carethy": 1
+   },
+   "sample_outlier_gtins": [
+    "7612100026748",
+    "7612100031650",
+    "7612100031667",
+    "7612100031674",
+    "8594159531765"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ugly",
+   "total_gtins": 10,
+   "family_prefix": "506",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "085": 3,
+    "079": 1,
+    "643": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "amazon": 3,
+    "Tesco": 1,
+    "Fiksu Ruoka": 1
+   },
+   "sample_outlier_gtins": [
+    "0799439196711",
+    "0852975008235",
+    "0852975008372",
+    "0852975008440",
+    "6430024999563"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "almdudler",
+   "total_gtins": 9,
+   "family_prefix": "900",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "901": 3,
+    "202": 2
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Billa": 3,
+    "Spar": 2
+   },
+   "sample_outlier_gtins": [
+    "2020002779283",
+    "2020003703607",
+    "9015160100300",
+    "9015160105398",
+    "9015160105930"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ballygowan",
+   "total_gtins": 13,
+   "family_prefix": "509",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "501": 4,
+    "539": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "SuperValu": 3,
+    "Tesco": 2
+   },
+   "sample_outlier_gtins": [
+    "5011026065329",
+    "5011026701791",
+    "5011026745320",
+    "5011026794519",
+    "5391521836755"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "just water",
+   "total_gtins": 21,
+   "family_prefix": "085",
+   "family_count": 16,
+   "outlier_prefixes": {
+    "086": 2,
+    "061": 2,
+    "066": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "amazon": 2,
+    "Walmart": 2,
+    "Target": 1
+   },
+   "sample_outlier_gtins": [
+    "0615888960621",
+    "0615888961567",
+    "0664697916206",
+    "0866558000004",
+    "0866558000035"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "sunita",
+   "total_gtins": 11,
+   "family_prefix": "501",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "075": 5
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "amazon": 5
+   },
+   "sample_outlier_gtins": [
+    "0758391265361",
+    "0758391265385",
+    "0758391265392",
+    "0758391265408",
+    "0758391265422"
+   ],
+   "marketplace_outliers": 5,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "moomin",
+   "total_gtins": 11,
+   "family_prefix": "474",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "642": 5
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "S-kaupat": 4,
+    "K Ruoka": 1
+   },
+   "sample_outlier_gtins": [
+    "6420610113763",
+    "6420610113787",
+    "6420610114302",
+    "6420610114326",
+    "6420610117013"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "berri",
+   "total_gtins": 9,
+   "family_prefix": "086",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "074": 2,
+    "060": 1,
+    "019": 1,
+    "073": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "amazon": 3,
+    "Walmart": 1,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0195893430192",
+    "0607353953511",
+    "0732623667772",
+    "0747501843131",
+    "0747501843216"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "healsi",
+   "total_gtins": 9,
+   "family_prefix": "560",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "088": 4,
+    "843": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "amazon": 4,
+    "Auchan": 1
+   },
+   "sample_outlier_gtins": [
+    "0888022003335",
+    "0888022003359",
+    "0888022003366",
+    "0888022003373",
+    "8437019158057"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "ekobryggeriet",
+   "total_gtins": 16,
+   "family_prefix": "735",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "733": 5
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Hemk\u00f6p": 5
+   },
+   "sample_outlier_gtins": [
+    "7330605001250",
+    "7330605001267",
+    "7330605001274",
+    "7330605001281",
+    "7330605001311"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "adrenaline shoc",
+   "total_gtins": 16,
+   "family_prefix": "081",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "074": 4,
+    "030": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "amazon": 5
+   },
+   "sample_outlier_gtins": [
+    "0301158424107",
+    "0749004113124",
+    "0749004114992",
+    "0749004115005",
+    "0749004115029"
+   ],
+   "marketplace_outliers": 5,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "pop & bottle",
+   "total_gtins": 19,
+   "family_prefix": "085",
+   "family_count": 14,
+   "outlier_prefixes": {
+    "086": 3,
+    "099": 1,
+    "064": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Walmart": 2,
+    "amazon": 1,
+    "Harris Teeter": 1,
+    "Wholefoods": 1
+   },
+   "sample_outlier_gtins": [
+    "0648478615823",
+    "0868806000002",
+    "0868806000019",
+    "0868806000026",
+    "0995561293933"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "chin chin",
+   "total_gtins": 10,
+   "family_prefix": "471",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "070": 3,
+    "742": 2
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "amazon": 2,
+    "Carrefour": 2,
+    "safeway": 1
+   },
+   "sample_outlier_gtins": [
+    "0701243011111",
+    "0701243011128",
+    "0701243012330",
+    "7427129487698",
+    "7427136307576"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "nixie",
+   "total_gtins": 16,
+   "family_prefix": "081",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "380": 2,
+    "073": 2,
+    "074": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Kroger": 5
+   },
+   "sample_outlier_gtins": [
+    "0732623624300",
+    "0732623662470",
+    "0746155830290",
+    "3804078275387",
+    "3804078275394"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "aura bora",
+   "total_gtins": 10,
+   "family_prefix": "086",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "085": 5
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "safeway": 3,
+    "Thrive Market": 2
+   },
+   "sample_outlier_gtins": [
+    "0850026937022",
+    "0850026937039",
+    "0850026937053",
+    "0850026937077",
+    "0850026937183"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "shine water",
+   "total_gtins": 12,
+   "family_prefix": "086",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "085": 5
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "meijer": 3,
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0850036444091",
+    "0850036444114",
+    "0850036444121",
+    "0850036444152",
+    "0850036444404"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "inotea",
+   "total_gtins": 10,
+   "family_prefix": "086",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "380": 4,
+    "085": 1
+   },
+   "outlier_gtins": 5,
+   "outlier_retailers": {
+    "Kroger": 4,
+    "meijer": 1
+   },
+   "sample_outlier_gtins": [
+    "0850020195039",
+    "3804078258755",
+    "3804078258762",
+    "3804078258779",
+    "3804078258786"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "bare nature",
+   "total_gtins": 8,
+   "family_prefix": "085",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "068": 2,
+    "074": 1,
+    "073": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 4
+   },
+   "sample_outlier_gtins": [
+    "0686082455671",
+    "0689128697950",
+    "0732976282370",
+    "0743272197558"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "les fees bio",
+   "total_gtins": 10,
+   "family_prefix": "376",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "302": 4
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Naturalia": 4
+   },
+   "sample_outlier_gtins": [
+    "3021891003229",
+    "3021891003243",
+    "3021891003267",
+    "3021891003281"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "smart juice",
+   "total_gtins": 14,
+   "family_prefix": "089",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "079": 1,
+    "078": 1,
+    "085": 1,
+    "590": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 4
+   },
+   "sample_outlier_gtins": [
+    "0786173977836",
+    "0798235705363",
+    "0857042008132",
+    "5907377280071"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "bucha",
+   "total_gtins": 10,
+   "family_prefix": "085",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "070": 2,
+    "062": 2
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 2,
+    "Thebay.com": 2
+   },
+   "sample_outlier_gtins": [
+    "0628110435231",
+    "0628110435477",
+    "0703694613081",
+    "0703694613104"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "merchant's heart",
+   "total_gtins": 10,
+   "family_prefix": "961",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "505": 4
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Sainsbury's": 3,
+    "amazon": 1
+   },
+   "sample_outlier_gtins": [
+    "5054267008366",
+    "5054267008410",
+    "5054267008458",
+    "5054267407350"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "scheckter's",
+   "total_gtins": 11,
+   "family_prefix": "072",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "506": 4
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Tesco": 2,
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "5060248350027",
+    "5060248350034",
+    "5060248350171",
+    "5060248350188"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "alnavit",
+   "total_gtins": 19,
+   "family_prefix": "422",
+   "family_count": 15,
+   "outlier_prefixes": {
+    "423": 2,
+    "426": 2
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Alnatura": 4
+   },
+   "sample_outlier_gtins": [
+    "42300427",
+    "42305187",
+    "4260012974393",
+    "4260012974430"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "carpe diem",
+   "total_gtins": 8,
+   "family_prefix": "902",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "900": 3,
+    "202": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Rewe": 2,
+    "Spar": 1,
+    "El Corte Ingl\u00e9s": 1
+   },
+   "sample_outlier_gtins": [
+    "2020001708420",
+    "90020636",
+    "9008700193634",
+    "9008700201995"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "postob\u00f3n",
+   "total_gtins": 8,
+   "family_prefix": "770",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "037": 2,
+    "843": 1,
+    "085": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 2,
+    "Alcampo": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0371993990181",
+    "0371993990198",
+    "0850050430803",
+    "8437010209000"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "tassoni",
+   "total_gtins": 13,
+   "family_prefix": "800",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "801": 4
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Esselunga a Casa": 3,
+    "amazon": 1
+   },
+   "sample_outlier_gtins": [
+    "80147916",
+    "80147947",
+    "80148012",
+    "80148708"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "gainomax",
+   "total_gtins": 11,
+   "family_prefix": "731",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "735": 2,
+    "643": 2
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "S-kaupat": 2,
+    "Coop": 1,
+    "Food Market Herkku": 1
+   },
+   "sample_outlier_gtins": [
+    "6430012055509",
+    "6430012055516",
+    "7350028548453",
+    "7350028548743"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "wolverine",
+   "total_gtins": 12,
+   "family_prefix": "735",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "641": 3,
+    "473": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "K Ruoka": 3,
+    "Mat Smart": 1
+   },
+   "sample_outlier_gtins": [
+    "47350021421935",
+    "6417783168928",
+    "6417783168935",
+    "6417783169062"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "limitless",
+   "total_gtins": 13,
+   "family_prefix": "085",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "079": 2,
+    "066": 2
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 4
+   },
+   "sample_outlier_gtins": [
+    "0665609403647",
+    "0665609403654",
+    "0791484252107",
+    "0791484252121"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "tea zone",
+   "total_gtins": 9,
+   "family_prefix": "089",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "081": 1,
+    "087": 1,
+    "063": 1,
+    "371": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 3,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0638827639648",
+    "0815812012789",
+    "0877183006422",
+    "3711954142544"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "cool breeze",
+   "total_gtins": 8,
+   "family_prefix": "068",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "072": 3,
+    "080": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 4
+   },
+   "sample_outlier_gtins": [
+    "0726682783795",
+    "0726682784075",
+    "0726682784082",
+    "0804319433074"
+   ],
+   "marketplace_outliers": 4,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "angel specialty products",
+   "total_gtins": 8,
+   "family_prefix": "070",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "085": 2,
+    "091": 1,
+    "094": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 2,
+    "Kmart": 2
+   },
+   "sample_outlier_gtins": [
+    "0857385006246",
+    "0857385006253",
+    "0910824644024",
+    "0943237511638"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "dr brown's",
+   "total_gtins": 9,
+   "family_prefix": "068",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "085": 2,
+    "061": 1,
+    "073": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 3,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0612637255663",
+    "0732623660568",
+    "0850051163601",
+    "0850051163878"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "hawaiian springs",
+   "total_gtins": 11,
+   "family_prefix": "066",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "073": 2,
+    "074": 1,
+    "070": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 2,
+    "Kroger": 2
+   },
+   "sample_outlier_gtins": [
+    "0707089573530",
+    "0732623745005",
+    "0732623745029",
+    "0744044408858"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "qnt",
+   "total_gtins": 11,
+   "family_prefix": "542",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "540": 4
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Carrefour": 2,
+    "Shop Pharmacie": 2
+   },
+   "sample_outlier_gtins": [
+    "5404017402485",
+    "5404017402744",
+    "5404017402751",
+    "5404017405318"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "rambler",
+   "total_gtins": 15,
+   "family_prefix": "086",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "085": 3,
+    "074": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 2,
+    "safeway": 1,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0746155802815",
+    "0850041982045",
+    "0850041982090",
+    "0850041982212"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "226ers",
+   "total_gtins": 12,
+   "family_prefix": "843",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "841": 2,
+    "506": 1,
+    "073": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Carethy": 3,
+    "Planeta Huerto": 1
+   },
+   "sample_outlier_gtins": [
+    "0737870191902",
+    "5060536650006",
+    "8414606332939",
+    "8414606333387"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "jocko",
+   "total_gtins": 15,
+   "family_prefix": "081",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "070": 3,
+    "086": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "amazon": 3,
+    "H-E-B": 1
+   },
+   "sample_outlier_gtins": [
+    "0708088781391",
+    "0708088781438",
+    "0708088781575",
+    "0860005339204"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "riot energy",
+   "total_gtins": 9,
+   "family_prefix": "085",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "073": 2,
+    "063": 1,
+    "074": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Kroger": 3,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0630606264225",
+    "0732623663378",
+    "0732623720798",
+    "0746155803218"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "dirtea",
+   "total_gtins": 9,
+   "family_prefix": "425",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "202": 3,
+    "900": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Spar": 3,
+    "Rewe": 1
+   },
+   "sample_outlier_gtins": [
+    "2020004009517",
+    "2020004009562",
+    "2020004009593",
+    "9006900230777"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "vive",
+   "total_gtins": 10,
+   "family_prefix": "408",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "251": 3,
+    "252": 1
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Aldi": 4
+   },
+   "sample_outlier_gtins": [
+    "25190182",
+    "25190298",
+    "25198232",
+    "25282061"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "oxyshred",
+   "total_gtins": 8,
+   "family_prefix": "085",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "081": 4
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Target": 4
+   },
+   "sample_outlier_gtins": [
+    "0810095630200",
+    "0810095630262",
+    "0810095632099",
+    "0810095632174"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "hsn",
+   "total_gtins": 9,
+   "family_prefix": "506",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "505": 4
+   },
+   "outlier_gtins": 4,
+   "outlier_retailers": {
+    "Carrefour": 4
+   },
+   "sample_outlier_gtins": [
+    "5056329501945",
+    "5056329501976",
+    "5056329508968",
+    "5056329509231"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "mont",
+   "total_gtins": 8,
+   "family_prefix": "802",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "337": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Courses U": 2,
+    "Intermarche": 1
+   },
+   "sample_outlier_gtins": [
+    "3375830000016",
+    "3375830000061",
+    "3375830002065"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "northland",
+   "total_gtins": 8,
+   "family_prefix": "075",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "071": 1,
+    "024": 1,
+    "069": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 1,
+    "safeway": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0242274000007",
+    "0698642217841",
+    "0713789009835"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "bionaturae",
+   "total_gtins": 11,
+   "family_prefix": "079",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "019": 2,
+    "803": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 2,
+    "NaturaSi": 1
+   },
+   "sample_outlier_gtins": [
+    "0190283729634",
+    "0190283729641",
+    "8034063241584"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "laird superfood",
+   "total_gtins": 7,
+   "family_prefix": "085",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "081": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "safeway": 1,
+    "Bol.com": 1,
+    "Target": 1
+   },
+   "sample_outlier_gtins": [
+    "0810005130134",
+    "0810005132978",
+    "0810005132992"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "powell & mahoney",
+   "total_gtins": 11,
+   "family_prefix": "089",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "085": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Target": 1,
+    "amazon": 1,
+    "H-E-B": 1
+   },
+   "sample_outlier_gtins": [
+    "0853680005090",
+    "0853680005212",
+    "0853680005298"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "jos\u00e9 cuervo",
+   "total_gtins": 11,
+   "family_prefix": "081",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "076": 1,
+    "073": 1,
+    "017": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 1,
+    "Kroger": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0174429181081",
+    "0732623661459",
+    "0768786452290"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "booster",
+   "total_gtins": 8,
+   "family_prefix": "431",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "574": 2,
+    "405": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Edeka": 1,
+    "K Ruoka": 1,
+    "Osuma": 1
+   },
+   "sample_outlier_gtins": [
+    "40554549",
+    "5741000164532",
+    "5741000166734"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "waiakea",
+   "total_gtins": 13,
+   "family_prefix": "085",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "061": 1,
+    "070": 1,
+    "066": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 1,
+    "Walmart": 1,
+    "Target": 1
+   },
+   "sample_outlier_gtins": [
+    "0618020799950",
+    "0664697916435",
+    "0708156357633"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "kill cliff",
+   "total_gtins": 10,
+   "family_prefix": "089",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "064": 2,
+    "080": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 3
+   },
+   "sample_outlier_gtins": [
+    "0642014206919",
+    "0642014206940",
+    "0809555979645"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "reflet de france",
+   "total_gtins": 7,
+   "family_prefix": "356",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "324": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Carrefour": 3
+   },
+   "sample_outlier_gtins": [
+    "3245390020390",
+    "3245390022684",
+    "3245390022691"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "kohana",
+   "total_gtins": 9,
+   "family_prefix": "081",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "380": 2,
+    "075": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Kroger": 2,
+    "amazon": 1
+   },
+   "sample_outlier_gtins": [
+    "0756314897255",
+    "3804078263162",
+    "3804078263179"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "d'arbo",
+   "total_gtins": 12,
+   "family_prefix": "900",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "202": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Spar": 3
+   },
+   "sample_outlier_gtins": [
+    "2020002957674",
+    "2020004498335",
+    "2020004498342"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "runa",
+   "total_gtins": 10,
+   "family_prefix": "085",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "073": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 3
+   },
+   "sample_outlier_gtins": [
+    "0736983897428",
+    "0736983897435",
+    "0736983897442"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "biotech usa",
+   "total_gtins": 10,
+   "family_prefix": "599",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "085": 1,
+    "400": 1,
+    "843": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Carethy": 3
+   },
+   "sample_outlier_gtins": [
+    "0854033007273",
+    "4006643168639",
+    "8436005300753"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "lucky jack",
+   "total_gtins": 8,
+   "family_prefix": "085",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "208": 2,
+    "308": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Vitacost": 3
+   },
+   "sample_outlier_gtins": [
+    "20855346005530",
+    "20855346005554",
+    "30855346005520"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "yo",
+   "total_gtins": 10,
+   "family_prefix": "900",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "404": 2,
+    "202": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Rewe": 2,
+    "Spar": 1
+   },
+   "sample_outlier_gtins": [
+    "2020001016433",
+    "4048517720949",
+    "4048517767005"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "guizza",
+   "total_gtins": 9,
+   "family_prefix": "800",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "802": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Iper": 2,
+    "Carrefour": 1
+   },
+   "sample_outlier_gtins": [
+    "8020458000041",
+    "8023263000039",
+    "8023263000176"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "vit hit",
+   "total_gtins": 12,
+   "family_prefix": "503",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "543": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Bol.com": 2,
+    "Kruidvat": 1
+   },
+   "sample_outlier_gtins": [
+    "5430004017226",
+    "5430004017233",
+    "5430004017264"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "bullit",
+   "total_gtins": 12,
+   "family_prefix": "900",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "872": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Coop": 3
+   },
+   "sample_outlier_gtins": [
+    "8728500002714",
+    "8728500998826",
+    "8728500999922"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "joe tea",
+   "total_gtins": 11,
+   "family_prefix": "074",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "068": 2,
+    "070": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 3
+   },
+   "sample_outlier_gtins": [
+    "0688943366362",
+    "0688943366379",
+    "0703694617614"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "strike force",
+   "total_gtins": 13,
+   "family_prefix": "010",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "086": 2,
+    "085": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 3
+   },
+   "sample_outlier_gtins": [
+    "0856938007013",
+    "0863976000210",
+    "0863976000289"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "sanavi",
+   "total_gtins": 9,
+   "family_prefix": "085",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "071": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 3
+   },
+   "sample_outlier_gtins": [
+    "0710051631060",
+    "0710051631572",
+    "0710051631589"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "wilderness poets",
+   "total_gtins": 12,
+   "family_prefix": "085",
+   "family_count": 9,
+   "outlier_prefixes": {
+    "089": 1,
+    "096": 1,
+    "021": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Walmart": 2,
+    "iHerb": 1
+   },
+   "sample_outlier_gtins": [
+    "0215597343946",
+    "0891617002651",
+    "0968866552739"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "dubbeldrank",
+   "total_gtins": 8,
+   "family_prefix": "871",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "872": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Jan Linders": 1,
+    "Albert Heijn": 1,
+    "Coop": 1
+   },
+   "sample_outlier_gtins": [
+    "8720157400288",
+    "8720157402848",
+    "8720157463030"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "dad's",
+   "total_gtins": 7,
+   "family_prefix": "066",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "076": 2,
+    "083": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 3
+   },
+   "sample_outlier_gtins": [
+    "0769553411359",
+    "0769553411366",
+    "0834927009514"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "glow",
+   "total_gtins": 7,
+   "family_prefix": "085",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "086": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "amazon": 3
+   },
+   "sample_outlier_gtins": [
+    "0861982000255",
+    "0861982000279",
+    "0866336000479"
+   ],
+   "marketplace_outliers": 3,
+   "reading": "marketplace pseudo-suspicion"
+  },
+  {
+   "brand": "abatilles",
+   "total_gtins": 11,
+   "family_prefix": "354",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "304": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Carrefour": 2,
+    "Auchan": 1
+   },
+   "sample_outlier_gtins": [
+    "3048431001996",
+    "3048431061167",
+    "3048431061990"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "so good so you",
+   "total_gtins": 14,
+   "family_prefix": "085",
+   "family_count": 11,
+   "outlier_prefixes": {
+    "086": 2,
+    "065": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Target": 2,
+    "safeway": 1
+   },
+   "sample_outlier_gtins": [
+    "0651433622996",
+    "0860160002555",
+    "0860160002579"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "vedrenne",
+   "total_gtins": 7,
+   "family_prefix": "337",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "310": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Carrefour": 3
+   },
+   "sample_outlier_gtins": [
+    "3104948166044",
+    "3104948167041",
+    "3104948168048"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "dalphin",
+   "total_gtins": 10,
+   "family_prefix": "871",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "426": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Coop": 2,
+    "Vomar": 1
+   },
+   "sample_outlier_gtins": [
+    "4260325350358",
+    "4260325350365",
+    "4260325350389"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "infusion",
+   "total_gtins": 11,
+   "family_prefix": "370",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "366": 2,
+    "358": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Carrefour": 3
+   },
+   "sample_outlier_gtins": [
+    "3580283512751",
+    "3665549108012",
+    "3665549108777"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "fruiss",
+   "total_gtins": 13,
+   "family_prefix": "321",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "334": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Cdiscount": 3
+   },
+   "sample_outlier_gtins": [
+    "3345252899857",
+    "3346097625496",
+    "3347708602998"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "jacobs",
+   "total_gtins": 8,
+   "family_prefix": "871",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "704": 1,
+    "762": 1,
+    "202": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Spar": 2,
+    "CareMarket": 1
+   },
+   "sample_outlier_gtins": [
+    "2020003150531",
+    "7040518510656",
+    "7622210169389"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "recoaro",
+   "total_gtins": 7,
+   "family_prefix": "800",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "805": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Carrefour": 3
+   },
+   "sample_outlier_gtins": [
+    "8058649330080",
+    "8058649330134",
+    "8058649330233"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ardor",
+   "total_gtins": 11,
+   "family_prefix": "085",
+   "family_count": 8,
+   "outlier_prefixes": {
+    "075": 1,
+    "074": 1,
+    "073": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Kroger": 3
+   },
+   "sample_outlier_gtins": [
+    "0732623607419",
+    "0746155799290",
+    "0751035017265"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "halfday",
+   "total_gtins": 9,
+   "family_prefix": "086",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "380": 2,
+    "079": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Kroger": 2,
+    "amazon": 1
+   },
+   "sample_outlier_gtins": [
+    "0798392095437",
+    "3804078256577",
+    "3804078256584"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "bio primo",
+   "total_gtins": 13,
+   "family_prefix": "220",
+   "family_count": 10,
+   "outlier_prefixes": {
+    "761": 2,
+    "426": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Vitalabo": 3
+   },
+   "sample_outlier_gtins": [
+    "4260342237519",
+    "7610463011975",
+    "7610463011999"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "better booch",
+   "total_gtins": 8,
+   "family_prefix": "085",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "060": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Kroger": 3
+   },
+   "sample_outlier_gtins": [
+    "0601960564030",
+    "0601960564108",
+    "0601960564115"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "victor allen's",
+   "total_gtins": 10,
+   "family_prefix": "081",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "073": 2,
+    "035": 1
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Kroger": 2,
+    "amazon": 1
+   },
+   "sample_outlier_gtins": [
+    "0352154336161",
+    "0732623773305",
+    "0732623773312"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "united sodas of america",
+   "total_gtins": 9,
+   "family_prefix": "085",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "073": 3
+   },
+   "outlier_gtins": 3,
+   "outlier_retailers": {
+    "Kroger": 3
+   },
+   "sample_outlier_gtins": [
+    "0732623648740",
+    "0732623772971",
+    "0732623772988"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "tres agaves",
+   "total_gtins": 7,
+   "family_prefix": "085",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "076": 1,
+    "019": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 1,
+    "safeway": 1
+   },
+   "sample_outlier_gtins": [
+    "0196383001823",
+    "0760194261686"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "h\u00e9par",
+   "total_gtins": 6,
+   "family_prefix": "761",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "317": 1,
+    "844": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Carrefour": 2
+   },
+   "sample_outlier_gtins": [
+    "3179732370761",
+    "8445291061149"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "bigga",
+   "total_gtins": 7,
+   "family_prefix": "076",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "079": 1,
+    "503": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0791374833676",
+    "5030644550208"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "lilt",
+   "total_gtins": 7,
+   "family_prefix": "544",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "068": 1,
+    "501": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0680499957858",
+    "5017726180485"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ka",
+   "total_gtins": 9,
+   "family_prefix": "500",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "501": 1,
+    "890": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Sainsbury's": 1,
+    "Jumbo Supermarkten": 1
+   },
+   "sample_outlier_gtins": [
+    "5010889010040",
+    "8904061111090"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "volcano",
+   "total_gtins": 8,
+   "family_prefix": "081",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "061": 1,
+    "073": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0618020801806",
+    "0731329136520"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "aquahydrate",
+   "total_gtins": 8,
+   "family_prefix": "018",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "068": 1,
+    "073": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 1,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0686686987691",
+    "0732623725441"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "boxed water",
+   "total_gtins": 7,
+   "family_prefix": "085",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "079": 1,
+    "072": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0724943571600",
+    "0794504888416"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "true nopal",
+   "total_gtins": 7,
+   "family_prefix": "086",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "077": 1,
+    "074": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 1,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0746155828440",
+    "0773821087849"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "vitrex",
+   "total_gtins": 6,
+   "family_prefix": "400",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "422": 1,
+    "425": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Edeka": 2
+   },
+   "sample_outlier_gtins": [
+    "42227458",
+    "4251093300263"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "amy & brian",
+   "total_gtins": 7,
+   "family_prefix": "072",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "085": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0854413001402",
+    "0854413001600"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "alvalle",
+   "total_gtins": 6,
+   "family_prefix": "316",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "841": 1,
+    "541": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Carrefour": 2
+   },
+   "sample_outlier_gtins": [
+    "5410188031102",
+    "8410409010142"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "hi ball",
+   "total_gtins": 7,
+   "family_prefix": "089",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "085": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0852421006075",
+    "0852421006150"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ella's kitchen",
+   "total_gtins": 7,
+   "family_prefix": "506",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "084": 1,
+    "088": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0845901031353",
+    "0885396646021"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "vitalinea",
+   "total_gtins": 7,
+   "family_prefix": "800",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "803": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Conad": 1,
+    "Iper": 1
+   },
+   "sample_outlier_gtins": [
+    "80369592",
+    "80369691"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "lilia",
+   "total_gtins": 6,
+   "family_prefix": "800",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "544": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Conad": 1,
+    "Carrefour": 1
+   },
+   "sample_outlier_gtins": [
+    "5449000101693",
+    "5449000253750"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ultima",
+   "total_gtins": 6,
+   "family_prefix": "085",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "081": 1,
+    "075": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Thrive Market": 1,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0751035735084",
+    "0810003420374"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "jokk",
+   "total_gtins": 9,
+   "family_prefix": "731",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "735": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Hemk\u00f6p": 2
+   },
+   "sample_outlier_gtins": [
+    "7350126085386",
+    "7350126085416"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "probios",
+   "total_gtins": 9,
+   "family_prefix": "801",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "805": 1,
+    "802": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "NaturaSi": 2
+   },
+   "sample_outlier_gtins": [
+    "8024749601870",
+    "8057432977495"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "harney & sons",
+   "total_gtins": 7,
+   "family_prefix": "063",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "068": 1,
+    "073": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 1,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0680201880825",
+    "0732623682072"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "texas tea",
+   "total_gtins": 8,
+   "family_prefix": "085",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "073": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Kroger": 2
+   },
+   "sample_outlier_gtins": [
+    "0732623664160",
+    "0732623664184"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "craftmix",
+   "total_gtins": 6,
+   "family_prefix": "086",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "085": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0850050635130",
+    "0850050635321"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "clear fruit",
+   "total_gtins": 6,
+   "family_prefix": "085",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "068": 1,
+    "066": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 1,
+    "Walmart": 1
+   },
+   "sample_outlier_gtins": [
+    "0660777184596",
+    "0685987081923"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "pickle juice",
+   "total_gtins": 6,
+   "family_prefix": "018",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "085": 1,
+    "073": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 1,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0732623760503",
+    "0854977005083"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "b-tea",
+   "total_gtins": 6,
+   "family_prefix": "060",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "085": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "H-E-B": 2
+   },
+   "sample_outlier_gtins": [
+    "0858973007003",
+    "0858973007034"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "crazy water",
+   "total_gtins": 7,
+   "family_prefix": "079",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "073": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Kroger": 2
+   },
+   "sample_outlier_gtins": [
+    "0732623733477",
+    "0732623733484"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "poli",
+   "total_gtins": 7,
+   "family_prefix": "869",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "843": 1,
+    "088": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Trendyol": 2
+   },
+   "sample_outlier_gtins": [
+    "0882381057275",
+    "8437000945918"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "de mi pais",
+   "total_gtins": 8,
+   "family_prefix": "089",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "070": 1,
+    "068": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0688474656321",
+    "0708734136971"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "gusto",
+   "total_gtins": 7,
+   "family_prefix": "506",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "072": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0721866638137",
+    "0721866638144"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "stubborn soda",
+   "total_gtins": 6,
+   "family_prefix": "040",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "080": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0804090260708",
+    "0804090260715"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "mistic",
+   "total_gtins": 8,
+   "family_prefix": "037",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "068": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0680201880139",
+    "0680201880306"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ener-c",
+   "total_gtins": 8,
+   "family_prefix": "087",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "074": 1,
+    "075": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 1,
+    "Kroger": 1
+   },
+   "sample_outlier_gtins": [
+    "0745559183988",
+    "0751035021941"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "naren",
+   "total_gtins": 7,
+   "family_prefix": "869",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "868": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Ozdilek Sanal Market": 2
+   },
+   "sample_outlier_gtins": [
+    "8683672074412",
+    "8683672074429"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "aqua esse",
+   "total_gtins": 6,
+   "family_prefix": "075",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "071": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0718179615283",
+    "0718179615320"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "ekotrebol",
+   "total_gtins": 8,
+   "family_prefix": "843",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "404": 1,
+    "401": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Greenweez": 2
+   },
+   "sample_outlier_gtins": [
+    "4012852204242",
+    "4042600395588"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "urge",
+   "total_gtins": 9,
+   "family_prefix": "500",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "544": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Spar": 1,
+    "Coop": 1
+   },
+   "sample_outlier_gtins": [
+    "5449000280640",
+    "5449000300249"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "plus!",
+   "total_gtins": 9,
+   "family_prefix": "871",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "503": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Osuma": 2
+   },
+   "sample_outlier_gtins": [
+    "5038862130448",
+    "5038862135399"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "perfectly clear",
+   "total_gtins": 6,
+   "family_prefix": "070",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "506": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Sainsbury's": 1,
+    "amazon": 1
+   },
+   "sample_outlier_gtins": [
+    "5060292120331",
+    "5060292125121"
+   ],
+   "marketplace_outliers": 1,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "trip",
+   "total_gtins": 6,
+   "family_prefix": "506",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "507": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Sainsbury's": 2
+   },
+   "sample_outlier_gtins": [
+    "5070000120706",
+    "5070000120713"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "state",
+   "total_gtins": 6,
+   "family_prefix": "574",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "570": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "REMA 1000": 1,
+    "Fotex": 1
+   },
+   "sample_outlier_gtins": [
+    "5700002147202",
+    "5700002147226"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "tropical vibes",
+   "total_gtins": 6,
+   "family_prefix": "502",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "078": 1,
+    "071": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0719943650813",
+    "0782539244383"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "george's",
+   "total_gtins": 7,
+   "family_prefix": "081",
+   "family_count": 5,
+   "outlier_prefixes": {
+    "078": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Giant Eagle": 1,
+    "Vitacost": 1
+   },
+   "sample_outlier_gtins": [
+    "0789287100329",
+    "0789287100640"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "stanton orchards",
+   "total_gtins": 9,
+   "family_prefix": "030",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "742": 1,
+    "073": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Giant Eagle": 1,
+    "Wholefoods": 1
+   },
+   "sample_outlier_gtins": [
+    "0736211575319",
+    "7427296824098"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "d'marie",
+   "total_gtins": 9,
+   "family_prefix": "085",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "086": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "amazon": 2
+   },
+   "sample_outlier_gtins": [
+    "0860010579718",
+    "0860010579794"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "dunkin'",
+   "total_gtins": 6,
+   "family_prefix": "088",
+   "family_count": 4,
+   "outlier_prefixes": {
+    "010": 1,
+    "091": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Walmart": 2
+   },
+   "sample_outlier_gtins": [
+    "0100142839770",
+    "0915953383936"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "chamberlain coffee",
+   "total_gtins": 9,
+   "family_prefix": "081",
+   "family_count": 7,
+   "outlier_prefixes": {
+    "046": 2
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Walmart": 2
+   },
+   "sample_outlier_gtins": [
+    "0462746415195",
+    "0463067796444"
+   ],
+   "marketplace_outliers": 2,
+   "reading": "multi-country brand variants (national chains)"
+  },
+  {
+   "brand": "bloom",
+   "total_gtins": 8,
+   "family_prefix": "084",
+   "family_count": 6,
+   "outlier_prefixes": {
+    "066": 1,
+    "079": 1
+   },
+   "outlier_gtins": 2,
+   "outlier_retailers": {
+    "Target": 2
+   },
+   "sample_outlier_gtins": [
+    "0664697911348",
+    "0794969304827"
+   ],
+   "marketplace_outliers": 0,
+   "reading": "multi-country brand variants (national chains)"
+  }
+ ]
+}

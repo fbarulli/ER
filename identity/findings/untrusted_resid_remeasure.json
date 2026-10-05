@@ -1,0 +1,8 @@
+{
+ "verdict": "All 3,007 census rows carry structurally invalid or missing GTINs (that is what made these 959 groups untrusted-title collisions in the first place). They were never flowing through gtin-trusted identity processing, and the 86 bundle-scope holds (which pin valid-GTIN keys) do not touch them.",
+ "census_rows": 3007,
+ "structurally_valid_gtin_rows_among_them": 0,
+ "rows_with_trial_held_gtin": 0,
+ "held_keys_total": 984,
+ "protection": "T2/T3 descriptor guard (unchanged, still active for these groups)"
+}

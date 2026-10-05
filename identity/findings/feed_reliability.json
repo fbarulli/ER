@@ -1,0 +1,2896 @@
+{
+ "feeds": [
+  {
+   "feed": "medpex",
+   "families_spoken": 4,
+   "dissent_authored": 4,
+   "majority_holdings": 1,
+   "dissent_ratio": 4.0,
+   "top_dissent_dims": [
+    [
+     "volume_ml",
+     4
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 4
+   }
+  },
+  {
+   "feed": "consum",
+   "families_spoken": 5,
+   "dissent_authored": 5,
+   "majority_holdings": 2,
+   "dissent_ratio": 2.5,
+   "top_dissent_dims": [
+    [
+     "volume_ml",
+     4
+    ],
+    [
+     "brand",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "brand": 1,
+    "volume_ml": 4
+   }
+  },
+  {
+   "feed": "ozdilek sanal market",
+   "families_spoken": 5,
+   "dissent_authored": 3,
+   "majority_holdings": 2,
+   "dissent_ratio": 1.5,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 2,
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "hepsiburada",
+   "families_spoken": 1,
+   "dissent_authored": 1,
+   "majority_holdings": 1,
+   "dissent_ratio": 1.0,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 1
+   }
+  },
+  {
+   "feed": "pingo doce",
+   "families_spoken": 2,
+   "dissent_authored": 1,
+   "majority_holdings": 1,
+   "dissent_ratio": 1.0,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "efarma",
+   "families_spoken": 1,
+   "dissent_authored": 1,
+   "majority_holdings": 1,
+   "dissent_ratio": 1.0,
+   "top_dissent_dims": [
+    [
+     "sweetener",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "sweetener": 1
+   }
+  },
+  {
+   "feed": "lebensmittel de",
+   "families_spoken": 1,
+   "dissent_authored": 1,
+   "majority_holdings": 1,
+   "dissent_ratio": 1.0,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 1
+   }
+  },
+  {
+   "feed": "easyparapharmacie",
+   "families_spoken": 1,
+   "dissent_authored": 1,
+   "majority_holdings": 0,
+   "dissent_ratio": null,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "kruidvat",
+   "families_spoken": 1,
+   "dissent_authored": 1,
+   "majority_holdings": 1,
+   "dissent_ratio": 1.0,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "trendyol",
+   "families_spoken": 1,
+   "dissent_authored": 1,
+   "majority_holdings": 0,
+   "dissent_ratio": null,
+   "top_dissent_dims": [
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1
+   }
+  },
+  {
+   "feed": "sam s club",
+   "families_spoken": 1,
+   "dissent_authored": 1,
+   "majority_holdings": 0,
+   "dissent_ratio": null,
+   "top_dissent_dims": [
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1
+   }
+  },
+  {
+   "feed": "morrisons",
+   "families_spoken": 11,
+   "dissent_authored": 7,
+   "majority_holdings": 9,
+   "dissent_ratio": 0.7777777777777778,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     5
+    ],
+    [
+     "sweetener",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "sweetener": 1,
+    "package_type": 1,
+    "package_material": 5
+   }
+  },
+  {
+   "feed": "planeta huerto",
+   "families_spoken": 26,
+   "dissent_authored": 13,
+   "majority_holdings": 22,
+   "dissent_ratio": 0.5909090909090909,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     6
+    ],
+    [
+     "volume_ml",
+     3
+    ],
+    [
+     "package_type",
+     2
+    ],
+    [
+     "flavor",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 3,
+    "flavor": 1,
+    "sweetener": 1,
+    "package_type": 2,
+    "package_material": 6
+   }
+  },
+  {
+   "feed": "monoprix",
+   "families_spoken": 13,
+   "dissent_authored": 7,
+   "majority_holdings": 13,
+   "dissent_ratio": 0.5384615384615384,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     5
+    ],
+    [
+     "package_type",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 2,
+    "package_material": 5
+   }
+  },
+  {
+   "feed": "mcdrogerie",
+   "families_spoken": 3,
+   "dissent_authored": 1,
+   "majority_holdings": 2,
+   "dissent_ratio": 0.5,
+   "top_dissent_dims": [
+    [
+     "flavor",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "flavor": 1
+   }
+  },
+  {
+   "feed": "kronans apotek",
+   "families_spoken": 5,
+   "dissent_authored": 2,
+   "majority_holdings": 4,
+   "dissent_ratio": 0.5,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "rossmann",
+   "families_spoken": 12,
+   "dissent_authored": 6,
+   "majority_holdings": 12,
+   "dissent_ratio": 0.5,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "package_material",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "carbonation": 2,
+    "package_type": 1,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "mercadona",
+   "families_spoken": 3,
+   "dissent_authored": 1,
+   "majority_holdings": 2,
+   "dissent_ratio": 0.5,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "sklavenitis",
+   "families_spoken": 11,
+   "dissent_authored": 4,
+   "majority_holdings": 8,
+   "dissent_ratio": 0.5,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "package_material",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 2,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "k ruoka",
+   "families_spoken": 265,
+   "dissent_authored": 105,
+   "majority_holdings": 226,
+   "dissent_ratio": 0.4646017699115044,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     72
+    ],
+    [
+     "package_material",
+     29
+    ],
+    [
+     "flavor",
+     2
+    ],
+    [
+     "brand",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "brand": 1,
+    "volume_ml": 1,
+    "flavor": 2,
+    "carbonation": 72,
+    "package_material": 29
+   }
+  },
+  {
+   "feed": "vitalabo",
+   "families_spoken": 16,
+   "dissent_authored": 6,
+   "majority_holdings": 14,
+   "dissent_ratio": 0.42857142857142855,
+   "top_dissent_dims": [
+    [
+     "sweetener",
+     3
+    ],
+    [
+     "package_material",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "sweetener": 3,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "jan linders",
+   "families_spoken": 27,
+   "dissent_authored": 14,
+   "majority_holdings": 35,
+   "dissent_ratio": 0.4,
+   "top_dissent_dims": [
+    [
+     "sweetener",
+     6
+    ],
+    [
+     "package_material",
+     4
+    ],
+    [
+     "carbonation",
+     3
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 3,
+    "sweetener": 6,
+    "package_type": 1,
+    "package_material": 4
+   }
+  },
+  {
+   "feed": "jet com",
+   "families_spoken": 4,
+   "dissent_authored": 1,
+   "majority_holdings": 3,
+   "dissent_ratio": 0.3333333333333333,
+   "top_dissent_dims": [
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1
+   }
+  },
+  {
+   "feed": "thebay com",
+   "families_spoken": 6,
+   "dissent_authored": 3,
+   "majority_holdings": 9,
+   "dissent_ratio": 0.3333333333333333,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     2
+    ],
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 1,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "matas",
+   "families_spoken": 3,
+   "dissent_authored": 1,
+   "majority_holdings": 3,
+   "dissent_ratio": 0.3333333333333333,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 1
+   }
+  },
+  {
+   "feed": "wholefoods",
+   "families_spoken": 102,
+   "dissent_authored": 50,
+   "majority_holdings": 161,
+   "dissent_ratio": 0.3105590062111801,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     17
+    ],
+    [
+     "package_material",
+     14
+    ],
+    [
+     "sweetener",
+     8
+    ],
+    [
+     "volume_ml",
+     5
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 5,
+    "flavor": 2,
+    "carbonation": 17,
+    "sweetener": 8,
+    "package_type": 4,
+    "package_material": 14
+   }
+  },
+  {
+   "feed": "shop apotheke",
+   "families_spoken": 20,
+   "dissent_authored": 7,
+   "majority_holdings": 23,
+   "dissent_ratio": 0.30434782608695654,
+   "top_dissent_dims": [
+    [
+     "volume_ml",
+     3
+    ],
+    [
+     "sweetener",
+     2
+    ],
+    [
+     "carbonation",
+     1
+    ],
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 3,
+    "carbonation": 1,
+    "sweetener": 2,
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "ooshop",
+   "families_spoken": 35,
+   "dissent_authored": 14,
+   "majority_holdings": 46,
+   "dissent_ratio": 0.30434782608695654,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     9
+    ],
+    [
+     "package_type",
+     5
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 5,
+    "package_material": 9
+   }
+  },
+  {
+   "feed": "spar",
+   "families_spoken": 39,
+   "dissent_authored": 12,
+   "majority_holdings": 41,
+   "dissent_ratio": 0.2926829268292683,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     11
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 1,
+    "package_material": 11
+   }
+  },
+  {
+   "feed": "iper",
+   "families_spoken": 29,
+   "dissent_authored": 9,
+   "majority_holdings": 32,
+   "dissent_ratio": 0.28125,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     5
+    ],
+    [
+     "sweetener",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "carbonation": 5,
+    "sweetener": 2,
+    "package_type": 1
+   }
+  },
+  {
+   "feed": "sokos",
+   "families_spoken": 14,
+   "dissent_authored": 5,
+   "majority_holdings": 18,
+   "dissent_ratio": 0.2777777777777778,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     3
+    ],
+    [
+     "package_material",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 3,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "delhaize",
+   "families_spoken": 13,
+   "dissent_authored": 5,
+   "majority_holdings": 18,
+   "dissent_ratio": 0.2777777777777778,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ],
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "carbonation": 2,
+    "package_type": 1,
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "loblaws",
+   "families_spoken": 12,
+   "dissent_authored": 5,
+   "majority_holdings": 18,
+   "dissent_ratio": 0.2777777777777778,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ],
+    [
+     "carbonation",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "carbonation": 1,
+    "package_type": 1,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "walmart",
+   "families_spoken": 78,
+   "dissent_authored": 30,
+   "majority_holdings": 111,
+   "dissent_ratio": 0.2702702702702703,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     12
+    ],
+    [
+     "sweetener",
+     7
+    ],
+    [
+     "package_type",
+     5
+    ],
+    [
+     "volume_ml",
+     4
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 4,
+    "carbonation": 2,
+    "sweetener": 7,
+    "package_type": 5,
+    "package_material": 12
+   }
+  },
+  {
+   "feed": "fotex",
+   "families_spoken": 23,
+   "dissent_authored": 7,
+   "majority_holdings": 27,
+   "dissent_ratio": 0.25925925925925924,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     3
+    ],
+    [
+     "package_material",
+     3
+    ],
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "carbonation": 3,
+    "package_material": 3
+   }
+  },
+  {
+   "feed": "harris teeter",
+   "families_spoken": 100,
+   "dissent_authored": 44,
+   "majority_holdings": 175,
+   "dissent_ratio": 0.25142857142857145,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     26
+    ],
+    [
+     "package_material",
+     10
+    ],
+    [
+     "sweetener",
+     4
+    ],
+    [
+     "package_type",
+     4
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 26,
+    "sweetener": 4,
+    "package_type": 4,
+    "package_material": 10
+   }
+  },
+  {
+   "feed": "caremarket",
+   "families_spoken": 27,
+   "dissent_authored": 7,
+   "majority_holdings": 28,
+   "dissent_ratio": 0.25,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     4
+    ],
+    [
+     "carbonation",
+     3
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 3,
+    "package_material": 4
+   }
+  },
+  {
+   "feed": "mat smart",
+   "families_spoken": 103,
+   "dissent_authored": 30,
+   "majority_holdings": 124,
+   "dissent_ratio": 0.24193548387096775,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     11
+    ],
+    [
+     "carbonation",
+     9
+    ],
+    [
+     "package_type",
+     4
+    ],
+    [
+     "volume_ml",
+     3
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 3,
+    "flavor": 1,
+    "carbonation": 9,
+    "sweetener": 2,
+    "package_type": 4,
+    "package_material": 11
+   }
+  },
+  {
+   "feed": "esselunga a casa",
+   "families_spoken": 22,
+   "dissent_authored": 7,
+   "majority_holdings": 29,
+   "dissent_ratio": 0.2413793103448276,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     4
+    ],
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 2,
+    "package_type": 1,
+    "package_material": 4
+   }
+  },
+  {
+   "feed": "carethy",
+   "families_spoken": 17,
+   "dissent_authored": 5,
+   "majority_holdings": 21,
+   "dissent_ratio": 0.23809523809523808,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     3
+    ],
+    [
+     "volume_ml",
+     1
+    ],
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "carbonation": 1,
+    "package_material": 3
+   }
+  },
+  {
+   "feed": "walgreens",
+   "families_spoken": 21,
+   "dissent_authored": 7,
+   "majority_holdings": 30,
+   "dissent_ratio": 0.23333333333333334,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     3
+    ],
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "package_material",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 2,
+    "package_type": 3,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "dm",
+   "families_spoken": 13,
+   "dissent_authored": 3,
+   "majority_holdings": 13,
+   "dissent_ratio": 0.23076923076923078,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     2
+    ],
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 1,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "macy s",
+   "families_spoken": 3,
+   "dissent_authored": 2,
+   "majority_holdings": 9,
+   "dissent_ratio": 0.2222222222222222,
+   "top_dissent_dims": [
+    [
+     "volume_ml",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 2
+   }
+  },
+  {
+   "feed": "tesco",
+   "families_spoken": 50,
+   "dissent_authored": 13,
+   "majority_holdings": 59,
+   "dissent_ratio": 0.22033898305084745,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     11
+    ],
+    [
+     "sweetener",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "sweetener": 1,
+    "package_type": 1,
+    "package_material": 11
+   }
+  },
+  {
+   "feed": "bazaar",
+   "families_spoken": 26,
+   "dissent_authored": 6,
+   "majority_holdings": 28,
+   "dissent_ratio": 0.21428571428571427,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     5
+    ],
+    [
+     "sweetener",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "sweetener": 1,
+    "package_material": 5
+   }
+  },
+  {
+   "feed": "rema 1000",
+   "families_spoken": 12,
+   "dissent_authored": 3,
+   "majority_holdings": 14,
+   "dissent_ratio": 0.21428571428571427,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     3
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 3
+   }
+  },
+  {
+   "feed": "rewe",
+   "families_spoken": 38,
+   "dissent_authored": 10,
+   "majority_holdings": 48,
+   "dissent_ratio": 0.20833333333333334,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     4
+    ],
+    [
+     "carbonation",
+     3
+    ],
+    [
+     "volume_ml",
+     2
+    ],
+    [
+     "sweetener",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 2,
+    "carbonation": 3,
+    "sweetener": 1,
+    "package_material": 4
+   }
+  },
+  {
+   "feed": "hipercor",
+   "families_spoken": 46,
+   "dissent_authored": 11,
+   "majority_holdings": 53,
+   "dissent_ratio": 0.20754716981132076,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     3
+    ],
+    [
+     "package_material",
+     3
+    ],
+    [
+     "volume_ml",
+     2
+    ],
+    [
+     "flavor",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 2,
+    "flavor": 2,
+    "carbonation": 3,
+    "sweetener": 1,
+    "package_material": 3
+   }
+  },
+  {
+   "feed": "lyko",
+   "families_spoken": 14,
+   "dissent_authored": 3,
+   "majority_holdings": 15,
+   "dissent_ratio": 0.2,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     3
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 3
+   }
+  },
+  {
+   "feed": "auchan",
+   "families_spoken": 110,
+   "dissent_authored": 28,
+   "majority_holdings": 140,
+   "dissent_ratio": 0.2,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     14
+    ],
+    [
+     "package_material",
+     9
+    ],
+    [
+     "flavor",
+     2
+    ],
+    [
+     "carbonation",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "flavor": 2,
+    "carbonation": 2,
+    "sweetener": 1,
+    "package_type": 14,
+    "package_material": 9
+   }
+  },
+  {
+   "feed": "conad",
+   "families_spoken": 25,
+   "dissent_authored": 5,
+   "majority_holdings": 25,
+   "dissent_ratio": 0.2,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "package_material",
+     2
+    ],
+    [
+     "sweetener",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 2,
+    "sweetener": 1,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "apoteket",
+   "families_spoken": 5,
+   "dissent_authored": 1,
+   "majority_holdings": 5,
+   "dissent_ratio": 0.2,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "mathem",
+   "families_spoken": 140,
+   "dissent_authored": 30,
+   "majority_holdings": 154,
+   "dissent_ratio": 0.19480519480519481,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     13
+    ],
+    [
+     "carbonation",
+     8
+    ],
+    [
+     "volume_ml",
+     6
+    ],
+    [
+     "package_type",
+     3
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 6,
+    "carbonation": 8,
+    "package_type": 3,
+    "package_material": 13
+   }
+  },
+  {
+   "feed": "courses u",
+   "families_spoken": 84,
+   "dissent_authored": 22,
+   "majority_holdings": 115,
+   "dissent_ratio": 0.19130434782608696,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     10
+    ],
+    [
+     "package_type",
+     6
+    ],
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "brand",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "brand": 1,
+    "volume_ml": 1,
+    "flavor": 1,
+    "carbonation": 2,
+    "sweetener": 1,
+    "package_type": 6,
+    "package_material": 10
+   }
+  },
+  {
+   "feed": "carrefour",
+   "families_spoken": 214,
+   "dissent_authored": 52,
+   "majority_holdings": 273,
+   "dissent_ratio": 0.19047619047619047,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     24
+    ],
+    [
+     "package_type",
+     12
+    ],
+    [
+     "carbonation",
+     6
+    ],
+    [
+     "volume_ml",
+     5
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 5,
+    "flavor": 2,
+    "carbonation": 6,
+    "sweetener": 3,
+    "package_type": 12,
+    "package_material": 24
+   }
+  },
+  {
+   "feed": "safeway",
+   "families_spoken": 272,
+   "dissent_authored": 84,
+   "majority_holdings": 445,
+   "dissent_ratio": 0.18876404494382024,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     33
+    ],
+    [
+     "package_type",
+     19
+    ],
+    [
+     "package_material",
+     17
+    ],
+    [
+     "volume_ml",
+     7
+    ]
+   ],
+   "per_dim_dissent": {
+    "brand": 1,
+    "volume_ml": 7,
+    "flavor": 3,
+    "carbonation": 33,
+    "sweetener": 4,
+    "package_type": 19,
+    "package_material": 17
+   }
+  },
+  {
+   "feed": "intermarche",
+   "families_spoken": 75,
+   "dissent_authored": 20,
+   "majority_holdings": 107,
+   "dissent_ratio": 0.18691588785046728,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     12
+    ],
+    [
+     "package_type",
+     7
+    ],
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 1,
+    "package_type": 7,
+    "package_material": 12
+   }
+  },
+  {
+   "feed": "iherb",
+   "families_spoken": 14,
+   "dissent_authored": 5,
+   "majority_holdings": 27,
+   "dissent_ratio": 0.18518518518518517,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     3
+    ],
+    [
+     "volume_ml",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "package_type": 1,
+    "package_material": 3
+   }
+  },
+  {
+   "feed": "meijer",
+   "families_spoken": 145,
+   "dissent_authored": 43,
+   "majority_holdings": 234,
+   "dissent_ratio": 0.18376068376068377,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     22
+    ],
+    [
+     "carbonation",
+     9
+    ],
+    [
+     "package_type",
+     8
+    ],
+    [
+     "volume_ml",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 2,
+    "flavor": 1,
+    "carbonation": 9,
+    "sweetener": 1,
+    "package_type": 8,
+    "package_material": 22
+   }
+  },
+  {
+   "feed": "kauppahalli24 fi",
+   "families_spoken": 55,
+   "dissent_authored": 13,
+   "majority_holdings": 73,
+   "dissent_ratio": 0.1780821917808219,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     7
+    ],
+    [
+     "package_type",
+     3
+    ],
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "sweetener",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 2,
+    "sweetener": 1,
+    "package_type": 3,
+    "package_material": 7
+   }
+  },
+  {
+   "feed": "ica",
+   "families_spoken": 112,
+   "dissent_authored": 24,
+   "majority_holdings": 135,
+   "dissent_ratio": 0.17777777777777778,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     12
+    ],
+    [
+     "volume_ml",
+     8
+    ],
+    [
+     "carbonation",
+     3
+    ],
+    [
+     "flavor",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 8,
+    "flavor": 1,
+    "carbonation": 3,
+    "package_material": 12
+   }
+  },
+  {
+   "feed": "target",
+   "families_spoken": 250,
+   "dissent_authored": 73,
+   "majority_holdings": 421,
+   "dissent_ratio": 0.17339667458432304,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     28
+    ],
+    [
+     "package_type",
+     22
+    ],
+    [
+     "volume_ml",
+     14
+    ],
+    [
+     "sweetener",
+     5
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 14,
+    "carbonation": 4,
+    "sweetener": 5,
+    "package_type": 22,
+    "package_material": 28
+   }
+  },
+  {
+   "feed": "hy vee",
+   "families_spoken": 221,
+   "dissent_authored": 63,
+   "majority_holdings": 377,
+   "dissent_ratio": 0.16710875331564987,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     21
+    ],
+    [
+     "package_type",
+     15
+    ],
+    [
+     "volume_ml",
+     13
+    ],
+    [
+     "carbonation",
+     11
+    ]
+   ],
+   "per_dim_dissent": {
+    "brand": 1,
+    "volume_ml": 13,
+    "carbonation": 11,
+    "sweetener": 2,
+    "package_type": 15,
+    "package_material": 21
+   }
+  },
+  {
+   "feed": "peapod",
+   "families_spoken": 30,
+   "dissent_authored": 7,
+   "majority_holdings": 42,
+   "dissent_ratio": 0.16666666666666666,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     4
+    ],
+    [
+     "package_type",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "package_type": 2,
+    "package_material": 4
+   }
+  },
+  {
+   "feed": "rite aid",
+   "families_spoken": 26,
+   "dissent_authored": 9,
+   "majority_holdings": 54,
+   "dissent_ratio": 0.16666666666666666,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     3
+    ],
+    [
+     "package_type",
+     3
+    ],
+    [
+     "package_material",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "carbonation": 3,
+    "package_type": 3,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "naturalia",
+   "families_spoken": 6,
+   "dissent_authored": 1,
+   "majority_holdings": 6,
+   "dissent_ratio": 0.16666666666666666,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "dirk",
+   "families_spoken": 91,
+   "dissent_authored": 19,
+   "majority_holdings": 123,
+   "dissent_ratio": 0.15447154471544716,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     8
+    ],
+    [
+     "carbonation",
+     6
+    ],
+    [
+     "package_type",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "flavor": 1,
+    "carbonation": 6,
+    "sweetener": 1,
+    "package_type": 2,
+    "package_material": 8
+   }
+  },
+  {
+   "feed": "longos",
+   "families_spoken": 10,
+   "dissent_authored": 2,
+   "majority_holdings": 13,
+   "dissent_ratio": 0.15384615384615385,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "fiksu ruoka",
+   "families_spoken": 41,
+   "dissent_authored": 7,
+   "majority_holdings": 47,
+   "dissent_ratio": 0.14893617021276595,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     5
+    ],
+    [
+     "sweetener",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "sweetener": 2,
+    "package_material": 5
+   }
+  },
+  {
+   "feed": "kroger",
+   "families_spoken": 197,
+   "dissent_authored": 45,
+   "majority_holdings": 303,
+   "dissent_ratio": 0.1485148514851485,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     16
+    ],
+    [
+     "carbonation",
+     15
+    ],
+    [
+     "package_material",
+     11
+    ],
+    [
+     "volume_ml",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 2,
+    "flavor": 1,
+    "carbonation": 15,
+    "package_type": 16,
+    "package_material": 11
+   }
+  },
+  {
+   "feed": "osuma",
+   "families_spoken": 21,
+   "dissent_authored": 4,
+   "majority_holdings": 27,
+   "dissent_ratio": 0.14814814814814814,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ],
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "carbonation": 1,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "el corte ingles",
+   "families_spoken": 52,
+   "dissent_authored": 10,
+   "majority_holdings": 68,
+   "dissent_ratio": 0.14705882352941177,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     4
+    ],
+    [
+     "carbonation",
+     2
+    ],
+    [
+     "package_material",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "flavor": 1,
+    "carbonation": 2,
+    "package_type": 4,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "co op",
+   "families_spoken": 16,
+   "dissent_authored": 3,
+   "majority_holdings": 21,
+   "dissent_ratio": 0.14285714285714285,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     3
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 3
+   }
+  },
+  {
+   "feed": "vitacost",
+   "families_spoken": 52,
+   "dissent_authored": 15,
+   "majority_holdings": 105,
+   "dissent_ratio": 0.14285714285714285,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     10
+    ],
+    [
+     "volume_ml",
+     2
+    ],
+    [
+     "package_material",
+     2
+    ],
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 2,
+    "carbonation": 1,
+    "package_type": 10,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "cdiscount",
+   "families_spoken": 22,
+   "dissent_authored": 3,
+   "majority_holdings": 22,
+   "dissent_ratio": 0.13636363636363635,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     2
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 1,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "mytime de",
+   "families_spoken": 24,
+   "dissent_authored": 4,
+   "majority_holdings": 30,
+   "dissent_ratio": 0.13333333333333333,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     4
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 4
+   }
+  },
+  {
+   "feed": "auchandrive",
+   "families_spoken": 83,
+   "dissent_authored": 16,
+   "majority_holdings": 123,
+   "dissent_ratio": 0.13008130081300814,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     8
+    ],
+    [
+     "package_type",
+     7
+    ],
+    [
+     "sweetener",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "sweetener": 1,
+    "package_type": 7,
+    "package_material": 8
+   }
+  },
+  {
+   "feed": "coop",
+   "families_spoken": 292,
+   "dissent_authored": 48,
+   "majority_holdings": 370,
+   "dissent_ratio": 0.12972972972972974,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     22
+    ],
+    [
+     "volume_ml",
+     9
+    ],
+    [
+     "carbonation",
+     9
+    ],
+    [
+     "package_type",
+     7
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 9,
+    "flavor": 1,
+    "carbonation": 9,
+    "package_type": 7,
+    "package_material": 22
+   }
+  },
+  {
+   "feed": "mat se",
+   "families_spoken": 202,
+   "dissent_authored": 29,
+   "majority_holdings": 230,
+   "dissent_ratio": 0.12608695652173912,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     21
+    ],
+    [
+     "volume_ml",
+     3
+    ],
+    [
+     "package_type",
+     3
+    ],
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 3,
+    "carbonation": 1,
+    "pulp": 1,
+    "package_type": 3,
+    "package_material": 21
+   }
+  },
+  {
+   "feed": "apotek hjartat",
+   "families_spoken": 8,
+   "dissent_authored": 1,
+   "majority_holdings": 8,
+   "dissent_ratio": 0.125,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "biocoop",
+   "families_spoken": 8,
+   "dissent_authored": 1,
+   "majority_holdings": 8,
+   "dissent_ratio": 0.125,
+   "top_dissent_dims": [
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1
+   }
+  },
+  {
+   "feed": "vitaminshoppe",
+   "families_spoken": 5,
+   "dissent_authored": 1,
+   "majority_holdings": 8,
+   "dissent_ratio": 0.125,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 1
+   }
+  },
+  {
+   "feed": "sainsbury s",
+   "families_spoken": 49,
+   "dissent_authored": 8,
+   "majority_holdings": 69,
+   "dissent_ratio": 0.11594202898550725,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     5
+    ],
+    [
+     "package_type",
+     2
+    ],
+    [
+     "brand",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "brand": 1,
+    "package_type": 2,
+    "package_material": 5
+   }
+  },
+  {
+   "feed": "ruohonjuuri",
+   "families_spoken": 6,
+   "dissent_authored": 1,
+   "majority_holdings": 9,
+   "dissent_ratio": 0.1111111111111111,
+   "top_dissent_dims": [
+    [
+     "sweetener",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "sweetener": 1
+   }
+  },
+  {
+   "feed": "droginet",
+   "families_spoken": 15,
+   "dissent_authored": 2,
+   "majority_holdings": 18,
+   "dissent_ratio": 0.1111111111111111,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 2
+   }
+  },
+  {
+   "feed": "amazon",
+   "families_spoken": 311,
+   "dissent_authored": 58,
+   "majority_holdings": 531,
+   "dissent_ratio": 0.10922787193973635,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     26
+    ],
+    [
+     "volume_ml",
+     14
+    ],
+    [
+     "package_material",
+     11
+    ],
+    [
+     "package_type",
+     5
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 14,
+    "carbonation": 26,
+    "sweetener": 2,
+    "package_type": 5,
+    "package_material": 11
+   }
+  },
+  {
+   "feed": "giant eagle",
+   "families_spoken": 91,
+   "dissent_authored": 21,
+   "majority_holdings": 197,
+   "dissent_ratio": 0.1065989847715736,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     9
+    ],
+    [
+     "package_type",
+     5
+    ],
+    [
+     "carbonation",
+     4
+    ],
+    [
+     "flavor",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "flavor": 1,
+    "carbonation": 4,
+    "sweetener": 1,
+    "pulp": 1,
+    "package_type": 5,
+    "package_material": 9
+   }
+  },
+  {
+   "feed": "bol com",
+   "families_spoken": 12,
+   "dissent_authored": 2,
+   "majority_holdings": 19,
+   "dissent_ratio": 0.10526315789473684,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 2
+   }
+  },
+  {
+   "feed": "coop dk mad",
+   "families_spoken": 21,
+   "dissent_authored": 3,
+   "majority_holdings": 29,
+   "dissent_ratio": 0.10344827586206896,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     3
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 3
+   }
+  },
+  {
+   "feed": "meny",
+   "families_spoken": 39,
+   "dissent_authored": 5,
+   "majority_holdings": 49,
+   "dissent_ratio": 0.10204081632653061,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     3
+    ],
+    [
+     "package_type",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 2,
+    "package_material": 3
+   }
+  },
+  {
+   "feed": "hemkop",
+   "families_spoken": 236,
+   "dissent_authored": 28,
+   "majority_holdings": 277,
+   "dissent_ratio": 0.10108303249097472,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     17
+    ],
+    [
+     "volume_ml",
+     6
+    ],
+    [
+     "package_type",
+     3
+    ],
+    [
+     "carbonation",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 6,
+    "carbonation": 2,
+    "package_type": 3,
+    "package_material": 17
+   }
+  },
+  {
+   "feed": "asda",
+   "families_spoken": 51,
+   "dissent_authored": 7,
+   "majority_holdings": 73,
+   "dissent_ratio": 0.0958904109589041,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     5
+    ],
+    [
+     "carbonation",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 1,
+    "package_type": 1,
+    "package_material": 5
+   }
+  },
+  {
+   "feed": "willys",
+   "families_spoken": 230,
+   "dissent_authored": 26,
+   "majority_holdings": 282,
+   "dissent_ratio": 0.09219858156028368,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     15
+    ],
+    [
+     "volume_ml",
+     7
+    ],
+    [
+     "package_type",
+     4
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 7,
+    "package_type": 4,
+    "package_material": 15
+   }
+  },
+  {
+   "feed": "sportnahrung",
+   "families_spoken": 7,
+   "dissent_authored": 1,
+   "majority_holdings": 11,
+   "dissent_ratio": 0.09090909090909091,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 1
+   }
+  },
+  {
+   "feed": "shop pharmacie",
+   "families_spoken": 8,
+   "dissent_authored": 1,
+   "majority_holdings": 11,
+   "dissent_ratio": 0.09090909090909091,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "vomar",
+   "families_spoken": 67,
+   "dissent_authored": 8,
+   "majority_holdings": 91,
+   "dissent_ratio": 0.08791208791208792,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     3
+    ],
+    [
+     "package_type",
+     2
+    ],
+    [
+     "package_material",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "carbonation": 3,
+    "package_type": 2,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "h e b",
+   "families_spoken": 206,
+   "dissent_authored": 33,
+   "majority_holdings": 377,
+   "dissent_ratio": 0.08753315649867374,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     15
+    ],
+    [
+     "package_type",
+     7
+    ],
+    [
+     "carbonation",
+     5
+    ],
+    [
+     "volume_ml",
+     4
+    ]
+   ],
+   "per_dim_dissent": {
+    "brand": 1,
+    "volume_ml": 4,
+    "flavor": 1,
+    "carbonation": 5,
+    "package_type": 7,
+    "package_material": 15
+   }
+  },
+  {
+   "feed": "s kaupat",
+   "families_spoken": 273,
+   "dissent_authored": 28,
+   "majority_holdings": 321,
+   "dissent_ratio": 0.08722741433021806,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     18
+    ],
+    [
+     "sweetener",
+     5
+    ],
+    [
+     "flavor",
+     2
+    ],
+    [
+     "carbonation",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "flavor": 2,
+    "carbonation": 2,
+    "sweetener": 5,
+    "package_type": 1,
+    "package_material": 18
+   }
+  },
+  {
+   "feed": "apotea",
+   "families_spoken": 10,
+   "dissent_authored": 1,
+   "majority_holdings": 12,
+   "dissent_ratio": 0.08333333333333333,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "supervalu",
+   "families_spoken": 9,
+   "dissent_authored": 1,
+   "majority_holdings": 12,
+   "dissent_ratio": 0.08333333333333333,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 1
+   }
+  },
+  {
+   "feed": "cvs",
+   "families_spoken": 34,
+   "dissent_authored": 6,
+   "majority_holdings": 78,
+   "dissent_ratio": 0.07692307692307693,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     5
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_type": 1,
+    "package_material": 5
+   }
+  },
+  {
+   "feed": "albert heijn",
+   "families_spoken": 59,
+   "dissent_authored": 7,
+   "majority_holdings": 92,
+   "dissent_ratio": 0.07608695652173914,
+   "top_dissent_dims": [
+    [
+     "package_type",
+     3
+    ],
+    [
+     "package_material",
+     2
+    ],
+    [
+     "carbonation",
+     1
+    ],
+    [
+     "sweetener",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 1,
+    "sweetener": 1,
+    "package_type": 3,
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "metro",
+   "families_spoken": 18,
+   "dissent_authored": 2,
+   "majority_holdings": 28,
+   "dissent_ratio": 0.07142857142857142,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     2
+    ]
+   ],
+   "per_dim_dissent": {
+    "package_material": 2
+   }
+  },
+  {
+   "feed": "fred meyer stores",
+   "families_spoken": 74,
+   "dissent_authored": 10,
+   "majority_holdings": 141,
+   "dissent_ratio": 0.07092198581560284,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     5
+    ],
+    [
+     "package_material",
+     4
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 5,
+    "package_type": 1,
+    "package_material": 4
+   }
+  },
+  {
+   "feed": "thrive market",
+   "families_spoken": 44,
+   "dissent_authored": 7,
+   "majority_holdings": 104,
+   "dissent_ratio": 0.0673076923076923,
+   "top_dissent_dims": [
+    [
+     "package_material",
+     3
+    ],
+    [
+     "sweetener",
+     2
+    ],
+    [
+     "volume_ml",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "volume_ml": 1,
+    "sweetener": 2,
+    "package_type": 1,
+    "package_material": 3
+   }
+  },
+  {
+   "feed": "e fresh",
+   "families_spoken": 18,
+   "dissent_authored": 1,
+   "majority_holdings": 24,
+   "dissent_ratio": 0.041666666666666664,
+   "top_dissent_dims": [
+    [
+     "flavor",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "flavor": 1
+   }
+  },
+  {
+   "feed": "food market herkku",
+   "families_spoken": 246,
+   "dissent_authored": 11,
+   "majority_holdings": 299,
+   "dissent_ratio": 0.03678929765886288,
+   "top_dissent_dims": [
+    [
+     "sweetener",
+     5
+    ],
+    [
+     "package_material",
+     4
+    ],
+    [
+     "flavor",
+     1
+    ],
+    [
+     "carbonation",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "flavor": 1,
+    "carbonation": 1,
+    "sweetener": 5,
+    "package_material": 4
+   }
+  },
+  {
+   "feed": "greenweez",
+   "families_spoken": 52,
+   "dissent_authored": 2,
+   "majority_holdings": 62,
+   "dissent_ratio": 0.03225806451612903,
+   "top_dissent_dims": [
+    [
+     "carbonation",
+     1
+    ],
+    [
+     "package_type",
+     1
+    ]
+   ],
+   "per_dim_dissent": {
+    "carbonation": 1,
+    "package_type": 1
+   }
+  },
+  {
+   "feed": "galaxus",
+   "families_spoken": 4,
+   "dissent_authored": 0,
+   "majority_holdings": 4,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "farmaline",
+   "families_spoken": 3,
+   "dissent_authored": 0,
+   "majority_holdings": 4,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "aldi",
+   "families_spoken": 5,
+   "dissent_authored": 0,
+   "majority_holdings": 13,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "gittigidiyor",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 2,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "docti pharma",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 1,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "promofarma",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 1,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "edeka",
+   "families_spoken": 21,
+   "dissent_authored": 0,
+   "majority_holdings": 28,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "alnatura",
+   "families_spoken": 6,
+   "dissent_authored": 0,
+   "majority_holdings": 8,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "bennet",
+   "families_spoken": 12,
+   "dissent_authored": 0,
+   "majority_holdings": 17,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "mifarma",
+   "families_spoken": 4,
+   "dissent_authored": 0,
+   "majority_holdings": 6,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "migros",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 2,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "da",
+   "families_spoken": 6,
+   "dissent_authored": 0,
+   "majority_holdings": 6,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "atida",
+   "families_spoken": 3,
+   "dissent_authored": 0,
+   "majority_holdings": 3,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "jumbo supermarkten",
+   "families_spoken": 6,
+   "dissent_authored": 0,
+   "majority_holdings": 6,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "kmart",
+   "families_spoken": 5,
+   "dissent_authored": 0,
+   "majority_holdings": 6,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "cocooncenter",
+   "families_spoken": 2,
+   "dissent_authored": 0,
+   "majority_holdings": 2,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "billa",
+   "families_spoken": 2,
+   "dissent_authored": 0,
+   "majority_holdings": 2,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "la grande epicerie",
+   "families_spoken": 7,
+   "dissent_authored": 0,
+   "majority_holdings": 7,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "e leclerc",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 1,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "wearesante",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 1,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "action",
+   "families_spoken": 4,
+   "dissent_authored": 0,
+   "majority_holdings": 7,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "douglas",
+   "families_spoken": 3,
+   "dissent_authored": 0,
+   "majority_holdings": 3,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "versandapotheke",
+   "families_spoken": 3,
+   "dissent_authored": 0,
+   "majority_holdings": 4,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "galeria kaufhof",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 1,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "boticinal",
+   "families_spoken": 2,
+   "dissent_authored": 0,
+   "majority_holdings": 3,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "sam mccauley chemists",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 1,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "redcare",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 2,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "decathlon",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 2,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "marketpaketi com",
+   "families_spoken": 4,
+   "dissent_authored": 0,
+   "majority_holdings": 4,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "jean coutu",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 1,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  },
+  {
+   "feed": "boots",
+   "families_spoken": 1,
+   "dissent_authored": 0,
+   "majority_holdings": 2,
+   "dissent_ratio": 0.0,
+   "top_dissent_dims": [],
+   "per_dim_dissent": {}
+  }
+ ],
+ "families": 1783
+}
