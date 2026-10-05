@@ -2598,6 +2598,10 @@ class ColabSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # CPU high-RAM machine shape (colab CLI `--high-mem`).  Consumed only when
+    # a lane itself provisions a fresh CPU session; leaving it False (the
+    # default) keeps allocation byte-identical to the pre-parity behavior.
+    high_mem: bool = False
     repository: str = Field(min_length=1)
     branch: str = Field(min_length=1)
     git_remote_name: str = Field(min_length=1)

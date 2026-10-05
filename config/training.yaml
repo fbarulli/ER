@@ -177,6 +177,12 @@ colab:
   # Full all-track launches default to GPU; the smoke script requests CPU.
   # GPU provisioning still requires the launcher's --allow-gpu flag.
   gpu: "T4"
+  # CPU lane shape: when a lane itself must provision a FRESH CPU session
+  # (--what bundle / colab_bundle), pass `--high-mem` to `colab new`.  The
+  # owner-launched sessions (50% and full cohort VMs) are high-RAM by
+  # allocation and are reused by name, so this stays false by default;
+  # flipping it changes only self-provisioned CPU runtimes.
+  high_mem: false
   # Training workers consume immutable bundles prepared locally.  Keep all
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false
