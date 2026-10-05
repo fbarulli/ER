@@ -176,7 +176,10 @@ cpu_bundle_prep:
   high_mem: true
   # true = cli.colab --what bundle dispatch forwards to the lane (the shared
   # launcher otherwise keeps its original direct behavior, byte-identical).
-  lane: false
+  # Owner directive 2026-10-05: production posture = true; the first launch
+  # goes through cli.colab main() (session/checkout/install prologue), and
+  # the module entry stays the relaunch-only path.
+  lane: true
 
 # ── Colab checkout/runtime ─────────────────────────────────────────────────
 # The launcher clones this public training branch instead of uploading a
