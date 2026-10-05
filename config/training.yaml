@@ -183,6 +183,10 @@ colab:
   # allocation and are reused by name, so this stays false by default;
   # flipping it changes only self-provisioned CPU runtimes.
   high_mem: false
+  # Owner structural ruling: data-bundle production runs through its own
+  # lane file (src/cli/colab_data_bundle_prep.py).  With false (default) the
+  # shared launcher keeps its original direct --what bundle behavior.
+  cpu_data_bundle_lane: false
   # Training workers consume immutable bundles prepared locally.  Keep all
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false

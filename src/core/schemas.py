@@ -2599,9 +2599,14 @@ class ColabSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # CPU high-RAM machine shape (colab CLI `--high-mem`).  Consumed only when
-    # a lane itself provisions a fresh CPU session; leaving it False (the
-    # default) keeps allocation byte-identical to the pre-parity behavior.
+    # the data-bundle prep lane provisions a fresh CPU session; leaving it
+    # False (the default) keeps allocation byte-identical to pre-parity.
     high_mem: bool = False
+    # Owner structural ruling 8: data-bundle production lives in its own lane
+    # file (src/cli/colab_data_bundle_prep.py).  When False (default),
+    # cli.colab main keeps its original direct --what bundle call,
+    # byte-identical; when True, the dispatch forwards to the lane.
+    cpu_data_bundle_lane: bool = False
     repository: str = Field(min_length=1)
     branch: str = Field(min_length=1)
     git_remote_name: str = Field(min_length=1)

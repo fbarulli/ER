@@ -1,20 +1,26 @@
-"""CPU-prep parity contracts (--what bundle vs the standalone bundle lane).
+"""CPU data-bundle prep lane parity (owner structural ruling 8).
 
-Three capabilities the bundle lane (src/cli/colab_bundle.py, commits
-d264af1/9e7f0e4/902689e/99c7ce8) already delivers must hold for the CPU prep
-lane launched through colab_backend.py -> cli.colab main --what bundle:
+Data-bundle production lives in its own lane file (src/cli/
+colab_data_bundle_prep.py), exactly like the standalone bundle lane
+(src/cli/colab_bundle.py, commits d264af1/9e7f0e4/902689e/99c7ce8).
+src/cli/colab.py keeps only config-gated thin passthroughs and is
+byte-identical when the lane is unused.  The pinned capabilities:
 
-* high-RAM provisioning — a fresh CPU allocation requests the machine shape
-  only when config/training.yaml colab.high_mem says so; an owner-launched
-  named session is re-verified and never reallocated;
-* logging via streaming — the prep cell streams through
-  run_colab_exec_stream (root system transcript + local training.log
-  mirror), and [done] prints only on clean completion ([failed] otherwise);
-* tqdm passthrough — the emitted prepare script never captures the child's
-  stderr (fd inheritance is how the bars stream live; 902689e).
+* launch capability — a fresh CPU allocation requests the machine shape
+  only when config/training.yaml colab.high_mem says so; an
+  owner-launched named session is re-verified and never reallocated; a
+  GPU accelerator is never reshaped;
+* streaming — the lane forwards EVERY prep chunk to BOTH transcripts
+  (root system log + training.log) and prints [done] only on clean
+  completion ([failed] otherwise, never retried);
+* tqdm passthrough — the emitted prepare script never captures the
+  child's stderr (fd inheritance is how the bars stream live; 902689e);
+* dispatch — the thin passthrough in cli.colab main is config-gated
+  (colab.cpu_data_bundle_lane): default keeps the original direct
+  --what bundle call byte-identical.
 
-No Colab transport is contacted: every test stages an intentional stream or
-command fake, the same shape the bundle-lane tests use.
+No Colab transport is contacted: every test stages an intentional stream
+or command fake, the same shape the bundle-lane tests use.
 """
 from __future__ import annotations
 
@@ -26,7 +32,8 @@ from unittest import mock
 
 import pytest
 
-from cli import colab
+import cli.colab as colab
+import cli.colab_data_bundle_prep as prep
 
 
 def _fake_colab(received: list[list]):
@@ -46,19 +53,18 @@ def _fake_colab(received: list[list]):
 
 def _provision(monkeypatch, *, received: list, high_mem: bool, gpu: str = "CPU"):
     monkeypatch.setattr(colab, "SESSION", "test-prep-vm")
-    monkeypatch.setattr(
-        colab, "_COLAB", colab._COLAB.model_copy(update={"high_mem": high_mem})
-    )
+    monkeypatch.setattr(colab, "GPU", gpu)
+    monkeypatch.setattr(prep, "training_cfg", mock.Mock(
+        **{"return_value.colab.high_mem": high_mem}))
     monkeypatch.setattr(colab, "colab", _fake_colab(received))
     # The control-channel handshake is simulated deliberately: what is under
     # test is the allocation argv, not the kernel probe.
     monkeypatch.setattr(colab, "_verify_session_handshake", lambda *a, **k: None)
-    monkeypatch.setattr(colab, "GPU", gpu)
 
 
 def test_cpu_provisioning_defaults_to_the_standard_shape(monkeypatch):
-    """No colab.high_mem in config -> the emitted `colab new` argv is the
-    byte-identical pre-parity command (CPU, no shape flag)."""
+    """No colab.high_mem in config -> the passthrough returns () and the
+    emitted `colab new` argv is the byte-identical pre-parity command."""
     received: list = []
     _provision(monkeypatch, received=received, high_mem=False)
     colab.ensure_session()
@@ -125,8 +131,8 @@ class _NullStream:
 
 
 def test_tqdm_bars_stream_with_carriage_returns(monkeypatch, capsys):
-    """tqdm emits \r-separated progress; stream_output must flush each unit
-    instead of swallowing it behind a newline (902689e passthrough)."""
+    """tqdm emits \r-separated progress; the shared transport must flush
+    each unit instead of swallowing it behind a newline (902689e)."""
     bars = "10%|█| 1/10\r40%|██| 4/10\r100%|████| 10/10\r\n"
     process = _StreamProcess("stage start\n", bars)
     monkeypatch.setattr(colab.subprocess, "Popen", lambda *a, **kw: process)
@@ -138,12 +144,13 @@ def test_tqdm_bars_stream_with_carriage_returns(monkeypatch, capsys):
     assert "100%|████| 10/10" in terminal
 
 
-def test_run_bundle_streams_into_both_transcripts_without_capturing_stderr(
-    monkeypatch, tmp_path
+def test_cpu_prep_lane_streams_into_both_transcripts_and_tags_the_cohort(
+    monkeypatch, tmp_path, capsys
 ):
-    """The CPU prep lane runs its prepare subprocess with inherited streams
-    (fd passthrough) and labels the stage so both transcripts carry it."""
-    dataset = tmp_path / "dataset.csv"
+    """run_cpu_bundle_prep layers the parity capabilities on top of
+    cli.colab.run_bundle WITHOUT editing it: coerced dual-transcript
+    streaming, cohort tag, and an uncaptured prepare child."""
+    dataset = tmp_path / "dataset_50pct.csv"
     dataset.write_text("sku_id\na\n", encoding="utf-8")
     uploads: list = []
     downloads: list = []
@@ -153,25 +160,24 @@ def test_run_bundle_streams_into_both_transcripts_without_capturing_stderr(
     )
     seen: dict = {}
 
-    def fake_stream(session, script, *, timeout, log_name, retry_safe=False,
-                    exclude_from_live_log=False, training_output=False):
+    def recorder(session, script, *, timeout=None, log_name=None, retry_safe=False,
+                 exclude_from_live_log=False, training_output=False):
         seen["script"] = script
         seen["kwargs"] = {
-            "timeout": timeout, "log_name": log_name,
-            "training_output": training_output,
+            "log_name": log_name, "training_output": training_output,
         }
 
-    monkeypatch.setattr(colab, "run_colab_exec_stream", fake_stream)
+    monkeypatch.setattr(colab, "run_colab_exec_stream", recorder)
     monkeypatch.setattr(
         colab, "_download_file_with_visibility",
         lambda **kwargs: downloads.append(kwargs),
     )
     monkeypatch.setattr(colab, "_result_event", lambda *a, **k: None)
-    colab.run_bundle(dataset)
+    prep.run_cpu_bundle_prep(dataset)
     assert uploads and uploads[0][1] == f"{colab.REMOTE_ROOT}/dataset.csv"
+    # BOTH transcripts: the shared training_output contract is forced on by
+    # the lane wrapper, whatever the untouched call in colab.py passes.
     assert seen["kwargs"]["log_name"] == "bundle"
-    # BOTH transcripts: the root system log rides stream printing, and
-    # training_output forwards the same chunks into training.log.
     assert seen["kwargs"]["training_output"] is True
     script = seen["script"]
     assert "training.prepare_all" in script
@@ -180,18 +186,86 @@ def test_run_bundle_streams_into_both_transcripts_without_capturing_stderr(
     assert downloads and downloads[0]["remote"] == (
         f"{colab.REMOTE_ROOT}/bundle_delivery.tar.gz"
     )
+    # Cohort tagging: the two owner sessions are identifiable in a transcript.
+    terminal = capsys.readouterr().out
+    assert "[cpu-prep] cohort=50pct dataset=dataset_50pct.csv" in terminal
 
 
-def _run_bundle_main(argv: list[str], bundle) -> list[str]:
-    """Drive cli.colab main() for the bundle lane with every surface faked."""
-    order: list[str] = []
+def test_cohort_tags_split_the_two_owner_sessions(tmp_path):
+    full = tmp_path / "dataset.csv"
+    half = tmp_path / "dataset_50pct.csv"
+    assert prep.cohort_label(full) == "full"
+    assert prep.cohort_label(half) == "50pct"
 
-    def record(label, result=None):
-        def side_effect(*_a, **_k):
-            order.append(label)
-            return result
-        return side_effect
 
+def test_default_dispatch_keeps_colabs_original_bundle_call(monkeypatch, tmp_path):
+    """cpu_data_bundle_lane False (default) -> byte-identical dispatch: the
+    direct colab.run_bundle call, the lane never entered."""
+    dataset = tmp_path / "cohort.csv"
+    dataset.write_text("sku_id\na\n", encoding="utf-8")
+    monkeypatch.setattr(
+        colab, "_COLAB", colab._COLAB.model_copy(update={"cpu_data_bundle_lane": False})
+    )
+    direct = mock.Mock(name="run_bundle")
+    lane = mock.Mock(name="run_cpu_bundle_prep")
+    fake = _bounded_dispatch_test(monkeypatch, dataset, direct, lane)
+    fake("disable")
+    assert direct.call_count == 1 and lane.call_count == 0
+
+
+def test_lane_dispatch_forwards_to_the_separate_file(monkeypatch, tmp_path):
+    dataset = tmp_path / "cohort.csv"
+    dataset.write_text("sku_id\na\n", encoding="utf-8")
+    monkeypatch.setattr(
+        colab, "_COLAB", colab._COLAB.model_copy(update={"cpu_data_bundle_lane": True})
+    )
+    direct = mock.Mock(name="run_bundle")
+    lane = mock.Mock(name="run_cpu_bundle_prep")
+    fake = _bounded_dispatch_test(monkeypatch, dataset, direct, lane)
+    fake("enable")
+    assert lane.call_count == 1 and lane.call_args.kwargs == {"dataset_csv": dataset}
+    assert direct.call_count == 0
+
+
+def _bounded_dispatch_test(monkeypatch, dataset, direct, lane):
+    """Drive cli.colab main() for --what bundle with every surface faked."""
+    monkeypatch.setattr(colab, "run_bundle", direct)
+    monkeypatch.setattr(prep, "run_cpu_bundle_prep", lane)
+
+    def drive(_mode: str) -> None:
+        stack = [
+            mock.patch.object(sys, "argv", [
+                "colab.py", "--what", "bundle", "--gpu", "CPU",
+                "--dataset-csv", str(dataset),
+            ]),
+            mock.patch.object(colab, "start_live_log"),
+            mock.patch.object(colab, "close_live_log"),
+            mock.patch.object(colab, "check_colab_cli"),
+            mock.patch.object(colab, "acquire_colab_launch_lock", return_value=None),
+            mock.patch.object(colab, "release_colab_launch_lock"),
+            mock.patch.object(colab, "ensure_session"),
+            mock.patch.object(colab, "prepare_remote_layout"),
+            mock.patch.object(colab, "install_deps"),
+            mock.patch.object(colab, "verify_training_inputs"),
+            mock.patch.object(colab, "log_gpu_profile"),
+            mock.patch.object(colab, "stop"),
+            mock.patch.object(colab, "stop_keep_alive_daemon", return_value=1),
+        ]
+        saved_gpu = colab.GPU
+        for patcher in stack:
+            patcher.start()
+        try:
+            colab.main()
+        finally:
+            colab.GPU = saved_gpu
+            for patcher in reversed(stack):
+                patcher.stop()
+
+    return drive
+
+
+def _run_bundle_main(argv: list[str], bundle) -> None:
+    """Drive cli.colab main() for the default bundle lane (telemetry pins)."""
     stack = [
         mock.patch.object(sys, "argv", ["colab.py", *argv]),
         mock.patch.object(colab, "start_live_log"),
@@ -201,7 +275,7 @@ def _run_bundle_main(argv: list[str], bundle) -> list[str]:
         mock.patch.object(colab, "check_colab_cli"),
         mock.patch.object(colab, "acquire_colab_launch_lock", return_value=None),
         mock.patch.object(colab, "release_colab_launch_lock"),
-        mock.patch.object(colab, "ensure_session", record("session")),
+        mock.patch.object(colab, "ensure_session"),
         mock.patch.object(colab, "prepare_remote_layout"),
         mock.patch.object(colab, "install_deps"),
         mock.patch.object(colab, "verify_training_inputs"),
@@ -212,24 +286,18 @@ def _run_bundle_main(argv: list[str], bundle) -> list[str]:
         mock.patch.object(colab, "drain_local_bundle_prewarm"),
         mock.patch.object(colab, "drain_validation_upload_prewarm"),
         mock.patch.object(colab, "run_bundle", bundle),
-        mock.patch.object(colab, "stop", record("stop")),
-        mock.patch.object(colab, "stop_keep_alive_daemon", record("stop_daemon", 1)),
+        mock.patch.object(colab, "stop"),
+        mock.patch.object(colab, "stop_keep_alive_daemon", return_value=1),
     ]
     saved_gpu = colab.GPU
-    saved_env = os.environ.get("EUROMONITOR_KEEP_ALIVE_ALLOWED")
     for patcher in stack:
         patcher.start()
     try:
         colab.main()
     finally:
         colab.GPU = saved_gpu
-        if saved_env is None:
-            os.environ.pop("EUROMONITOR_KEEP_ALIVE_ALLOWED", None)
-        else:
-            os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = saved_env
         for patcher in reversed(stack):
             patcher.stop()
-    return order
 
 
 def test_cpu_prep_lane_announces_done_only_on_clean_completion(
@@ -259,4 +327,46 @@ def test_cpu_prep_lane_reports_failed_when_the_run_raises(
         )
     captured = capsys.readouterr()
     assert "[failed] launch did not complete successfully" in captured.out
+    assert "[done]" not in captured.out
+
+
+def _run_lane_main(monkeypatch, dataset, runner):
+    """The lane's own entry point owns its [done]/[failed] telemetry."""
+    monkeypatch.setattr(
+        sys, "argv",
+        ["colab_data_bundle_prep.py", "--dataset-csv", str(dataset)],
+    )
+    saved_gpu = colab.GPU
+    saved_env = os.environ.get("EUROMONITOR_KEEP_ALIVE_ALLOWED")
+    monkeypatch.setattr(prep, "run_cpu_bundle_prep", runner)
+    try:
+        prep.main()
+    finally:
+        colab.GPU = saved_gpu
+        if saved_env is None:
+            os.environ.pop("EUROMONITOR_KEEP_ALIVE_ALLOWED", None)
+        else:
+            os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = saved_env
+
+
+def test_the_own_lane_prints_done_only_on_clean_completion(
+    monkeypatch, tmp_path, capsys
+):
+    dataset = tmp_path / "cohort.csv"
+    dataset.write_text("sku_id\na\n", encoding="utf-8")
+    _run_lane_main(monkeypatch, dataset, mock.Mock())
+    captured = capsys.readouterr()
+    assert "[done] cpu prep lane completed" in captured.out
+    assert "[failed]" not in captured.out
+
+
+def test_the_own_lane_reports_failed_and_reraises(monkeypatch, tmp_path, capsys):
+    dataset = tmp_path / "cohort.csv"
+    dataset.write_text("sku_id\na\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="VM died"):
+        _run_lane_main(
+            monkeypatch, dataset, mock.Mock(side_effect=RuntimeError("VM died")),
+        )
+    captured = capsys.readouterr()
+    assert "[failed] cpu prep lane did not complete" in captured.out
     assert "[done]" not in captured.out

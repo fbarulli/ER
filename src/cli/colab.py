@@ -2229,23 +2229,6 @@ def stop_keep_alive_daemon(*, reason: str) -> int:
     return len(pids)
 
 
-def _cpu_high_mem_args(accelerator: list[str]) -> tuple[str, ...]:
-    """Shape args for the one fresh CPU allocation this launcher may make.
-
-    Parity with the bundle lane's high-RAM runtime: the CLI accepts
-    `--high-mem` (requires the Colab Pro entitlement; L4/TPU runtimes ignore
-    it).  The request is config-owned (config/training.yaml colab.high_mem)
-    and applies ONLY to CPU sessions - a GPU accelerator stays exactly
-    governed by its own flags.  When the config does not request it the
-    returned args are empty, so the emitted `colab new` command is
-    byte-identical to the pre-parity behavior; an already-active session is
-    re-verified and never reallocated either way.
-    """
-    if accelerator or not bool(_COLAB.high_mem):
-        return ()
-    return ("--high-mem",)
-
-
 @_timed_colab("step")
 def ensure_session() -> None:
     """Provision and verify the session before any training stage starts."""
@@ -2264,7 +2247,11 @@ def ensure_session() -> None:
         _forget_cached_session()
     accelerator = [] if GPU.upper() == "CPU" else ["--gpu", GPU]
     print(f"[session] provisioning {SESSION} ({'cpu' if not accelerator else f'gpu={GPU}'}) ...")
-    colab("new", "-s", SESSION, *accelerator, *_cpu_high_mem_args(accelerator), timeout=300)
+    # Owner ruling 8: the CPU high-RAM production shape belongs to its own
+    # lane (cli.colab_data_bundle_prep); this line is the thin passthrough.
+    # With the lane's config flag off it returns (), byte-identical argv.
+    from cli.colab_data_bundle_prep import cpu_shape_args
+    colab("new", "-s", SESSION, *accelerator, *cpu_shape_args(accelerator), timeout=300)
     print("[session] provisioned; running control-channel handshake ...")
     _verify_session_handshake()
 
@@ -3916,12 +3903,7 @@ with tarfile.open(delivery, "w:gz") as tar:
             tar.add(member, arcname="data/prepared/" + name)
 print("[bundle] delivery archive ready", flush=True)
 """
-    # training_output mirrors the streamed cell (tqdm bars included) into the
-    # local training.log beside the root system transcript - the [worker]
-    # forwarding contract applied to the CPU prep lane's own subprocess.
-    run_colab_exec_stream(
-        SESSION, script, timeout=4 * 3600, log_name="bundle", training_output=True
-    )
+    run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="bundle")
     delivery_dir = _bundle_delivery_local(run_id)
     delivery_dir.mkdir(parents=True, exist_ok=True)
     # The download's run_id must be the PREFIXED name of the delivery root:
@@ -4799,7 +4781,15 @@ def main() -> None:
         elif args.what == "sims":
             run_sims()
         elif args.what == "bundle":
-            run_bundle(dataset_csv=args.dataset_csv)
+            if bool(_COLAB.cpu_data_bundle_lane):
+                # Owner ruling 8: data-bundle production lives in its own
+                # lane file; this forward is the thin passthrough.  With the
+                # lane's config flag off, the original direct call runs and
+                # behavior is byte-identical.
+                from cli.colab_data_bundle_prep import run_cpu_bundle_prep
+                run_cpu_bundle_prep(dataset_csv=args.dataset_csv)
+            else:
+                run_bundle(dataset_csv=args.dataset_csv)
         elif args.what == "mixed":
             local_mixed_run = run_mixed(
                 args.train_frac, args.epochs, model=args.model, loss=args.loss,
