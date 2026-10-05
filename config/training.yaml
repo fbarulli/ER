@@ -35,8 +35,8 @@ masking:
     mask_extent: 0.15
   profile: baseline
   frac: 0.80          # fraction of positive anchors masked when enabled
-  mask_hard_negatives: true  # enable dynamic masking on label-0 training pairs
-  hard_negative_frac: 0.30   # mask_frac_negatives: only 30% of label-0 presentations
+  mask_hard_negatives: false  # OFF for now: on-the-fly masking is non-deterministic; baked views carry it
+  hard_negative_frac: 0.0    # dynamic layer zeroed (owner ruling 2026-10-05); re-enable after evidence
   mask_prob: null     # null: positive extent drawn from mask_lo..mask_hi
   mask_lo: 0.20       # variable extent band, U(0.20, 0.30) per masked copy
   mask_hi: 0.30
