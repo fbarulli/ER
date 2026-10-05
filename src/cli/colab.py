@@ -1229,6 +1229,7 @@ print(json.dumps(payload), flush=True)
 
 def run_parallel_train_and_tail(
     args: list[str], workers: int, *, resume_run: str | None = None,
+    smoke: bool = False,
     run_labels: list[str] | None = None,
     worker_losses: list[str] | None = None,
     masking_profiles: list[str] | None = None,
@@ -1529,7 +1530,7 @@ print(json.dumps(payload), flush=True)
                 failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
                 if failed:
                     raise RuntimeError(f"parallel trainers failed: {failed}")
-                download_verified_training_results(remote_base, workers)
+                download_verified_training_results(remote_base, workers, smoke=smoke)
                 print(f"[train] all {workers} remote workers completed successfully", flush=True)
                 return remote_base, workers
             time.sleep(_LOG_POLL_SECONDS)
@@ -2004,10 +2005,15 @@ def _read_remote_text(remote: str) -> str:
     raise RuntimeError("remote read returned no marker")
 
 
-def download_verified_training_results(remote_base: str, workers: int) -> None:
+def download_verified_training_results(
+    remote_base: str, workers: int, *, smoke: bool = False
+) -> None:
     """Transfer one manifest-backed result archive before VM teardown."""
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    local_base = TRAINING_RESULTS / run_id
+    # Smoke runs join a separate retention lane (smoke_ prefix): the local
+    # root must already carry the prefix BEFORE extraction so the overwrite
+    # sweep below governs only this lane.
+    local_base = TRAINING_RESULTS / (f"smoke_{run_id}" if smoke else run_id)
     local_base.mkdir(parents=True, exist_ok=True)
     _result_event(run_id, "download", "started", workers=workers)
     remote_archive = _prepare_remote_result_archive(remote_base, workers)
@@ -2036,6 +2042,14 @@ def download_verified_training_results(remote_base: str, workers: int) -> None:
         f"({len(manifest.included)} included, {len(manifest.excluded)} excluded)",
         flush=True,
     )
+    from model_tracks.run_retention import publish_training_run, replace_smoke
+    if smoke:
+        replace_smoke(local_base)
+        print("[retention] smoke: newest result is the only local smoke run", flush=True)
+    else:
+        receipt = publish_training_run(local_base)
+        print(f"[retention] dvc published run={Path(local_base).name} "
+              f"pruned={len(receipt.pruned)} in {receipt.seconds:.1f}s", flush=True)
 
 
 
@@ -2612,6 +2626,7 @@ def run_train(
     remote_prepared_bundles: list[str] | None = None,
     remote_validation_csv: str | None = None,
     incremental_sync: bool = True,
+    smoke: bool = False,
 ) -> tuple[str, int]:
     """Full-chain GPU training on the VM."""
     print("[run] train.py on the configured VM runtime ...")
@@ -2675,6 +2690,7 @@ def run_train(
         return run_single_train_and_stream(
             args,
             run_label=run_label,
+            smoke=smoke,
             prepared_bundle=prepared_bundles[0] if prepared_bundles else None,
             remote_checkout_bundle=(
                 remote_prepared_bundles[0] if remote_prepared_bundles else None
@@ -2695,7 +2711,7 @@ def run_train(
             incremental_sync=incremental_sync,
         )
     return run_parallel_train_and_tail(
-        args, workers, resume_run=resume_run,
+        args, workers, smoke=smoke, resume_run=resume_run,
         run_labels=(
             _expand_worker_profiles(run_label, workers, "run label")
             if run_label else None
@@ -3460,6 +3476,7 @@ pathlib.Path({remote_dir!r}).mkdir(parents=True, exist_ok=True)
 
 def run_single_train_and_stream(
     args: list[str], *, run_label: str | None = None,
+    smoke: bool = False,
     prepared_bundle: Path | None = None, final_inference: bool = True,
     remote_checkout_bundle: str | None = None,
     inference_sample: int | None = None,
@@ -3616,7 +3633,7 @@ print(f"[train] worker 1 completed; log={{log_path}}", flush=True)
     finally:
         if syncer is not None:
             syncer.stop()
-    download_verified_training_results(remote_base, 1)
+    download_verified_training_results(remote_base, 1, smoke=smoke)
     print(
         f"[train] single worker completed; results downloaded "
         f"({_format_bytes(syncer.synced_bytes() if syncer is not None else 0)} arrived during the run)",
@@ -4639,6 +4656,7 @@ def main() -> None:
             local_training_run = run_train(
                 args.train_frac, _SMOKE_EPOCHS, sample=smoke_sample,
                 workers=_SMOKE_WORKERS,
+                smoke=True,
                 inference_sample=smoke_sample,
                 inference_device="cuda" if GPU.upper() != "CPU" else "cpu",
                 run_label=args.run_label,
