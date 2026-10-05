@@ -77,24 +77,13 @@ def cohort_label(dataset_csv: Path) -> str:
     attributable without importing the colab module.
     """
     name = Path(dataset_csv).name
-    if name == Path(DATA_FILE_DEFAULT).name:
+    if name == _spec().export_csvs[0]:
         return "full"
     if "50pct" in name:
         return "50pct"
     return "".join(
         ch if ch.isalnum() or ch in "-_" else "_" for ch in name.rsplit(".", 1)[0]
     )
-
-
-# The SSOT default export binding ("dataset" in config/paths.yaml files:).
-# Resolved lazily to keep the module import-light for --help paths.
-def _default_export_name() -> str:
-    from core.common import F
-
-    return Path(F["dataset"]).name
-
-
-DATA_FILE_DEFAULT = "dataset.csv"
 
 
 def _spec():
@@ -257,9 +246,12 @@ def download_dataset(package: KagglePackage, *, execute: bool) -> dict[str, Any]
             f"kaggle datasets download failed (rc={result.returncode}); "
             "see the streamed kaggle output above"
         )
-    fetched = stage / f"{slug.split('/')[-1]}.zip"
-    if not fetched.is_file():
-        raise RuntimeError(f"kaggle download produced no archive at {fetched}")
+    fetched_candidates = sorted(
+        stage.glob("*.zip"), key=lambda path: path.stat().st_mtime, reverse=True
+    )
+    if not fetched_candidates:
+        raise RuntimeError(f"kaggle download produced no archive under {stage}")
+    fetched = fetched_candidates[0]
     observed = sha256_file(fetched)
     if observed != receipt["archive_sha256"]:
         raise RuntimeError(
