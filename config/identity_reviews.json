@@ -304,6 +304,1137 @@
         "983459721",
         "988395862"
       ]
+    },
+    "4260339810329": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165327149",
+        "165471318",
+        "165549216"
+      ]
+    },
+    "5015612151571": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "212042072",
+        "212274271"
+      ]
+    },
+    "5018076100512": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159473330",
+        "82239168",
+        "87542394"
+      ]
+    },
+    "5018076100550": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165682651",
+        "165716239",
+        "251485937",
+        "251794927"
+      ]
+    },
+    "5018076100697": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "110629683",
+        "343574484"
+      ]
+    },
+    "5018076100703": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159519286",
+        "80905167",
+        "91183378"
+      ]
+    },
+    "5018076100765": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "82139800",
+        "88724233"
+      ]
+    },
+    "5026236010809": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "80507768",
+        "85796938"
+      ]
+    },
+    "5026236011202": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "78451285",
+        "80840540",
+        "89081839"
+      ]
+    },
+    "5060035011230": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "79855076",
+        "82038036"
+      ]
+    },
+    "5060035011247": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "78654455",
+        "94695381",
+        "95607041"
+      ]
+    },
+    "5060042491339": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "78638065",
+        "79998314"
+      ]
+    },
+    "5060128500504": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "78404561",
+        "79885513",
+        "85554458"
+      ]
+    },
+    "5060128501105": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "251689195",
+        "80839310",
+        "87892391"
+      ]
+    },
+    "5060128501204": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "251661216",
+        "79633891",
+        "94326476"
+      ]
+    },
+    "5060146710015": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "111850845",
+        "79337301",
+        "84475149"
+      ]
+    },
+    "5060146710046": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159326988",
+        "82551439",
+        "92395235"
+      ]
+    },
+    "5060248350171": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "68346153",
+        "68698380"
+      ]
+    },
+    "5060248350188": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "85030561",
+        "95437063"
+      ]
+    },
+    "5060376690446": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "178777918",
+        "85869905",
+        "88705111"
+      ]
+    },
+    "5060376690576": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "178534427",
+        "78485616"
+      ]
+    },
+    "5060424220007": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "166542298",
+        "166659489",
+        "166737166"
+      ]
+    },
+    "5060452360096": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "251484285",
+        "251492882",
+        "251589560",
+        "251772152"
+      ]
+    },
+    "5060510930001": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165433587",
+        "167514497"
+      ]
+    },
+    "5060510930087": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165475621",
+        "167522746"
+      ]
+    },
+    "754436584442": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "177850684",
+        "177853323",
+        "177935217",
+        "178069572"
+      ]
+    },
+    "754436584480": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "166570495",
+        "166706863"
+      ]
+    },
+    "8054615740044": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165335901",
+        "165342672",
+        "165473292",
+        "165642515"
+      ]
+    },
+    "8056326430238": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "135976543",
+        "136020238",
+        "136213263"
+      ]
+    },
+    "811961020460": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159370572",
+        "159592977"
+      ]
+    },
+    "811961020484": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159225613",
+        "159332438"
+      ]
+    },
+    "813427000689": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "81424079",
+        "88724948"
+      ]
+    },
+    "813427000696": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "113109383",
+        "80126591",
+        "87119796"
+      ]
+    },
+    "813427000832": {
+      "reason": "Source titles advertise different explicit bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "79275806",
+        "84669475"
+      ]
+    },
+    "5060118260203": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "221317275",
+        "432854030",
+        "78813603",
+        "78927488",
+        "78977044",
+        "79178941",
+        "79199603",
+        "79497151",
+        "79655458",
+        "79683224",
+        "81083507",
+        "81408367",
+        "81682634",
+        "81972381",
+        "82088570",
+        "82165260",
+        "82782897",
+        "83010330",
+        "83117426",
+        "83156688",
+        "83249718",
+        "83624080",
+        "83641638",
+        "84025389",
+        "84029716",
+        "84259256",
+        "86326894",
+        "86849346",
+        "87179968",
+        "87213772",
+        "87413763",
+        "87431545",
+        "87894050",
+        "90157245",
+        "90369969",
+        "90634203",
+        "90693299",
+        "90836535",
+        "91205184",
+        "91243883",
+        "91968888",
+        "923579767",
+        "93652353",
+        "95337437"
+      ]
+    },
+    "5060452360065": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165384816",
+        "165406314",
+        "165421951",
+        "165459904",
+        "165477494",
+        "165492764",
+        "165495401",
+        "165510152",
+        "165534437",
+        "165536419",
+        "165571189",
+        "165592313",
+        "165616022",
+        "165616626",
+        "165643335",
+        "251486619",
+        "251494278",
+        "251527155",
+        "251529219",
+        "251530700",
+        "251620347",
+        "251627749",
+        "251685119",
+        "251706944",
+        "251708464",
+        "251737975",
+        "251748283",
+        "517572015"
+      ]
+    },
+    "5060477670002": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159254043",
+        "159260964",
+        "159325112",
+        "159334952",
+        "159348958",
+        "159511191",
+        "159524919",
+        "159558352",
+        "159610999",
+        "159711236",
+        "159772789",
+        "159777220",
+        "159845987",
+        "179194442",
+        "198663534",
+        "251550603",
+        "255829480",
+        "341620026",
+        "341626965",
+        "341630978",
+        "341741658",
+        "341760930",
+        "341797874",
+        "341839631",
+        "832833304"
+      ]
+    },
+    "5060468010510": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "179312315",
+        "221294227",
+        "68735120",
+        "69653964",
+        "70490211",
+        "70738196",
+        "70833458",
+        "71193166",
+        "71654211",
+        "72306312",
+        "72412753",
+        "73685780",
+        "73830086",
+        "74278374",
+        "74423997",
+        "75944384",
+        "76667965",
+        "76743826",
+        "76773983",
+        "77201301",
+        "77341594"
+      ]
+    },
+    "5060167500169": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "13765553",
+        "78649571",
+        "79261646",
+        "80316261",
+        "80504227",
+        "80913600",
+        "82232262",
+        "82514223",
+        "83964955",
+        "85307231",
+        "85677659",
+        "85864484",
+        "87879456",
+        "88199440",
+        "88456802",
+        "92447653",
+        "95048911",
+        "96910005",
+        "96972491"
+      ]
+    },
+    "5060167500220": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159343160",
+        "159481723",
+        "159504063",
+        "159532706",
+        "159660916",
+        "159683510",
+        "159706582",
+        "159796290",
+        "160178081",
+        "19988507",
+        "251491735",
+        "251704210"
+      ]
+    },
+    "5060128500405": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "104396990",
+        "80286723",
+        "82004714",
+        "82132484",
+        "82560588",
+        "83075683",
+        "83929105",
+        "84565043",
+        "91782931",
+        "94216470",
+        "94501682",
+        "95361681",
+        "97956746"
+      ]
+    },
+    "5020934402522": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "347310788",
+        "53846231",
+        "83702767",
+        "87467038",
+        "88226710",
+        "88258902",
+        "88692926",
+        "90683360"
+      ]
+    },
+    "5060107330412": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "58970780",
+        "78457730",
+        "79062179",
+        "82021703",
+        "83658389",
+        "85417430",
+        "92842970",
+        "96834255"
+      ]
+    },
+    "868657000060": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "14283844",
+        "159375480",
+        "159633665",
+        "159817760",
+        "251480418",
+        "251507811",
+        "251770630"
+      ]
+    },
+    "5060477670019": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159324241",
+        "159692508",
+        "159700860",
+        "159743212",
+        "159813009",
+        "198583518"
+      ]
+    },
+    "5060128500801": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "251539833",
+        "80821222",
+        "81526038",
+        "82151743",
+        "82593295",
+        "95041540",
+        "96675389"
+      ]
+    },
+    "897351000427": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "116579218",
+        "118316550",
+        "158509811",
+        "162402383",
+        "222490450",
+        "318824814",
+        "402171329",
+        "449723498",
+        "47072806",
+        "76331535",
+        "93136177"
+      ]
+    },
+    "810013080209": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "213284021",
+        "429250152",
+        "653951067",
+        "675843434",
+        "754678049",
+        "813624719",
+        "867452296",
+        "959800765"
+      ]
+    },
+    "890817001051": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "277710246",
+        "312745620",
+        "53011360",
+        "71034954",
+        "72799927",
+        "73949018",
+        "77071191",
+        "9879745"
+      ]
+    },
+    "867657000094": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "1060487593",
+        "148781192",
+        "189165042",
+        "322204225",
+        "631347067",
+        "749622769",
+        "907154057"
+      ]
+    },
+    "5060438160092": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159587063",
+        "159606785",
+        "159738751",
+        "159797549",
+        "70204925"
+      ]
+    },
+    "856305007066": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "246217425",
+        "246282064",
+        "246399714",
+        "246425586"
+      ]
+    },
+    "710069106055": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "71034436",
+        "73698889",
+        "74287889",
+        "75733158"
+      ]
+    },
+    "810013080230": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "429073926",
+        "653859826",
+        "677103486",
+        "754693539",
+        "813919862",
+        "868132740",
+        "958095017"
+      ]
+    },
+    "793674820073": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "198548041",
+        "245017273",
+        "71525802",
+        "891241980",
+        "985925699"
+      ]
+    },
+    "862284000080": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "18931869",
+        "68721239",
+        "74480857",
+        "830422011",
+        "946915596"
+      ]
+    },
+    "853955000904": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "111529819",
+        "290135355",
+        "344820828",
+        "4467733",
+        "631346180",
+        "68786839",
+        "72301190",
+        "941527191",
+        "966703701",
+        "969789564"
+      ]
+    },
+    "5034033000497": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "116074563",
+        "159438982",
+        "159562389",
+        "159803798",
+        "67571583",
+        "70609890"
+      ]
+    },
+    "718179615320": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "166559987",
+        "166597608",
+        "166707375",
+        "166741786"
+      ]
+    },
+    "840269200229": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "747827566",
+        "753368570",
+        "946326063",
+        "994193407"
+      ]
+    },
+    "840269200236": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "755402286",
+        "903600601",
+        "946542808",
+        "994149168"
+      ]
+    },
+    "840269200243": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "747558364",
+        "753352315",
+        "978992729",
+        "994184977"
+      ]
+    },
+    "5034033000220": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159554165",
+        "159601653",
+        "159635971",
+        "409928266"
+      ]
+    },
+    "813427000672": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "83429473",
+        "83709230",
+        "94608302"
+      ]
+    },
+    "819768010318": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "71718969",
+        "74964616",
+        "75812394"
+      ]
+    },
+    "5060510930018": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165342943",
+        "165373767",
+        "165573712"
+      ]
+    },
+    "850018328784": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "631352788",
+        "704596828",
+        "893020677",
+        "906170038",
+        "907629373"
+      ]
+    },
+    "894357002561": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "1027520588",
+        "137627715",
+        "139920169",
+        "654030623",
+        "70162083"
+      ]
+    },
+    "5425002406950": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "131906984",
+        "240318628",
+        "242792600",
+        "487806681",
+        "654185125"
+      ]
+    },
+    "810013080223": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "429063830",
+        "653314876",
+        "813760951",
+        "961626055"
+      ]
+    },
+    "815298020414": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "114808006",
+        "154718320",
+        "57019279",
+        "70745719"
+      ]
+    },
+    "851818001877": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "110701528",
+        "319418940",
+        "73877497",
+        "954644175"
+      ]
+    },
+    "850017346086": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "669170483",
+        "827919655",
+        "888730251"
+      ]
+    },
+    "850379003238": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "501434230",
+        "759607116",
+        "981119690"
+      ]
+    },
+    "853303007296": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "631346676",
+        "645524621",
+        "928811092"
+      ]
+    },
+    "5060128501402": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "85003520",
+        "91655740",
+        "93668106"
+      ]
+    },
+    "5060524790264": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159337325",
+        "159472489",
+        "251512192"
+      ]
+    },
+    "5425002406967": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "132578954",
+        "132842567",
+        "243433588"
+      ]
+    },
+    "8722200960343": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "283499655",
+        "437338216",
+        "437733813"
+      ]
+    },
+    "842885098211": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "11261080",
+        "154676453",
+        "322473683",
+        "449588879",
+        "47120741",
+        "70468960",
+        "72366690",
+        "74042375",
+        "76118320"
+      ]
+    },
+    "810533009865": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "14319182",
+        "349512387",
+        "415192458",
+        "48731112",
+        "68805776",
+        "78050324",
+        "8547447",
+        "906606108"
+      ]
+    },
+    "842885098716": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "322413652",
+        "449636782",
+        "47084366",
+        "667040",
+        "70396447",
+        "74345331",
+        "75021210",
+        "75296730"
+      ]
+    },
+    "7350093030259": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165562069",
+        "210094038",
+        "224271351",
+        "246356123",
+        "246759792",
+        "261156178",
+        "446867790"
+      ]
+    },
+    "5021265223459": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "80261318",
+        "82165935",
+        "82684607",
+        "84060482",
+        "88240598",
+        "92427017"
+      ]
+    },
+    "5060102622215": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "136187388",
+        "136279660",
+        "136525004",
+        "299570106",
+        "380569229"
+      ]
+    },
+    "8717496906687": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "81404901",
+        "81982334",
+        "82254047",
+        "85835614",
+        "91744757"
+      ]
+    },
+    "189727000217": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "124623940",
+        "215232793",
+        "755965776",
+        "958045394"
+      ]
+    },
+    "850029394013": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "508704256",
+        "574883437",
+        "757285932",
+        "870889092"
+      ]
+    },
+    "8436567350302": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "191755054",
+        "279233565",
+        "571490525",
+        "580840047"
+      ]
+    },
+    "189727000248": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "123125859",
+        "215058723",
+        "958234050"
+      ]
+    },
+    "780999003410": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "152922703",
+        "73774927",
+        "77528442"
+      ]
+    },
+    "793674820462": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "244912618",
+        "839632307",
+        "945691175"
+      ]
+    },
+    "5034033000886": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159672689",
+        "411159254",
+        "67725295"
+      ]
+    },
+    "5060305341067": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "197674262",
+        "197923611",
+        "197961357"
+      ]
+    },
+    "5060406080155": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "135969218",
+        "136300186",
+        "5591019"
+      ]
+    },
+    "50248407": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "398712723",
+        "961183311"
+      ]
+    },
+    "50598434": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "91303399",
+        "95204318"
+      ]
+    },
+    "634158897627": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "251513371",
+        "251519324"
+      ]
+    },
+    "701243012330": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "193068645",
+        "963707136"
+      ]
+    },
+    "718179615283": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "166626177",
+        "166686989"
+      ]
+    },
+    "727413005438": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "263230752",
+        "264524735"
+      ]
+    },
+    "754436584473": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "166665135",
+        "166692537"
+      ]
+    },
+    "794504888416": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "68922429",
+        "82119371"
+      ]
+    },
+    "850042868652": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "1028018351",
+        "784334811"
+      ]
+    },
+    "854337002196": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "72484090",
+        "76488737"
+      ]
+    },
+    "856305007011": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "245912640",
+        "245928834"
+      ]
+    },
+    "863944000433": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "305452455",
+        "888966419"
+      ]
+    },
+    "868657000053": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159420169",
+        "161406223"
+      ]
+    },
+    "868657000084": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "961365433",
+        "966699250"
+      ]
+    },
+    "5060510930124": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165473883",
+        "165607237"
+      ]
+    },
+    "5060524790004": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159370354",
+        "159666177"
+      ]
+    },
+    "5060524790301": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "159498944",
+        "159690718"
+      ]
+    },
+    "5425002407018": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "241319482",
+        "469106194"
+      ]
+    },
+    "9403067111084": {
+      "reason": "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md.",
+      "evidence_sku_ids": [
+        "165812020",
+        "178801986"
+      ]
     }
   },
   "listing_context": {
@@ -421,6 +1552,182 @@
         "attribute": "Juice Features: from concentrate; Made From: lemon; Volume: 1000; Sweetener: sugar; Flavour: lemon; Caffeine: 15-25 mg; Pack Material Type: Paper / Carton; Health Claims: hydrating; Carbonization: still; Juice Content: 10-15%"
       },
       "reason": "Kiviks is the brand; original lemon description matches same-GTIN peer. Kiwi ingredient/flavor is brand translation leakage."
+    },
+    "216658859": {
+      "expected_gtin": "7070866028466",
+      "fields": {
+        "sku_name_eng": "Maxim BCAA Boost Apple & Pear 330 ml",
+        "attribute": "Sweetener: sucralose; Juice Content: 0-2%; Carbonization: carbonated; Caffeine: 15-25 mg; Volume: 330; Pack Type: Can; Sports Positioning: muscle growth; Pack Material Type: Metal; Health Claims: energy boosting, no sugar; Immune Support Ingredients: vitamin c; Energy Source: b-vitamins; Sports Ingredients: bcaa; Flavour: apple, pear"
+      },
+      "reason": "Own description explicitly names Apple & Pear; matching sibling title and flavor corroborate. Evidence: https://www.foodie.fi/entry/12495/hiilihapotettu-urheilujuoma-330ml/7070866028466; sibling SKUs 255905683. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "78240221": {
+      "expected_gtin": "7070866025328",
+      "fields": {
+        "sku_name_eng": "Maxim BCAA Boost Wild Strawberry 330 ml",
+        "attribute": "Volume: 330; Caffeine: 15-25 mg; Sports Ingredients: bcaa; Immune Support Ingredients: vitamin c; Sports Positioning: muscle growth; Carbonization: carbonated; Pack Material Type: Metal; Juice Content: 0-2%; Sweetener: sucralose; Energy Source: b-vitamins; Health Claims: no sugar, energy boosting; Flavour: strawberry"
+      },
+      "reason": "Own description explicitly names strawberry; two same-GTIN siblings corroborate. Evidence: https://www.foodie.fi/entry/12495/hiilihapotettu-urheilujuoma-330ml/7070866025328; sibling SKUs 91342512, 283257581. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "251921598": {
+      "expected_gtin": "6430039222571",
+      "fields": {
+        "sku_name_eng": "Puhdistamo Natural Energy Drink Passion Fruit Ginger 330 ml",
+        "attribute": "Energy Source: yerba mate; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Pack Material Type: Metal; Naturally derived: natural; Carbonization: still; Flavour: passion fruit, ginger"
+      },
+      "reason": "Source slug identifies the variant and 330 ml; same-GTIN peer naming corroborates. Replace scraped interface text add to wish list. Evidence: https://www.sokos.fi/fi/sokos/puhdistamo-natural-energy-drink-passionhedelma-inkivaari-330ml; sibling SKUs 208348592. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "251936215": {
+      "expected_gtin": "6430039222564",
+      "fields": {
+        "sku_name_eng": "Puhdistamo Natural Energy Drink Lemon Acai 330 ml",
+        "attribute": "Naturally derived: natural; Energy Source: yerba mate; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Carbonization: still; Pack Material Type: Metal; Flavour: lemon, acai"
+      },
+      "reason": "Source slug identifies the variant and 330 ml; same-GTIN peer naming corroborates. Replace scraped interface text add to wish list. Evidence: https://www.sokos.fi/fi/sokos/puhdistamo-natural-energy-drink-sitruuna-acai-330ml; sibling SKUs 208283862, 347638599. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "322226723": {
+      "expected_gtin": "6430039222779",
+      "fields": {
+        "sku_name_eng": "Puhdistamo Natural Energy Drink Peach 330 ml",
+        "attribute": "Naturally derived: natural; Pack Material Type: Metal; Energy Source: yerba mate; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Carbonization: still; Flavour: peach"
+      },
+      "reason": "Source slug identifies the variant and 330 ml; same-GTIN peer naming corroborates. Replace scraped interface text add to wish list. Evidence: https://www.sokos.fi/fi/sokos/puhdistamo-natural-energy-drink-persikka-330ml; sibling SKUs 272567949, 524138959. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "322350466": {
+      "expected_gtin": "6430039222786",
+      "fields": {
+        "sku_name_eng": "Puhdistamo Natural Energy Drink Bergamot 330 ml",
+        "attribute": "Carbonization: still; Health Claims: no sugar, energy boosting; Pack Material Type: Metal; Energy Source: yerba mate; Naturally derived: natural; Juice Content: 0-2%; Flavour: bergamot"
+      },
+      "reason": "Source slug identifies the variant and 330 ml; same-GTIN peer naming corroborates. Replace scraped interface text add to wish list. Evidence: https://www.sokos.fi/fi/sokos/puhdistamo-natural-energy-drink-bergamotti-330ml; sibling SKUs 272413141, 524630995, 746780661. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "449162997": {
+      "expected_gtin": "8715600245332",
+      "fields": {
+        "sku_name_eng": "Sisi No bubbles orange 1.5 l",
+        "attribute": "Volume: 1500; Pack Material Type: Plastic; Immune Support Ingredients: vitamin c, antioxidants; Water Type: spring; Pack Type: Bottle; Juice Content: 5-10%; Sweetener: sucralose, sugar, acesulfame potassium; Carbonization: still; Caffeine: 15-25 mg; Naturally derived: natural fragrances; Flavour: orange"
+      },
+      "reason": "Own description heading and URL agree on this variant and size; peer corroborates. Replace scraped groceries title. Evidence: https://www.coop.nl/product/8715600245332/Sisi-No-bubbles-orange; sibling SKUs 520654099. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "449258863": {
+      "expected_gtin": "8715600245394",
+      "fields": {
+        "sku_name_eng": "Sisi No bubbles mango 1.5 l",
+        "attribute": "Immune Support Ingredients: vitamin c, antioxidants; Sweetener: cyclamate, saccharin, sucralose, sugar; Volume: 1500; Pack Material Type: Plastic; Juice Content: 10-15%; Caffeine: 15-25 mg; Carbonization: still; Flavour: mango"
+      },
+      "reason": "Own description heading and URL agree on this variant and size; peer corroborates. Replace scraped groceries title. Evidence: https://www.coop.nl/product/8715600245394/Sisi-No-bubbles-mango; sibling SKUs 520887202. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "69555693": {
+      "expected_gtin": "7310090363200",
+      "fields": {
+        "sku_name_eng": "Fun Light strawberry beverage concentrate 1.0 l",
+        "attribute": "Pack Material Type: Plastic; Pack Type: Bottle; Sweetener: aspartame, sugar, acesulfame potassium; Volume: 1000; Juice Content: 0-2%; Flavour: strawberry"
+      },
+      "reason": "Own description starts with an explicit flavor declaration; same-GTIN peer title and flavor corroborate. Sweetener and juice claims are not inferred. Evidence: https://www.foodie.fi/entry/1018/juomatiiviste-1-0l/7310090363200; sibling SKUs 87483959, 248002380. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "71639291": {
+      "expected_gtin": "7310090367208",
+      "fields": {
+        "sku_name_eng": "Fun Light wild berry beverage concentrate 1.0 l",
+        "attribute": "Pack Material Type: Plastic; Pack Type: Bottle; Volume: 1000; Health Claims: no sugar, hydrating; Sweetener: aspartame, acesulfame potassium; Juice Content: 0-2%; Flavour: wild berry"
+      },
+      "reason": "Own description starts with an explicit flavor declaration; same-GTIN peer title and flavor corroborate. Sweetener and juice claims are not inferred. Evidence: https://www.foodie.fi/entry/1018/juomatiiviste-1-0l/7310090367208; sibling SKUs 92602956, 247826990. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "75494994": {
+      "expected_gtin": "7310090360209",
+      "fields": {
+        "sku_name_eng": "Fun Light orange beverage concentrate 1.0 l",
+        "attribute": "Volume: 1000; Pack Material Type: Plastic; Pack Type: Bottle; Sweetener: aspartame, acesulfame potassium; Juice Content: 0-2%; Immune Support Ingredients: vitamin c, antioxidants; Health Claims: no sugar; Flavour: orange"
+      },
+      "reason": "Own description starts with an explicit flavor declaration; same-GTIN peer title and flavor corroborate. Sweetener and juice claims are not inferred. Evidence: https://www.foodie.fi/entry/1018/juomatiiviste-1-0l/7310090360209; sibling SKUs 94457985, 247887618. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "75985836": {
+      "expected_gtin": "6417802361217",
+      "fields": {
+        "sku_name_eng": "Fun Light raspberry beverage concentrate 1.0 l",
+        "attribute": "Volume: 1000; Water Type: flavoured; No Artificial Ingredients: no artificial flavours; Sweetener: aspartame, acesulfame potassium; Juice Content: 0-2%; Pack Material Type: Plastic; Flavour: raspberry"
+      },
+      "reason": "Own description starts with an explicit flavor declaration; same-GTIN peer title and flavor corroborate. Sweetener and juice claims are not inferred. Evidence: https://www.foodie.fi/entry/1018/juomatiiviste-1-0l/6417802361217; sibling SKUs 230606760, 250773826, 258210799. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "78951293": {
+      "expected_gtin": "7310861041214",
+      "fields": {
+        "sku_name_eng": "Gainomax BCAA Apple Pear energy drink 330 ml",
+        "attribute": "Volume: 330; Free From: no caffeine; Health Claims: energy boosting; Pack Material Type: Metal; Naturally derived: natural fragrances; Sports Ingredients: bcaa; Sports Positioning: muscle growth; Contains Minerals: magnesium; Sweetener: sucralose, sugar, acesulfame potassium; Juice Content: 0-2%; Immune Support Ingredients: vitamin c, antioxidants; Carbonization: carbonated; Flavour: apple, pear"
+      },
+      "reason": "Own description explicitly names apple and pear; source URL says omena and peer corroborates. Evidence: https://www.foodie.fi/entry/12495/330ml-energiajuoma-omena/7310861041214; sibling SKUs 84256142. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "80848984": {
+      "expected_gtin": "7310861041207",
+      "fields": {
+        "sku_name_eng": "Gainomax BCAA Citrus energy drink 330 ml",
+        "attribute": "Pack Material Type: Metal; Free From: no caffeine; Naturally derived: natural fragrances; Sports Ingredients: protein; Volume: 330; Contains Minerals: magnesium; Carbonization: carbonated; Health Claims: energy boosting; Pack Type: Can; Sports Positioning: muscle growth; Juice Content: 0-2%; Sweetener: sucralose, acesulfame potassium; Immune Support Ingredients: vitamin c, antioxidants; Flavour: citrus"
+      },
+      "reason": "Own description and sitrus URL identify citrus; same-GTIN peer corroborates. Untranslated secondary flavor is not guessed. Evidence: https://www.foodie.fi/entry/12495/330ml-energiajuoma-sitrus/7310861041207; sibling SKUs 222705460. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "927354566": {
+      "expected_gtin": "4250519666563",
+      "fields": {
+        "sku_name_eng": "ESN Ultra Vitamin Syrup Sour Cherry 65 ml",
+        "attribute": "Sports Positioning: fitness; Juice Content: 0-2%; Volume: 65; Flavour: cherry"
+      },
+      "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size. Evidence: https://www.shop-apotheke.com/fitness/upmED42K2/esn-ultra-vitamin-syrup-sour-cherry.htm; sibling SKUs 942564466, 945598805. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "927640172": {
+      "expected_gtin": "4250519662558",
+      "fields": {
+        "sku_name_eng": "ESN Ultra Vitamin Syrup Lemon Ice Tea 65 ml",
+        "attribute": "Sports Positioning: fitness; Juice Content: 0-2%; Volume: 65; Flavour: lemon, tea"
+      },
+      "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size. Evidence: https://www.shop-apotheke.com/fitness/upmX4WEXF/esn-ultra-vitamin-syrup-lemon-ice-tea.htm; sibling SKUs 942525929. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "927830188": {
+      "expected_gtin": "4250519662565",
+      "fields": {
+        "sku_name_eng": "ESN Ultra Vitamin Syrup Peach Ice Tea 65 ml",
+        "attribute": "Sports Positioning: fitness; Juice Content: 0-2%; Volume: 65; Flavour: peach, tea"
+      },
+      "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size. Evidence: https://www.shop-apotheke.com/fitness/upmM7CRKM/esn-ultra-vitamin-syrup-peach-ice-tea.htm; sibling SKUs 943698575. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "930089956": {
+      "expected_gtin": "4250519666556",
+      "fields": {
+        "sku_name_eng": "ESN Ultra Vitamin Syrup Green Apple 65 ml",
+        "attribute": "Sports Positioning: fitness; Juice Content: 0-2%; Volume: 65; Flavour: apple"
+      },
+      "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size. Evidence: https://www.shop-apotheke.com/fitness/upmHXCC7F/esn-ultra-vitamin-syrup-green-apple.htm; sibling SKUs 942419129. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "944994492": {
+      "expected_gtin": "4250519662541",
+      "fields": {
+        "sku_name_eng": "ESN Ultra Vitamin Syrup Cola 65 ml",
+        "attribute": "Health Claims: no sugar, good source of vitamins, no calories; Juice Content: 2-5%; Sweetener: sucralose, acesulfame potassium; Immune Support Ingredients: vitamin c; Volume: 65; Flavour: cola"
+      },
+      "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size. Evidence: https://www.shop-apotheke.at/fitness/upmHETMP2/esn-ultra-vitamin-syrup-cola.htm; sibling SKUs 943828337. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "945598805": {
+      "expected_gtin": "4250519666563",
+      "fields": {
+        "sku_name_eng": "ESN Ultra Vitamin Syrup Sour Cherry 65 ml",
+        "attribute": "Immune Support Ingredients: vitamin c; Juice Content: 2-5%; Sweetener: sucralose, acesulfame potassium; Health Claims: no sugar, good source of vitamins, no calories; Volume: 65; Flavour: cherry"
+      },
+      "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size. Evidence: https://www.shop-apotheke.at/fitness/upmED42K2/esn-ultra-vitamin-syrup-sour-cherry.htm; sibling SKUs 942564466, 927354566. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "924310310": {
+      "expected_gtin": "671785201960",
+      "fields": {
+        "sku_name_eng": "Eska Natural Spring Water 6 x 1.5 l",
+        "attribute": "Pack Type: Pouch; Carbonization: still; Juice Content: 0-2%; Water Type: spring; Naturally derived: natural; Volume: 1500; Count per Unit: 6"
+      },
+      "reason": "Metro page checked 2026-10-05 identifies exact product number and 6 x 1.5 l; same-GTIN peers corroborate volume. Evidence: https://www.metro.ca/en/online-grocery/aisles/beverages/water/bottled-water/natural-spring-water/p/671785201960; sibling SKUs 114732827, 998232612. See identity/findings/REVIEWED_REPAIRS.md."
+    },
+    "873249408": {
+      "expected_gtin": "671785501824",
+      "fields": {
+        "sku_name_eng": "Eska Natural Spring Water 12 x 500 ml",
+        "attribute": "Juice Content: 0-2%; Carbonization: still; Naturally derived: natural; Water Type: spring; Pack Material Type: Flexible Pack; Volume: 500; Count per Unit: 12"
+      },
+      "reason": "Metro page checked 2026-10-05 identifies exact product number and 12 x 500 ml; same-GTIN peers corroborate both quantities. Evidence: https://www.metro.ca/en/online-grocery/aisles/beverages/water/bottled-water/natural-spring-water/p/671785501824; sibling SKUs 235187247, 323062214. See identity/findings/REVIEWED_REPAIRS.md."
     }
   }
 }

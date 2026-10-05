@@ -219,6 +219,12 @@ def extract_pack_evidence(title: str) -> list[dict]:
                 entry["start"] == match.start(1) for entry in measurements
             ):
                 continue
+            if kind == "pack_of" and any(
+                entry["start"] == match.start(1) for entry in measurements
+            ):
+                # "8 pack of 16 Fl Oz" states eight units, not sixteen.
+                # A quantity carrying a volume unit cannot be a pack count.
+                continue
             if kind == "compact" and text[match.end():].startswith(")") and re.search(
                 rf"\b{int(re.sub(r'[.,]', '', match.group(1))) + 1}\)",
                 text[match.end() + 1:],
@@ -227,6 +233,11 @@ def extract_pack_evidence(title: str) -> list[dict]:
                 continue
             # Currency followed by whitespace still denotes a price.
             if re.search(r"[$€£]\s*$", text[:match.start()]):
+                continue
+            # GDSN weight declarations ("gross weight: 527 unit (specific) …
+            # centiliters") are prose measurements, not a retail bundle: a
+            # count immediately preceded by a weight label is skipped.
+            if re.search(r"(?:gross\s+)?weight\W*$", text[:match.start()], re.I):
                 continue
             count = int(re.sub(r"[.,]", "", match.group(1)))
             if kind == "nested":
@@ -876,15 +887,18 @@ def extract_all(sku_name_eng: str, attribute: str, description_short_eng: str = 
     if attr_pack > 1 or attr_pack_conf > 0:
         pack_qty = attr_pack
         pack_conf = attr_pack_conf
+    elif pack_conf_title > 0:
+        # Slugs can be truncated ("16-9-Count") or omit separators. Keep
+        # their disagreement in the ledger, but don't overwrite an explicit
+        # title count with URL/image-derived numbers.
+        pack_qty = pack_title
+        pack_conf = pack_conf_title
     elif pack_url > 1 or pack_conf_url > 0:
         pack_qty = pack_url
         pack_conf = pack_conf_url
     elif pack_img > 1 or pack_conf_img > 0:
         pack_qty = pack_img
         pack_conf = pack_conf_img
-    elif pack_conf_title > 0:
-        pack_qty = pack_title
-        pack_conf = pack_conf_title
     else:
         pack_qty = pack_description
         pack_conf = pack_conf_description
@@ -2839,7 +2853,7 @@ def run_within_brand_pipeline(
     )
 
     # Build global n‑gram IDF from all GTINs
-    rows_by_gtin = {row["gtin"]: row["rows"] for _, row in grouped.iterrows()}
+    rows_by_gtin = dict(zip(grouped["gtin"], grouped["rows"], strict=True))
     global_idf = NgramIDF(rows_by_gtin)
 
     # Precompute within‑brand IDF per brand
@@ -2858,25 +2872,25 @@ def run_within_brand_pipeline(
     # Generate canonical records
     canonical_records = []
     from tqdm import tqdm
-    for _, row in tqdm(grouped.iterrows(), total=len(grouped), unit="gtin", desc="cards", disable=None):
-        brand_key = row["brand"].lower().strip()
+    for row in tqdm(grouped.itertuples(index=False), total=len(grouped), unit="gtin", desc="cards", disable=None):
+        brand_key = row.brand.lower().strip()
         record = generate_canonical(
-            row["gtin"],
-            row["brand"],
-            row["rows"],
+            row.gtin,
+            row.brand,
+            row.rows,
             global_idf,
             brand_idf_map[brand_key],
-            descriptions=row["descriptions"],
-            urls=row["urls"],
-            image_urls=row["image_urls"],
-            breadcrumbs_engs=row["breadcrumbs_engs"],
-            categories=row["categories"],
+            descriptions=row.descriptions,
+            urls=row.urls,
+            image_urls=row.image_urls,
+            breadcrumbs_engs=row.breadcrumbs_engs,
+            categories=row.categories,
         )
-        record["description_evidence"] = row["description_evidence"]
-        record["breadcrumb_evidence"] = row["breadcrumb_evidence"]
+        record["description_evidence"] = row.description_evidence
+        record["breadcrumb_evidence"] = row.breadcrumb_evidence
         # Per-title original evidence, carried so the engine's stage-7
         # clarification can reach the real columns (see _source_rows_for).
-        record["source_rows"] = row["source_rows"]
+        record["source_rows"] = row.source_rows
         canonical_records.append(record)
     df_canon = pd.DataFrame(canonical_records)
     timing.mark("canonical_cards")
@@ -2979,7 +2993,7 @@ def run_within_brand_pipeline(
                 candidate_pairs.add((gtins[i], gtins[j]))
 
     # Gate and similarity
-    gtin_to_canon = {row["gtin"]: row for _, row in df_canon.iterrows()}
+    gtin_to_canon = dict(zip(df_canon["gtin"], df_canon.to_dict(orient="records"), strict=True))
     results = []
     # GATE VISIBILITY (owner directive 2026-09-07): every gate call logs
     # exactly what it SAW (both sides' volume/pack/flavor + confidences)

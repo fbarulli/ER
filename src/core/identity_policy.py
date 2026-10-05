@@ -43,6 +43,7 @@ class ListingIdentity(BaseModel):
 class ListingFields(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_gtin: str
+    expected_url: str | None = None
     fields: dict[str, str]
     reason: str = Field(min_length=1)
 
@@ -72,7 +73,33 @@ def review_policy() -> ReviewPolicy:
     for fix in policy.listing_fields.values():
         if not set(fix.fields).issubset({"sku_name_eng", "attribute"}):
             raise ValueError("reviewed field corrections may only change title or attributes")
+        from core.gtin import normalize_gtin_value
+        _, valid = normalize_gtin_value(fix.expected_gtin)
+        if not valid and not fix.expected_url:
+            raise ValueError("untrusted-GTIN field corrections require an exact source URL")
     return policy
+
+
+def _field_fix_applies(gtin: object, url: object, fix: ListingFields) -> bool:
+    """Bind untrusted identifier repairs to the reviewed listing's source URL.
+
+    Descriptor repair grants no identifier trust. Missing/malformed identifiers
+    cannot use normalized equality; require the exact original cell and URL.
+    """
+    from core.gtin import normalize_gtin_value
+    if fix.expected_url is not None and url != fix.expected_url:
+        return False
+    expected, valid = normalize_gtin_value(fix.expected_gtin)
+    if not valid:
+        missing = gtin is None or pd.isna(gtin)
+        raw = '' if missing else str(gtin)
+        # The configured CSV reader maps NA source cells to missing values.
+        # Preserve that missing-cell equivalence, never a malformed number.
+        same_cell = raw == fix.expected_gtin or (
+            missing and fix.expected_gtin in {'', 'NA', 'N/A', 'nan'})
+        return bool(fix.expected_url) and same_cell
+    actual, _ = normalize_gtin_value(gtin)
+    return actual is not None and actual.zfill(14) == expected.zfill(14)
 
 
 def held_keys() -> frozenset[str]:
@@ -149,9 +176,9 @@ def apply_identity_links(frame: pd.DataFrame) -> pd.DataFrame:
     for sku, fix in review_policy().listing_fields.items():
         candidates = result[id_column].astype(str).eq(sku)
         if candidates.any():
-            from core.gtin import normalize_and_validate_gtin
-            actual = normalize_and_validate_gtin(result.loc[candidates, gtin_column]).gtin_clean.astype("string").str.zfill(14)
-            indices = actual.index[actual.eq(fix.expected_gtin.zfill(14))]
+            indices = [index for index in result.index[candidates]
+                       if _field_fix_applies(result.at[index, gtin_column],
+                           result.at[index, url_column] if url_column else None, fix)]
             for field, value in fix.fields.items():
                 # raw_of resolves the destination through column_mapping
                 # instead of re-declaring {"sku_name_eng": "sku_name_eng", …} here.
@@ -169,11 +196,8 @@ def resolve_listing_row(row: dict) -> dict:
     """Scalar adapter to the same reviewed-link conditions."""
     sku = str(row.get('sku_id', '') or '')
     fix = review_policy().listing_fields.get(sku)
-    if fix:
-        from core.gtin import normalize_and_validate_gtin
-        key = normalize_and_validate_gtin(pd.Series([row.get("gtin", "")])).gtin_clean.iat[0]
-        if pd.notna(key) and str(key).zfill(14) == fix.expected_gtin.zfill(14):
-            row = {**row, **fix.fields}
+    if fix and _field_fix_applies(row.get('gtin', ''), row.get('sku_url'), fix):
+        row = {**row, **fix.fields}
     link = review_policy().listing_identity.get(sku)
     if not link or row.get('sku_url') != link.expected_url:
         return row

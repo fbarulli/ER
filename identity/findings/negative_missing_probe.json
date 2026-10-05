@@ -1,0 +1,3089 @@
+{
+ "pairs": [
+  {
+   "id": "R0001",
+   "title": "Zero Calorie Flavored Water Peach (12 bottles)",
+   "gtins": [
+    "646035595779",
+    "613665160738"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "1004003226",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1004003226",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1004003226",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1004003226",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1004003226",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1037822416",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1037822416",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1037822416",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1037822416",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1037822416",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0003",
+   "title": "Organic Matcha Lemonade Tea Mix With Premium Japanese Matcha Powder (5",
+   "gtins": [
+    "604224378114",
+    "604002393209"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "1018299855",
+     "dim": "volume_ml",
+     "verdict": "gap",
+     "hits": {
+      "sku_name_eng": " weigh",
+      "description_short_eng": " weigh",
+      "sku_url": " weigh"
+     }
+    },
+    {
+     "side": "left",
+     "sku": "1018299855",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1018299855",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1018299855",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1018299855",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1018299855",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1018299855",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1018299855",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1023270242",
+     "dim": "volume_ml",
+     "verdict": "gap",
+     "hits": {
+      "sku_name_eng": " weigh",
+      "description_short_eng": " weigh",
+      "sku_url": " weigh"
+     }
+    },
+    {
+     "side": "right",
+     "sku": "1023270242",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1023270242",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "1023270242",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "1023270242",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1023270242",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1023270242",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1023270242",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0005",
+   "title": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles (4 Pa",
+   "gtins": [
+    "100142347862",
+    "100141564826"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "1023331221",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1023331221",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1023331221",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1023331221",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1023331221",
+     "dim": "package_material",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "glass"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "1055443660",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1055443660",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1055443660",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1055443660",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1055443660",
+     "dim": "package_material",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "glass"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "R0008",
+   "title": "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ",
+   "gtins": [
+    "615888989264",
+    "673276821404"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "1036638393",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1036638393",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1036638393",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1036638393",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1036638393",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1041268429",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1041268429",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1041268429",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1041268429",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1041268429",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0011",
+   "title": "Zero Calorie Flavored Water Peach (12 bottles)",
+   "gtins": [
+    "613665160738",
+    "629710237393"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "1037822416",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1037822416",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1037822416",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1037822416",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1037822416",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1056405072",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1056405072",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1056405072",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1056405072",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1056405072",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0012",
+   "title": "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ",
+   "gtins": [
+    "673276821404",
+    "673276851340"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "1041268429",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1041268429",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1041268429",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1041268429",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1041268429",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1052440080",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1052440080",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1052440080",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1052440080",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1052440080",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0014",
+   "title": "Blenheim Ginger Ale Hot, 12 Ounce (12 Glass Bottles)",
+   "gtins": [
+    "758106228582",
+    "747519475737"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "1042969696",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1042969696",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1042969696",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1042969696",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1042969696",
+     "dim": "package_material",
+     "verdict": "gap",
+     "hits": {
+      "sku_name_eng": [
+       "glass"
+      ],
+      "sku_url": [
+       "glass"
+      ],
+      "image_url": [
+       "glass"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "1048560651",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1048560651",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1048560651",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1048560651",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "1048560651",
+     "dim": "package_material",
+     "verdict": "gap",
+     "hits": {
+      "sku_name_eng": [
+       "glass"
+      ],
+      "sku_url": [
+       "glass"
+      ],
+      "image_url": [
+       "glass"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "R0018",
+   "title": "Stirrings Pack Lemon Drop Cocktail Mix 750ml Bottle - Real Juice No Pr",
+   "gtins": [
+    "810184856511",
+    "810164203144"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "1050341466",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1050341466",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "diet",
+       "sucralose",
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "1050341466",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1050341466",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "1050341466",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "927214843",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "927214843",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "sucralose"
+      ],
+      "attribute": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "927214843",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "927214843",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "927214843",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0030",
+   "title": "De mi Pais Coconut Water 16.4 oz - Agua de Coco",
+   "gtins": [
+    "688474656321",
+    "896211002076"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "144623046",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "144623046",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "144623046",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "144623046",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "144623046",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "breadcrumbs_eng": [
+       "bottle"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "176459834",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "176459834",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "176459834",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "176459834",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "176459834",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "breadcrumbs_eng": [
+       "bottle"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "R0038",
+   "title": "Brecon Carreg Still Natural Mineral Water",
+   "gtins": [
+    "5030341500001",
+    "5030341500896"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "159106142",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "159106142",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "159106142",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "159106142",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "159106142",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "159149654",
+     "dim": "volume_ml",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "159149654",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "159149654",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "159149654",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "159149654",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "159149654",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "159149654",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "category": [
+       "bottle"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "R0055",
+   "title": "Bare Nature Peach Vitamin Iced Tea (20 oz., 12 ct.)",
+   "gtins": [
+    "732976282370",
+    "743272197558"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "209221682",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "209221682",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "209221682",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "209221682",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "71531506",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "71531506",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "71531506",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "71531506",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0065",
+   "title": "apple juice Bio 100% squeezed \u00e9kolo",
+   "gtins": [
+    "8437010011016",
+    "8437010011078"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "247470418",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "247470418",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "247470418",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580758175",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "580758175",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580758175",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0071",
+   "title": "Fee Brothers Lemon Cocktail Bitters - Aromatic Cocktail Mixer & Concen",
+   "gtins": [
+    "610098920588",
+    "791863140544"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "280528378",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "280528378",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "280528378",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "280528378",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "280528378",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "280528378",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "breadcrumbs_eng": [
+       "bottle"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "280528378",
+     "dim": "package_material",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75875890",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75875890",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75875890",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75875890",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75875890",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75875890",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "bottle",
+       "glass",
+       "tin"
+      ],
+      "breadcrumbs_eng": [
+       "bottle"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "75875890",
+     "dim": "package_material",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "glass"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "R0096",
+   "title": "Weider L- Carnitine Water",
+   "gtins": [
+    "4044782387337",
+    "4044782387030"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "408053079",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408053079",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408053079",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408274857",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408274857",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408274857",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0097",
+   "title": "peeroton mineral vitamin Drink",
+   "gtins": [
+    "9007088003023",
+    "9007088100548"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "408075382",
+     "dim": "volume_ml",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": "fluid=",
+      "attribute": " weigh"
+     }
+    },
+    {
+     "side": "left",
+     "sku": "408075382",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408075382",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408075382",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408075382",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408075382",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408102918",
+     "dim": "volume_ml",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": "fluid=",
+      "attribute": " weigh"
+     }
+    },
+    {
+     "side": "right",
+     "sku": "408102918",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408102918",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408102918",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408102918",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408102918",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0098",
+   "title": "multipower L- Carnitine Water",
+   "gtins": [
+    "4006643166635",
+    "4006643166734"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "408228609",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408228609",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408228609",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408247093",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408247093",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408247093",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0099",
+   "title": "Weider L- Carnitine Water",
+   "gtins": [
+    "4044782387030",
+    "4044782387238"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "408274857",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408274857",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "408274857",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408301023",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408301023",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "408301023",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0100",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196292184",
+    "4260196292115"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "409345244",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409345244",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "409345244",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409345244",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409345244",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409393864",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409393864",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "409393864",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409393864",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409393864",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0101",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196292115",
+    "4260196292979"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "409393864",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409393864",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "409393864",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409393864",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409393864",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409488999",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409488999",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "409488999",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409488999",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409488999",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0102",
+   "title": "multipower Power Kick",
+   "gtins": [
+    "4006643167632",
+    "4006643167731"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "409480984",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409480984",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409480984",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409576358",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409576358",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409576358",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0103",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196292979",
+    "4260196292160"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "409488999",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409488999",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "409488999",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409488999",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409488999",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409705139",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409705139",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "409705139",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409705139",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409705139",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0104",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196292160",
+    "4260196294966"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "409705139",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409705139",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "409705139",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409705139",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409705139",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409706374",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409706374",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "409706374",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409706374",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409706374",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0105",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196294966",
+    "4260196292122"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "409706374",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409706374",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "409706374",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409706374",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "409706374",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409800729",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409800729",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "syrup"
+      ],
+      "attribute": [
+       "acesulfame",
+       "sucralose"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "409800729",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409800729",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "409800729",
+     "dim": "package_type",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0110",
+   "title": "got7 syrup Sugar free",
+   "gtins": [
+    "4260353177965",
+    "4260353178641"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "416191537",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "416191537",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "416191537",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "416191537",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "416403508",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "416403508",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "416403508",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "416403508",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0121",
+   "title": "Iso Tonic Orange Mango 600 gr",
+   "gtins": [
+    "854033007273",
+    "4006643168639"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "482463501",
+     "dim": "volume_ml",
+     "verdict": "gap",
+     "hits": {
+      "sku_name_eng": " weigh"
+     }
+    },
+    {
+     "side": "left",
+     "sku": "482463501",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "482463501",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "482463501",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "482463501",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "482463501",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "482852193",
+     "dim": "volume_ml",
+     "verdict": "gap",
+     "hits": {
+      "sku_name_eng": " weigh"
+     }
+    },
+    {
+     "side": "right",
+     "sku": "482852193",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "482852193",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "482852193",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "482852193",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "482852193",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0127",
+   "title": "alnavit greener Held Bio Smoothie 250ml",
+   "gtins": [
+    "42284079",
+    "42300427"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "49323272",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "49323272",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "55259352",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "55259352",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0129",
+   "title": "amecke gentle juices apple 1l",
+   "gtins": [
+    "4005517004066",
+    "4005517004080"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "49390948",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "49390948",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "49420840",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "49420840",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "49420840",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "49420840",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "49420840",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "carton"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "R0174",
+   "title": "kombucha tea Ginger kombutxa",
+   "gtins": [
+    "8437017259077",
+    "8437017259015"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "580598886",
+     "dim": "volume_ml",
+     "verdict": "gap",
+     "hits": {
+      "attribute": " weigh"
+     }
+    },
+    {
+     "side": "left",
+     "sku": "580598886",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "sugar"
+      ],
+      "attribute": [
+       "diet",
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "580598886",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "580598886",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580666698",
+     "dim": "volume_ml",
+     "verdict": "gap",
+     "hits": {
+      "attribute": " weigh"
+     }
+    },
+    {
+     "side": "right",
+     "sku": "580666698",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "sugar"
+      ],
+      "attribute": [
+       "diet",
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "580666698",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580666698",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0175",
+   "title": "Isotonic Drink 226ers berries",
+   "gtins": [
+    "8436567350401",
+    "8436567350449"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "580701954",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "sugar"
+      ],
+      "breadcrumbs_eng": [
+       "diet"
+      ],
+      "attribute": [
+       "diet",
+       "no sugar",
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "580701954",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "580701954",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "580701954",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "tin"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "580723026",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "sugar"
+      ],
+      "breadcrumbs_eng": [
+       "diet"
+      ],
+      "attribute": [
+       "diet",
+       "no sugar",
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "580723026",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580723026",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580723026",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "tin"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "R0176",
+   "title": "grape juice black bio 100% squeezed \u00e9kolo",
+   "gtins": [
+    "8437010011085",
+    "8437010011023"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "580714546",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "580714546",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "580714546",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "580714546",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580737283",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580737283",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "580737283",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580737283",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0177",
+   "title": "juice of kiwi and organic apple \u00e9kolo",
+   "gtins": [
+    "8437010011160",
+    "8437010011719"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "580720821",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "580720821",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "580720821",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580745084",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "580745084",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580745084",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0178",
+   "title": "Isotonic Drink lemon 226ers",
+   "gtins": [
+    "8436567350425",
+    "8436567350463"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "580763376",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "580763376",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580776155",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "580776155",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0192",
+   "title": "Holoslife Sea water 250 ml",
+   "gtins": [
+    "637913163975",
+    "642213315016"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "653749803",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "653749803",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "653749803",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "653749803",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "653749803",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "653749803",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "category": [
+       "bottle"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "691353375",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691353375",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691353375",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691353375",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691353375",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691353375",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "category": [
+       "bottle"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "R0201",
+   "title": "L- Carnitine Water Mexican 500 ml",
+   "gtins": [
+    "854255008850",
+    "5999076228607"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "691355584",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "691355584",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "691355584",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "691355584",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "691355584",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "691355584",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "sku_name_eng": [
+       "can",
+       "tin"
+      ],
+      "sku_url": [
+       "can",
+       "tin"
+      ],
+      "category": [
+       "bottle"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "691526286",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691526286",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691526286",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691526286",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691526286",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "691526286",
+     "dim": "package_type",
+     "verdict": "gap",
+     "hits": {
+      "sku_name_eng": [
+       "can",
+       "tin"
+      ],
+      "sku_url": [
+       "can",
+       "tin"
+      ],
+      "category": [
+       "bottle"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "R0210",
+   "title": "ESN Flavor Drops, 50 ml",
+   "gtins": [
+    "4250519605821",
+    "4250519610375"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "704939559",
+     "dim": "flavor",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "fruit"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "704939559",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "704939559",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "breadcrumbs_eng": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "704939559",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "breadcrumbs_eng": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "704939559",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "704939559",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "704943073",
+     "dim": "flavor",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": [
+       "fruit"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "704943073",
+     "dim": "carbonation",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "704943073",
+     "dim": "sweetener",
+     "verdict": "gap",
+     "hits": {
+      "breadcrumbs_eng": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "704943073",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "breadcrumbs_eng": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "704943073",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "704943073",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0211",
+   "title": "NAYA WATER - 600ML 20",
+   "gtins": [
+    "769553420696",
+    "769553420689"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "70918444",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "70918444",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "70918444",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "70918444",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "70918444",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75356671",
+     "dim": "flavor",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75356671",
+     "dim": "sweetener",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75356671",
+     "dim": "sweetener_type",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75356671",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "75356671",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  },
+  {
+   "id": "R0218",
+   "title": "Harmless Harvest Coconut Water 100% Raw Organic",
+   "gtins": [
+    "859078002672",
+    "859078002153"
+   ],
+   "ga": [
+    {
+     "side": "left",
+     "sku": "72844043",
+     "dim": "volume_ml",
+     "verdict": "gap",
+     "hits": {
+      "description_short_eng": "fluid="
+     }
+    },
+    {
+     "side": "left",
+     "sku": "72844043",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "left",
+     "sku": "72844043",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "left",
+     "sku": "72844043",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "8656767",
+     "dim": "sweetener_type",
+     "verdict": "gap",
+     "hits": {
+      "attribute": [
+       "sugar"
+      ]
+     }
+    },
+    {
+     "side": "right",
+     "sku": "8656767",
+     "dim": "sweetening",
+     "verdict": "absent",
+     "hits": {}
+    },
+    {
+     "side": "right",
+     "sku": "8656767",
+     "dim": "pulp",
+     "verdict": "absent",
+     "hits": {}
+    }
+   ]
+  }
+ ],
+ "stats": {
+  "absent": 282,
+  "gap": 58,
+  "gap_by_column": {
+   "sku_name_eng": 8,
+   "description_short_eng": 28,
+   "sku_url": 6,
+   "image_url": 2,
+   "attribute": 31,
+   "breadcrumbs_eng": 10,
+   "category": 5
+  }
+ }
+}
