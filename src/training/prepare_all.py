@@ -23,16 +23,14 @@ from collections.abc import Sequence
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 import yaml
 from core.portable_archive import Digest
+from core.schemas import PREPARATION_REUSABLE_KEYS
 
 STAGES = ('dedupe', 'cross_country_pairs', 'number_reference', 'verify_reference',
         'canonical_and_gates', 'gate_census', 'labeled_pairs', 'validation',
           'graph_inputs', 'full_bundle', 'suite_inputs', 'verify_handoff')
 
 
-REUSABLE_KEYS = ('dataset_deduped', 'sku_to_rep', 'dedupe_summary',
-                 'ambiguous_offer_groups', 'removals', 'dedupe_conflicts',
-                 'number_reference', 'second04_pairs_positive', 'canonical_records',
-                 'gate_results', 'labeled_pairs', 'final_validation', 'validation_fold_map')
+REUSABLE_KEYS = PREPARATION_REUSABLE_KEYS
 
 
 class PreparedFile(BaseModel):
@@ -85,7 +83,7 @@ def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Pat
                 json.dumps(config, sort_keys=True).encode()).hexdigest()
         else:
             identity[str(path.resolve())] = sha256(path)
-    identity['text_checkpoint'] = checkpoint_hash(Path(checkpoint))
+    identity['text_checkpoint'] = checkpoint_hash(Path(checkpoint), use_memo=False)
     return identity
 
 
@@ -196,6 +194,10 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
     suite = load_suite(config_path)
     # Read bundle settings afresh for long-lived callers.
     training = type(training_cfg()).model_validate(yaml.safe_load(Path(TRAINING_CONFIG_PATH).read_text()))
+    prep = training.preparation
+    # The declared run contract owns the resumable key set; the module-level
+    # constant is the defaulted public API (tests pin it), the run reads cfg.
+    reusable_keys = tuple(prep.reusable_keys)
     if suite.text_model != training.training.base_model:
         raise ValueError('suite text_model and training.base_model must agree before preparation')
     if suite.epochs > training.training.epochs:
@@ -207,12 +209,12 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         negative_supply_run_tag = lane.pairs_run_tag
     if negative_supply_run_tag and not re.fullmatch(r'[A-Za-z0-9_-]+', negative_supply_run_tag):
         raise ValueError('negative-supply run tag must contain only letters, digits, underscores, hyphens')
-    run_dir = Path(run_dir or RESULTS / 'training_prep' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')).resolve()
+    run_dir = Path(run_dir or RESULTS / prep.run_dir_base / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')).resolve()
     negative_supply_run_tag = negative_supply_run_tag or ('prep_' + run_dir.name)
     if not re.fullmatch(r'[A-Za-z0-9_-]+', negative_supply_run_tag):
         raise ValueError('preparation directory name requires an explicit valid --negative-supply-run-tag')
     run_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = RESULTS / 'training_prep.lock'
+    lock_path = RESULTS / prep.lock_file
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open('w') as lock:
         try:
@@ -230,8 +232,8 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         if len(training.colab.full_prepared_bundles) != 1:
             raise ValueError('prepare_all requires exactly one configured full baseline bundle')
         bundle = (root / training.colab.full_prepared_bundles[0]).resolve()
-        suite_archive = run_dir / f'all_tracks_inputs.{suite.input_archive_format}'
-        smoke = root / 'data/prepared/smoke_200'
+        suite_archive = run_dir / f'{prep.suite_archive_name}.{suite.input_archive_format}'
+        smoke = root / prep.smoke_dir
         smoke_before = {str(path): sha256(path) for path in smoke.rglob('*') if path.is_file()}
         env = os.environ.copy()
         env['PYTHONPATH'] = str(root / 'src') + os.pathsep + str(root)
@@ -251,7 +253,7 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     'provenance': preparation_provenance(root, config_path, checkpoint),
                     'smoke_original': smoke_before, 'reusable_outputs': {},
                     'hybrid_embeddings': 'GPU pending: frozen baseline forward before hybrid training'}
-        manifest_path = run_dir / 'manifest.json'
+        manifest_path = run_dir / prep.manifest_file
         if resume_from in {'full_bundle', 'suite_inputs'}:
             previous_state = PreparationState.model_validate_json(manifest_path.read_text())
             previous = previous_state.model_dump(mode='json')
@@ -281,7 +283,7 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             state = PreparationState.model_validate(manifest)
             temporary.write_text(state.model_dump_json(indent=2) + '\n')
             temporary.replace(manifest_path)
-            timing_path = run_dir / 'timings.json'
+            timing_path = run_dir / prep.timings_file
             timing_temporary = timing_path.with_suffix('.tmp')
             timing_temporary.write_text(json.dumps({
                 'status': manifest['status'],
@@ -289,11 +291,15 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 'total_stage_seconds': round(sum(manifest.get('stage_seconds', {}).values()), 3),
             }, indent=2) + '\n')
             timing_temporary.replace(timing_path)
+            # One self-rewriting worst-offender report for the whole run.
+            from core.timing import collect_timing_entries, write_offender_report
+            write_offender_report(run_dir / prep.offender_report,
+                                  collect_timing_entries(run_dir, manifest.get('stage_seconds', {})))
         def run(name, arguments, *, check=True):
-            print(f'[prepare] {name} -> {run_dir / (name + ".log")}', flush=True)
-            env['ER_TIMING_OUT'] = str(run_dir / (name + '.timing.json'))
-            env['ER_TIMING_LOG'] = str(run_dir / 'timings.log')
-            with (run_dir / (name + '.log')).open('w') as log:
+            print(f'[prepare] {name} -> {run_dir / (name + prep.stage_log_suffix)}', flush=True)
+            env['ER_TIMING_OUT'] = str(run_dir / (name + prep.stage_timing_suffix))
+            env['ER_TIMING_LOG'] = str(run_dir / prep.timings_log)
+            with (run_dir / (name + prep.stage_log_suffix)).open('w') as log:
                 from training.preparation_run import active_preparation
                 result = active_preparation().run_stage(arguments, root=root, env=env, log=log)
             manifest['stage_metrics'][name]['returncode'] = result.returncode
@@ -304,7 +310,7 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             from training.preparation_run import active_preparation
             active_preparation().invalidate(path)
             if path.exists():
-                destination = run_dir / 'before' / name
+                destination = run_dir / prep.archive_dir / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if destination.exists():
                     destination = destination.with_name(destination.name + '.' +
@@ -320,9 +326,9 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 stage_started = time.monotonic()
                 manifest.setdefault('stage_metrics', {})[name] = {
                     'status': 'running', 'started_at': datetime.now(timezone.utc).isoformat(),
-                    'detail_path': str(run_dir / (name + '.timing.json')),
+                    'detail_path': str(run_dir / (name + prep.stage_timing_suffix)),
                 }
-                emit_timing(f'[timing] prepare.{name} state=started', path=run_dir / 'timings.log')
+                emit_timing(f'[timing] prepare.{name} state=started', path=run_dir / prep.timings_log)
                 publish()
                 if name == 'dedupe':
                     run(name, ['-m', 'training.dedupe'])
@@ -336,20 +342,20 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     run(name, ['-m', 'training.data_prep'])
                 elif name == 'gate_census':
                     manifest['gate_census'] = refresh_gate_census(
-                        F['gate_results'], TRAINING_CONFIG_PATH, run_dir / 'gate_census.json')
+                        F['gate_results'], TRAINING_CONFIG_PATH, run_dir / prep.gate_census_file)
                     from core.common import refresh_training_config
                     refresh_training_config()
                 elif name == 'labeled_pairs':
                     run(name, ['-m', 'training.labeled_pairs'])
                 elif name == 'negative_supply':
-                    archive(RESULTS / 'negative_supply' / negative_supply_run_tag, 'negative_supply')
+                    archive(RESULTS / prep.negative_supply_dir / negative_supply_run_tag, 'negative_supply')
                     run(name, ['-m', 'training.negative_supply', '--run-tag', negative_supply_run_tag])
                 elif name == 'discriminator':
                     arguments = [str(root / 'scripts/negative_supply_discriminator.py'),
-                                 str(RESULTS / 'negative_supply' / negative_supply_run_tag / 'pairs.csv'),
-                                 '--out', str(run_dir / 'discriminator.json')]
+                                 str(RESULTS / prep.negative_supply_dir / negative_supply_run_tag / 'pairs.csv'),
+                                 '--out', str(run_dir / prep.discriminator_file)]
                     result = run(name, arguments, check=False)
-                    verdict = json.loads((run_dir / 'discriminator.json').read_text())
+                    verdict = json.loads((run_dir / prep.discriminator_file).read_text())
                     manifest['discriminator'] = verdict
                     if result.returncode and (lane.mode == 'lane' or verdict.get('verdict') != 'SEPARABLE'):
                         raise subprocess.CalledProcessError(result.returncode, arguments)
@@ -381,47 +387,39 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     run(name, ['-m', 'model_tracks.package', '--config', str(config_path),
                                '--output', str(suite_archive)])
                 else:
-                    current_provenance = preparation_provenance(root, config_path, checkpoint)
-                    if current_provenance != manifest['provenance']:
-                        raise ValueError('Preparation source/config/raw input/checkpoint changed during the run')
-                    from training.prepared_bundle import load_prepared_bundle
-                    header, prepared = load_prepared_bundle(bundle, verify_inputs=True)
-                    for key in ('canonical_records', 'gate_results', 'labeled_pairs'):
-                        if prepared[key + '_csv'] != Path(F[key]).read_bytes():
-                            raise ValueError(f'Bundle contains stale {key}')
-                    graph = json.loads((setup / 'setup_manifest.json').read_text())
-                    for key, field in [('dataset_deduped', 'source_catalog_sha256'),
-                                       ('labeled_pairs', 'labeled_pairs_sha256')]:
-                        if graph[field] != sha256(F[key]):
-                            raise ValueError(f'Graph inputs contain stale {key}')
-                    if graph['text_checkpoint_sha256'] != current_provenance['text_checkpoint']:
-                        raise ValueError('Graph checkpoint hash does not match')
-                    from model_tracks.package import verify
-                    package = verify(suite_archive)
-                    manifest['suite_package'] = {'path': str(suite_archive),
-                                                'sha256': sha256(suite_archive),
-                                                'preflight': package['preflight']}
-                    if {str(path): sha256(path) for path in smoke.rglob('*') if path.is_file()} != smoke_before:
-                        raise ValueError('Smoke files changed during full preparation')
-                    paths = [Path(F[key]) for key in REUSABLE_KEYS] + [p for p in setup.rglob('*') if p.is_file()]
-                    paths += [bundle, bundle.with_suffix(bundle.suffix + '.json'), text_bundle,
-                              text_bundle.with_suffix(text_bundle.suffix + '.json'), suite_archive]
+                    from training.handoff import verify_training_loads, write_handoff_report
+                    inventory_paths = [Path(F[key]) for key in reusable_keys]
+                    inventory_paths += [p for p in setup.rglob('*') if p.is_file()]
+                    inventory_paths += [bundle, bundle.with_suffix(bundle.suffix + '.json'),
+                                        text_bundle, text_bundle.with_suffix(text_bundle.suffix + '.json'),
+                                        suite_archive]
                     if negative_supply_run_tag:
-                        paths += [RESULTS / 'negative_supply' / negative_supply_run_tag / filename
-                                  for filename in ('pairs.csv', 'manifest.json')]
-                        paths.append(run_dir / 'discriminator.json')
-                    manifest['outputs'] = file_inventory(paths)
-                    manifest['bundle'] = header.model_dump(mode='json')
+                        inventory_paths += [RESULTS / prep.negative_supply_dir / negative_supply_run_tag / filename
+                                            for filename in ('pairs.csv', 'manifest.json')]
+                        inventory_paths.append(run_dir / prep.discriminator_file)
+                    handoff_path = run_dir / prep.handoff_file
+                    report = verify_training_loads(
+                        root=root, suite=suite, suite_config_path=config_path,
+                        checkpoint=checkpoint, setup_dir=setup, full_bundle=bundle,
+                        text_bundle=text_bundle, suite_archive=suite_archive,
+                        provenance=manifest['provenance'], smoke_dir=smoke,
+                        smoke_original=smoke_before, reusable_paths=inventory_paths)
+                    write_handoff_report(report, handoff_path)
+                    manifest['handoff'] = {'path': str(handoff_path), 'status': report.status,
+                                           'total_seconds': report.total_seconds}
+                    manifest['outputs'] = report.final_inventory
+                    manifest['bundle'] = report.bundle_header
+                    manifest['suite_package'] = report.suite_package
                     manifest['smoke_unchanged_verified'] = True
                 if name in {'graph_inputs', 'full_bundle'}:
-                    reusable = [Path(F[key]) for key in REUSABLE_KEYS]
+                    reusable = [Path(F[key]) for key in reusable_keys]
                     reusable += [path for path in setup.rglob('*') if path.is_file()]
                     if name == 'full_bundle':
                         reusable += [bundle, bundle.with_suffix(bundle.suffix + '.json'), text_bundle,
                                      text_bundle.with_suffix(text_bundle.suffix + '.json')]
-                    reusable += [RESULTS / 'negative_supply' / negative_supply_run_tag / filename
+                    reusable += [RESULTS / prep.negative_supply_dir / negative_supply_run_tag / filename
                                  for filename in ('pairs.csv', 'manifest.json')]
-                    reusable.append(run_dir / 'discriminator.json')
+                    reusable.append(run_dir / prep.discriminator_file)
                     manifest['reusable_outputs'] = file_inventory(reusable)
                 if name == 'full_bundle':
                     from training.preparation_run import active_preparation
@@ -439,7 +437,7 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 manifest.setdefault('stage_seconds', {})[name] = elapsed
                 manifest['stage_metrics'][name].update(status='complete', seconds=elapsed,
                     finished_at=datetime.now(timezone.utc).isoformat())
-                emit_timing(f'[timing] prepare.{name} state=completed elapsed_seconds={elapsed:.3f}', path=run_dir / 'timings.log')
+                emit_timing(f'[timing] prepare.{name} state=completed elapsed_seconds={elapsed:.3f}', path=run_dir / prep.timings_log)
                 publish()
             manifest['status'] = 'complete'
             publish()
@@ -451,7 +449,7 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 manifest.setdefault('stage_seconds', {})[name] = elapsed
                 manifest['stage_metrics'][name].update(status='failed', seconds=elapsed,
                     finished_at=datetime.now(timezone.utc).isoformat())
-                emit_timing(f'[timing] prepare.{name} state=failed elapsed_seconds={elapsed:.3f}', path=run_dir / 'timings.log')
+                emit_timing(f'[timing] prepare.{name} state=failed elapsed_seconds={elapsed:.3f}', path=run_dir / prep.timings_log)
             manifest.update(status='failed', failed_stage=name, error=str(error))
             publish()
             raise

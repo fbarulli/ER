@@ -2731,6 +2731,95 @@ class NegativeSupplyModeSpec(BaseModel):
         return self
 
 
+PREPARATION_REUSABLE_KEYS = (
+    'dataset_deduped', 'sku_to_rep', 'dedupe_summary', 'ambiguous_offer_groups',
+    'removals', 'dedupe_conflicts', 'number_reference', 'second04_pairs_positive',
+    'canonical_records', 'gate_results', 'labeled_pairs', 'final_validation',
+    'validation_fold_map',
+)
+
+
+class PreparationGraphSetupSpec(BaseModel):
+    """training.preparation.graph_setup — the prepared setup-dir layout.
+
+    Producers (graph_tracks.setup, model_tracks.package) and consumers
+    (suite preflight, worker adapters, the handoff boundary) read these names
+    from here: one declared layout contract for the prepared input directory.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    catalog: str = "eligible_catalog.csv"
+    splits: str = "listing_splits.csv"
+    pairs: str = "listing_pairs.csv"
+    pair_lineage: str = "pair_lineage.json"
+    census: str = "graph_census.json"
+    manifest: str = "setup_manifest.json"
+    text_config: str = "text.yaml"
+    track_config_suffix: str = ".yaml"
+    prepared_dir: str = "prepared"
+    shared_training_data: str = "shared_training_data.json"
+    shared_training_projection: str = "shared_training_projection.json"
+    text_training_binding: str = "text_training_binding.json"
+    text_export_request: str = "text_export_request.json"
+    embedding_request: str = "embedding_inputs.json"
+    shared_embeddings: str = "shared_minilm__embeddings.npz"
+
+    def track_config(self, track: str) -> str:
+        return f"{track}{self.track_config_suffix}"
+
+
+class PreparationSpec(BaseModel):
+    """training.preparation — the owned preparation run contract.
+
+    Run and file layout of the CSV-to-training-input lifecycle: where run
+    directories live, the lock the run holds, the artifacts it emits, the
+    resumable output key set, and the setup-directory layout (graph_setup).
+    Stage order and commands stay code-owned in training.prepare_all until
+    the thin-orchestrator rewrite; everything name-like is declared here so
+    producers and consumers never re-hardcode a path.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_dir_base: str = "training_prep"
+    lock_file: str = "training_prep.lock"
+    smoke_dir: str = "data/prepared/smoke_200"
+    suite_archive_name: str = "all_tracks_inputs"
+    archive_dir: str = "before"
+    manifest_file: str = "manifest.json"
+    timings_file: str = "timings.json"
+    timings_log: str = "timings.log"
+    offender_report: str = "timing_offenders.log"
+    stage_log_suffix: str = ".log"
+    stage_timing_suffix: str = ".timing.json"
+    gate_census_file: str = "gate_census.json"
+    discriminator_file: str = "discriminator.json"
+    handoff_file: str = "handoff.json"
+    negative_supply_dir: str = "negative_supply"
+    reusable_keys: tuple[str, ...] = PREPARATION_REUSABLE_KEYS
+    graph_setup: PreparationGraphSetupSpec = Field(default_factory=PreparationGraphSetupSpec)
+
+    @model_validator(mode="after")
+    def _declared_paths_are_portable(self) -> "PreparationSpec":
+        def walk(fragment: Any, where: str) -> None:
+            if isinstance(fragment, dict):
+                for key, value in fragment.items():
+                    walk(value, f"{where}.{key}")
+            elif isinstance(fragment, str):
+                candidate = Path(fragment)
+                if candidate.is_absolute() or ".." in candidate.parts:
+                    raise ValueError(
+                        f"preparation.{where} must be a relative path fragment: {fragment!r}"
+                    )
+
+        keys = list(self.reusable_keys)
+        if not keys or len(set(keys)) != len(keys):
+            raise ValueError("preparation.reusable_keys must be non-empty and unique")
+        walk(self.model_dump(), "preparation")
+        return self
+
+
 class TrainingConfig(BaseModel):
     """config/training.yaml — the training lane's OWN config (in its dir).
 
@@ -2772,6 +2861,7 @@ class TrainingConfig(BaseModel):
     tracking: TrackingSpec
     colab: ColabSpec
     rand_matching: RandMatchingSpec
+    preparation: PreparationSpec = Field(default_factory=PreparationSpec)
     # TIER 1(e) bundle-drift switch (see config/training.yaml): when TRUE,
     # training.prepared_bundle hard-fails a bundle built under drifted
     # masking config instead of warning. Env PREPARED_BUNDLE_DRIFT_STRICT

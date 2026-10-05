@@ -555,6 +555,14 @@ def _path(cfg_value: str) -> Path:
     return p if p.is_absolute() else TRAIN_ROOT / p
 
 
+@lru_cache(maxsize=1)
+def git_revision() -> str:
+    """The repository revision owning this run (resolved once per process)."""
+    import subprocess
+    return subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=TRAIN_ROOT,
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
 # ── paths (SSOT) ────────────────────────────────────────────────────────────
 DATA_DIR = _path(_CFG["paths"]["data_dir"])
 _results_override = os.environ.get("EUROMONITOR_RESULTS_DIR")
