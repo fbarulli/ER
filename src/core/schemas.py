@@ -2593,20 +2593,29 @@ class RuntimePackagesSpec(BaseModel):
         return values
 
 
+class CpuBundlePrepSpec(BaseModel):
+    """CPU data-bundle prep lane settings (owner structural ruling 8).
+
+    Strictly ISOLATED additions consumed ONLY by src/cli/
+    colab_data_bundle_prep.py and its thin passthroughs in cli.colab —
+    nothing on the GPU-training runtime path reads this block.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Request `--high-mem` when the lane must provision a FRESH CPU session;
+    # False (default) keeps the allocation argv byte-identical to pre-parity.
+    high_mem: bool = False
+    # True = cli.colab's --what bundle dispatch forwards to the lane;
+    # False (default) keeps the original direct call, byte-identical.
+    lane: bool = False
+
+
 class ColabSpec(BaseModel):
     """Remote checkout/runtime settings for the Colab training lane."""
 
     model_config = ConfigDict(extra="forbid")
 
-    # CPU high-RAM machine shape (colab CLI `--high-mem`).  Consumed only when
-    # the data-bundle prep lane provisions a fresh CPU session; leaving it
-    # False (the default) keeps allocation byte-identical to pre-parity.
-    high_mem: bool = False
-    # Owner structural ruling 8: data-bundle production lives in its own lane
-    # file (src/cli/colab_data_bundle_prep.py).  When False (default),
-    # cli.colab main keeps its original direct --what bundle call,
-    # byte-identical; when True, the dispatch forwards to the lane.
-    cpu_data_bundle_lane: bool = False
     repository: str = Field(min_length=1)
     branch: str = Field(min_length=1)
     git_remote_name: str = Field(min_length=1)
@@ -2893,6 +2902,9 @@ class TrainingConfig(BaseModel):
     calibration_sweep: CalibrationSweepSpec
     tracking: TrackingSpec
     colab: ColabSpec
+    # Isolated CPU data-bundle prep lane block (owner ruling 8) — never
+    # read on the GPU-training runtime path.
+    cpu_bundle_prep: CpuBundlePrepSpec = Field(default_factory=CpuBundlePrepSpec)
     rand_matching: RandMatchingSpec
     difficulty: DifficultySpec = Field(default_factory=DifficultySpec)
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)

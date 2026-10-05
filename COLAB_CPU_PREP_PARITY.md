@@ -2,8 +2,10 @@
 
 Contract bringing the CPU data-bundle prep lane to parity with the bundle
 lane (commits d264af1 / 9e7f0e4 / 902689e / 99c7ce8 / 4d40d1e), under
-**owner structural ruling 8**: data-bundle production lives in a SEPARATE
-lane file, exactly like the existing standalone bundle lane.
+**owner structural ruling 8** (data-bundle production lives in a SEPARATE
+lane file, exactly like the existing standalone bundle lane) and the
+**owner ruling extension** (FULL separation from the GPU training code —
+no common files; additive-only shared-schema additions in their own block).
 
 ## Ownership shape
 
@@ -13,17 +15,43 @@ lane file, exactly like the existing standalone bundle lane.
   point is `python -m cli.colab_data_bundle_prep`; `run_cpu_bundle_prep` is
   the capability layer over `cli.colab.run_bundle` (never rewrites it).
 - **`src/cli/colab.py` keeps only config-gated thin passthroughs**, byte-
-  identical when the lane is unused:
+  identical when the lane is unused (see ISOLATION BOUNDARY below):
   1. `ensure_session` provision argv forwards to `cpu_shape_args`
-     (lazy import; returns `()` unless `colab.high_mem` — argv unchanged);
+     (lazy import; returns `()` unless `cpu_bundle_prep.high_mem` — argv unchanged);
   2. main's `--what bundle` dispatch forwards to `run_cpu_bundle_prep`
-     only when `colab.cpu_data_bundle_lane` is true; otherwise the
+     only when the ISOLATED root key `cpu_bundle_prep.lane` is true; otherwise the
      original direct `run_bundle` call runs unchanged.
 - `colab_bundle.py` (the already-committed standalone bundle lane) is NOT
   extended: it stays the committed CSV→inputs reference implementation.
+## ISOLATION BOUNDARY (owner ruling extension — hardens ruling 8)
+
+The CPU data-bundle production code is FULLY SEPARATE from the GPU
+training code. Every file the lane touches, and each one's role:
+
+| file | role | GPU-training runtime code? |
+|---|---|---|
+| `src/cli/colab_data_bundle_prep.py` | the production lane (new) | no — new file |
+| `src/cli/colab.py` | thin passthroughs ONLY: lazy `cpu_shape_args` forward in `ensure_session`'s provision argv, config-gated `--what bundle` forwarding; existing behavior byte-identical when the lane is unused | no in-place edits of GPU-lane logic (shared launcher shell, same precedent as `colab_bundle.py` importing it) |
+| `src/core/schemas.py` | ADDITIVE: new `CpuBundlePrepSpec` class + one default-factory root field `cpu_bundle_prep` | no — no reshaping, no renames, no shared-validator changes; not read on the GPU runtime path |
+| `config/training.yaml` | ADDITIVE: new top-level `cpu_bundle_prep:` block (+ the two keys REMOVED from the shared `colab:` block, restoring it byte-identical to its pre-parity form) | no |
+| `tests/test_colab_cpu_prep_parity.py` | lane parity pins (13, staged fakes) | no |
+| `COLAB_CPU_PREP_PARITY.md` | this contract | no |
+
+The lane imports ONLY `cli.colab`'s committed data-bundle production
+machinery (`run_bundle`, the proven exec transport, upload/retries,
+delivery/download, event registry — the `colab_bundle.py`
+"copy-assembled from cli.colab's working machinery" precedent) plus
+`core.common` config-path primitives (`DATA_PATH`, `training_cfg`).
+It NEVER imports or modifies `training.train`, `training.train_prepared`,
+`model_tracks.*`, worker paths, or the prepare path in-process:
+`training.prepare_all` executes as a REMOTE subprocess on the prep VM's
+own checkout, from the code the VM checkout holds, not in this lane's
+Python process. No shared function was edited; the two capabilities that
+needed a hook (provision shape, dual-transcript forcing, dispatch gate)
+are thin config-gated forwards.
 - `colab_backend.py` remains a 7-line shim delegating to `cli.colab.main`;
-  `src/core/schemas.py` gains the two config keys; `src/core/common.py`
-  untouched. Original colab code is extended, never rewritten.
+  `src/core/schemas.py` gains the ISOLATED `CpuBundlePrepSpec` class + root
+  field; `src/core/common.py` and every GPU-progress module untouched. Original colab code is extended, never rewritten.
 
 ## Capability 1 — high-RAM provisioning (owned by the lane)
 
@@ -32,7 +60,7 @@ lane file, exactly like the existing standalone bundle lane.
   shared primitive `ensure_session` re-verifies an active session and only
   calls `colab new` when none exists.
 - CPU gap (fixed): a fresh lane-driven CPU allocation was standard shape.
-- Contract: shape request is config-owned — `colab.high_mem`
+- Contract: shape request is config-owned — `cpu_bundle_prep.high_mem`
   (`ColabSpec.high_mem: bool = False`). Lane fn `cpu_shape_args(accelerator)`
   returns `("--high-mem",)` ONLY for CPU sessions whose config requests it;
   default/False ⇒ `()` ⇒ byte-identical `colab new` argv. GPU accelerators
@@ -102,7 +130,7 @@ locally.
    session and never allocates anything):
    `EUROMONITOR_COLAB_SESSION=er-prep-50pct .venv/bin/python -m cli.colab_data_bundle_prep --dataset-csv dataset_50pct.csv`
    `EUROMONITOR_COLAB_SESSION=er-prep-full  .venv/bin/python -m cli.colab_data_bundle_prep --dataset-csv dataset.csv`
-   (equivalently: flip `colab.cpu_data_bundle_lane: true` and use
+   (equivalently: flip `cpu_bundle_prep.lane: true` and use
    `python -m cli.colab --what bundle --gpu CPU --keep-alive --dataset-csv …`
    — the thin passthrough forwards; default config keeps the original path.)
 3. on-VM invoke (done by the lane): raw-export upload to
@@ -120,7 +148,7 @@ locally.
 
 ## Open owner questions
 
-1. Flip `colab.high_mem`/`cpu_data_bundle_lane` to true? Both default false
+1. Flip `cpu_bundle_prep.high_mem`/`cpu_bundle_prep.lane` to true? Both default false
    so the shared surface stays byte-identical; the flag only matters if a
    lane must self-provision or the shared dispatch should forward.
 2. Should the standalone `cli.colab_bundle` lane also honor `cpu_shape_args`

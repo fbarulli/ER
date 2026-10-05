@@ -55,7 +55,7 @@ def _provision(monkeypatch, *, received: list, high_mem: bool, gpu: str = "CPU")
     monkeypatch.setattr(colab, "SESSION", "test-prep-vm")
     monkeypatch.setattr(colab, "GPU", gpu)
     monkeypatch.setattr(prep, "training_cfg", mock.Mock(
-        **{"return_value.colab.high_mem": high_mem}))
+        **{"return_value.cpu_bundle_prep.high_mem": high_mem}))
     monkeypatch.setattr(colab, "colab", _fake_colab(received))
     # The control-channel handshake is simulated deliberately: what is under
     # test is the allocation argv, not the kernel probe.
@@ -203,9 +203,8 @@ def test_default_dispatch_keeps_colabs_original_bundle_call(monkeypatch, tmp_pat
     direct colab.run_bundle call, the lane never entered."""
     dataset = tmp_path / "cohort.csv"
     dataset.write_text("sku_id\na\n", encoding="utf-8")
-    monkeypatch.setattr(
-        colab, "_COLAB", colab._COLAB.model_copy(update={"cpu_data_bundle_lane": False})
-    )
+    monkeypatch.setattr(colab, "training_cfg", mock.Mock(
+        **{"return_value.cpu_bundle_prep.lane": False}))
     direct = mock.Mock(name="run_bundle")
     lane = mock.Mock(name="run_cpu_bundle_prep")
     fake = _bounded_dispatch_test(monkeypatch, dataset, direct, lane)
@@ -216,9 +215,8 @@ def test_default_dispatch_keeps_colabs_original_bundle_call(monkeypatch, tmp_pat
 def test_lane_dispatch_forwards_to_the_separate_file(monkeypatch, tmp_path):
     dataset = tmp_path / "cohort.csv"
     dataset.write_text("sku_id\na\n", encoding="utf-8")
-    monkeypatch.setattr(
-        colab, "_COLAB", colab._COLAB.model_copy(update={"cpu_data_bundle_lane": True})
-    )
+    monkeypatch.setattr(colab, "training_cfg", mock.Mock(
+        **{"return_value.cpu_bundle_prep.lane": True}))
     direct = mock.Mock(name="run_bundle")
     lane = mock.Mock(name="run_cpu_bundle_prep")
     fake = _bounded_dispatch_test(monkeypatch, dataset, direct, lane)

@@ -165,6 +165,19 @@ tracking:
     project: "e-r"
     mode: "online"
 
+# ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
+# Production code lives in src/cli/colab_data_bundle_prep.py: this block is
+# consumed ONLY by that lane and its thin passthroughs in cli.colab; no
+# GPU-training runtime path reads it. Exactly two owner-launched high-RAM
+# CPU VMs (50% cohort and full cohort) are the production surface.
+cpu_bundle_prep:
+  # `colab new --high-mem` when the lane must provision a FRESH CPU session;
+  # owner-launched sessions are reused by name either way.
+  high_mem: false
+  # true = cli.colab --what bundle dispatch forwards to the lane (the shared
+  # launcher otherwise keeps its original direct behavior, byte-identical).
+  lane: false
+
 # ── Colab checkout/runtime ─────────────────────────────────────────────────
 # The launcher clones this public training branch instead of uploading a
 # local working tree or data snapshot.
@@ -177,16 +190,6 @@ colab:
   # Full all-track launches default to GPU; the smoke script requests CPU.
   # GPU provisioning still requires the launcher's --allow-gpu flag.
   gpu: "T4"
-  # CPU lane shape: when a lane itself must provision a FRESH CPU session
-  # (--what bundle / colab_bundle), pass `--high-mem` to `colab new`.  The
-  # owner-launched sessions (50% and full cohort VMs) are high-RAM by
-  # allocation and are reused by name, so this stays false by default;
-  # flipping it changes only self-provisioned CPU runtimes.
-  high_mem: false
-  # Owner structural ruling: data-bundle production runs through its own
-  # lane file (src/cli/colab_data_bundle_prep.py).  With false (default) the
-  # shared launcher keeps its original direct --what bundle behavior.
-  cpu_data_bundle_lane: false
   # Training workers consume immutable bundles prepared locally.  Keep all
   # payload, pair, masking, country, and calibration construction off Colab.
   remote_data_prep: false

@@ -28,6 +28,16 @@ This module owns the CPU-prep parity capabilities:
   exist (50pct + full cohorts); the lane never launches, retries, or
   replaces a VM and prints the cap at start.
 
+ISOLATION (owner ruling extension): this file imports ONLY cli.colab's
+committed data-bundle production machinery (run_bundle, the proven exec
+transport, upload/retries, delivery/download, event registry — the
+colab_bundle.py copy-assembly precedent) plus core.common config-path
+primitives; it NEVER imports or modifies GPU-training runtime modules
+(training.train, training.train_prepared, model_tracks.*, worker paths).
+training.prepare_all runs as a REMOTE subprocess on the prep VM's own
+checkout, never in this lane's Python process. Its config is the isolated
+cpu_bundle_prep: block, never a reshaping of the shared colab: section.
+
 The single production entry point is `main` (python -m
 cli.colab_data_bundle_prep); `run_cpu_bundle_prep` is also the target of
 cli.colab main's --what bundle thin passthrough when
@@ -41,7 +51,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from core.common import DATA_PATH, TRAIN_ROOT, training_cfg
+from core.common import DATA_PATH, training_cfg
 
 import cli.colab as colab
 
@@ -54,13 +64,14 @@ def cpu_shape_args(accelerator: list[str]) -> tuple[str, ...]:
     """Shape args for the one fresh CPU allocation a lane may make.
 
     The CLI accepts `--high-mem` (requires the Colab Pro entitlement; L4/TPU
-    runtimes ignore it).  The request is config-owned (config/training.yaml
-    colab.high_mem) and applies ONLY to CPU sessions — a GPU accelerator
+    runtimes ignore it).  The request is config-owned in the lane's ISOLATED
+    block (config/training.yaml cpu_bundle_prep.high_mem; never the shared
+    colab: section) and applies ONLY to CPU sessions — a GPU accelerator
     stays governed by its own flags.  When the config does not request it
     the returned args are empty, so the emitted `colab new` command stays
     byte-identical to pre-parity behavior.
     """
-    if accelerator or not bool(training_cfg().colab.high_mem):
+    if accelerator or not bool(training_cfg().cpu_bundle_prep.high_mem):
         return ()
     return ("--high-mem",)
 

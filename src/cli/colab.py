@@ -4781,7 +4781,7 @@ def main() -> None:
         elif args.what == "sims":
             run_sims()
         elif args.what == "bundle":
-            if bool(_COLAB.cpu_data_bundle_lane):
+            if bool(training_cfg().cpu_bundle_prep.lane):
                 # Owner ruling 8: data-bundle production lives in its own
                 # lane file; this forward is the thin passthrough.  With the
                 # lane's config flag off, the original direct call runs and
