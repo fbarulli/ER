@@ -19,6 +19,56 @@ from core.common import load_local_sentence_transformer, plot_dpi
 
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
+# select_unrelated_pairs is a deterministic pure function of (df, payload,
+# n_pairs, seed, max_token_frequency); collapse diagnostics re-request the
+# same sample at every evaluation step of a run. The single-entry memo keys
+# on the arguments and verifies object identity, so a hit can only ever
+# return the result computed for these exact objects; a later run replaces
+# the entry, releasing the previous data frames.
+_UNRELATED_PAIRS_MEMO: dict[tuple, tuple] = {}
+
+
+def _memo_unrelated_pairs(key, df, payload, selected):
+    if len(_UNRELATED_PAIRS_MEMO) > 1:
+        _UNRELATED_PAIRS_MEMO.clear()
+    _UNRELATED_PAIRS_MEMO[key] = (df, payload, selected)
+
+
+def _memoized_unrelated_pairs(key, df, payload):
+    memo = _UNRELATED_PAIRS_MEMO.get(key)
+    if memo is not None and memo[0] is df and memo[1] is payload:
+        return memo[2]
+    return None
+
+
+# A10 fix: collapse_diagnostics re-requests the aligned payload slice at
+# every evaluation step. Materializing a fresh list per call produced a new
+# object identity each time, so the select_unrelated_pairs identity memo
+# could never hit. One (df, payload) object pair now maps to one stable
+# slice list; the bounded replacement policy matches the pairs memo above.
+_ALIGNED_PAYLOAD_MEMO: dict[tuple[int, int], tuple] = {}
+
+
+def aligned_payload_for_diagnostics(
+    df: pd.DataFrame, payload: list[str]
+) -> list[str]:
+    """df-aligned payload slice, stable per (df, payload) object pair.
+
+    Byte-identical to calling source_payload_for_dataframe on every call:
+    same values, same length contract failure. The difference is identity —
+    repeated calls receive the SAME list object, so the downstream
+    select_unrelated_pairs memo hits across evaluation steps instead of
+    recomputing the pair selection each time.
+    """
+    memo = _ALIGNED_PAYLOAD_MEMO.get((id(df), id(payload)))
+    if memo is not None and memo[0] is df and memo[1] is payload:
+        return memo[2]
+    if len(_ALIGNED_PAYLOAD_MEMO) > 1:
+        _ALIGNED_PAYLOAD_MEMO.clear()
+    aligned = source_payload_for_dataframe(df, payload)
+    _ALIGNED_PAYLOAD_MEMO[(id(df), id(payload))] = (df, payload, aligned)
+    return aligned
+
 
 def source_payload_for_dataframe(
     df: pd.DataFrame, payload: list[str]
@@ -69,6 +119,10 @@ def select_unrelated_pairs(
             "uniformity payload/data alignment mismatch: "
             f"rows={len(df)} payload={len(payload)}"
         )
+    key = (n_pairs, seed, max_token_frequency)
+    memoized = _memoized_unrelated_pairs(key, df, payload)
+    if memoized is not None:
+        return memoized
     category_col = "breadcrumbs_eng" if "breadcrumbs_eng" in df.columns else "category"
     brand = df["brand"].fillna("").astype(str).str.strip().str.lower().tolist()
     category = (
@@ -116,10 +170,12 @@ def select_unrelated_pairs(
         selected.append((left, right))
         available.difference_update((left, right))
         if len(selected) >= n_pairs:
+            _memo_unrelated_pairs(key, df, payload, selected)
             return selected
     # This is a diagnostic, not a training or publication gate. Return the
     # available deterministic sample so small/overlapping catalogs can still
     # finalize and record an explicit insufficient-sample result.
+    _memo_unrelated_pairs(key, df, payload, selected)
     return selected
 
 
@@ -198,7 +254,7 @@ def collapse_diagnostics(
     threshold-crossing rate at the real operating point is what maps directly
     to downstream matching risk (over-merging).
     """
-    payload = source_payload_for_dataframe(df, payload)
+    payload = aligned_payload_for_diagnostics(df, payload)
     guardrail = config["collapse_guardrail"]
     if not requested or not bool(guardrail["enabled"]):
         return {

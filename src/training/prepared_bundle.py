@@ -330,6 +330,25 @@ def write_prepared_bundle(
     return manifest
 
 
+def _timed_lineage_validations(data) -> None:
+    """D3 telemetry: load-time lineage validators with one timing line each.
+
+    Behavior-identical to calling the two validators back to back; the marks
+    record how expensive the attested-path and un-attested-path validators
+    are for the D3 decision.
+    """
+    from core.timing import Timing
+
+    timing = Timing("prepared_bundle.lineage")
+    _validate_augmented_features(
+        data["payload"], data["structured_features"],
+        data["mask_audit"] + data["hard_negative_mask_audit"],
+    )
+    timing.mark("augmented_features")
+    _validate_counterfactual_audits(data["payload"], data["hard_negative_mask_audit"])
+    timing.mark("counterfactual_audit")
+
+
 def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBundleManifest, dict[str, Any]]:
     """Load and validate a bundle before it crosses into the training lane.
 
@@ -381,11 +400,7 @@ def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBun
     missing = sorted(required - set(data))
     if missing:
         raise ValueError(f"prepared training bundle missing fields: {missing}")
-    _validate_augmented_features(
-        data["payload"], data["structured_features"],
-        data["mask_audit"] + data["hard_negative_mask_audit"],
-    )
-    _validate_counterfactual_audits(data["payload"], data["hard_negative_mask_audit"])
+    _lineage_timing = _timed_lineage_validations(data)
     if len(data["df"]) != manifest.n_df or len(data["payload"]) != manifest.n_payload:
         raise ValueError("prepared bundle manifest/data row counts disagree")
     if len(data["pos"]) != manifest.n_pos or len(data["neg"]) != manifest.n_neg:

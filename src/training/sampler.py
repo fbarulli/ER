@@ -43,11 +43,24 @@ from typing import Iterator
 import numpy as np
 
 
-def _row_text_hash(dataset, idx: int) -> frozenset[str]:
-    """Native text values only; telemetry must not defeat deduplication."""
+def _text_hash_columns(dataset) -> list[str]:
     columns = {"sentence1", "sentence2", "anchor", "positive", "negative"}
-    row = dataset[idx]
-    return frozenset(str(row[col]) for col in dataset.column_names if col in columns)
+    return [col for col in dataset.column_names if col in columns]
+
+
+def _row_text_hashes(dataset) -> list[frozenset[str]]:
+    """Native text values only; telemetry must not defeat deduplication.
+
+    Column-wise materialization decodes each text column once instead of one
+    arrow row per index; every per-row frozenset is identical to the row-wise
+    formulation, so packing and RNG order are unchanged.
+    """
+    names = _text_hash_columns(dataset)
+    columns = {name: list(dataset[name]) for name in names}
+    return [
+        frozenset(str(columns[name][index]) for name in names)
+        for index in range(len(dataset))
+    ]
 
 
 class ControlledBatchSampler:
@@ -138,7 +151,7 @@ class ControlledBatchSampler:
         self._packed_epoch = None
         self._packed_batches = None
         # Pre-compute text hashes for duplicate detection.
-        self._text_hashes = [_row_text_hash(dataset, i) for i in range(len(dataset))]
+        self._text_hashes = _row_text_hashes(dataset)
 
     def set_epoch(self, epoch: int) -> None:
         self._epoch = epoch

@@ -90,15 +90,20 @@ def prepare_training_tokens(model, payload, *, batch_size=256):
         timing.mark('prompt_' + str(prompts.index(prompt)))
     return {"version": 1, "policy": policy, "texts": texts, "variants": variants,
             "task_contract": PreparedTaskContract.from_model(model).model_dump(),
-            "payload_sha256": hashlib.sha256(json.dumps(list(payload), ensure_ascii=False).encode()).hexdigest()}
+            "payload_sha256": payload_sha256(payload)}
+
+
+def payload_sha256(payload) -> str:
+    """Stable digest over the frozen payload text list (write- and read-side)."""
+    return hashlib.sha256(json.dumps(list(payload), ensure_ascii=False).encode()).hexdigest()
 
 
 class PreparedTokenLookup:
     """No fixed-text tokenizer calls; explicitly registered dynamic text only."""
-    def __init__(self, model, table, payload):
+    def __init__(self, model, table, payload, *, payload_digest: str | None = None):
         if table.get("version") != 1 or table["policy"] != checkpoint_policy(model):
             raise ValueError("prepared training tokenizer/checkpoint policy mismatch; rebuild locally")
-        digest = hashlib.sha256(json.dumps(list(payload), ensure_ascii=False).encode()).hexdigest()
+        digest = payload_sha256(payload) if payload_digest is None else payload_digest
         if table["payload_sha256"] != digest:
             raise ValueError("prepared training token payload mismatch; rebuild locally")
         self.table = table
