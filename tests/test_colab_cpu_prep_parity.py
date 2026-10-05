@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import sys
 from pathlib import Path
 from unittest import mock
@@ -326,6 +327,35 @@ def test_cpu_prep_lane_reports_failed_when_the_run_raises(
     captured = capsys.readouterr()
     assert "[failed] launch did not complete successfully" in captured.out
     assert "[done]" not in captured.out
+
+
+def test_bundle_pin_rewrite_keeps_the_closing_quote_and_trailing_comment():
+    """Regression (both cohorts' first launch): the OLD sha-pin regex
+    consumed the closing quote before the trailing comment, producing an
+    unterminated YAML scalar on the VM.  Behavioral pin of the REAL
+    expression: only the 64-hex payload is swapped; the closing quote and
+    the trailing comment survive."""
+    line = (
+        '  source_export_expected_sha256: "'
+        + "a" * 64
+        + '"     # approved source bytes (drift gate)'
+    )
+    replacement = re.sub(
+        r'(source_export_expected_sha256: ")([0-9a-f]{64})',
+        r"\g<1>" + "b" * 64,
+        line,
+    )
+    assert replacement == (
+        '  source_export_expected_sha256: "'
+        + "b" * 64
+        + '"     # approved source bytes (drift gate)'
+    )
+    # And the fixed form parses as YAML even nested in its audit block:
+    import yaml
+
+    assert yaml.safe_load("audit:\n  x: 1\n" + replacement + "\n")["audit"][
+        "source_export_expected_sha256"
+    ] == ("b" * 64)
 
 
 def _run_lane_main(monkeypatch, dataset, runner, *, session=None):

@@ -3871,7 +3871,11 @@ _sha = hashlib.sha256(open(csv_path, "rb").read()).hexdigest()
 _cfg = {REMOTE_ROOT!r} + "/config/training.yaml"
 _text = open(_cfg, encoding="utf-8").read()
 _text = re.sub(r"(source_export_expected_rows: )[\\d_]+", r"\\g<1>" + str(_rows), _text, count=1)
-_text = re.sub(r'(source_export_expected_sha256: ")[0-9a-f]{{64}}"', r"\\g<1>" + _sha, _text, count=1)
+# Payload-only sha replacement: the merged audit lines carry trailing
+# comments AFTER the quoted hex, so consuming the closing quote here left an
+# unterminated scalar and broke the VM's YAML parse for prepare_all (both
+# cohorts' first launch).  Keep the quote and the comment; swap only the hex.
+_text = re.sub(r'(source_export_expected_sha256: ")([0-9a-f]{{64}})', r"\\g<1>" + _sha, _text, count=1)
 open(_cfg, "w", encoding="utf-8").write(_text)
 print(f"[bundle] VM audit pins -> rows={{_rows}} sha={{_sha[:12]}}...", flush=True)
 rc = subprocess.run(
