@@ -3796,6 +3796,62 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
     return run_id
 
 
+def run_bundle() -> None:
+    """Run the full CSV-to-inputs bundle lifecycle on the VM CPU.
+
+    Fresh-checkout flow: the VM uses its own clone (provisioned by the
+    standard session bootstrap); the raw export is uploaded (it is not in
+    git), prepare_all runs there end to end, and one delivery archive with
+    the run dir + regenerated data artifacts comes back. CPU-only: no GPU
+    allocation, no training.
+    """
+    from core.common import DATA_PATH
+
+    run_id = datetime.now(timezone.utc).strftime("bundle_%m%dT%H%M%S%fZ")
+    print(f"[bundle] uploading raw export -> {REMOTE_ROOT}/dataset.csv ...", flush=True)
+    _upload_with_retries(Path(DATA_PATH), f"{REMOTE_ROOT}/dataset.csv", timeout=3600)
+    script = _BOOTSTRAP + f"""
+import glob, os, subprocess, sys, tarfile
+rc = subprocess.run(
+    [sys.executable, "-m", "training.prepare_all"],
+    cwd={REMOTE_ROOT!r},
+    env={{**os.environ, "WANDB_MODE": "disabled"}},
+).returncode
+if rc != 0:
+    raise RuntimeError(f"prepare_all failed on the VM (rc={{rc}})")
+run_dir = sorted(glob.glob({REMOTE_ROOT!r} + "/results/training_prep/*"))[-1]
+delivery = {REMOTE_ROOT!r} + "/bundle_delivery.tar.gz"
+with tarfile.open(delivery, "w:gz") as tar:
+    tar.add(run_dir, arcname="training_prep/" + os.path.basename(run_dir))
+    for rel in ("data/canonical_records.csv", "data/gate_results.csv",
+                "data/dataset_deduped.csv", "data/labeled_pairs.csv",
+                "data/final_validation.csv", "data/number_tokens_reference.csv"):
+        if os.path.exists({REMOTE_ROOT!r} + "/" + rel):
+            tar.add({REMOTE_ROOT!r} + "/" + rel, arcname=rel)
+    for name in ("track_setup",):
+        member = {REMOTE_ROOT!r} + "/data/" + name
+        if os.path.isdir(member):
+            tar.add(member, arcname="data/" + name)
+    for name in ("full", "smoke_200"):
+        member = {REMOTE_ROOT!r} + "/data/prepared/" + name
+        if os.path.isdir(member):
+            tar.add(member, arcname="data/prepared/" + name)
+print("[bundle] delivery archive ready", flush=True)
+"""
+    run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="bundle")
+    local = RESULTS / "colab_bundle" / run_id
+    local.mkdir(parents=True, exist_ok=True)
+    _download_file_with_visibility(
+        remote=f"{REMOTE_ROOT}/bundle_delivery.tar.gz",
+        local=local / "bundle_delivery.tar.gz",
+        worker=None,
+        index=1,
+        total=1,
+        run_id=run_id,
+    )
+    print(f"[bundle] delivered -> {local / 'bundle_delivery.tar.gz'}", flush=True)
+
+
 def run_sims() -> None:
     """Run the configured zero-shot embedding model lane on the VM."""
     print(f"[run] zero_shot_sims --models {_SIMS_MODEL} on the VM ...")
@@ -4323,7 +4379,7 @@ def main() -> None:
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", default="tracks",
-                    choices=["train", "tracks", "dual-train", "hpo", "sims", "mixed", "smoke", "stop"],
+                    choices=["train", "tracks", "dual-train", "hpo", "sims", "mixed", "smoke", "bundle", "stop"],
                     help="what to run on the VM (default: tracks)")
     ap.add_argument('--tracks-config', type=Path, default=None,
                     help='prepared all-track suite; uses the existing Colab lifecycle')
@@ -4647,6 +4703,8 @@ def main() -> None:
                       git_inputs=suite_git_inputs)
         elif args.what == "sims":
             run_sims()
+        elif args.what == "bundle":
+            run_bundle()
         elif args.what == "mixed":
             local_mixed_run = run_mixed(
                 args.train_frac, args.epochs, model=args.model, loss=args.loss,
