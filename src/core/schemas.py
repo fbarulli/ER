@@ -2763,6 +2763,56 @@ PREPARATION_REUSABLE_KEYS = (
 )
 
 
+class KaggleSpec(BaseModel):
+    """training.kaggle — the Kaggle dataset/export transport lane's SSOT.
+
+    Additive (default-factory): CSVs without this block load byte-identically
+    and no existing default flips. The lane never edits the shared colab or
+    preparation keys — it packages/uploads/downloads cohort exports and
+    submission frames with kaggle's own CLI, hash-verified at both ends.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Dataset "owner/slug" to publish under; empty keeps every transport call
+    # fail-loud until the owner names the target dataset.
+    slug: str | None = None
+    # Cohort exports publishable by the lane, matched by self-describing
+    # cohort tags (same shape the cpu_bundle_prep cohort_label values take).
+    export_csvs: tuple[str, ...] = ("dataset.csv", "dataset_50pct.csv")
+    # Staging root (relative to TRAIN_ROOT) for packaged upload payloads and
+    # verified download receipts.
+    staging_dir: str = "results/kaggle_lane"
+    packaged_data_name: str = "dataset.csv"
+    metadata_file: str = "dataset_metadata.json"
+    payload_archive_suffix: str = ".kaggle.zip"
+    receipt_suffix: str = ".receipt.json"
+    # The external submission contract's two columns (lowercase by default,
+    # scripts/format_submission.py semantics).
+    submission_id_columns: tuple[str, str] = ("sku_id", "item_id")
+    kaggle_executable: str = "kaggle"
+
+    @model_validator(mode="after")
+    def _declared_paths_are_portable(self) -> "KaggleSpec":
+        def walk(fragment: Any, where: str) -> None:
+            if isinstance(fragment, dict):
+                for key, value in fragment.items():
+                    walk(value, f"{where}.{key}")
+                return
+            if not isinstance(fragment, str):
+                return
+            candidate = Path(fragment)
+            if candidate.is_absolute() or ".." in candidate.parts:
+                raise ValueError(
+                    f"kaggle.{where} must be a portable name or relative path fragment: {fragment!r}"
+                )
+
+        walk(self.model_dump(exclude={"kaggle_executable"}), "paths")
+        if len(self.submission_id_columns) != 2 or len(set(self.submission_id_columns)) != 2:
+            raise ValueError("kaggle.submission_id_columns must be two distinct column names")
+        return self
+
+
 class PreparationGraphSetupSpec(BaseModel):
     """training.preparation.graph_setup — the prepared setup-dir layout.
 
@@ -2886,6 +2936,9 @@ class TrainingConfig(BaseModel):
     colab: ColabSpec
     rand_matching: RandMatchingSpec
     difficulty: DifficultySpec = Field(default_factory=DifficultySpec)
+    # Kaggle dataset/export transport lane (additive; default factory so the
+    # existing YAML without the block stays byte-identical at load).
+    kaggle: KaggleSpec = Field(default_factory=KaggleSpec)
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)
     # TIER 1(e) bundle-drift switch (see config/training.yaml): when TRUE,
     # training.prepared_bundle hard-fails a bundle built under drifted
