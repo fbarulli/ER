@@ -14,9 +14,8 @@ Production behavior is unchanged: these families all retain their matches with t
 layer on top: which merges are safe (TRUE), which dissenting feeds are wrong
 (repair targets), and which need live adjudication.
 
-Findings across the top 40 (7 CLEAN: all descriptor differences are sub-set/superset
-mosaics that the predicates treat as compatible; `` are predicate-compatible
-variant shapes):
+Findings across the top 40 (**7 CLEAN**: all their descriptor differences are
+subset/superset mosaics the predicates treat as compatible):
 
 ## 1. TRUE merges — minority feed dissent (repair targets, not merge breaks)
 
@@ -49,6 +48,17 @@ carry, and the majority value they contradict:
 | 00815154020909 | NOS 8-pack | carbonation | carbonated (6) | harris teeter → still |
 | 00857273008758 | Collagen Water Strawberry Lemon | carbonation / sweetener | still (7) / diet (1) | wholefoods → carbonated / sugar |
 | 00867657000087 | Aspire Mango Lemonade | carbonation | carbonated (5) | amazon, kroger → still |
+| 00859078002627 | Harmless Harvest 32oz (6 Pack) | package_type | carton (3) | amazon → bottle |
+| 07310070001726 | Citrus carbonated water 50cl | carbonation | carbonated (7) | mathem → still |
+| 07310070001726 | (ditto) | package_material | plastic (5) | kronans apotek → glass |
+
+Findings across the top 40: **26 TRUE merges with repair-target dissent (§1),
+7 SPLITs needing live adjudication (§2), 7 CLEAN** — the remaining descriptor
+differences are predicate-compatible variant shapes (flavor supersets like
+`coffee` vs `coffee, latte`, brand subsets `jones` vs `jones, soda`, volume
+1750 vs 1751 within tolerance). (Two families surfaced during the corpus-wide
+1,783-family re-run were added to §1 on 2026-10-05: 00859078002627 and
+07310070001726.)
 
 ## 2. LIVE ADJUDICATION needed (no decisive majority — both sides plausible)
 
