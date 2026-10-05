@@ -1,0 +1,55 @@
+{
+  "dataset_rows": 71623,
+  "label0_pairs": 1044,
+  "label1_pairs": 4000,
+  "distinct_rows_parsed": 8726,
+  "runtime_seconds": 71.0,
+  "S0": {
+    "false_merge": 0.25,
+    "true_merge": 0.80125,
+    "dims": {
+      "volume": 599,
+      "carbonation": 24,
+      "package_type": 139,
+      "brand": 188,
+      "package_material": 307,
+      "pulp": 3,
+      "sweetener": 9,
+      "pack": 2,
+      "flavor": 2
+    }
+  },
+  "S1": {
+    "false_merge": 0.2413793103448276,
+    "true_merge": 0.78425,
+    "recovered": 9,
+    "recovered_dims": {
+      "sweetener": 2,
+      "flavor": 7
+    }
+  },
+  "S2": {
+    "false_merge": 0.2413793103448276,
+    "true_merge": 0.78425,
+    "image_identical_l0": 35,
+    "image_identical_l1": 225,
+    "image_identical_cross_retailer_l1": 104
+  },
+  "S3": {
+    "false_merge": 0.2413793103448276,
+    "true_merge": 0.78425,
+    "recovered": 441,
+    "recovered_dims": {
+      "carbonation": 106,
+      "sweetener": 257,
+      "flavor": 54,
+      "pulp": 24
+    },
+    "canonical_available": true
+  },
+  "bars": [
+    0.05,
+    0.1,
+    0.2
+  ]
+}
