@@ -471,10 +471,36 @@ def datagen_track():
                                       json.dumps({'plan_v1_weakspot_alloctions': plan.get('weakspot_weighted_mint'),
                                                   'superseded_by': 'duplicate variation census (Finding 07)'}, indent=1)),
                            "<span class='badge badge-open'>OPEN</span> — targets fixed; quota shares from the measured same-GTIN conflict distribution (Finding 07); generated examples land here once the mint run completes.")
+    gen_basics = '''
+<details open><summary>How generated training data is made · the two lanes + minting (basics)</summary>
+<p><strong>Lane 1 — counterfactual twins (minimal-flip negatives).</strong> Take a verified-matching
+positive pair (A1, A2), pick ONE structured field both sides agree on, rewrite only the anchor's value
+for that field with a real donor value (entity-disjoint, cross-retailer preferred, no invented tokens,
+coherent prose required). The twin (A1', A2) is labeled 0 by construction: it differs from a verified
+match in one load-bearing attribute. The original pair stays 1; both rows train together, so the loss
+must read the changed token instead of the ~90% shared ones. Every twin carries an audit row
+(target_mode, fields_hit, donor provenance) re-verified at load — an unprovable flip is rejected.</p>
+<p><strong>Lane 2 — masking augmentation (the view multiplier).</strong> Generated and base pairs are
+augmented by masking: declaration dropout, random masking inside the configured extent band, and value
+swaps — each masked copy keeps its numeric-channel lineage (volume/pack slices re-encoded) so text and
+numeric features agree. Caps bind concentration: per-field share, per-value share, per-attribute
+hard/soft quotas and pos/neg slice fractions.</p>
+<p><strong>Minting (negative supply lane).</strong> Real partners mined first (embeddings/TF-IDF
+blocking, same-GTIN exclusion, top-k per anchor); minted rows only top up uncovered anchors; the lane's
+pairs.csv is sha-pinned and the discriminator watches real-vs-minted separability.</p>
+<p><strong>Scope + trace.</strong> Generation draws from the <strong>11 donor-capable field groups</strong>
+of the 37-key attribute universe (promotion is census-backed, e.g. package_material and juice_content);
+difficulty slices (easy/medium/hard/unknown) come from the config <code>difficulty:</code> block. All
+surfaces are hashed (provenance + composition_fingerprint) and attested in <code>handoff.json</code>;
+the same SSOT knobs feed post-training analysis — see the tuning-surfaces table in PIPE.md. Full
+details: <code>training/masking.py</code> (augment_counterfactual_twins), <code>training/negative_supply.py</code>,
+<code>training/difficulty.py</code>.</p>
+</details>'''
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER datagen</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}.verdict{{margin:.4rem 0}}</style></head><body>
 <h1>ER · Datagen track — identity fixes, GTIN integrity, attribute census, datagen budget</h1>
 <p class="status">{ra.get('input_rows', 71_623):,} original listings → {ra.get('output_rows', 63_079):,} deduped · closure gate {ra.get('input_rows', 71_623):,} == 63,079 + 8,544 · Wave-1 fixes byte-identical · offline bundle lane OPEN (Finding 06)</p>
 {f01}{f02}{f03}{f04}{f05}{f06}{f07}{f08_target}
+{gen_basics}
 <details open><summary>Teacher-flag census from data_prep.json (veto/review — never guessed)</summary>
 <table><tr><th>Flag</th><th>Records</th></tr>{teacher_rows}</table>
 </details>

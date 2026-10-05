@@ -402,6 +402,15 @@ PYTHONPATH=src .venv/bin/python -m training.prepare_all \
 ## 7. Open questions for the user
 - Ship the uncommitted colab-wave fixes in the same commit as wave 2, or
   separately (or hold them back entirely)?
+- DVC IS RETIRED (owner decision 2026-10-05): no new DVC runs; a replacement
+  publication/transport mechanism is TBD — deliberately NOT being built now.
+  When it is, these are the wired surfaces to replace: src/training/dvc_store.py,
+  core/schemas dvc fields (publish_dvc/dvc_enabled, DvcPublication*),
+  model_tracks.worker dvc.enabled override, preflight runtime_versions dvc
+  requirement, artifact publishers (incremental/complete_colab_worker),
+  hpo_persistence, dvc.yaml/dvc.lock/dvc_refs/ and the dvc settings in
+  config/training.yaml. Publication today still works via publish_git +
+  tar.zst package transport.
 - The diet-gate blocker in TODO.md (neg_aug_frac 0.2592 < 0.30,
   pos/neg ratio 2.9821 > 1.50) pre-dates this refactor and still blocks
   the suite supervisor; it is OUT of scope for PIPE.md (data-policy,
