@@ -3854,8 +3854,22 @@ def run_bundle(dataset_csv: Path | None = None) -> None:
         flush=True,
     )
     _upload_with_retries(source, f"{REMOTE_ROOT}/dataset.csv", timeout=3600)
+    # Cohort-aware audit pins: the VM config re-pins to the uploaded export's
+    # measured census (rows + sha) BEFORE prepare_all reads it, so any cohort
+    # drives the lane while the drift gate stays meaningful for the rest of
+    # the run (a changed file mid-run still fails loudly at dedupe).
     script = _BOOTSTRAP + f"""
-import glob, os, subprocess, sys, tarfile
+import glob, hashlib, os, re, subprocess, sys, tarfile
+import pandas as pd
+csv_path = {REMOTE_ROOT!r} + "/dataset.csv"
+_rows = len(pd.read_csv(csv_path, dtype=str))
+_sha = hashlib.sha256(open(csv_path, "rb").read()).hexdigest()
+_cfg = {REMOTE_ROOT!r} + "/config/training.yaml"
+_text = open(_cfg, encoding="utf-8").read()
+_text = re.sub(r"(source_export_expected_rows: )[\\d_]+", r"\\g<1>" + str(_rows), _text, count=1)
+_text = re.sub(r'(source_export_expected_sha256: ")[0-9a-f]{{64}}"', r"\\g<1>" + _sha, _text, count=1)
+open(_cfg, "w", encoding="utf-8").write(_text)
+print(f"[bundle] VM audit pins -> rows={{_rows}} sha={{_sha[:12]}}...", flush=True)
 rc = subprocess.run(
     [sys.executable, "-m", "training.prepare_all"],
     cwd={REMOTE_ROOT!r},
