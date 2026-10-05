@@ -1,0 +1,2737 @@
+{
+  "verdicts": [
+    {
+      "gtin": "05411188128021",
+      "rows": 14,
+      "titles": [
+        "Alpro Caffe Ethiopian Coffee & Soya Caramel 235 Ml",
+        "Alpro Caffe Ethiopian Coffee & Soya Caramel Blend 235ml",
+        "Alpro Caff\u00e8 Coffee & Soya Caramel Drink",
+        "Alpro Caff\u00e8 Latte Ethiopian Coffee and Soya Caramel Chilled Drink 235ml"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['caramel', 'coffee']": 6,
+            "['coffee']": 3
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "asda",
+            "co op",
+            "hemkop",
+            "mat se",
+            "meny",
+            "sainsbury s",
+            "spar",
+            "tesco",
+            "willys"
+          ],
+          "value_counts": {
+            "['caramel', 'coffee']": 7,
+            "['caramel', 'coffee', 'latte']": 4,
+            "['coffee']": 3
+          }
+        },
+        "package_material": {
+          "feed_value_counts": {
+            "['metal']": 5,
+            "['carton', 'paper']": 4
+          },
+          "dissent_feeds": [
+            "hemkop",
+            "mat se",
+            "tesco",
+            "willys"
+          ],
+          "dissent_sku_ids": [
+            "330809160",
+            "331507339",
+            "212498392",
+            "334107321"
+          ],
+          "consensus_feeds": [
+            "asda",
+            "co op",
+            "meny",
+            "sainsbury s",
+            "spar"
+          ],
+          "value_counts": {
+            "['metal']": 10,
+            "['carton', 'paper']": 4
+          }
+        }
+      }
+    },
+    {
+      "gtin": "04260213391630",
+      "rows": 13,
+      "titles": [
+        "DR-GOERG Bio coconut water ecological container 1 l",
+        "Dr. Goerg Organic Coconut Water",
+        "Dr. goerg Bio- coconut water 1l",
+        "Dr. goerg Organic Coconut Water"
+      ],
+      "dimension_verdicts": {
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 5,
+            "['carbonated']": 1
+          },
+          "dissent_feeds": [
+            "carethy"
+          ],
+          "dissent_sku_ids": [
+            "653914078"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "el corte ingles",
+            "hipercor",
+            "rewe",
+            "shop apotheke"
+          ],
+          "value_counts": {
+            "['still']": 7,
+            "['carbonated']": 6
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00859078002153",
+      "rows": 12,
+      "titles": [
+        "HARMLESS HARVEST Organic Coconut Water",
+        "Harmless Harvest 100% Raw Coconut Water",
+        "Harmless Harvest Coconut Water 100% Raw Organic",
+        "Harmless Harvest Coconut Water 16oz"
+      ],
+      "dimension_verdicts": {
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 11,
+            "['carbonated']": 1
+          },
+          "dissent_feeds": [
+            "wholefoods"
+          ],
+          "dissent_sku_ids": [
+            "441084869"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer",
+            "peapod",
+            "safeway",
+            "target",
+            "walmart"
+          ],
+          "value_counts": {
+            "['still']": 11,
+            "['carbonated']": 1
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_added_sugar']": 2,
+            "['diet']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "meijer",
+            "peapod",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['diet']": 1,
+            "['no_added_sugar']": 2
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['bottle']": 5,
+            "['carton']": 1
+          },
+          "dissent_feeds": [
+            "meijer"
+          ],
+          "dissent_sku_ids": [
+            "631357454"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "peapod",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['bottle']": 5,
+            "['carton']": 1
+          }
+        },
+        "package_material": {
+          "feed_value_counts": {
+            "['plastic']": 9,
+            "['carton', 'paper']": 2,
+            "['metal']": 1
+          },
+          "dissent_feeds": [
+            "giant eagle",
+            "harris teeter",
+            "safeway"
+          ],
+          "dissent_sku_ids": [
+            "140617194",
+            "17547479",
+            "449595812"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "h e b",
+            "hy vee",
+            "meijer",
+            "peapod",
+            "target",
+            "walmart",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['carton', 'paper']": 2,
+            "['plastic']": 9,
+            "['metal']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "07310050005171",
+      "rows": 11,
+      "titles": [
+        "Ice Coffee latte macchiato",
+        "Ice Coffee macchiato organic",
+        "Ice latte macchiato",
+        "Ice latte macchiato organic 230ml l\u00f6fbergs"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['coffee', 'light']": 1,
+            "['coffee', 'espresso', 'latte']": 1,
+            "['coffee', 'latte', 'light']": 2,
+            "['coffee', 'latte']": 5
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "coop",
+            "food market herkku",
+            "hemkop",
+            "ica",
+            "k ruoka",
+            "mat se",
+            "s kaupat",
+            "spar",
+            "willys"
+          ],
+          "value_counts": {
+            "['coffee', 'latte']": 6,
+            "['coffee', 'light']": 1,
+            "['coffee']": 1,
+            "['coffee', 'latte', 'light']": 2,
+            "['coffee', 'espresso', 'latte']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00859078002672",
+      "rows": 11,
+      "titles": [
+        "100% Raw Coconut Water - Organic",
+        "Coconut Water - 8.75 Oz - 8.75 fl oz",
+        "Coconut Water, 8.75 Ounce ( Pack of 12)",
+        "Harmless Harvest Coconut Water"
+      ],
+      "dimension_verdicts": {
+        "volume_ml": {
+          "feed_value_counts": {
+            "[259.0]": 3,
+            "[1000.0]": 1
+          },
+          "dissent_feeds": [
+            "hy vee"
+          ],
+          "dissent_sku_ids": [
+            "67379009"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "walmart",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "[259.0]": 4,
+            "[1000.0]": 1
+          }
+        },
+        "pack": {
+          "feed_value_counts": {
+            "[12.0]": 1,
+            "[1.0]": 9
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "kroger",
+            "peapod",
+            "walmart",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "[1.0]": 10,
+            "[12.0]": 1
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 8,
+            "['carbonated']": 2
+          },
+          "dissent_feeds": [
+            "fred meyer stores",
+            "kroger"
+          ],
+          "dissent_sku_ids": [
+            "318642310",
+            "47046220"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "peapod",
+            "walmart",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['still']": 9,
+            "['carbonated']": 2
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_added_sugar']": 1,
+            "['diet']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "peapod",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['diet']": 1,
+            "['no_added_sugar']": 1
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['bottle']": 7,
+            "['carton']": 1
+          },
+          "dissent_feeds": [
+            "giant eagle"
+          ],
+          "dissent_sku_ids": [
+            "40502813"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "hy vee",
+            "kroger",
+            "peapod",
+            "walmart",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['bottle']": 7,
+            "['carton']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "07310050005188",
+      "rows": 11,
+      "titles": [
+        "ICE Espresso + Milk organic fairtrade",
+        "Ice Coffee Espresso Ft / org",
+        "Ice Coffee Espresso organic",
+        "Ice Espresso & Milk"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['coffee', 'espresso']": 7,
+            "['espresso']": 2
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "coop",
+            "food market herkku",
+            "hemkop",
+            "k ruoka",
+            "mat se",
+            "mathem",
+            "s kaupat",
+            "spar",
+            "willys"
+          ],
+          "value_counts": {
+            "['coffee', 'espresso']": 9,
+            "['espresso']": 2
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['can']": 5,
+            "['tin']": 1
+          },
+          "dissent_feeds": [
+            "spar"
+          ],
+          "dissent_sku_ids": [
+            "413084895"
+          ],
+          "consensus_feeds": [
+            "coop",
+            "food market herkku",
+            "hemkop",
+            "s kaupat",
+            "willys"
+          ],
+          "value_counts": {
+            "['can']": 5,
+            "['tin']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00815154020008",
+      "rows": 11,
+      "titles": [
+        "High Performance Energy Drink",
+        "NOS High Performance Energy Drink",
+        "NOS High Performance Energy Drink, 16 Fl. Oz.",
+        "NOS High Performance Energy Drink, 16 fl oz"
+      ],
+      "dimension_verdicts": {
+        "carbonation": {
+          "feed_value_counts": {
+            "['carbonated']": 7,
+            "['still']": 2
+          },
+          "dissent_feeds": [
+            "harris teeter",
+            "rite aid"
+          ],
+          "dissent_sku_ids": [
+            "246345128",
+            "631363558"
+          ],
+          "consensus_feeds": [
+            "fred meyer stores",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "safeway",
+            "walmart"
+          ],
+          "value_counts": {
+            "['still']": 3,
+            "['carbonated']": 7
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00894357002585",
+      "rows": 10,
+      "titles": [
+        "Smart Juice Blend, Antoxdnt Force Org, 33.8 fl oz",
+        "Smart Juice Organic Antioxidant Force - 33.8 Fl. Oz.",
+        "Smart Juice Organic Antioxidant Force 100% Juice",
+        "Smart Juice Organic Antioxidant Force 100% Juice -- 33.8 fl oz"
+      ],
+      "dimension_verdicts": {
+        "pack": {
+          "feed_value_counts": {
+            "[1.0]": 9,
+            "[6.0]": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "h e b",
+            "hy vee",
+            "jet com",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target",
+            "vitacost"
+          ],
+          "value_counts": {
+            "[1.0]": 9,
+            "[6.0]": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00857273008758",
+      "rows": 10,
+      "titles": [
+        "Collagen Water, Strawberry Lemon",
+        "Strawberry Lemon Collagen Water, 12 fl oz",
+        "Vital Proteins Collagen Water Strawberry Lemon",
+        "Vital Proteins Collagen Water Strbry Lmn - 12 OZ"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['fruit', 'lemon', 'strawberry']": 6,
+            "['lemon', 'strawberry']": 2,
+            "['fruit']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "cvs",
+            "fred meyer stores",
+            "harris teeter",
+            "hy vee",
+            "kroger",
+            "safeway",
+            "target",
+            "walgreens",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['lemon', 'strawberry']": 2,
+            "['fruit', 'lemon', 'strawberry']": 7,
+            "['fruit']": 1
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 7,
+            "['carbonated']": 1
+          },
+          "dissent_feeds": [
+            "wholefoods"
+          ],
+          "dissent_sku_ids": [
+            "441235472"
+          ],
+          "consensus_feeds": [
+            "fred meyer stores",
+            "harris teeter",
+            "hy vee",
+            "kroger",
+            "safeway",
+            "target",
+            "walgreens"
+          ],
+          "value_counts": {
+            "['still']": 8,
+            "['carbonated']": 1
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['sugar']": 1,
+            "['diet']": 1
+          },
+          "dissent_feeds": [
+            "wholefoods"
+          ],
+          "dissent_sku_ids": [
+            "441235472"
+          ],
+          "consensus_feeds": [
+            "harris teeter"
+          ],
+          "value_counts": {
+            "['sugar']": 1,
+            "['diet']": 1
+          }
+        },
+        "sweetener_type": {
+          "feed_value_counts": {
+            "['monk_fruit']": 4,
+            "['sugar']": 1,
+            "['monk_fruit', 'sugar']": 3
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "cvs",
+            "fred meyer stores",
+            "harris teeter",
+            "hy vee",
+            "kroger",
+            "safeway",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['sugar']": 1,
+            "['monk_fruit', 'sugar']": 4,
+            "['monk_fruit']": 4
+          }
+        },
+        "package_material": {
+          "feed_value_counts": {
+            "['plastic']": 6,
+            "['glass']": 1,
+            "['metal']": 1
+          },
+          "dissent_feeds": [
+            "harris teeter",
+            "wholefoods"
+          ],
+          "dissent_sku_ids": [
+            "265307575",
+            "441235472"
+          ],
+          "consensus_feeds": [
+            "cvs",
+            "fred meyer stores",
+            "hy vee",
+            "kroger",
+            "target",
+            "walgreens"
+          ],
+          "value_counts": {
+            "['glass']": 2,
+            "['plastic']": 6,
+            "['metal']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00616003708777",
+      "rows": 10,
+      "titles": [
+        "Zing Zang Bloody Mary Mix",
+        "Zing Zang Bloody Mary Mix 1.75L Bottle",
+        "Zing Zang Bloody Mary Mix Pet - 1.75 Liter",
+        "Zing Zang Bloody Mary Mix in 59.2 Fluid Ounce Bottle"
+      ],
+      "dimension_verdicts": {
+        "volume_ml": {
+          "feed_value_counts": {
+            "[1751.0]": 1,
+            "[1750.0]": 5
+          },
+          "dissent_feeds": [
+            "amazon"
+          ],
+          "dissent_sku_ids": [
+            "72205986"
+          ],
+          "consensus_feeds": [
+            "h e b",
+            "hy vee",
+            "meijer",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "[1750.0]": 6,
+            "[1751.0]": 1
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['sugar']": 3,
+            "['no_sugar', 'sugar']": 1
+          },
+          "dissent_feeds": [
+            "target"
+          ],
+          "dissent_sku_ids": [
+            "43265618"
+          ],
+          "consensus_feeds": [
+            "fred meyer stores",
+            "hy vee",
+            "safeway"
+          ],
+          "value_counts": {
+            "['sugar']": 4,
+            "['no_sugar', 'sugar']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00620221200128",
+      "rows": 10,
+      "titles": [
+        "Green Apple Soda",
+        "JONES Green Apple Soda Btl 12oz",
+        "Jones Cane Sugar Soda Green Apple",
+        "Jones Green Apple Soda"
+      ],
+      "dimension_verdicts": {
+        "brand": {
+          "feed_value_counts": {
+            "['jones', 'soda']": 3,
+            "['jones']": 5
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "safeway"
+          ],
+          "value_counts": {
+            "['jones']": 6,
+            "['jones', 'soda']": 4
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['carbonated', 'still']": 1,
+            "['carbonated']": 6,
+            "['still']": 1
+          },
+          "dissent_feeds": [
+            "harris teeter"
+          ],
+          "dissent_sku_ids": [
+            "215636610"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "safeway"
+          ],
+          "value_counts": {
+            "['carbonated']": 8,
+            "['still']": 1,
+            "['carbonated', 'still']": 1
+          }
+        },
+        "sweetener_type": {
+          "feed_value_counts": {
+            "['cane_sugar', 'sugar']": 1,
+            "['cane_sugar']": 6
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "safeway"
+          ],
+          "value_counts": {
+            "['cane_sugar']": 8,
+            "['cane_sugar', 'sugar']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "07391835917803",
+      "rows": 10,
+      "titles": [
+        "Juice beetroot organic",
+        "beetroot juice organic",
+        "beetroot juice organic / requirement 750ml kung markatta",
+        "beetroot juice requirement"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['beet', 'cherry']": 8,
+            "['beet']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "apotea",
+            "apotek hjartat",
+            "coop",
+            "hemkop",
+            "ica",
+            "mat se",
+            "mat smart",
+            "mathem",
+            "willys"
+          ],
+          "value_counts": {
+            "['beet', 'cherry']": 9,
+            "['beet']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "05411188129257",
+      "rows": 9,
+      "titles": [
+        "Alpro Caffe Colombian Coffee & Oat Blend 235 Ml",
+        "Alpro Caffe Cup Oat 235ml",
+        "Alpro Caff\u00e8 Latte Colombian Coffee & Oat Chilled Drink 235ml",
+        "Caff\u00e8 Latte Colombian Coffee & Oat Chilled Drink 235ml"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['coffee', 'latte', 'light', 'oat']": 1,
+            "['coffee', 'oat']": 3
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "asda",
+            "co op",
+            "sainsbury s",
+            "tesco"
+          ],
+          "value_counts": {
+            "['coffee', 'oat']": 4,
+            "['coffee', 'latte', 'oat']": 4,
+            "['coffee', 'latte', 'light', 'oat']": 1
+          }
+        },
+        "package_material": {
+          "feed_value_counts": {
+            "['flexible', 'pack']": 1,
+            "['metal']": 3
+          },
+          "dissent_feeds": [
+            "asda"
+          ],
+          "dissent_sku_ids": [
+            "451697247"
+          ],
+          "consensus_feeds": [
+            "co op",
+            "sainsbury s",
+            "tesco"
+          ],
+          "value_counts": {
+            "['metal']": 8,
+            "['flexible', 'pack']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00810014530178",
+      "rows": 9,
+      "titles": [
+        "A SHOC Performance Energy Drink, Watermelon, Zero Sugar, 16 Ounce Can, Natural Energy Blen",
+        "A SHOC Watermelon Energy Drink",
+        "Adrenaline Shoc Smart Energy Drink, Watermelon",
+        "Adrenaline Shoc Smart Energy Energy Drink, 05 Watermelon"
+      ],
+      "dimension_verdicts": {
+        "brand": {
+          "feed_value_counts": {
+            "['adrenaline', 'shoc']": 7,
+            "['a', 'shoc']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer",
+            "walgreens"
+          ],
+          "value_counts": {
+            "['adrenaline', 'shoc']": 8,
+            "['a', 'shoc']": 1
+          }
+        },
+        "pack": {
+          "feed_value_counts": {
+            "[16.0]": 1,
+            "[1.0]": 7
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer",
+            "walgreens"
+          ],
+          "value_counts": {
+            "[16.0]": 1,
+            "[1.0]": 8
+          }
+        },
+        "flavor": {
+          "feed_value_counts": {
+            "['coffee', 'watermelon']": 6,
+            "['watermelon']": 2
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer",
+            "walgreens"
+          ],
+          "value_counts": {
+            "['coffee', 'watermelon']": 7,
+            "['watermelon']": 2
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 3,
+            "['carbonated']": 4
+          },
+          "dissent_feeds": [
+            "amazon",
+            "harris teeter",
+            "walgreens"
+          ],
+          "dissent_sku_ids": [
+            "173700728",
+            "368359736",
+            "368370942"
+          ],
+          "consensus_feeds": [
+            "fred meyer stores",
+            "giant eagle",
+            "hy vee",
+            "meijer"
+          ],
+          "value_counts": {
+            "['still']": 3,
+            "['carbonated']": 5
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_sugar']": 4,
+            "['no_added_sugar']": 2
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer"
+          ],
+          "value_counts": {
+            "['no_sugar']": 5,
+            "['no_added_sugar']": 2
+          }
+        },
+        "sweetener_type": {
+          "feed_value_counts": {
+            "['sucralose']": 1,
+            "['acesulfame_potassium', 'sucralose']": 4
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "fred meyer stores",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "meijer"
+          ],
+          "value_counts": {
+            "['acesulfame_potassium', 'sucralose']": 4,
+            "['sucralose']": 2
+          }
+        }
+      }
+    },
+    {
+      "gtin": "04260335835548",
+      "rows": 9,
+      "titles": [
+        "Bio coconut water (1000ml)",
+        "Ko Ro Eau organic coconut, 1 liter",
+        "Ko Ro Organic Coconut Water, 1 l",
+        "Ko Ro coconut water Bio, 1 l"
+      ],
+      "dimension_verdicts": {
+        "package_material": {
+          "feed_value_counts": {
+            "['plastic']": 1,
+            "['carton', 'paper']": 3
+          },
+          "dissent_feeds": [
+            "dm"
+          ],
+          "dissent_sku_ids": [
+            "443422624"
+          ],
+          "consensus_feeds": [
+            "galaxus",
+            "rewe",
+            "vitalabo"
+          ],
+          "value_counts": {
+            "['carton', 'paper']": 7,
+            "['plastic']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00810014530475",
+      "rows": 9,
+      "titles": [
+        "A SHOC Accelerator Island Guava Energy Drink Can - 12 Fl. Oz.",
+        "A SHOC Accelerator Island Guava Smart Energy Drink, 12 Fl Oz Can",
+        "A SHOC Accelerator Smart Energy Drink, 12 OZ | Island Guava",
+        "Accelerator Energy Drink, Island Guava"
+      ],
+      "dimension_verdicts": {
+        "brand": {
+          "feed_value_counts": {
+            "['a', 'shoc']": 3,
+            "['accelerator', 'shoc']": 4,
+            "['adrenaline', 'shoc']": 2
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "cvs",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer",
+            "rite aid",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['accelerator', 'shoc']": 4,
+            "['a', 'shoc']": 3,
+            "['adrenaline', 'shoc']": 2
+          }
+        },
+        "flavor": {
+          "feed_value_counts": {
+            "['guava']": 8,
+            "['coffee', 'guava']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "cvs",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer",
+            "rite aid",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['guava']": 8,
+            "['coffee', 'guava']": 1
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['carbonated']": 7,
+            "['still']": 2
+          },
+          "dissent_feeds": [
+            "harris teeter",
+            "meijer"
+          ],
+          "dissent_sku_ids": [
+            "575003297",
+            "839788857"
+          ],
+          "consensus_feeds": [
+            "cvs",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "rite aid",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['still']": 2,
+            "['carbonated']": 7
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_sugar']": 6,
+            "['no_added_sugar']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "rite aid",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['no_sugar']": 6,
+            "['no_added_sugar']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "05705010069492",
+      "rows": 9,
+      "titles": [
+        "Juice Apple Mandarin & Carrot organic 850ml good morning",
+        "Juice Mandarin & carrot organic",
+        "Juice apple Mandarin & carrot organic 850ml good morning",
+        "Juice apple, mandarin & carrot organic"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['apple', 'carrot', 'mandarin', 'orange']": 6,
+            "['apple', 'carrot', 'mandarin']": 1,
+            "['apple', 'carrot']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "coop",
+            "hemkop",
+            "ica",
+            "mat se",
+            "mathem",
+            "meny",
+            "spar",
+            "willys"
+          ],
+          "value_counts": {
+            "['apple', 'carrot', 'mandarin', 'orange']": 7,
+            "['apple', 'carrot']": 1,
+            "['apple', 'carrot', 'mandarin']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00810014530482",
+      "rows": 9,
+      "titles": [
+        "A SHOC Accelerator Orange Mango Energy Drink",
+        "A SHOC Accelerator Orange Mango Smart Energy Drink, 12 Fl Oz Can",
+        "A SHOC Accelerator Smart Energy Drink, 12 OZ | Orange Mango",
+        "Accelerator Energy Drink, Orange Mango"
+      ],
+      "dimension_verdicts": {
+        "brand": {
+          "feed_value_counts": {
+            "['a', 'shoc']": 4,
+            "['accelerator', 'shoc']": 3,
+            "['adrenaline', 'shoc']": 2
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "cvs",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer",
+            "rite aid",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['accelerator', 'shoc']": 3,
+            "['a', 'shoc']": 4,
+            "['adrenaline', 'shoc']": 2
+          }
+        },
+        "flavor": {
+          "feed_value_counts": {
+            "['mango', 'orange']": 8,
+            "['coffee', 'mango', 'orange']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "cvs",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer",
+            "rite aid",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['mango', 'orange']": 8,
+            "['coffee', 'mango', 'orange']": 1
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['carbonated']": 7,
+            "['still']": 2
+          },
+          "dissent_feeds": [
+            "harris teeter",
+            "meijer"
+          ],
+          "dissent_sku_ids": [
+            "569925314",
+            "840389798"
+          ],
+          "consensus_feeds": [
+            "cvs",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "rite aid",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['still']": 2,
+            "['carbonated']": 7
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_sugar']": 5,
+            "['no_added_sugar']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "rite aid",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['no_sugar']": 5,
+            "['no_added_sugar']": 1
+          }
+        },
+        "sweetener_type": {
+          "feed_value_counts": {
+            "['acesulfame_potassium', 'sucralose']": 6,
+            "['sucralose']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "cvs",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "rite aid",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['acesulfame_potassium', 'sucralose']": 6,
+            "['sucralose']": 1
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['can']": 5,
+            "['box', 'carton']": 1
+          },
+          "dissent_feeds": [
+            "hy vee"
+          ],
+          "dissent_sku_ids": [
+            "750043856"
+          ],
+          "consensus_feeds": [
+            "cvs",
+            "h e b",
+            "meijer",
+            "rite aid",
+            "target"
+          ],
+          "value_counts": {
+            "['can']": 5,
+            "['box', 'carton']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00859078002627",
+      "rows": 9,
+      "titles": [
+        "Harmless Coconut Water, Original 32oz (6 Pack)",
+        "Harmless Harvest Coconut Water",
+        "Harmless Harvest Organic Coconut Water",
+        "Harmless Harvest Organic Coconut Water - 32 Fl. Oz."
+      ],
+      "dimension_verdicts": {
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_added_sugar']": 3,
+            "['diet']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "meijer",
+            "safeway",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['no_added_sugar']": 3,
+            "['diet']": 2
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['bottle']": 1,
+            "['carton']": 3
+          },
+          "dissent_feeds": [
+            "amazon"
+          ],
+          "dissent_sku_ids": [
+            "68751256"
+          ],
+          "consensus_feeds": [
+            "h e b",
+            "meijer",
+            "safeway"
+          ],
+          "value_counts": {
+            "['carton']": 4,
+            "['bottle']": 2
+          }
+        }
+      }
+    },
+    {
+      "gtin": "04260171050457",
+      "rows": 9,
+      "titles": [
+        "coconut water pure",
+        "kulau Bio- coconut water Pure",
+        "kulau Pure Bio coconut water, 330 ml",
+        "kulau coconut water Bio, 330 ml"
+      ],
+      "dimension_verdicts": {
+        "sweetener": {
+          "feed_value_counts": {
+            "['sugar']": 2,
+            "['no_sugar']": 1
+          },
+          "dissent_feeds": [
+            "vitalabo"
+          ],
+          "dissent_sku_ids": [
+            "522131271"
+          ],
+          "consensus_feeds": [
+            "mcdrogerie",
+            "rewe"
+          ],
+          "value_counts": {
+            "['sugar']": 2,
+            "['no_sugar']": 3
+          }
+        }
+      }
+    },
+    {
+      "gtin": "04029679123632",
+      "rows": 9,
+      "titles": [
+        "Electrolyte Drink (1000ml)",
+        "Electrolyte Drink - Strawberry Lime",
+        "Power Bar Electrolyte Drink, calories- and low in sugar, perfect for sport",
+        "powerbar Electrolyte Drink Strawberry- Lime"
+      ],
+      "dimension_verdicts": {
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_sugar']": 2,
+            "['sugar']": 1
+          },
+          "dissent_feeds": [
+            "shop apotheke"
+          ],
+          "dissent_sku_ids": [
+            "531971846"
+          ],
+          "consensus_feeds": [
+            "galaxus",
+            "vitalabo"
+          ],
+          "value_counts": {
+            "['no_sugar']": 6,
+            "['sugar']": 3
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00852789008087",
+      "rows": 9,
+      "titles": [
+        "1 Liter, 33.8 fl oz",
+        "Alkaline Water, Lifestyle, Vapor Distilled",
+        "Vapor Distilled Water, 33.8 fl oz",
+        "ZENWTR 33.8 OZ."
+      ],
+      "dimension_verdicts": {
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 6,
+            "['carbonated']": 2
+          },
+          "dissent_feeds": [
+            "safeway",
+            "wholefoods"
+          ],
+          "dissent_sku_ids": [
+            "611533144",
+            "441201338"
+          ],
+          "consensus_feeds": [
+            "giant eagle",
+            "harris teeter",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "target"
+          ],
+          "value_counts": {
+            "['still']": 6,
+            "['carbonated']": 3
+          }
+        },
+        "package_material": {
+          "feed_value_counts": {
+            "['plastic']": 2,
+            "['metal']": 5
+          },
+          "dissent_feeds": [
+            "giant eagle",
+            "kroger"
+          ],
+          "dissent_sku_ids": [
+            "528574702",
+            "653424735"
+          ],
+          "consensus_feeds": [
+            "harris teeter",
+            "meijer",
+            "safeway",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['metal']": 5,
+            "['plastic']": 2
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00867657000087",
+      "rows": 9,
+      "titles": [
+        "Aspire Healthy Energy Drinks Mango Lemonade Single",
+        "Aspire Mango Lemonade",
+        "Aspire Mango Lemonade Calorie Burning Energy Drink Can",
+        "Aspire Mango Lemonade Energy Drink - 12 fl oz Can"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['lemon', 'mango']": 7,
+            "['ginger', 'mango']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "target"
+          ],
+          "value_counts": {
+            "['lemon', 'mango']": 8,
+            "['ginger', 'mango']": 1
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 2,
+            "['carbonated']": 5
+          },
+          "dissent_feeds": [
+            "amazon",
+            "kroger"
+          ],
+          "dissent_sku_ids": [
+            "135391068",
+            "928956448"
+          ],
+          "consensus_feeds": [
+            "giant eagle",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "meijer"
+          ],
+          "value_counts": {
+            "['still']": 2,
+            "['carbonated']": 6
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_sugar']": 2,
+            "['no_added_sugar', 'no_sugar']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "harris teeter",
+            "hy vee"
+          ],
+          "value_counts": {
+            "['no_sugar']": 3,
+            "['no_added_sugar', 'no_sugar']": 1
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['can']": 2,
+            "['box', 'carton']": 1
+          },
+          "dissent_feeds": [
+            "meijer"
+          ],
+          "dissent_sku_ids": [
+            "264775885"
+          ],
+          "consensus_feeds": [
+            "kroger",
+            "target"
+          ],
+          "value_counts": {
+            "['box', 'carton']": 1,
+            "['can']": 3
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00850003748795",
+      "rows": 9,
+      "titles": [
+        "",
+        "HYDRATING LEMON WATER, 15.2 oz",
+        "Lemon Perfect Lemon Water, Zero Sugar, Peach Raspberry, Hydrating",
+        "Lemon Perfect Peach Organic Lemon Water"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['lemon', 'peach', 'raspberry']": 7,
+            "['lemon', 'peach']": 1,
+            "['lemon']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['lemon', 'peach', 'raspberry']": 7,
+            "['lemon', 'peach']": 1,
+            "['lemon']": 1
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 7,
+            "['carbonated', 'still']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "safeway",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['still']": 7,
+            "['carbonated', 'still']": 1
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_sugar']": 7,
+            "['no_added_sugar', 'no_sugar']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['no_added_sugar', 'no_sugar']": 1,
+            "['no_sugar']": 7
+          }
+        },
+        "sweetener_type": {
+          "feed_value_counts": {
+            "['stevia']": 6,
+            "['stevia', 'sugar']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "safeway",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['stevia']": 6,
+            "['stevia', 'sugar']": 1
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['carton']": 1,
+            "['bottle']": 1
+          },
+          "dissent_feeds": [
+            "target"
+          ],
+          "dissent_sku_ids": [
+            "1038494207"
+          ],
+          "consensus_feeds": [
+            "hy vee"
+          ],
+          "value_counts": {
+            "['bottle']": 1,
+            "['carton']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00182136000021",
+      "rows": 9,
+      "titles": [
+        "AQU Ahydrate Enhanced Water with Electrolytes PH9 + - 1 Liter",
+        "AQU Ahydrate Purified Water - 33.8 fl oz Bottle",
+        "AQUA Hydrate Purified Water With Electrolytes",
+        "Aqua Hydrate Aqua Hydrate Water 1.0 LT ( Pack of 1)"
+      ],
+      "dimension_verdicts": {
+        "package_material": {
+          "feed_value_counts": {
+            "['metal']": 5,
+            "['plastic']": 2
+          },
+          "dissent_feeds": [
+            "h e b",
+            "target"
+          ],
+          "dissent_sku_ids": [
+            "73106680",
+            "318500138"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "harris teeter",
+            "hy vee",
+            "rite aid",
+            "safeway"
+          ],
+          "value_counts": {
+            "['metal']": 5,
+            "['plastic']": 2,
+            "['glass']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "04006643141335",
+      "rows": 9,
+      "titles": [
+        "ISO Drink - Grapefruit- Lime",
+        "ISO Drink - grapefruit - lime",
+        "iso drink - Grapefruit- Lime",
+        "multipower iso drink"
+      ],
+      "dimension_verdicts": {
+        "sweetener_type": {
+          "feed_value_counts": {
+            "['acesulfame_potassium', 'cyclamate', 'fructose', 'saccharin', 'sugar']": 1,
+            "['acesulfame_potassium', 'aspartame', 'cyclamate', 'fructose', 'saccharin']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "sportnahrung",
+            "vitalabo"
+          ],
+          "value_counts": {
+            "['acesulfame_potassium', 'cyclamate', 'fructose', 'saccharin', 'sugar']": 1,
+            "['acesulfame_potassium', 'aspartame', 'cyclamate', 'fructose', 'saccharin']": 6,
+            "['acesulfame_potassium', 'aspartame', 'cyclamate', 'fructose']": 1,
+            "['acesulfame_potassium', 'aspartame', 'fructose']": 1
+          }
+        },
+        "package_material": {
+          "feed_value_counts": {
+            "['plastic']": 1,
+            "['metal']": 1
+          },
+          "dissent_feeds": [
+            "vitalabo"
+          ],
+          "dissent_sku_ids": [
+            "484879067"
+          ],
+          "consensus_feeds": [
+            "sportnahrung"
+          ],
+          "value_counts": {
+            "['plastic']": 1,
+            "['metal']": 8
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00850003748771",
+      "rows": 9,
+      "titles": [
+        "HYDRATING LEMON WATER, 15.2 fl oz",
+        "Lemon Perfect Just Lemon 15.2oz",
+        "Lemon Perfect Lemon Water, Zero Sugar, Original Lemon, Hydrating",
+        "Lemon Perfect Original Lemon Hydrating Lemon Water - 15.2 fl oz Bottle"
+      ],
+      "dimension_verdicts": {
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 7,
+            "['carbonated']": 1
+          },
+          "dissent_feeds": [
+            "safeway"
+          ],
+          "dissent_sku_ids": [
+            "863656061"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['still']": 7,
+            "['carbonated']": 1
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_sugar']": 5,
+            "['no_added_sugar', 'no_sugar']": 3
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['no_added_sugar', 'no_sugar']": 3,
+            "['no_sugar']": 5
+          }
+        }
+      }
+    },
+    {
+      "gtin": "07310070001726",
+      "rows": 9,
+      "titles": [
+        "Citrus carbonated water Pet",
+        "Citrus carbonated water incl. Pant",
+        "carbonated water Citrus",
+        "carbonated water Citrus 50cl frameless"
+      ],
+      "dimension_verdicts": {
+        "carbonation": {
+          "feed_value_counts": {
+            "['carbonated']": 7,
+            "['still']": 1
+          },
+          "dissent_feeds": [
+            "mathem"
+          ],
+          "dissent_sku_ids": [
+            "56107985"
+          ],
+          "consensus_feeds": [
+            "coop",
+            "hemkop",
+            "ica",
+            "kronans apotek",
+            "mat se",
+            "mat smart",
+            "willys"
+          ],
+          "value_counts": {
+            "['carbonated']": 8,
+            "['still']": 1
+          }
+        },
+        "package_material": {
+          "feed_value_counts": {
+            "['plastic']": 5,
+            "['glass']": 1
+          },
+          "dissent_feeds": [
+            "kronans apotek"
+          ],
+          "dissent_sku_ids": [
+            "895440843"
+          ],
+          "consensus_feeds": [
+            "hemkop",
+            "ica",
+            "mat se",
+            "mat smart",
+            "willys"
+          ],
+          "value_counts": {
+            "['plastic']": 6,
+            "['glass']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00854125003039",
+      "rows": 9,
+      "titles": [
+        "Tres Agaves Margarita Mix, 33.8 Fl Oz Bottle",
+        "Tres Agaves Mixers Organic Lime Margarita Mix",
+        "Tres Agaves Organic Lime Margarita Mix",
+        "Tres Agaves Organic Lime Margarita Mix Bottle - 1 Liter"
+      ],
+      "dimension_verdicts": {
+        "pack": {
+          "feed_value_counts": {
+            "[2.0]": 1,
+            "[1.0]": 7
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "meijer",
+            "safeway",
+            "target",
+            "walmart"
+          ],
+          "value_counts": {
+            "[1.0]": 8,
+            "[2.0]": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00815154020909",
+      "rows": 9,
+      "titles": [
+        "Energy Nos Energy Drink, 8 cans / 16 fl oz",
+        "High Performance Energy Drink",
+        "NOS High Performance Energy Drink",
+        "NOS High Performance Energy Drink - 8 - 16 fl oz"
+      ],
+      "dimension_verdicts": {
+        "pack": {
+          "feed_value_counts": {
+            "[8.0]": 6,
+            "[1.0]": 2
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "h e b",
+            "harris teeter",
+            "hy vee",
+            "kroger",
+            "safeway",
+            "walmart"
+          ],
+          "value_counts": {
+            "[1.0]": 2,
+            "[8.0]": 7
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['carbonated']": 6,
+            "['still']": 1
+          },
+          "dissent_feeds": [
+            "harris teeter"
+          ],
+          "dissent_sku_ids": [
+            "2514550"
+          ],
+          "consensus_feeds": [
+            "fred meyer stores",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "safeway",
+            "walmart"
+          ],
+          "value_counts": {
+            "['carbonated']": 7,
+            "['still']": 1
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['can']": 2,
+            "['box', 'carton']": 5
+          },
+          "dissent_feeds": [
+            "amazon",
+            "h e b"
+          ],
+          "dissent_sku_ids": [
+            "84234353",
+            "70769858"
+          ],
+          "consensus_feeds": [
+            "fred meyer stores",
+            "hy vee",
+            "kroger",
+            "safeway",
+            "walmart"
+          ],
+          "value_counts": {
+            "['box', 'carton']": 6,
+            "['can']": 2
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00850003748788",
+      "rows": 9,
+      "titles": [
+        "HYDRATING LEMON WATER, 15.2 fl oz",
+        "Lemon Perfect Dragon Fruit Mango 15.2oz",
+        "Lemon Perfect Dragon Fruit Mango Hydrating Lemon Water - 15.2 fl oz Bottle",
+        "Lemon Perfect Dragon Fruit Mango, Hydrating Flavored Lemon Water, Zero Sugar, Delicious an"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['fruit', 'lemon', 'mango']": 7,
+            "['fruit', 'lemon']": 1,
+            "['lemon']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['fruit', 'lemon', 'mango']": 7,
+            "['fruit', 'lemon']": 1,
+            "['lemon']": 1
+          }
+        },
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 7,
+            "['carbonated', 'still']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "safeway",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['still']": 7,
+            "['carbonated', 'still']": 1
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_sugar']": 5,
+            "['no_added_sugar', 'no_sugar']": 3,
+            "['diet', 'sugar']": 1
+          },
+          "dissent_feeds": [
+            "wholefoods"
+          ],
+          "dissent_sku_ids": [
+            "921689023"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['no_added_sugar', 'no_sugar']": 3,
+            "['no_sugar']": 5,
+            "['diet', 'sugar']": 1
+          }
+        },
+        "sweetener_type": {
+          "feed_value_counts": {
+            "['stevia']": 6,
+            "['sugar']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "safeway",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['stevia']": 6,
+            "['sugar']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "05400706615655",
+      "rows": 9,
+      "titles": [
+        "Organic Aloe Vera Juice - 1 l",
+        "purasana Aloe Vera Juice Bio, 1 l",
+        "purasana Aloe Vera Juice organic, 1 liter",
+        "purasana Aloe vera juice Bio, 1 l"
+      ],
+      "dimension_verdicts": {
+        "sweetener": {
+          "feed_value_counts": {
+            "['diet']": 1,
+            "['no_sugar']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "farmaline",
+            "vitalabo"
+          ],
+          "value_counts": {
+            "['diet']": 2,
+            "['no_sugar']": 5
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00850005100010",
+      "rows": 9,
+      "titles": [
+        "Oat Milk Latte, Vanilla with Collagen",
+        "POP AND BOTTLE Vanilla Oat Milk Latte with Collagen, 8 FZ",
+        "Pop & Bottle + Collagen Vanilla Oat Milk Latte",
+        "Pop & Bottle Vanilla Cold Brew Oat Milk Latte with Collagen - 8 fl oz Can"
+      ],
+      "dimension_verdicts": {
+        "volume_ml": {
+          "feed_value_counts": {
+            "[237.0]": 7,
+            "[311.0]": 1
+          },
+          "dissent_feeds": [
+            "wholefoods"
+          ],
+          "dissent_sku_ids": [
+            "668956383"
+          ],
+          "consensus_feeds": [
+            "aldi",
+            "h e b",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target",
+            "thrive market"
+          ],
+          "value_counts": {
+            "[237.0]": 7,
+            "[311.0]": 1
+          }
+        },
+        "pack": {
+          "feed_value_counts": {
+            "[1.0]": 8,
+            "[38.0]": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "aldi",
+            "amazon",
+            "h e b",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target",
+            "thrive market",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "[1.0]": 8,
+            "[38.0]": 1
+          }
+        },
+        "flavor": {
+          "feed_value_counts": {
+            "['coffee', 'latte', 'oat', 'vanilla']": 8,
+            "['coffee', 'latte', 'vanilla']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "aldi",
+            "amazon",
+            "h e b",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target",
+            "thrive market",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['coffee', 'latte', 'oat', 'vanilla']": 8,
+            "['coffee', 'latte', 'vanilla']": 1
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['no_added_sugar']": 3,
+            "['no_added_sugar', 'sugar']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "safeway",
+            "target",
+            "thrive market"
+          ],
+          "value_counts": {
+            "['no_added_sugar']": 3,
+            "['no_added_sugar', 'sugar']": 1
+          }
+        },
+        "sweetening": {
+          "feed_value_counts": {
+            "['sweetened']": 1,
+            "['no_artificial_sweeteners']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "target",
+            "thrive market"
+          ],
+          "value_counts": {
+            "['no_artificial_sweeteners']": 1,
+            "['sweetened']": 1
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['bottle']": 5,
+            "['bottle', 'can']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "h e b",
+            "kroger",
+            "meijer",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['bottle']": 5,
+            "['bottle', 'can']": 1
+          }
+        },
+        "package_material": {
+          "feed_value_counts": {
+            "['metal']": 4,
+            "['plastic']": 4
+          },
+          "dissent_feeds": [
+            "h e b",
+            "safeway",
+            "thrive market",
+            "wholefoods"
+          ],
+          "dissent_sku_ids": [
+            "768320486",
+            "919697749",
+            "341741863",
+            "668956383"
+          ],
+          "consensus_feeds": [
+            "aldi",
+            "amazon",
+            "meijer",
+            "target"
+          ],
+          "value_counts": {
+            "['metal']": 4,
+            "['plastic']": 4
+          }
+        }
+      }
+    },
+    {
+      "gtin": "07391881836714",
+      "rows": 8,
+      "titles": [
+        "LOHILO Beauty Lover Luxury Edition elderflower Lemon 330 ml",
+        "elderflower / lemon energy drink incl. Pant",
+        "elderflower Le Collagen energy drink can",
+        "elderflower Le energy drink can"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['elderflower']": 2,
+            "['elderflower', 'lemon']": 3
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "hemkop",
+            "lyko",
+            "mat se",
+            "mathem",
+            "willys"
+          ],
+          "value_counts": {
+            "['elderflower', 'lemon']": 5,
+            "['elderflower']": 2,
+            "['elderberry', 'elderflower', 'lemon']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "04029679112544",
+      "rows": 8,
+      "titles": [
+        "Electrolyte Drink - Galium odoratum",
+        "Electrolyte Drink - Woodruff",
+        "Electrolyte Drink - waldmeister",
+        "Power Bar Electrolyte Drink, calories- and low in sugar, perfect for the sport in waldmeis"
+      ],
+      "dimension_verdicts": {
+        "sweetener": {
+          "feed_value_counts": {
+            "['sugar']": 1,
+            "['no_sugar']": 1
+          },
+          "dissent_feeds": [
+            "vitalabo"
+          ],
+          "dissent_sku_ids": [
+            "485097819"
+          ],
+          "consensus_feeds": [
+            "shop apotheke"
+          ],
+          "value_counts": {
+            "['no_sugar']": 7,
+            "['sugar']": 1
+          }
+        },
+        "sweetener_type": {
+          "feed_value_counts": {
+            "['sugar']": 1,
+            "['acesulfame_potassium', 'cyclamate']": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "shop apotheke",
+            "vitalabo"
+          ],
+          "value_counts": {
+            "['acesulfame_potassium', 'cyclamate']": 3,
+            "['acesulfame_potassium', 'aspartame', 'cyclamate', 'saccharin']": 1,
+            "['acesulfame_potassium', 'aspartame', 'cyclamate']": 2,
+            "['acesulfame_potassium']": 1,
+            "['sugar']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00853158004112",
+      "rows": 8,
+      "titles": [
+        "Alkaline 88 Water",
+        "Alkaline 88 Water Himalayan Minerals",
+        "Alkaline 88 Water, 128 oz",
+        "Alkaline88 8.8pH Purified Water - 1 Gallon"
+      ],
+      "dimension_verdicts": {
+        "carbonation": {
+          "feed_value_counts": {
+            "['still']": 5,
+            "['carbonated']": 1
+          },
+          "dissent_feeds": [
+            "wholefoods"
+          ],
+          "dissent_sku_ids": [
+            "747192972"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "hy vee",
+            "meijer",
+            "peapod",
+            "walmart"
+          ],
+          "value_counts": {
+            "['still']": 6,
+            "['carbonated']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "08690088018909",
+      "rows": 8,
+      "titles": [
+        "axu vital extracted chamomile juice 500 ml",
+        "axu vital extracted light juice 500 ml",
+        "axu vital extracted light juice 500 ml - 6 boxes",
+        "axuvital extracted chamomile juice"
+      ],
+      "dimension_verdicts": {
+        "pack": {
+          "feed_value_counts": {
+            "[6.0]": 1,
+            "[1.0]": 1
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "gittigidiyor",
+            "hepsiburada"
+          ],
+          "value_counts": {
+            "[1.0]": 7,
+            "[6.0]": 1
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['box']": 1,
+            "['blister']": 1
+          },
+          "dissent_feeds": [
+            "hepsiburada"
+          ],
+          "dissent_sku_ids": [
+            "57672954"
+          ],
+          "consensus_feeds": [
+            "gittigidiyor"
+          ],
+          "value_counts": {
+            "['blister']": 7,
+            "['box']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00853471004493",
+      "rows": 8,
+      "titles": [
+        "FORTO Coffee Latte Ready- To- Drink Coffee, 200 Mg Caffeine, 11 Fl Oz",
+        "Forto Coffee Latte RTD",
+        "Forto Energy Coffee, Organic, Latte",
+        "Forto Energy Organic Cold Brew Coffee with Milk"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['coffee', 'latte']": 5,
+            "['coffee']": 2
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "h e b",
+            "hy vee",
+            "meijer",
+            "safeway",
+            "target"
+          ],
+          "value_counts": {
+            "['coffee', 'latte']": 6,
+            "['coffee']": 2
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['cup', 'pot', 'tub']": 3,
+            "['bottle']": 1
+          },
+          "dissent_feeds": [
+            "target"
+          ],
+          "dissent_sku_ids": [
+            "161057507"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "meijer"
+          ],
+          "value_counts": {
+            "['cup', 'pot', 'tub']": 3,
+            "['bottle']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00868235000482",
+      "rows": 8,
+      "titles": [
+        "Mocha Nitro Cold Brew Latte - 7 Oz",
+        "Nitro Cold Brew Coffee, Oat Milk Mocha",
+        "Oat Milk Mocha Nitro Cold Brew Latte, 7 fl oz",
+        "RISE BREWING CO COLD BREW NITRO MOCHA 7 OZ"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['coffee', 'latte', 'mocha', 'oat']": 2,
+            "['coffee', 'mocha', 'oat']": 3,
+            "['coffee', 'mocha']": 1,
+            "['coffee', 'latte', 'mocha']": 2
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "fred meyer stores",
+            "kroger",
+            "meijer",
+            "safeway",
+            "thrive market",
+            "walmart",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['coffee', 'latte', 'mocha', 'oat']": 2,
+            "['coffee', 'latte', 'mocha']": 2,
+            "['coffee', 'mocha', 'oat']": 3,
+            "['coffee', 'mocha']": 1
+          }
+        },
+        "package_type": {
+          "feed_value_counts": {
+            "['can']": 4,
+            "['box', 'carton']": 1
+          },
+          "dissent_feeds": [
+            "kroger"
+          ],
+          "dissent_sku_ids": [
+            "653421007"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "safeway",
+            "thrive market",
+            "walmart"
+          ],
+          "value_counts": {
+            "['can']": 4,
+            "['box', 'carton']": 1
+          }
+        }
+      }
+    },
+    {
+      "gtin": "00854092006149",
+      "rows": 8,
+      "titles": [
+        "Cold Brew Coffee Protein Beverage, 12 fl oz",
+        "Cold Brew Coffee, 12 fl oz",
+        "Koia Cold Brew Coffee Plant Based Protein Drink, 12 oz",
+        "Koia Cold Brew Coffee Plant Powered Nutrition Drink - 12oz"
+      ],
+      "dimension_verdicts": {
+        "flavor": {
+          "feed_value_counts": {
+            "['coffee']": 2,
+            "['coffee', 'fruit']": 5
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "safeway",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['coffee', 'fruit']": 6,
+            "['coffee']": 2
+          }
+        },
+        "sweetener": {
+          "feed_value_counts": {
+            "['sugar']": 1,
+            "['no_sugar']": 1
+          },
+          "dissent_feeds": [
+            "giant eagle"
+          ],
+          "dissent_sku_ids": [
+            "112586168"
+          ],
+          "consensus_feeds": [
+            "amazon"
+          ],
+          "value_counts": {
+            "['no_sugar']": 1,
+            "['sugar']": 1
+          }
+        },
+        "sweetener_type": {
+          "feed_value_counts": {
+            "['sugar']": 1,
+            "['cane_sugar', 'monk_fruit']": 5
+          },
+          "dissent_feeds": [],
+          "dissent_sku_ids": [],
+          "consensus_feeds": [
+            "amazon",
+            "giant eagle",
+            "h e b",
+            "hy vee",
+            "target",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['cane_sugar', 'monk_fruit']": 6,
+            "['sugar']": 1
+          }
+        },
+        "package_material": {
+          "feed_value_counts": {
+            "['metal']": 2,
+            "['plastic']": 2
+          },
+          "dissent_feeds": [
+            "h e b",
+            "target"
+          ],
+          "dissent_sku_ids": [
+            "91336668",
+            "93025324"
+          ],
+          "consensus_feeds": [
+            "amazon",
+            "wholefoods"
+          ],
+          "value_counts": {
+            "['metal']": 2,
+            "['plastic']": 2
+          }
+        }
+      }
+    }
+  ]
+}
