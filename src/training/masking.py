@@ -1268,6 +1268,7 @@ def augment_counterfactual_twins(
             rejected("anchor_outside_train")
             continue
         anchor_fields = _field_surfaces(payload[a])
+        anchor_tokens = set(payload[a].split())
         pair_fields = _field_surfaces(payload[b])
         agreed = sorted(
             field

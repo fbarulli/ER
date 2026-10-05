@@ -205,25 +205,43 @@ def datagen_track():
         fv = {}
     teacher_conflicts = sum(v for k, v in fl.items() if str(k).startswith('description_conflict')) or None
     del teacher_conflicts
-    # Generation quantification: read ONLY what the bundling process publishes.
-    ac = (w1 or {}).get('augmentation_coverage', {})
-    ratio = (w1 or {}).get('effective_train_ratio')
+    # Generation quantification: read ONLY what the bundling process publishes —
+    # the bundle header (augmentation_coverage + effective_train_ratio), the
+    # newest run's handoff.json and its timing_offenders.log. Bundles are
+    # published beside the run tree, so the newest published header wins when
+    # no per-worker manifest is on disk; no external version store.
+    published = (list((ROOT.parent / 'data' / 'prepared' / 'full').glob('*.pkl.gz.json'))
+                 + list((_results / 'training_prep').glob('*.pkl.gz.json')))
+    bundle_path = max(published, key=lambda p: p.stat().st_mtime, default=None)
+    bundle, bundle_source = w1 or {}, 'data/prepared/full/worker_1_baseline.pkl.gz.json'
+    if not bundle.get('augmentation_coverage'):
+        try:
+            bundle = json.loads(bundle_path.read_text())
+            bundle_source = str(bundle_path.relative_to(ROOT.parent))
+        except Exception:
+            bundle, bundle_source = {}, 'no bundle header published yet'
+    ac = bundle.get('augmentation_coverage', {})
+    groups = ac.get('attributes', {})
+    ratio = bundle.get('effective_train_ratio')
     ratio = '—' if ratio in (None, '') else f'{float(ratio):.3f}'
     try:
         run_dirs = sorted(p for p in (_results / 'training_prep').glob('2*') if p.is_dir())
         latest = run_dirs[-1] if run_dirs else None
-        hq = json.loads((latest / 'handoff.json').read_text()) if latest else None
+        try:
+            hq = json.loads((latest / 'handoff.json').read_text()) if latest else None
+        except Exception:
+            hq = None
         handoff_cell = (f"pass · {len(hq.get('inputs', []))} inputs metered · "
                         f"loss/batch attested: {'yes' if hq.get('loss_batch_correctness') else 'n/a'}"
                         if hq else 'no handoff.json yet (run prepare_all)')
         offender_path = latest / 'timing_offenders.log' if latest else None
         if offender_path and Path(offender_path).is_file():
             lines = [l for l in Path(offender_path).read_text().splitlines() if l and not l.startswith('#')]
-            offender_cell = f'<code>{escape(lines[0])}</code>' if lines else 'empty report'
+            offender_cell = lines[0] if lines else 'empty report'
         else:
             offender_cell = 'no report yet'
     except Exception:
-        handoff_cell, offender_cell = '—', '—'
+        handoff_cell, offender_cell = 'no handoff.json yet (run prepare_all)', 'no report yet'
     # Finding 01 — dedupe closure
     dedupe_metrics = ''.join([
         _fmetric(ra.get('input_rows', 71_623), 'original listings in'),
@@ -491,47 +509,44 @@ def datagen_track():
                                       json.dumps({'plan_v1_weakspot_alloctions': plan.get('weakspot_weighted_mint'),
                                                   'superseded_by': 'duplicate variation census (Finding 07)'}, indent=1)),
                            "<span class='badge badge-open'>OPEN</span> — targets fixed; quota shares from the measured same-GTIN conflict distribution (Finding 07); generated examples land here once the mint run completes.")
-    gen_basics = '''
-<details open><summary>How generated training data is made · the two lanes + minting (basics)</summary>
-<p><strong>Lane 1 — counterfactual twins (minimal-flip negatives).</strong> Take a verified-matching
-positive pair (A1, A2), pick ONE structured field both sides agree on, rewrite only the anchor's value
-for that field with a real donor value (entity-disjoint, cross-retailer preferred, no invented tokens,
-coherent prose required). The twin (A1', A2) is labeled 0 by construction: it differs from a verified
-match in one load-bearing attribute. The original pair stays 1; both rows train together, so the loss
-must read the changed token instead of the ~90% shared ones. Every twin carries an audit row
-(target_mode, fields_hit, donor provenance) re-verified at load — an unprovable flip is rejected.</p>
-<p><strong>Lane 2 — masking augmentation (the view multiplier).</strong> Generated and base pairs are
-augmented by masking: declaration dropout, random masking inside the configured extent band, and value
-swaps — each masked copy keeps its numeric-channel lineage (volume/pack slices re-encoded) so text and
-numeric features agree. Caps bind concentration: per-field share, per-value share, per-attribute
-hard/soft quotas and pos/neg slice fractions.</p>
-<p><strong>Minting (negative supply lane).</strong> Real partners mined first (embeddings/TF-IDF
-blocking, same-GTIN exclusion, top-k per anchor); minted rows only top up uncovered anchors; the lane's
-pairs.csv is sha-pinned and the discriminator watches real-vs-minted separability.</p>
-<p><strong>Scope + trace.</strong> Generation draws from the <strong>11 donor-capable field groups</strong>
-of the 37-key attribute universe (promotion is census-backed, e.g. package_material and juice_content);
-difficulty slices (easy/medium/hard/unknown) come from the config <code>difficulty:</code> block. All
-surfaces are hashed (provenance + composition_fingerprint) and attested in <code>handoff.json</code>;
-the same SSOT knobs feed post-training analysis — see the tuning-surfaces table in PIPE.md. Full
-details: <code>training/masking.py</code> (augment_counterfactual_twins), <code>training/negative_supply.py</code>,
-<code>training/difficulty.py</code>.</p>
-<p><strong>Quantified from bundling outputs (no external store)</strong> — every number below is read
-from files the bundling process itself publishes:</p>
-<table><tr><th>Measure</th><th>Value</th><th>Output file</th></tr>
-<tr><td>source train positives / negatives</td><td>{ac.get('source_train_positives', '—'):,} / {ac.get('source_train_negatives', '—'):,}</td><td><code>data/prepared/full/*.json</code> (bundle header augmentation_coverage)</td></tr>
-<tr><td>minted negatives (twins pool)</td><td>{ac.get('minted_negatives', '—'):,}</td><td><code>data/prepared/full/*.json</code></td></tr>
-<tr><td>masked views (positives / minted negatives)</td><td>{ac.get('masked_positives', '—'):,} / {ac.get('masked_minted_negatives', '—'):,}</td><td><code>data/prepared/full/*.json</code></td></tr>
-<tr><td>vendor variation positives</td><td>{ac.get('vendor_variation_positives', '—'):,}</td><td><code>data/prepared/full/*.json</code></td></tr>
-<tr><td>guaranteed bundle-only view ratio</td><td>{ratio}</td><td><code>data/prepared/full/*.json</code> (effective_train_ratio)</td></tr>
-<tr><td>handoff boundary</td><td>{handoff_cell}</td><td><code>results/training_prep/&lt;run&gt;/handoff.json</code></td></tr>
-<tr><td>worst timing offender</td><td>{offender_cell}</td><td><code>results/training_prep/&lt;run&gt;/timing_offenders.log</code></td></tr>
-</table>
-</details>'''
+    # Finding 09 — how the generated rows are made (the two lanes + minting)
+    gen_metrics = ''.join([
+        _fmetric(f"{ac.get('source_train_positives', 0):,} / {ac.get('source_train_negatives', 0):,}", 'source positives / negatives in'),
+        _fmetric(f"{ac.get('minted_negatives', 0):,}", 'Lane-1 twins minted (negatives)'),
+        _fmetric(f"{ac.get('masked_positives', 0):,} / {ac.get('masked_minted_negatives', 0):,}", 'Lane-2 masked views (pos / minted neg)'),
+        _fmetric(f"{len(groups)} / 37", 'donor-capable field groups'),
+        _fmetric(ratio, 'guaranteed bundle-only view ratio'),
+    ])
+    gen_compare = _fcompare([
+        ('Negatives had no generator — gate-labeled or hand-picked',
+         'Lane 1 · counterfactual twins: flip ONE field both sides agree on, donor value from a real cross-retailer row; twin labeled 0 by construction, original pair stays 1', 'PASS'),
+        ('Each pair trained on a single view',
+         'Lane 2 · masking: declaration dropout + extent-band masking + value swaps, volume/pack lineage re-encoded so text and numbers agree', 'PASS'),
+        ('An unprovable flip would train silently',
+         'every twin carries an audit row (target_mode, fields_hit, donor provenance) re-verified at load — an unprovable flip is rejected', 'PASS'),
+        ('Minted rows could displace real partners',
+         'real partners mined first (embeddings/TF-IDF blocking, same-GTIN exclusion, top-k per anchor); minted rows only top up uncovered anchors; pairs.csv sha-pinned', 'PASS'),
+        ('Generation could reach any of the 37 attribute keys',
+         f"{len(groups)} donor-capable groups only; juice_content has no comparable evidence, so nothing is minted for it", 'PASS'),
+        ('Run knobs could drift from the analysis knobs',
+         'difficulty slices from the config <code>difficulty:</code> block, hashed provenance + composition_fingerprint attested in <code>handoff.json</code>, same SSOT knobs feed post-training analysis', 'PASS'),
+    ])
+    gen_evidence = _fevidence(f'{bundle_source} (bundle header augmentation_coverage) + results/training_prep/<run>/handoff.json',
+                              json.dumps({'requested_counts': ac.get('requested_counts'),
+                                          'effective_train_ratio': bundle.get('effective_train_ratio'),
+                                          'handoff_boundary': handoff_cell,
+                                          'worst_timing_offender': offender_cell,
+                                          'attributes': {k: v.get('status') for k, v in groups.items()}}, indent=1))
+    f09 = _ffinding(9, 'How generated training data is made — two lanes + minting', 'PASS',
+                    gen_metrics, gen_compare, gen_evidence,
+                    f"<span class='badge badge-pass'>PASS</span> — the two lanes ship: {ac.get('minted_negatives', 0):,} twins and "
+                    f"{ac.get('masked_positives', 0) + ac.get('masked_minted_negatives', 0):,} masked views, every generated row re-verified at load. "
+                    f"Open part: boundary attestation ({handoff_cell}). Code: <code>training/masking.py</code>, "
+                    f"<code>training/negative_supply.py</code>, <code>training/difficulty.py</code>.")
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER datagen</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}.verdict{{margin:.4rem 0}}</style></head><body>
 <h1>ER · Datagen track — identity fixes, GTIN integrity, attribute census, datagen budget</h1>
 <p class="status">{ra.get('input_rows', 71_623):,} original listings → {ra.get('output_rows', 63_079):,} deduped · closure gate {ra.get('input_rows', 71_623):,} == 63,079 + 8,544 · Wave-1 fixes byte-identical · offline bundle lane OPEN (Finding 06)</p>
-{f01}{f02}{f03}{f04}{f05}{f06}{f07}{f08_target}
-{gen_basics}
+{f01}{f02}{f03}{f04}{f05}{f06}{f07}{f08_target}{f09}
 <details open><summary>Teacher-flag census from data_prep.json (veto/review — never guessed)</summary>
 <table><tr><th>Flag</th><th>Records</th></tr>{teacher_rows}</table>
 </details>

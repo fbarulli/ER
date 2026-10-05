@@ -398,12 +398,21 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                                             for filename in ('pairs.csv', 'manifest.json')]
                         inventory_paths.append(run_dir / prep.discriminator_file)
                     handoff_path = run_dir / prep.handoff_file
-                    report = verify_training_loads(
-                        root=root, suite=suite, suite_config_path=config_path,
-                        checkpoint=checkpoint, setup_dir=setup, full_bundle=bundle,
-                        text_bundle=text_bundle, suite_archive=suite_archive,
-                        provenance=manifest['provenance'], smoke_dir=smoke,
-                        smoke_original=smoke_before, reusable_paths=inventory_paths)
+                    # The boundary runs inline, not through run(): apply the
+                    # same stage-timing environment so its Timing sections
+                    # land in the stage JSON and the offender report.
+                    os.environ.update(ER_TIMING_OUT=str(run_dir / (name + prep.stage_timing_suffix)),
+                                      ER_TIMING_LOG=str(run_dir / prep.timings_log))
+                    try:
+                        report = verify_training_loads(
+                            root=root, suite=suite, suite_config_path=config_path,
+                            checkpoint=checkpoint, setup_dir=setup, full_bundle=bundle,
+                            text_bundle=text_bundle, suite_archive=suite_archive,
+                            provenance=manifest['provenance'], smoke_dir=smoke,
+                            smoke_original=smoke_before, reusable_paths=inventory_paths)
+                    finally:
+                        os.environ.pop('ER_TIMING_OUT', None)
+                        os.environ.pop('ER_TIMING_LOG', None)
                     write_handoff_report(report, handoff_path)
                     manifest['handoff'] = {'path': str(handoff_path), 'status': report.status,
                                            'total_seconds': report.total_seconds}

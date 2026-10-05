@@ -5,6 +5,7 @@ import ast
 import json
 import math
 from collections import Counter, defaultdict
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -12,7 +13,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, Response
 
-from core.common import F, TRAIN_ROOT, resolve_model, training_cfg, data_cfg, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH
+from core.common import F, TRAIN_ROOT, DATA_PATH, resolve_model, training_cfg, data_cfg, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH
 from core.columns import read_column
 from core.schemas import CANONICAL_RECORDS_COLUMNS
 from graph_tracks.data import file_hash, load_records, load_text_cache
@@ -180,6 +181,122 @@ def tracking_attributes():
     return sorted(set(attribute_registry()) | {
         VETO_CENSUS_KEY_BY_DIMENSION.get(key,key) or key for key in
         set(ATTRIBUTE_SOURCES) | set(ATTRIBUTE_UNAVAILABLE) | set(CRITICAL_NAME_BY_CENSUS_KEY.values())})
+
+
+# ── one worked example: original entry → captured words → counterpart + masked ──
+# Every text shown is a saved artifact, not a re-derivation: the original entry
+# is the raw export (dashboard/catalog.py frame, shared with /catalog), the
+# capture is the SSOT parser (core.attribute_universe.parse) on that entry's own
+# cells, and the counterpart/masked texts are the recorded anchor_text →
+# masked_text rows of results/logs/mask_visibility.csv. The bar plot counts the
+# same ledger plus the published bundle header. No prose, no recomputation.
+
+@lru_cache(maxsize=1)
+def _raw_frame(mtime_ns: int):
+    """The raw export the whole audit population comes from (repo-root
+    dataset.csv, 13 original columns, as exported). Parsed once per source
+    modification time; the configured files.dataset binding is a 35-row
+    hand-made fixture and is not the population the ledger describes."""
+    import pandas as pd
+    path = TRAIN_ROOT / 'dataset.csv'
+    if not path.is_file():
+        return None
+    return pd.read_csv(path, dtype=str, keep_default_na=False, low_memory=False)
+
+
+@lru_cache(maxsize=1)
+def _visibility(mtime_ns: int):
+    return csv_rows(F['decision_visibility'] / 'mask_visibility.csv')
+
+
+@lru_cache(maxsize=1)
+def _bundle_header(mtime_ns: int):
+    headers = list((F['decision_visibility'].parent / 'training_prep').glob('*.pkl.gz.json'))
+    if not headers:
+        return {}, None
+    newest = max(headers, key=lambda p: p.stat().st_mtime)
+    return json_file(newest, {}), str(newest.relative_to(TRAIN_ROOT))
+
+
+def _marked(text, values):
+    """Raw text with every captured word marked in place, left to right."""
+    pending = sorted({str(v) for v in values if str(v).strip()}, key=len, reverse=True)
+    rest, out = str(text), ''
+    while pending:
+        hits = [(rest.find(v), v) for v in pending]
+        hits = [(i, v) for i, v in hits if i >= 0]
+        if not hits:
+            break
+        index, value = min(hits)
+        out += e(rest[:index]) + '<mark>' + e(value) + '</mark>'
+        rest = rest[index + len(value):]
+        pending.remove(value)
+    return out + e(rest)
+
+
+def capture_example():
+    """One original entry, the words captured from it, and the two generated
+    forms recorded for that same entry (counterfactual counterpart, masked
+    view). Returns {} when the ledger or the export is unavailable."""
+    rows = _visibility(F['decision_visibility'].stat().st_mtime_ns) if F['decision_visibility'].is_dir() else []
+    if not rows:
+        return {}
+    by_gtin = defaultdict(list)
+    for row in rows:
+        by_gtin[row['gtin']].append(row)
+    raw = _raw_frame((TRAIN_ROOT / 'dataset.csv').stat().st_mtime_ns) if (TRAIN_ROOT / 'dataset.csv').is_file() else None
+    if raw is None:
+        return {}
+    gtins = set(raw.gtin[raw.gtin.str.isdigit()])
+    from core.attribute_universe import AttributeUniverse
+    universe = AttributeUniverse(raw)
+    from core.text import attribute_fields
+    chosen = None
+    for gtin in sorted(by_gtin):
+        modes = {row['target_mode'] for row in by_gtin[gtin]}
+        if 'swap_values' in modes and modes & {'random', 'declaration_dropout'} and gtin in gtins:
+            chosen = gtin
+            break
+    if chosen is None:
+        return {}
+    entry = raw[raw.gtin.eq(chosen)].iloc[0].to_dict()
+    captured = []
+    for key, value in attribute_fields(entry.get('attribute', '')):
+        parsed = universe.parse(f'{key}: {value}')
+        for field, result in parsed.items():
+            captured.append({'field': field, 'raw': value,
+                             'value': ' · '.join(sorted(str(x) for x in result)) or '—'})
+    swap = next(r for r in by_gtin[chosen] if r['target_mode'] == 'swap_values')
+    masked = next(r for r in by_gtin[chosen] if r['target_mode'] in {'random', 'declaration_dropout'})
+    changed = [w for w in set(swap['masked_text'].split()) ^ set(swap['anchor_text'].split())]
+    header, header_source = _bundle_header(0)
+    coverage = header.get('augmentation_coverage', {}).get('attributes', {})
+    return {'gtin': chosen, 'entry': entry, 'columns': list(raw.columns),
+            'captured': captured, 'swap': swap, 'masked': masked, 'changed': changed,
+            'anchor_text': swap['anchor_text'],
+            'plot': [{'attribute': key, 'minted': value.get('minted', 0),
+                      'masked': value.get('masked', 0), 'status': value.get('status', '')}
+                     for key, value in sorted(coverage.items(), key=lambda kv: -kv[1].get('minted', 0))],
+            'ratio': header.get('effective_train_ratio'), 'header_source': header_source}
+
+
+def _plot_bars(rows):
+    """Horizontal bars: minted (solid) behind masked (lighter), per attribute."""
+    if not rows:
+        return '<p class="muted">no bundle header published yet</p>'
+    top = max([max(x['minted'], x['masked']) for x in rows] + [1])
+    out = []
+    for row in rows:
+        minted = 100 * row['minted'] / top
+        masked = 100 * row['masked'] / top
+        out.append(
+            f'<tr><td class="attr">{e(row["attribute"])}</td>'
+            f'<td class="barcell"><span class="bar minted" style="width:{minted:.1f}%"></span>'
+            f'<span class="bar masked" style="width:{masked:.1f}%"></span></td>'
+            f'<td class="num">{row["minted"]:,}</td><td class="num">{row["masked"]:,}</td>'
+            f'<td class="status">{e(row["status"])}</td></tr>')
+    return ('<table class="plot"><tr><th>attribute</th><th></th><th>minted</th>'
+            '<th>masked</th><th>status</th></tr>' + ''.join(out) + '</table>')
 
 
 def attribute_tracking(traces, reports, available):
@@ -655,6 +772,23 @@ def decisions(gtin1: str = '', gtin2: str = '', gate: str = '', scope: str = '',
         query['round'] = round
     body = '<h1>Attribute decision tracking</h1><p>Attribute → extracted values, confidence and comparison metrics → saved gate reason → JEV evidence → model outcomes and attribute slices. Pair identifiers connect the evidence; attributes organize the inspection.</p>'
     body += '<p><a href="/gate">Gate</a> · <a href="/jev">JEV audits</a> · <a href="/training">Training runs</a> · <a href="/graphs">Graph tracks</a> · <a href="/api/decisions?' + e(urlencode(query)) + '">Download this trace as JSON</a></p>'
+    example = capture_example()
+    if example:
+        body += '<h2>One original entry</h2>'
+        body += table(['column', 'as exported'], [[e(column), _marked(value if column == 'attribute' else value, [x['raw'] for x in example['captured']]) if column == 'attribute' else e(value)] for column, value in example['entry'].items()])
+        body += '<h2>Words captured → attribute</h2>'
+        body += table(['field', 'captured from', 'value'], [[x['field'], e(x['raw']), e(x['value'])] for x in example['captured']])
+        body += '<h2>Training text</h2><pre>' + e(example['anchor_text']) + '</pre>'
+        body += '<h2>Counterpart sample</h2>'
+        body += table(['original', 'counterpart'], [
+            [e(example['swap']['anchor_text']),
+             _marked(example['swap']['masked_text'], example['changed'])]])
+        body += table(['label', 'text'], [
+            ['original', e(example['masked']['anchor_text'])],
+            ['masked (' + e(example['masked']['target_mode']) + ', extent ' + e(example['masked']['realized_extent']) + ')', _marked(example['masked']['masked_text'], ['[MASK]'])]])
+        body += '<h2>Made and spread per attribute</h2>'
+        body += _plot_bars(example['plot'])
+        body += '<p class="muted">' + e(str(example['header_source'])) + ' · effective_train_ratio ' + e(str(example['ratio'])) + '</p>'
     body += '<form onsubmit="for(const input of this.querySelectorAll(\'input\')){if(!input.value)input.disabled=true}"><label>Attribute <select name="attribute"><option value="">All attributes</option>' + ''.join('<option value="'+e(key)+'" '+('selected' if key == attribute else '')+'>'+e(key)+'</option>' for key in tracking_attributes()) + '</select></label> ' + ''.join('<label>' + e(label) + ' <input name="' + name + '" value="' + e(value) + '"></label> ' for name, label, value in [('gtin1','GTIN A',gtin1),('gtin2','GTIN B',gtin2),('gate','Gate decision',gate),('scope','JEV input scope',scope),('round','JEV round',round or '')]) + '<button>Inspect</button></form>'
     body += '<h2>Attribute map</h2><p>Counts describe the displayed pair page. Comparison metrics use the existing shared attribute engine on current evidence; they are not recovered historical execution traces. Saved gate reasons remain separate. JEV/model scores assess pairs unless the artifact explicitly records an attribute assessment.</p>'
     for row in result['attribute_tracking']:
@@ -719,4 +853,4 @@ def decisions(gtin1: str = '', gtin2: str = '', gate: str = '', scope: str = '',
                    [[v.get(k) for k in ('dimension','slice','fold','repeat','n','n_positive','n_negative','threshold','status')]
                     for v in robust.get('slices',[])]) + '</details>'
         body += '<pre>' + e(json.dumps(report['report'],indent=2)) + '</pre></details>'
-    return HTMLResponse('<!doctype html><html><head><title>Decision evidence</title><style>body{font:15px system-ui;margin:24px}table{border-collapse:collapse}td,th{padding:6px;border:1px solid #ddd}pre{white-space:pre-wrap;overflow-wrap:anywhere}details{margin:12px 0}input{max-width:180px}</style></head><body>' + body + '</body></html>', headers={'Cache-Control':'no-store'})
+    return HTMLResponse('<!doctype html><html><head><title>Decision evidence</title><style>body{font:15px system-ui;margin:24px}table{border-collapse:collapse}td,th{padding:6px;border:1px solid #ddd}pre{white-space:pre-wrap;overflow-wrap:anywhere}details{margin:12px 0}input{max-width:180px}mark{background:#fff0a8;padding:0 .15em}h2{margin-top:1.4em}table.plot td.attr{white-space:nowrap;font-family:ui-monospace,monospace}table.plot td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}table.plot td.status{font-size:.8em;color:#666;white-space:nowrap}td.barcell{width:45%;min-width:220px;position:relative;background:#f3f4f6}span.bar{position:absolute;left:0;top:4px;height:14px;border-radius:2px}span.bar.minted{background:#4b5563}span.bar.masked{top:4px;height:14px;background:#93c5fd;mix-blend-mode:multiply}</style></head><body>' + body + '</body></html>', headers={'Cache-Control':'no-store'})
