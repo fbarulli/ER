@@ -3,21 +3,21 @@
     "cohort": "frozen original residuals; not a new sampling or full recall estimate",
     "cases": 1056,
     "actions": {
-      "keep_distinct_need_variant_evidence": 248,
+      "keep_distinct_need_variant_evidence": 247,
       "keep_distinct_repaired_descriptors": 13,
-      "retain_match_review_remaining_feed_conflicts": 729,
-      "hold_identifier_scope": 56,
-      "retain_match_descriptors_repaired": 10
+      "hold_identifier_scope": 86,
+      "retain_match_review_remaining_feed_conflicts": 695,
+      "retain_match_descriptors_repaired": 15
     },
     "decisions": {
-      "different": 261,
-      "same": 739,
-      "review": 56
+      "different": 260,
+      "review": 86,
+      "same": 710
     },
     "hashes": {
       "dataset.csv": "539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c",
-      "config/identity_reviews.json": "f0aaf9406e76b02a3cf01d790e21b94a5d5959bd98aaee01f9f01a715cdfe7de",
-      "src/pipeline.py": "8860c6972216eb5412fdb905145c8c0f7680b1a8aad4bee53fdb6b4974563b80",
+      "config/identity_reviews.json": "70eb92bb1ce770294b7addc8232e537fc9ed134ef3c1ac7dbf62427111b39ea2",
+      "src/pipeline.py": "6fbbdc7535c094a698ad53cd3ac6a3bdfb3650c131b9b6d49c6a115d78424361",
       "src/core/url_evidence.py": "774c971677390c4cca361278fb66786c7e31578033c96bb45142c13aec29fd31",
       "identity/findings/residual_cases.json": "6b639cecb55ea3a26679c10d0ea6586840e50ceed29bc65af9fbf432684ab5b4"
     }
@@ -917,9 +917,11 @@
       "before_conflicts": [],
       "after_conflicts": [],
       "before_decision": "different",
-      "after_decision": "different",
-      "hold_reasons": [],
-      "disposition": "keep_distinct_need_variant_evidence"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0065",
@@ -4304,9 +4306,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0295",
@@ -4502,9 +4506,11 @@
         "package_material"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0306",
@@ -4596,9 +4602,11 @@
         "volume"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0311",
@@ -4614,9 +4622,11 @@
         "volume"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0312",
@@ -6329,9 +6339,11 @@
         "carbonation"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0404",
@@ -6437,9 +6449,11 @@
         "package_material"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0410",
@@ -6455,9 +6469,11 @@
         "package_material"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0411",
@@ -6527,9 +6543,11 @@
         "package_material"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0415",
@@ -6545,9 +6563,11 @@
         "package_material"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0416",
@@ -7255,9 +7275,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0455",
@@ -7273,9 +7295,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0456",
@@ -8467,9 +8491,11 @@
         "package_material"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0521",
@@ -10189,13 +10215,11 @@
       "before_conflicts": [
         "volume"
       ],
-      "after_conflicts": [
-        "volume"
-      ],
+      "after_conflicts": [],
       "before_decision": "same",
       "after_decision": "same",
       "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "disposition": "retain_match_descriptors_repaired"
     },
     {
       "case_id": "R0616",
@@ -10207,13 +10231,11 @@
       "before_conflicts": [
         "volume"
       ],
-      "after_conflicts": [
-        "volume"
-      ],
+      "after_conflicts": [],
       "before_decision": "same",
       "after_decision": "same",
       "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "disposition": "retain_match_descriptors_repaired"
     },
     {
       "case_id": "R0617",
@@ -10375,13 +10397,11 @@
       "before_conflicts": [
         "volume"
       ],
-      "after_conflicts": [
-        "volume"
-      ],
+      "after_conflicts": [],
       "before_decision": "same",
       "after_decision": "same",
       "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "disposition": "retain_match_descriptors_repaired"
     },
     {
       "case_id": "R0626",
@@ -11883,9 +11903,11 @@
         "carbonation"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0709",
@@ -12947,9 +12969,11 @@
         "flavor"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0768",
@@ -12965,9 +12989,11 @@
         "flavor"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0769",
@@ -13271,9 +13297,11 @@
         "volume"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0786",
@@ -13381,9 +13409,11 @@
         "package_material"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0792",
@@ -13658,9 +13688,11 @@
         "package_material"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0807",
@@ -14168,9 +14200,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0835",
@@ -14838,9 +14872,11 @@
         "carbonation"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0872",
@@ -14856,9 +14892,11 @@
         "carbonation"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0873",
@@ -15094,9 +15132,11 @@
         "carbonation"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0886",
@@ -16183,9 +16223,11 @@
         "package_material"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0945",
@@ -16545,13 +16587,11 @@
       "before_conflicts": [
         "volume"
       ],
-      "after_conflicts": [
-        "volume"
-      ],
+      "after_conflicts": [],
       "before_decision": "same",
       "after_decision": "same",
       "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "disposition": "retain_match_descriptors_repaired"
     },
     {
       "case_id": "R0965",
@@ -17071,9 +17111,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R0994",
@@ -17523,9 +17565,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R1019",
@@ -17541,9 +17585,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R1020",
@@ -17847,9 +17893,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R1037",
@@ -17941,9 +17989,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R1042",
@@ -18029,9 +18079,11 @@
         "pack"
       ],
       "before_decision": "same",
-      "after_decision": "same",
-      "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "after_decision": "review",
+      "hold_reasons": [
+        "Source titles advertise different explicit retail bundle counts under one GTIN; identifier scope (inner item versus complete offer) is unresolved. See identity/findings/BUNDLE_SCOPE_FINDINGS.md."
+      ],
+      "disposition": "hold_identifier_scope"
     },
     {
       "case_id": "R1047",
@@ -18061,13 +18113,11 @@
       "before_conflicts": [
         "volume"
       ],
-      "after_conflicts": [
-        "volume"
-      ],
+      "after_conflicts": [],
       "before_decision": "same",
       "after_decision": "same",
       "hold_reasons": [],
-      "disposition": "retain_match_review_remaining_feed_conflicts"
+      "disposition": "retain_match_descriptors_repaired"
     },
     {
       "case_id": "R1049",

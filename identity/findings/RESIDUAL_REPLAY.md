@@ -7,21 +7,21 @@ Each original case remains in this replay, including quarantined identifiers. Th
   "cohort": "frozen original residuals; not a new sampling or full recall estimate",
   "cases": 1056,
   "actions": {
-    "keep_distinct_need_variant_evidence": 248,
+    "keep_distinct_need_variant_evidence": 247,
     "keep_distinct_repaired_descriptors": 13,
-    "retain_match_review_remaining_feed_conflicts": 729,
-    "hold_identifier_scope": 56,
-    "retain_match_descriptors_repaired": 10
+    "hold_identifier_scope": 86,
+    "retain_match_review_remaining_feed_conflicts": 695,
+    "retain_match_descriptors_repaired": 15
   },
   "decisions": {
-    "different": 261,
-    "same": 739,
-    "review": 56
+    "different": 260,
+    "review": 86,
+    "same": 710
   },
   "hashes": {
     "dataset.csv": "539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c",
-    "config/identity_reviews.json": "f0aaf9406e76b02a3cf01d790e21b94a5d5959bd98aaee01f9f01a715cdfe7de",
-    "src/pipeline.py": "8860c6972216eb5412fdb905145c8c0f7680b1a8aad4bee53fdb6b4974563b80",
+    "config/identity_reviews.json": "70eb92bb1ce770294b7addc8232e537fc9ed134ef3c1ac7dbf62427111b39ea2",
+    "src/pipeline.py": "6fbbdc7535c094a698ad53cd3ac6a3bdfb3650c131b9b6d49c6a115d78424361",
     "src/core/url_evidence.py": "774c971677390c4cca361278fb66786c7e31578033c96bb45142c13aec29fd31",
     "identity/findings/residual_cases.json": "6b639cecb55ea3a26679c10d0ea6586840e50ceed29bc65af9fbf432684ab5b4"
   }
@@ -93,7 +93,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0061 | 22482137, 641429575 | none | none | keep_distinct_need_variant_evidence |
 | R0062 | 225867715, 336938922 | none | none | keep_distinct_need_variant_evidence |
 | R0063 | 23443872, 49461119 | none | none | keep_distinct_need_variant_evidence |
-| R0064 | 246425586, 247039738 | none | none | keep_distinct_need_variant_evidence |
+| R0064 | 246425586, 247039738 | none | none | hold_identifier_scope |
 | R0065 | 247470418, 580758175 | none | none | keep_distinct_need_variant_evidence |
 | R0066 | 248002380, 258352487 | none | none | keep_distinct_need_variant_evidence |
 | R0067 | 251921598, 251936215 | none | flavor | keep_distinct_repaired_descriptors |
@@ -323,7 +323,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0291 | 112762266, 391525948 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0292 | 113109383, 80126591 | pack | pack | hold_identifier_scope |
 | R0293 | 113109383, 87119796 | pack | pack | hold_identifier_scope |
-| R0294 | 114808006, 70745719 | pack | pack | retain_match_review_remaining_feed_conflicts |
+| R0294 | 114808006, 70745719 | pack | pack | hold_identifier_scope |
 | R0295 | 116052007, 749367435 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0296 | 11647728, 5857655 | flavor | flavor | retain_match_review_remaining_feed_conflicts |
 | R0297 | 117372632, 78335870 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
@@ -334,13 +334,13 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0302 | 125297659, 125457175 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0303 | 12609331, 42543006 | diet_claim | diet_claim | retain_match_review_remaining_feed_conflicts |
 | R0304 | 12770130, 33372227 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
-| R0305 | 131906984, 487806681 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
+| R0305 | 131906984, 487806681 | package_material | package_material | hold_identifier_scope |
 | R0306 | 132630536, 520659679 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0307 | 135976543, 136020238 | pack | pack | hold_identifier_scope |
 | R0308 | 135976543, 136213263 | pack | pack | hold_identifier_scope |
 | R0309 | 137447469, 156596541 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
-| R0310 | 14319182, 48731112 | volume | volume | retain_match_review_remaining_feed_conflicts |
-| R0311 | 14319182, 68805776 | volume | volume | retain_match_review_remaining_feed_conflicts |
+| R0310 | 14319182, 48731112 | volume | volume | hold_identifier_scope |
+| R0311 | 14319182, 68805776 | volume | volume | hold_identifier_scope |
 | R0312 | 146596407, 9974670 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0313 | 149315012, 774495788 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0314 | 14966250, 44706908 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
@@ -432,19 +432,19 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0400 | 186335426, 56416014 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0401 | 186345107, 53935269 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0402 | 188535755, 524035281 | sweetener | sweetener | retain_match_review_remaining_feed_conflicts |
-| R0403 | 18931869, 68721239 | pack, carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
+| R0403 | 18931869, 68721239 | pack, carbonation | carbonation | hold_identifier_scope |
 | R0404 | 191456548, 247064480 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0405 | 191831563, 247100947 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0406 | 19667029, 43002046 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0407 | 197949878, 237383540 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0408 | 198468634, 909687678 | volume | volume | retain_match_review_remaining_feed_conflicts |
-| R0409 | 198583518, 159324241 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
-| R0410 | 198583518, 159743212 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
+| R0409 | 198583518, 159324241 | package_material | package_material | hold_identifier_scope |
+| R0410 | 198583518, 159743212 | package_material | package_material | hold_identifier_scope |
 | R0411 | 198888979, 203777679 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0412 | 199095040, 200699248 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0413 | 199846042, 452285503 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
-| R0414 | 19988507, 159504063 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
-| R0415 | 19988507, 159796290 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
+| R0414 | 19988507, 159504063 | package_material | package_material | hold_identifier_scope |
+| R0415 | 19988507, 159796290 | package_material | package_material | hold_identifier_scope |
 | R0416 | 200427122, 428611739 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0417 | 200881498, 216019972 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0418 | 201265433, 204549585 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
@@ -483,8 +483,8 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0451 | 24122880, 10050777 | brand | brand | retain_match_review_remaining_feed_conflicts |
 | R0452 | 2445132, 839345702 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0453 | 2445132, 864621076 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
-| R0454 | 245912640, 245928834 | pack | pack | retain_match_review_remaining_feed_conflicts |
-| R0455 | 246217425, 246425586 | pack | pack | retain_match_review_remaining_feed_conflicts |
+| R0454 | 245912640, 245928834 | pack | pack | hold_identifier_scope |
+| R0455 | 246217425, 246425586 | pack | pack | hold_identifier_scope |
 | R0456 | 247197944, 961251412 | volume | volume | retain_match_review_remaining_feed_conflicts |
 | R0457 | 247380187, 580745084 | volume | volume | retain_match_review_remaining_feed_conflicts |
 | R0458 | 251484285, 251492882 | pack | pack | hold_identifier_scope |
@@ -549,7 +549,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0517 | 319042031, 21868563 | carbonation, package_type | carbonation, package_type | retain_match_review_remaining_feed_conflicts |
 | R0518 | 319057735, 952478454 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0519 | 319087582, 96964625 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
-| R0520 | 319418940, 73877497 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
+| R0520 | 319418940, 73877497 | package_material | package_material | hold_identifier_scope |
 | R0521 | 319425226, 700928814 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0522 | 319425226, 818998731 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0523 | 319426177, 631348705 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
@@ -644,8 +644,8 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0612 | 4779654, 32481569 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0613 | 478431916, 499599875 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0614 | 478577674, 408636849 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
-| R0615 | 478897060, 524136120 | volume | volume | retain_match_review_remaining_feed_conflicts |
-| R0616 | 478996127, 457546118 | volume | volume | retain_match_review_remaining_feed_conflicts |
+| R0615 | 478897060, 524136120 | volume | none | retain_match_descriptors_repaired |
+| R0616 | 478996127, 457546118 | volume | none | retain_match_descriptors_repaired |
 | R0617 | 479034012, 750798576 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0618 | 479742542, 934389996 | pulp, package_type | pulp, package_type | retain_match_review_remaining_feed_conflicts |
 | R0619 | 479765904, 850424658 | pack | none | retain_match_descriptors_repaired |
@@ -654,7 +654,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0622 | 481261449, 524606144 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0623 | 486958661, 406414882 | carbonation, sweetener | carbonation, sweetener | retain_match_review_remaining_feed_conflicts |
 | R0624 | 489171416, 406399476 | volume, carbonation, sweetener | volume, carbonation, sweetener | retain_match_review_remaining_feed_conflicts |
-| R0625 | 491466016, 458565628 | volume | volume | retain_match_review_remaining_feed_conflicts |
+| R0625 | 491466016, 458565628 | volume | none | retain_match_descriptors_repaired |
 | R0626 | 494835934, 72839588 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0627 | 49580524, 47477960 | volume | volume | retain_match_review_remaining_feed_conflicts |
 | R0628 | 496098843, 520835193 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
@@ -737,7 +737,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0705 | 528777772, 530576142 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0706 | 529840632, 485324391 | sweetener | sweetener | retain_match_review_remaining_feed_conflicts |
 | R0707 | 529840632, 485487663 | sweetener | sweetener | retain_match_review_remaining_feed_conflicts |
-| R0708 | 53011360, 277710246 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
+| R0708 | 53011360, 277710246 | carbonation | carbonation | hold_identifier_scope |
 | R0709 | 530181154, 648648722 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0710 | 53163981, 330676598 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0711 | 531971846, 484882184 | sweetener | sweetener | retain_match_review_remaining_feed_conflicts |
@@ -796,8 +796,8 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0764 | 589402198, 452302472 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0765 | 58950051, 55596859 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0766 | 58966438, 55605156 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
-| R0767 | 58970780, 79062179 | flavor | flavor | retain_match_review_remaining_feed_conflicts |
-| R0768 | 58970780, 85417430 | flavor | flavor | retain_match_review_remaining_feed_conflicts |
+| R0767 | 58970780, 79062179 | flavor | flavor | hold_identifier_scope |
+| R0768 | 58970780, 85417430 | flavor | flavor | hold_identifier_scope |
 | R0769 | 58999311, 55613526 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0770 | 59029109, 55590581 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0771 | 59109723, 158418085 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
@@ -814,13 +814,13 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0782 | 620364384, 596054998 | sweetener | sweetener | retain_match_review_remaining_feed_conflicts |
 | R0783 | 625125966, 977298960 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0784 | 625608313, 678060058 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
-| R0785 | 631346676, 928811092 | volume | volume | retain_match_review_remaining_feed_conflicts |
+| R0785 | 631346676, 928811092 | volume | volume | hold_identifier_scope |
 | R0786 | 631365440, 1032376264 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0787 | 633878570, 306322228 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0788 | 642915429, 830648911 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0789 | 645446714, 662375006 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0790 | 651914975, 639135725 | volume | volume | retain_match_review_remaining_feed_conflicts |
-| R0791 | 653314876, 813760951 | pack, package_material | pack, package_material | retain_match_review_remaining_feed_conflicts |
+| R0791 | 653314876, 813760951 | pack, package_material | pack, package_material | hold_identifier_scope |
 | R0792 | 653594937, 75002203 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0793 | 653914078, 57308207 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0794 | 653991202, 318456970 | package_type, package_material | package_type, package_material | retain_match_review_remaining_feed_conflicts |
@@ -835,7 +835,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0803 | 67082963, 452399661 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0804 | 673701488, 631339915 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0805 | 676233250, 933005612 | volume | volume | retain_match_review_remaining_feed_conflicts |
-| R0806 | 677103486, 429073926 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
+| R0806 | 677103486, 429073926 | package_material | package_material | hold_identifier_scope |
 | R0807 | 67766110, 71241199 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0808 | 67822828, 70506469 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0809 | 679348742, 597498131 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
@@ -863,7 +863,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0831 | 709584627, 201395439 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0832 | 71003942, 68922775 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0833 | 71030810, 74955401 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
-| R0834 | 71034436, 75733158 | pack | pack | retain_match_review_remaining_feed_conflicts |
+| R0834 | 71034436, 75733158 | pack | pack | hold_identifier_scope |
 | R0835 | 710552956, 373752476 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0836 | 710860456, 188050181 | sweetener | sweetener | retain_match_review_remaining_feed_conflicts |
 | R0837 | 711680807, 181205464 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
@@ -900,8 +900,8 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0868 | 74840288, 1054033125 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0869 | 748694462, 788698665 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0870 | 749234380, 668958910 | volume, carbonation | volume, carbonation | retain_match_review_remaining_feed_conflicts |
-| R0871 | 75021210, 47084366 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
-| R0872 | 75021210, 70396447 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
+| R0871 | 75021210, 47084366 | carbonation | carbonation | hold_identifier_scope |
+| R0872 | 75021210, 70396447 | carbonation | carbonation | hold_identifier_scope |
 | R0873 | 750732442, 906719446 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0874 | 751432818, 769120782 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0875 | 751644981, 786564635 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
@@ -914,7 +914,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0882 | 756146050, 53918812 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0883 | 756292762, 191643226 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0884 | 756329123, 124137087 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
-| R0885 | 76118320, 11261080 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
+| R0885 | 76118320, 11261080 | carbonation | carbonation | hold_identifier_scope |
 | R0886 | 76194899, 24951840 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0887 | 764359946, 75797483 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0888 | 765441226, 839582073 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
@@ -973,7 +973,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0941 | 824905591, 811144512 | volume | volume | retain_match_review_remaining_feed_conflicts |
 | R0942 | 825057979, 669167447 | volume | volume | retain_match_review_remaining_feed_conflicts |
 | R0943 | 827854553, 964453499 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
-| R0944 | 827919655, 669170483 | pack, package_material | pack, package_material | retain_match_review_remaining_feed_conflicts |
+| R0944 | 827919655, 669170483 | pack, package_material | pack, package_material | hold_identifier_scope |
 | R0945 | 82891232, 78376959 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0946 | 83009956, 12534984 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0947 | 83009956, 143313248 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
@@ -993,7 +993,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0961 | 85207217, 55607778 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0962 | 854139373, 778603491 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0963 | 854274296, 785331866 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
-| R0964 | 854465099, 676945309 | volume | volume | retain_match_review_remaining_feed_conflicts |
+| R0964 | 854465099, 676945309 | volume | none | retain_match_descriptors_repaired |
 | R0965 | 85475589, 380160537 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R0966 | 854778490, 948507442 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0967 | 854971467, 631364555 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
@@ -1022,7 +1022,7 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R0990 | 910088066, 896333001 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0991 | 910399685, 905120617 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0992 | 91057647, 76815370 | flavor | flavor | retain_match_review_remaining_feed_conflicts |
-| R0993 | 91303399, 95204318 | pack | pack | retain_match_review_remaining_feed_conflicts |
+| R0993 | 91303399, 95204318 | pack | pack | hold_identifier_scope |
 | R0994 | 913785799, 977880613 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R0995 | 918944345, 950667984 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R0996 | 92344024, 379958567 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
@@ -1047,8 +1047,8 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R1015 | 94394467, 92627265 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R1016 | 94526285, 50457719 | package_type, package_material | package_type, package_material | retain_match_review_remaining_feed_conflicts |
 | R1017 | 94592458, 76667500 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
-| R1018 | 946326063, 753368570 | pack | pack | retain_match_review_remaining_feed_conflicts |
-| R1019 | 946542808, 994149168 | pack | pack | retain_match_review_remaining_feed_conflicts |
+| R1018 | 946326063, 753368570 | pack | pack | hold_identifier_scope |
+| R1019 | 946542808, 994149168 | pack | pack | hold_identifier_scope |
 | R1020 | 946978259, 955839407 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R1021 | 94849229, 512679561 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R1022 | 948536351, 963671362 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
@@ -1065,19 +1065,19 @@ Each original case remains in this replay, including quarantined identifiers. Th
 | R1033 | 95539386, 55589492 | volume | volume | retain_match_review_remaining_feed_conflicts |
 | R1034 | 958912069, 448742079 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R1035 | 959263518, 15493334 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
-| R1036 | 961365433, 966699250 | pack | pack | retain_match_review_remaining_feed_conflicts |
+| R1036 | 961365433, 966699250 | pack | pack | hold_identifier_scope |
 | R1037 | 966655009, 70458315 | volume, pulp | volume, pulp | retain_match_review_remaining_feed_conflicts |
 | R1038 | 9678243, 47042132 | package_material | package_material | retain_match_review_remaining_feed_conflicts |
 | R1039 | 975718807, 631339051 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R1040 | 977196787, 969343742 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
-| R1041 | 978992729, 753352315 | volume, pack | volume, pack | retain_match_review_remaining_feed_conflicts |
+| R1041 | 978992729, 753352315 | volume, pack | volume, pack | hold_identifier_scope |
 | R1042 | 980225294, 749236644 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
 | R1043 | 980334711, 891748192 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R1044 | 980529306, 631354695 | volume | none | retain_match_descriptors_repaired |
 | R1045 | 980687836, 921606418 | sweetener | sweetener | retain_match_review_remaining_feed_conflicts |
-| R1046 | 981119690, 759607116 | pack | pack | retain_match_review_remaining_feed_conflicts |
+| R1046 | 981119690, 759607116 | pack | pack | hold_identifier_scope |
 | R1047 | 985923411, 117899487 | package_type | package_type | retain_match_review_remaining_feed_conflicts |
-| R1048 | 985989378, 246047318 | volume | volume | retain_match_review_remaining_feed_conflicts |
+| R1048 | 985989378, 246047318 | volume | none | retain_match_descriptors_repaired |
 | R1049 | 986601922, 995107069 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |
 | R1050 | 990888395, 933625970 | sweetener | sweetener | retain_match_review_remaining_feed_conflicts |
 | R1051 | 993541190, 987573425 | carbonation | carbonation | retain_match_review_remaining_feed_conflicts |

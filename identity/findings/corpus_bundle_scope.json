@@ -1,0 +1,10 @@
+{
+  "census": "corpus-wide bundle-count collisions; disjoint title-advertised pack counts within one eligible GTIN family",
+  "eligible_rows": 25374,
+  "eligible_gtins": 13102,
+  "already_held_gtins": 148,
+  "held_collision_families": 0,
+  "families": 0,
+  "affected_rows": 0,
+  "families_detail": []
+}
