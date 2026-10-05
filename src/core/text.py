@@ -68,13 +68,17 @@ PACK_RE = re.compile(
 )
 
 # Pack-count ONLY (03 reconcile): "6x1.5l", "4x 1 ltr", "10 pack",
-# "10 Packets", "48 pk", "pack of 6". Deliberately separate from PACK_RE
-# so reconciliation can be tuned/tested independently of volume extraction.
+# "10 Packets", "48 pk", "pack of 6", "case of 12". Deliberately separate
+# from PACK_RE so reconciliation can be tuned/tested independently of volume
+# extraction. `case of N` is a declared retail bundle exactly like "pack of
+# N" — measured gap: Amazon case titles ('... 16oz Bottle ( Case of 12)')
+# blocked under NO_PACK while their identity parser extracted {12}.
 PACK_COUNT_RE = re.compile(
     r"""(?:
         (\d+)\s*x\s*\d+(?:[.,]\d+)?\s*(?:ml|l|ltr|cl|dl|oz|fl\.?\s?oz)\b
       | (\d+)\s*(?:-|\s)?(?:pack|pk|packets?|pcs|count|ct)\b
       | pack\s*of\s*(\d+)
+      | cases?\s+of\s*(\d+)
     )""",
     re.IGNORECASE | re.VERBOSE,
 )

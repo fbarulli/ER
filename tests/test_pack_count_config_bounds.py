@@ -12,6 +12,13 @@ def test_current_source_pack_count_no_longer_raises():
     assert text.extract_pack_counts(title) == {12}
 
 
+def test_case_of_is_a_declared_retail_bundle():
+    # Amazon case titles ('16oz Bottle ( Case of 12)') blocked under NO_PACK
+    # while the identity parser already extracted {12} from `cases? of N`.
+    assert text.extract_pack_counts('16oz Bottle ( Case of 12)') == {12}
+    assert text.extract_pack_counts('Case of 24, 500ml') == {24}
+
+
 def test_pack_count_uses_configured_inclusive_bounds(monkeypatch):
     active = text._unit_spec()
     spec = SimpleNamespace(**active.model_dump())
