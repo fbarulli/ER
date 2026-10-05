@@ -7,25 +7,13 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from core.common import training_cfg
+from core.schemas import DifficultySpec
 from training.masking import _FIELD_PREFIXES, _field_surfaces, _field_values_conflict, field_of
 
 Difficulty = Literal['easy', 'medium', 'hard', 'unknown']
 
-
-class DifficultySpec(BaseModel):
-    model_config = ConfigDict(extra='forbid', frozen=True)
-    version: Literal[1] = 1
-    min_both_observed: int = Field(default=2, ge=1)
-    low_text_overlap: float = Field(default=.2, ge=0, le=1)
-    high_text_overlap: float = Field(default=.5, ge=0, le=1)
-    positive_missing_share: float = Field(default=.5, ge=0, le=1)
-    easy_negative_conflicts: int = Field(default=3, ge=2)
-
-    @model_validator(mode='after')
-    def ordered(self):
-        if self.low_text_overlap >= self.high_text_overlap:
-            raise ValueError('difficulty overlap thresholds must be ordered')
-        return self
 
 
 class DifficultyEndpoint(BaseModel):
@@ -71,7 +59,7 @@ class PairDifficulty(BaseModel):
 
 def measure_pair(left: DifficultyEndpoint, right: DifficultyEndpoint, label: int,
                  spec: DifficultySpec | None = None) -> PairDifficulty:
-    spec = spec or DifficultySpec()
+    spec = spec or training_cfg().difficulty
     both, one, neither, conflicts = [], [], [], []
     for field in _FIELD_PREFIXES:
         a, b = left.attributes[field], right.attributes[field]

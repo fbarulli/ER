@@ -95,6 +95,37 @@ Efficiency comes from doing each piece of work once per run, sharing objects,
 avoiding duplicated projections/tokenization, and fast serialization/transport.
 It does not depend on proving a previous run's cached stage is still valid.
 
+## Tuning surfaces: attributes, minting, slices, augmentation
+
+Four surfaces change constantly and reappear in post-training analysis
+(ablation, evidence loops, error analysis). They must trace END TO END:
+the same definition that prepared the data is the one post-training
+measures against, and a post-training tuning decision edits the same SSOT
+key preparation consumed — so the next build attests the change and
+nothing forks between preparation-time and analysis-time truth.
+
+| Surface | Owning code | SSOT knob | Attested by |
+|---|---|---|---|
+| Attribute universe (37 keys, parsers, conflict predicates, census budget) | `core/attribute_universe.py` (one declarative FieldSpec registry) | the registry itself | provenance (src) + composition_fingerprint + ablation attribute scans |
+| Regex / feature extraction (number strips, volume/pack, bands, text composition) | `pipeline.py` regex bank, `core/model_input.py` (THE single composition), `core/structured_features.py` | config/paths.yaml column + extraction blocks; `config/training.yaml` gate block | composition_fingerprint + provenance |
+| Minting (counterfactual twins, real-partner mining, mint caps and moves) | `training/negative_supply.py`, `training/masking.py` (_mint_cfp) | `NegativeSupplySpec` (EUROMONITOR_NEGATIVE_SUPPLY_SPEC JSON), `mining:` block | lane manifest pairs_sha256 + handoff.json generation coverage |
+| Masking / augmentation (profiles, balanced counts, swap/dropout lanes) | `training/masking.py`, `training/balanced_augmentation.py` | `masking_profiles:` + `masking.balanced_augmentation:` | bundle manifest masking_config/easy_config + augmentation_coverage |
+| Difficulty slices (easy/medium/hard/unknown cut-offs) | `training/difficulty.py` | `difficulty:` block (versioned DifficultySpec) | handoff.json LossBatchAttestation context + coverage contracts |
+
+Rules:
+- A threshold or rule belonging to one of these surfaces lives in its SSOT
+  knob or its single owning registry — never inline at a call site. The
+  difficulty thresholds were the last code-default offenders and are now
+  config (`difficulty:`), because post-training evidence will tune them.
+- Every surface above is covered by `preparation_provenance` (src/scripts/
+  config re-hash) and, where it shapes payload bytes, by
+  `composition_fingerprint` — so an edit is loud: provenance mismatch
+  forces regeneration; the artifact records which rule version built it.
+- Post-training findings (ablation cohorts, difficulty-slice deficits,
+  diet shortfalls) are expressed as edits to THESE surfaces only. The
+  rebuild-everything rule below is the change route; no analysis lane may
+  patch data post hoc.
+
 ## Expected changes
 
 Regex, negative minting, feature extraction, numeric augmentation, vocabulary,

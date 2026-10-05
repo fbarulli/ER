@@ -2731,6 +2731,30 @@ class NegativeSupplyModeSpec(BaseModel):
         return self
 
 
+class DifficultySpec(BaseModel):
+    """training.difficulty — structural pair difficulty slice thresholds.
+
+    The pre-training difficulty proxy (easy/medium/hard/unknown) that the
+    attribute and difficulty slices are cut by. Tuned from training
+    evidence; lives in the SSOT so a threshold change is a config edit.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[1] = 1
+    min_both_observed: int = Field(default=2, ge=1)
+    low_text_overlap: float = Field(default=0.2, ge=0, le=1)
+    high_text_overlap: float = Field(default=0.5, ge=0, le=1)
+    positive_missing_share: float = Field(default=0.5, ge=0, le=1)
+    easy_negative_conflicts: int = Field(default=3, ge=2)
+
+    @model_validator(mode="after")
+    def _overlap_thresholds_ordered(self) -> "DifficultySpec":
+        if self.low_text_overlap >= self.high_text_overlap:
+            raise ValueError("difficulty overlap thresholds must be ordered")
+        return self
+
+
 PREPARATION_REUSABLE_KEYS = (
     'dataset_deduped', 'sku_to_rep', 'dedupe_summary', 'ambiguous_offer_groups',
     'removals', 'dedupe_conflicts', 'number_reference', 'second04_pairs_positive',
@@ -2861,6 +2885,7 @@ class TrainingConfig(BaseModel):
     tracking: TrackingSpec
     colab: ColabSpec
     rand_matching: RandMatchingSpec
+    difficulty: DifficultySpec = Field(default_factory=DifficultySpec)
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)
     # TIER 1(e) bundle-drift switch (see config/training.yaml): when TRUE,
     # training.prepared_bundle hard-fails a bundle built under drifted
