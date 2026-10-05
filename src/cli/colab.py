@@ -3796,20 +3796,64 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
     return run_id
 
 
-def run_bundle() -> None:
+def _bundle_delivery_local(run_id: str) -> Path:
+    """Local delivery root for one bundle lane delivery archive.
+
+    `_download_file_with_visibility` resolves its display/event paths with
+    local.relative_to(TRAINING_RESULTS / run_id) (and `_result_event` writes
+    into that same root), so the delivery MUST sit directly under
+    TRAINING_RESULTS / <the run_id passed to that call>. run_bundle therefore
+    derives one `colab_bundle_`-prefixed run id via this helper and passes
+    Path(root).name as the download run_id, keeping the whole transfer inside
+    a single TRAINING_RESULTS/colab_bundle_<run_id> root. Retention is
+    unaffected: run_retention prunes only track-marker-carrying completed
+    runs under TRAINING_RESULTS, and bundle deliveries carry none.
+    """
+    return TRAINING_RESULTS / ("colab_bundle_" + run_id)
+
+
+def run_bundle(dataset_csv: Path | None = None) -> None:
     """Run the full CSV-to-inputs bundle lifecycle on the VM CPU.
 
-    Fresh-checkout flow: the VM uses its own clone (provisioned by the
-    standard session bootstrap); the raw export is uploaded (it is not in
-    git), prepare_all runs there end to end, and one delivery archive with
-    the run dir + regenerated data artifacts comes back. CPU-only: no GPU
-    allocation, no training.
+    Fresh-checkout flow: the VM reuses the checkout prepare_remote_layout
+    refetches to the configured branch HEAD; the raw export is uploaded on
+    top of it because dataset.csv IS git-tracked (commit 1084010 "track the
+    five CSVs a clone needs, ignore the rest") — the upload is a freshness
+    override that replaces the checkout's committed bytes with the export
+    passed via --dataset-csv (or repo-root dataset.csv by default), so an
+    uncommitted export still drives the whole run. prepare_all then runs
+    on the VM end to end and one delivery archive with the run dir +
+    regenerated data artifacts comes back. CPU-only: no GPU allocation, no
+    training.
+
+    WHICH export this is, is enforced by the committed config audit pins
+    audit.source_export_expected_rows / _sha256 (config/training.yaml, drift
+    threshold 0.0), asserted the first time the pinned stage loads the raw
+    export — for this lane that is the FIRST prepare_all stage, dedupe, so a
+    cohort CSV against full-cohort pins fails loudly at dedupe.
+    rand_matching.gate_census_pin is NOT the enforcement point in this flow:
+    the gate_census stage re-records it from the freshly regenerated
+    gate_results.csv (refresh_gate_census rewrites config/training.yaml)
+    before labeled_pairs compares against it — self-recording, not a
+    tripwire.
+
+    Delivery: the local copy lands under TRAINING_RESULTS/colab_bundle_<id>/
+    (see _bundle_delivery_local); the VM-side archive keeps the FIXED name
+    REMOTE_ROOT/bundle_delivery.tar.gz, so a rerun on a live VM overwrites
+    the previous delivery — acceptable because the download consumes it per
+    invocation and the local copy is timestamped per run_id.
     """
     from core.common import DATA_PATH
 
+    source = Path(dataset_csv) if dataset_csv is not None else Path(DATA_PATH)
+    if not source.is_file():
+        raise FileNotFoundError(f"bundle raw export not found: {source}")
     run_id = datetime.now(timezone.utc).strftime("bundle_%m%dT%H%M%S%fZ")
-    print(f"[bundle] uploading raw export -> {REMOTE_ROOT}/dataset.csv ...", flush=True)
-    _upload_with_retries(Path(DATA_PATH), f"{REMOTE_ROOT}/dataset.csv", timeout=3600)
+    print(
+        f"[bundle] uploading raw export {source} -> {REMOTE_ROOT}/dataset.csv ...",
+        flush=True,
+    )
+    _upload_with_retries(source, f"{REMOTE_ROOT}/dataset.csv", timeout=3600)
     script = _BOOTSTRAP + f"""
 import glob, os, subprocess, sys, tarfile
 rc = subprocess.run(
@@ -3820,6 +3864,9 @@ rc = subprocess.run(
 if rc != 0:
     raise RuntimeError(f"prepare_all failed on the VM (rc={{rc}})")
 run_dir = sorted(glob.glob({REMOTE_ROOT!r} + "/results/training_prep/*"))[-1]
+# FIXED delivery name: a rerun on a live VM overwrites the previous archive;
+# acceptable because the launcher consumes it per invocation and keeps a
+# per-run timestamped copy under TRAINING_RESULTS/colab_bundle_<run_id>/.
 delivery = {REMOTE_ROOT!r} + "/bundle_delivery.tar.gz"
 with tarfile.open(delivery, "w:gz") as tar:
     tar.add(run_dir, arcname="training_prep/" + os.path.basename(run_dir))
@@ -3839,17 +3886,24 @@ with tarfile.open(delivery, "w:gz") as tar:
 print("[bundle] delivery archive ready", flush=True)
 """
     run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="bundle")
-    local = RESULTS / "colab_bundle" / run_id
-    local.mkdir(parents=True, exist_ok=True)
+    delivery_dir = _bundle_delivery_local(run_id)
+    delivery_dir.mkdir(parents=True, exist_ok=True)
+    # The download's run_id must be the PREFIXED name of the delivery root:
+    # _download_file_with_visibility resolves local.relative_to(
+    # TRAINING_RESULTS / run_id), so only the exact sibling-free id inside
+    # that root satisfies the contract (see _bundle_delivery_local).
     _download_file_with_visibility(
         remote=f"{REMOTE_ROOT}/bundle_delivery.tar.gz",
-        local=local / "bundle_delivery.tar.gz",
+        local=delivery_dir / "bundle_delivery.tar.gz",
         worker=None,
         index=1,
         total=1,
-        run_id=run_id,
+        run_id=delivery_dir.name,
     )
-    print(f"[bundle] delivered -> {local / 'bundle_delivery.tar.gz'}", flush=True)
+    print(
+        f"[bundle] delivered -> {delivery_dir / 'bundle_delivery.tar.gz'}",
+        flush=True,
+    )
 
 
 def run_sims() -> None:
@@ -4385,6 +4439,11 @@ def main() -> None:
                     help='prepared all-track suite; uses the existing Colab lifecycle')
     ap.add_argument('--prepared-input-package', type=Path, default=None,
                     help='reuse a training.prepare_all all_tracks_inputs package (.tar.zst) after freshness validation')
+    ap.add_argument('--dataset-csv', type=Path, default=None,
+                    help="raw export to upload for --what bundle "
+                         "(default: config/paths.yaml dataset = repo:dataset.csv; "
+                         "the VM holds it at dataset.csv so the committed audit "
+                         "pins still enforce which export is consumed)")
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
                     f"{_TRAIN_FRAC_DEFAULT:g})")
@@ -4704,7 +4763,7 @@ def main() -> None:
         elif args.what == "sims":
             run_sims()
         elif args.what == "bundle":
-            run_bundle()
+            run_bundle(dataset_csv=args.dataset_csv)
         elif args.what == "mixed":
             local_mixed_run = run_mixed(
                 args.train_frac, args.epochs, model=args.model, loss=args.loss,
