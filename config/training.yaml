@@ -18,10 +18,10 @@ masking:
   balanced_augmentation:
     enabled: true
     counts:
-      minted_negatives: 30
-      masked_minted_negatives: 15
-      masked_positives: 5
-      vendor_variation_positives: 2
+      minted_negatives: 12000
+      masked_minted_negatives: 6000
+      masked_positives: 1200
+      vendor_variation_positives: 300
     sample_counts:
       minted_negatives: 100
       masked_minted_negatives: 50
@@ -904,7 +904,7 @@ pairs:
 # loudly past either cap instead of training on merged entities.
 entity_clusters:
   max_component_size: 15
-  max_giant_ratio: 0.30
+  max_giant_ratio: 0.05
 
 # ── plotting (was EDA/eda.yaml plots: — every fig.savefig reads this) ────────
 plots:
@@ -931,9 +931,9 @@ audit:
   blocking_min_recall: 0.95      # greedy forward-selection recall floor
   manifest_dir: "results/manifests"   # per-stage <stage>.json, written LAST;
                                # presence w/ status "complete" = stage ran
-  source_export_expected_rows: 35 # approved dataset.csv census (drift gate)
+  source_export_expected_rows: 71_623 # approved dataset.csv census (drift gate)
   source_drift_threshold_pct: 0.0     # allowed row-count drift; 0.0 = exact
-  source_export_expected_sha256: "c5b86436459f4504e7756969c5e161b1c97b4722d3aed003486e94b7a445e258" # approved source bytes
+  source_export_expected_sha256: "539c247292de41d065a7e1b472a845cc122f95cee9087cf567099cf312fab88c" # approved source bytes
   manifest_stages:                    # stages that MUST produce a manifest,
     - "dedupe"                        # in pipeline order (an orchestrator lane
     - "data_prep"                     # may append its own later)
