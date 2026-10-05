@@ -855,7 +855,7 @@ def veto_eligibility_ledger(
     from core.critical_attributes import CRITICAL_ATTRIBUTE_DIMENSIONS
 
     if census is None:
-        from core.common import RESULTS
+        from core.common import TRAIN_ROOT
 
         path = TRAIN_ROOT / "artifacts/evidence/attribute_universe_census.json"
         if not path.exists():
