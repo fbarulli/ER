@@ -51,7 +51,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from core.common import DATA_PATH, training_cfg
+from core.common import DATA_PATH, F, TRAIN_ROOT, training_cfg
 
 import cli.colab as colab
 
@@ -132,6 +132,21 @@ def run_cpu_bundle_prep(dataset_csv: Path | None = None) -> None:
         colab.run_bundle(dataset_csv=source)
 
 
+def _qualify_session_transcripts(session: str) -> None:
+    """Per-session root/training transcript paths for the 2-parallel cap.
+
+    The SSOT maps `colab_system.log`/`training.log` to FIXED repo-root
+    names, so two concurrent prep lanes would truncate each other's
+    records at `start_live_log` time.  The file map is mutated in THIS
+    process only (module state is process-local), so `cli.colab
+    start_live_log` (the untouched shared primitive) resolves the
+    session-qualified names instead: `colab_system_<session>.log` and
+    `training_<session>.log` beside the originals.
+    """
+    F["colab_live_log"] = TRAIN_ROOT / f"colab_system_{session}.log"
+    F["colab_training_log"] = TRAIN_ROOT / f"training_{session}.log"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-csv", type=Path, default=None,
@@ -143,12 +158,20 @@ def main() -> None:
     # named high-RAM sessions and this lane reuses them by name.
     colab.GPU = "CPU"
     os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
+    session = os.environ.get("EUROMONITOR_COLAB_SESSION", colab.SESSION)
+    _qualify_session_transcripts(session)
+    # The shared tee primitive (untouched) installs the dual transcript:
+    # root system log + training.log, both session-qualified, with the
+    # per-lane stdout/stderr traveling to this process's own streams.
+    colab.start_live_log()
     try:
         run_cpu_bundle_prep(args.dataset_csv)
     except BaseException:
         print("\n[failed] cpu prep lane did not complete successfully", flush=True)
+        colab.close_live_log()
         raise
     print("\n[done] cpu prep lane completed and artifacts downloaded locally", flush=True)
+    colab.close_live_log()
 
 
 if __name__ == "__main__":

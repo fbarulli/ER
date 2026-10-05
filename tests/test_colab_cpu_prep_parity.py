@@ -328,7 +328,7 @@ def test_cpu_prep_lane_reports_failed_when_the_run_raises(
     assert "[done]" not in captured.out
 
 
-def _run_lane_main(monkeypatch, dataset, runner):
+def _run_lane_main(monkeypatch, dataset, runner, *, session=None):
     """The lane's own entry point owns its [done]/[failed] telemetry."""
     monkeypatch.setattr(
         sys, "argv",
@@ -336,6 +336,8 @@ def _run_lane_main(monkeypatch, dataset, runner):
     )
     saved_gpu = colab.GPU
     saved_env = os.environ.get("EUROMONITOR_KEEP_ALIVE_ALLOWED")
+    monkeypatch.setattr(colab, "start_live_log", mock.Mock())
+    monkeypatch.setattr(colab, "close_live_log", mock.Mock())
     monkeypatch.setattr(prep, "run_cpu_bundle_prep", runner)
     try:
         prep.main()
@@ -356,6 +358,23 @@ def test_the_own_lane_prints_done_only_on_clean_completion(
     captured = capsys.readouterr()
     assert "[done] cpu prep lane completed" in captured.out
     assert "[failed]" not in captured.out
+
+
+def test_lane_transcripts_are_session_qualified_in_its_own_process(
+    monkeypatch, tmp_path
+):
+    """Two parallel prep lanes must not truncate each other's records: the
+    lane mutates the PROCESS-LOCAL file map so the shared tee primitive
+    resolves per-session paths; the module map itself is untouched."""
+    from core import common
+    saved = common.F["colab_live_log"], common.F["colab_training_log"]
+    try:
+        prep._qualify_session_transcripts("er-prep-50pct")
+        assert common.F["colab_live_log"].name == "colab_system_er-prep-50pct.log"
+        assert common.F["colab_training_log"].name == "training_er-prep-50pct.log"
+        assert common.F["colab_live_log"].parent == saved[0].parent
+    finally:
+        common.F["colab_live_log"], common.F["colab_training_log"] = saved
 
 
 def test_the_own_lane_reports_failed_and_reraises(monkeypatch, tmp_path, capsys):

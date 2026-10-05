@@ -173,7 +173,7 @@ tracking:
 cpu_bundle_prep:
   # `colab new --high-mem` when the lane must provision a FRESH CPU session;
   # owner-launched sessions are reused by name either way.
-  high_mem: false
+  high_mem: true
   # true = cli.colab --what bundle dispatch forwards to the lane (the shared
   # launcher otherwise keeps its original direct behavior, byte-identical).
   lane: false
