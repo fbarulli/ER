@@ -1,3 +1,11 @@
+"""Suite training-control surfaces: what each worker command must carry.
+
+The text-worker pin reads only a typed sidecar header (PIPE.md forbids
+unpickling the full bundle just for the command), so the fixture builds a
+minimal-but-valid PreparedBundleManifest sidecar; the trainer still owns
+the full verified load after the barrier.
+"""
+
 from pathlib import Path
 from types import SimpleNamespace
 import json
@@ -6,6 +14,45 @@ import numpy as np
 import pandas as pd
 import pytest
 import yaml
+
+
+def _sidecar_manifest(tmp_path: Path) -> Path:
+    """Write a minimal-but-valid PreparedBundleManifest sidecar (SSOT types).
+
+    The worker reads only this header to build its command; building it through
+    the real pydantic model keeps the pin honest (empty-but-typed arrays) with
+    no production-code stubs.
+    """
+    from training.prepared_bundle import PreparedBundleManifest
+    from core.common import masking_cfg, load_config
+
+    payload = dict(
+        schema_version='3',
+        payload_variant='full',
+        masking_profile='baseline',
+        model_input=load_config()['training']['model_input'],
+        masking_config=dict(masking_cfg('baseline')),
+        easy_config={'enabled': False, 'ratio_to_hard': 1.0},
+        ratio_to_hard=1.0,
+        static_view_ratio=1.0,
+        effective_train_ratio=1.0,
+        ratio_contract_note='test fixture header; guaranteed bundle-only ratio 1.000; '
+                            'easy-negative settings (disabled, ratio=1) are a possible '
+                            'contrastive projection and are not guaranteed.',
+        n_df=1,
+        n_payload=1,
+        n_pos=1,
+        n_neg=0,
+        n_train_neg=0,
+        n_labeled_pairs_bytes=1,
+        n_canonical_records_bytes=1,
+        n_gate_results_bytes=1,
+        sha256='a' * 64,
+    )
+    manifest = PreparedBundleManifest.model_validate(payload)
+    sidecar = tmp_path / 'bundle.json'
+    sidecar.write_text(manifest.model_dump_json(indent=2) + '\n', encoding='utf-8')
+    return sidecar
 
 
 def stage_smoke_parent(setup: Path, monkeypatch):
@@ -38,7 +85,6 @@ def stage_smoke_parent(setup: Path, monkeypatch):
 def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     from model_tracks import worker
     import core.common
-    import training.prepared_bundle
     import model_tracks.text_report
 
     (tmp_path / 'setup_manifest.json').write_text('{}')
@@ -51,9 +97,8 @@ def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     # The worker reads only the bundle's sidecar manifest to build its command;
     # the trainer performs the full verified load after the barrier. Loading the
     # whole bundle here cost ~19s and made the text worker the barrier straggler.
-    monkeypatch.setattr(training.prepared_bundle, 'PreparedBundleManifest',
-                        SimpleNamespace(model_validate_json=lambda *_, **__: SimpleNamespace(
-                            payload_variant='full')))
+    # The sidecar is built through the REAL typed model so the pin stays honest.
+    _sidecar_manifest(tmp_path)
     monkeypatch.setattr(worker, 'wait_for_start', lambda *_: None)
     commands = []
     monkeypatch.setattr(worker.subprocess, 'run', lambda command, **_: commands.append(command))
