@@ -74,6 +74,22 @@ from core.common import (
 from core.schemas import check_labeled_pairs_frame
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_MARGIN
 from core.common import runtime as _runtime
+from core.timing import emit_timing
+
+# D7 telemetry: wall seconds spent inside load_config's deepcopy, keyed by
+# call-site label (fold{n}.* for per-fold sites); aggregated per fold and
+# emitted by train_one_config before it returns.
+_CFG_DEEPCOPY_TOTALS: dict[str, float] = {}
+
+
+def _timed_load_config(key: str) -> dict:
+    """Behavior-identical load_config with a measured deepcopy component."""
+    started = time.perf_counter()
+    value = load_config()
+    _CFG_DEEPCOPY_TOTALS[key] = _CFG_DEEPCOPY_TOTALS.get(key, 0.0) + (
+        time.perf_counter() - started
+    )
+    return value
 
 _SSOT_HP = bool(_runtime("hard_positives"))  # no-fallback SSOT
 from core.hard_negatives import mine_hard_negatives, pairs_in_set
@@ -786,10 +802,7 @@ def _mnrl_training_triples_with_populations(
     # i.e. "the original matches its canonical better than its one-flip
     # twin". That is the counterfactual pressure; without this branch the
     # twin lane mints evaluation rows that never see a gradient.
-    selected_negative_pairs = {
-        (int(a), int(b))
-        for a, b in np.asarray(train_neg, dtype=int).reshape(-1, 2)
-    }
+    selected_negative_pairs = selected_edges
     for audit in hard_negative_mask_audit or []:
         if audit.get("target_mode") != "counterfactual":
             continue
@@ -1397,6 +1410,14 @@ class LateEpochLrDecayCallback(TrainerCallback):
         self.applied_epoch: float | None = None
         self.learning_rates_before: list[float] = []
         self.learning_rates_after: list[float] = []
+        self.resumed_start = False
+        self.global_step_at_resume = 0
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        # D2 telemetry: whether this run STARTED from an existing checkpoint.
+        self.resumed_start = bool(getattr(state, "global_step", 0))
+        self.global_step_at_resume = int(getattr(state, "global_step", 0))
+        return control
 
     def on_epoch_begin(self, args, state, control, **kwargs):
         if not self.enabled or self.applied:
@@ -1432,6 +1453,14 @@ class LateEpochLrDecayCallback(TrainerCallback):
             f"    [optim] late-epoch LR decay applied at epoch {current_epoch:.3f} "
             f"(boundary={boundary:.3f}, multiplier={self.multiplier:.3f})",
             flush=True,
+        )
+        emit_timing(
+            "[timing] training.late_epoch_lr applied "
+            f"applied_epoch={current_epoch:.3f} boundary={boundary:.3f} "
+            f"multiplier={self.multiplier:.3f} resumed_start={self.resumed_start} "
+            f"global_step_at_resume={self.global_step_at_resume} "
+            f"lr_before_min={min(self.learning_rates_before):.8g} "
+            f"lr_after_min={min(self.learning_rates_after):.8g}"
         )
         return control
 
@@ -1604,6 +1633,20 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         self.wandb_ctx = wandb_ctx
         self.last_epoch = 0
 
+    def _record_ann_refire(self, state, completed_epoch: int, cadence: int) -> None:
+        """D2 telemetry: every ANN-refresh fire with its resume fingerprint.
+
+        A fire with ``last_epoch=0`` while ``global_step`` is past the first
+        epochs is the resume-refire signature; the run timing log is the
+        surface the resume decision reads.
+        """
+        emit_timing(
+            "[timing] training.ann_refresh fired "
+            f"fold={self.fold_i} epoch={completed_epoch} "
+            f"last_epoch={int(self.last_epoch)} cadence={cadence} "
+            f"global_step={int(getattr(state, 'global_step', 0))}"
+        )
+
     def on_save(self, args, state, control, **kwargs):
         if not state.is_world_process_zero:
             return control
@@ -1613,7 +1656,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
                 "FineTunedAnnRefreshCallback was created without the live model"
             )
         ann_cfg = config_section("mining", "ann")
-        attr_cfg = load_config()["mining"]["attribute_conflict"]
+        attr_cfg = _timed_load_config(f"ann_refresh.fold{self.fold_i}")["mining"]["attribute_conflict"]
         if not bool(ann_cfg["refresh_enabled"]) and not bool(attr_cfg["enabled"]):
             return control
         epoch = float(state.epoch or 0.0)
@@ -1621,6 +1664,7 @@ class FineTunedAnnRefreshCallback(TrainerCallback):
         completed_epoch = int(np.floor(epoch + 1e-8))
         if completed_epoch < self.last_epoch + cadence:
             return control
+        self._record_ann_refire(state, completed_epoch, cadence)
         from training.ann_refresh import (
             encode_finetuned_embeddings,
             refresh_finetuned_ann,
@@ -2930,6 +2974,8 @@ def _dynamic_mask_negative_transform(
     from training.masking import mask_text
 
     transformed = {key: list(values) for key, values in batch.items()}
+    ann_version = int(ann_state.get("version", 0)) if ann_state else 0
+    epoch_now = int(epoch_ref["epoch"])
     for i, label in enumerate(batch["label"]):
         pair_id = int(batch["pair_id"][i])
         base_population = (
@@ -2937,7 +2983,6 @@ def _dynamic_mask_negative_transform(
             if pair_populations is not None and pair_id < len(pair_populations)
             else ("positive" if int(label) else "hard_negative")
         )
-        ann_version = int(ann_state.get("version", 0)) if ann_state else 0
         augmentation = "none"
         if int(label) == 0 and ann_pairs:
             replacement = ann_pairs.get(pair_id)
@@ -2957,17 +3002,17 @@ def _dynamic_mask_negative_transform(
             if base_population == "masked_positive":
                 augmentation = "static_mask"
             if presentation_counts is not None:
-                key = (int(epoch_ref["epoch"]), pair_id, base_population, augmentation, ann_version)
+                key = (epoch_now, pair_id, base_population, augmentation, ann_version)
                 presentation_counts[key] = presentation_counts.get(key, 0) + 1
             continue
         epoch_stats = stats_by_epoch.setdefault(
-            int(epoch_ref["epoch"]),
+            epoch_now,
             {"negative_presented": 0.0, "masked_count": 0.0, "extent_sum": 0.0},
         )
         epoch_stats["negative_presented"] += 1.0
         if rng.random() >= frac:
             if presentation_counts is not None:
-                key = (int(epoch_ref["epoch"]), pair_id, base_population, augmentation, ann_version)
+                key = (epoch_now, pair_id, base_population, augmentation, ann_version)
                 presentation_counts[key] = presentation_counts.get(key, 0) + 1
             continue
         original_text = str(transformed["sentence1"][i])
@@ -2985,16 +3030,16 @@ def _dynamic_mask_negative_transform(
         epoch_stats["masked_count"] += 1.0
         epoch_stats["extent_sum"] += float(_extent)
         counts[pair_id] = counts.get(pair_id, 0) + 1
-        epoch_counts = counts_by_epoch.setdefault(int(epoch_ref["epoch"]), {})
+        epoch_counts = counts_by_epoch.setdefault(epoch_now, {})
         epoch_counts[pair_id] = epoch_counts.get(pair_id, 0) + 1
         if presentation_counts is not None:
-            key = (int(epoch_ref["epoch"]), pair_id, base_population, augmentation, ann_version)
+            key = (epoch_now, pair_id, base_population, augmentation, ann_version)
             presentation_counts[key] = presentation_counts.get(key, 0) + 1
         if mask_audit is not None:
             mask_audit.append(
                 {
                     "fold": fold,
-                    "epoch": int(epoch_ref["epoch"]),
+                    "epoch": epoch_now,
                     "pair_id": pair_id,
                     "population": base_population,
                     "augmentation": augmentation,
@@ -3030,7 +3075,7 @@ def _load_labeled_different_positive_pairs(
     the gate similarity is independent evidence (the artifact has no separate
     quality signal beyond its gate-derived positive label).
     """
-    selection_rule = load_config()["rand_matching"][
+    selection_rule = _timed_load_config("plan.rand_matching")["rand_matching"][
         "calibration_different_gtin_selection"
     ]
     if selection_rule != "lowest_source_row_lexicographic_target":
@@ -3165,12 +3210,16 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
                                ("gate_positive" if label else "hard_negative")
                                for pop, label in zip(populations, dataset["label"], strict=True)]
     elif loss == "mnrl":
-        triples = _build_mnrl_training_triples(train_all, tr_negs, mask_audit=mask_audit,
-                                              hard_negative_mask_audit=hard_negative_mask_audit)
+        triples_with_populations = _mnrl_training_triples_with_populations(
+            train_all, tr_negs, mask_audit=mask_audit,
+            hard_negative_mask_audit=hard_negative_mask_audit,
+        )
+        triples = [triple for triple, _population in triples_with_populations]
         if not triples:
             raise ValueError("MNRL needs anchor-positive-negative training triples")
-        populations = _build_mnrl_triple_populations(train_all, tr_negs, mask_audit=mask_audit,
-                                                    hard_negative_mask_audit=hard_negative_mask_audit)
+        populations = [
+            population for _triple, population in triples_with_populations
+        ]
         balanced_policy = training_cfg().masking.balanced_augmentation
         if balanced_policy.enabled:
             from training.balanced_augmentation import balance_objective
@@ -3197,17 +3246,19 @@ def _prepare_objective_plan(*, loss, payload, structured_features, train_all, tr
                    "pair_population": ["triplet"] * len(examples)}
         sampler_populations = dataset["pair_population"]
     objective["dataset"] = dataset
-    bs_cfg = load_config()["training"]["batch_sampler"]
+    bs_cfg = _timed_load_config(f"fold{fold_i}.bs_cfg")["training"]["batch_sampler"]
     ds = Dataset.from_dict(dataset)
-    epochs = int(load_config()["training"]["epochs"])
+    epochs = int(_timed_load_config(f"fold{fold_i}.epochs")["training"]["epochs"])
     packed = {}
+    grouped_ds = None
     for device, batch_size in (("cpu", BATCH_SIZE_CPU), ("cuda", BATCH_SIZE_CUDA)):
         device_started = time.perf_counter()
         print(f"[plan-sampler] start device={device} batch_size={batch_size} rows={len(ds):,} epochs={epochs}", flush=True)
         if bs_cfg["enabled"]:
             weights = bs_cfg.get("compositions_by_loss", {}).get(loss, bs_cfg["composition"])
             composition = resolve_composition(weights, sampler_populations, batch_size)
-            grouped_ds = ds.add_column("sampler_population", sampler_populations)
+            if grouped_ds is None:
+                grouped_ds = ds.add_column("sampler_population", sampler_populations)
             sampler = ControlledBatchSampler(grouped_ds, batch_size, composition, seed=int(bs_cfg["seed"]),
                                               population_column="sampler_population")
         else:
@@ -3249,7 +3300,7 @@ def prepare_fixed_training_inputs(
     train_frac=None, sample=False, selection_mode=False
 ):
     """The single CPU implementation for fixed fold inputs and objective rows."""
-    calibration_config = load_config()
+    calibration_config = _timed_load_config("plan.calibration")
     _train_neg_source = (
         train_neg_pairs if train_neg_pairs is not None else neg_pairs
     )
@@ -3789,9 +3840,9 @@ def prepare_fixed_training_inputs(
             ))
             fixed["random_neg_pairs"] = _split_safe_random_negative_pairs(
                 df, row_bc, set(test_bc), seed=SEED + fold_i + 1000,
-                n_neg=int(load_config()["pairs"]["n_neg"]),
+                n_neg=int(_timed_load_config(f"fold{fold_i}.random_neg_pairs")["pairs"]["n_neg"]),
             )
-            retrieval_ks = tuple(load_config()["evaluation"]["retrieval_ks"])
+            retrieval_ks = tuple(_timed_load_config(f"fold{fold_i}.retrieval_ks")["evaluation"]["retrieval_ks"])
             fixed["retrieval_pool"] = build_evaluation_pool(
                 test_pos, np.asarray([str(df["sku_id"].iloc[int(i)]) for i in test_pos[:, 0]], dtype=str),
                 competitor_rows=_fold_canonical_rows, row_component=_retrieval_row_component,
@@ -3891,7 +3942,8 @@ def train_one_config(
     _TrainConfig.model_validate(cfg)
     if cfg["architecture"] != "two_tower":  # schema keeps this exhaustive
         raise ValueError(f"unsupported training architecture: {cfg['architecture']}")
-    calibration_config = load_config()
+    _CFG_DEEPCOPY_TOTALS.clear()
+    calibration_config = _timed_load_config("run.calibration")
 
     df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0 = data
     if prepared_plan is None:
@@ -3913,6 +3965,13 @@ def train_one_config(
     _train_neg_source = fixed_inputs["shared"]['_train_neg_source']
     country = fixed_inputs["shared"]['country']
     rows = list(fixed_inputs["skipped"])
+    _canon_attrs: dict[str, dict] | None = None
+    if prepared_tokens is not None:
+        from training.token_inputs import payload_sha256
+
+        prepared_payload_digest = payload_sha256(payload)
+    else:
+        prepared_payload_digest = None
     for fold_inputs in fixed_inputs["folds"]:
         fold_i = fold_inputs["fold_i"]
         try:
@@ -3993,7 +4052,9 @@ def train_one_config(
             token_lookup = None
             if prepared_tokens is not None:
                 from training.token_inputs import PreparedTokenLookup
-                token_lookup = PreparedTokenLookup(model, prepared_tokens, payload)
+                token_lookup = PreparedTokenLookup(
+                    model, prepared_tokens, payload, payload_digest=prepared_payload_digest
+                )
 
             # ── build the training dataset FIRST (steps derive from it) ──
             from datasets import Dataset
@@ -4037,6 +4098,7 @@ def train_one_config(
                 dynamic_mask_counts: dict[int, int] = {}
                 dynamic_mask_counts_by_epoch: dict[int, dict[int, int]] = {}
                 dynamic_epoch_ref = {"epoch": 0}
+                dynamic_mask_audit: list[dict] = []
                 if (
                     (dynamic_mask_hard_negatives and dynamic_mask_frac > 0)
                     or ann_refresh_enabled
@@ -4071,7 +4133,7 @@ def train_one_config(
                                 if TRACK_DATAPOINT_USAGE
                                 else None
                             ),
-                            mask_audit=hard_negative_mask_audit,
+                            mask_audit=dynamic_mask_audit,
                             fold=fold_i,
                             token_lookup=token_lookup,
                         )
@@ -4233,7 +4295,9 @@ def train_one_config(
             sentences1 = [a for a, _ in dev_pairs] + [a for a, _ in dev_neg_pairs]
             sentences2 = [b for _, b in dev_pairs] + [b for _, b in dev_neg_pairs]
             labels = [1] * len(dev_pairs) + [0] * len(dev_neg_pairs)
-            _sf_cfg = load_config()["training"]["structured_features"]
+            _sf_cfg = _timed_load_config(
+                f"fold{fold_i}.structured_features"
+            )["training"]["structured_features"]
             structured_feature_weight = (
                 float(_sf_cfg["embedding_weight"])
                 if bool(_sf_cfg["enabled"]) and bool(_sf_cfg["feed_to_loss"])
@@ -5611,13 +5675,14 @@ def train_one_config(
             )
             from core.common import F as _F
 
-            _canon_frame = pd.read_csv(
-                _F["canonical_records"], dtype=str, keep_default_na=False
-            )
-            _canon_attrs = {
-                str(record["gtin"]): canonical_attribute_info(record)
-                for record in _canon_frame.to_dict("records")
-            }
+            if _canon_attrs is None:
+                _canon_frame = pd.read_csv(
+                    _F["canonical_records"], dtype=str, keep_default_na=False
+                )
+                _canon_attrs = {
+                    str(record["gtin"]): canonical_attribute_info(record)
+                    for record in _canon_frame.to_dict("records")
+                }
 
             def _attribute_info(index: int) -> dict[str, object]:
                 """Use structured canonical attributes for canonical endpoints."""
@@ -5643,6 +5708,20 @@ def train_one_config(
             def _attribute_conflicts(a: int, b: int) -> dict[str, object]:
                 return conflict_columns(_attribute_info(a), _attribute_info(b))
 
+            df_sku_ids = df["sku_id"].tolist()
+            df_retailers = df["retailer"].tolist()
+
+            def _sku_id(i, _n_canon=n_canon_entries):
+                if i < len(df):
+                    return str(df_sku_ids[i])
+                bc_i = str(row_bc[i]) if i < len(row_bc) else ""
+                if i < len(df) + _n_canon:
+                    return f"canon#{bc_i or i}"
+                return f"masked#{i}"
+
+            def _retailer(i):
+                return str(df_retailers[i]) if i < len(df) else "-"
+
             for pairs, scores, label, a_col, b_col in (
                 (test_pos, pos_s, 1, None, None),
                 (hard_test, neg_s, 0, None, None),
@@ -5654,18 +5733,6 @@ def train_one_config(
                     # labeled EVERYTHING past df as "masked#N" — canonical
                     # targets (the majority, ~85% of pos endpoints) were
                     # mislabeled. Label by what the entry actually is.
-                    def _sku_id(i, _n_canon=n_canon_entries):
-                        if i < len(df):
-                            return str(df["sku_id"].iloc[i])
-                        # canonical entries carry the GTIN as their gtin
-                        bc_i = str(row_bc[i]) if i < len(row_bc) else ""
-                        if i < len(df) + _n_canon:
-                            return f"canon#{bc_i or i}"
-                        return f"masked#{i}"
-
-                    def _retailer(i):
-                        return str(df["retailer"].iloc[i]) if i < len(df) else "-"
-
                     pair_records.append(
                         {
                             "fold": fold_i,
@@ -5816,6 +5883,16 @@ def train_one_config(
                 raise
             rows.append({"fold": fold_i, "status": "failed", "traceback": tb})
 
+    # D7 telemetry: aggregate load_config deepcopy cost per fold, one line each.
+    _fold_aggregate: dict[str, float] = {}
+    for _key, _seconds in _CFG_DEEPCOPY_TOTALS.items():
+        _prefix = _key.split(".", 1)[0]
+        _fold_aggregate[_prefix] = _fold_aggregate.get(_prefix, 0.0) + _seconds
+    for _prefix in sorted(_fold_aggregate):
+        emit_timing(
+            f"[timing] training.config_deepcopy fold={_prefix} "
+            f"seconds={_fold_aggregate[_prefix]:.6f}"
+        )
     return rows
 
 
@@ -5969,7 +6046,7 @@ def run_hpo(
             for r in proxy_rows
             if np.isfinite(r.get("collapse_crossing_rate", float("nan")))
         ]
-        guardrail = load_config()["collapse_guardrail"]
+        guardrail = _timed_load_config("hpo.guardrail")["collapse_guardrail"]
         if collapse_medians and max(collapse_medians) > float(guardrail["reject_median"]):
             raise optuna.TrialPruned(
                 "collapse guardrail rejected trial: "

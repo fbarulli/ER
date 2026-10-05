@@ -89,13 +89,19 @@ def _tracking_contrastive_loss(
             self._per_epoch_counts: dict[int, dict[int, dict[str, int]]] = {}
             self._pair_lineage: list[dict] = []
             self._current_epoch = 0
+            self._uniformity_active_batches = 0
+            self._uniformity_below_min_batches = 0
 
         def _uniformity_penalty(self, embeddings):
             if uniformity_weight <= 0:
                 return embeddings[0].sum() * 0.0
             vectors = torch.cat(embeddings, dim=0)
             if len(vectors) < uniformity_min_batch_size:
+                # D4 telemetry: this silent zero is counted per batch so runs
+                # record how often uniformity pressure was skipped.
+                self._uniformity_below_min_batches += 1
                 return vectors.sum() * 0.0
+            self._uniformity_active_batches += 1
             vectors = F.normalize(vectors, p=2, dim=1)
             distances = torch.pdist(vectors, p=2).pow(2)
             if not len(distances):
@@ -305,6 +311,10 @@ def _tracking_contrastive_loss(
             totals = self._tracking_totals
             self._tracking_totals = {}
             self._tracking_batches = 0
+            uniformity_active = self._uniformity_active_batches
+            uniformity_below_min = self._uniformity_below_min_batches
+            self._uniformity_active_batches = 0
+            self._uniformity_below_min_batches = 0
             if not batches:
                 return {}
             result = {
@@ -320,6 +330,8 @@ def _tracking_contrastive_loss(
                 "uniformity_loss": totals.get("uniformity_loss", 0.0),
                 "anti_collapse_loss": totals.get("anti_collapse_loss", 0.0),
                 "tracking_batches": float(batches),
+                "uniformity_active_batches": float(uniformity_active),
+                "uniformity_below_min_batches": float(uniformity_below_min),
             }
             result.update(
                 {

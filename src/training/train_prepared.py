@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -185,20 +186,14 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         plan = bundle["training_plan"]
     else:
         from training.run_plan import validate_run_plan
+
+        _run_plan_started = time.perf_counter()
         plan = validate_run_plan(bundle, bundle["training_plan"], loss=args.loss,
                                  train_frac=args.train_frac, sample=bool(args.sample), seed=SEED)
-    shared_path = getattr(args, 'shared_training_data', None)
-    binding_path = getattr(args, 'training_binding', None)
-    if bool(shared_path) != bool(binding_path):
-        raise ValueError('shared training data and track binding must be supplied together')
-    if not shared_path and not args.allow_unshared_supervision:
-        # The suite always supplies the binding (model_tracks.worker). Training
-        # without it means the supervision is not the shared population, which
-        # is a deliberate, recorded decision — never a default.
-        raise ValueError(
-            'prepared training requires --shared-training-data with '
-            '--training-binding so the supervision is the shared population; '
-            'pass --allow-unshared-supervision to train without it on purpose')
+        emit_timing(
+            f"[timing] training.run_plan data_digest_revalidation: "
+            f"{time.perf_counter() - _run_plan_started:.3f}s"
+        )
     if shared_path:
         from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding, from_bundle
         shared = SharedTrainingData.model_validate_json(shared_path.read_text())
@@ -223,6 +218,8 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
     )
 
     from training.run_plan import training_config
+    import torch
+
     cfg_train = training_config(epochs=args.epochs, lr=args.lr)
     data = (df, payload, structured_features, row_bc, country, pos, hp_pairs, emb0)
     rows = train_one_config(
@@ -234,7 +231,7 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         data=data,
         seed=SEED,
         on_cuda=(args.device == "cuda" or
-                 (args.device == "auto" and __import__("torch").cuda.is_available())),
+                 (args.device == "auto" and torch.cuda.is_available())),
         folds_override=test_bc,
         dev_fraction=float(cfg["training"]["dev_fraction"]),
         dev_override=dev_bc,

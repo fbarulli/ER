@@ -35,9 +35,45 @@ class TrainingAttestation(BaseModel):
     bundle_path: str
     bundle_sha256: str = Field(pattern=_SHA256)
     provenance_digest: str | None = Field(default=None, pattern=_SHA256)
+    provenance_verified: str | None = None
     plan_identity: dict[str, Any] | None = None
     checks: dict[str, Any]
     attested_at: str
+
+
+def record_provenance_verification(attestation: TrainingAttestation) -> str:
+    """Telemetry gate for the proactive provenance evidence (D1).
+
+    Never fails the run; the measured status is carried on the attestation
+    object and in one ``[timing]`` line so runs can conclude the item from
+    data.
+    """
+    from core.common import training_cfg
+
+    status = "missing_manifest"
+    try:
+        sibling = Path(attestation.run_dir) / training_cfg().preparation.manifest_file
+        if sibling.is_file():
+            payload = json.loads(sibling.read_text(encoding="utf-8"))
+            provenance = payload.get("provenance") if isinstance(payload, dict) else None
+            if not isinstance(provenance, dict):
+                status = "unusable_manifest_provenance"
+            elif attestation.provenance_digest is None:
+                status = "missing_digest"
+            else:
+                canonical = json.dumps(
+                    provenance, sort_keys=True, separators=(",", ":")
+                )
+                digest = hashlib.sha256(canonical.encode()).hexdigest()
+                status = "verified" if digest == attestation.provenance_digest else "mismatch"
+    except Exception:
+        status = "unreadable_manifest"
+    attestation.provenance_verified = status
+    emit_timing(
+        f"[timing] training.attestation provenance_verified={status} "
+        f"run_dir={attestation.run_dir}"
+    )
+    return status
 
 
 def _stream_sha256(path: Path) -> str:
@@ -108,10 +144,16 @@ def verify_plan_identity(attestation: TrainingAttestation, *, loss: str,
     The boundary attested the plan for ONE objective; a trainer invoking a
     different loss/train_frac/sample would silently train outside the
     attested batch contract.  This is a dict compare, not a re-validation.
+    An attestation without a plan identity proves nothing about the batch
+    contract, so it fails closed here instead of passing silently.
     """
     identity = attestation.plan_identity
     if not identity:
-        return
+        raise ValueError(
+            "training attestation carries no plan identity; the invocation "
+            "cannot be checked against the attested frozen plan "
+            f"(run_dir={attestation.run_dir!r})"
+        )
     requested = {"loss": loss, "train_frac": float(train_frac), "sample": bool(sample)}
     mismatches = {
         name: {"attested": identity.get(name), "invoked": value}
@@ -195,6 +237,7 @@ def attestation_from_handoff(handoff_path: Path, *, bundle_path: Path) -> Traini
     started = time.monotonic()
     payload = _read_json(handoff_path, what="handoff report")
     attestation = _handoff_attestation(payload, handoff_path, bundle_path=bundle_path)
+    record_provenance_verification(attestation)
     emit_timing(f"[timing] training.attestation built_from_handoff path={handoff_path.name} "
                 f"bundle_sha256={attestation.bundle_sha256} "
                 f"seconds={time.monotonic() - started:.3f}")
@@ -215,6 +258,7 @@ def read_attestation(path: Path, *, bundle_path: Path) -> TrainingAttestation:
             f"not a training attestation or handoff report: {path} "
             f"(schema={payload.get('schema')!r})"
         )
+    record_provenance_verification(attestation)
     emit_timing(f"[timing] training.attestation read path={path.name} "
                 f"kind={'attestation' if payload.get('schema') == SCHEMA else 'handoff'} "
                 f"bundle_sha256={attestation.bundle_sha256} "
