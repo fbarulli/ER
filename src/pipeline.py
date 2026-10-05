@@ -2848,7 +2848,7 @@ def run_within_brand_pipeline(
     )
 
     # Build global n‑gram IDF from all GTINs
-    rows_by_gtin = {row["gtin"]: row["rows"] for _, row in grouped.iterrows()}
+    rows_by_gtin = dict(zip(grouped["gtin"], grouped["rows"], strict=True))
     global_idf = NgramIDF(rows_by_gtin)
 
     # Precompute within‑brand IDF per brand
@@ -2867,25 +2867,25 @@ def run_within_brand_pipeline(
     # Generate canonical records
     canonical_records = []
     from tqdm import tqdm
-    for _, row in tqdm(grouped.iterrows(), total=len(grouped), unit="gtin", desc="cards", disable=None):
-        brand_key = row["brand"].lower().strip()
+    for row in tqdm(grouped.itertuples(index=False), total=len(grouped), unit="gtin", desc="cards", disable=None):
+        brand_key = row.brand.lower().strip()
         record = generate_canonical(
-            row["gtin"],
-            row["brand"],
-            row["rows"],
+            row.gtin,
+            row.brand,
+            row.rows,
             global_idf,
             brand_idf_map[brand_key],
-            descriptions=row["descriptions"],
-            urls=row["urls"],
-            image_urls=row["image_urls"],
-            breadcrumbs_engs=row["breadcrumbs_engs"],
-            categories=row["categories"],
+            descriptions=row.descriptions,
+            urls=row.urls,
+            image_urls=row.image_urls,
+            breadcrumbs_engs=row.breadcrumbs_engs,
+            categories=row.categories,
         )
-        record["description_evidence"] = row["description_evidence"]
-        record["breadcrumb_evidence"] = row["breadcrumb_evidence"]
+        record["description_evidence"] = row.description_evidence
+        record["breadcrumb_evidence"] = row.breadcrumb_evidence
         # Per-title original evidence, carried so the engine's stage-7
         # clarification can reach the real columns (see _source_rows_for).
-        record["source_rows"] = row["source_rows"]
+        record["source_rows"] = row.source_rows
         canonical_records.append(record)
     df_canon = pd.DataFrame(canonical_records)
     timing.mark("canonical_cards")
@@ -2988,7 +2988,7 @@ def run_within_brand_pipeline(
                 candidate_pairs.add((gtins[i], gtins[j]))
 
     # Gate and similarity
-    gtin_to_canon = {row["gtin"]: row for _, row in df_canon.iterrows()}
+    gtin_to_canon = dict(zip(df_canon["gtin"], df_canon.to_dict(orient="records"), strict=True))
     results = []
     # GATE VISIBILITY (owner directive 2026-09-07): every gate call logs
     # exactly what it SAW (both sides' volume/pack/flavor + confidences)

@@ -129,11 +129,25 @@ def write(path, value):
     path.write_text(json.dumps(value, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False)+'\n')
 
 
+def _field_surfaces(text: str) -> dict[str, set[str]]:
+    """Declared attribute -> set of raw ';'-parts, one pass per endpoint."""
+    from core.text import normalized_attribute_text
+
+    surfaces: dict[str, set[str]] = {}
+    for part in str(text).split(';'):
+        if ':' not in part:
+            surfaces.setdefault('', set()).add(part)
+            continue
+        field, cell = part.split(':', 1)
+        surfaces.setdefault(normalized_attribute_text(field), set()).add(field + ':' + cell)
+    return surfaces
+
+
 def declaration_removed(row, attribute):
     from core.text import normalized_attribute_text
+    from training.masking import field_of
     result = dict(row)
     if result.get('frozen_payload'):
-        from training.masking import field_of
         fields = {'volume': {'volume'}, 'count per unit': {'pack'},
             'flavour': {'flavor'}, 'carbonization': {'carbonation'},
             'sweetener': {'sweetener', 'sweetener_type', 'sweetening'},
@@ -224,6 +238,7 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
         if chosen and all(p.get(axis) is None or p.get(axis) == '' for p in chosen):
             for p in chosen:
                 p[axis] = None
+    from core.text import normalized_attribute_text
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False)
     if 'sku_id' not in frame or frame.sku_id.duplicated().any() or (frame.sku_id == '').any():
         raise ValueError('catalog requires unique nonempty sku_id')
@@ -269,12 +284,24 @@ def prepare(catalog, pairs, checkpoint, *, track='text', listings=None, text_che
     baseline_records = [records[i] for i in ids] if listings else []
     variants = [{'attribute':None, 'channel':'baseline', 'text_indices':baseline_text,
                  'records':baseline_records, 'changed_listings':0}]
+    endpoint_surfaces = {i: _field_surfaces(rows[i].get('attribute', '')) for i in ids}
     for attr_index, attribute in enumerate(attributes,1):
         altered_text = []
         if baseline_text:
             for n,i in enumerate(ids):
-                changed_row = declaration_removed(rows[i],attribute)
-                altered_text.append(baseline_text[n] if changed_row == rows[i] else intern(compose(changed_row)))
+                row_surfaces = endpoint_surfaces[i]
+                frozen = rows[i].get('frozen_payload')
+                if attribute in row_surfaces or frozen:
+                    kept_parts = [
+                        part for part in str(rows[i].get('attribute', '')).split(';')
+                        if part not in row_surfaces.get(attribute, ())
+                    ]
+                    kept_attribute = ';'.join(kept_parts)
+                    changed_row = ({**rows[i], 'attribute': kept_attribute}
+                        if not frozen else declaration_removed(rows[i], attribute))
+                    altered_text.append(baseline_text[n] if changed_row == rows[i] else intern(compose(changed_row)))
+                else:
+                    altered_text.append(baseline_text[n])
         altered_records = [graph_removed(r, cfg.graph_fields.get(attribute, [])) for r in baseline_records]
         for channel in (['text', 'graph', 'both'] if cfg.uniform_channels else
                         ['text'] if track == 'text' else ['graph'] if track == 'gnn_only' else ['text', 'graph', 'both']):
