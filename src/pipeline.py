@@ -219,6 +219,12 @@ def extract_pack_evidence(title: str) -> list[dict]:
                 entry["start"] == match.start(1) for entry in measurements
             ):
                 continue
+            if kind == "pack_of" and any(
+                entry["start"] == match.start(1) for entry in measurements
+            ):
+                # "8 pack of 16 Fl Oz" states eight units, not sixteen.
+                # A quantity carrying a volume unit cannot be a pack count.
+                continue
             if kind == "compact" and text[match.end():].startswith(")") and re.search(
                 rf"\b{int(re.sub(r'[.,]', '', match.group(1))) + 1}\)",
                 text[match.end() + 1:],
@@ -876,15 +882,18 @@ def extract_all(sku_name_eng: str, attribute: str, description_short_eng: str = 
     if attr_pack > 1 or attr_pack_conf > 0:
         pack_qty = attr_pack
         pack_conf = attr_pack_conf
+    elif pack_conf_title > 0:
+        # Slugs can be truncated ("16-9-Count") or omit separators. Keep
+        # their disagreement in the ledger, but don't overwrite an explicit
+        # title count with URL/image-derived numbers.
+        pack_qty = pack_title
+        pack_conf = pack_conf_title
     elif pack_url > 1 or pack_conf_url > 0:
         pack_qty = pack_url
         pack_conf = pack_conf_url
     elif pack_img > 1 or pack_conf_img > 0:
         pack_qty = pack_img
         pack_conf = pack_conf_img
-    elif pack_conf_title > 0:
-        pack_qty = pack_title
-        pack_conf = pack_conf_title
     else:
         pack_qty = pack_description
         pack_conf = pack_conf_description

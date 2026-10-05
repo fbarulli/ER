@@ -146,6 +146,33 @@ def _protect_missing_titles(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _protect_untrusted_title_conflicts(frame: pd.DataFrame) -> pd.DataFrame:
+    """Do not let T2/T3 undo descriptor splits left unresolved by T1.5.
+
+    Empty identity partitions mean no trusted key. Before price aggregation,
+    require every pair to pass the same descriptor review as T1.5. Preserve
+    the whole group on a conflict: compatibility is not transitive.
+    """
+    candidates = frame[frame['_ident'].eq('')]
+    protected = []
+    for (_, _), group in candidates.groupby(['retailer', 'sku_name_eng'], sort=False):
+        if len(group) < 2:
+            continue
+        from itertools import combinations
+        identities = [row_identity(row) for row in group.to_dict('records')]
+        if any(evaluate_sku_identity(a, b)['decision'] not in {'same', 'compatible_unverified'}
+               for a, b in combinations(identities, 2)):
+            protected.extend(group.index)
+    if not protected:
+        return frame
+    result = frame.copy()
+    protected = set(protected)
+    for position, index in enumerate(result.index):
+        if index in protected:
+            result.at[index, '_ident'] = f'descriptor-review-row:{position}'
+    return result
+
+
 
 def main() -> None:
     for _out in (CSV_SUMMARY, CSV_OFFERS, CSV_REMOVALS, CSV_CONFLICTS,
@@ -300,6 +327,7 @@ def main() -> None:
     # identity, or both without one). Two DIFFERENT trusted gtins under one
     # title are different products and must not be merged here.
     work = _protect_missing_titles(work)
+    work = _protect_untrusted_title_conflicts(work)
     with_price = work.copy()
     with_price["_t2_bc"] = with_price["_ident"]
     no_price = work.iloc[0:0]

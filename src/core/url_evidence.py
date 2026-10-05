@@ -85,12 +85,12 @@ _IMAGE_DIM = re.compile(r"^\d+x$")
 # reconstructing punctuation; this is sanitation, not a conversion parser.
 @lru_cache(maxsize=1)
 def _slug_decimal_pattern():
-    # One digit on each side is an observed decimal shape. Longer count
-    # heads (24-500ml) retain list semantics; unknown suffixes are not sizes.
+    # A short fractional tail followed by an explicit unit is a slug decimal
+    # (33-8-oz, 16-9-fl-oz). Three-digit tails (24-500ml) remain count lists.
     from core.text import _unit_spec
 
     units = '|'.join(entry.pattern for entry in _unit_spec().volume)
-    return re.compile(r'(?<![\w.])(\d)-(\d)(?=(?:' + units + r')(?![a-z]))', re.I | re.X)
+    return re.compile(r'(?<![\w.])(\d{1,3})-(\d{1,2})(?=-?(?:' + units + r')(?![a-z]))', re.I | re.X)
 _VOWELS = frozenset("aeiou")
 
 
@@ -235,6 +235,7 @@ def url_text(url: object) -> str:
     ):
         slug = slug[:-len(basename)]
     slug = _UUID.sub(" ", slug)
+    slug = re.sub(r'\bfl-oz\b', 'fl oz', slug, flags=re.I)
     slug = _slug_decimal_pattern().sub(r"\1.\2", slug)
     slug = re.sub(r"[-_+]+", " ", slug)
     slug = normalize_text(slug)
@@ -243,6 +244,10 @@ def url_text(url: object) -> str:
     # the same grammar as downstream readers (including multiword fl oz).
     quantity_spans = [(entry['start'], entry['end']) for entry in extract_volume_evidence(slug)]
     quantity_spans.extend(match.span() for match in PACK_RE.finditer(slug))
+    # Retain the count in "case of 6 33.8 oz". Dropping the 6 previously
+    # manufactured "case of 8 oz" after decimal fragments were filtered.
+    quantity_spans.extend(match.span() for match in re.finditer(
+        r'\bcases?\s+of\s+\d+\b', slug, re.I))
     tokens = [
         token
         for match in re.finditer(r'\S+', slug)

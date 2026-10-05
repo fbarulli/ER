@@ -1,0 +1,390 @@
+[
+  {
+    "sku_id": "216658859",
+    "gtin": "7070866028466",
+    "before": {
+      "sku_name_eng": "carbonated sport...",
+      "attribute": "Sweetener: sucralose; Juice Content: 0-2%; Carbonization: carbonated; Caffeine: 15-25 mg; Volume: 330; Pack Type: Can; Sports Positioning: muscle growth; Pack Material Type: Metal; Health Claims: energy boosting, no sugar; Immune Support Ingredients: vitamin c; Energy Source: b-vitamins; Sports Ingredients: bcaa"
+    },
+    "after": {
+      "sku_name_eng": "Maxim BCAA Boost Apple & Pear 330 ml",
+      "attribute": "Sweetener: sucralose; Juice Content: 0-2%; Carbonization: carbonated; Caffeine: 15-25 mg; Volume: 330; Pack Type: Can; Sports Positioning: muscle growth; Pack Material Type: Metal; Health Claims: energy boosting, no sugar; Immune Support Ingredients: vitamin c; Energy Source: b-vitamins; Sports Ingredients: bcaa; Flavour: apple, pear"
+    },
+    "reason": "Own description explicitly names Apple & Pear; matching sibling title and flavor corroborate.",
+    "source": "https://www.foodie.fi/entry/12495/hiilihapotettu-urheilujuoma-330ml/7070866028466",
+    "comparison_skus": [
+      "255905683"
+    ]
+  },
+  {
+    "sku_id": "78240221",
+    "gtin": "7070866025328",
+    "before": {
+      "sku_name_eng": "carbonated sport...",
+      "attribute": "Volume: 330; Caffeine: 15-25 mg; Sports Ingredients: bcaa; Immune Support Ingredients: vitamin c; Sports Positioning: muscle growth; Carbonization: carbonated; Pack Material Type: Metal; Juice Content: 0-2%; Sweetener: sucralose; Energy Source: b-vitamins; Health Claims: no sugar, energy boosting"
+    },
+    "after": {
+      "sku_name_eng": "Maxim BCAA Boost Wild Strawberry 330 ml",
+      "attribute": "Volume: 330; Caffeine: 15-25 mg; Sports Ingredients: bcaa; Immune Support Ingredients: vitamin c; Sports Positioning: muscle growth; Carbonization: carbonated; Pack Material Type: Metal; Juice Content: 0-2%; Sweetener: sucralose; Energy Source: b-vitamins; Health Claims: no sugar, energy boosting; Flavour: strawberry"
+    },
+    "reason": "Own description explicitly names strawberry; two same-GTIN siblings corroborate.",
+    "source": "https://www.foodie.fi/entry/12495/hiilihapotettu-urheilujuoma-330ml/7070866025328",
+    "comparison_skus": [
+      "91342512",
+      "283257581"
+    ]
+  },
+  {
+    "sku_id": "251921598",
+    "gtin": "6430039222571",
+    "before": {
+      "sku_name_eng": "add to wish list",
+      "attribute": "Energy Source: yerba mate; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Pack Material Type: Metal; Naturally derived: natural; Carbonization: still"
+    },
+    "after": {
+      "sku_name_eng": "Puhdistamo Natural Energy Drink Passion Fruit Ginger 330 ml",
+      "attribute": "Energy Source: yerba mate; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Pack Material Type: Metal; Naturally derived: natural; Carbonization: still; Flavour: passion fruit, ginger"
+    },
+    "reason": "Source slug identifies the variant and 330 ml; same-GTIN peer naming corroborates. Replace scraped interface text add to wish list.",
+    "source": "https://www.sokos.fi/fi/sokos/puhdistamo-natural-energy-drink-passionhedelma-inkivaari-330ml",
+    "comparison_skus": [
+      "208348592"
+    ]
+  },
+  {
+    "sku_id": "251936215",
+    "gtin": "6430039222564",
+    "before": {
+      "sku_name_eng": "add to wish list",
+      "attribute": "Naturally derived: natural; Energy Source: yerba mate; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Carbonization: still; Pack Material Type: Metal"
+    },
+    "after": {
+      "sku_name_eng": "Puhdistamo Natural Energy Drink Lemon Acai 330 ml",
+      "attribute": "Naturally derived: natural; Energy Source: yerba mate; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Carbonization: still; Pack Material Type: Metal; Flavour: lemon, acai"
+    },
+    "reason": "Source slug identifies the variant and 330 ml; same-GTIN peer naming corroborates. Replace scraped interface text add to wish list.",
+    "source": "https://www.sokos.fi/fi/sokos/puhdistamo-natural-energy-drink-sitruuna-acai-330ml",
+    "comparison_skus": [
+      "208283862",
+      "347638599"
+    ]
+  },
+  {
+    "sku_id": "322226723",
+    "gtin": "6430039222779",
+    "before": {
+      "sku_name_eng": "add to wish list",
+      "attribute": "Naturally derived: natural; Pack Material Type: Metal; Energy Source: yerba mate; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Carbonization: still"
+    },
+    "after": {
+      "sku_name_eng": "Puhdistamo Natural Energy Drink Peach 330 ml",
+      "attribute": "Naturally derived: natural; Pack Material Type: Metal; Energy Source: yerba mate; Health Claims: no sugar, energy boosting; Juice Content: 0-2%; Carbonization: still; Flavour: peach"
+    },
+    "reason": "Source slug identifies the variant and 330 ml; same-GTIN peer naming corroborates. Replace scraped interface text add to wish list.",
+    "source": "https://www.sokos.fi/fi/sokos/puhdistamo-natural-energy-drink-persikka-330ml",
+    "comparison_skus": [
+      "272567949",
+      "524138959"
+    ]
+  },
+  {
+    "sku_id": "322350466",
+    "gtin": "6430039222786",
+    "before": {
+      "sku_name_eng": "add to wish list",
+      "attribute": "Carbonization: still; Health Claims: no sugar, energy boosting; Pack Material Type: Metal; Energy Source: yerba mate; Naturally derived: natural; Juice Content: 0-2%"
+    },
+    "after": {
+      "sku_name_eng": "Puhdistamo Natural Energy Drink Bergamot 330 ml",
+      "attribute": "Carbonization: still; Health Claims: no sugar, energy boosting; Pack Material Type: Metal; Energy Source: yerba mate; Naturally derived: natural; Juice Content: 0-2%; Flavour: bergamot"
+    },
+    "reason": "Source slug identifies the variant and 330 ml; same-GTIN peer naming corroborates. Replace scraped interface text add to wish list.",
+    "source": "https://www.sokos.fi/fi/sokos/puhdistamo-natural-energy-drink-bergamotti-330ml",
+    "comparison_skus": [
+      "272413141",
+      "524630995",
+      "746780661"
+    ]
+  },
+  {
+    "sku_id": "449162997",
+    "gtin": "8715600245332",
+    "before": {
+      "sku_name_eng": "groceries",
+      "attribute": "Volume: 1500; Pack Material Type: Plastic; Immune Support Ingredients: vitamin c, antioxidants; Water Type: spring; Pack Type: Bottle; Juice Content: 5-10%; Sweetener: sucralose, sugar, acesulfame potassium; Carbonization: still; Caffeine: 15-25 mg; Naturally derived: natural fragrances"
+    },
+    "after": {
+      "sku_name_eng": "Sisi No bubbles orange 1.5 l",
+      "attribute": "Volume: 1500; Pack Material Type: Plastic; Immune Support Ingredients: vitamin c, antioxidants; Water Type: spring; Pack Type: Bottle; Juice Content: 5-10%; Sweetener: sucralose, sugar, acesulfame potassium; Carbonization: still; Caffeine: 15-25 mg; Naturally derived: natural fragrances; Flavour: orange"
+    },
+    "reason": "Own description heading and URL agree on this variant and size; peer corroborates. Replace scraped groceries title.",
+    "source": "https://www.coop.nl/product/8715600245332/Sisi-No-bubbles-orange",
+    "comparison_skus": [
+      "520654099"
+    ]
+  },
+  {
+    "sku_id": "449258863",
+    "gtin": "8715600245394",
+    "before": {
+      "sku_name_eng": "groceries",
+      "attribute": "Immune Support Ingredients: vitamin c, antioxidants; Sweetener: cyclamate, saccharin, sucralose, sugar; Volume: 1500; Pack Material Type: Plastic; Juice Content: 10-15%; Caffeine: 15-25 mg; Carbonization: still"
+    },
+    "after": {
+      "sku_name_eng": "Sisi No bubbles mango 1.5 l",
+      "attribute": "Immune Support Ingredients: vitamin c, antioxidants; Sweetener: cyclamate, saccharin, sucralose, sugar; Volume: 1500; Pack Material Type: Plastic; Juice Content: 10-15%; Caffeine: 15-25 mg; Carbonization: still; Flavour: mango"
+    },
+    "reason": "Own description heading and URL agree on this variant and size; peer corroborates. Replace scraped groceries title.",
+    "source": "https://www.coop.nl/product/8715600245394/Sisi-No-bubbles-mango",
+    "comparison_skus": [
+      "520887202"
+    ]
+  },
+  {
+    "sku_id": "69555693",
+    "gtin": "7310090363200",
+    "before": {
+      "sku_name_eng": "beverage concentrate 1.0l",
+      "attribute": "Pack Material Type: Plastic; Pack Type: Bottle; Sweetener: aspartame, sugar, acesulfame potassium; Volume: 1000; Juice Content: 0-2%"
+    },
+    "after": {
+      "sku_name_eng": "Fun Light strawberry beverage concentrate 1.0 l",
+      "attribute": "Pack Material Type: Plastic; Pack Type: Bottle; Sweetener: aspartame, sugar, acesulfame potassium; Volume: 1000; Juice Content: 0-2%; Flavour: strawberry"
+    },
+    "reason": "Own description starts with an explicit flavor declaration; same-GTIN peer title and flavor corroborate. Sweetener and juice claims are not inferred.",
+    "source": "https://www.foodie.fi/entry/1018/juomatiiviste-1-0l/7310090363200",
+    "comparison_skus": [
+      "87483959",
+      "248002380"
+    ]
+  },
+  {
+    "sku_id": "71639291",
+    "gtin": "7310090367208",
+    "before": {
+      "sku_name_eng": "beverage concentrate 1.0l",
+      "attribute": "Pack Material Type: Plastic; Pack Type: Bottle; Volume: 1000; Health Claims: no sugar, hydrating; Sweetener: aspartame, acesulfame potassium; Juice Content: 0-2%"
+    },
+    "after": {
+      "sku_name_eng": "Fun Light wild berry beverage concentrate 1.0 l",
+      "attribute": "Pack Material Type: Plastic; Pack Type: Bottle; Volume: 1000; Health Claims: no sugar, hydrating; Sweetener: aspartame, acesulfame potassium; Juice Content: 0-2%; Flavour: wild berry"
+    },
+    "reason": "Own description starts with an explicit flavor declaration; same-GTIN peer title and flavor corroborate. Sweetener and juice claims are not inferred.",
+    "source": "https://www.foodie.fi/entry/1018/juomatiiviste-1-0l/7310090367208",
+    "comparison_skus": [
+      "92602956",
+      "247826990"
+    ]
+  },
+  {
+    "sku_id": "75494994",
+    "gtin": "7310090360209",
+    "before": {
+      "sku_name_eng": "beverage concentrate 1.0l",
+      "attribute": "Volume: 1000; Pack Material Type: Plastic; Pack Type: Bottle; Sweetener: aspartame, acesulfame potassium; Juice Content: 0-2%; Immune Support Ingredients: vitamin c, antioxidants; Health Claims: no sugar"
+    },
+    "after": {
+      "sku_name_eng": "Fun Light orange beverage concentrate 1.0 l",
+      "attribute": "Volume: 1000; Pack Material Type: Plastic; Pack Type: Bottle; Sweetener: aspartame, acesulfame potassium; Juice Content: 0-2%; Immune Support Ingredients: vitamin c, antioxidants; Health Claims: no sugar; Flavour: orange"
+    },
+    "reason": "Own description starts with an explicit flavor declaration; same-GTIN peer title and flavor corroborate. Sweetener and juice claims are not inferred.",
+    "source": "https://www.foodie.fi/entry/1018/juomatiiviste-1-0l/7310090360209",
+    "comparison_skus": [
+      "94457985",
+      "247887618"
+    ]
+  },
+  {
+    "sku_id": "75985836",
+    "gtin": "6417802361217",
+    "before": {
+      "sku_name_eng": "beverage concentrate 1.0l",
+      "attribute": "Volume: 1000; Water Type: flavoured; No Artificial Ingredients: no artificial flavours; Sweetener: aspartame, acesulfame potassium; Juice Content: 0-2%; Pack Material Type: Plastic"
+    },
+    "after": {
+      "sku_name_eng": "Fun Light raspberry beverage concentrate 1.0 l",
+      "attribute": "Volume: 1000; Water Type: flavoured; No Artificial Ingredients: no artificial flavours; Sweetener: aspartame, acesulfame potassium; Juice Content: 0-2%; Pack Material Type: Plastic; Flavour: raspberry"
+    },
+    "reason": "Own description starts with an explicit flavor declaration; same-GTIN peer title and flavor corroborate. Sweetener and juice claims are not inferred.",
+    "source": "https://www.foodie.fi/entry/1018/juomatiiviste-1-0l/6417802361217",
+    "comparison_skus": [
+      "230606760",
+      "250773826",
+      "258210799"
+    ]
+  },
+  {
+    "sku_id": "78951293",
+    "gtin": "7310861041214",
+    "before": {
+      "sku_name_eng": "GM 330ml bcaa Energiaj...",
+      "attribute": "Volume: 330; Free From: no caffeine; Health Claims: energy boosting; Pack Material Type: Metal; Naturally derived: natural fragrances; Sports Ingredients: bcaa; Sports Positioning: muscle growth; Contains Minerals: magnesium; Sweetener: sucralose, sugar, acesulfame potassium; Juice Content: 0-2%; Immune Support Ingredients: vitamin c, antioxidants; Carbonization: carbonated"
+    },
+    "after": {
+      "sku_name_eng": "Gainomax BCAA Apple Pear energy drink 330 ml",
+      "attribute": "Volume: 330; Free From: no caffeine; Health Claims: energy boosting; Pack Material Type: Metal; Naturally derived: natural fragrances; Sports Ingredients: bcaa; Sports Positioning: muscle growth; Contains Minerals: magnesium; Sweetener: sucralose, sugar, acesulfame potassium; Juice Content: 0-2%; Immune Support Ingredients: vitamin c, antioxidants; Carbonization: carbonated; Flavour: apple, pear"
+    },
+    "reason": "Own description explicitly names apple and pear; source URL says omena and peer corroborates.",
+    "source": "https://www.foodie.fi/entry/12495/330ml-energiajuoma-omena/7310861041214",
+    "comparison_skus": [
+      "84256142"
+    ]
+  },
+  {
+    "sku_id": "80848984",
+    "gtin": "7310861041207",
+    "before": {
+      "sku_name_eng": "GM 330ml bcaa Energiaj...",
+      "attribute": "Pack Material Type: Metal; Free From: no caffeine; Naturally derived: natural fragrances; Sports Ingredients: protein; Volume: 330; Contains Minerals: magnesium; Carbonization: carbonated; Health Claims: energy boosting; Pack Type: Can; Sports Positioning: muscle growth; Juice Content: 0-2%; Sweetener: sucralose, acesulfame potassium; Immune Support Ingredients: vitamin c, antioxidants"
+    },
+    "after": {
+      "sku_name_eng": "Gainomax BCAA Citrus energy drink 330 ml",
+      "attribute": "Pack Material Type: Metal; Free From: no caffeine; Naturally derived: natural fragrances; Sports Ingredients: protein; Volume: 330; Contains Minerals: magnesium; Carbonization: carbonated; Health Claims: energy boosting; Pack Type: Can; Sports Positioning: muscle growth; Juice Content: 0-2%; Sweetener: sucralose, acesulfame potassium; Immune Support Ingredients: vitamin c, antioxidants; Flavour: citrus"
+    },
+    "reason": "Own description and sitrus URL identify citrus; same-GTIN peer corroborates. Untranslated secondary flavor is not guessed.",
+    "source": "https://www.foodie.fi/entry/12495/330ml-energiajuoma-sitrus/7310861041207",
+    "comparison_skus": [
+      "222705460"
+    ]
+  },
+  {
+    "sku_id": "927354566",
+    "gtin": "4250519666563",
+    "before": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup",
+      "attribute": "Volume: 1000; Sports Positioning: fitness; Juice Content: 0-2%"
+    },
+    "after": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup Sour Cherry 65 ml",
+      "attribute": "Sports Positioning: fitness; Juice Content: 0-2%; Volume: 65; Flavour: cherry"
+    },
+    "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size.",
+    "source": "https://www.shop-apotheke.com/fitness/upmED42K2/esn-ultra-vitamin-syrup-sour-cherry.htm",
+    "comparison_skus": [
+      "942564466",
+      "945598805"
+    ]
+  },
+  {
+    "sku_id": "927640172",
+    "gtin": "4250519662558",
+    "before": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup",
+      "attribute": "Volume: 1000; Sports Positioning: fitness; Juice Content: 0-2%"
+    },
+    "after": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup Lemon Ice Tea 65 ml",
+      "attribute": "Sports Positioning: fitness; Juice Content: 0-2%; Volume: 65; Flavour: lemon, tea"
+    },
+    "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size.",
+    "source": "https://www.shop-apotheke.com/fitness/upmX4WEXF/esn-ultra-vitamin-syrup-lemon-ice-tea.htm",
+    "comparison_skus": [
+      "942525929"
+    ]
+  },
+  {
+    "sku_id": "927830188",
+    "gtin": "4250519662565",
+    "before": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup",
+      "attribute": "Volume: 1000; Sports Positioning: fitness; Juice Content: 0-2%"
+    },
+    "after": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup Peach Ice Tea 65 ml",
+      "attribute": "Sports Positioning: fitness; Juice Content: 0-2%; Volume: 65; Flavour: peach, tea"
+    },
+    "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size.",
+    "source": "https://www.shop-apotheke.com/fitness/upmM7CRKM/esn-ultra-vitamin-syrup-peach-ice-tea.htm",
+    "comparison_skus": [
+      "943698575"
+    ]
+  },
+  {
+    "sku_id": "930089956",
+    "gtin": "4250519666556",
+    "before": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup",
+      "attribute": "Volume: 1000; Sports Positioning: fitness; Juice Content: 0-2%"
+    },
+    "after": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup Green Apple 65 ml",
+      "attribute": "Sports Positioning: fitness; Juice Content: 0-2%; Volume: 65; Flavour: apple"
+    },
+    "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size.",
+    "source": "https://www.shop-apotheke.com/fitness/upmHXCC7F/esn-ultra-vitamin-syrup-green-apple.htm",
+    "comparison_skus": [
+      "942419129"
+    ]
+  },
+  {
+    "sku_id": "944994492",
+    "gtin": "4250519662541",
+    "before": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup",
+      "attribute": "Volume: 65; Health Claims: no sugar, good source of vitamins, no calories; Juice Content: 2-5%; Sweetener: sucralose, acesulfame potassium; Immune Support Ingredients: vitamin c"
+    },
+    "after": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup Cola 65 ml",
+      "attribute": "Health Claims: no sugar, good source of vitamins, no calories; Juice Content: 2-5%; Sweetener: sucralose, acesulfame potassium; Immune Support Ingredients: vitamin c; Volume: 65; Flavour: cola"
+    },
+    "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size.",
+    "source": "https://www.shop-apotheke.at/fitness/upmHETMP2/esn-ultra-vitamin-syrup-cola.htm",
+    "comparison_skus": [
+      "943828337"
+    ]
+  },
+  {
+    "sku_id": "945598805",
+    "gtin": "4250519666563",
+    "before": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup",
+      "attribute": "Volume: 65; Immune Support Ingredients: vitamin c; Juice Content: 2-5%; Sweetener: sucralose, acesulfame potassium; Health Claims: no sugar, good source of vitamins, no calories"
+    },
+    "after": {
+      "sku_name_eng": "ESN Ultra Vitamin Syrup Sour Cherry 65 ml",
+      "attribute": "Immune Support Ingredients: vitamin c; Juice Content: 2-5%; Sweetener: sucralose, acesulfame potassium; Health Claims: no sugar, good source of vitamins, no calories; Volume: 65; Flavour: cherry"
+    },
+    "reason": "Live retailer page checked 2026-10-05 binds selected flavor, 0.065 l and EAN; historical same-GTIN peer already reports 65 ml. Prepared drink yield is not bottle size.",
+    "source": "https://www.shop-apotheke.at/fitness/upmED42K2/esn-ultra-vitamin-syrup-sour-cherry.htm",
+    "comparison_skus": [
+      "942564466",
+      "927354566"
+    ]
+  },
+  {
+    "sku_id": "924310310",
+    "gtin": "671785201960",
+    "before": {
+      "sku_name_eng": "Natural Spring Water",
+      "attribute": "Pack Type: Pouch; Carbonization: still; Juice Content: 0-2%; Water Type: spring; Naturally derived: natural"
+    },
+    "after": {
+      "sku_name_eng": "Eska Natural Spring Water 6 x 1.5 l",
+      "attribute": "Pack Type: Pouch; Carbonization: still; Juice Content: 0-2%; Water Type: spring; Naturally derived: natural; Volume: 1500; Count per Unit: 6"
+    },
+    "reason": "Metro page checked 2026-10-05 identifies exact product number and 6 x 1.5 l; same-GTIN peers corroborate volume.",
+    "source": "https://www.metro.ca/en/online-grocery/aisles/beverages/water/bottled-water/natural-spring-water/p/671785201960",
+    "comparison_skus": [
+      "114732827",
+      "998232612"
+    ]
+  },
+  {
+    "sku_id": "873249408",
+    "gtin": "671785501824",
+    "before": {
+      "sku_name_eng": "Natural Spring Water",
+      "attribute": "Juice Content: 0-2%; Volume: 500; Carbonization: still; Naturally derived: natural; Water Type: spring; Pack Material Type: Flexible Pack"
+    },
+    "after": {
+      "sku_name_eng": "Eska Natural Spring Water 12 x 500 ml",
+      "attribute": "Juice Content: 0-2%; Carbonization: still; Naturally derived: natural; Water Type: spring; Pack Material Type: Flexible Pack; Volume: 500; Count per Unit: 12"
+    },
+    "reason": "Metro page checked 2026-10-05 identifies exact product number and 12 x 500 ml; same-GTIN peers corroborate both quantities.",
+    "source": "https://www.metro.ca/en/online-grocery/aisles/beverages/water/bottled-water/natural-spring-water/p/671785501824",
+    "comparison_skus": [
+      "235187247",
+      "323062214"
+    ]
+  }
+]

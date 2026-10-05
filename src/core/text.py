@@ -385,14 +385,18 @@ def extract_volume_evidence(text: str) -> list[dict]:
             if denominator == 0:
                 continue
             nested_count = bool(re.search(r'\d+\s*[x×]\s*$', preceding, re.I))
-            count_size = (nested_count or (not whole and numerator >= denominator
+            case_count = bool(re.search(r'\bcase\s+of\s*$|\d+\s*/\s*$', preceding, re.I))
+            count_size = (nested_count or case_count or (not whole and numerator >= denominator
                           and unit in _volume_views()[1] and bool(re.search(r'\s/', number))))
             value = float(denominator) if count_size else whole + numerator / denominator
             parsed = (value, unit, unit in _volume_views()[1], match.group(0))
         else:
             # Preserve comma decimal semantics. General normalization would
             # erase the comma and turn 1 ,25 litres into a count-list.
-            count_list = re.fullmatch(r'(\d{2,}),\s+(\d{3,})', number)
+            # "concentrate 1 + 4, 200ml" is a dilution ratio followed by
+            # bottle size, not a 4.2 ml package. Preserve genuine 0, 33 l
+            # and 1,25 l decimals while separating integer/size lists.
+            count_list = re.fullmatch(r'([1-9]\d*),\s+(\d{3,})', number)
             numeric = count_list.group(2) if count_list else re.sub(r'\s*([.,])\s*', r'\1', number)
             parsed = _extract_volume_match_legacy(numeric + ' ' + unit_surface)
         value, parsed_unit, ambiguous, _ = parsed
