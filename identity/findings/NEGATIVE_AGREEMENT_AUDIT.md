@@ -107,6 +107,17 @@ decidable LOCALLY; GS1 registry per-GTIN and live-page fetches remain the only
 unresolved step for the 14 pseudo-suspicion pairs. Recommendation stands:
 keep-distinct until registered.
 
+## 6. Price forensics (per-unit price = price / (volume × pack), same listing text)
+
+| Pattern | Pairs | Reading |
+|---|---|---|
+| Unit-price ratio ≈ 1.0 on identical text | R0001 (0.97), R0011 (1.07), R0014 (1.00), R0021-style twins R0211 NAYA (0.99) | Same goods at near-identical unit prices under 2 pseudo GTINs — duplicate-offer evidence |
+| Metric-consistent distinct sizes (unit price agrees across sizes) | R0218 Harmless: 3.19/259 ml ≈ 0.0123 vs 5.49/473 ml ≈ 0.0116 | REAL 2-size family — keep-distinct correct, price-coherent |
+| Large unit-price gaps on byte-identical text | R0005 Starbucks (0.62), R0018 Stirrings (0.75), R0030 De mi Pais (2.07), R0055 (0.64), R0071 (0.66) | Marketplace/duplicate offers priced independently — duplicate-channel evidence (already pseudo-suspected) |
+| 100×-scale price glitch | R0121 BioTech: 826 vs 7.04; sibling UK rows 7.54/7.04 | Carethy locale-scale glitch on the Belgian duplicate — same listing |
+| Same price for every member of a variant family | Sportnahrung blocks: Weider 1.79×3 SKUs, Multipower 1.69, Power Kick 1.79, IronMaxx 16.9×7-row ladder (slug ladder shares the URL), GOT7 3.9, peeroton 27.9, ESN 6.99 (Vitalabo-FR) | One page per unflavoured (unnamed) variant — genuine sibling lines; keep-distinct correct |
+| Size/variant-priced differences | Planeta Huerto blocks R0065/R0174-178 (0.47–2.36), R0129 Amecke (1.79 vs 2.79, 1 L each) | Distinct variants priced individually — keep correct |
+
 ## 4. Actions decided
 
 1. Keep the 261 negatives distinct (unchanged) until per-pair registry checks.
