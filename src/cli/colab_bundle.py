@@ -25,13 +25,13 @@ untouched):
   guard enforces (len of the parsed frame, core.common._validate_source_export);
   sha256 comes from the digest loop copied from colab.py:3224.
 
-  prepare_all on the VM . subprocess with stderr routed through
-  os.pipe(): a daemon pump thread (threading, inside the same remote
-  script) reads 8192-byte chunks, decodes utf-8/replace, and writes every
-  chunk BOTH to REMOTE_ROOT/prepare_all_stderr.log AND sys.stdout — tqdm
-  bars stream live as [out] lines through run_colab_exec_stream. On rc!=0
-  the tail of the log file is printed to the cell before raising (tail
-  shape copied from colab.py:4428's stderr[-1000:]); never on success.
+  prepare_all on the VM . subprocess.run([sys.executable, "-m",
+  "training.prepare_all"], cwd=root) with NO stderr capture, NO log file
+  and NO pump thread: stdout and stderr inherit to the streamed cell
+  exactly like run_sims' subprocess (cli.colab:3929-3940) — live [out]
+  lines carry every tqdm bar and tracebacks stream live; on rc!=0 the
+  RuntimeError follows the streamed output (working-code inheritance, not
+  captured-file buffering).
 
   delivery archive ..... the member list copied verbatim from the previous
   attempt in git history (git show 8ddc614:src/cli/colab.py, run_bundle
@@ -105,7 +105,6 @@ import pandas as pd
 root = "{REMOTE_ROOT}"
 csv_path = root + "/dataset.csv"
 config_path = root + "/config/training.yaml"
-stderr_log = root + "/prepare_all_stderr.log"
 """
 _RESUME_EXTRACT_SEGMENT = f"""
 # resume: extract the owner-built frozen state BEFORE the pin re-write
@@ -138,75 +137,31 @@ with open(config_path, "w") as handle:
 print("[pins] source_export_expected_rows=%d source_export_expected_sha256=%s" % (rows, digest), flush=True)
 """
 _PREPARE_FRESH_SEGMENT = f"""
-# prepare: run the full CSV-to-inputs preparation; stderr is streamed live
-# (tqdm bars reach the cell output as they happen) AND captured to the log
-# file for the postmortem tail on failure.
-import threading
-read_fd, write_fd = os.pipe()
-stderr_log_handle = open(stderr_log, "w")
-
-def pump_stderr():
-    for chunk in iter(lambda: os.read(read_fd, 8192), b""):
-        chunk = chunk.decode("utf-8", "replace")
-        stderr_log_handle.write(chunk)
-        stderr_log_handle.flush()
-        sys.stdout.write(chunk)
-        sys.stdout.flush()
-
-pump = threading.Thread(target=pump_stderr, daemon=True)
-pump.start()
+# prepare: run the full CSV-to-inputs preparation; stdout and stderr inherit
+# to the streamed cell exactly like run_sims' subprocess (live [out] lines
+# with every tqdm bar; tracebacks stream live too).
 rc = subprocess.run(
     [sys.executable, "-m", "training.prepare_all"],
     cwd=root,
-    stderr=write_fd,
 ).returncode
-os.close(write_fd)
-pump.join()
-os.close(read_fd)
-stderr_log_handle.close()
 if rc != 0:
-    with open(stderr_log) as handle:
-        tail = handle.read()
-    print("prepare_all stderr tail (" + stderr_log + "): " + tail[-1000:], flush=True)
-    raise RuntimeError("prepare_all failed on the VM (rc=%d); stderr tail in %s" % (rc, stderr_log))
+    raise RuntimeError("prepare_all failed on the VM (rc=%d); see the streamed output above" % rc)
 """
 _PREPARE_RESUME_SEGMENT = f"""
-# resume: continue the frozen preparation in place (prepare_all CLI); stderr
-# is streamed live (tqdm bars as they happen) AND captured to the log file
-# (postmortem tail only on failure).
+# resume: continue the frozen preparation in place (prepare_all CLI); stdout
+# and stderr inherit to the streamed cell (live [out] lines, tqdm bars,
+# tracebacks).
 # lifecycle: resume_from='validation' re-runs negative_supply+discriminator+
 # validation+graph_inputs+full_bundle+suite_inputs+verify_handoff (~45 min
 # token phase); the delivery/download flow below then works unchanged.
-import threading
-read_fd, write_fd = os.pipe()
-stderr_log_handle = open(stderr_log, "w")
-
-def pump_stderr():
-    for chunk in iter(lambda: os.read(read_fd, 8192), b""):
-        chunk = chunk.decode("utf-8", "replace")
-        stderr_log_handle.write(chunk)
-        stderr_log_handle.flush()
-        sys.stdout.write(chunk)
-        sys.stdout.flush()
-
-pump = threading.Thread(target=pump_stderr, daemon=True)
-pump.start()
 rc = subprocess.run(
     [sys.executable, "-m", "training.prepare_all",
      "--run-dir", root + "/results/training_prep/@RESUME_RUN_ID@",
      "--resume-from", "@RESUME_FROM@"],
     cwd=root,
-    stderr=write_fd,
 ).returncode
-os.close(write_fd)
-pump.join()
-os.close(read_fd)
-stderr_log_handle.close()
 if rc != 0:
-    with open(stderr_log) as handle:
-        tail = handle.read()
-    print("prepare_all stderr tail (" + stderr_log + "): " + tail[-1000:], flush=True)
-    raise RuntimeError("prepare_all failed on the VM (rc=%d); stderr tail in %s" % (rc, stderr_log))
+    raise RuntimeError("prepare_all failed on the VM (rc=%d); see the streamed output above" % rc)
 """
 _DELIVERY_SEGMENT = f"""
 # delivery: run dir + regenerated data artifacts (list from the 8ddc614 lane).
