@@ -122,13 +122,19 @@ def preflight(config: Path, *, allow_gpu_pending=False,native_token_model=None) 
         raise ValueError('text bundle contains held identity listings')
     # Run the same read-only diet contract locally and on the remote snapshot.
     # Strict drift checks prevent launch under a different augmentation config.
-    diet = subprocess.run(
-        [sys.executable, str(TRAIN_ROOT / 'scripts/diet_manifest.py'),
-         str((TRAIN_ROOT / cfg.text_bundle).resolve())], cwd=TRAIN_ROOT,
-        env={**os.environ, 'PYTHONPATH': str(TRAIN_ROOT / 'src'),
-             'PREPARED_BUNDLE_DRIFT_STRICT': '1'},
-        capture_output=True, text=True, timeout=120,
-    )
+    # Reuse the already validated object; diet checking is CPU logic, not a
+    # second interpreter that imports models and decompresses the same bundle.
+    from contextlib import redirect_stdout, redirect_stderr
+    from io import StringIO
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('er_diet_manifest', TRAIN_ROOT / 'scripts/diet_manifest.py')
+    diet_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(diet_module)
+    out, err = StringIO(), StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = diet_module.main(['diet_manifest.py', str(TRAIN_ROOT / cfg.text_bundle)],
+                                prepared=(manifest, bundle))
+    diet = subprocess.CompletedProcess([], code, out.getvalue(), err.getvalue())
     diet_warning = is_smoke and diet.returncode == 3
     if diet_warning:
         print('[preflight] WARNING: sampled smoke diet misses training thresholds:\n' + diet.stdout, flush=True)

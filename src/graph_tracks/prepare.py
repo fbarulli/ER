@@ -14,7 +14,7 @@ import pandas as pd
 from graph_tracks.data import RELATIONS, NUMERIC, file_hash, load_records
 
 
-def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
+def prepare(catalog: Path, splits: Path, pairs: Path, output: Path, *, training_tensors: bool = True) -> Path:
     from core.sku_identity import row_identity
     from graph_tracks.train import load_pairs, write_json
     frame = pd.read_csv(catalog, dtype=str, keep_default_na=False, low_memory=False)
@@ -71,7 +71,8 @@ def prepare(catalog: Path, splits: Path, pairs: Path, output: Path) -> Path:
         'excluded_model_inputs': ['gtin', 'verified identity edges', 'raw text'],
     })
     from graph_tracks.prepared_inputs import prepare_training
-    prepare_training(listing_path, output / 'pairs.csv')
+    if training_tensors:
+        prepare_training(listing_path, output / 'pairs.csv')
     return listing_path
 
 

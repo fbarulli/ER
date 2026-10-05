@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import errno
 import fcntl
 import hashlib
 import json
@@ -26,6 +27,12 @@ from core.portable_archive import Digest
 STAGES = ('dedupe', 'cross_country_pairs', 'number_reference', 'verify_reference',
         'canonical_and_gates', 'gate_census', 'labeled_pairs', 'validation',
           'graph_inputs', 'full_bundle', 'suite_inputs', 'verify_handoff')
+
+
+REUSABLE_KEYS = ('dataset_deduped', 'sku_to_rep', 'dedupe_summary',
+                 'ambiguous_offer_groups', 'removals', 'dedupe_conflicts',
+                 'number_reference', 'second04_pairs_positive', 'canonical_records',
+                 'gate_results', 'labeled_pairs', 'final_validation', 'validation_fold_map')
 
 
 class PreparedFile(BaseModel):
@@ -64,7 +71,8 @@ def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Pat
     from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH
     from graph_tracks.text_cache import checkpoint_hash
     paths = set((root / 'src').rglob('*.py')) | set((root / 'scripts').rglob('*.py'))
-    paths.update((root / 'config').glob('*.yaml'))
+    paths.update(path for path in (root / 'config').rglob('*')
+                 if path.suffix in {'.yaml', '.yml', '.json'} and path.is_file())
     paths.update([Path(CONFIG_PATH), Path(TRAINING_CONFIG_PATH),
                   Path(VOCABULARY_CONFIG_PATH), Path(suite_config), Path(DATA_PATH)])
     identity = {}
@@ -97,6 +105,30 @@ def sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def file_inventory(paths: Sequence[Path]) -> dict[str, dict[str, str | int]]:
+    """Hash each resolved artifact once per snapshot; never cache across stages."""
+    return {str(path): PreparedFile(sha256=sha256(path), bytes=path.stat().st_size).model_dump()
+            for path in dict.fromkeys(path.resolve() for path in paths)}
+
+
+def copy_bundle(source: Path, destination: Path) -> None:
+    """Use filesystem copy-on-write when available, keeping independent files.
+
+    Never hard-link mutable bundle paths: a later write must not corrupt its peer.
+    Unsupported filesystems use shutil's platform-accelerated copy instead.
+    """
+    try:
+        with source.open('rb') as src, destination.open('wb') as dst:
+            fcntl.ioctl(dst.fileno(), 0x40049409, src.fileno())  # Linux FICLONE
+    except OSError as error:
+        if error.errno not in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY,
+                              errno.EINVAL, errno.ENOSYS}:
+            raise
+        shutil.copy2(source, destination)
+    else:
+        shutil.copystat(source, destination)
+
+
 def verify_stage_manifest(path: str | Path, *, required_inputs: Sequence[str | Path] = ()) -> None:
     from core.manifest import source_tree_sha256
     from core.schemas import StageManifest
@@ -125,12 +157,16 @@ def refresh_gate_census(gate_csv: Path, config_path: Path, report_path: Path) ->
     import pandas as pd
     from core.manifest import atomic_write_json, atomic_write_text
     from core.schemas import RandMatchingSpec
-    frame = pd.read_csv(gate_csv, dtype={'gtin1': str, 'gtin2': str}, keep_default_na=False)
+    frame = pd.read_csv(gate_csv, usecols=['gtin1', 'gtin2', 'gate_decision'],
+                        dtype=str, keep_default_na=False)
     if frame[['gtin1', 'gtin2']].apply(lambda column: column.str.strip().eq('')).any().any():
         raise ValueError('Empty gate pair endpoint')
     if frame.gtin1.eq(frame.gtin2).any():
         raise ValueError('Gate census contains self-pairs')
-    identities = frame[['gtin1', 'gtin2']].apply(lambda row: tuple(sorted(row)), axis=1)
+    left, right = frame.gtin1, frame.gtin2
+    ordered = left.le(right)
+    identities = pd.DataFrame({'left': left.where(ordered, right),
+                               'right': right.where(ordered, left)})
     if identities.duplicated().any():
         raise ValueError('Duplicate candidate pairs')
     if set(frame.gate_decision) - {'hard_no', 'proceed', 'fallback'}:
@@ -149,7 +185,7 @@ def refresh_gate_census(gate_csv: Path, config_path: Path, report_path: Path) ->
     return counts
 
 
-def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
+def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 negative_supply_run_tag=None):
     from core.timing import emit_timing
     requested_negative_supply_run_tag = negative_supply_run_tag
@@ -158,7 +194,8 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
     root = Path(TRAIN_ROOT)
     config_path = Path(tracks_config or root / 'config/model_tracks.yaml').resolve()
     suite = load_suite(config_path)
-    training = training_cfg()
+    # Read bundle settings afresh for long-lived callers.
+    training = type(training_cfg()).model_validate(yaml.safe_load(Path(TRAINING_CONFIG_PATH).read_text()))
     if suite.text_model != training.training.base_model:
         raise ValueError('suite text_model and training.base_model must agree before preparation')
     if suite.epochs > training.training.epochs:
@@ -190,8 +227,10 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         checkpoint = resolve_model(suite.text_model)
         setup = (root / suite.setup_dir).resolve()
         text_bundle = (root / suite.text_bundle).resolve()
-        bundle = root / 'data/prepared/full/worker_1_baseline.pkl.gz'
-        suite_archive = run_dir / 'all_tracks_inputs.zip'
+        if len(training.colab.full_prepared_bundles) != 1:
+            raise ValueError('prepare_all requires exactly one configured full baseline bundle')
+        bundle = (root / training.colab.full_prepared_bundles[0]).resolve()
+        suite_archive = run_dir / f'all_tracks_inputs.{suite.input_archive_format}'
         smoke = root / 'data/prepared/smoke_200'
         smoke_before = {str(path): sha256(path) for path in smoke.rglob('*') if path.is_file()}
         env = os.environ.copy()
@@ -199,6 +238,8 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
         env['EUROMONITOR_SHARED_BASE_DATA'] = str(run_dir / (
             'shared_base_' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '.pkl'))
         env.pop('WANDB_API_KEY', None)
+        # Preparation mutates inputs; inherited worker attestations are invalid.
+        env['ER_DATA_GATE_ENFORCE'] = '1'
         completed = []
         manifest = {'status': 'running', 'resume_from': resume_from,
                     'training_started': False, 'smoke_updated': False,
@@ -253,13 +294,15 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             env['ER_TIMING_OUT'] = str(run_dir / (name + '.timing.json'))
             env['ER_TIMING_LOG'] = str(run_dir / 'timings.log')
             with (run_dir / (name + '.log')).open('w') as log:
-                result = subprocess.run([sys.executable, *arguments], cwd=root, env=env,
-                                        stdout=log, stderr=subprocess.STDOUT, check=False)
+                from training.preparation_run import active_preparation
+                result = active_preparation().run_stage(arguments, root=root, env=env, log=log)
             manifest['stage_metrics'][name]['returncode'] = result.returncode
             if check:
                 result.check_returncode()
             return result
         def archive(path, name):
+            from training.preparation_run import active_preparation
+            active_preparation().invalidate(path)
             if path.exists():
                 destination = run_dir / 'before' / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -294,6 +337,8 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 elif name == 'gate_census':
                     manifest['gate_census'] = refresh_gate_census(
                         F['gate_results'], TRAINING_CONFIG_PATH, run_dir / 'gate_census.json')
+                    from core.common import refresh_training_config
+                    refresh_training_config()
                 elif name == 'labeled_pairs':
                     run(name, ['-m', 'training.labeled_pairs'])
                 elif name == 'negative_supply':
@@ -315,7 +360,7 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                 elif name == 'graph_inputs':
                     archive(setup, 'track_setup')
                     run(name, ['-m', 'graph_tracks.setup', '--output', str(setup),
-                               '--text-checkpoint', str(checkpoint)])
+                               '--text-checkpoint', str(checkpoint), '--defer-training-tensors'])
                 elif name == 'full_bundle':
                     archive(bundle, bundle.name)
                     archive(bundle.with_suffix(bundle.suffix + '.json'), bundle.name + '.json')
@@ -326,7 +371,9 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                         archive(text_bundle, 'text_bundle.pkl.gz')
                         archive(text_bundle.with_suffix(text_bundle.suffix + '.json'), 'text_bundle.pkl.gz.json')
                         text_bundle.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(bundle, text_bundle)
+                        copy_bundle(bundle, text_bundle)
+                        from training.preparation_run import active_preparation
+                        active_preparation().alias_bundle(bundle, text_bundle)
                         shutil.copy2(bundle.with_suffix(bundle.suffix + '.json'),
                                      text_bundle.with_suffix(text_bundle.suffix + '.json'))
                 elif name == 'suite_inputs':
@@ -334,11 +381,11 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     run(name, ['-m', 'model_tracks.package', '--config', str(config_path),
                                '--output', str(suite_archive)])
                 else:
-                    if preparation_provenance(root, config_path, checkpoint) != manifest['provenance']:
+                    current_provenance = preparation_provenance(root, config_path, checkpoint)
+                    if current_provenance != manifest['provenance']:
                         raise ValueError('Preparation source/config/raw input/checkpoint changed during the run')
                     from training.prepared_bundle import load_prepared_bundle
-                    from graph_tracks.text_cache import checkpoint_hash
-                    header, prepared = load_prepared_bundle(bundle)
+                    header, prepared = load_prepared_bundle(bundle, verify_inputs=True)
                     for key in ('canonical_records', 'gate_results', 'labeled_pairs'):
                         if prepared[key + '_csv'] != Path(F[key]).read_bytes():
                             raise ValueError(f'Bundle contains stale {key}')
@@ -347,7 +394,7 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                                        ('labeled_pairs', 'labeled_pairs_sha256')]:
                         if graph[field] != sha256(F[key]):
                             raise ValueError(f'Graph inputs contain stale {key}')
-                    if graph['text_checkpoint_sha256'] != checkpoint_hash(Path(checkpoint)):
+                    if graph['text_checkpoint_sha256'] != current_provenance['text_checkpoint']:
                         raise ValueError('Graph checkpoint hash does not match')
                     from model_tracks.package import verify
                     package = verify(suite_archive)
@@ -356,30 +403,37 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                                                 'preflight': package['preflight']}
                     if {str(path): sha256(path) for path in smoke.rglob('*') if path.is_file()} != smoke_before:
                         raise ValueError('Smoke files changed during full preparation')
-                    keys = ('dataset_deduped', 'sku_to_rep', 'dedupe_summary', 'ambiguous_offer_groups',
-                            'removals', 'dedupe_conflicts', 'number_reference',
-                            'second04_pairs_positive', 'canonical_records', 'gate_results',
-                            'labeled_pairs', 'final_validation', 'validation_fold_map')
-                    paths = [Path(F[key]) for key in keys] + [p for p in setup.rglob('*') if p.is_file()]
+                    paths = [Path(F[key]) for key in REUSABLE_KEYS] + [p for p in setup.rglob('*') if p.is_file()]
                     paths += [bundle, bundle.with_suffix(bundle.suffix + '.json'), text_bundle,
                               text_bundle.with_suffix(text_bundle.suffix + '.json'), suite_archive]
                     if negative_supply_run_tag:
                         paths += [RESULTS / 'negative_supply' / negative_supply_run_tag / filename
                                   for filename in ('pairs.csv', 'manifest.json')]
                         paths.append(run_dir / 'discriminator.json')
-                    manifest['outputs'] = {str(path): {'sha256': sha256(path), 'bytes': path.stat().st_size}
-                                           for path in paths}
+                    manifest['outputs'] = file_inventory(paths)
                     manifest['bundle'] = header.model_dump(mode='json')
                     manifest['smoke_unchanged_verified'] = True
                 if name in {'graph_inputs', 'full_bundle'}:
-                    reusable = [Path(F[key]) for key in ('dataset_deduped', 'canonical_records',
-                                'gate_results', 'labeled_pairs', 'final_validation', 'validation_fold_map')]
+                    reusable = [Path(F[key]) for key in REUSABLE_KEYS]
                     reusable += [path for path in setup.rglob('*') if path.is_file()]
                     if name == 'full_bundle':
                         reusable += [bundle, bundle.with_suffix(bundle.suffix + '.json'), text_bundle,
                                      text_bundle.with_suffix(text_bundle.suffix + '.json')]
-                    manifest['reusable_outputs'] = {str(path): {
-                        'sha256': sha256(path), 'bytes': path.stat().st_size} for path in reusable}
+                    reusable += [RESULTS / 'negative_supply' / negative_supply_run_tag / filename
+                                 for filename in ('pairs.csv', 'manifest.json')]
+                    reusable.append(run_dir / 'discriminator.json')
+                    manifest['reusable_outputs'] = file_inventory(reusable)
+                if name == 'full_bundle':
+                    from training.preparation_run import active_preparation
+                    active_preparation()._base.clear()
+                    active_preparation()._datasets.clear()
+                if name == 'dedupe':
+                    from training.preparation_run import active_preparation
+                    active_preparation().invalidate(Path(F['dataset_deduped']))
+                if name == 'number_reference':
+                    import pipeline
+                    pipeline._VERDICTS_CACHE = None
+                    pipeline._VERDICTS_LOADED = False
                 completed.append(name)
                 elapsed = round(time.monotonic() - stage_started, 3)
                 manifest.setdefault('stage_seconds', {})[name] = elapsed
@@ -401,6 +455,12 @@ def prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             manifest.update(status='failed', failed_stage=name, error=str(error))
             publish()
             raise
+
+
+def prepare_all(**kwargs):
+    """Execute the CSV-to-training-input lifecycle as one owned Python run."""
+    from training.preparation_run import TrainingPreparation
+    return TrainingPreparation(**kwargs).execute()
 
 
 def main():

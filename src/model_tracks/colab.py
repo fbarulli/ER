@@ -4,7 +4,7 @@ from pathlib import Path
 import tarfile
 import hashlib
 
-from core.portable_archive import verify_archive
+from core.portable_archive import verify_archive, verified_archive
 from core.archive_reader import open_archive, archive_sidecar
 from graph_tracks.data import file_hash
 from model_tracks.package import verify
@@ -14,14 +14,13 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publ
     """Save immutable inputs through the existing Git artifact publisher."""
     from core.common import TRAIN_ROOT
     from model_tracks.publish import push_artifacts
-    verify(archive)
+    metadata = verify(archive)
     files = {'inputs.tar.zst':archive}
     if resume_archive is not None:
         recovery = verify_archive(resume_archive,'suite_recovery_manifest.json')
         if recovery.get('run_tag') != run_tag:
             raise ValueError('recovery suite run mismatch')
         original = recovery.get('input_package')
-        metadata = verify(archive)
         if not isinstance(original,dict) or any(original.get(key) != metadata.get(key)
                                                for key in ('revision','files')):
             raise ValueError('resume package differs from interrupted suite sources or inputs')
@@ -34,7 +33,7 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publ
     transport = folder/f'{identity}.tar.gz'
     if not transport.exists():
         partial = transport.with_suffix('.partial')
-        with tarfile.open(partial,'w:gz') as package:
+        with tarfile.open(partial,'w:gz',compresslevel=0) as package:
             for name,path in files.items():
                 package.add(path,arcname=name,recursive=False)
         partial.replace(transport)
@@ -86,8 +85,7 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
         git_inputs: Path | None = None):
     from cli import colab as backend
     from core.common import RESULTS, TRAIN_ROOT
-    metadata = verify(archive)
-    with open_archive(archive) as source:
+    with verified_archive(archive, 'model_tracks_package.json') as (source, metadata):
         import yaml
         settings = yaml.safe_load(source.read('data/model_tracks/suite.yaml'))
     from model_tracks.config import SuiteConfig
@@ -105,7 +103,7 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
     if resume and resume_archive is None and recovery_local.exists():
         resume_archive = recovery_local
     remote_recovery = f'{backend.REMOTE_ROOT}/prepared_training/{run_tag}__recovery.zip'
-    remote_zip = f'{backend.REMOTE_ROOT}/prepared_training/{run_tag}__all_tracks.zip'
+    remote_zip = f"{backend.REMOTE_ROOT}/prepared_training/{run_tag}__all_tracks.{settings['input_archive_format']}"
     git_inputs = git_inputs or prepare_git_inputs(archive,run_tag,resume_archive=resume_archive)
     remote_inputs = backend.REMOTE_ROOT+'/'+git_inputs.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
     if resume_archive is not None:
@@ -146,14 +144,12 @@ if hashlib.sha256(archive_path.read_bytes()).hexdigest() != {file_hash(archive)!
 subprocess.run(["git","fetch","--depth=1","--filter=blob:none","--no-tags",
                 {backend.GIT_REMOTE_NAME!r},{metadata['revision']!r}],cwd=root,check=True)
 subprocess.run(["git","checkout","--detach",{metadata['revision']!r}],cwd=root,check=True)
-from core.archive_reader import open_archive
-with open_archive(archive_path) as archive:
+from core.portable_archive import verified_archive, verify_archive
+with verified_archive(archive_path,"model_tracks_package.json") as (archive, _):
     for member in archive.infolist():
         if not (root/member.filename).resolve().is_relative_to(root.resolve()):
             raise ValueError("unsafe input package member")
     archive.extractall(root)
-from core.portable_archive import verify_archive
-verify_archive(archive_path,"model_tracks_package.json")
 output_path=pathlib.Path({remote_output!r})
 if {resume_archive is not None!r} and not output_path.exists():
     from model_tracks.package import restore_recovery

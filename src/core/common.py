@@ -267,6 +267,19 @@ def vocabulary() -> dict[str, Any]:
     return dict(_VOCABULARY)
 
 
+def refresh_training_config() -> TrainingConfig:
+    """Refresh the run-owned training view after publishing measured gate counts."""
+    global _TRAIN_CFG, PINNED_GATE_FALLBACK_PAIRS
+    updated = TrainingConfig.model_validate(_read_yaml(TRAINING_CONFIG_PATH))
+    _load_config_cached.cache_clear()
+    merged = load_config()
+    _CFG.clear()
+    _CFG.update(merged)
+    _TRAIN_CFG = updated
+    PINNED_GATE_FALLBACK_PAIRS = int(updated.rand_matching.gate_census_pin.fallback)
+    return updated
+
+
 def training_cfg() -> TrainingConfig:
     """The validated training-lane config (config/training.yaml)."""
     return _TRAIN_CFG
@@ -1050,13 +1063,27 @@ def _read_dataset_csv(path: Path, *, columns: Sequence[str] | None = None) -> pd
     """Read every dataset lane with the configured string/NA contract."""
     if columns is not None and not columns:
         raise ValueError("source export projection requires at least one column")
-    return pd.read_csv(path, usecols=columns, **data_cfg().dataset_csv_read.model_dump())
+    from training.preparation_run import active_preparation
+    run = active_preparation()
+    if run is None:
+        return pd.read_csv(path, usecols=columns, **data_cfg().dataset_csv_read.model_dump())
+    key = path.resolve()
+    if key not in run._datasets:
+        run._datasets[key] = pd.read_csv(path, **data_cfg().dataset_csv_read.model_dump())
+    frame = run._datasets[key]
+    return (frame if columns is None else frame.loc[:, list(columns)]).copy(deep=True)
 
 
 def _load_source_export(columns: Sequence[str] | None = None) -> pd.DataFrame:
     """Parse selected raw columns while retaining the source census/hash guard."""
     df = _read_dataset_csv(DATA_PATH, columns=columns)
-    _validate_source_export(df, DATA_PATH)
+    from training.preparation_run import active_preparation
+    run = active_preparation()
+    key = 'validated_source:' + str(DATA_PATH.resolve())
+    if run is None or key not in run._objects:
+        _validate_source_export(df, DATA_PATH)
+        if run is not None:
+            run._objects[key] = True
     return df
 
 

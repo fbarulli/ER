@@ -323,12 +323,29 @@ def write_prepared_bundle(
         manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
     timing.mark('hash_and_write_manifest')
+    from training.preparation_run import active_preparation
+    run = active_preparation()
+    if run is not None:
+        run._objects['built_bundle:' + str(run.bundle_key(path))] = (manifest, payload_data)
     return manifest
 
 
-def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, Any]]:
-    """Load and validate a bundle before it crosses into the training lane."""
+def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBundleManifest, dict[str, Any]]:
+    """Load and validate a bundle before it crosses into the training lane.
 
+    `verify_inputs` defaults to the suite data gate's decision.  The bundle is
+    always decompressed and unpickled -- training consumes it -- but when the
+    supervisor already attested these exact bytes the whole-file SHA-256 and the
+    manifest/provenance comparisons are skipped, since a changed bundle changes
+    its digest and leaves enforcement active.  Pass True to force them.
+    """
+    from training.preparation_run import active_preparation
+    run = active_preparation()
+    if run is not None and run.bundle_key(path) in run._bundles:
+        return run._bundles[run.bundle_key(path)]
+    if verify_inputs is None:
+        from model_tracks.data_gate import _owner_trusted
+        verify_inputs = not _owner_trusted('text bundle')
     if not path.is_file():
         raise FileNotFoundError(f"prepared training bundle missing: {path}")
     manifest_path = path.with_suffix(path.suffix + ".json")
@@ -337,17 +354,23 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
     manifest = PreparedBundleManifest.model_validate_json(
         manifest_path.read_text(encoding="utf-8")
     )
-    actual_digest = _digest(path)
-    if actual_digest != manifest.sha256:
-        raise ValueError(
-            f"prepared bundle SHA-256 mismatch: {path} "
-            f"{actual_digest} != {manifest.sha256}"
-        )
-    with gzip.open(path, "rb") as handle:
-        data = pickle.load(handle)
+    if verify_inputs:
+        actual_digest = _digest(path)
+        if actual_digest != manifest.sha256:
+            raise ValueError(
+                f"prepared bundle SHA-256 mismatch: {path} "
+                f"{actual_digest} != {manifest.sha256}"
+            )
+    built = run._objects.pop('built_bundle:' + str(run.bundle_key(path)), None) if run is not None else None
+    if built is not None:
+        _, data = built
+    else:
+        with gzip.open(path, "rb") as handle:
+            data = pickle.load(handle)
     if not isinstance(data, dict):
         raise TypeError("prepared training bundle must contain a mapping")
-    _validate_bundle_arrays(data)
+    if verify_inputs:
+        _validate_bundle_arrays(data)
     required = {
         "df", "payload", "structured_features", "row_bc", "country", "pos",
         "hp_pairs", "emb0", "neg", "train_neg", "neg_sources",
@@ -435,6 +458,8 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
             "its verdict from selected bundle pairs.",
             flush=True,
         )
+    if run is not None:
+        run._bundles[run.bundle_key(path)] = (manifest, data)
     return manifest, data
 
 

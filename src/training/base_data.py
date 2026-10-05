@@ -31,6 +31,27 @@ def fingerprint(df, variant):
 
 def load_base_data(df, *, payload_variant='full', cache_path=None):
     from core.common import training_cfg
+    from training.preparation_run import active_preparation
+    run = active_preparation()
+    if run is not None:
+        # One producer, isolated mutable views for augmentation consumers.
+        import copy
+        import pandas as pd
+        normalized = df.fillna('').reset_index(drop=True)
+        key = hashlib.sha256(pd.util.hash_pandas_object(normalized, index=True).values.tobytes()
+                             + repr(list(normalized.columns)).encode()
+                             + payload_variant.encode()).hexdigest()
+        if key not in run._base:
+            spec = training_cfg().negative_supply
+            if spec.mode == 'lane':
+                from training.negative_supply import build_lane_training_data
+                data = build_lane_training_data(df, payload_variant=payload_variant,
+                    run_tag=spec.pairs_run_tag, mint_cap=spec.mint_cap)
+            else:
+                from pipeline import build_training_data
+                data = build_training_data(df, payload_variant=payload_variant)
+            run._base[key] = data
+        return copy.deepcopy(run._base[key])
 
     # Negative-supply mode (owner ruling 2026-10-03). Default 'gate' keeps the
     # existing path byte-for-byte; 'lane' replaces the gate-derived negatives

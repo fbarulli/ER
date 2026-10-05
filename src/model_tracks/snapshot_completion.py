@@ -7,13 +7,12 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import zipfile
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.portable_archive import Digest, verify_archive
 from graph_tracks.data import file_hash
-from core.archive_reader import archive_sidecar
+from core.archive_reader import archive_sidecar, open_archive
 
 
 class SnapshotCompletionReceipt(BaseModel):
@@ -39,7 +38,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     inputs = verify_archive(input_archive, 'model_tracks_package.json')
     if training['run_tag'] != run_tag:
         raise ValueError('snapshot completion run mismatch')
-    with zipfile.ZipFile(input_archive) as archive:
+    with open_archive(input_archive) as archive:
         settings = SuiteConfig.model_validate(
             yaml.safe_load(archive.read('data/model_tracks/suite.yaml')))
     inventory = {relative: digest for relative, digest in inputs['files'].items()
@@ -51,7 +50,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     mismatches = [relative for relative, expected in inventory.items()
                   if not (TRAIN_ROOT / relative).is_file()
                   or file_hash(TRAIN_ROOT / relative) != expected]
-    with zipfile.ZipFile(input_archive) as archive:
+    with open_archive(input_archive) as archive:
         with tempfile.TemporaryDirectory(prefix='er-suite-completion-') as temporary:
             snapshot = Path(temporary)
             for relative in inventory:

@@ -23,13 +23,7 @@ Every gate row lands in exactly one bucket; the closure
 input == output + sum(dropped) is asserted by finish_manifest before the
 manifest is published.
 
-INVOCATION NOTE: this module deliberately keeps its module-level flow
-(it has always run at import; the repo invokes it as a subprocess —
-cli/colab.py's data-prep chain runs scripts by file path, no other module
-imports it). The work moved into main() called at module level, so BOTH
-`python src/training/labeled_pairs.py` and
-`python -m training.labeled_pairs` (and any import) behave
-identically — nothing that calls this script changes.
+The entrypoint is import-safe so the preparation run can call main directly.
 """
 
 
@@ -45,15 +39,6 @@ from core.common import (
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
 from core.schemas import check_labeled_pairs_frame
 
-# thresholds from the SSOT (config/training.yaml pairs.*) — were hardcoded 0.8
-# twice; a config change must not silently diverge from build_training_data.
-# NO FALLBACK (owner doctrine): a missing key crashes here, loudly, at import
-# time — never a silent inline default that can drift from the YAML.
-_pairs_cfg = load_config()["pairs"]
-_pin_cfg = load_config()["rand_matching"]["gate_census_pin"]
-POS_SIM = float(_pairs_cfg["proceed_sim_threshold"])
-NEG_SIM = float(_pairs_cfg["hardneg_sim_threshold"])
-
 
 def main() -> None:
     """Read gate_results.csv, split pos/hard-neg, write labeled_pairs.csv.
@@ -61,6 +46,10 @@ def main() -> None:
     Pure pandas over the gate CSV (~135k rows, <1s); the manifest wraps the
     whole flow — begin at stage start, finish LAST.
     """
+    cfg = load_config()
+    _pairs_cfg, _pin_cfg = cfg['pairs'], cfg['rand_matching']['gate_census_pin']
+    POS_SIM = float(_pairs_cfg['proceed_sim_threshold'])
+    NEG_SIM = float(_pairs_cfg['hardneg_sim_threshold'])
     gate_csv = F["gate_results"]
     # Seed: the SSOT seed (lib.common.SEED) — this stage is deterministic
     # (no RNG consumed), recorded so the manifest's environment block
@@ -187,4 +176,5 @@ def main() -> None:
     )
 
 
-main()  # module-level flow preserved: this script has always run at import
+if __name__ == "__main__":
+    main()

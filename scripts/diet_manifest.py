@@ -158,11 +158,11 @@ def mnrl_presentation_counts(data: dict) -> list[dict]:
             for fold, triples, source in objectives]
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], *, prepared=None) -> int:
     if len(argv) != 2:
         print(f"usage: {Path(argv[0]).name} BUNDLE_PATH", file=sys.stderr)
         return 2
-    manifest, data = load_prepared_bundle(Path(argv[1]))
+    manifest, data = prepared if prepared is not None else load_prepared_bundle(Path(argv[1]))
     masking = masking_cfg(manifest.masking_profile)
     diet_min_neg_aug_frac = float(masking["diet_min_neg_aug_frac"])
     diet_max_pos_neg_view_ratio = float(masking["diet_max_pos_neg_view_ratio"])

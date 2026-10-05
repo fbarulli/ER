@@ -4,6 +4,7 @@ text_bundle: data/track_setup/text_prepared.pkl.gz
 text_model: minilm_l6
 epochs: 10
 device: cuda
+input_archive_format: tar.zst
 result_archive_format: tar.zst
 schedule: parallel
 max_parallel: 3

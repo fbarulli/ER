@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import yaml
 
-from core.portable_archive import write_archive, verify_archive
+from core.portable_archive import write_archive, verify_archive, verified_archive
 from model_tracks.config import load_config
 from model_tracks.preflight import preflight
 
@@ -113,11 +113,19 @@ def package(config: Path, output: Path) -> Path:
     prepare_baseline(setup,Path(resolve_model(cfg.text_model)),composer=compose)
     timing.mark('baseline_export')
     native_model = next(value for key,value in token_cache.items() if key[0] == 'model')
+    # Preflight independently reloads and validates the bundle. Release the
+    # producer's object graph first rather than retaining two full populations.
+    del bundle, shared, text_binding
+    composed.clear()
+    token_cache.clear()
     checks = preflight(config,allow_gpu_pending=True,native_token_model=native_model)
     timing.mark('preflight')
     target = Path('data/model_tracks/shared')
+    bundle_path = (TRAIN_ROOT / cfg.text_bundle).resolve()
+    bundle_sources = {bundle_path, bundle_path.with_suffix(bundle_path.suffix + '.json')}
     files = {str(target / p.relative_to(setup)):p for p in setup.rglob('*') if p.is_file()
              and p.name not in {'gnn_only.yaml','hybrid.yaml','text.yaml'} and p.suffix not in {'.zip'}
+             and p.resolve() not in bundle_sources
              and p.name not in {'text_prepared.pkl.gz','text_prepared.pkl.gz.json'}}
     text_settings.update(report_test=cfg.report_test)
     inline = {str(target/'text.yaml'): yaml.safe_dump(text_settings, sort_keys=False)}
@@ -143,7 +151,8 @@ def package(config: Path, output: Path) -> Path:
         files[source.relative_to(TRAIN_ROOT).as_posix()] = source
     revision = subprocess.run(['git','rev-parse','HEAD'],cwd=TRAIN_ROOT,capture_output=True,text=True,check=True).stdout.strip()
     archive = write_archive(output,files,inline=inline,manifest_name='model_tracks_package.json',
-                            metadata={'schema':'er-model-tracks-package-v1','revision':revision,'preflight':checks})
+                            metadata={'schema':'er-model-tracks-package-v1','revision':revision,'preflight':checks},
+                            profile=True)
     timing.mark('archive_write')
     timing.dump_if_requested()
     return archive
@@ -162,13 +171,12 @@ def verify_current(path: Path, config: Path):
     cfg = load_config(config)
     setup = (TRAIN_ROOT/cfg.setup_dir).resolve()
     target = Path('data/model_tracks/shared')
-    metadata = verify(path)
     expected_suite = cfg.model_dump()
     expected_suite.update(setup_dir=str(target), text_bundle=str(target/'text_prepared.pkl.gz'))
     from graph_tracks.config import load_text_config, load_config as load_graph_config
     expected_text = load_text_config(setup / 'text.yaml').model_dump()
     expected_text.update(report_test=cfg.report_test)
-    with open_archive(path) as archive:
+    with verified_archive(path, 'model_tracks_package.json') as (archive, metadata):
         if yaml.safe_load(archive.read('data/model_tracks/suite.yaml')) != expected_suite:
             raise ValueError('prepared package suite config changed; regenerate locally')
         if yaml.safe_load(archive.read(str(target/'text.yaml'))) != expected_text:

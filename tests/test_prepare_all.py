@@ -58,7 +58,9 @@ def test_failed_stage_stops_preparation_and_retains_smoke(tmp_path,monkeypatch):
     def failed(command,**kwargs):
         calls.append(command)
         raise subprocess.CalledProcessError(2,command)
-    monkeypatch.setattr(subprocess,'run',failed)
+    from training.preparation_run import TrainingPreparation
+    monkeypatch.setattr(TrainingPreparation, 'run_stage',
+        lambda self, arguments, **kwargs: failed(['python', *arguments], **kwargs))
     run_dir=tmp_path/'prep_run'
     with pytest.raises(subprocess.CalledProcessError):
         prepare_all(run_dir=run_dir)
@@ -87,3 +89,154 @@ def test_census_rejects_reversed_duplicate(tmp_path):
                   'gate_decision':['proceed','proceed']}).to_csv(gates, index=False)
     with pytest.raises(ValueError, match='Duplicate candidate'):
         refresh_gate_census(gates, tmp_path/'unused.yaml', tmp_path/'unused.json')
+
+
+def test_inventory_deduplicates_paths_but_never_caches_content(tmp_path, monkeypatch):
+    import os
+    import training.prepare_all as preparation
+    artifact = tmp_path / 'payload'
+    artifact.write_bytes(b'old')
+    alias = tmp_path / 'alias'
+    alias.symlink_to(artifact)
+    calls = []
+    original = preparation.sha256
+    monkeypatch.setattr(preparation, 'sha256', lambda path: (calls.append(path), original(path))[1])
+    first = preparation.file_inventory([artifact, artifact, alias])
+    assert len(calls) == len(first) == 1
+    stat = artifact.stat()
+    artifact.write_bytes(b'new')
+    os.utime(artifact, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    second = preparation.file_inventory([artifact])
+    assert first != second  # Same length and mtime cannot hide changed content.
+    assert len(calls) == 2
+
+
+def test_provenance_includes_nested_json_and_ignores_only_measured_census(tmp_path, monkeypatch):
+    import core.common as common
+    import training.prepare_all as preparation
+    config = tmp_path / 'config'
+    config.mkdir()
+    training = config / 'training.yaml'
+    training.write_text('rand_matching:\n  gate_census_pin: {total_pairs: 1}\n  setting: 1\n')
+    policy = config / 'nested' / 'policy.json'
+    policy.parent.mkdir()
+    policy.write_text('{"version": 1}')
+    raw = tmp_path / 'raw.csv'
+    raw.write_text('raw')
+    for name in ('CONFIG_PATH', 'TRAINING_CONFIG_PATH', 'VOCABULARY_CONFIG_PATH'):
+        monkeypatch.setattr(common, name, training)
+    monkeypatch.setattr(common, 'DATA_PATH', raw)
+    monkeypatch.setattr('graph_tracks.text_cache.checkpoint_hash', lambda path: '0'*64)
+    first = preparation.preparation_provenance(tmp_path, training, 'model')
+    training.write_text('rand_matching:\n  gate_census_pin: {total_pairs: 2}\n  setting: 1\n')
+    assert preparation.preparation_provenance(tmp_path, training, 'model') == first
+    policy.write_text('{"version": 2}')
+    assert preparation.preparation_provenance(tmp_path, training, 'model') != first
+
+
+def test_full_run_and_suite_resume_force_fresh_validation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import core.common as common
+    import training.prepare_all as preparation
+    from model_tracks.config import SuiteConfig
+    root = tmp_path
+    results = root / 'results'
+    run_dir = root / 'run'
+    setup = root / 'setup'
+    suite = SuiteConfig(setup_dir='setup', text_bundle='setup/text.pkl.gz')
+    files = {key: root / f'{key}.csv' for key in preparation.REUSABLE_KEYS}
+    for path in files.values():
+        path.write_text('original')
+    monkeypatch.setattr(common, 'TRAIN_ROOT', root)
+    monkeypatch.setattr(common, 'RESULTS', results)
+    monkeypatch.setattr(common, 'F', files)
+    monkeypatch.setattr(common, 'resolve_model', lambda key: root/'checkpoint')
+    monkeypatch.setattr('model_tracks.config.load_config', lambda path: suite)
+    monkeypatch.setattr(preparation, 'preparation_provenance', lambda *args: {'text_checkpoint': '0'*64})
+    monkeypatch.setattr(preparation, 'refresh_gate_census', lambda *args: {})
+    monkeypatch.setenv('ER_DATA_GATE', 'stale inherited trust')
+    calls = []
+
+    def run(command, **kwargs):
+        assert kwargs['env']['ER_DATA_GATE_ENFORCE'] == '1'
+        calls.append(command)
+        if 'training.negative_supply' in command:
+            directory = results/'negative_supply'/'prep_run'
+            directory.mkdir(parents=True)
+            for filename in ('pairs.csv', 'manifest.json'):
+                (directory/filename).write_text('lane')
+        elif any('negative_supply_discriminator.py' in part for part in command):
+            (run_dir/'discriminator.json').write_text('{"verdict": "PASS"}')
+        elif 'graph_tracks.setup' in command:
+            setup.mkdir()
+            (setup/'setup_manifest.json').write_text(json.dumps({
+                'source_catalog_sha256': preparation.sha256(files['dataset_deduped']),
+                'labeled_pairs_sha256': preparation.sha256(files['labeled_pairs']),
+                'text_checkpoint_sha256': '0'*64,
+            }))
+        elif 'training.train' in command:
+            bundle = Path(command[command.index('--prepare-bundle') + 1])
+            bundle.parent.mkdir(parents=True)
+            bundle.write_bytes(b'bundle')
+            Path(str(bundle)+'.json').write_text('{}')
+        elif 'model_tracks.package' in command:
+            (run_dir/'all_tracks_inputs.tar.zst').write_bytes(b'archive')
+            # Packaging legitimately updates graph inputs and adds projections.
+            (setup/'projection.json').write_text('{"projection": 1}')
+        return subprocess.CompletedProcess(command, 0)
+
+    from training.preparation_run import TrainingPreparation
+    monkeypatch.setattr(TrainingPreparation, 'run_stage',
+        lambda self, arguments, **kwargs: run(['python', *arguments], **kwargs))
+    verified = []
+    def load(path, *, verify_inputs):
+        verified.append(verify_inputs)
+        return SimpleNamespace(model_dump=lambda **kwargs: {}), {
+            key+'_csv': files[key].read_bytes()
+            for key in ('canonical_records', 'gate_results', 'labeled_pairs')}
+    monkeypatch.setattr('training.prepared_bundle.load_prepared_bundle', load)
+    monkeypatch.setattr('model_tracks.package.verify', lambda path: {'preflight': {}})
+    manifest_path = prepare_all(run_dir=run_dir)
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest['status'] == 'complete'
+    assert manifest['stages'][-4:] == ['graph_inputs', 'full_bundle', 'suite_inputs', 'verify_handoff']
+    assert verified == [True]
+    calls.clear()
+    prepare_all(run_dir=run_dir, resume_from='suite_inputs')
+    assert len(calls) == 1 and 'model_tracks.package' in calls[0]
+    assert verified == [True, True]
+    # A reference edit must invalidate resume, even with unchanged size.
+    files['number_reference'].write_text('modified')
+    with pytest.raises(ValueError, match='Stale prepared resume input'):
+        prepare_all(run_dir=run_dir, resume_from='suite_inputs')
+
+
+def test_bundle_copy_remains_independent(tmp_path):
+    from training.prepare_all import copy_bundle
+    source, target = tmp_path/'source', tmp_path/'target'
+    source.write_bytes(b'original')
+    copy_bundle(source, target)
+    assert target.read_bytes() == b'original'
+    assert source.stat().st_ino != target.stat().st_ino
+    source.write_bytes(b'modified')
+    assert target.read_bytes() == b'original'
+    target.write_bytes(b'separate')
+    assert source.read_bytes() == b'modified'
+
+
+def test_bundle_copy_falls_back_only_when_clone_is_unsupported(tmp_path, monkeypatch):
+    import errno
+    import training.prepare_all as preparation
+    source, target = tmp_path/'source', tmp_path/'target'
+    source.write_bytes(b'original')
+    def unsupported(*args):
+        raise OSError(errno.EOPNOTSUPP, 'unsupported')
+    monkeypatch.setattr(preparation.fcntl, 'ioctl', unsupported)
+    preparation.copy_bundle(source, target)
+    assert target.read_bytes() == source.read_bytes()
+    def full(*args):
+        raise OSError(errno.ENOSPC, 'full')
+    monkeypatch.setattr(preparation.fcntl, 'ioctl', full)
+    with pytest.raises(OSError) as exc:
+        preparation.copy_bundle(source, target)
+    assert exc.value.errno == errno.ENOSPC

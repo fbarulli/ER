@@ -77,7 +77,11 @@ def main() -> None:
                 f"[verify] FAIL: {p} missing — nothing to compare against"
             )
         committed = pd.read_csv(p, dtype={"token": str})
-        rebuilt = build()
+        from training.preparation_run import active_preparation
+        run = active_preparation()
+        rebuilt = run._objects.get('number_reference') if run is not None else None
+        if rebuilt is None:
+            rebuilt = build()
         if len(committed) != len(rebuilt):
             raise SystemExit(
                 f"[verify] FAIL: row count {len(committed)} vs rebuilt "
@@ -108,6 +112,10 @@ def main() -> None:
     ref = build()
     p.parent.mkdir(parents=True, exist_ok=True)
     ref.to_csv(p, index=False)
+    from training.preparation_run import active_preparation
+    run = active_preparation()
+    if run is not None:
+        run._objects['number_reference'] = ref
     print(f"wrote {p} ({len(ref):,} rows)", flush=True)
     print(
         f"  verdict mix: {dict(ref['verdict'].value_counts())}",

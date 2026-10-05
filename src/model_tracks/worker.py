@@ -14,6 +14,24 @@ from model_tracks.config import load_config
 from model_tracks.parallel import wait_for_start
 
 
+def graph_worker_settings(setup: Path, cfg, track: str, *, gpu_only: bool = False) -> dict:
+    """The exact graph configuration this worker trains under.
+
+    The pre-training data gate builds its graph inputs through this function so
+    the validated configuration cannot drift from the executed one.
+    """
+    from graph_tracks.config import GraphConfig, load_config as load_graph_config
+    settings = load_graph_config(setup / f'{track}.yaml', expected_track=track).model_dump()
+    settings.update(device=cfg.device, epochs=cfg.epochs, report_test=cfg.report_test,
+                    postprocess=not gpu_only, include_inputs=False)
+    if cfg.dvc_enabled or gpu_only:
+        # The suite publisher owns persistence; avoid a second mutable
+        # local DVC snapshot while background uploads are active.
+        settings['dvc'] = {**settings.get('dvc', {}), 'enabled': False}
+    settings.update(cfg.graph_execution_overrides())
+    return GraphConfig.model_validate(settings).model_dump()
+
+
 def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
     from model_tracks.telemetry import WorkerEvents
     output = Path(os.environ['EUROMONITOR_RESULTS_DIR'])
@@ -36,9 +54,13 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     output = Path(os.environ['EUROMONITOR_RESULTS_DIR'])
     output.mkdir(parents=True, exist_ok=True)
     if track == 'text':
-        from training.prepared_bundle import load_prepared_bundle
-        manifest, _ = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
-        events.emit('input_validation', 'validated', device=cfg.device,
+        from training.prepared_bundle import PreparedBundleManifest
+        bundle_path = (TRAIN_ROOT / cfg.text_bundle).resolve()
+        # The trainer owns full payload loading/validation after the barrier.
+        # This adapter only needs the typed header to construct its command.
+        manifest = PreparedBundleManifest.model_validate_json(
+            bundle_path.with_suffix(bundle_path.suffix + '.json').read_text())
+        events.emit('input_validation', 'configured', device=cfg.device,
                     report_test=cfg.report_test, bundle=str(cfg.text_bundle),
                     payload=manifest.payload_variant)
         command = [sys.executable, '-m', 'training.train_prepared', '--bundle', cfg.text_bundle,
@@ -54,16 +76,8 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
         if setup_manifest.get('smoke'):
             command.extend(['--sample', str(setup_manifest['source_listing_count'])])
     else:
-        from graph_tracks.config import GraphConfig, load_config as load_graph_config
-        settings = load_graph_config(setup / f'{track}.yaml', expected_track=track).model_dump()
-        settings.update(device=cfg.device, epochs=cfg.epochs, report_test=cfg.report_test,
-                        postprocess=not gpu_only,include_inputs=False)
-        if cfg.dvc_enabled or gpu_only:
-            # The suite publisher owns persistence; avoid a second mutable
-            # local DVC snapshot while background uploads are active.
-            settings['dvc'] = {**settings.get('dvc', {}), 'enabled': False}
-        settings.update(cfg.graph_execution_overrides())
-        settings = GraphConfig.model_validate(settings).model_dump()
+        from graph_tracks.config import GraphConfig
+        settings = graph_worker_settings(setup, cfg, track, gpu_only=gpu_only)
         worker_config = output / 'worker.yaml'
         worker_config.write_text(yaml.safe_dump(settings, sort_keys=False))
         events.emit('input_validation', 'configured', device=cfg.device,

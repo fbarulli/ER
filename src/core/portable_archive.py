@@ -1,5 +1,6 @@
 """Shared SHA256 inventories for prepared-input and result archives."""
 from __future__ import annotations
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -109,21 +110,73 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
 
 
 
-def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'files') -> dict[str, Any]:
+def _check_member(name: str, *, regular: bool = True) -> None:
+    if not name or Path(name).is_absolute() or '..' in Path(name).parts:
+        raise ValueError('unsafe archive path')
+    if not regular:
+        raise ValueError('archive member must be a regular file (no symbolic links)')
+
+
+def _check_inventory(metadata, actual, manifest_name, inventory_key):
+    inventory = INVENTORY.validate_python(metadata[inventory_key])
+    if set(actual) != set(inventory):
+        raise ValueError('archive has undeclared or missing members')
+    for target, expected in inventory.items():
+        if actual[target] != expected:
+            raise ValueError(f'archive integrity mismatch: {target}')
+    return metadata
+
+
+def verify_open_archive(archive, manifest_name: str, *, inventory_key: str = 'files') -> dict[str, Any]:
+    """Verify a caller-owned reader so subsequent reads need no second inflation."""
+    names = archive.namelist()
+    if len(set(names)) != len(names):
+        raise ValueError('duplicate archive members')
+    for member in archive.infolist():
+        _check_member(member.filename, regular=not member.is_dir() and
+                      (member.external_attr >> 16) & 0o170000 != 0o120000)
+    metadata = json.loads(archive.read(manifest_name))
+    actual = {}
+    for name in names:
+        if name != manifest_name:
+            with archive.open(name) as handle:
+                actual[name] = hashlib.file_digest(handle, 'sha256').hexdigest()
+    return _check_inventory(metadata, actual, manifest_name, inventory_key)
+
+
+@contextmanager
+def verified_archive(path: Path, manifest_name: str, *, inventory_key: str = 'files'):
+    """Keep the verified reader open for extraction or configuration inspection."""
     with open_archive(path) as archive:
-        if len(set(archive.namelist())) != len(archive.namelist()):
-            raise ValueError('duplicate archive members')
-        for member in archive.infolist():
-            if Path(member.filename).is_absolute() or '..' in Path(member.filename).parts:
-                raise ValueError('unsafe archive path')
-            if (member.external_attr >> 16) & 0o170000 == 0o120000:
-                raise ValueError('archive symbolic link')
-        metadata = json.loads(archive.read(manifest_name))
-        inventory = INVENTORY.validate_python(metadata[inventory_key])
-        if set(archive.namelist()) != set(inventory) | {manifest_name}:
-            raise ValueError('archive has undeclared or missing members')
-        for target, expected in inventory.items():
-            with archive.open(target) as handle:
-                if hashlib.file_digest(handle, 'sha256').hexdigest() != expected:
-                    raise ValueError(f'archive integrity mismatch: {target}')
-        return metadata
+        yield archive, verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
+
+
+def verify_archive(path: Path, manifest_name: str, *, inventory_key: str = 'files') -> dict[str, Any]:
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            return verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
+    # Verification is sequential: do not inflate a multi-GB tar to a temporary
+    # disk file just to read it once. Hash members directly from the zstd stream.
+    actual, seen, metadata = {}, set(), None
+    zstd = zstd_module()
+    try:
+        with zstd.open(path, 'rb') as compressed:
+            with tarfile.open(fileobj=compressed, mode='r|') as archive:
+                for member in archive:
+                    _check_member(member.name, regular=member.isfile())
+                    if member.name in seen:
+                        raise ValueError('duplicate archive members')
+                    seen.add(member.name)
+                    with archive.extractfile(member) as handle:
+                        if member.name == manifest_name:
+                            metadata = json.load(handle)
+                        else:
+                            actual[member.name] = hashlib.file_digest(handle, 'sha256').hexdigest()
+            # Consume the frame trailer as well; truncated zstd streams must fail.
+            while compressed.read(1024 * 1024):
+                pass
+    except zstd.ZstdError as error:
+        raise ValueError(f'invalid Zstandard archive: {path}') from error
+    if metadata is None:
+        raise ValueError('archive manifest missing')
+    return _check_inventory(metadata, actual, manifest_name, inventory_key)

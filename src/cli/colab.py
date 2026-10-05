@@ -4440,7 +4440,7 @@ def main() -> None:
         if suite.device != ('cpu' if args.gpu.upper() == 'CPU' else 'cuda'):
             raise ValueError('suite device and --gpu must agree')
         suite_run_tag = args.resume_run or _lane_run_stamp()
-        suite_archive = RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.tar.zst'
+        suite_archive = RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.{suite.input_archive_format}'
         if args.resume_run:
             if not suite_archive.is_file():
                 raise FileNotFoundError(f'resume requires the original prepared input package: {suite_archive}')

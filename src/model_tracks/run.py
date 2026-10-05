@@ -102,6 +102,16 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             events.emit('baseline_ablation','completed',device=cfg.device)
         del baseline_model
         torch.cuda.empty_cache()
+    # Every data test runs here: once, on the machine that will train, after the
+    # baseline export (the last producer of a gate input) and before the
+    # barrier that releases any worker. One attestation then covers the exact
+    # bytes all three concurrent tracks consume, so the training path spends its
+    # time training instead of re-arguing shared immutable inputs.
+    from model_tracks.data_gate import validate as validate_data
+    events.emit('data_gate', 'starting')
+    gate = validate_data(config, allow_gpu_pending=True,
+                         suite_inputs=None if gpu_only else inputs)
+    events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
     from model_tracks.resume import TRACKS, suite_identity, validate_suite, completed_track
@@ -148,6 +158,9 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
            'ER_INCREMENTAL_DVC':'1' if cfg.dvc_enabled and not gpu_only else '0',
            'EUROMONITOR_DISABLE_DVC_CHECKPOINTS':'1' if gpu_only else os.environ.get('EUROMONITOR_DISABLE_DVC_CHECKPOINTS', '0'),
            'EUROMONITOR_REMOTE_TRAINING':'1' if gpu_only else os.environ.get('EUROMONITOR_REMOTE_TRAINING', '0'),
+           'ER_DATA_GATE': gate.attestation,
+           'ER_DATA_GATE_GPU_PENDING': '1',
+           'ER_DATA_GATE_CONFIG': str(config.resolve()),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
     if not commands:
         result = {'mode': 'resume', 'workers': [], 'skipped_verified_tracks': skipped}

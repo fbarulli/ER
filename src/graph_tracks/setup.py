@@ -98,7 +98,7 @@ def listing_contract(catalog, labels, populations):
                                                        for (a,b),origins in sorted(lineage.items())]}
 
 
-def setup(output: Path, checkpoint: Path) -> Path:
+def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> Path:
     from core.timing import Timing
     timing = Timing('graph_tracks.setup')
     from core.common import F, SEED, TRAIN_ROOT, load_dataset_deduped, training_cfg
@@ -140,7 +140,7 @@ def setup(output: Path, checkpoint: Path) -> Path:
     load_pairs(output / 'listing_pairs.csv', load_pairs_from)
     timing.mark('validate_and_write_pairs')
     listings = prepare(output / 'eligible_catalog.csv', output / 'listing_splits.csv',
-                       output / 'listing_pairs.csv', output / 'prepared')
+                       output / 'listing_pairs.csv', output / 'prepared', training_tensors=training_tensors)
     records = load_records(listings)
     write_json(output / 'graph_census.json', census(records, fit_vocabulary(records)))
     timing.mark('graph_features_and_census')
@@ -185,8 +185,10 @@ def main():
     parser.add_argument('--output', type=Path, default=Path('data/track_setup'))
     parser.add_argument('--text-checkpoint', type=Path,
                         default=Path('artifacts/models/all-MiniLM-L6-v2'))
+    parser.add_argument('--defer-training-tensors', action='store_true',
+                        help='suite packaging builds tensors once after final supervision projection')
     args = parser.parse_args()
-    print(setup(args.output, args.text_checkpoint))
+    print(setup(args.output, args.text_checkpoint, training_tensors=not args.defer_training_tensors))
 
 
 if __name__ == '__main__':
