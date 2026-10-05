@@ -26,7 +26,7 @@ def runtime_snapshot_files(*, ablation_config: Path | None = None) -> dict[str, 
     # AND excluded from the Colab sparse checkout, so unless it ships in the
     # package the GPU calibration lane can never find it. Fail here, at package
     # time, instead of on the remote after provisioning an accelerator.
-    registry = TRAIN_ROOT / 'results' / 'semantics' / 'family_registry.json'
+    registry = TRAIN_ROOT / 'artifacts/evidence/semantics' / 'family_registry.json'
     if not registry.is_file():
         raise FileNotFoundError(
             'semantic family registry missing: run scripts/build_attribute_semantics.py '

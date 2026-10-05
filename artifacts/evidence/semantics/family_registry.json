@@ -1,0 +1,4997 @@
+{
+  "families": [
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "adaptogen"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "ashwagandha"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "cbd"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "chaga"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "chamomile"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "cordyceps"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "eleuthero"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "ginseng"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "hemp"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "holy basil"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "lemon balm"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "licorice"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "maca"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "reishi"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "rhodiola"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "botanicals and functional ingredients",
+      "members": [
+        "schisandra"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "caffeine",
+      "members": [
+        "0-15mg"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "caffeine",
+      "members": [
+        "100-150mg"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "caffeine",
+      "members": [
+        "15-25mg"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "caffeine",
+      "members": [
+        "150-200mg"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "caffeine",
+      "members": [
+        "200+mg"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "caffeine",
+      "members": [
+        "25-50mg"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "caffeine",
+      "members": [
+        "50-100mg"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "carbonization",
+      "members": [
+        "carbonated"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "carbonization",
+      "members": [
+        "gently carbonated"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "carbonization",
+      "members": [
+        "sparkling"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "carbonization",
+      "members": [
+        "still"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "coffee type",
+      "members": [
+        "arabica"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "coffee type",
+      "members": [
+        "bourbon"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "coffee type",
+      "members": [
+        "java"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "coffee type",
+      "members": [
+        "mocha"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "coffee type",
+      "members": [
+        "robusta"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "concentrate format",
+      "members": [
+        "electrolytes"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "concentrate format",
+      "members": [
+        "powder"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "concentrate format",
+      "members": [
+        "sport"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "concentrate format",
+      "members": [
+        "tablet"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "concentrate format",
+      "members": [
+        "vitamins"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "contains minerals",
+      "members": [
+        "calcium"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "contains minerals",
+      "members": [
+        "iron"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "contains minerals",
+      "members": [
+        "magnesium"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "contains minerals",
+      "members": [
+        "manganese"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "contains minerals",
+      "members": [
+        "selenium"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "contains minerals",
+      "members": [
+        "sulfur"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "contains minerals",
+      "members": [
+        "zinc"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "10"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "100"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "12"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "120"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "14"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "15"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "16"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "18"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "2"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "20"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "24"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "25"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "28"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "30"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "36"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "4"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "40"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "5"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "50"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "6"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "8"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "80"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "count per unit",
+      "members": [
+        "9"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "detox"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "diabetic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "halal"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "kosher"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "low carbs"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "paleo diet"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "pescetarian"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "plant-based"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "vegan"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "vegetarian"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "diets",
+      "members": [
+        "weight watcher"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "energy source",
+      "members": [
+        "b-vitamins"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "energy source",
+      "members": [
+        "coffee bean"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "energy source",
+      "members": [
+        "green tea"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "energy source",
+      "members": [
+        "guarana"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "energy source",
+      "members": [
+        "guayusa"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "energy source",
+      "members": [
+        "l-theanine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "energy source",
+      "members": [
+        "yerba mate"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "1% for the planet"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "biodegradable (product)"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "biodynamic/demeter"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "carbon neutral by carbon trust"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "carbon neutral/reduced carbon"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "climate pledge friendly"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "energy efficiency"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "environmentally friendly"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "no herbicide"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "no palm oil"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "no pesticides"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "no polyethylene"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "no solvents"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "plastic neutral"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "reducing co2 products"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "environmentally friendly",
+      "members": [
+        "zero waste"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "acai"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "agave"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "almond"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "amaretto"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "apricot"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "aronia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "artichoke"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "avocado"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "banana"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "barley"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "basil"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "beet"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "bergamot"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "bilberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "birch"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "blackberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "blackcurrant"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "blueberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "bubble gum"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "burdock"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "cabbage"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "cactus"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "camomile"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "cappuccino"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "caramel"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "cardamom"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "carrot"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "charcoal"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "chilli"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "cinnamon"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "cocoa"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "cucumber"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "currant"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "dandelion"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "eucalyptus"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "fennel"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "fig"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "ginseng"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "guarana"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "guava"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "hazelnut"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "hibiscus"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "honey"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "irish cream"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "jasmine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "kiwi"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "latte"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "lavender"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "lychee"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "magnolia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "mandarin"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "maple"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "marshmallow"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "melon"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "mocha"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "mulberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "nettle"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "noni"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "nut"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "oat"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "olive"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "onion"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "papaya"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "pea"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "pepper"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "peppermint"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "plum"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "prune"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "pumpkin"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "raisin"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "rosehip"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "rosemary"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "sea salt"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "spearmint"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "tangerine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "tea"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "thyme"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "toffee"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "tomato"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "flavour",
+      "members": [
+        "wild berries"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "animal free"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "dairy free"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "grain free"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "lactose free"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no alcohol"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no allergens"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no caffeine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no celery"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no crustaceans"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no eggs"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no fish"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no gelatin"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no milk"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no molluscs"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no nuts"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no peanuts"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no shellfish"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no soy"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "no yeast"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "free from",
+      "members": [
+        "wheat free"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "australia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "austria"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "belgium"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "bolivia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "brazil"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "canada"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "china"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "colombia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "costa rica"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "czech republic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "denmark"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "estonia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "ethiopia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "finland"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "france"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "georgia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "germany"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "greece"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "hungary"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "india"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "indonesia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "iran"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "ireland"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "israel"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "italy"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "jamaica"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "japan"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "jordan"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "latvia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "lebanon"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "madagascar"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "malta"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "mexico"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "morocco"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "netherlands"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "norway"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "oman"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "peru"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "philippines"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "poland"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "portugal"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "russia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "south africa"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "south korea"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "spain"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "sri lanka (ceylon)"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "sweden"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "switzerland"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "taiwan"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "thailand"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "the bahamas"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "togo"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "turkey"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "united kingdom"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "united states"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "geographic origin",
+      "members": [
+        "vietnam"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "aids sleep"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "antioxidant"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "ayurvedic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "balanced nutrition"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "bone health"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "brain health/ cognitive health / memory health"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "cardiovascular health"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "cellular health"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "contains collagen"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "digestive health"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "energy boosting"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "fatigue relief"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "good source of calcium"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "good source of minerals"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "good source of nutrients"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "good source of potassium"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "good source of vitamins"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "healthy hips and joints"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "high protein"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "high/source of fibre"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "hydrating"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "hypoallergenic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "immune system health"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "low alcohol"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "low calories"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "low fat"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "low in cholesterol"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "low protein"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "low salt"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "low saturated fats",
+        "no saturated fats"
+      ],
+      "min_cosine": 0.0074
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "low sugar"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "mental wellbeing"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "mood-enhancing"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "no added salt"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "no added sugar"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "no calories"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "no fat"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "no salt"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "no sugar"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "no trans fats"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "nootropic/enhanced mental performance"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "pre-biotic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "probiotic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "relaxing"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "sensitive skin"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "skin health"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "stress relief"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "superfood"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "superfruit"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "weight loss"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "health claims",
+      "members": [
+        "whole grain"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "immune support ingredients",
+      "members": [
+        "antioxidants"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "immune support ingredients",
+      "members": [
+        "elderberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "immune support ingredients",
+      "members": [
+        "ginger"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "immune support ingredients",
+      "members": [
+        "turmeric"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "immune support ingredients",
+      "members": [
+        "vitamin c"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "immune support ingredients",
+      "members": [
+        "wellmune"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "immune support ingredients",
+      "members": [
+        "zinc"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice content",
+      "members": [
+        "0-2%"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice content",
+      "members": [
+        "10-15%"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice content",
+      "members": [
+        "100%"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice content",
+      "members": [
+        "15-25%"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice content",
+      "members": [
+        "2-5%"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice content",
+      "members": [
+        "25-50%"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice content",
+      "members": [
+        "5-10%"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice content",
+      "members": [
+        "50-75%"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice content",
+      "members": [
+        "75-99%"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice features",
+      "members": [
+        "cold press"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice features",
+      "members": [
+        "frozen"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice features",
+      "members": [
+        "pasteurized"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice features",
+      "members": [
+        "pulp free"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice features",
+      "members": [
+        "raw"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice features",
+      "members": [
+        "smoothie"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "juice features",
+      "members": [
+        "with pulp"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "acai"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "aloe vera"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "anise"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "apple"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "apricot"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "aronia berry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "artichoke"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "asparagus"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "avocado"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "banana"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "baobab fruit"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "barbados cherry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "beet"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "bilberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "blackberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "blackcurrant"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "blueberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "boysenberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "broccoli"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "cabbage"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "camu camu"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "caraway"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "carrot"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "cherry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "chilli pepper"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "citrus"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "clementine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "coconut"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "courgette"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "cranberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "cucumber"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "currant"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "elderberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "fig"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "forest fruit"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "garlic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "ginger"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "goji berry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "gooseberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "grape"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "grapefruit"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "guava"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "habanero"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "herb and spice"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "honeydew"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "jackfruit"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "jerusalem artichoke"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "juniper berry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "kale"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "kiwi"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "lemon"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "lettuce"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "lime"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "lychee"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "mandarine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "mango"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "mangosteen"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "maqui berry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "melon"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "mulberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "mushroom"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "nectarine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "nettle"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "onion"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "orange"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "papaya"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "paprika"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "parsnip"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "passion fruit"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "peach"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "pear"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "pepper"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "pineapple"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "pitaya"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "plum"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "pomegranate"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "potato"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "prune"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "pumpkin"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "quince"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "radish"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "raspberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "redcurrant"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "rhubarb"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "romaine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "rose hip"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "shallot"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "silybum marianum"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "soursop"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "spinach"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "strawberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "sweet potato"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "tangerine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "tomato"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "tuber"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "turnip"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "watercress"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "watermelon"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "yumberry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "made from",
+      "members": [
+        "yuzu"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural acids"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural additives"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural colourants"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural dyes"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural fats"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural flavours"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural fragrances"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural minerals"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural oils"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural preservatives"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural supplements"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "naturally derived",
+      "members": [
+        "natural sweeteners"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no antibiotics"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no artificial additives"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no artificial colours"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no artificial flavours"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no artificial fragrances"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no artificial preservatives"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no artificial sweeteners"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no aspartame"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no carrageenan"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no citric acid"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no dye"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no gmo"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no hormones"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no msg"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no nitrites/nitrates"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "no artificial ingredients",
+      "members": [
+        "no sucralose"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "nutri score",
+      "members": [
+        "a"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "nutri score",
+      "members": [
+        "b"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "nutri score",
+      "members": [
+        "c"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "nutri score",
+      "members": [
+        "d"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "nutri score",
+      "members": [
+        "e"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack material type",
+      "members": [
+        "flexible pack"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack material type",
+      "members": [
+        "glass"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack material type",
+      "members": [
+        "metal"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack material type",
+      "members": [
+        "paper / carton"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack material type",
+      "members": [
+        "plastic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "aerosol"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "bag in box"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "bag/packet"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "blister"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "bottle"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "bucket"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "can"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "carton/box"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "jar"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "liquid carton"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "pouch"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "tin"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "tray"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "pack type",
+      "members": [
+        "tub/cup/pot"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "roast type",
+      "members": [
+        "breakfast"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "roast type",
+      "members": [
+        "dark"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "roast type",
+      "members": [
+        "espresso"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "roast type",
+      "members": [
+        "french"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "roast type",
+      "members": [
+        "italian"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "roast type",
+      "members": [
+        "light"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "roast type",
+      "members": [
+        "medium"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "black"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "coconut creamer"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "cold brew"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "cream"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "dark roast"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "frappuccino"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "latte"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "milk"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "mocha"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "nitro"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "rtd coffee style",
+      "members": [
+        "oat milk"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports drinks style",
+      "members": [
+        "hypertonic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports drinks style",
+      "members": [
+        "hypotonic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports drinks style",
+      "members": [
+        "isotonic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports ingredients",
+      "members": [
+        "bcaa"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports ingredients",
+      "members": [
+        "creatine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports ingredients",
+      "members": [
+        "electrolytes"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports ingredients",
+      "members": [
+        "protein"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports positioning",
+      "members": [
+        "fitness"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports positioning",
+      "members": [
+        "muscle growth"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports positioning",
+      "members": [
+        "post-workout"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sports positioning",
+      "members": [
+        "pre-workout"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "biodegradable (packaging)"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "can be recycled"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "compostable"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "efficient/optimised packaging"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "from recycled materials"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "from sustainable sources (packaging)"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "plastic free packaging"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "recycled pet"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "refill (packaging)"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "reuse (packaging)"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "terracycle"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable packaging",
+      "members": [
+        "widely recycled"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "b-corp"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "eu organic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "fair for life"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "fair trade usa"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "fairtrade"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "from sustainable sources (product)"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "fsc (forest stewardship council)"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "locally sourced"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "organic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "rainforest alliance"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "regenerative agriculture"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "responsible forestry"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "soil association"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "soil health"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "traceability"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "us epa safer choice"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "usda organic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sustainable sourcing",
+      "members": [
+        "utz certified"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "acesulfame_potassium"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "allulose"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "aspartame"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "cane_sugar"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "corn_syrup"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "cyclamate"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "erythritol"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "fructose"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "glucose"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "hfcs"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "monk_fruit"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "neotame"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "saccharin"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "stevia"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "sucralose"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "sucrose"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "sugar"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "sweetener",
+      "members": [
+        "unsweetened"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "barley"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "black"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "camomile"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "chai"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "darjeeling"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "earl grey"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "english breakfast"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "green"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "gunpowder"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "herbal"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "jasmine"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "kukicha"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "loose leaf"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "masala chai"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "matcha"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "oolong"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "puerh"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "red"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "rooibos"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "sencha"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "tea type",
+      "members": [
+        "white"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "alkaline"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "aloe vera"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "artesian"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "artichoke"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "birch"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "bottled at source"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "cactus"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "coconut"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "distilled"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "drinking"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "filtered"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "flavoured"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "herbal"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "ionised"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "maple"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "mineral"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "ph balanced"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "pure"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "purified"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "seltzer"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "soda"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "spring"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "tonic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "water type",
+      "members": [
+        "volcanic"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "10"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "100"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "1000"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "10000"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "110"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "113"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "119"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "1191"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "120"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "125"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "128"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "1304"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "1362"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "15"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "150"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "1589"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "160"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "165"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "17"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "170"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "175"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "18"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "1816"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "184"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "190"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "198"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "2"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "20"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "200"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "2043"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "206"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "21"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "210"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "22"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "225"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "226"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "227"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "230"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "234"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "240"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "249"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "2497"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "250"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "255"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "26"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "260"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "270"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "275"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "28"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "283"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "290"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "30"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "300"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "3000"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "312"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "33"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "330"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "340"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "35"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "350"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "360"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "369"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "375"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "397"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "4"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "400"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "41"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "425"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "43"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "439"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "440"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "450"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "453"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "454"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "460"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "482"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "496"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "5"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "500"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "510"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "54"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "550"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "567"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "57"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "6"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "60"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "600"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "65"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "650"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "7"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "70"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "709"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "71"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "75"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "750"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "79"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "8"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "80"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "85"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "9"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "90"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "900"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "907"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "908"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "97"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "99"
+      ],
+      "min_cosine": 1.0
+    },
+    {
+      "key": "weight",
+      "members": [
+        "998"
+      ],
+      "min_cosine": 1.0
+    }
+  ],
+  "tau": 0.85
+}

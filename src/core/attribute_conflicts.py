@@ -857,7 +857,7 @@ def veto_eligibility_ledger(
     if census is None:
         from core.common import RESULTS
 
-        path = RESULTS / "attribute_universe_census.json"
+        path = TRAIN_ROOT / "artifacts/evidence/attribute_universe_census.json"
         if not path.exists():
             raise FileNotFoundError(
                 f"veto_eligibility_ledger requires {path.as_posix()} (the "

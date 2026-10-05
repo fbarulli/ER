@@ -1,0 +1,3323 @@
+{
+  "baseline": {
+    "botanicals and functional ingredients": {
+      "conflict_pairs": 150,
+      "conflict_rate": 0.1847,
+      "distinct_raw_strings": 99,
+      "distinct_value_sets": 90,
+      "rows_populated": 1864,
+      "same_gtin_pairs_both_populated": 812
+    },
+    "caffeine": {
+      "conflict_pairs": 1372,
+      "conflict_rate": 0.1677,
+      "distinct_raw_strings": 7,
+      "distinct_value_sets": 7,
+      "rows_populated": 27175,
+      "same_gtin_pairs_both_populated": 8180
+    },
+    "carbonization": {
+      "conflict_pairs": 2616,
+      "conflict_rate": 0.1077,
+      "distinct_raw_strings": 11,
+      "distinct_value_sets": 10,
+      "rows_populated": 56125,
+      "same_gtin_pairs_both_populated": 24279
+    },
+    "coffee type": {
+      "conflict_pairs": 10,
+      "conflict_rate": 0.019,
+      "distinct_raw_strings": 12,
+      "distinct_value_sets": 12,
+      "rows_populated": 1658,
+      "same_gtin_pairs_both_populated": 526
+    },
+    "concentrate format": {
+      "conflict_pairs": 257,
+      "conflict_rate": 0.4905,
+      "distinct_raw_strings": 20,
+      "distinct_value_sets": 20,
+      "rows_populated": 3652,
+      "same_gtin_pairs_both_populated": 524
+    },
+    "contains minerals": {
+      "conflict_pairs": 286,
+      "conflict_rate": 0.1393,
+      "distinct_raw_strings": 47,
+      "distinct_value_sets": 47,
+      "rows_populated": 6926,
+      "same_gtin_pairs_both_populated": 2053
+    },
+    "count per unit": {
+      "conflict_pairs": 1,
+      "conflict_rate": 0.0133,
+      "distinct_raw_strings": 27,
+      "distinct_value_sets": 27,
+      "rows_populated": 1054,
+      "same_gtin_pairs_both_populated": 75
+    },
+    "diets": {
+      "conflict_pairs": 307,
+      "conflict_rate": 0.2617,
+      "distinct_raw_strings": 73,
+      "distinct_value_sets": 52,
+      "rows_populated": 5068,
+      "same_gtin_pairs_both_populated": 1173
+    },
+    "energy source": {
+      "conflict_pairs": 483,
+      "conflict_rate": 0.2232,
+      "distinct_raw_strings": 34,
+      "distinct_value_sets": 34,
+      "rows_populated": 5079,
+      "same_gtin_pairs_both_populated": 2164
+    },
+    "environmentally friendly": {
+      "conflict_pairs": 66,
+      "conflict_rate": 0.1077,
+      "distinct_raw_strings": 53,
+      "distinct_value_sets": 45,
+      "rows_populated": 2781,
+      "same_gtin_pairs_both_populated": 613
+    },
+    "flavour": {
+      "conflict_pairs": 16,
+      "conflict_rate": 0.0009,
+      "distinct_raw_strings": 2389,
+      "distinct_value_sets": 338,
+      "rows_populated": 48433,
+      "same_gtin_pairs_both_populated": 18719
+    },
+    "free from": {
+      "conflict_pairs": 460,
+      "conflict_rate": 0.2391,
+      "distinct_raw_strings": 276,
+      "distinct_value_sets": 206,
+      "rows_populated": 6828,
+      "same_gtin_pairs_both_populated": 1924
+    },
+    "geographic origin": {
+      "conflict_pairs": 35,
+      "conflict_rate": 0.0131,
+      "distinct_raw_strings": 147,
+      "distinct_value_sets": 139,
+      "rows_populated": 7332,
+      "same_gtin_pairs_both_populated": 2675
+    },
+    "giftbox": {
+      "conflict_pairs": 0,
+      "conflict_rate": 0.0,
+      "distinct_raw_strings": 1,
+      "distinct_value_sets": 1,
+      "rows_populated": 21,
+      "same_gtin_pairs_both_populated": 1
+    },
+    "health claims": {
+      "conflict_pairs": 4152,
+      "conflict_rate": 0.4603,
+      "distinct_raw_strings": 3826,
+      "distinct_value_sets": 2285,
+      "rows_populated": 29009,
+      "same_gtin_pairs_both_populated": 9021
+    },
+    "immune support ingredients": {
+      "conflict_pairs": 693,
+      "conflict_rate": 0.1188,
+      "distinct_raw_strings": 56,
+      "distinct_value_sets": 44,
+      "rows_populated": 16948,
+      "same_gtin_pairs_both_populated": 5834
+    },
+    "juice content": {
+      "conflict_pairs": 2009,
+      "conflict_rate": 0.0803,
+      "distinct_raw_strings": 34,
+      "distinct_value_sets": 27,
+      "rows_populated": 63117,
+      "same_gtin_pairs_both_populated": 25010
+    },
+    "juice features": {
+      "conflict_pairs": 1548,
+      "conflict_rate": 0.3911,
+      "distinct_raw_strings": 71,
+      "distinct_value_sets": 71,
+      "rows_populated": 10718,
+      "same_gtin_pairs_both_populated": 3958
+    },
+    "made from": {
+      "conflict_pairs": 1271,
+      "conflict_rate": 0.1368,
+      "distinct_raw_strings": 3810,
+      "distinct_value_sets": 2485,
+      "rows_populated": 19338,
+      "same_gtin_pairs_both_populated": 9289
+    },
+    "naturally derived": {
+      "conflict_pairs": 2138,
+      "conflict_rate": 0.1959,
+      "distinct_raw_strings": 135,
+      "distinct_value_sets": 82,
+      "rows_populated": 28637,
+      "same_gtin_pairs_both_populated": 10911
+    },
+    "no artificial ingredients": {
+      "conflict_pairs": 711,
+      "conflict_rate": 0.3478,
+      "distinct_raw_strings": 272,
+      "distinct_value_sets": 122,
+      "rows_populated": 10998,
+      "same_gtin_pairs_both_populated": 2044
+    },
+    "nutri score": {
+      "conflict_pairs": 2,
+      "conflict_rate": 0.0833,
+      "distinct_raw_strings": 7,
+      "distinct_value_sets": 7,
+      "rows_populated": 412,
+      "same_gtin_pairs_both_populated": 24
+    },
+    "pack material type": {
+      "conflict_pairs": 2105,
+      "conflict_rate": 0.0964,
+      "distinct_raw_strings": 5,
+      "distinct_value_sets": 5,
+      "rows_populated": 51703,
+      "same_gtin_pairs_both_populated": 21841
+    },
+    "pack type": {
+      "conflict_pairs": 462,
+      "conflict_rate": 0.0273,
+      "distinct_raw_strings": 14,
+      "distinct_value_sets": 14,
+      "rows_populated": 48382,
+      "same_gtin_pairs_both_populated": 16899
+    },
+    "roast type": {
+      "conflict_pairs": 90,
+      "conflict_rate": 0.2687,
+      "distinct_raw_strings": 21,
+      "distinct_value_sets": 21,
+      "rows_populated": 958,
+      "same_gtin_pairs_both_populated": 335
+    },
+    "rtd coffee style": {
+      "conflict_pairs": 457,
+      "conflict_rate": 0.3449,
+      "distinct_raw_strings": 121,
+      "distinct_value_sets": 96,
+      "rows_populated": 3399,
+      "same_gtin_pairs_both_populated": 1325
+    },
+    "special edition": {
+      "conflict_pairs": 0,
+      "conflict_rate": 0.0,
+      "distinct_raw_strings": 1,
+      "distinct_value_sets": 1,
+      "rows_populated": 216,
+      "same_gtin_pairs_both_populated": 47
+    },
+    "sports drinks style": {
+      "conflict_pairs": 14,
+      "conflict_rate": 0.1818,
+      "distinct_raw_strings": 3,
+      "distinct_value_sets": 3,
+      "rows_populated": 464,
+      "same_gtin_pairs_both_populated": 77
+    },
+    "sports ingredients": {
+      "conflict_pairs": 77,
+      "conflict_rate": 0.0559,
+      "distinct_raw_strings": 11,
+      "distinct_value_sets": 11,
+      "rows_populated": 4949,
+      "same_gtin_pairs_both_populated": 1377
+    },
+    "sports positioning": {
+      "conflict_pairs": 41,
+      "conflict_rate": 0.3565,
+      "distinct_raw_strings": 12,
+      "distinct_value_sets": 12,
+      "rows_populated": 1231,
+      "same_gtin_pairs_both_populated": 115
+    },
+    "sustainable packaging": {
+      "conflict_pairs": 48,
+      "conflict_rate": 0.1301,
+      "distinct_raw_strings": 40,
+      "distinct_value_sets": 36,
+      "rows_populated": 3020,
+      "same_gtin_pairs_both_populated": 369
+    },
+    "sustainable sourcing": {
+      "conflict_pairs": 1359,
+      "conflict_rate": 0.1856,
+      "distinct_raw_strings": 170,
+      "distinct_value_sets": 94,
+      "rows_populated": 14497,
+      "same_gtin_pairs_both_populated": 7323
+    },
+    "sweetener": {
+      "conflict_pairs": 1421,
+      "conflict_rate": 0.1572,
+      "distinct_raw_strings": 238,
+      "distinct_value_sets": 238,
+      "rows_populated": 25741,
+      "same_gtin_pairs_both_populated": 9041
+    },
+    "tea type": {
+      "conflict_pairs": 184,
+      "conflict_rate": 0.1925,
+      "distinct_raw_strings": 137,
+      "distinct_value_sets": 117,
+      "rows_populated": 2987,
+      "same_gtin_pairs_both_populated": 956
+    },
+    "volume": {
+      "conflict_pairs": 395,
+      "conflict_rate": 0.0146,
+      "distinct_raw_strings": 184,
+      "distinct_value_sets": 184,
+      "rows_populated": 62475,
+      "same_gtin_pairs_both_populated": 27127
+    },
+    "water type": {
+      "conflict_pairs": 1474,
+      "conflict_rate": 0.1558,
+      "distinct_raw_strings": 192,
+      "distinct_value_sets": 173,
+      "rows_populated": 18850,
+      "same_gtin_pairs_both_populated": 9462
+    },
+    "weight": {
+      "conflict_pairs": 11,
+      "conflict_rate": 0.0268,
+      "distinct_raw_strings": 184,
+      "distinct_value_sets": 184,
+      "rows_populated": 2677,
+      "same_gtin_pairs_both_populated": 411
+    }
+  },
+  "census": {
+    "keys": {
+      "botanicals and functional ingredients": {
+        "conflict_pairs": 150,
+        "conflict_rate": 0.1847,
+        "distinct_raw_strings": 99,
+        "distinct_value_sets": 90,
+        "rows_populated": 1864,
+        "same_gtin_pairs_both_populated": 812,
+        "top_sets": [
+          [
+            [
+              "ginseng"
+            ],
+            852
+          ],
+          [
+            [
+              "licorice"
+            ],
+            144
+          ],
+          [
+            [
+              "chamomile"
+            ],
+            143
+          ],
+          [
+            [
+              "lemon balm"
+            ],
+            73
+          ],
+          [
+            [
+              "adaptogen"
+            ],
+            52
+          ],
+          [
+            [
+              "maca"
+            ],
+            46
+          ],
+          [
+            [
+              "cordyceps"
+            ],
+            43
+          ],
+          [
+            [
+              "ashwagandha",
+              "ginseng"
+            ],
+            38
+          ],
+          [
+            [
+              "hemp"
+            ],
+            38
+          ],
+          [
+            [
+              "ashwagandha"
+            ],
+            35
+          ]
+        ]
+      },
+      "caffeine": {
+        "conflict_pairs": 1372,
+        "conflict_rate": 0.1677,
+        "distinct_raw_strings": 7,
+        "distinct_value_sets": 7,
+        "rows_populated": 27175,
+        "same_gtin_pairs_both_populated": 8180,
+        "top_sets": [
+          [
+            [
+              "15-25mg"
+            ],
+            15465
+          ],
+          [
+            [
+              "0-15mg"
+            ],
+            6357
+          ],
+          [
+            [
+              "25-50mg"
+            ],
+            3055
+          ],
+          [
+            [
+              "50-100mg"
+            ],
+            1198
+          ],
+          [
+            [
+              "150-200mg"
+            ],
+            658
+          ],
+          [
+            [
+              "100-150mg"
+            ],
+            265
+          ],
+          [
+            [
+              "200+mg"
+            ],
+            177
+          ]
+        ]
+      },
+      "carbonization": {
+        "conflict_pairs": 2616,
+        "conflict_rate": 0.1077,
+        "distinct_raw_strings": 11,
+        "distinct_value_sets": 10,
+        "rows_populated": 56125,
+        "same_gtin_pairs_both_populated": 24279,
+        "top_sets": [
+          [
+            [
+              "still"
+            ],
+            38993
+          ],
+          [
+            [
+              "carbonated"
+            ],
+            9216
+          ],
+          [
+            [
+              "sparkling"
+            ],
+            3943
+          ],
+          [
+            [
+              "carbonated",
+              "sparkling"
+            ],
+            3032
+          ],
+          [
+            [
+              "gently carbonated"
+            ],
+            517
+          ],
+          [
+            [
+              "carbonated",
+              "gently carbonated"
+            ],
+            149
+          ],
+          [
+            [
+              "sparkling",
+              "still"
+            ],
+            118
+          ],
+          [
+            [
+              "carbonated",
+              "still"
+            ],
+            84
+          ],
+          [
+            [
+              "gently carbonated",
+              "sparkling"
+            ],
+            72
+          ],
+          [
+            [
+              "gently carbonated",
+              "still"
+            ],
+            1
+          ]
+        ]
+      },
+      "coffee type": {
+        "conflict_pairs": 10,
+        "conflict_rate": 0.019,
+        "distinct_raw_strings": 12,
+        "distinct_value_sets": 12,
+        "rows_populated": 1658,
+        "same_gtin_pairs_both_populated": 526,
+        "top_sets": [
+          [
+            [
+              "arabica"
+            ],
+            1010
+          ],
+          [
+            [
+              "mocha"
+            ],
+            490
+          ],
+          [
+            [
+              "arabica",
+              "mocha"
+            ],
+            55
+          ],
+          [
+            [
+              "arabica",
+              "java"
+            ],
+            24
+          ],
+          [
+            [
+              "arabica",
+              "robusta"
+            ],
+            22
+          ],
+          [
+            [
+              "java"
+            ],
+            20
+          ],
+          [
+            [
+              "java",
+              "mocha"
+            ],
+            16
+          ],
+          [
+            [
+              "robusta"
+            ],
+            12
+          ],
+          [
+            [
+              "bourbon"
+            ],
+            4
+          ],
+          [
+            [
+              "mocha",
+              "robusta"
+            ],
+            3
+          ]
+        ]
+      },
+      "concentrate format": {
+        "conflict_pairs": 257,
+        "conflict_rate": 0.4905,
+        "distinct_raw_strings": 20,
+        "distinct_value_sets": 20,
+        "rows_populated": 3652,
+        "same_gtin_pairs_both_populated": 524,
+        "top_sets": [
+          [
+            [
+              "powder"
+            ],
+            2101
+          ],
+          [
+            [
+              "powder",
+              "vitamins"
+            ],
+            481
+          ],
+          [
+            [
+              "electrolytes",
+              "powder"
+            ],
+            325
+          ],
+          [
+            [
+              "electrolytes",
+              "powder",
+              "sport"
+            ],
+            305
+          ],
+          [
+            [
+              "electrolytes",
+              "powder",
+              "sport",
+              "vitamins"
+            ],
+            119
+          ],
+          [
+            [
+              "electrolytes",
+              "powder",
+              "vitamins"
+            ],
+            66
+          ],
+          [
+            [
+              "powder",
+              "sport",
+              "vitamins"
+            ],
+            65
+          ],
+          [
+            [
+              "electrolytes",
+              "sport",
+              "tablet"
+            ],
+            41
+          ],
+          [
+            [
+              "electrolytes",
+              "tablet"
+            ],
+            36
+          ],
+          [
+            [
+              "powder",
+              "sport"
+            ],
+            25
+          ]
+        ]
+      },
+      "contains minerals": {
+        "conflict_pairs": 286,
+        "conflict_rate": 0.1393,
+        "distinct_raw_strings": 47,
+        "distinct_value_sets": 47,
+        "rows_populated": 6926,
+        "same_gtin_pairs_both_populated": 2053,
+        "top_sets": [
+          [
+            [
+              "calcium"
+            ],
+            2399
+          ],
+          [
+            [
+              "calcium",
+              "magnesium"
+            ],
+            1793
+          ],
+          [
+            [
+              "magnesium"
+            ],
+            1268
+          ],
+          [
+            [
+              "calcium",
+              "iron"
+            ],
+            338
+          ],
+          [
+            [
+              "iron"
+            ],
+            225
+          ],
+          [
+            [
+              "sulfur"
+            ],
+            191
+          ],
+          [
+            [
+              "zinc"
+            ],
+            140
+          ],
+          [
+            [
+              "calcium",
+              "magnesium",
+              "manganese",
+              "zinc"
+            ],
+            73
+          ],
+          [
+            [
+              "magnesium",
+              "zinc"
+            ],
+            69
+          ],
+          [
+            [
+              "calcium",
+              "iron",
+              "magnesium"
+            ],
+            67
+          ]
+        ]
+      },
+      "count per unit": {
+        "conflict_pairs": 1,
+        "conflict_rate": 0.0133,
+        "distinct_raw_strings": 27,
+        "distinct_value_sets": 27,
+        "rows_populated": 1054,
+        "same_gtin_pairs_both_populated": 75,
+        "top_sets": [
+          [
+            [
+              "12"
+            ],
+            218
+          ],
+          [
+            [
+              "10"
+            ],
+            195
+          ],
+          [
+            [
+              "24"
+            ],
+            119
+          ],
+          [
+            [
+              "30"
+            ],
+            101
+          ],
+          [
+            [
+              "20"
+            ],
+            100
+          ],
+          [
+            [
+              "8"
+            ],
+            60
+          ],
+          [
+            [
+              "50"
+            ],
+            59
+          ],
+          [
+            [
+              "6"
+            ],
+            59
+          ],
+          [
+            [
+              "15"
+            ],
+            35
+          ],
+          [
+            [
+              "18"
+            ],
+            21
+          ]
+        ]
+      },
+      "diets": {
+        "conflict_pairs": 307,
+        "conflict_rate": 0.2617,
+        "distinct_raw_strings": 73,
+        "distinct_value_sets": 52,
+        "rows_populated": 5068,
+        "same_gtin_pairs_both_populated": 1173,
+        "top_sets": [
+          [
+            [
+              "kosher"
+            ],
+            1673
+          ],
+          [
+            [
+              "vegan"
+            ],
+            790
+          ],
+          [
+            [
+              "plant-based"
+            ],
+            659
+          ],
+          [
+            [
+              "low carbs"
+            ],
+            306
+          ],
+          [
+            [
+              "detox"
+            ],
+            303
+          ],
+          [
+            [
+              "paleo diet"
+            ],
+            241
+          ],
+          [
+            [
+              "halal"
+            ],
+            167
+          ],
+          [
+            [
+              "diabetic"
+            ],
+            113
+          ],
+          [
+            [
+              "plant-based",
+              "vegan"
+            ],
+            110
+          ],
+          [
+            [
+              "kosher",
+              "plant-based"
+            ],
+            90
+          ]
+        ]
+      },
+      "energy source": {
+        "conflict_pairs": 483,
+        "conflict_rate": 0.2232,
+        "distinct_raw_strings": 34,
+        "distinct_value_sets": 34,
+        "rows_populated": 5079,
+        "same_gtin_pairs_both_populated": 2164,
+        "top_sets": [
+          [
+            [
+              "b-vitamins"
+            ],
+            2708
+          ],
+          [
+            [
+              "green tea"
+            ],
+            505
+          ],
+          [
+            [
+              "b-vitamins",
+              "guarana"
+            ],
+            346
+          ],
+          [
+            [
+              "guarana"
+            ],
+            322
+          ],
+          [
+            [
+              "l-theanine"
+            ],
+            234
+          ],
+          [
+            [
+              "yerba mate"
+            ],
+            217
+          ],
+          [
+            [
+              "green tea",
+              "l-theanine"
+            ],
+            160
+          ],
+          [
+            [
+              "green tea",
+              "guarana"
+            ],
+            125
+          ],
+          [
+            [
+              "coffee bean"
+            ],
+            65
+          ],
+          [
+            [
+              "guayusa"
+            ],
+            63
+          ]
+        ]
+      },
+      "environmentally friendly": {
+        "conflict_pairs": 66,
+        "conflict_rate": 0.1077,
+        "distinct_raw_strings": 53,
+        "distinct_value_sets": 45,
+        "rows_populated": 2781,
+        "same_gtin_pairs_both_populated": 613,
+        "top_sets": [
+          [
+            [
+              "environmentally friendly"
+            ],
+            1804
+          ],
+          [
+            [
+              "no pesticides"
+            ],
+            210
+          ],
+          [
+            [
+              "carbon neutral/reduced carbon"
+            ],
+            209
+          ],
+          [
+            [
+              "1% for the planet"
+            ],
+            115
+          ],
+          [
+            [
+              "carbon neutral/reduced carbon",
+              "environmentally friendly"
+            ],
+            74
+          ],
+          [
+            [
+              "climate pledge friendly",
+              "no pesticides"
+            ],
+            56
+          ],
+          [
+            [
+              "plastic neutral"
+            ],
+            36
+          ],
+          [
+            [
+              "environmentally friendly",
+              "no pesticides"
+            ],
+            33
+          ],
+          [
+            [
+              "biodynamic/demeter"
+            ],
+            29
+          ],
+          [
+            [
+              "no palm oil"
+            ],
+            20
+          ]
+        ]
+      },
+      "flavour": {
+        "conflict_pairs": 16,
+        "conflict_rate": 0.0009,
+        "distinct_raw_strings": 2389,
+        "distinct_value_sets": 338,
+        "rows_populated": 48433,
+        "same_gtin_pairs_both_populated": 18719,
+        "top_sets": [
+          [
+            [],
+            33855
+          ],
+          [
+            [
+              "tea"
+            ],
+            3188
+          ],
+          [
+            [
+              "latte"
+            ],
+            804
+          ],
+          [
+            [
+              "blueberry"
+            ],
+            715
+          ],
+          [
+            [
+              "banana"
+            ],
+            524
+          ],
+          [
+            [
+              "kiwi"
+            ],
+            417
+          ],
+          [
+            [
+              "carrot"
+            ],
+            416
+          ],
+          [
+            [
+              "caramel"
+            ],
+            389
+          ],
+          [
+            [
+              "mocha"
+            ],
+            352
+          ],
+          [
+            [
+              "apricot"
+            ],
+            316
+          ]
+        ]
+      },
+      "free from": {
+        "conflict_pairs": 460,
+        "conflict_rate": 0.2391,
+        "distinct_raw_strings": 276,
+        "distinct_value_sets": 206,
+        "rows_populated": 6828,
+        "same_gtin_pairs_both_populated": 1924,
+        "top_sets": [
+          [
+            [
+              "no caffeine"
+            ],
+            1783
+          ],
+          [
+            [
+              "no alcohol"
+            ],
+            1137
+          ],
+          [
+            [
+              "dairy free"
+            ],
+            891
+          ],
+          [
+            [
+              "lactose free"
+            ],
+            845
+          ],
+          [
+            [
+              "no allergens"
+            ],
+            524
+          ],
+          [
+            [
+              "no alcohol",
+              "no caffeine"
+            ],
+            192
+          ],
+          [
+            [
+              "no soy"
+            ],
+            121
+          ],
+          [
+            [
+              "dairy free",
+              "no soy"
+            ],
+            104
+          ],
+          [
+            [
+              "lactose free",
+              "no eggs",
+              "no fish",
+              "no milk",
+              "no shellfish",
+              "no soy",
+              "wheat free"
+            ],
+            102
+          ],
+          [
+            [
+              "lactose free",
+              "no allergens"
+            ],
+            89
+          ]
+        ]
+      },
+      "geographic origin": {
+        "conflict_pairs": 35,
+        "conflict_rate": 0.0131,
+        "distinct_raw_strings": 147,
+        "distinct_value_sets": 139,
+        "rows_populated": 7332,
+        "same_gtin_pairs_both_populated": 2675,
+        "top_sets": [
+          [
+            [
+              "united states"
+            ],
+            1251
+          ],
+          [
+            [
+              "united kingdom"
+            ],
+            1089
+          ],
+          [
+            [
+              "germany"
+            ],
+            873
+          ],
+          [
+            [
+              "france"
+            ],
+            633
+          ],
+          [
+            [
+              "italy"
+            ],
+            422
+          ],
+          [
+            [
+              "spain"
+            ],
+            390
+          ],
+          [
+            [
+              "sweden"
+            ],
+            249
+          ],
+          [
+            [
+              "canada"
+            ],
+            238
+          ],
+          [
+            [
+              "switzerland"
+            ],
+            228
+          ],
+          [
+            [
+              "norway"
+            ],
+            217
+          ]
+        ]
+      },
+      "giftbox": {
+        "conflict_pairs": 0,
+        "conflict_rate": 0.0,
+        "distinct_raw_strings": 1,
+        "distinct_value_sets": 1,
+        "rows_populated": 21,
+        "same_gtin_pairs_both_populated": 1,
+        "top_sets": [
+          [
+            [
+              "giftbox"
+            ],
+            21
+          ]
+        ]
+      },
+      "health claims": {
+        "conflict_pairs": 4152,
+        "conflict_rate": 0.4603,
+        "distinct_raw_strings": 3826,
+        "distinct_value_sets": 2285,
+        "rows_populated": 29009,
+        "same_gtin_pairs_both_populated": 9021,
+        "top_sets": [
+          [
+            [
+              "energy boosting"
+            ],
+            2768
+          ],
+          [
+            [
+              "no sugar"
+            ],
+            2470
+          ],
+          [
+            [
+              "hydrating"
+            ],
+            1845
+          ],
+          [
+            [
+              "no added sugar"
+            ],
+            1740
+          ],
+          [
+            [
+              "good source of vitamins"
+            ],
+            1515
+          ],
+          [
+            [
+              "good source of minerals"
+            ],
+            1161
+          ],
+          [
+            [
+              "no calories",
+              "no sugar"
+            ],
+            729
+          ],
+          [
+            [
+              "low calories"
+            ],
+            717
+          ],
+          [
+            [
+              "energy boosting",
+              "no sugar"
+            ],
+            584
+          ],
+          [
+            [
+              "probiotic"
+            ],
+            488
+          ]
+        ]
+      },
+      "immune support ingredients": {
+        "conflict_pairs": 693,
+        "conflict_rate": 0.1188,
+        "distinct_raw_strings": 56,
+        "distinct_value_sets": 44,
+        "rows_populated": 16948,
+        "same_gtin_pairs_both_populated": 5834,
+        "top_sets": [
+          [
+            [
+              "vitamin c"
+            ],
+            6353
+          ],
+          [
+            [
+              "antioxidants",
+              "vitamin c"
+            ],
+            3554
+          ],
+          [
+            [
+              "ginger"
+            ],
+            2115
+          ],
+          [
+            [
+              "antioxidants"
+            ],
+            1532
+          ],
+          [
+            [
+              "elderberry"
+            ],
+            761
+          ],
+          [
+            [
+              "vitamin c",
+              "zinc"
+            ],
+            596
+          ],
+          [
+            [
+              "zinc"
+            ],
+            297
+          ],
+          [
+            [
+              "ginger",
+              "vitamin c"
+            ],
+            238
+          ],
+          [
+            [
+              "antioxidants",
+              "ginger",
+              "vitamin c"
+            ],
+            232
+          ],
+          [
+            [
+              "ginger",
+              "turmeric"
+            ],
+            201
+          ]
+        ]
+      },
+      "juice content": {
+        "conflict_pairs": 2009,
+        "conflict_rate": 0.0803,
+        "distinct_raw_strings": 34,
+        "distinct_value_sets": 27,
+        "rows_populated": 63117,
+        "same_gtin_pairs_both_populated": 25010,
+        "top_sets": [
+          [
+            [
+              "0-2%"
+            ],
+            45057
+          ],
+          [
+            [
+              "100%"
+            ],
+            12954
+          ],
+          [
+            [
+              "25-50%"
+            ],
+            1219
+          ],
+          [
+            [
+              "15-25%"
+            ],
+            1051
+          ],
+          [
+            [
+              "5-10%"
+            ],
+            860
+          ],
+          [
+            [
+              "2-5%"
+            ],
+            611
+          ],
+          [
+            [
+              "10-15%"
+            ],
+            586
+          ],
+          [
+            [
+              "50-75%"
+            ],
+            280
+          ],
+          [
+            [
+              "0-2%",
+              "100%"
+            ],
+            184
+          ],
+          [
+            [
+              "75-99%"
+            ],
+            177
+          ]
+        ]
+      },
+      "juice features": {
+        "conflict_pairs": 1548,
+        "conflict_rate": 0.3911,
+        "distinct_raw_strings": 71,
+        "distinct_value_sets": 71,
+        "rows_populated": 10718,
+        "same_gtin_pairs_both_populated": 3958,
+        "top_sets": [
+          [
+            [
+              "from concentrate"
+            ],
+            3233
+          ],
+          [
+            [
+              "smoothie"
+            ],
+            2556
+          ],
+          [
+            [
+              "from concentrate",
+              "smoothie"
+            ],
+            659
+          ],
+          [
+            [
+              "with pulp"
+            ],
+            508
+          ],
+          [
+            [
+              "cold press"
+            ],
+            473
+          ],
+          [
+            [
+              "cold press",
+              "smoothie"
+            ],
+            466
+          ],
+          [
+            [
+              "not from concentrate"
+            ],
+            461
+          ],
+          [
+            [
+              "pasteurized"
+            ],
+            411
+          ],
+          [
+            [
+              "from concentrate",
+              "pasteurized"
+            ],
+            315
+          ],
+          [
+            [
+              "from concentrate",
+              "with pulp"
+            ],
+            149
+          ]
+        ]
+      },
+      "made from": {
+        "conflict_pairs": 1271,
+        "conflict_rate": 0.1368,
+        "distinct_raw_strings": 3810,
+        "distinct_value_sets": 2485,
+        "rows_populated": 19338,
+        "same_gtin_pairs_both_populated": 9289,
+        "top_sets": [
+          [
+            [
+              "orange"
+            ],
+            1642
+          ],
+          [
+            [
+              "apple"
+            ],
+            1574
+          ],
+          [
+            [
+              "coconut"
+            ],
+            1470
+          ],
+          [
+            [
+              "lemon"
+            ],
+            705
+          ],
+          [
+            [
+              "cranberry"
+            ],
+            391
+          ],
+          [
+            [
+              "aloe vera"
+            ],
+            361
+          ],
+          [
+            [
+              "pomegranate"
+            ],
+            332
+          ],
+          [
+            [
+              "cherry"
+            ],
+            274
+          ],
+          [
+            [
+              "mango"
+            ],
+            248
+          ],
+          [
+            [
+              "grape"
+            ],
+            236
+          ]
+        ]
+      },
+      "naturally derived": {
+        "conflict_pairs": 2138,
+        "conflict_rate": 0.1959,
+        "distinct_raw_strings": 135,
+        "distinct_value_sets": 82,
+        "rows_populated": 28637,
+        "same_gtin_pairs_both_populated": 10911,
+        "top_sets": [
+          [
+            [
+              "natural"
+            ],
+            10436
+          ],
+          [
+            [
+              "natural flavours"
+            ],
+            7844
+          ],
+          [
+            [
+              "natural fragrances"
+            ],
+            3029
+          ],
+          [
+            [
+              "natural",
+              "natural flavours"
+            ],
+            2655
+          ],
+          [
+            [
+              "natural",
+              "natural fragrances"
+            ],
+            1251
+          ],
+          [
+            [
+              "natural",
+              "natural minerals"
+            ],
+            526
+          ],
+          [
+            [
+              "natural flavours",
+              "natural fragrances"
+            ],
+            511
+          ],
+          [
+            [
+              "natural sweeteners"
+            ],
+            292
+          ],
+          [
+            [
+              "natural",
+              "natural flavours",
+              "natural fragrances"
+            ],
+            260
+          ],
+          [
+            [
+              "natural flavours",
+              "natural sweeteners"
+            ],
+            204
+          ]
+        ]
+      },
+      "no artificial ingredients": {
+        "conflict_pairs": 711,
+        "conflict_rate": 0.3478,
+        "distinct_raw_strings": 272,
+        "distinct_value_sets": 122,
+        "rows_populated": 10998,
+        "same_gtin_pairs_both_populated": 2044,
+        "top_sets": [
+          [
+            [
+              "no gmo"
+            ],
+            1838
+          ],
+          [
+            [
+              "no artificial sweeteners"
+            ],
+            1770
+          ],
+          [
+            [
+              "no artificial preservatives"
+            ],
+            1068
+          ],
+          [
+            [
+              "no artificial additives"
+            ],
+            869
+          ],
+          [
+            [
+              "no artificial flavours"
+            ],
+            493
+          ],
+          [
+            [
+              "no artificial colours"
+            ],
+            480
+          ],
+          [
+            [
+              "no artificial sweeteners",
+              "no gmo"
+            ],
+            346
+          ],
+          [
+            [
+              "no artificial colours",
+              "no artificial flavours"
+            ],
+            330
+          ],
+          [
+            [
+              "no artificial colours",
+              "no artificial flavours",
+              "no artificial preservatives"
+            ],
+            330
+          ],
+          [
+            [
+              "no artificial colours",
+              "no artificial preservatives"
+            ],
+            296
+          ]
+        ]
+      },
+      "nutri score": {
+        "conflict_pairs": 2,
+        "conflict_rate": 0.0833,
+        "distinct_raw_strings": 7,
+        "distinct_value_sets": 7,
+        "rows_populated": 412,
+        "same_gtin_pairs_both_populated": 24,
+        "top_sets": [
+          [
+            [
+              "a"
+            ],
+            134
+          ],
+          [
+            [
+              "e"
+            ],
+            110
+          ],
+          [
+            [
+              "d"
+            ],
+            74
+          ],
+          [
+            [
+              "c"
+            ],
+            56
+          ],
+          [
+            [
+              "b"
+            ],
+            35
+          ],
+          [
+            [
+              "a",
+              "e"
+            ],
+            2
+          ],
+          [
+            [
+              "a",
+              "c"
+            ],
+            1
+          ]
+        ]
+      },
+      "pack material type": {
+        "conflict_pairs": 2105,
+        "conflict_rate": 0.0964,
+        "distinct_raw_strings": 5,
+        "distinct_value_sets": 5,
+        "rows_populated": 51703,
+        "same_gtin_pairs_both_populated": 21841,
+        "top_sets": [
+          [
+            [
+              "glass"
+            ],
+            14756
+          ],
+          [
+            [
+              "plastic"
+            ],
+            14538
+          ],
+          [
+            [
+              "metal"
+            ],
+            9918
+          ],
+          [
+            [
+              "paper / carton"
+            ],
+            9180
+          ],
+          [
+            [
+              "flexible pack"
+            ],
+            3311
+          ]
+        ]
+      },
+      "pack type": {
+        "conflict_pairs": 462,
+        "conflict_rate": 0.0273,
+        "distinct_raw_strings": 14,
+        "distinct_value_sets": 14,
+        "rows_populated": 48382,
+        "same_gtin_pairs_both_populated": 16899,
+        "top_sets": [
+          [
+            [
+              "bottle"
+            ],
+            29312
+          ],
+          [
+            [
+              "liquid carton"
+            ],
+            6196
+          ],
+          [
+            [
+              "can"
+            ],
+            6047
+          ],
+          [
+            [
+              "carton/box"
+            ],
+            3154
+          ],
+          [
+            [
+              "bag/packet"
+            ],
+            1065
+          ],
+          [
+            [
+              "pouch"
+            ],
+            851
+          ],
+          [
+            [
+              "jar"
+            ],
+            479
+          ],
+          [
+            [
+              "blister"
+            ],
+            478
+          ],
+          [
+            [
+              "tub/cup/pot"
+            ],
+            356
+          ],
+          [
+            [
+              "tin"
+            ],
+            226
+          ]
+        ]
+      },
+      "roast type": {
+        "conflict_pairs": 90,
+        "conflict_rate": 0.2687,
+        "distinct_raw_strings": 21,
+        "distinct_value_sets": 21,
+        "rows_populated": 958,
+        "same_gtin_pairs_both_populated": 335,
+        "top_sets": [
+          [
+            [
+              "espresso"
+            ],
+            349
+          ],
+          [
+            [
+              "dark"
+            ],
+            175
+          ],
+          [
+            [
+              "light"
+            ],
+            135
+          ],
+          [
+            [
+              "medium"
+            ],
+            119
+          ],
+          [
+            [
+              "dark",
+              "espresso"
+            ],
+            51
+          ],
+          [
+            [
+              "dark",
+              "light"
+            ],
+            21
+          ],
+          [
+            [
+              "italian"
+            ],
+            20
+          ],
+          [
+            [
+              "espresso",
+              "italian"
+            ],
+            18
+          ],
+          [
+            [
+              "french"
+            ],
+            17
+          ],
+          [
+            [
+              "espresso",
+              "light"
+            ],
+            9
+          ]
+        ]
+      },
+      "rtd coffee style": {
+        "conflict_pairs": 457,
+        "conflict_rate": 0.3449,
+        "distinct_raw_strings": 121,
+        "distinct_value_sets": 96,
+        "rows_populated": 3399,
+        "same_gtin_pairs_both_populated": 1325,
+        "top_sets": [
+          [
+            [
+              "cold brew"
+            ],
+            757
+          ],
+          [
+            [
+              "latte"
+            ],
+            672
+          ],
+          [
+            [
+              "latte",
+              "milk"
+            ],
+            216
+          ],
+          [
+            [
+              "mocha"
+            ],
+            193
+          ],
+          [
+            [
+              "black",
+              "cold brew"
+            ],
+            152
+          ],
+          [
+            [
+              "milk"
+            ],
+            141
+          ],
+          [
+            [
+              "black"
+            ],
+            131
+          ],
+          [
+            [
+              "cold brew",
+              "latte"
+            ],
+            107
+          ],
+          [
+            [
+              "latte",
+              "mocha"
+            ],
+            70
+          ],
+          [
+            [
+              "cold brew",
+              "latte",
+              "nitro",
+              "oat milk"
+            ],
+            61
+          ]
+        ]
+      },
+      "special edition": {
+        "conflict_pairs": 0,
+        "conflict_rate": 0.0,
+        "distinct_raw_strings": 1,
+        "distinct_value_sets": 1,
+        "rows_populated": 216,
+        "same_gtin_pairs_both_populated": 47,
+        "top_sets": [
+          [
+            [
+              "special edition"
+            ],
+            216
+          ]
+        ]
+      },
+      "sports drinks style": {
+        "conflict_pairs": 14,
+        "conflict_rate": 0.1818,
+        "distinct_raw_strings": 3,
+        "distinct_value_sets": 3,
+        "rows_populated": 464,
+        "same_gtin_pairs_both_populated": 77,
+        "top_sets": [
+          [
+            [
+              "isotonic"
+            ],
+            379
+          ],
+          [
+            [
+              "hypotonic"
+            ],
+            59
+          ],
+          [
+            [
+              "hypertonic"
+            ],
+            26
+          ]
+        ]
+      },
+      "sports ingredients": {
+        "conflict_pairs": 77,
+        "conflict_rate": 0.0559,
+        "distinct_raw_strings": 11,
+        "distinct_value_sets": 11,
+        "rows_populated": 4949,
+        "same_gtin_pairs_both_populated": 1377,
+        "top_sets": [
+          [
+            [
+              "electrolytes"
+            ],
+            3392
+          ],
+          [
+            [
+              "protein"
+            ],
+            1015
+          ],
+          [
+            [
+              "bcaa"
+            ],
+            308
+          ],
+          [
+            [
+              "bcaa",
+              "electrolytes"
+            ],
+            200
+          ],
+          [
+            [
+              "creatine"
+            ],
+            12
+          ],
+          [
+            [
+              "bcaa",
+              "protein"
+            ],
+            9
+          ],
+          [
+            [
+              "bcaa",
+              "creatine",
+              "electrolytes"
+            ],
+            4
+          ],
+          [
+            [
+              "electrolytes",
+              "protein"
+            ],
+            3
+          ],
+          [
+            [
+              "bcaa",
+              "creatine"
+            ],
+            2
+          ],
+          [
+            [
+              "creatine",
+              "electrolytes"
+            ],
+            2
+          ]
+        ]
+      },
+      "sports positioning": {
+        "conflict_pairs": 41,
+        "conflict_rate": 0.3565,
+        "distinct_raw_strings": 12,
+        "distinct_value_sets": 12,
+        "rows_populated": 1231,
+        "same_gtin_pairs_both_populated": 115,
+        "top_sets": [
+          [
+            [
+              "fitness"
+            ],
+            380
+          ],
+          [
+            [
+              "pre-workout"
+            ],
+            332
+          ],
+          [
+            [
+              "muscle growth"
+            ],
+            203
+          ],
+          [
+            [
+              "post-workout",
+              "pre-workout"
+            ],
+            184
+          ],
+          [
+            [
+              "post-workout"
+            ],
+            86
+          ],
+          [
+            [
+              "fitness",
+              "post-workout"
+            ],
+            15
+          ],
+          [
+            [
+              "fitness",
+              "pre-workout"
+            ],
+            14
+          ],
+          [
+            [
+              "muscle growth",
+              "pre-workout"
+            ],
+            7
+          ],
+          [
+            [
+              "fitness",
+              "post-workout",
+              "pre-workout"
+            ],
+            5
+          ],
+          [
+            [
+              "fitness",
+              "muscle growth"
+            ],
+            3
+          ]
+        ]
+      },
+      "sustainable packaging": {
+        "conflict_pairs": 48,
+        "conflict_rate": 0.1301,
+        "distinct_raw_strings": 40,
+        "distinct_value_sets": 36,
+        "rows_populated": 3020,
+        "same_gtin_pairs_both_populated": 369,
+        "top_sets": [
+          [
+            [
+              "can be recycled"
+            ],
+            1909
+          ],
+          [
+            [
+              "from recycled materials"
+            ],
+            443
+          ],
+          [
+            [
+              "can be recycled",
+              "from recycled materials"
+            ],
+            149
+          ],
+          [
+            [
+              "widely recycled"
+            ],
+            138
+          ],
+          [
+            [
+              "from recycled materials",
+              "recycled pet"
+            ],
+            54
+          ],
+          [
+            [
+              "from sustainable sources (packaging)"
+            ],
+            51
+          ],
+          [
+            [
+              "efficient/optimised packaging"
+            ],
+            43
+          ],
+          [
+            [
+              "recycled pet"
+            ],
+            42
+          ],
+          [
+            [
+              "can be recycled",
+              "plastic free packaging"
+            ],
+            37
+          ],
+          [
+            [
+              "can be recycled",
+              "widely recycled"
+            ],
+            18
+          ]
+        ]
+      },
+      "sustainable sourcing": {
+        "conflict_pairs": 1359,
+        "conflict_rate": 0.1856,
+        "distinct_raw_strings": 170,
+        "distinct_value_sets": 94,
+        "rows_populated": 14497,
+        "same_gtin_pairs_both_populated": 7323,
+        "top_sets": [
+          [
+            [
+              "organic"
+            ],
+            10157
+          ],
+          [
+            [
+              "organic",
+              "usda organic"
+            ],
+            1147
+          ],
+          [
+            [
+              "fairtrade",
+              "organic"
+            ],
+            654
+          ],
+          [
+            [
+              "rainforest alliance"
+            ],
+            538
+          ],
+          [
+            [
+              "from sustainable sources (product)"
+            ],
+            400
+          ],
+          [
+            [
+              "fairtrade"
+            ],
+            286
+          ],
+          [
+            [
+              "fsc (forest stewardship council)"
+            ],
+            127
+          ],
+          [
+            [
+              "from sustainable sources (product)",
+              "organic"
+            ],
+            123
+          ],
+          [
+            [
+              "eu organic",
+              "organic"
+            ],
+            105
+          ],
+          [
+            [
+              "locally sourced"
+            ],
+            88
+          ]
+        ]
+      },
+      "sweetener": {
+        "conflict_pairs": 1421,
+        "conflict_rate": 0.1572,
+        "distinct_raw_strings": 238,
+        "distinct_value_sets": 238,
+        "rows_populated": 25741,
+        "same_gtin_pairs_both_populated": 9041,
+        "top_sets": [
+          [
+            [
+              "sugar"
+            ],
+            9781
+          ],
+          [
+            [
+              "cane_sugar"
+            ],
+            2723
+          ],
+          [
+            [
+              "acesulfame_potassium",
+              "sucralose"
+            ],
+            1586
+          ],
+          [
+            [
+              "sucralose"
+            ],
+            1311
+          ],
+          [
+            [
+              "stevia"
+            ],
+            974
+          ],
+          [
+            [
+              "acesulfame_potassium",
+              "aspartame"
+            ],
+            926
+          ],
+          [
+            [
+              "unsweetened"
+            ],
+            729
+          ],
+          [
+            [
+              "hfcs",
+              "sugar"
+            ],
+            687
+          ],
+          [
+            [
+              "hfcs"
+            ],
+            635
+          ],
+          [
+            [
+              "stevia",
+              "sugar"
+            ],
+            457
+          ]
+        ]
+      },
+      "tea type": {
+        "conflict_pairs": 184,
+        "conflict_rate": 0.1925,
+        "distinct_raw_strings": 137,
+        "distinct_value_sets": 117,
+        "rows_populated": 2987,
+        "same_gtin_pairs_both_populated": 956,
+        "top_sets": [
+          [
+            [
+              "green"
+            ],
+            1039
+          ],
+          [
+            [
+              "black"
+            ],
+            614
+          ],
+          [
+            [
+              "black",
+              "green"
+            ],
+            210
+          ],
+          [
+            [
+              "white"
+            ],
+            128
+          ],
+          [
+            [
+              "herbal"
+            ],
+            125
+          ],
+          [
+            [
+              "green",
+              "matcha"
+            ],
+            75
+          ],
+          [
+            [
+              "green",
+              "herbal"
+            ],
+            62
+          ],
+          [
+            [
+              "black",
+              "loose leaf"
+            ],
+            56
+          ],
+          [
+            [
+              "green",
+              "loose leaf"
+            ],
+            48
+          ],
+          [
+            [
+              "green",
+              "sencha"
+            ],
+            45
+          ]
+        ]
+      },
+      "volume": {
+        "conflict_pairs": 395,
+        "conflict_rate": 0.0146,
+        "distinct_raw_strings": 184,
+        "distinct_value_sets": 184,
+        "rows_populated": 62475,
+        "same_gtin_pairs_both_populated": 27127,
+        "top_sets": [
+          [
+            [
+              1000.0
+            ],
+            10464
+          ],
+          [
+            [
+              500.0
+            ],
+            8483
+          ],
+          [
+            [
+              355.0
+            ],
+            6267
+          ],
+          [
+            [
+              330.0
+            ],
+            5209
+          ],
+          [
+            [
+              250.0
+            ],
+            4733
+          ],
+          [
+            [
+              750.0
+            ],
+            3732
+          ],
+          [
+            [
+              1500.0
+            ],
+            3313
+          ],
+          [
+            [
+              200.0
+            ],
+            3247
+          ],
+          [
+            [
+              473.0
+            ],
+            2485
+          ],
+          [
+            [
+              700.0
+            ],
+            1064
+          ]
+        ]
+      },
+      "water type": {
+        "conflict_pairs": 1474,
+        "conflict_rate": 0.1558,
+        "distinct_raw_strings": 192,
+        "distinct_value_sets": 173,
+        "rows_populated": 18850,
+        "same_gtin_pairs_both_populated": 9462,
+        "top_sets": [
+          [
+            [
+              "mineral"
+            ],
+            4153
+          ],
+          [
+            [
+              "filtered"
+            ],
+            2493
+          ],
+          [
+            [
+              "spring"
+            ],
+            2483
+          ],
+          [
+            [
+              "coconut"
+            ],
+            1591
+          ],
+          [
+            [
+              "flavoured"
+            ],
+            1203
+          ],
+          [
+            [
+              "purified"
+            ],
+            890
+          ],
+          [
+            [
+              "aloe vera"
+            ],
+            775
+          ],
+          [
+            [
+              "soda"
+            ],
+            643
+          ],
+          [
+            [
+              "tonic"
+            ],
+            469
+          ],
+          [
+            [
+              "coconut",
+              "pure"
+            ],
+            302
+          ]
+        ]
+      },
+      "weight": {
+        "conflict_pairs": 11,
+        "conflict_rate": 0.0268,
+        "distinct_raw_strings": 184,
+        "distinct_value_sets": 184,
+        "rows_populated": 2677,
+        "same_gtin_pairs_both_populated": 411,
+        "top_sets": [
+          [
+            [
+              "1000"
+            ],
+            249
+          ],
+          [
+            [
+              "250"
+            ],
+            180
+          ],
+          [
+            [
+              "500"
+            ],
+            168
+          ],
+          [
+            [
+              "227"
+            ],
+            110
+          ],
+          [
+            [
+              "300"
+            ],
+            104
+          ],
+          [
+            [
+              "600"
+            ],
+            96
+          ],
+          [
+            [
+              "100"
+            ],
+            88
+          ],
+          [
+            [
+              "340"
+            ],
+            82
+          ],
+          [
+            [
+              "150"
+            ],
+            70
+          ],
+          [
+            [
+              "9"
+            ],
+            58
+          ]
+        ]
+      }
+    },
+    "rows": 71623,
+    "same_gtin_pairs_total": 30182,
+    "unclassified_keys": {},
+    "valid_gtin_rows": 26214
+  },
+  "datagen_budget": {
+    "botanicals and functional ingredients": {
+      "conflict_rate": 0.1847,
+      "distsets": 90,
+      "eval_slice": true,
+      "eval_supported_sets": 6,
+      "expected_mint": 2208,
+      "expected_pair_coverage": 344,
+      "headroom_share": 0.1847,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 1864,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "caffeine": {
+      "conflict_rate": 0.1677,
+      "distsets": 7,
+      "eval_slice": true,
+      "eval_supported_sets": 7,
+      "expected_mint": 31732,
+      "expected_pair_coverage": 4557,
+      "headroom_share": 0.1677,
+      "kind": "NUMERIC_BAND",
+      "masking_donor": true,
+      "rows_populated": 27175,
+      "structured_channel": "numeric",
+      "veto_candidate": false
+    },
+    "carbonization": {
+      "conflict_rate": 0.1077,
+      "distsets": 10,
+      "eval_slice": true,
+      "eval_supported_sets": 9,
+      "expected_mint": 62170,
+      "expected_pair_coverage": 6045,
+      "headroom_share": 0.1077,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 56125,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "coffee type": {
+      "conflict_rate": 0.019,
+      "distsets": 12,
+      "eval_slice": true,
+      "eval_supported_sets": 2,
+      "expected_mint": 1690,
+      "expected_pair_coverage": 32,
+      "headroom_share": 0.019,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 1658,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "concentrate format": {
+      "conflict_rate": 0.4905,
+      "distsets": 20,
+      "eval_slice": true,
+      "eval_supported_sets": 4,
+      "expected_mint": 5443,
+      "expected_pair_coverage": 1791,
+      "headroom_share": 0.4905,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 3652,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "contains minerals": {
+      "conflict_rate": 0.1393,
+      "distsets": 47,
+      "eval_slice": true,
+      "eval_supported_sets": 9,
+      "expected_mint": 7891,
+      "expected_pair_coverage": 965,
+      "headroom_share": 0.1393,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 6926,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "count per unit": {
+      "conflict_rate": 0.0133,
+      "distsets": 27,
+      "eval_slice": false,
+      "eval_supported_sets": 0,
+      "expected_mint": 1068,
+      "expected_pair_coverage": 14,
+      "headroom_share": 0.0133,
+      "kind": "SET_NUMERIC",
+      "masking_donor": true,
+      "rows_populated": 1054,
+      "structured_channel": "numeric",
+      "veto_candidate": false
+    },
+    "diets": {
+      "conflict_rate": 0.2617,
+      "distsets": 52,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 6394,
+      "expected_pair_coverage": 1326,
+      "headroom_share": 0.2617,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 5068,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "energy source": {
+      "conflict_rate": 0.2232,
+      "distsets": 34,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 6213,
+      "expected_pair_coverage": 1134,
+      "headroom_share": 0.2232,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 5079,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "environmentally friendly": {
+      "conflict_rate": 0.1077,
+      "distsets": 45,
+      "eval_slice": true,
+      "eval_supported_sets": 4,
+      "expected_mint": 3081,
+      "expected_pair_coverage": 300,
+      "headroom_share": 0.1077,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 2781,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "flavour": {
+      "conflict_rate": 0.0009,
+      "distsets": 338,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 0,
+      "expected_pair_coverage": 44,
+      "headroom_share": 0.0009,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": false,
+      "rows_populated": 48433,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "free from": {
+      "conflict_rate": 0.2391,
+      "distsets": 206,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 8461,
+      "expected_pair_coverage": 1633,
+      "headroom_share": 0.2391,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 6828,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "geographic origin": {
+      "conflict_rate": 0.0131,
+      "distsets": 139,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 7428,
+      "expected_pair_coverage": 96,
+      "headroom_share": 0.0131,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 7332,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "giftbox": {
+      "conflict_rate": 0.0,
+      "distsets": 1,
+      "eval_slice": false,
+      "eval_supported_sets": 0,
+      "expected_mint": 0,
+      "expected_pair_coverage": 0,
+      "headroom_share": 0.0,
+      "kind": "CONSTANT",
+      "masking_donor": false,
+      "rows_populated": 21,
+      "structured_channel": "none",
+      "veto_candidate": false
+    },
+    "health claims": {
+      "conflict_rate": 0.4603,
+      "distsets": 2285,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 42362,
+      "expected_pair_coverage": 13353,
+      "headroom_share": 0.4603,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 29009,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "immune support ingredients": {
+      "conflict_rate": 0.1188,
+      "distsets": 44,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 18961,
+      "expected_pair_coverage": 2013,
+      "headroom_share": 0.1188,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 16948,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "juice content": {
+      "conflict_rate": 0.0803,
+      "distsets": 27,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 68185,
+      "expected_pair_coverage": 5068,
+      "headroom_share": 0.0803,
+      "kind": "NUMERIC_BAND",
+      "masking_donor": true,
+      "rows_populated": 63117,
+      "structured_channel": "numeric",
+      "veto_candidate": true
+    },
+    "juice features": {
+      "conflict_rate": 0.3911,
+      "distsets": 71,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 14910,
+      "expected_pair_coverage": 4192,
+      "headroom_share": 0.3911,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 10718,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "made from": {
+      "conflict_rate": 0.1368,
+      "distsets": 2485,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 21983,
+      "expected_pair_coverage": 2645,
+      "headroom_share": 0.1368,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 19338,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "naturally derived": {
+      "conflict_rate": 0.1959,
+      "distsets": 82,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 34247,
+      "expected_pair_coverage": 5610,
+      "headroom_share": 0.1959,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 28637,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "no artificial ingredients": {
+      "conflict_rate": 0.3478,
+      "distsets": 122,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 14823,
+      "expected_pair_coverage": 3825,
+      "headroom_share": 0.3478,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 10998,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "nutri score": {
+      "conflict_rate": 0.0833,
+      "distsets": 7,
+      "eval_slice": false,
+      "eval_supported_sets": 0,
+      "expected_mint": 0,
+      "expected_pair_coverage": 34,
+      "headroom_share": 0.0833,
+      "kind": "SET_ENUM",
+      "masking_donor": false,
+      "rows_populated": 412,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "pack material type": {
+      "conflict_rate": 0.0964,
+      "distsets": 5,
+      "eval_slice": true,
+      "eval_supported_sets": 5,
+      "expected_mint": 56687,
+      "expected_pair_coverage": 4984,
+      "headroom_share": 0.0964,
+      "kind": "SET_ENUM",
+      "masking_donor": true,
+      "rows_populated": 51703,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "pack type": {
+      "conflict_rate": 0.0273,
+      "distsets": 14,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 49703,
+      "expected_pair_coverage": 1321,
+      "headroom_share": 0.0273,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 48382,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "roast type": {
+      "conflict_rate": 0.2687,
+      "distsets": 21,
+      "eval_slice": true,
+      "eval_supported_sets": 4,
+      "expected_mint": 0,
+      "expected_pair_coverage": 257,
+      "headroom_share": 0.2687,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": false,
+      "rows_populated": 958,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "rtd coffee style": {
+      "conflict_rate": 0.3449,
+      "distsets": 96,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 4571,
+      "expected_pair_coverage": 1172,
+      "headroom_share": 0.3449,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 3399,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "special edition": {
+      "conflict_rate": 0.0,
+      "distsets": 1,
+      "eval_slice": true,
+      "eval_supported_sets": 1,
+      "expected_mint": 0,
+      "expected_pair_coverage": 0,
+      "headroom_share": 0.0,
+      "kind": "CONSTANT",
+      "masking_donor": false,
+      "rows_populated": 216,
+      "structured_channel": "none",
+      "veto_candidate": false
+    },
+    "sports drinks style": {
+      "conflict_rate": 0.1818,
+      "distsets": 3,
+      "eval_slice": true,
+      "eval_supported_sets": 1,
+      "expected_mint": 0,
+      "expected_pair_coverage": 84,
+      "headroom_share": 0.1818,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": false,
+      "rows_populated": 464,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "sports ingredients": {
+      "conflict_rate": 0.0559,
+      "distsets": 11,
+      "eval_slice": true,
+      "eval_supported_sets": 4,
+      "expected_mint": 5226,
+      "expected_pair_coverage": 277,
+      "headroom_share": 0.0559,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 4949,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "sports positioning": {
+      "conflict_rate": 0.3565,
+      "distsets": 12,
+      "eval_slice": true,
+      "eval_supported_sets": 2,
+      "expected_mint": 1670,
+      "expected_pair_coverage": 439,
+      "headroom_share": 0.3565,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 1231,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "sustainable packaging": {
+      "conflict_rate": 0.1301,
+      "distsets": 36,
+      "eval_slice": true,
+      "eval_supported_sets": 2,
+      "expected_mint": 3413,
+      "expected_pair_coverage": 393,
+      "headroom_share": 0.1301,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 3020,
+      "structured_channel": "text",
+      "veto_candidate": true
+    },
+    "sustainable sourcing": {
+      "conflict_rate": 0.1856,
+      "distsets": 94,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 17188,
+      "expected_pair_coverage": 2691,
+      "headroom_share": 0.1856,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 14497,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "sweetener": {
+      "conflict_rate": 0.1572,
+      "distsets": 238,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 29787,
+      "expected_pair_coverage": 4046,
+      "headroom_share": 0.1572,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 25741,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "tea type": {
+      "conflict_rate": 0.1925,
+      "distsets": 117,
+      "eval_slice": true,
+      "eval_supported_sets": 6,
+      "expected_mint": 3562,
+      "expected_pair_coverage": 575,
+      "headroom_share": 0.1925,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 2987,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "volume": {
+      "conflict_rate": 0.0146,
+      "distsets": 184,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 63387,
+      "expected_pair_coverage": 912,
+      "headroom_share": 0.0146,
+      "kind": "SET_NUMERIC",
+      "masking_donor": true,
+      "rows_populated": 62475,
+      "structured_channel": "numeric",
+      "veto_candidate": false
+    },
+    "water type": {
+      "conflict_rate": 0.1558,
+      "distsets": 173,
+      "eval_slice": true,
+      "eval_supported_sets": 10,
+      "expected_mint": 21787,
+      "expected_pair_coverage": 2937,
+      "headroom_share": 0.1558,
+      "kind": "SET_CATEGORICAL",
+      "masking_donor": true,
+      "rows_populated": 18850,
+      "structured_channel": "text",
+      "veto_candidate": false
+    },
+    "weight": {
+      "conflict_rate": 0.0268,
+      "distsets": 184,
+      "eval_slice": true,
+      "eval_supported_sets": 3,
+      "expected_mint": 2749,
+      "expected_pair_coverage": 72,
+      "headroom_share": 0.0268,
+      "kind": "SET_NUMERIC",
+      "masking_donor": true,
+      "rows_populated": 2677,
+      "structured_channel": "numeric",
+      "veto_candidate": true
+    }
+  }
+}

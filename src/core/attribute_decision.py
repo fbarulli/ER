@@ -908,7 +908,7 @@ class SemanticFamilyIndex:
     def load(cls) -> "SemanticFamilyIndex":
         from core.common import TRAIN_ROOT
 
-        path = TRAIN_ROOT / "results" / "semantics" / "family_registry.json"
+        path = TRAIN_ROOT / "artifacts/evidence/semantics" / "family_registry.json"
         if not path.is_file():
             raise FileNotFoundError(
                 f"semantic family registry missing: {path.as_posix()} — "

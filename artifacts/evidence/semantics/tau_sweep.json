@@ -1,0 +1,42 @@
+[
+  {
+    "tau": 0.8,
+    "components": 645,
+    "singletons": 636,
+    "largest": [
+      2,
+      2,
+      2
+    ]
+  },
+  {
+    "tau": 0.85,
+    "components": 649,
+    "singletons": 644,
+    "largest": [
+      2,
+      2,
+      2
+    ]
+  },
+  {
+    "tau": 0.9,
+    "components": 652,
+    "singletons": 650,
+    "largest": [
+      2,
+      2,
+      1
+    ]
+  },
+  {
+    "tau": 0.95,
+    "components": 654,
+    "singletons": 654,
+    "largest": [
+      1,
+      1,
+      1
+    ]
+  }
+]

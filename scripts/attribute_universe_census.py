@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     universe.verify_census(census)
     print(f"[verify] {len(MEASURED_BASELINE)} pinned keys reproduce within +/-1%")
 
-    artifact = Path(TRAIN_ROOT) / "results" / "attribute_universe_census.json"
+    artifact = Path(TRAIN_ROOT) / "artifacts/evidence/attribute_universe_census.json"
     payload = {
         "census": census,
         "datagen_budget": budget,

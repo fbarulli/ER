@@ -205,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     for f in per_key:
         print(f"    {f['key']:34s} {f['members']}")
 
-    root = TRAIN_ROOT / "results" / "semantics"
+    root = TRAIN_ROOT / "artifacts/evidence/semantics"
     root.mkdir(parents=True, exist_ok=True)
     npz = root / "value_index.npz"
     np.savez(
