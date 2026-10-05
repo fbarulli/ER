@@ -234,6 +234,11 @@ def extract_pack_evidence(title: str) -> list[dict]:
             # Currency followed by whitespace still denotes a price.
             if re.search(r"[$€£]\s*$", text[:match.start()]):
                 continue
+            # GDSN weight declarations ("gross weight: 527 unit (specific) …
+            # centiliters") are prose measurements, not a retail bundle: a
+            # count immediately preceded by a weight label is skipped.
+            if re.search(r"(?:gross\s+)?weight\W*$", text[:match.start()], re.I):
+                continue
             count = int(re.sub(r"[.,]", "", match.group(1)))
             if kind == "nested":
                 count *= int(match.group(2))
