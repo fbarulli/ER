@@ -53,7 +53,7 @@ def _chrome():
             + a('/', '← home', strong=True)
             + a('/experiments', 'findings') + a('/gate', 'gate')
             + a('/datagen', 'datagen') + a('/graphs', 'graphs')
-            + a('/training', 'training') + a('/jev', 'JEV audits') + a('/decisions', 'attribute tracking') + '</nav>')
+            + a('/training', 'training') + a('/runs', 'runs') + a('/jev', 'JEV audits') + a('/decisions', 'attribute tracking') + '</nav>')
 
 _CHROME = _chrome()
 
@@ -357,7 +357,8 @@ def datagen_track():
                     brand_evidence, f"<span class='badge badge-pass'>PASS</span> — folds add, never swap; declined groups keep their named reasons.")
     # Finding 05 — attribute universe census
     budget_html = ''
-    census_path = _results / 'attribute_universe_census.json'
+    # migrated 2026-10-05: fail-loud tracked evidence lives in artifacts/evidence/
+    census_path = ROOT.parent / 'artifacts' / 'evidence' / 'attribute_universe_census.json'
     if census_path.exists():
         try:
             cu = json.loads(census_path.read_text())
@@ -380,16 +381,16 @@ def datagen_track():
             ])
             f05 = _ffinding(5, 'AttributeUniverse census — capture still pending', 'OPEN', census_metrics,
                             census_compare,
-                            _fevidence('results/attribute_universe_census.json',
+                            _fevidence('artifacts/evidence/attribute_universe_census.json',
                                        json.dumps({'baseline_keys': sorted(cu.get('baseline', {}))}, indent=1)),
                             "<span class='badge badge-open'>OPEN</span> — censused and scoped, capture pending; this is the next multiplier.")
         except Exception:
             f05 = _ffinding(5, 'AttributeUniverse census', 'OPEN', '', _fcompare([]),
-                            _fevidence('results/attribute_universe_census.json', 'census file present but not parseable'),
+                            _fevidence('artifacts/evidence/attribute_universe_census.json', 'census file present but not parseable'),
                             'census unreadable in this view.')
     else:
         f05 = _ffinding(5, 'AttributeUniverse census — capture still pending', 'OPEN', '', _fcompare([]),
-                        _fevidence('results/attribute_universe_census.json', 'census JSON not yet written (AttributeUniverse build in flight — renders here when it lands)'),
+                        _fevidence('artifacts/evidence/attribute_universe_census.json', 'census JSON not yet written (AttributeUniverse build in flight — renders here when it lands)'),
                         'census not yet on disk.')
     # Finding 06 — training-data preparation · offline bundle lane (current blocker)
     bundle_metrics = ''.join([
@@ -1021,7 +1022,8 @@ def graphs_track():
                     _fevidence('results/graph_tracks/* + dvc_refs/* (directory listing, capped)', listing, cap=600),
                     f"<span class='badge {'badge-pass' if pubs else 'badge-open'}'>{'PASS' if pubs else 'OPEN'}</span> — lifecycle logic landed in commit 5001027{' ; published refs present' if pubs else ' ; no published refs yet'}.")
     # Finding 03 — sequencing (waiting-on)
-    census_path = _results / 'attribute_universe_census.json'
+    # migrated 2026-10-05: fail-loud tracked evidence lives in artifacts/evidence/
+    census_path = ROOT.parent / 'artifacts' / 'evidence' / 'attribute_universe_census.json'
     census_landed = census_path.exists()
     wait_metrics = ''.join([
         _fmetric('landed' if census_landed else 'in flight', 'AttributeUniverse census (feeds graph node relations)'),
@@ -1029,12 +1031,12 @@ def graphs_track():
     ])
     wait_compare = _fcompare([
         ('AttributeUniverse census must land before graph node relations exist',
-         f'results/attribute_universe_census.json {"present — feeds the relations" if census_landed else "not yet written"}',
+         f'artifacts/evidence/attribute_universe_census.json {"present — feeds the relations" if census_landed else "not yet written"}',
          'PASS' if census_landed else 'OPEN'),
         ('P1/P2 TODO items must close before graph linkage expands', 'open — owner DEAD LAST ruling', 'OPEN'),
     ])
     f03 = _ffinding(3, 'Waiting on — sequencing rules', 'OPEN', wait_metrics, wait_compare,
-                    _fevidence('results/attribute_universe_census.json + TODO.md',
+                    _fevidence('artifacts/evidence/attribute_universe_census.json + TODO.md',
                                'Census feeds the graph node relations; P1/P2 items gate the expansion of graph linkage.'),
                     "<span class='badge badge-open'>OPEN</span> — census is the dependency; linkage expansion waits on the P1/P2 owner ruling.")
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER graphs</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}</style></head><body>
@@ -1042,6 +1044,173 @@ def graphs_track():
 <p class="status">2 lanes (GNN-only / hybrid semantic-ID) · full-batch typed two-hop aggregation · snapshot lifecycle landed (commit 5001027) · 62,963-row catalogs skip</p>
 {f01}{f02}{f03}
 <p class="muted"><a href="/">← home</a> · <a href="/datagen">datagen track</a> · <a href="/gate">gate decisions</a> · <a href="/training">training reports</a></p>
+</body></html>'''
+
+
+# ── runs history track ───────────────────────────────────────────────────────
+# Table of every generated run (bundle prep runs + training runs) with a
+# regression quick-glance against the PREVIOUS bundle run, plus a compare
+# view (/runs/compare?a=..&b=..) rendering the run-history ComparisonReport:
+# per-stage seconds scale-normalized to per-1000-dataset-rows rates (grown
+# rates highlighted), census shifts, output-rate regressions and the
+# worst-offender drift. regression semantics live in
+# model_tracks.run_history.compare; this page only renders them.
+
+_RUNS_STYLE = _FINDING_STYLE + (
+    'tr.grew{background:#f8d7da}tr.fell{background:#dff4e8}'
+    '.runstatus{padding:.1rem .5rem;border-radius:.6rem;font-weight:700;font-size:.8rem}'
+    '.st-complete{background:#dff4e8}.st-running{background:#fff0cf}'
+    '.st-failed{background:#f8d7da}.st-unknown{background:#eee}')
+
+
+def _run_status_badge(status):
+    key = (status or 'unknown')
+    label = escape(key)
+    cls = {c: f'st-{c}' for c in ('complete', 'running', 'failed', 'unknown')}.get(key, 'st-unknown')
+    return f'<span class="runstatus {cls}">{label}</span>'
+
+
+def _runs_roots():
+    from core.common import TRAIN_ROOT
+    return TRAIN_ROOT / 'results' / 'training_prep', TRAIN_ROOT / 'training_results'
+
+
+def _runs_table(prep_root, training_root):
+    """Rows (run id, date, status, rows, outputs, artifacts) + regression flag vs the previous bundle run."""
+    from model_tracks.run_history import (bundle_facts, compare, list_bundles,
+                                          list_training_runs)
+    def fmt(value):
+        return '—' if value is None else f'{value:,}'
+    rows = []
+    bundle_dirs = list_bundles([prep_root])
+    # Chronological pairing: each run's badge compares it against the OLDER
+    # neighbor (compare(older, newer); b = this run), so a REGRESSION badge
+    # means "this run got slower per-1000-rows than the run before it".
+    older = None
+    for entry in bundle_dirs:
+        try:
+            run = bundle_facts(entry)
+        except ValueError as error:
+            rows.append(f'<tr class="grew"><td>{escape(entry.name)}</td>'
+                        f'<td colspan="9">unreadable run record — {escape(str(error))} '
+                        f'<a href="/runs/compare?a={escape(entry.name)}&b={escape(entry.name)}">try compare page</a></td></tr>')
+            continue
+        regression_cell = '·'
+        if older is not None:
+            report = compare(older, run)
+            if report.pair_kind == 'incomplete_pair':
+                regression_cell = f'<a href="/runs/compare?a={escape(report.a_id)}&b={escape(report.b_id)}" style="color:#666">pair?</a>'
+            elif report.regressions:
+                regression_cell = (f'<a href="/runs/compare?a={escape(report.a_id)}&b={escape(report.b_id)}" '
+                                   f'style="color:#b00;font-weight:700">REGRESSION ({len(report.regressions)})</a>')
+        labeled = (f"{run.labeled.kept:,} ({run.labeled.pos:,}p/{run.labeled.hard_neg:,}n)"
+                   if run.labeled else '—')
+        attested = ('attested' if run.handoff and run.handoff.loss_batch_attested else
+                    'present' if run.handoff else '—')
+        rows.append(
+            f'<tr><td><a href="/runs/compare?a={escape(run.run_id)}&b={escape(run.run_id)}">{escape(run.run_id)}</a></td>'
+            f'<td>{escape(run.created or "—")}</td><td>{_run_status_badge(run.status)}</td>'
+            f'<td>{fmt(run.dataset_rows)}</td><td>{labeled}</td><td>{fmt(run.minted_rows)}</td>'
+            f'<td>{len(run.stages)}</td><td>{run.total_stage_seconds:,.1f}</td>'
+            f'<td>{attested}</td><td>{regression_cell}</td></tr>')
+        older = run
+    training_rows = []
+    for entry in list_training_runs([training_root]):
+        from model_tracks.run_history import training_run_facts
+        facts_run = training_run_facts(entry)
+        training_rows.append(
+            f'<tr><td>{escape(facts_run.run_id)}</td><td>{escape(facts_run.created or "—")}</td>'
+            f'<td>{_run_status_badge(facts_run.status)}</td><td colspan="6">—</td></tr>')
+    return rows, training_rows
+
+
+@app.get('/runs', response_class=HTMLResponse)
+def runs_page():
+    prep_root, training_root = _runs_roots()
+    try:
+        rows, training_rows = _runs_table(prep_root, training_root)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    body = ''.join(rows)
+    training_body = ''.join(training_rows) or '<tr><td colspan="9">no completed training runs locally</td></tr>'
+    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER runs</title><style>{_RUNS_STYLE}</style></head><body>
+<h1>ER · Run history</h1>
+<p class="status">{len(rows)} bundle runs · regression flag compares each run against the PREVIOUS bundle run (per-1000-rows scale-normalized; status-mismatched pairs are marked pair?, never regressions)</p>
+<table><tr><th>Run</th><th>Created</th><th>Status</th><th>Dataset rows</th><th>Labeled pairs</th><th>Minted</th><th>Stages</th><th>Stage seconds</th><th>Handoff</th><th>vs previous</th></tr>{body}</table>
+<h2>Training runs <span class="muted">(completed-retention markers only)</span></h2>
+<table><tr><th>Run</th><th>Created</th><th>Status</th><th colspan="6">Metrics</th></tr>{training_body}</table>
+<p class="muted"><a href="/">← home</a> · <a href="/training">training reports</a> · compare view: <code>/runs/compare?a=&lt;id&gt;&amp;b=&lt;id&gt;</code></p>
+</body></html>'''
+
+
+@app.get('/runs/compare', response_class=HTMLResponse)
+def runs_compare_page(a: str, b: str):
+    from model_tracks.run_history import compare, facts as run_facts
+    prep_root, training_root = _runs_roots()
+    try:
+        report = compare(run_facts(a, prep_roots=[prep_root], training_roots=[training_root]),
+                         run_facts(b, prep_roots=[prep_root], training_roots=[training_root]))
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    def fmt(value, spec=',.0f'):
+        return '—' if value is None else format(value, spec)
+
+    stage_rows = []
+    for row in report.stages:
+        grew = row.per_1k_ratio is not None and row.per_1k_ratio > 1.0 \
+            and row.regression is not None
+        cls = ' class="grew"' if grew and row.regression else (' class="fell"' if row.regression is False and row.per_1k_ratio is not None and row.per_1k_ratio < 1.0 else '')
+        flag = 'REGRESSION' if row.regression else ('improved' if row.regression is False and row.per_1k_ratio is not None and row.per_1k_ratio < 1.0 else '·')
+        stage_rows.append(
+            f'<tr{cls}><td>{escape(row.stage)}</td><td>{fmt(row.a_seconds, ",.1f")}</td>'
+            f'<td>{fmt(row.b_seconds, ",.1f")}</td><td>{fmt(row.a_per_1k, ".3f")}</td>'
+            f'<td>{fmt(row.b_per_1k, ".3f")}</td>'
+            f'<td>{"×%.2f" % row.per_1k_ratio if row.per_1k_ratio is not None else "—"}</td>'
+            f'<td>{escape(row.a_status or "—")} → {escape(row.b_status or "—")}</td><td>{flag}</td></tr>')
+    census_rows = ''.join(
+        f'<tr><td>{escape(row.key)}</td><td>{fmt(row.a)}</td><td>{fmt(row.b)}</td>'
+        f'<td>{fmt(row.a_per_1k, ".3f")}</td><td>{fmt(row.b_per_1k, ".3f")}</td>'
+        f'<td>{"×%.2f" % row.per_1k_ratio if row.per_1k_ratio is not None else "—"}</td></tr>'
+        for row in report.census) or '<tr><td colspan="6">no gate census on both runs</td></tr>'
+    output_rows = []
+    for row in report.outputs:
+        cls = ' class="grew"' if row.regression else ''
+        flag = 'REGRESSION (rate fell)' if row.regression else ('improved' if row.regression is False and row.per_1k_ratio is not None and row.per_1k_ratio > 1.0 else '·')
+        output_rows.append(
+            f'<tr{cls}><td>{escape(row.name)}</td><td>{fmt(row.a)}</td><td>{fmt(row.b)}</td>'
+            f'<td>{fmt(row.a_per_1k, ".3f")}</td><td>{fmt(row.b_per_1k, ".3f")}</td>'
+            f'<td>{"×%.2f" % row.per_1k_ratio if row.per_1k_ratio is not None else "—"}</td><td>{flag}</td></tr>')
+    offenders = ''.join(
+        f'<tr><td>{escape(label)}</td><td>{fmt(a_sec, ",.1f")}</td><td>{fmt(b_sec, ",.1f")}</td></tr>'
+        for label, a_sec, b_sec in report.offenders_top) or '<tr><td colspan="3">offenders absent on both runs</td></tr>'
+    regressions = ('<ul>' + ''.join(
+        f'<li><span class="badge badge-fail">{escape(item.kind)}</span> {escape(item.detail)}</li>'
+        for item in report.regressions) + '</ul>'
+        if report.regressions else
+        '<p>No regressions under the scale-normalized rules.</p>'
+        if report.pair_kind == 'complete_pair' else
+        '<p><span class="badge badge-open">incomplete_pair</span> — runs of different status are NOT compared as regressions.</p>')
+    banner = (f'<p class="status">pair={escape(report.pair_kind)} · scale_normalized='
+              f'{"yes" if report.scale_normalized else "no"} '
+              f'(dataset_rows {fmt(report.dataset_rows_a)} vs {fmt(report.dataset_rows_b)})</p>')
+    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER runs · compare</title><style>{_RUNS_STYLE}</style></head><body>
+<h1>ER · Run compare — {escape(report.a_id)} → {escape(report.b_id)}</h1>{banner}
+<h2>Stages (raw seconds | per 1000 dataset rows; grown per-1k rows highlighted)</h2>
+<table><tr><th>Stage</th><th>A s</th><th>B s</th><th>A s/1k</th><th>B s/1k</th><th>B/A</th><th>Status A→B</th><th>Verdict</th></tr>{''.join(stage_rows)}</table>
+<h2>Census shifts (gate pairs, per-1000-rows)</h2>
+<table><tr><th>Key</th><th>A</th><th>B</th><th>A per-1k</th><th>B per-1k</th><th>B/A</th></tr>{census_rows}</table>
+<h2>Output counts per 1000 rows (fell = regression)</h2>
+<table><tr><th>Output</th><th>A</th><th>B</th><th>A per-1k</th><th>B per-1k</th><th>B/A</th><th>Verdict</th></tr>{''.join(output_rows)}</table>
+<h2>Worst offender drift</h2>
+<p>{escape(report.worst_offender_a.label if report.worst_offender_a else '—')} ({fmt(report.worst_offender_a.seconds if report.worst_offender_a else None, ",.1f")}s) →
+{escape(report.worst_offender_b.label if report.worst_offender_b else '—')} ({fmt(report.worst_offender_b.seconds if report.worst_offender_b else None, ",.1f")}s)
+{"<strong>— DRIFTED</strong>" if report.worst_offender_drift else ""}</p>
+<table><tr><th>Offender</th><th>A s</th><th>B s</th></tr>{offenders}</table>
+<h2>Regressions ({len(report.regressions)})</h2>{regressions}
+<p class="muted"><a href="/runs">← run history</a></p>
 </body></html>'''
 
 
