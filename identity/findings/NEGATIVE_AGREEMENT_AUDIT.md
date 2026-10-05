@@ -61,10 +61,59 @@ keep-distinct CORRECT (the extraction gaps only mask the difference):**
   peeroton, Power Kick, ironmaxx, GOT7 syrup, ESN drops — German/Austrian EANs,
   distinct SKUs of unnamed flavours).
 
+## 5. Local checks run (all of them; no network)
+
+`scripts/negative_local_checks.py` → `negative_local_checks.json`. For every pair:
+corpus-wide **brand-prefix family scan** (all other GTINs of the same brand cell →
+2-3-digit GS1 prefix census, pair GTINs classified in/out of family), price/desc/
+country forensics, and URL-slug archaeology.
+
+**Pair prefix verdict (canonical-13 first-3):**
+
+- **Outlier GTINs on both sides — 14 pseudo-suspicion pairs, confirmed locally,
+  independent of any registry:**
+  R0001+R0011 Fruit2O (pair 604/613/646 vs sparse family),
+  R0003 Sen Cha (604×2 vs family 081), R0008+R0012 Stumptown (613/673 vs family
+  085...), R0014 Blenheim (754/743 vs 084...), R0018 Stirrings (0810… vs family
+  078...), R0030 De mi Pais (688 vs family 089...), R0055 Bare Nature
+  (613/073 vs family 085...), R0071 Fee Brothers (613/079), R0121 BioTech USA
+  (085…/400… vs family 599…, countries Belgium/UK, prices 826 vs 7.04 — same
+  Carethy path p-471012 twice), R0192 Holoslife (063/064, UK/Netherlands, same
+  slug p-407149 twice), R0201 Weider (085/599 vs family 404…, same slug twice),
+  R0211 NAYA (076×2 vs family 063…).
+- **Registry-consistent prefixes (keep-distinct stands, 23 pairs):** the entire
+  German/Austrian/Spanish sibling blocks — Weider/Multipower/IronMaxx/GOT7/ESN/
+  peeroton/Alnavit/Amecke (400/404/425/426/900 families), ékolo/Kombutxa/226ers
+  (843), Brecon Carreg (503), plus Starbucks Frappuccino R0005 (010×2 both sides).
+
+**URL archaeology:**
+- R0030 + R0211 = the SAME Amazon search query (`keywords=` and `ts_id` identical)
+  scraped at two result positions (`sr=1-411` vs `sr=1-588`) — one listing, two
+  pseudo-GTINs. R0030's right GTIN matches its brand family; the left does not.
+- R0121/R0192/R0201 = same Carethy page slug duplicated in two countries, each
+  carrying a different chosen GTIN — cross-country duplicate listings.
+- R0018/R0071 = two different Amazon ASINs with byte-identical marketing text.
+
+**Net upgrade of §3 verdicts:** of the 37 identical-name pairs, the brand-prefix
+scan classifies **14 three-channel pseudo-suspicion pairs** (Walmart
+classType=VARIANT chain, Amazon ASIN twins, Carethy cross-country slug twins,
+NAYA amazon search twins) backed locally by prefix-family outliers and
+duplicate-page forensics; 23 pairs are registry-consistent real sibling blocks.
+Borderline within the registry-consistent set: R0005 Starbucks (legit 010… UPCs
+both sides, byte-identical descriptions but 7.47 vs 11.99 prices — a possible
+legal twin-barcode/duplicate offer) and R0096/R0098/R0099 same-price German
+sibling EANs — indistinguishable locally; registry only. This is the maximum
+decidable LOCALLY; GS1 registry per-GTIN and live-page fetches remain the only
+unresolved step for the 14 pseudo-suspicion pairs. Recommendation stands:
+keep-distinct until registered.
+
 ## 4. Actions decided
 
 1. Keep the 261 negatives distinct (unchanged) until per-pair registry checks.
-2. The three material/type gaps above are worth a description-surface extension
+2. The three material/type gaps in §2 are worth a description-surface extension
    experiment in a future run; they do NOT change any current verdict.
-3. Item 4 of NEXT_STEPS is validated as: no false negative lurking in this cohort —
-   either wrong-keep pairs with pseudo GTINs (need registry), or real siblings.
+3. Local checks (§5) cannot decide the 14 pseudo-suspicion pairs; GS1-registry
+   and live-page checks are next (network). Item 4 of NEXT_STEPS is validated
+   as: no false negative can be minted locally — pairs are either real
+   sibling variants (keep correct) or duplicate pseudo-GTIN channels
+   (registry check pending).

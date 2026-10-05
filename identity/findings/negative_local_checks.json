@@ -1,0 +1,1831 @@
+{
+ "pairs": [
+  {
+   "id": "R0001",
+   "title": "Zero Calorie Flavored Water Peach (12 bottles)",
+   "gtins": [
+    "646035595779",
+    "613665160738"
+   ],
+   "brand": "Fruit2O",
+   "prefix": {
+    "left": "064",
+    "right": "061",
+    "brand_family_prefixes": {
+     "027": 1,
+     "055": 1,
+     "062": 1
+    },
+    "brand_family_size": 3
+   },
+   "prefix_verdict": "family 027 x1 (33%); pair prefixes 064/061 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "42.09",
+     "43.49"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": false
+   },
+   "url": {
+    "left": {
+     "path_tail": "13877306160",
+     "variant_page": true,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "15312313671",
+     "variant_page": true,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0003",
+   "title": "Organic Matcha Lemonade Tea Mix With Premium Japanese Matcha Pow",
+   "gtins": [
+    "604224378114",
+    "604002393209"
+   ],
+   "brand": "Sen Cha",
+   "prefix": {
+    "left": "060",
+    "right": "060",
+    "brand_family_prefixes": {
+     "081": 2,
+     "094": 2,
+     "084": 1
+    },
+    "brand_family_size": 5
+   },
+   "prefix_verdict": "family 081 x2 (40%); pair prefixes 060/060 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "23.95",
+     "24.95"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": false
+   },
+   "url": {
+    "left": {
+     "path_tail": "14879207599",
+     "variant_page": true,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "14817800606",
+     "variant_page": true,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0005",
+   "title": "Starbucks Frappuccino, Vanilla Iced Coffee Drink, 9.5 Oz Bottles",
+   "gtins": [
+    "100142347862",
+    "100141564826"
+   ],
+   "brand": "Starbucks Frappuccino Vanilla",
+   "prefix": {
+    "left": "010",
+    "right": "010",
+    "brand_family_prefixes": {
+     "010": 3,
+     "079": 1,
+     "080": 1,
+     "571": 1,
+     "099": 1,
+     "091": 1
+    },
+    "brand_family_size": 8
+   },
+   "prefix_verdict": "family 010 x3 (38%); pair prefixes 010/010 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "7.47",
+     "11.99"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "14735864457",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "15422670974",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0008",
+   "title": "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ",
+   "gtins": [
+    "615888989264",
+    "673276821404"
+   ],
+   "brand": "Stumptown",
+   "prefix": {
+    "left": "061",
+    "right": "067",
+    "brand_family_prefixes": {
+     "085": 22,
+     "018": 8,
+     "084": 1,
+     "061": 1,
+     "067": 1
+    },
+    "brand_family_size": 33
+   },
+   "prefix_verdict": "family 085 x22 (67%); pair prefixes 061/067 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "21.29",
+     "16.31"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "15158553222",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "15355272629",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0011",
+   "title": "Zero Calorie Flavored Water Peach (12 bottles)",
+   "gtins": [
+    "613665160738",
+    "629710237393"
+   ],
+   "brand": "Fruit2O",
+   "prefix": {
+    "left": "061",
+    "right": "062",
+    "brand_family_prefixes": {
+     "064": 1,
+     "027": 1,
+     "055": 1
+    },
+    "brand_family_size": 3
+   },
+   "prefix_verdict": "family 064 x1 (33%); pair prefixes 061/062 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "43.49",
+     "40.8"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "15312313671",
+     "variant_page": true,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "15965961784",
+     "variant_page": true,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0012",
+   "title": "STUMPTOWN COFFEE ROASTERS Cold Brew Concentrate 2x, 25.4 FZ",
+   "gtins": [
+    "673276821404",
+    "673276851340"
+   ],
+   "brand": "Stumptown",
+   "prefix": {
+    "left": "067",
+    "right": "067",
+    "brand_family_prefixes": {
+     "085": 22,
+     "018": 8,
+     "061": 2,
+     "084": 1
+    },
+    "brand_family_size": 33
+   },
+   "prefix_verdict": "family 085 x22 (67%); pair prefixes 067/067 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "16.31",
+     "18.3"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "15355272629",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "15711221786",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0014",
+   "title": "Blenheim Ginger Ale Hot, 12 Ounce (12 Glass Bottles)",
+   "gtins": [
+    "758106228582",
+    "747519475737"
+   ],
+   "brand": "Blenheim",
+   "prefix": {
+    "left": "075",
+    "right": "074",
+    "brand_family_prefixes": {
+     "084": 2,
+     "076": 2,
+     "087": 1,
+     "075": 1,
+     "023": 1
+    },
+    "brand_family_size": 7
+   },
+   "prefix_verdict": "family 084 x2 (29%); pair prefixes 075/074 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "45.03",
+     "45.12"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "15473216508",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "15765220942",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0018",
+   "title": "Stirrings Pack Lemon Drop Cocktail Mix 750ml Bottle - Real Juice",
+   "gtins": [
+    "810184856511",
+    "810164203144"
+   ],
+   "brand": "Stirrings",
+   "prefix": {
+    "left": "081",
+    "right": "081",
+    "brand_family_prefixes": {
+     "078": 27,
+     "081": 21,
+     "076": 2
+    },
+    "brand_family_size": 50
+   },
+   "prefix_verdict": "family 078 x27 (54%); pair prefixes 081/081 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "14.98",
+     "19.98"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": false
+   },
+   "url": {
+    "left": {
+     "path_tail": "B0F2MFDG7Q",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": "B0F2MFDG7Q",
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "B0D3MXK73V",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": "B0D3MXK73V",
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0030",
+   "title": "De mi Pais Coconut Water 16.4 oz - Agua de Coco",
+   "gtins": [
+    "688474656321",
+    "896211002076"
+   ],
+   "brand": "De Mi Pais",
+   "prefix": {
+    "left": "068",
+    "right": "089",
+    "brand_family_prefixes": {
+     "089": 5,
+     "070": 1
+    },
+    "brand_family_size": 6
+   },
+   "prefix_verdict": "family 089 x5 (83%); pair prefixes 068/089 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "22.22",
+     "10.73"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "ref=sr_1_588",
+     "variant_page": false,
+     "amazon_search_ref": true,
+     "amazon_dp_asin": "B0163FXHX2",
+     "search_keywords": "Coconut+Water"
+    },
+    "right": {
+     "path_tail": "ref=sr_1_411",
+     "variant_page": false,
+     "amazon_search_ref": true,
+     "amazon_dp_asin": "B0163FXHRS",
+     "search_keywords": "Coconut+Water"
+    },
+    "same_path_tail": false,
+    "same_search_query": true
+   }
+  },
+  {
+   "id": "R0038",
+   "title": "Brecon Carreg Still Natural Mineral Water",
+   "gtins": [
+    "5030341500001",
+    "5030341500896"
+   ],
+   "brand": "Brecon Carreg",
+   "prefix": {
+    "left": "503",
+    "right": "503",
+    "brand_family_prefixes": {
+     "503": 5
+    },
+    "brand_family_size": 5
+   },
+   "prefix_verdict": "family 503 x5 (100%); pair prefixes 503/503 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "NA",
+     "NA"
+    ],
+    "country": [
+     "United Kingdom",
+     "United Kingdom"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "view",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "view",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0055",
+   "title": "Bare Nature Peach Vitamin Iced Tea (20 oz., 12 ct.)",
+   "gtins": [
+    "732976282370",
+    "743272197558"
+   ],
+   "brand": "Bare Nature",
+   "prefix": {
+    "left": "073",
+    "right": "074",
+    "brand_family_prefixes": {
+     "085": 4,
+     "068": 2
+    },
+    "brand_family_size": 6
+   },
+   "prefix_verdict": "family 085 x4 (67%); pair prefixes 073/074 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "15.99",
+     "25.05"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "ref=sr_1_358",
+     "variant_page": false,
+     "amazon_search_ref": true,
+     "amazon_dp_asin": "B01HZO1WPA",
+     "search_keywords": "Bottled+Iced+Tea"
+    },
+    "right": {
+     "path_tail": "ref=sr_1_1362",
+     "variant_page": false,
+     "amazon_search_ref": true,
+     "amazon_dp_asin": "B01N0OD075",
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0065",
+   "title": "apple juice Bio 100% squeezed \u00e9kolo",
+   "gtins": [
+    "8437010011016",
+    "8437010011078"
+   ],
+   "brand": "Ekolo",
+   "prefix": {
+    "left": "843",
+    "right": "843",
+    "brand_family_prefixes": {
+     "843": 34
+    },
+    "brand_family_size": 34
+   },
+   "prefix_verdict": "family 843 x34 (100%); pair prefixes 843/843 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "2.95",
+     "1.25"
+    ],
+    "country": [
+     "Spain",
+     "Spain"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "venta-zumo-de-manzana-bio-100-exprimido-ekolo_93335",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "112711",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0071",
+   "title": "Fee Brothers Lemon Cocktail Bitters - Aromatic Cocktail Mixer & ",
+   "gtins": [
+    "610098920588",
+    "791863140544"
+   ],
+   "brand": "Fee Brothers",
+   "prefix": {
+    "left": "061",
+    "right": "079",
+    "brand_family_prefixes": {
+     "079": 10,
+     "035": 1
+    },
+    "brand_family_size": 11
+   },
+   "prefix_verdict": "family 079 x10 (91%); pair prefixes 061/079 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "11.57",
+     "17.49"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": false
+   },
+   "url": {
+    "left": {
+     "path_tail": "B008L18SAE",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": "B008L18SAE",
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "B000SZ7DNE",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": "B000SZ7DNE",
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0096",
+   "title": "Weider L- Carnitine Water",
+   "gtins": [
+    "4044782387337",
+    "4044782387030"
+   ],
+   "brand": "Weider",
+   "prefix": {
+    "left": "404",
+    "right": "404",
+    "brand_family_prefixes": {
+     "404": 17,
+     "841": 13,
+     "599": 3,
+     "085": 1
+    },
+    "brand_family_size": 34
+   },
+   "prefix_verdict": "family 404 x17 (50%); pair prefixes 404/404 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "1.79",
+     "1.79"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "weider-l-carnitine-water",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "weider-l-carnitine-water",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0097",
+   "title": "peeroton mineral vitamin Drink",
+   "gtins": [
+    "9007088003023",
+    "9007088100548"
+   ],
+   "brand": "Peeroton",
+   "prefix": {
+    "left": "900",
+    "right": "900",
+    "brand_family_prefixes": {
+     "900": 12,
+     "202": 1
+    },
+    "brand_family_size": 13
+   },
+   "prefix_verdict": "family 900 x12 (92%); pair prefixes 900/900 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "27.9",
+     "27.9"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "peeroton-mineral-vitamin-drink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "peeroton-mineral-vitamin-drink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0098",
+   "title": "multipower L- Carnitine Water",
+   "gtins": [
+    "4006643166635",
+    "4006643166734"
+   ],
+   "brand": "Multipower",
+   "prefix": {
+    "left": "400",
+    "right": "400",
+    "brand_family_prefixes": {
+     "400": 20,
+     "599": 1
+    },
+    "brand_family_size": 21
+   },
+   "prefix_verdict": "family 400 x20 (95%); pair prefixes 400/400 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "1.69",
+     "1.69"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "multipower-l-carnitine-water",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "multipower-l-carnitine-water",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0099",
+   "title": "Weider L- Carnitine Water",
+   "gtins": [
+    "4044782387030",
+    "4044782387238"
+   ],
+   "brand": "Weider",
+   "prefix": {
+    "left": "404",
+    "right": "404",
+    "brand_family_prefixes": {
+     "404": 16,
+     "841": 13,
+     "599": 3,
+     "085": 1
+    },
+    "brand_family_size": 33
+   },
+   "prefix_verdict": "family 404 x16 (48%); pair prefixes 404/404 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "1.79",
+     "1.79"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "weider-l-carnitine-water",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "weider-l-carnitine-water",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0100",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196292184",
+    "4260196292115"
+   ],
+   "brand": "IronMaxx",
+   "prefix": {
+    "left": "426",
+    "right": "426",
+    "brand_family_prefixes": {
+     "426": 16
+    },
+    "brand_family_size": 16
+   },
+   "prefix_verdict": "family 426 x16 (100%); pair prefixes 426/426 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "16.9",
+     "16.9"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0101",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196292115",
+    "4260196292979"
+   ],
+   "brand": "IronMaxx",
+   "prefix": {
+    "left": "426",
+    "right": "426",
+    "brand_family_prefixes": {
+     "426": 15
+    },
+    "brand_family_size": 15
+   },
+   "prefix_verdict": "family 426 x15 (100%); pair prefixes 426/426 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "16.9",
+     "16.9"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0102",
+   "title": "multipower Power Kick",
+   "gtins": [
+    "4006643167632",
+    "4006643167731"
+   ],
+   "brand": "Multipower",
+   "prefix": {
+    "left": "400",
+    "right": "400",
+    "brand_family_prefixes": {
+     "400": 18,
+     "599": 1
+    },
+    "brand_family_size": 19
+   },
+   "prefix_verdict": "family 400 x18 (95%); pair prefixes 400/400 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "1.79",
+     "1.79"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "multipower-power-kick",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "multipower-power-kick",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0103",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196292979",
+    "4260196292160"
+   ],
+   "brand": "IronMaxx",
+   "prefix": {
+    "left": "426",
+    "right": "426",
+    "brand_family_prefixes": {
+     "426": 14
+    },
+    "brand_family_size": 14
+   },
+   "prefix_verdict": "family 426 x14 (100%); pair prefixes 426/426 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "16.9",
+     "16.9"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0104",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196292160",
+    "4260196294966"
+   ],
+   "brand": "IronMaxx",
+   "prefix": {
+    "left": "426",
+    "right": "426",
+    "brand_family_prefixes": {
+     "426": 18
+    },
+    "brand_family_size": 18
+   },
+   "prefix_verdict": "family 426 x18 (100%); pair prefixes 426/426 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "16.9",
+     "16.9"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0105",
+   "title": "iron maxx Low Calories sports drink",
+   "gtins": [
+    "4260196294966",
+    "4260196292122"
+   ],
+   "brand": "IronMaxx",
+   "prefix": {
+    "left": "426",
+    "right": "426",
+    "brand_family_prefixes": {
+     "426": 18
+    },
+    "brand_family_size": 18
+   },
+   "prefix_verdict": "family 426 x18 (100%); pair prefixes 426/426 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "16.9",
+     "16.9"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "ironmaxx-low-calories-sportsdrink",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0110",
+   "title": "got7 syrup Sugar free",
+   "gtins": [
+    "4260353177965",
+    "4260353178641"
+   ],
+   "brand": "Got7",
+   "prefix": {
+    "left": "426",
+    "right": "426",
+    "brand_family_prefixes": {
+     "426": 1
+    },
+    "brand_family_size": 1
+   },
+   "prefix_verdict": "family 426 x1 (100%); pair prefixes 426/426 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "3.9",
+     "3.9"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "got7-sirup-sugar-free",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "got7-sirup-sugar-free",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0121",
+   "title": "Iso Tonic Orange Mango 600 gr",
+   "gtins": [
+    "854033007273",
+    "4006643168639"
+   ],
+   "brand": "BioTech USA",
+   "prefix": {
+    "left": "085",
+    "right": "400",
+    "brand_family_prefixes": {
+     "599": 9,
+     "843": 1
+    },
+    "brand_family_size": 10
+   },
+   "prefix_verdict": "family 599 x9 (90%); pair prefixes 085/400 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "826",
+     "7.04"
+    ],
+    "country": [
+     "Belgium",
+     "United Kingdom"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "p-471012",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "p-471012",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0127",
+   "title": "alnavit greener Held Bio Smoothie 250ml",
+   "gtins": [
+    "42284079",
+    "42300427"
+   ],
+   "brand": "Alnavit",
+   "prefix": {
+    "left": "",
+    "right": "",
+    "brand_family_prefixes": {
+     "426": 2
+    },
+    "brand_family_size": 2
+   },
+   "prefix_verdict": "GTIN-8/short code \u2014 no 3-digit prefix family",
+   "forensics": {
+    "prices": [
+     "2.49",
+     "2.49"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": true,
+    "same_desc": false
+   },
+   "url": {
+    "left": {
+     "path_tail": "2479071",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "2479071",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0129",
+   "title": "amecke gentle juices apple 1l",
+   "gtins": [
+    "4005517004066",
+    "4005517004080"
+   ],
+   "brand": "Amecke",
+   "prefix": {
+    "left": "400",
+    "right": "400",
+    "brand_family_prefixes": {
+     "400": 37
+    },
+    "brand_family_size": 37
+   },
+   "prefix_verdict": "family 400 x37 (100%); pair prefixes 400/400 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "1.79",
+     "2.79"
+    ],
+    "country": [
+     "Germany",
+     "Germany"
+    ],
+    "same_price": false,
+    "same_desc": false
+   },
+   "url": {
+    "left": {
+     "path_tail": "594198",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "594198",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0174",
+   "title": "kombucha tea Ginger kombutxa",
+   "gtins": [
+    "8437017259077",
+    "8437017259015"
+   ],
+   "brand": "Kombutxa",
+   "prefix": {
+    "left": "843",
+    "right": "843",
+    "brand_family_prefixes": {
+     "843": 6
+    },
+    "brand_family_size": 6
+   },
+   "prefix_verdict": "family 843 x6 (100%); pair prefixes 843/843 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "3.75",
+     "9"
+    ],
+    "country": [
+     "Spain",
+     "Spain"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "111969",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "111968",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0175",
+   "title": "Isotonic Drink 226ers berries",
+   "gtins": [
+    "8436567350401",
+    "8436567350449"
+   ],
+   "brand": "226ers",
+   "prefix": {
+    "left": "843",
+    "right": "843",
+    "brand_family_prefixes": {
+     "843": 11,
+     "841": 4,
+     "506": 1,
+     "073": 1
+    },
+    "brand_family_size": 17
+   },
+   "prefix_verdict": "family 843 x11 (65%); pair prefixes 843/843 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "18",
+     "26"
+    ],
+    "country": [
+     "Spain",
+     "Spain"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "160163",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "160164",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0176",
+   "title": "grape juice black bio 100% squeezed \u00e9kolo",
+   "gtins": [
+    "8437010011085",
+    "8437010011023"
+   ],
+   "brand": "Ekolo",
+   "prefix": {
+    "left": "843",
+    "right": "843",
+    "brand_family_prefixes": {
+     "843": 34
+    },
+    "brand_family_size": 34
+   },
+   "prefix_verdict": "family 843 x34 (100%); pair prefixes 843/843 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "1.4",
+     "3"
+    ],
+    "country": [
+     "Spain",
+     "Spain"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "112686",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "112665",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0177",
+   "title": "juice of kiwi and organic apple \u00e9kolo",
+   "gtins": [
+    "8437010011160",
+    "8437010011719"
+   ],
+   "brand": "Ekolo",
+   "prefix": {
+    "left": "843",
+    "right": "843",
+    "brand_family_prefixes": {
+     "843": 35
+    },
+    "brand_family_size": 35
+   },
+   "prefix_verdict": "family 843 x35 (100%); pair prefixes 843/843 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "3.05",
+     "1.95"
+    ],
+    "country": [
+     "Spain",
+     "Spain"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "112652",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "112710",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0178",
+   "title": "Isotonic Drink lemon 226ers",
+   "gtins": [
+    "8436567350425",
+    "8436567350463"
+   ],
+   "brand": "226ers",
+   "prefix": {
+    "left": "843",
+    "right": "843",
+    "brand_family_prefixes": {
+     "843": 11,
+     "841": 4,
+     "506": 1,
+     "073": 1
+    },
+    "brand_family_size": 17
+   },
+   "prefix_verdict": "family 843 x11 (65%); pair prefixes 843/843 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "18",
+     "25.95"
+    ],
+    "country": [
+     "Spain",
+     "Spain"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "160165",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "160166",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0192",
+   "title": "Holoslife Sea water 250 ml",
+   "gtins": [
+    "637913163975",
+    "642213315016"
+   ],
+   "brand": "Holoslife",
+   "prefix": {
+    "left": "063",
+    "right": "064",
+    "brand_family_prefixes": {
+     "063": 6,
+     "064": 3
+    },
+    "brand_family_size": 9
+   },
+   "prefix_verdict": "family 063 x6 (67%); pair prefixes 063/064 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "1.75",
+     "2.25"
+    ],
+    "country": [
+     "United Kingdom",
+     "Netherlands"
+    ],
+    "same_price": false,
+    "same_desc": false
+   },
+   "url": {
+    "left": {
+     "path_tail": "p-407149",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "p-407149",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0201",
+   "title": "L- Carnitine Water Mexican 500 ml",
+   "gtins": [
+    "854255008850",
+    "5999076228607"
+   ],
+   "brand": "Weider",
+   "prefix": {
+    "left": "085",
+    "right": "599",
+    "brand_family_prefixes": {
+     "404": 20,
+     "841": 13,
+     "599": 1
+    },
+    "brand_family_size": 34
+   },
+   "prefix_verdict": "family 404 x20 (59%); pair prefixes 085/599 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "1.53",
+     "1.69"
+    ],
+    "country": [
+     "Germany",
+     "Italy"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "l-carnitine-water-mexican-500-ml",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "l-carnitine-water-mexican-500-ml",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0210",
+   "title": "ESN Flavor Drops, 50 ml",
+   "gtins": [
+    "4250519605821",
+    "4250519610375"
+   ],
+   "brand": "ESN",
+   "prefix": {
+    "left": "425",
+    "right": "425",
+    "brand_family_prefixes": {
+     "425": 24,
+     "426": 3
+    },
+    "brand_family_size": 27
+   },
+   "prefix_verdict": "family 425 x24 (89%); pair prefixes 425/425 -> registry-consistent",
+   "forensics": {
+    "prices": [
+     "6.99",
+     "6.99"
+    ],
+    "country": [
+     "France",
+     "France"
+    ],
+    "same_price": true,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "flavor-drops",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "flavor-drops",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0211",
+   "title": "NAYA WATER - 600ML 20",
+   "gtins": [
+    "769553420696",
+    "769553420689"
+   ],
+   "brand": "Naya",
+   "prefix": {
+    "left": "076",
+    "right": "076",
+    "brand_family_prefixes": {
+     "063": 1
+    },
+    "brand_family_size": 1
+   },
+   "prefix_verdict": "family 063 x1 (100%); pair prefixes 076/076 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "71.51",
+     "72.4"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": true
+   },
+   "url": {
+    "left": {
+     "path_tail": "ref=sr_1_2636_s_it",
+     "variant_page": false,
+     "amazon_search_ref": true,
+     "amazon_dp_asin": "B07JK98QVJ",
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "ref=sr_1_2592_s_it",
+     "variant_page": false,
+     "amazon_search_ref": true,
+     "amazon_dp_asin": "B07JL6JC42",
+     "search_keywords": null
+    },
+    "same_path_tail": false,
+    "same_search_query": false
+   }
+  },
+  {
+   "id": "R0218",
+   "title": "Harmless Harvest Coconut Water 100% Raw Organic",
+   "gtins": [
+    "859078002672",
+    "859078002153"
+   ],
+   "brand": "Harmless Harvest",
+   "prefix": {
+    "left": "085",
+    "right": "085",
+    "brand_family_prefixes": {
+     "081": 25,
+     "085": 23,
+     "067": 2,
+     "099": 2,
+     "063": 1
+    },
+    "brand_family_size": 53
+   },
+   "prefix_verdict": "family 081 x25 (47%); pair prefixes 085/085 -> OUTLIER(S) \u2014 pseudo-GTIN suspicion",
+   "forensics": {
+    "prices": [
+     "3.19",
+     "5.49"
+    ],
+    "country": [
+     "USA",
+     "USA"
+    ],
+    "same_price": false,
+    "same_desc": false
+   },
+   "url": {
+    "left": {
+     "path_tail": "www.peapod.com",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "right": {
+     "path_tail": "www.peapod.com",
+     "variant_page": false,
+     "amazon_search_ref": false,
+     "amazon_dp_asin": null,
+     "search_keywords": null
+    },
+    "same_path_tail": true,
+    "same_search_query": false
+   }
+  }
+ ]
+}
