@@ -200,13 +200,13 @@ def upload_dataset(package: KagglePackage, *, execute: bool) -> dict[str, Any]:
     }
     if not execute:
         return plan
-    executable = _require_kaggle_executable(spec.kaggle_executable)
     slug = spec.slug
     if not slug:
         raise RuntimeError(
             "config/training.yaml kaggle.slug is unset; name the target "
             "dataset (owner/slug) before an executed upload"
         )
+    executable = _require_kaggle_executable(spec.kaggle_executable)
     command = [executable, "datasets", "create", "--dir-mode", "skip",
                "-r", str(package.archive_path)]
     print(f"[kaggle-lane] executing: {' '.join(command)}", flush=True)
@@ -242,13 +242,13 @@ def download_dataset(package: KagglePackage, *, execute: bool) -> dict[str, Any]
     }
     if not execute:
         return plan
-    executable = _require_kaggle_executable(spec.kaggle_executable)
     slug = spec.slug
     if not slug:
         raise RuntimeError(
             "config/training.yaml kaggle.slug is unset; name the target "
             "dataset (owner/slug) before an executed download"
         )
+    executable = _require_kaggle_executable(spec.kaggle_executable)
     stage = staging_dir() / cohort_label(Path(package.export_path))
     command = [executable, "datasets", "download", slug, "--path", str(stage)]
     result = subprocess.run(command, cwd=TRAIN_ROOT)
@@ -298,6 +298,8 @@ def package_submission(input_path: Path, output_path: Path) -> Path:
     unmatched = int(
         frame[expected[1]].str.startswith(_unmatched_prefix()).sum()
     )
+    stage = staging_dir()
+    stage.mkdir(parents=True, exist_ok=True)
     receipt = {
         "submission": str(output_path),
         "rows": int(len(frame)),
@@ -308,7 +310,7 @@ def package_submission(input_path: Path, output_path: Path) -> Path:
     }
     atomic_write_json(
         receipt,
-        staging_dir() / f"submission{spec.receipt_suffix}",
+        stage / f"submission{spec.receipt_suffix}",
     )
     print(
         f"[kaggle-lane] submission packaged: rows={receipt['rows']} "
