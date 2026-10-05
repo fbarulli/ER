@@ -205,6 +205,25 @@ def datagen_track():
         fv = {}
     teacher_conflicts = sum(v for k, v in fl.items() if str(k).startswith('description_conflict')) or None
     del teacher_conflicts
+    # Generation quantification: read ONLY what the bundling process publishes.
+    ac = (w1 or {}).get('augmentation_coverage', {})
+    ratio = (w1 or {}).get('effective_train_ratio')
+    ratio = '—' if ratio in (None, '') else f'{float(ratio):.3f}'
+    try:
+        run_dirs = sorted(p for p in (_results / 'training_prep').glob('2*') if p.is_dir())
+        latest = run_dirs[-1] if run_dirs else None
+        hq = json.loads((latest / 'handoff.json').read_text()) if latest else None
+        handoff_cell = (f"pass · {len(hq.get('inputs', []))} inputs metered · "
+                        f"loss/batch attested: {'yes' if hq.get('loss_batch_correctness') else 'n/a'}"
+                        if hq else 'no handoff.json yet (run prepare_all)')
+        offender_path = latest / 'timing_offenders.log' if latest else None
+        if offender_path and Path(offender_path).is_file():
+            lines = [l for l in Path(offender_path).read_text().splitlines() if l and not l.startswith('#')]
+            offender_cell = f'<code>{escape(lines[0])}</code>' if lines else 'empty report'
+        else:
+            offender_cell = 'no report yet'
+    except Exception:
+        handoff_cell, offender_cell = '—', '—'
     # Finding 01 — dedupe closure
     dedupe_metrics = ''.join([
         _fmetric(ra.get('input_rows', 71_623), 'original listings in'),
@@ -398,6 +417,7 @@ def datagen_track():
                     "<span class='badge badge-open'>OPEN</span> — bundle blocker: worker_1 and worker_2 embed different upstream snapshots (n_df 62,927 vs 56,529) and different masking fracs, so the offline bundle cannot ship as one lane — rebuild both workers against the current canonical corpus (13,216 rows · data_prep.json), while labeled_pairs and final_validation themselves PASS.")
     teacher_rows = ''.join(f'<tr><td><code>{escape(k)}</code></td><td>{v:,}</td></tr>' for k, v in sorted(fl.items()))
     # Finding 07 — same-GTIN duplicate variation (measured, feeds augmentation design)
+    var, dvc = {}, {}
     try:
         dvc = json.loads((_results / 'duplicate_variation_census.json').read_text())
         var = dvc.get('column_varies_pct', {})
@@ -495,6 +515,17 @@ surfaces are hashed (provenance + composition_fingerprint) and attested in <code
 the same SSOT knobs feed post-training analysis — see the tuning-surfaces table in PIPE.md. Full
 details: <code>training/masking.py</code> (augment_counterfactual_twins), <code>training/negative_supply.py</code>,
 <code>training/difficulty.py</code>.</p>
+<p><strong>Quantified from bundling outputs (no external store)</strong> — every number below is read
+from files the bundling process itself publishes:</p>
+<table><tr><th>Measure</th><th>Value</th><th>Output file</th></tr>
+<tr><td>source train positives / negatives</td><td>{ac.get('source_train_positives', '—'):,} / {ac.get('source_train_negatives', '—'):,}</td><td><code>data/prepared/full/*.json</code> (bundle header augmentation_coverage)</td></tr>
+<tr><td>minted negatives (twins pool)</td><td>{ac.get('minted_negatives', '—'):,}</td><td><code>data/prepared/full/*.json</code></td></tr>
+<tr><td>masked views (positives / minted negatives)</td><td>{ac.get('masked_positives', '—'):,} / {ac.get('masked_minted_negatives', '—'):,}</td><td><code>data/prepared/full/*.json</code></td></tr>
+<tr><td>vendor variation positives</td><td>{ac.get('vendor_variation_positives', '—'):,}</td><td><code>data/prepared/full/*.json</code></td></tr>
+<tr><td>guaranteed bundle-only view ratio</td><td>{ratio}</td><td><code>data/prepared/full/*.json</code> (effective_train_ratio)</td></tr>
+<tr><td>handoff boundary</td><td>{handoff_cell}</td><td><code>results/training_prep/&lt;run&gt;/handoff.json</code></td></tr>
+<tr><td>worst timing offender</td><td>{offender_cell}</td><td><code>results/training_prep/&lt;run&gt;/timing_offenders.log</code></td></tr>
+</table>
 </details>'''
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER datagen</title><style>body{{font-family:system-ui;margin:2rem;color:#222}}{_FINDING_STYLE}h1{{font-size:1.4rem}}.verdict{{margin:.4rem 0}}</style></head><body>
 <h1>ER · Datagen track — identity fixes, GTIN integrity, attribute census, datagen budget</h1>
