@@ -165,6 +165,34 @@ tracking:
     project: "e-r"
     mode: "online"
 
+# ── Kaggle dataset/export transport lane ───────────────────────────────────
+# Parallel dataset/transport lane (branch kaggle-lane): packages/uploads
+# cohort exports and finished submission frames to a Kaggle dataset, with
+# sha256-verified fetch-back, alongside the Colab GPU lane. NEW-lane only —
+# never edits colab/preparation keys; no DVC revival. Every transport value
+# lives here so no code-and-config duplicate arises.
+kaggle:
+  # "owner/slug" the lane publishes under; null keeps every upload fail-loud
+  # until the owner names the target dataset (no silent default account).
+  slug: null
+  # Cohort exports the lane may package (repo-root names, matching the
+  # cpu_bundle_prep cohort_label tags).
+  export_csvs: ["dataset.csv", "dataset_50pct.csv"]
+  # Staging root for packaged payloads, config manifests, and download
+  # receipts (relative to the repo root, portable fragments only).
+  staging_dir: "results/kaggle_lane"
+  # Fixed inside-archive data filename and sidecar names.
+  packaged_data_name: "dataset.csv"
+  metadata_file: "dataset_metadata.json"
+  payload_archive_suffix: ".kaggle.zip"
+  receipt_suffix: ".receipt.json"
+  # External submission contract (two distinct columns; the finished
+  # SKU_ITEM frame keeps exactly these, lowercase in the packaged copy).
+  submission_id_columns: ["sku_id", "item_id"]
+  # The lane drives the kaggle CLI via this executable name; credentials stay:
+  # credentials live in ~/.kaggle/kaggle.json, never in this file.
+  kaggle_executable: "kaggle"
+
 # ── Colab checkout/runtime ─────────────────────────────────────────────────
 # The launcher clones this public training branch instead of uploading a
 # local working tree or data snapshot.
