@@ -196,8 +196,9 @@ def main() -> None:
 
     bc_stripped = work["gtin"].fillna("").astype(str).str.strip()
     before_valid_gtins = set(bc_stripped[gtin_validity(bc_stripped)]) - {""}
+    held = reviewed_row_mask(work)
     work = work.assign(
-        _bc_valid=(gtin_validity(bc_stripped) & ~reviewed_row_mask(work)).to_numpy()
+        _bc_valid=(gtin_validity(bc_stripped) & ~held).to_numpy()
     )
     # The identity partition: a row's TRUSTED gtin, or "" when it has none.
     # T1 collapses within a partition by construction; T3 reuses it so two
@@ -206,7 +207,6 @@ def main() -> None:
         _ident=np.where(work["_bc_valid"],
                         work["gtin"].fillna("").astype(str).str.strip(), ""),
     )
-    held = reviewed_row_mask(work)
     work.loc[held, "_ident"] = "review:" + work.loc[held, "sku_id"].astype(str)
     with_bc = work[(work["_has_bc"] == 1) & (work["_bc_valid"])]
     t1_bc_invalid = work[(work["_has_bc"] == 1) & (~work["_bc_valid"])]

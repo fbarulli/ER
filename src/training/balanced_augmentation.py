@@ -129,6 +129,12 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
     rng = random.Random(seed)
     original_payload = list(payload)
     fields = [_field_surfaces(text) for text in payload]
+    # One array read instead of df.iloc scalar lookups inside the mint loops.
+    # Value semantics match df.iloc[x].get('retailer', '') exactly: a missing
+    # retailer yields NaN (str -> 'nan'), NOT the empty string.
+    retailer_by_row = df['retailer'].to_numpy(dtype=object) if len(df) else np.array([], dtype=object)
+    def retailer_of(index: int) -> str:
+        return str(retailer_by_row[index]) if index < len(retailer_by_row) else ''
     positives = [(int(a), int(b)) for a,b in pos if int(a) in train_indices and int(b) in train_indices]
     negatives = [(int(a), int(b)) for a,b in neg if int(a) in train_indices and int(b) in train_indices]
     positive_support, negative_support = Counter(), Counter()
@@ -168,7 +174,7 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
         # another variant; no large seller/product group monopolizes a field.
         groups = defaultdict(list)
         for a,b in candidates:
-            vendor = str(df.iloc[a].get('retailer','')) if a < len(df) else ''
+            vendor = retailer_of(a) if a < len(df) else ''
             groups[(normalize_entity_key(row_bc[a],str(a)),vendor)].append((a,b))
         candidates = []
         while any(groups.values()):
@@ -180,8 +186,8 @@ def augment_balanced(*, pos, neg, payload, row_bc, features, df, train_indices,
                 if anchor_use[(a,b,field)] >= spec.max_variants_per_anchor_field: continue
                 source_key = normalize_entity_key(row_bc[a],str(a))
                 attempts = rng.sample(donors[field], min(spec.donor_attempts,len(donors[field])))
-                source_vendor = str(df.iloc[a].get('retailer','')) if a < len(df) else ''
-                attempts.sort(key=lambda item: item[0] >= len(df) or str(df.iloc[item[0]].get('retailer','')) == source_vendor)
+                source_vendor = retailer_of(a) if a < len(df) else ''
+                attempts.sort(key=lambda item: item[0] >= len(df) or retailer_of(item[0]) == source_vendor)
                 for donor, values in attempts:
                     if normalize_entity_key(row_bc[donor],str(donor)) == source_key: continue
                     if not _field_values_conflict(field, fields[b][field], values): continue

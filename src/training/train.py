@@ -25,7 +25,6 @@ from core.common import (
     F,
     artifact,
     collapse_guardrail_cfg,
-    ensure_parent,
     load_config,
     load_dataset_deduped,
     load_local_sentence_transformer,
@@ -46,7 +45,11 @@ from training.training import ES_PATIENCE, ES_THRESHOLD, train_one_config
 # and final DVC publishing are CPU/network work and are intentionally deferred
 # until the worker outputs have been downloaded locally.
 _REMOTE_TRAINING = os.environ.get("EUROMONITOR_REMOTE_TRAINING") == "1"
-_UNIFORMITY_CFG = load_config()["training"]["uniformity_regularization"]
+
+
+def _uniformity_cfg() -> dict:
+    """Read at call time so refresh_training_config() is never shadowed."""
+    return load_config()["training"]["uniformity_regularization"]
 
 # thresholds live in config/paths.yaml (pairs.proceed_sim_threshold /
 # pairs.hardneg_sim_threshold) and are read by pipeline.build_training_data
@@ -652,6 +655,7 @@ def _main_inner(_wandb) -> None:
         dtype=int,
     ).reshape(-1, 2)
     s = data["stats"]
+    uniformity = _uniformity_cfg()
     _wandb.log_config(
         {
             "model": args.model,
@@ -675,12 +679,12 @@ def _main_inner(_wandb) -> None:
             "mask_track_visibility": bool(mask_cfg["track_visibility"]),
             "mask_track_per_epoch": bool(mask_cfg["track_per_epoch"]),
             "uniformity_regularization_enabled": bool(
-                _UNIFORMITY_CFG["enabled"]
+                uniformity["enabled"]
             ),
             "uniformity_regularization_weight": float(
-                _UNIFORMITY_CFG["weight"]
+                uniformity["weight"]
             ),
-            "uniformity_temperature": float(_UNIFORMITY_CFG["temperature"]),
+            "uniformity_temperature": float(uniformity["temperature"]),
             "late_epoch_lr_decay_enabled": bool(
                 runtime("late_epoch_lr_decay")["enabled"]
             ),
@@ -1520,6 +1524,7 @@ def _main_inner(_wandb) -> None:
     # NO FALLBACK (owner Q27): every optimizer knob comes from the SSOT
     # training: block via runtime() — the inline 0.05/0.01/linear/1.0
     # literals duplicated config/training.yaml and could silently diverge.
+    uniformity = _uniformity_cfg()
     cfg = {
         "architecture": runtime("architecture"),
         "epochs": args.epochs,
@@ -1540,8 +1545,8 @@ def _main_inner(_wandb) -> None:
         "patience": ES_PATIENCE,
         "es_threshold": ES_THRESHOLD,
         "uniformity_weight": (
-            float(_UNIFORMITY_CFG["weight"])
-            if bool(_UNIFORMITY_CFG["enabled"])
+            float(uniformity["weight"])
+            if bool(uniformity["enabled"])
             else 0.0
         ),
         "late_epoch_decay_enabled": bool(
@@ -1968,6 +1973,9 @@ def _main_inner(_wandb) -> None:
             metrics_path=out,
             rows=all_rows,
         )
+    calibration_rows = [
+        row for row in ok_rows if row.get("calibration_rand_index") is not None
+    ]
     _wandb.set_summary(
         {
             "mean_auc": float(np.mean(aucs)) if aucs else None,

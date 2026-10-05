@@ -126,7 +126,7 @@ def test_provenance_includes_nested_json_and_ignores_only_measured_census(tmp_pa
     for name in ('CONFIG_PATH', 'TRAINING_CONFIG_PATH', 'VOCABULARY_CONFIG_PATH'):
         monkeypatch.setattr(common, name, training)
     monkeypatch.setattr(common, 'DATA_PATH', raw)
-    monkeypatch.setattr('graph_tracks.text_cache.checkpoint_hash', lambda path: '0'*64)
+    monkeypatch.setattr('graph_tracks.text_cache.checkpoint_hash', lambda path, **kwargs: '0'*64)
     first = preparation.preparation_provenance(tmp_path, training, 'model')
     training.write_text('rand_matching:\n  gate_census_pin: {total_pairs: 2}\n  setting: 1\n')
     assert preparation.preparation_provenance(tmp_path, training, 'model') == first

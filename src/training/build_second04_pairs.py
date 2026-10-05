@@ -110,12 +110,6 @@ def _usable_rows_with_census(
     ), census
 
 
-def _usable_rows(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return valid rows while retaining the census in the build path."""
-    usable, _ = _usable_rows_with_census(frame)
-    return usable
-
-
 def _build_manifest_with_census(
     frame: pd.DataFrame,
 ) -> tuple[pd.DataFrame, ExclusionCensus]:

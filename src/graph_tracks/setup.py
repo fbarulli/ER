@@ -101,7 +101,7 @@ def listing_contract(catalog, labels, populations):
 def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> Path:
     from core.timing import Timing
     timing = Timing('graph_tracks.setup')
-    from core.common import F, SEED, TRAIN_ROOT, load_dataset_deduped, training_cfg
+    from core.common import F, SEED, TRAIN_ROOT, git_revision, load_dataset_deduped, training_cfg
     from core.identity_policy import POLICY_PATH
     from training.base_data import load_base_data
     from training.folds import derive_holdout
@@ -144,9 +144,7 @@ def setup(output: Path, checkpoint: Path, *, training_tensors: bool = True) -> P
     records = load_records(listings)
     write_json(output / 'graph_census.json', census(records, fit_vocabulary(records)))
     timing.mark('graph_features_and_census')
-    import subprocess
-    revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=TRAIN_ROOT,
-                              capture_output=True, text=True, check=True).stdout.strip()
+    revision = git_revision()
     write_json(output / 'setup_manifest.json', {
         'schema': 'er-track-setup-v1', 'git_revision': revision, 'seed': SEED,
         'source_catalog_sha256': file_hash(F['dataset_deduped']),

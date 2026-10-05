@@ -214,11 +214,15 @@ def negative_policy_evidence(
             in_dev_neg = (f1 == dev) & (f2 == dev)
             in_test_neg = (f1 == test) & (f2 == test)
         else:
-            assigned = neg.apply(
-                lambda row: negative_pair_fold(
-                    policy, int(row["fold"]), int(row["fold_2"]), n_folds=n_folds
-                ),
-                axis=1,
+            # Vectorized negative_pair_fold (the same rule, no row loop):
+            # train-side endpoint present -> min(f1, f2), else fold_a. An
+            # empty negative population yields empty assignments — recorded,
+            # never a crash.
+            import numpy as np
+
+            train_side = (f1 < n_folds - 2) | (f2 < n_folds - 2)
+            assigned = pd.Series(
+                np.where(train_side, np.minimum(f1, f2), f1), index=neg.index
             )
             in_dev_neg = assigned == dev
             in_test_neg = assigned == test

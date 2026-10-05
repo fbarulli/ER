@@ -2,9 +2,7 @@
 from pathlib import Path
 import hashlib
 import json
-import os
 import subprocess
-import sys
 import pandas as pd
 
 from model_tracks.config import load_config

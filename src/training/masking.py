@@ -24,11 +24,14 @@ from tqdm import tqdm
 from core.common import load_config, training_cfg
 from core.schemas import MaskingResult
 
-# extent band SSOT — read once at import from config/training.yaml (masking:
-# block, validated by MaskingSpec at load). No inline literals (owner Q27:
-# the config, not the signature, declares the band).
-_MASK_LO = float(training_cfg().masking.mask_lo)
-_MASK_HI = float(training_cfg().masking.mask_hi)
+# extent band SSOT — config/training.yaml masking: block (validated by
+# MaskingSpec at load), read at CALL time so refresh_training_config() after
+# the gate-census publish can never be shadowed by an import-time snapshot.
+# No inline literals (owner Q27: the config, not the signature, declares the
+# band).
+def _mask_band() -> tuple[float, float]:
+    masking = training_cfg().masking
+    return float(masking.mask_lo), float(masking.mask_hi)
 
 MASK_TOKEN = "[MASK]"
 
@@ -214,8 +217,9 @@ def mask_text(
     """
     if rng is None:
         rng = random.Random()
-    lo = _MASK_LO if lo is None else lo
-    hi = _MASK_HI if hi is None else hi
+    band_lo, band_hi = _mask_band()
+    lo = band_lo if lo is None else lo
+    hi = band_hi if hi is None else hi
     if mask_prob is None:
         mask_prob = lo + (hi - lo) * rng.random()
     toks = text.split()
@@ -276,8 +280,9 @@ def augment_pairs(
     new_bc = [str(x) for x in row_bc]
     extra = []
     base = len(payload)
-    effective_lo = _MASK_LO if lo is None else float(lo)
-    effective_hi = _MASK_HI if hi is None else float(hi)
+    band_lo, band_hi = _mask_band()
+    effective_lo = band_lo if lo is None else float(lo)
+    effective_hi = band_hi if hi is None else float(hi)
     for i in tqdm(mask_idx, unit="pair", desc="mask", disable=None):
         a, b = int(pos[i][0]), int(pos[i][1])
         if target_fields is None:
@@ -908,6 +913,7 @@ def augment_value_swaps(
             rejected("anchor_outside_train")
             continue
         anchor_fields = _field_surfaces(payload[a])
+        anchor_tokens = set(payload[a].split())
         anchor_entities = {entities[a], entities[b]}
         chosen: tuple[str, list[str], list[str] | None, int, int] | None = None
         for _attempt in range(14):
@@ -923,7 +929,7 @@ def augment_value_swaps(
                 # cross-seller, so a same-store donor teaches the wrong gap
                 continue
             if max_donor_overlap is not None:
-                anchor_toks = set(payload[a].split())
+                anchor_toks = anchor_tokens
                 donor_toks = set(payload[c].split())
                 union = anchor_toks | donor_toks
                 if union and len(anchor_toks & donor_toks) / len(union) >= max_donor_overlap:
@@ -1020,7 +1026,7 @@ def augment_value_swaps(
                 "donor_split": "train" if allowed_payload_indices is not None else None,
                 "donor_anchor_entity": str(row_bc[c]),
                 "donor_pair_entity": str(row_bc[d]),
-                "fields_before": {field: _field_surfaces(payload[a]).get(field, [])},
+                "fields_before": {field: anchor_fields.get(field, [])},
                 "fields_after": {field: _field_surfaces(swapped_anchor).get(field, [])},
                 "fields_hit": [field],
                 "donor_anchor_payload_idx": c,
@@ -1287,7 +1293,7 @@ def augment_counterfactual_twins(
                 # cross-seller, so a same-store donor teaches the wrong gap
                 continue
             if max_donor_overlap is not None:
-                anchor_toks = set(payload[a].split())
+                anchor_toks = anchor_tokens
                 donor_toks = set(payload[c].split())
                 union = anchor_toks | donor_toks
                 if union and len(anchor_toks & donor_toks) / len(union) >= max_donor_overlap:

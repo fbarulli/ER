@@ -1,7 +1,6 @@
 """One deduplicated prepared-input package for one all-track Colab run."""
 import json
 from pathlib import Path
-import subprocess
 import yaml
 
 from core.portable_archive import write_archive, verify_archive, verified_archive
@@ -41,7 +40,7 @@ def runtime_snapshot_files(*, ablation_config: Path | None = None) -> dict[str, 
 
 
 def package(config: Path, output: Path) -> Path:
-    from core.common import F, TRAIN_ROOT
+    from core.common import F, TRAIN_ROOT, git_revision
     from core.timing import Timing
 
     timing = Timing("model_tracks.package")
@@ -149,7 +148,7 @@ def package(config: Path, output: Path) -> Path:
     for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
         source = Path(F[key]).resolve()
         files[source.relative_to(TRAIN_ROOT).as_posix()] = source
-    revision = subprocess.run(['git','rev-parse','HEAD'],cwd=TRAIN_ROOT,capture_output=True,text=True,check=True).stdout.strip()
+    revision = git_revision()
     archive = write_archive(output,files,inline=inline,manifest_name='model_tracks_package.json',
                             metadata={'schema':'er-model-tracks-package-v1','revision':revision,'preflight':checks},
                             profile=True)

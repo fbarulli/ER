@@ -9,8 +9,16 @@ import numpy as np
 import pandas as pd
 from graph_tracks.data import file_hash
 
+_CONTENT_HASH_MEMO: dict[tuple, str] = {}
+
 def composition_fingerprint():
-    """Fingerprint the local composition code and all shipped parser config."""
+    """Fingerprint the local composition code and all shipped parser config.
+
+    Same stat-signature memo as checkpoint_hash (mtime+size identify
+    content). The fingerprinted files are editable source/config, so any
+    write to them changes mtime_ns and forces a re-hash; only repeated
+    READS within a process reuse the digest.
+    """
     from core.common import TRAIN_ROOT
     files = list((TRAIN_ROOT / 'src/core').rglob('*.py'))
     files += list((TRAIN_ROOT / 'src/ner').rglob('*.py'))
@@ -18,11 +26,23 @@ def composition_fingerprint():
     files += [TRAIN_ROOT / 'config' / name for name in (
         'paths.yaml', 'training.yaml', 'identity_dimensions.yaml',
         'identity_reviews.json', 'vocabulary.json')]
+    files.sort()
+    tracked = []
+    for path in files:
+        info = path.stat()
+        tracked.append((path.relative_to(TRAIN_ROOT).as_posix(), info.st_mtime_ns, info.st_size))
+    signature = ('composition_fingerprint', tuple(tracked))
+    if len(_CONTENT_HASH_MEMO) > 64:
+        _CONTENT_HASH_MEMO.clear()
+    memoized = _CONTENT_HASH_MEMO.get(signature)
+    if memoized is not None:
+        return memoized
     digest = hashlib.sha256()
-    for path in sorted(files):
+    for path in files:
         digest.update(path.relative_to(TRAIN_ROOT).as_posix().encode())
         digest.update(bytes.fromhex(file_hash(path)))
-    return digest.hexdigest()
+    _CONTENT_HASH_MEMO[signature] = digest.hexdigest()
+    return _CONTENT_HASH_MEMO[signature]
 
 
 def compose_texts(catalog: Path, *, composer=None):
@@ -52,17 +72,31 @@ def texts_hash(texts):
     return hashlib.sha256(json.dumps(texts, ensure_ascii=False).encode()).hexdigest()
 
 
-def checkpoint_hash(path: Path) -> str:
+def checkpoint_hash(path: Path, *, use_memo: bool = True) -> str:
     if not path.is_dir():
         raise ValueError('checkpoint must be a local directory; remote revisions are not pinned here')
     files = sorted(p for p in path.rglob('*') if p.is_file())
     if not files:
         raise ValueError('empty checkpoint')
+    # stat-signature caching assumes checkpoint files are immutable once
+    # published (mtime+size identify content). Provenance gates pass
+    # use_memo=False: a re-hash must never be a stat comparison.
+    tracked = []
+    for file in files:
+        info = file.stat()
+        tracked.append((file.relative_to(path).as_posix(), info.st_mtime_ns, info.st_size))
+    signature = ('checkpoint_hash', str(path.resolve()), tuple(tracked))
+    if len(_CONTENT_HASH_MEMO) > 64:
+        _CONTENT_HASH_MEMO.clear()
+    memoized = _CONTENT_HASH_MEMO.get(signature) if use_memo else None
+    if memoized is not None:
+        return memoized
     digest = hashlib.sha256()
     for file in files:
         digest.update(str(file.relative_to(path)).encode())
         digest.update(bytes.fromhex(file_hash(file)))
-    return digest.hexdigest()
+    _CONTENT_HASH_MEMO[signature] = digest.hexdigest()
+    return _CONTENT_HASH_MEMO[signature]
 
 
 def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64, device='cpu', input_metadata=None):
