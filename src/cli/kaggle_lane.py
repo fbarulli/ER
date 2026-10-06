@@ -1208,16 +1208,22 @@ def stream_kernel_logs(slug: str, log_path: Path | None = None) -> dict[str, Any
         # FileDownload.prepare_from returns the live streamed requests.Response
         # (text/event-stream, "data: {stream_name,time,data}" SSE frames).
         plan["stream_url"] = str(getattr(response, "url", "") or "")
-        for raw in response.iter_lines(decode_unicode=True):
+        # Decode UTF-8 explicitly: iter_lines(decode_unicode=True) would use
+        # requests' latin-1 default and mangle the box-drawing progress bars.
+        for raw in response.iter_lines():
             if not raw:
                 continue
-            log_handle.write(raw + "\n")
+            line = raw.decode("utf-8", errors="replace") \
+                if isinstance(raw, bytes) else raw
+            if not line:
+                continue
+            log_handle.write(line + "\n")
             log_handle.flush()
-            line = raw[5:].strip() if raw.startswith("data:") else raw
+            line = line[5:].strip() if line.startswith("data:") else line
             try:
                 payload = json.loads(line)
             except (json.JSONDecodeError, ValueError):
-                print(f"[stream {kernel}] {raw[:200]}", flush=True)
+                print(f"[stream {kernel}] {line[:200]}", flush=True)
                 continue
             if not isinstance(payload, dict):
                 print(f"[stream {kernel}] {line[:200]}", flush=True)
