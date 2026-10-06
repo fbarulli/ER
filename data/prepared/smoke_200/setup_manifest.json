@@ -1,36 +1,45 @@
 {
-  "excluded_unassigned_listings": 35119,
-  "git_revision": "29317e5d3913b6bcac193ca8dd70ae77d566b06b",
-  "identity_policy_sha256": "0c176f054d0e66ad957f9238605d05cb7ef7ed717cfaecbcefd114b2ce52f62c",
-  "labeled_pairs_sha256": "5f75706dcbcfb7c495938e638957fe86bc95f77d5e8189e54d27975228dfc25d",
-  "negative_policy": "same-split labeled negatives only",
+  "augmentation": "shared frozen text objective; masked, swapped and counterfactual endpoints retained",
+  "excluded_unassigned_listings": 37025,
+  "git_revision": "94b2473538b0ffcc75cf865ddb3b387ef4d14513",
+  "identity_policy_sha256": "70eb92bb1ce770294b7addc8232e537fc9ed134ef3c1ac7dbf62427111b39ea2",
+  "labeled_pairs_sha256": "6f8b77a3b7b80a223254fe0a7651708278ed6ca4dc9764b208809d46352f7109",
+  "missing_axes": [
+    "difficulty",
+    "gate_evidence",
+    "gendata",
+    "masking"
+  ],
+  "negative_policy": "exact shared training negatives; unchanged clean evaluation negatives",
   "pair_counts": {
     "dev": {
-      "0": 35,
-      "1": 2847
+      "0": 34,
+      "1": 2780
     },
     "test": {
-      "0": 75,
-      "1": 2929
+      "0": 31,
+      "1": 2765
     },
     "train": {
-      "0": 117,
-      "1": 5566
+      "0": 38400,
+      "1": 38400
     }
   },
-  "pair_protocol": "first listing per labeled entity plus same-entity positive chains",
-  "parent_setup_sha256": "19780317ef89079724ecd7bc2be0a34dac9f7ad9d92237436b50c193bcf36cef",
+  "pair_protocol": "shared frozen training objective; clean listing-only dev/test evaluation",
+  "parent_setup_sha256": "3e42c269a7815e4fbe3f14ef30598e94c97e092aedce875161e774597d69c587",
   "schema": "er-track-setup-v1",
   "seed": 42,
+  "shared_training_data_sha256": "dfcc9ee9de730341429aafb0cae5264b391abb3c5ecb65e45f56a47e9737e6fb",
   "skipped_labels": {
-    "cross_split_negative": 379,
-    "untrusted_identity_chain_listings": 3459
+    "cross_split_negative": 351,
+    "untrusted_identity_chain_listings": 3594
   },
   "smoke": true,
-  "source_catalog_sha256": "8b2cf874879a5bf7cde51a046cd5db627f3f3874f50d8ad91271a8f083d2e74e",
+  "source_catalog_sha256": "0a879253d8d041d77d38601d775d94e78e42ab877b9cd0c55bf01c6d5f9ba18e",
   "source_listing_count": 200,
+  "source_trace_columns": [],
   "split_protocol": "training.folds.derive_holdout",
-  "text_checkpoint": "/tmp/opencode/er-rename/artifacts/models/all-MiniLM-L6-v2",
+  "text_checkpoint": "artifacts/models/all-MiniLM-L6-v2",
   "text_checkpoint_sha256": "a3f36d62c73027de84a628b90e8c4ae133dafb21fe4b7ede7740923b1c99ccab",
   "text_checkpoint_status": "local baseline; fine-tuning history not inferred"
 }

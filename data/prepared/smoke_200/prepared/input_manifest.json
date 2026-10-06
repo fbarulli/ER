@@ -1,5 +1,6 @@
 {
-  "catalog_sha256": "09565ee4814efbd906fb7164e4de964096431cac91e2cb23302e52966cda705e",
+  "augmentation": "not_applicable: fixed graph pairs; no masking/gendata pipeline",
+  "catalog_sha256": "d248d53febe007f1461976aafb58b8706958c62d59212d78c8b1e1a725b29fde",
   "excluded_model_inputs": [
     "gtin",
     "verified identity edges",
@@ -8,13 +9,24 @@
   "feature_scope": "derived from core.sku_identity.graph_schema; every extractor descriptor is a model input",
   "identity_dimensions_sha256": "6cf653b52b11a1128db1867f484c0dee649cddc639863e67444eee962398aa1d",
   "identity_extractor": "core.sku_identity.row_identity",
-  "identity_policy_sha256": "0c176f054d0e66ad957f9238605d05cb7ef7ed717cfaecbcefd114b2ce52f62c",
-  "listings_sha256": "df2aba1faefc764f597b7e71dd91c4093cc3f97c890d5e76d4f5df832e5689b1",
+  "identity_policy_sha256": "70eb92bb1ce770294b7addc8232e537fc9ed134ef3c1ac7dbf62427111b39ea2",
+  "listings_sha256": "f2dcba9b8abb4122751537c56c2d2e9bca42721bc3c88135aad14e7ce33fedfe",
   "numeric": [
     "volume_ml",
     "pack"
   ],
-  "pairs_sha256": "42d026a7abcbba34dccf56b8b23175bdefef4e61b411bc43b0c091806578e3a6",
+  "pair_lineage_sha256": null,
+  "pair_trace": {
+    "missing_axes": [
+      "difficulty",
+      "gate_evidence",
+      "gendata",
+      "masking"
+    ],
+    "source_trace_columns": [],
+    "status": "unknown: no source lineage supplied"
+  },
+  "pairs_sha256": "35beee423ef9230457f128a1cf3703ba605353aae169d9f4fcd476ca0b2404b6",
   "relations": [
     "brand",
     "flavor",
@@ -26,7 +38,7 @@
     "package_type",
     "package_material"
   ],
-  "report_attributes_sha256": "3b8b7765f8bc71ba99222c97a4ee38fde38185cec3cfc391df889547d2207f08",
+  "report_attributes_sha256": "7a84d633b28a8fb61e4e10b467bb73d07bc7be8f3daee31be9762af2b6b8298a",
   "schema": "er-graph-inputs-v1",
-  "splits_sha256": "7c3fbab81ec158ca1ff1abe1d04d28b5886d0ee712f0c9f1d17217670126a63e"
+  "splits_sha256": "8867036ca638593bad1b9b76e3c9203fa55bc4d444c21f06c6cabc66813dd4f2"
 }

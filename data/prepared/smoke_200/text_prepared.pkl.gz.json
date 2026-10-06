@@ -9,21 +9,42 @@
     "keep_redundant_attribute_words": true,
     "emit_singleton_pack_token": false
   },
-  "n_df": 200,
-  "n_payload": 13678,
-  "n_pos": 418,
-  "n_neg": 98,
-  "n_train_neg": 98,
-  "n_labeled_pairs_bytes": 23570,
-  "n_canonical_records_bytes": 73323280,
-  "n_gate_results_bytes": 29692886,
-  "sha256": "93b76433c0cb94ec52dbe354f5c1f439a56dec91f944a474cfeae11f75865666",
+  "n_df": 192,
+  "n_payload": 13316,
+  "n_pos": 197,
+  "n_neg": 32,
+  "n_train_neg": 32,
+  "n_labeled_pairs_bytes": 23300,
+  "n_canonical_records_bytes": 73192913,
+  "n_gate_results_bytes": 29527906,
+  "sha256": "d9ab5d18e58dd97f51e84affa8f75395c86916feb46c88b45d8fcc4bd0acb4f5",
   "masking_config": {
     "enabled": true,
+    "balanced_augmentation": {
+      "enabled": true,
+      "counts": {
+        "minted_negatives": 12000,
+        "masked_minted_negatives": 6000,
+        "masked_positives": 1200,
+        "vendor_variation_positives": 300
+      },
+      "sample_counts": {
+        "minted_negatives": 100,
+        "masked_minted_negatives": 50,
+        "masked_positives": 10,
+        "vendor_variation_positives": 5
+      },
+      "original_objective_share": 0.5,
+      "min_attribute_pairs": 10,
+      "donor_attempts": 64,
+      "max_variants_per_anchor_field": 2,
+      "max_attribute_share": 0.35,
+      "mask_extent": 0.15
+    },
     "profile": "baseline",
     "frac": 0.8,
-    "mask_hard_negatives": true,
-    "hard_negative_frac": 0.3,
+    "mask_hard_negatives": false,
+    "hard_negative_frac": 0.0,
     "mask_prob": null,
     "mask_lo": 0.2,
     "mask_hi": 0.3,
@@ -101,7 +122,8 @@
     "candidate_pool_size": 10000
   },
   "ratio_to_hard": 1.0,
-  "static_view_ratio": 4.26530612244898,
-  "effective_train_ratio": 4.26530612244898,
-  "ratio_contract_note": "Guaranteed bundle-only view ratio 4.265; easy-negative settings (enabled, ratio=1) are a possible contrastive projection and are not guaranteed."
+  "static_view_ratio": 6.15625,
+  "effective_train_ratio": 6.15625,
+  "ratio_contract_note": "Guaranteed bundle-only view ratio 6.156; easy-negative settings (enabled, ratio=1) are a possible contrastive projection and are not guaranteed.",
+  "augmentation_coverage": {}
 }
