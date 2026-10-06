@@ -306,6 +306,9 @@ def package_submission(input_path: Path, output_path: Path) -> Path:
 # ── remote bundle-generation kernel (owner ruling 2026-10-06: CPU-only) ─────
 
 CREDENTIALS_PATH = Path.home() / ".kaggle" / "kaggle.json"
+# kaggle CLI 2.x consumes this token file (OAuth-free path); the legacy
+# kaggle.json stays alongside for the 1.x/hub readers.
+ACCESS_TOKEN_PATH = Path.home() / ".kaggle" / "access_token"
 BUNDLE_KERNEL_CODE_FILE = "bundle_cpu.py"
 
 BUNDLE_KERNEL_SCRIPT = '''\
@@ -437,7 +440,12 @@ def write_credentials(*, key_env: str | None = None, execute: bool) -> dict[str,
         json.dumps({"username": spec.username, "key": token}) + "\n",
         encoding="utf-8")
     CREDENTIALS_PATH.chmod(0o600)
+    # The 2.x CLI loads its token from here on every fresh process; no
+    # trailing newline — CLI readers do not strip reliably.
+    ACCESS_TOKEN_PATH.write_text(token, encoding="utf-8")
+    ACCESS_TOKEN_PATH.chmod(0o600)
     plan["written"] = True
+    plan["access_token_written"] = str(ACCESS_TOKEN_PATH)
     return plan
 
 

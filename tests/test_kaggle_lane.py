@@ -286,24 +286,31 @@ def _kernel_spec(tmp_path, monkeypatch, **updates):
 def test_credentials_dry_run_never_writes(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch)
     target = tmp_path / "home" / ".kaggle" / "kaggle.json"
+    tokens = tmp_path / "home" / ".kaggle" / "access_token"
     monkeypatch.setattr(kaggle_lane, "CREDENTIALS_PATH", target)
+    monkeypatch.setattr(kaggle_lane, "ACCESS_TOKEN_PATH", tokens)
     monkeypatch.setenv("KAGGLE_API_KEY", "token-abc")
     plan = kaggle_lane.write_credentials(execute=False)
     assert plan["mode"] == "dry-run" and plan["key_present"] is True
     assert plan["username"] == "owner"
-    assert not target.exists()
+    assert not target.exists() and not tokens.exists()
 
 
 def test_credentials_execute_writes_0600_and_fail_loud(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch)
     target = tmp_path / "home" / ".kaggle" / "kaggle.json"
+    tokens = tmp_path / "home" / ".kaggle" / "access_token"
     monkeypatch.setattr(kaggle_lane, "CREDENTIALS_PATH", target)
+    monkeypatch.setattr(kaggle_lane, "ACCESS_TOKEN_PATH", tokens)
     monkeypatch.setenv("KAGGLE_API_KEY", "token-abc")
     plan = kaggle_lane.write_credentials(execute=True)
     assert plan["written"] is True
     document = json.loads(target.read_text())
     assert document == {"username": "owner", "key": "token-abc"}
     assert target.stat().st_mode & 0o777 == 0o600
+    # The 2.x CLI token file: no trailing newline, 0600.
+    assert tokens.read_text() == "token-abc"
+    assert tokens.stat().st_mode & 0o777 == 0o600
     monkeypatch.setenv("KAGGLE_API_KEY", "")
     with pytest.raises(RuntimeError, match="empty or unset"):
         kaggle_lane.write_credentials(execute=True)
