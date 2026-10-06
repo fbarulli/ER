@@ -123,7 +123,8 @@ wrapped = (
     "echo '[prepare-process] resource snapshot after prepare'; free -h || true; "
     "printf '%s\\\\n' \\"$rc\\" > " + shlex.quote(str(status_path)) + "; exit $rc"
 )
-env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src")}}
+env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
+    "ER_PACKAGE_SKIP_ABLATION": "1"}}
 with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
     child = subprocess.Popen(["/bin/bash", "-lc", wrapped], cwd=root, env=env,
         stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
