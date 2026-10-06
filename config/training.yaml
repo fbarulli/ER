@@ -507,7 +507,7 @@ evaluation:
   # previously a bare pydantic default_factory literal in graph_tracks/config.py
   # that both graph_tracks_*.yaml had to restate by hand.
   ann_recall_ks: [1, 5, 10, 50]
-  # "Recall at an agreed precision" (MODEL_TRACKS_PLAN.md evaluation table).
+  # "Recall at an agreed precision" (the model plan evaluation table).
   # The plan requires the agreement to be a declared value rather than a
   # floating target; this is it. Reported as recall_at_precision in every
   # track pair-metric row, alongside the agreed value it was computed at.
@@ -1209,6 +1209,12 @@ mining_profiles:
 # than carrying a module-specific config file. Paths are resolved by
 # core.common.ner_config(); no NER module infers a config location.
 ner:
+  archive_names:
+    checkpoint: latest_checkpoint.tar.zst
+    best_model: best_ner_model.tar.zst
+    final_model: ner_model_final.tar.zst
+    remote_model: model_bundle.tar.zst
+    published_final_model: ner_model.tar.zst
   base_dir: "."
   results_dir: "results"
   columns: &ner_columns

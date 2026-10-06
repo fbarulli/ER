@@ -93,6 +93,20 @@ def test_gpu_worker_exports_vectors_and_ablations_before_completion(tmp_path,mon
                           device='cuda',report_test=False,post_training_ablation=True)
     monkeypatch.setattr(worker,'load_config',lambda _:cfg)
     monkeypatch.setattr(prepared_bundle,'load_prepared_bundle',lambda _: (SimpleNamespace(payload_variant='full'),{}))
+    # worker.py reads the bundle's typed sidecar header (bundle -> bundle.json)
+    # to build the trainer command before the barrier; stubbing the full
+    # loader does not cover that read, so the sidecar must exist on disk.
+    import json as _json
+    from training.prepared_bundle import PreparedBundleManifest as _Manifest
+    _header = {
+        'payload_variant': 'full', 'masking_profile': 'baseline',
+        'model_input': {'profile': 'cleaned', 'include_evidence': False},
+        'n_df': 1, 'n_payload': 1, 'n_pos': 1, 'n_neg': 1, 'n_train_neg': 1,
+        'n_labeled_pairs_bytes': 1, 'n_canonical_records_bytes': 1,
+        'n_gate_results_bytes': 1, 'sha256': '0' * 64,
+    }
+    _Manifest.model_validate(_header)   # fail here, not three frames deep
+    (tmp_path/'bundle.json').write_text(_json.dumps(_header))
     monkeypatch.setattr(worker,'wait_for_start',lambda *args:None)
     order = []
     monkeypatch.setattr(worker.subprocess,'run',lambda *args,**kwargs:order.append('train'))

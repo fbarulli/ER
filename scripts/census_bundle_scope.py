@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from core.common import audit_finding
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from core.gtin import gtin_validity
@@ -116,7 +118,7 @@ def main():
         'affected_rows': sum(f['rows'] for f in census),
         'families_detail': census,
     }
-    (ROOT / 'identity/findings/corpus_bundle_scope.json').write_text(
+    (audit_finding('corpus_bundle_scope.json')).write_text(
         json.dumps(out, indent=2) + '\n')
 
     print(json.dumps({k: v for k, v in out.items() if k != 'families_detail'}, indent=2))

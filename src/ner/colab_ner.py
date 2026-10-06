@@ -47,7 +47,7 @@ The dry run validates:
 - Hugging Face token file and repository access
 - Colab CLI availability
 - whether the configured Colab session currently exists
-- whether ``checkpoints/latest_checkpoint.zip`` exists in the HF repo
+- whether ``checkpoints/latest_checkpoint.tar.zst`` exists in the HF repo
 
 It does not create a session, upload files, install packages, restore a
 checkpoint, download a model, or start training.
@@ -87,17 +87,17 @@ import shutil
 import subprocess
 import tempfile
 import time
-import zipfile
 from pathlib import Path
 
-from core.common import TRAINING_CONFIG_PATH, TRAIN_ROOT, ner_config, resolve_model
+from core.common import TRAINING_CONFIG_PATH, TRAIN_ROOT, ner_config, resolve_model, training_cfg
+from core.archive_reader import tar_archive
 
 NER_SOURCE_DIR = Path(__file__).resolve().parent
 ARTIFACT_MANIFEST_NAME = "ner_artifacts_manifest.json"
 EXPECTED_FINAL_ARTIFACTS = (
     "ner_errors.csv",
     "training_metadata.json",
-    "ner_model_final.zip",
+    ner_config()['archive_names']['final_model'],
 )
 
 
@@ -189,7 +189,7 @@ def load_settings() -> dict:
         "remote_input_jsonl": f"{remote_results_dir}/{input_jsonl.name}",
         "remote_output_dir": f"{remote_results_dir}/{output_dir.name}",
         "remote_model_name": remote_model_name,
-        "remote_model_archive": f"{remote_project_dir}/model_bundle.zip",
+        "remote_model_archive": f"{remote_project_dir}/{config['archive_names']['remote_model']}",
     }
 
 
@@ -291,6 +291,7 @@ from pathlib import Path
 for path in [
     {settings["remote_project_dir"]!r},
     {settings["remote_results_dir"]!r},
+    {str(Path(settings["remote_project_dir"]) / "core")!r},
     {str(Path(settings["remote_model_name"]).parent)!r},
 ]:
     Path(path).mkdir(parents=True, exist_ok=True)
@@ -316,6 +317,7 @@ subprocess.check_call([
     "pydantic",
     "pyyaml",
     "huggingface_hub",
+    "backports.zstd",
 ])
 '''
     colab_exec(settings, code)
@@ -326,9 +328,13 @@ def upload_inputs(settings: dict) -> None:
 
     colab_upload(settings, NER_SOURCE_DIR / "ner.py", f"{remote}/ner.py")
 
+    for name in ('__init__.py', 'archive_reader.py'):
+        colab_upload(settings, TRAIN_ROOT / 'src/core' / name, f'{remote}/core/{name}')
+
     # Render the single authoritative NER section for the remote process.
     # It is an execution input, not another persistent config source.
     remote_config = ner_config()
+    remote_config["archives"] = training_cfg().archives.model_dump()
     remote_config["base_dir"] = settings["remote_project_dir"]
     remote_config["results_dir"] = settings["remote_results_dir"]
     remote_config["ner_training"] = dict(remote_config["ner_training"])
@@ -351,13 +357,9 @@ def upload_inputs(settings: dict) -> None:
 
     archive_base = Path(tempfile.mkdtemp(prefix="ner_model_")) / "model_bundle"
     try:
-        archive = Path(
-            shutil.make_archive(
-                str(archive_base),
-                "zip",
-                root_dir=str(settings["local_model_path"]),
-            )
-        )
+        archive = archive_base.with_name(ner_config()['archive_names']['remote_model'])
+        with tar_archive(archive, 'x') as bundle:
+            bundle.add(settings['local_model_path'], arcname='.')
         colab_upload(settings, archive, settings["remote_model_archive"])
     finally:
         shutil.rmtree(archive_base.parent, ignore_errors=True)
@@ -369,7 +371,10 @@ def ensure_remote_base_model(settings: dict) -> None:
     code = f'''
 from pathlib import Path
 import shutil
-import zipfile
+import sys
+from types import SimpleNamespace
+sys.path.insert(0, {settings['remote_project_dir']!r})
+from core.archive_reader import tar_archive
 
 target = Path({settings["remote_model_name"]!r})
 archive = Path({settings["remote_model_archive"]!r})
@@ -379,8 +384,8 @@ if not archive.is_file():
 if target.exists():
     shutil.rmtree(target)
 target.mkdir(parents=True, exist_ok=True)
-with zipfile.ZipFile(archive) as bundle:
-    bundle.extractall(target)
+with tar_archive(archive, settings=SimpleNamespace(**{training_cfg().archives.model_dump()!r})) as bundle:
+    bundle.extractall(target, filter="data")
 if not (target / "config.json").is_file():
     raise RuntimeError(f"shipped model is incomplete: {{target}}/config.json missing")
 print("[model] materialized:", target)
@@ -607,11 +612,11 @@ def download_results(settings: dict) -> None:
 
 
 def extract_final_model(settings: dict) -> None:
-    zip_path = settings["results_dir"] / "ner_model_final.zip"
+    archive_path = settings["results_dir"] / ner_config()["archive_names"]["final_model"]
     output_dir = settings["local_output_dir"]
 
-    if not zip_path.is_file():
-        log("[model] final ZIP was not downloaded")
+    if not archive_path.is_file():
+        log("[model] final archive was not downloaded")
         return
 
     if output_dir.exists():
@@ -619,8 +624,8 @@ def extract_final_model(settings: dict) -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(zip_path, "r") as archive:
-        archive.extractall(output_dir)
+    with tar_archive(archive_path) as archive:
+        archive.extractall(output_dir, filter="data")
 
     log(f"[model] extracted: {output_dir}")
 

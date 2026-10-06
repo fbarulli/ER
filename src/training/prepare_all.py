@@ -350,7 +350,10 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
             if negative_supply_run_tag:
                 stages[stages.index('validation'):stages.index('validation')] = ['negative_supply', 'discriminator']
             first = 'negative_supply' if resume_from == 'validation' else resume_from
-            for name in stages[stages.index(first):]:
+            from tqdm import tqdm
+            bar = tqdm(stages[stages.index(first):], desc='prepare_all',
+                       unit='stage', dynamic_ncols=True)
+            for name in bar:
                 stage_started = time.monotonic()
                 manifest.setdefault('stage_metrics', {})[name] = {
                     'status': 'running', 'started_at': datetime.now(timezone.utc).isoformat(),
@@ -500,11 +503,14 @@ def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
                     finished_at=datetime.now(timezone.utc).isoformat())
                 emit_timing(f'[timing] prepare.{name} state=completed elapsed_seconds={elapsed:.3f}', path=run_dir / prep.timings_log)
                 publish()
+            bar.close()
             manifest['status'] = 'complete'
             publish()
             print(f'[prepare] complete -> {manifest_path}', flush=True)
             return manifest_path
         except BaseException as error:
+            if 'bar' in locals():
+                bar.close()
             if name in manifest.get('stage_metrics', {}):
                 elapsed = round(time.monotonic() - stage_started, 3)
                 manifest.setdefault('stage_seconds', {})[name] = elapsed

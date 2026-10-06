@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT/'src'))
+from core.common import AUDIT_FINDINGS_DIR
 sys.path.insert(0, str(ROOT / 'src'))
 from core.gtin import gtin_validity
 from core.identity_policy import reviewed_row_mask
@@ -40,7 +42,7 @@ def text_identity(identity):
 
 
 def main():
-    out = ROOT / 'identity/findings'
+    out = AUDIT_FINDINGS_DIR
     digest = sha256_of(ROOT / 'dataset.csv')
     assert digest == EXPECTED_SHA, 'Scorecard dataset has changed'
     df = pd.read_csv(ROOT / 'dataset.csv', dtype=str, keep_default_na=False)

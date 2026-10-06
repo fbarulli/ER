@@ -13,6 +13,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from core.common import audit_finding
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 import pandas as pd
@@ -135,7 +137,7 @@ def main():
     df = pd.read_csv(ROOT / 'dataset.csv', dtype=str, keep_default_na=False)
     raw = {r['sku_id']: dict(r) for r in df[list(COLUMNS)].to_dict('records')}
 
-    j = json.load(open(ROOT / 'identity/findings/residual_cases.json'))
+    j = json.load(open(audit_finding('residual_cases.json')))
     neg = [c for c in j if c['kind'] == 'different_gtin']
     cards = []
     for c in neg:
@@ -174,7 +176,7 @@ def main():
     json.dump({'pairs': report, 'stats': {'absent': stats['absent'],
                                           'gap': stats['gap'],
                                           'gap_by_column': col_hit}},
-              open(ROOT / 'identity/findings/negative_missing_probe.json', 'w'),
+              open(audit_finding('negative_missing_probe.json'), 'w'),
               indent=1)
     print('missing dims verified:', stats['absent'] + stats['gap'])
     print('genuinely absent everywhere (all 13 columns):', stats['absent'])

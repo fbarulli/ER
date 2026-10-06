@@ -488,20 +488,25 @@ def test_frozen_canonical_records_have_no_leading_zero_gtins() -> None:
     must be rerun with the repair path (never silently compiled away).
     """
     canon = pd.read_csv("data/canonical_records.csv", dtype={"gtin": str}, keep_default_na=False)
-    # RE-PINNED 2026-10-01: 13,225 -> 13,216 canonicals (-9). Source:
-    # results/manifests/data_prep.json (run 2026-09-30 23:43-23:45):
-    # dataset.csv SHA 539c2479 rows=197,783 -> canonical_records.csv
-    # rows=13,216 SHA a655b27d; row_accounting closure 71,623 in ==
-    # 13,216 kept + 12,995 collapsed_same_gtin + 45,412 dropped
+    # RE-PINNED 2026-10-06: 13,216 -> 13,102 canonicals (-114). Prior pin
+    # (2026-10-01): 13,225 -> 13,216 (-9), measured against
+    # dataset_deduped.csv SHA 73a94016 / 63,079 rows.
+    # THIS re-pin rides an INPUT change, not a repair path: the deduped
+    # catalog is now SHA 0a879253 / 65,721 rows (+2,642), and data_prep was
+    # rerun against it. Source: results/manifests/data_prep.json (run
+    # 2026-10-06 08:24-08:36) — closure 71,623 in == 13,102 kept +
+    # 12,274 collapsed_same_gtin + 46,247 dropped
     # (gtin_missing_or_nan 41,545 / gtin_checksum_failed 3,715 /
-    # identity_review_quarantined 152). The old 13,225 was measured
-    # before the latest dedupe chain rebuild (dataset_deduped.csv SHA
-    # 73a94016, 63,079 rows; the 9-canonical shortfall rides that
-    # rebuild). Zero leading-zero GTINs: unchanged (re-measured 0 on
-    # the new export). If this fails again, the int64 hazard is live
-    # (or the export narrowed again): rerun data_prep with the repair
-    # path; never silently compile the guard away.
-    assert len(canon) == 13216
+    # identity_review_quarantined 987); gate_pairs 134,365.
+    # The -114 is carried by identity_review_quarantined growing 152 -> 987
+    # (+835), the documented identity-repair quarantine; collapsed_same_gtin
+    # moved 12,995 -> 12,274 (-721) as the larger catalog added same-GTIN
+    # coverage. Both are policy, not drift.
+    # THE HAZARD GUARD IS THE NEXT ASSERTION, not this count: leading-zero
+    # GTINs re-measured 0 on the new export, so the int64 join is still
+    # lossless. If the COUNT fails again with an UNCHANGED dataset_deduped.csv
+    # SHA, that is a real defect and this guard must not be relaxed.
+    assert len(canon) == 13102
     leading_zero = canon["gtin"].str.startswith("0").sum()
     assert int(leading_zero) == 0
     # every key byte-spells into the string-normalized map with no loss

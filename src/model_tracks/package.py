@@ -226,7 +226,6 @@ def _make_composer():
                 composed[key] = text
                 cache_bytes += cost
             return text
-    return composed[key]
     return compose
 
 

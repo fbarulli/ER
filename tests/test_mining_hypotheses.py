@@ -26,6 +26,8 @@ import ast
 import inspect
 import json
 import os
+from itertools import count
+from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
@@ -422,43 +424,79 @@ def _provenance_blocks() -> dict[str, str]:
         wanted.setdefault(key, node)
         index_of.setdefault(id(node), index)
 
-    for index, node in enumerate(fn.body):
-        text = ast.unparse(node)
-        if isinstance(node, ast.Assign):
-            target = ast.unparse(node.targets[0])
-            if target == "train_neg" and text == "train_neg = neg":
-                _record("alias", node, index)
-            elif target == "neg_sources":
-                _record("sources_init", node, index)
-            elif target == "train_neg_sources":
-                _record("sources_copy", node, index)
-            elif target == "balance_train_classes":
-                _record("balance_flag", node, index)
-        elif isinstance(node, ast.For) and ast.unparse(node.target) == (
-            "(enabled, candidates, source)"
-        ):
-            # The static miners (targeted attribute + cross-brand) append via
-            # ONE data-driven loop; the (enabled, candidates, source) tuples
-            # keep each population's provenance label. Both keys resolve to
-            # the loop so the sandbox execs it exactly once.
-            flat = text.replace("'", '"')
-            if "targeted_attribute_neg" in flat and "targeted_attribute_conflict" in flat \
-                    and "cross_brand_neg" in flat and "cross_brand_conflict" in flat:
-                _record("targeted", node, index)
-                _record("cross_brand", node, index)
-        elif isinstance(node, ast.If):
-            if ast.unparse(node.test) == "balance_train_classes":
-                # first: this block also mentions train_neg_sources and raises
-                _record("balance", node, index)
-            elif ast.unparse(node.test).startswith("len(neg_sources) != len(neg)"):
-                # Match on the TEST, not the body text: the masking block's
-                # text also contains the (nested) alignment check, and a
-                # text match would hand the sandbox the whole mask block.
-                _record("guard", node, index)
-            elif "_attr_neg = np.empty" in text:
-                _record("attr_mine", node, index)
-            elif "np.vstack([neg, _attr_neg])" in text:
-                _record("attr", node, index)
+    def _child_bodies(node: ast.AST) -> list[list[ast.stmt]]:
+        """Statement lists nested inside a node, in source order.
+
+        The provenance statements used to be direct children of the function.
+        Wrapping the augmentation block in a tracing/guard context manager
+        (`with trace_step(...)`) nests them one level deeper without changing
+        what they do, so this walks the WHOLE function rather than assuming a
+        flat body. Order is still train.py's own source order — the miner loop
+        feeds the `train_neg` alias that follows it, and a stale fixed order
+        silently drops appended rows.
+        """
+        bodies: list[list[ast.stmt]] = []
+        for attr in ("body", "orelse", "finalbody"):
+            value = getattr(node, attr, None)
+            if isinstance(value, list) and value and isinstance(value[0], ast.stmt):
+                bodies.append(value)
+        for handler in getattr(node, "handlers", None) or []:
+            bodies.append(handler.body)
+        return bodies
+
+    # One monotonically increasing counter over a pre-order walk keeps the
+    # source index comparable across nesting depths.
+    counter = count()
+
+    def walk(body: list[ast.stmt]) -> None:
+        for node in body:
+            index = next(counter)
+            text = ast.unparse(node)
+            if isinstance(node, ast.Assign):
+                target = ast.unparse(node.targets[0])
+                if target == "train_neg" and text == "train_neg = neg":
+                    _record("alias", node, index)
+                elif target == "neg_sources":
+                    _record("sources_init", node, index)
+                elif target == "train_neg_sources":
+                    _record("sources_copy", node, index)
+                elif target == "balance_train_classes":
+                    _record("balance_flag", node, index)
+            elif isinstance(node, ast.For) and ast.unparse(node.target) == (
+                "(enabled, candidates, source)"
+            ):
+                # The static miners (targeted attribute + cross-brand) append via
+                # ONE data-driven loop; the (enabled, candidates, source) tuples
+                # keep each population's provenance label. Both keys resolve to
+                # the loop so the sandbox execs it exactly once.
+                flat = text.replace("'", '"')
+                if "targeted_attribute_neg" in flat and "targeted_attribute_conflict" in flat \
+                        and "cross_brand_neg" in flat and "cross_brand_conflict" in flat:
+                    _record("targeted", node, index)
+                    _record("cross_brand", node, index)
+            elif isinstance(node, ast.If):
+                # Prefix match, like `guard` below: the balanced-augmentation
+                # lane narrowed this guard to
+                # `balance_train_classes and not balanced_policy.enabled`,
+                # because it balances the classes itself. The block still owns
+                # the explicit class-balancing path; only its guard condition
+                # grew a clause, so an equality match would miss it.
+                if ast.unparse(node.test).startswith("balance_train_classes"):
+                    # first: this block also mentions train_neg_sources and raises
+                    _record("balance", node, index)
+                elif ast.unparse(node.test).startswith("len(neg_sources) != len(neg)"):
+                    # Match on the TEST, not the body text: the masking block's
+                    # text also contains the (nested) alignment check, and a
+                    # text match would hand the sandbox the whole mask block.
+                    _record("guard", node, index)
+                elif "_attr_neg = np.empty" in text:
+                    _record("attr_mine", node, index)
+                elif "np.vstack([neg, _attr_neg])" in text:
+                    _record("attr", node, index)
+            for nested in _child_bodies(node):
+                walk(nested)
+
+    walk(fn.body)
     order = [
         "alias", "sources_init", "sources_copy", "targeted", "cross_brand",
         "attr_mine", "attr", "guard", "balance_flag", "balance",
@@ -525,6 +563,13 @@ def _run_provenance_case(
             "gate": {"vol_tolerance": 0.05, "vol_abs_tolerance": 5.0},
         },
         "mining_enabled": True,
+        # train.py's balance guard is
+        # `balance_train_classes and not balanced_policy.enabled`: the
+        # balanced-augmentation lane balances the classes itself, so the
+        # explicit path only runs when augmentation is off. Every case here
+        # asserts the EXPLICIT path, so report the augmentation lane as off
+        # rather than letting the block no-op and assert nothing.
+        "balanced_policy": SimpleNamespace(enabled=False),
         "print": lambda *a, **k: None,
     }
     try:

@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+import json
+import yaml
 import zipfile
 import sys
 from types import SimpleNamespace
@@ -71,10 +73,22 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
         publications.append((paths, message))
     monkeypatch.setattr(publish, 'push_artifacts', record_publication)
     inputs = tmp_path / 'inputs.zip'
+    # A REAL verified package: colab.run opens it through verified_archive()
+    # and re-hashes every member against the manifest inventory, so a zip
+    # holding only the suite config no longer passes. `revision` is the
+    # package's own revision, which the checkout script fetches separately.
+    import hashlib as _hashlib
+    from model_tracks.package import package_member as _member
+    _suite = ('setup_dir: shared\ntext_bundle: shared/text.pkl.gz\ndevice: cpu\n'
+              'publish_git: false\npublish_dvc: false\n').encode()
+    _members = {_member('suite_package_config'): _suite}
+    _inventory = {name: _hashlib.sha256(blob).hexdigest()
+                  for name, blob in _members.items()}
     with zipfile.ZipFile(inputs, 'w') as archive:
-        archive.writestr('data/model_tracks/suite.yaml',
-                         'setup_dir: shared\ntext_bundle: shared/text.pkl.gz\ndevice: cpu\n'
-                         'publish_git: false\npublish_dvc: false\n')
+        for name, blob in _members.items():
+            archive.writestr(name, blob)
+        archive.writestr('model_tracks_package.json',
+                         json.dumps({'files': _inventory, 'revision': 'original'}))
     metadata = {'revision': 'original', 'files': {'source': 'hash'}}
     monkeypatch.setattr(colab, 'verify', lambda _: metadata)
     output = tmp_path / 'stopped'
@@ -112,7 +126,13 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     monkeypatch.setitem(sys.modules, 'cli.colab', backend)
     with pytest.raises(RuntimeError, match='worker failure'):
         colab.run(inputs, 'smoke')
-    recovery = tmp_path / 'results/model_tracks/smoke.recovery.zip'
+    # The recovery archive follows the suite's result_archive_format, which is
+    # tar.zst for current suites (immutable prepared inputs stay zip). Derive it
+    # from the same validated config run() uses instead of hardcoding .zip.
+    from model_tracks.config import SuiteConfig
+    _suffix = '.' + SuiteConfig.model_validate(
+        yaml.safe_load(_suite.decode())).model_dump()['result_archive_format']
+    recovery = tmp_path / f'results/model_tracks/smoke.recovery{_suffix}'
     assert verify_archive(recovery, 'suite_recovery_manifest.json')['input_package'] == metadata
     assert any('recovery_package' in script for script in scripts)
     assert len(publications) == 1

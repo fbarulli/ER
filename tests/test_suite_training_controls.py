@@ -1,6 +1,6 @@
 """Suite training-control surfaces: what each worker command must carry.
 
-The text-worker pin reads only a typed sidecar header (PIPE.md forbids
+The text-worker pin reads only a typed sidecar header (docs/pipeline.md forbids
 unpickling the full bundle just for the command), so the fixture builds a
 minimal-but-valid PreparedBundleManifest sidecar; the trainer still owns
 the full verified load after the barrier.

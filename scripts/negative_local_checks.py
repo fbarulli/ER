@@ -12,6 +12,8 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from core.common import audit_finding
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 import pandas as pd
@@ -50,7 +52,7 @@ def main():
         if bs and c13:
             brand_gtins[bs].append(c13)
 
-    j = json.load(open(ROOT / 'identity/findings/residual_cases.json'))
+    j = json.load(open(audit_finding('residual_cases.json')))
     neg = [c for c in j if c['kind'] == 'different_gtin']
     pairs = []
     for c in neg:
@@ -119,7 +121,7 @@ def main():
                                             and aL['search_keywords'] is not None)}
         out.append(rec)
 
-    (ROOT / 'identity/findings/negative_local_checks.json').write_text(
+    (audit_finding('negative_local_checks.json')).write_text(
         json.dumps({'pairs': out}, indent=1))
     for rec in out:
         print(f"== {rec['id']} {rec['title']}")

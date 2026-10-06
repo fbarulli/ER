@@ -14,6 +14,8 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from core.common import audit_finding
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 import pandas as pd
@@ -76,7 +78,7 @@ def main():
         'brands_flagged': len(flagged),
         'flagged': flagged,
     }
-    (ROOT / 'identity/findings/pseudo_gtin_census.json').write_text(
+    (audit_finding('pseudo_gtin_census.json')).write_text(
         json.dumps(out, indent=1) + '\n')
 
     lines = ['# Pseudo-GTIN census (corpus-wide brand-prefix family scan)', '',
@@ -98,7 +100,7 @@ def main():
                              ret=', '.join(f'{k} x{v}' for k, v in
                                            list(f['outlier_retailers'].items())[:3]),
                              rdg=f['reading']))
-    (ROOT / 'identity/findings/PSEUDO_GTIN_CENSUS.md').write_text('\n'.join(lines) + '\n')
+    (audit_finding('PSEUDO_GTIN_CENSUS.md')).write_text('\n'.join(lines) + '\n')
     mp_flagged = [f for f in flagged if 'marketplace' in f['reading']]
     print('brands flagged:', len(flagged),
           '| marketplace-attributed:', len(mp_flagged),

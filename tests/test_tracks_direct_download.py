@@ -14,8 +14,25 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
     settings = dict(setup_dir='data/setup', text_bundle='data/text.pkl', device='cpu',
                     publish_dvc=publishing, publish_git=False)
     inputs = tmp_path / 'inputs.zip'
+    # A REAL verified package: model_tracks.package writes
+    # model_tracks_package.json with a sha256 inventory of every other member,
+    # and colab.py opens it through verified_archive() (not verify_archive),
+    # which re-hashes each member against that inventory. A zip holding only
+    # the suite config no longer passes.
+    import hashlib as _hashlib
+    from model_tracks.package import package_member as _member
+    _members = {_member('suite_package_config'): json.dumps(settings).encode()}
+    _inventory = {name: _hashlib.sha256(blob).hexdigest()
+                  for name, blob in _members.items()}
     with zipfile.ZipFile(inputs, 'w') as archive:
-        archive.writestr('data/model_tracks/suite.yaml', json.dumps(settings))
+        for name, blob in _members.items():
+            archive.writestr(name, blob)
+        # `revision` is required: colab.run's checkout script fetches and
+        # detach-checks-out the PACKAGE's own revision, because the
+        # immutable package can predate the commit that published its
+        # transport, and a depth-one branch clone need not contain it.
+        archive.writestr('model_tracks_package.json',
+                         json.dumps({'files': _inventory, 'revision': 'revision'}))
     transport = tmp_path / 'transport.tar.gz'
     transport.write_bytes(b'inputs')
     payload = tmp_path / 'payload.zip'
@@ -24,7 +41,10 @@ def test_direct_download_verified_before_release_and_completion(tmp_path, monkey
     monkeypatch.setattr(common, 'RESULTS', tmp_path)
     monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(colab, 'verify', lambda _: dict(revision='revision', files={}))
-    monkeypatch.setattr(colab, 'verify_archive', lambda *a: dict(run_tag='run'))
+    # colab.run reads `revision` off the transport verification to fetch and
+    # detach-checkout the package's exact source revision before restoring
+    # its frozen files, so the stub must carry it alongside run_tag.
+    monkeypatch.setattr(colab, 'verify_archive', lambda *a: dict(run_tag='run', revision='revision'))
     monkeypatch.setattr(backend, 'GPU', 'CPU')
     monkeypatch.setattr(backend, '_env_value', lambda _: None)
     monkeypatch.setattr(backend, '_wandb_env_script', lambda: '')

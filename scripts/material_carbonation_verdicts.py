@@ -14,6 +14,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+import sys; sys.path.insert(0, str(ROOT/'src'))
+from core.common import audit_finding
 sys.path.insert(0, str(ROOT / 'src'))
 import pandas as pd
 
@@ -114,7 +116,7 @@ def main():
         'feed_country_tallies': {f: sorted(c) for f, c in feed_countries.items()},
         'dissent_pair_types': {d: c.most_common(15) for d, c in dissent_types.items()},
     }
-    (ROOT / 'identity/findings/material_carbonation_verdicts.json').write_text(
+    audit_finding('material_carbonation_verdicts.json').write_text(
         json.dumps(out, indent=1) + '\n')
     print('eligible rows:', len(el))
     print('families with feed conflicts:', len(family_verdicts))

@@ -14,9 +14,9 @@ def archive_settings():
 
 
 @contextmanager
-def tar_archive(path, mode='r'):
+def tar_archive(path, mode='r', *, settings=None):
     """Zstandard for new tar writers; spool once for repeated legacy/new reads."""
-    settings = archive_settings()
+    settings = archive_settings() if settings is None else settings
     if mode in {'w', 'x'}:
         with zstd_module().open(path, mode + 'b', level=settings.compression_level) as compressed:
             with tarfile.open(fileobj=compressed, mode='w|', dereference=True,
@@ -33,7 +33,7 @@ def tar_archive(path, mode='r'):
         with tarfile.open(path, 'r:*') as archive:
             yield archive
         return
-    with open_archive(path) as reader:
+    with open_archive(path, settings=settings) as reader:
         yield reader.archive
 
 
@@ -54,8 +54,9 @@ def zstd_module():
 
 
 class TarReader:
-    def __init__(self, archive):
+    def __init__(self, archive, settings):
         self.archive = archive
+        self.settings = settings
 
     def namelist(self):
         return self.archive.getnames()
@@ -93,7 +94,7 @@ class TarReader:
         if target.is_symlink():
             raise ValueError('archive extraction target is a symbolic link')
         with self.open(name) as source, target.open('wb') as output:
-            shutil.copyfileobj(source, output, length=archive_settings().copy_buffer_bytes)
+            shutil.copyfileobj(source, output, length=self.settings.copy_buffer_bytes)
         return str(target)
 
     def extractall(self, destination):
@@ -102,20 +103,21 @@ class TarReader:
 
 
 @contextmanager
-def open_archive(path):
+def open_archive(path, *, settings=None):
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
             yield archive
         return
     # Inflate once to a disk-backed seekable tar. Repeated reads then avoid
     # replaying the compressed stream for every checkpoint and report.
+    settings = archive_settings() if settings is None else settings
     with tempfile.TemporaryFile() as spool:
         zstd = zstd_module()
         try:
             with zstd.open(path, 'rb') as compressed:
-                shutil.copyfileobj(compressed, spool, length=archive_settings().copy_buffer_bytes)
+                shutil.copyfileobj(compressed, spool, length=settings.copy_buffer_bytes)
         except zstd.ZstdError as error:
             raise ValueError(f'invalid Zstandard archive: {path}') from error
         spool.seek(0)
         with tarfile.open(fileobj=spool, mode='r:') as archive:
-            yield TarReader(archive)
+            yield TarReader(archive, settings)

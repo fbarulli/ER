@@ -9,11 +9,12 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src'))
+from core.common import AUDIT_FINDINGS_DIR
 from core.sku_identity import row_identity, identity_conflict, evaluate_sku_identity
 
 
 def main():
-    folder=ROOT/'identity/findings'
+    folder=AUDIT_FINDINGS_DIR
     cases=json.loads((folder/'residual_cases.json').read_text())
     cache={}
     def identity(row):

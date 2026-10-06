@@ -18,6 +18,8 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
+import sys; sys.path.insert(0, str(ROOT/'src'))
+from core.common import audit_finding
 sys.path.insert(0, str(ROOT / 'src'))
 from core.gtin import gtin_validity
 from core.identity_policy import held_keys, reviewed_row_mask
@@ -135,7 +137,7 @@ def main():
             })
 
     out = {'verdicts': verdicts}
-    (ROOT / 'identity/findings/biggest_merge_verdicts.json').write_text(
+    audit_finding('biggest_merge_verdicts.json').write_text(
         json.dumps(out, indent=2) + '\n')
     for v in verdicts:
         print(f"== {v['gtin']} rows={v['rows']} {v['titles'][:2]}")

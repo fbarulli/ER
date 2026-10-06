@@ -44,6 +44,10 @@ paths:
   models_dir: "artifacts/models"        # Git-shipped production model bundle
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
   logs_dir: "logs"                      # per-step orchestrator logs
+  # Machine-written audit findings. Tracked on purpose: this is the durable
+  # evidence record for identity/gate adjudication, and the audit scripts read
+  # each other's JSON here. Declared once so no script spells the path itself.
+  audit_findings_dir: "identity/findings"
   # Training inputs share the versioned root-level data directory with the
   # reference data. Results remain separate and are never inputs by default.
   training_data_dir: "data"

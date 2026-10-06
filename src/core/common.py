@@ -575,6 +575,26 @@ RESULTS.mkdir(parents=True, exist_ok=True)
 TRAINING_RESULTS = _path(_CFG["paths"]["training_results_dir"])
 TRAINING_RESULTS.mkdir(parents=True, exist_ok=True)
 
+# Machine-written audit findings: the identity/gate adjudication evidence and
+# the generated .md report beside each JSON. ONE declaration, resolved here, so
+# the audit scripts cannot drift apart. These files are cross-read (one script's
+# JSON is another's input), which is exactly why the path belongs in config
+# instead of being spelled independently in six places.
+AUDIT_FINDINGS_DIR = _path(_CFG["paths"]["audit_findings_dir"])
+
+
+def audit_finding(name: str) -> Path:
+    """Resolve one audit finding/report file under the declared findings root.
+
+    `name` is a bare filename, never a path: a caller that passes a separator
+    is re-anchored to the declared root rather than escaping it, so this can
+    never become a second way to spell the location.
+    """
+    if not name or name != Path(name).name:
+        raise ValueError(f"audit finding name must be a bare filename: {name!r}")
+    return AUDIT_FINDINGS_DIR / name
+
+
 # ── artifact binding roots (SSOT) ────────────────────────────────────────────
 # Every files./layouts. entry is a "root:name" binding. roots resolve here —
 # ONE rule per root, no guessing, no per-lane inference:

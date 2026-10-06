@@ -11,6 +11,8 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from core.archive_reader import tar_archive
 from typing import Any
 
 import spacy
@@ -432,62 +434,31 @@ def _write_checkpoint_state(
         )
 
 
-def _make_checkpoint_zip(
-    output_dir: Path,
-    checkpoint_dir: Path,
-):
-    zip_base = (
-        output_dir.parent
-        / "latest_checkpoint"
-    )
-
-    zip_path = Path(
-        shutil.make_archive(
-            str(zip_base),
-            "zip",
-            root_dir=output_dir,
-            base_dir=checkpoint_dir.name,
-        )
-    )
-
-    return zip_path
+def _archive_options():
+    try:
+        from core.common import training_cfg
+    except ModuleNotFoundError:
+        # The standalone worker receives the rendered YAML archive policy.
+        return SimpleNamespace(**ner_config()['archives'])
+    return training_cfg().archives
 
 
-def _make_model_zip(
-    nlp,
-    destination: Path,
-):
-    destination.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+def _make_checkpoint_archive(output_dir: Path, checkpoint_dir: Path):
+    archive_path = output_dir.parent / ner_config()['archive_names']['checkpoint']
+    with tar_archive(archive_path, 'w', settings=_archive_options()) as archive:
+        archive.add(checkpoint_dir, arcname=checkpoint_dir.name)
+    return archive_path
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        model_dir = tmp / "ner_model"
 
+def _make_model_archive(nlp, destination: Path):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=destination.parent) as tmp:
+        model_dir = Path(tmp) / 'ner_model'
         nlp.to_disk(model_dir)
-
-        zip_base = (
-            destination.parent
-            / destination.stem
-        )
-
-        generated = Path(
-            shutil.make_archive(
-                str(zip_base),
-                "zip",
-                root_dir=tmp,
-                base_dir="ner_model",
-            )
-        )
-
-    if generated != destination:
-        if destination.exists():
-            destination.unlink()
-
-        generated.replace(destination)
-
+        candidate = Path(tmp) / destination.name
+        with tar_archive(candidate, 'x', settings=_archive_options()) as archive:
+            archive.add(model_dir, arcname=model_dir.name)
+        candidate.replace(destination)
     return destination
 
 
@@ -643,7 +614,7 @@ def backup_checkpoint_to_hf(
 
     repo_id = os.environ["HF_NER_REPO"]
 
-    zip_path = _make_checkpoint_zip(
+    archive_path = _make_checkpoint_archive(
         output_dir,
         checkpoint_dir,
     )
@@ -651,11 +622,10 @@ def backup_checkpoint_to_hf(
     try:
         _upload_file_with_retry(
             api,
-            local_path=zip_path,
+            local_path=archive_path,
             repo_id=repo_id,
             path_in_repo=(
-                "checkpoints/"
-                "latest_checkpoint.zip"
+                'checkpoints/' + ner_config()['archive_names']['checkpoint']
             ),
             commit_message=(
                 f"NER checkpoint epoch {epoch}"
@@ -670,7 +640,7 @@ def backup_checkpoint_to_hf(
         )
 
     finally:
-        zip_path.unlink(
+        archive_path.unlink(
             missing_ok=True
         )
 
@@ -684,23 +654,23 @@ def backup_best_model_to_hf(
         return
 
     repo_id = os.environ["HF_NER_REPO"]
-    zip_path = (
+    archive_path = (
         RESULTS_DIR
-        / "best_ner_model.zip"
+        / ner_config()['archive_names']['best_model']
     )
 
-    _make_model_zip(
+    _make_model_archive(
         nlp,
-        zip_path,
+        archive_path,
     )
 
     try:
         _upload_file_with_retry(
             api,
-            local_path=zip_path,
+            local_path=archive_path,
             repo_id=repo_id,
             path_in_repo=(
-                "best/best_ner_model.zip"
+                'best/' + ner_config()['archive_names']['best_model']
             ),
             commit_message=(
                 f"Best NER model epoch {epoch}"
@@ -715,14 +685,14 @@ def backup_best_model_to_hf(
         )
 
     finally:
-        zip_path.unlink(
+        archive_path.unlink(
             missing_ok=True
         )
 
 
 def upload_final_artifacts_to_hf(
     api,
-    final_model_zip: Path,
+    final_model_archive: Path,
     metadata_path: Path,
     errors_path: Path,
     artifact_manifest_path: Path,
@@ -734,8 +704,8 @@ def upload_final_artifacts_to_hf(
 
     artifacts = [
         (
-            final_model_zip,
-            "final/ner_model.zip",
+            final_model_archive,
+            'final/' + ner_config()['archive_names']['published_final_model'],
         ),
         (
             metadata_path,
@@ -1184,14 +1154,14 @@ def main():
         / "training_metadata.json"
     )
 
-    final_model_zip = (
+    final_model_archive = (
         RESULTS_DIR
-        / "ner_model_final.zip"
+        / ner_config()['archive_names']['final_model']
     )
 
-    _make_model_zip(
+    _make_model_archive(
         best_nlp,
-        final_model_zip,
+        final_model_archive,
     )
 
     # Hash the two payload artifacts in metadata for human inspection.  The
@@ -1199,7 +1169,7 @@ def main():
     # is written LAST, making it the remote completion/integrity marker.
     metadata["artifact_hashes"] = {
         errors_path.name: _sha256_file(errors_path),
-        final_model_zip.name: _sha256_file(final_model_zip),
+        final_model_archive.name: _sha256_file(final_model_archive),
     }
     metadata_path.write_text(
         json.dumps(
@@ -1209,20 +1179,20 @@ def main():
         encoding="utf-8",
     )
     artifact_manifest_path = _write_artifact_manifest(
-        [errors_path, metadata_path, final_model_zip]
+        [errors_path, metadata_path, final_model_archive]
     )
 
     upload_final_artifacts_to_hf(
         hf_api,
-        final_model_zip,
+        final_model_archive,
         metadata_path,
         errors_path,
         artifact_manifest_path,
     )
 
     logger.info(
-        "Training complete. Final model zip → %s",
-        final_model_zip,
+        "Training complete. Final model archive → %s",
+        final_model_archive,
     )
 
 
