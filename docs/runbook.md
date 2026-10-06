@@ -129,6 +129,12 @@ into the new run dir, so check disk.
 
 ## Do not
 
+- **Do not run `colab sessions`/`colab exec` probes while a launcher holds a
+  session.** colab-cli 0.7.4's `sessions` refresh cannot match server
+  assignments (they carry only the machine endpoint, no session name) and
+  rewrites its local `sessions.json` empty — every later `exec -s <name>`
+  then fails "not found" while the VM is actually alive. The launcher's own
+  transcript is the only visibility source during a live run.
 - **Do not use `python -m cli.colab` to launch.** It makes a separate `__main__` and
   can read CPU despite `--gpu`. Use `colab_backend.py` or `er-colab`.
 - **Do not use `python -m cli.colab_data_bundle_prep` as a first launch.** It skips
