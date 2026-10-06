@@ -27,6 +27,14 @@ masking:
       masked_minted_negatives: 50
       masked_positives: 10
       vendor_variation_positives: 5
+    # Cohort-tagged counts: the 10k cohort exhausts at 287 valid
+    # cross-vendor pairs in its train split (local deterministic run).
+    cohort_counts:
+      10k:
+        minted_negatives: 12000
+        masked_minted_negatives: 6000
+        masked_positives: 1200
+        vendor_variation_positives: 287
     original_objective_share: 0.50
     min_attribute_pairs: 10
     donor_attempts: 64

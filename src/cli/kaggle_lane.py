@@ -398,7 +398,8 @@ if COHORT != "full":
     shutil.copy2(source, root / "dataset.csv")
     print(f"[bundle-cpu] cohort remap: {COHORT_DATASET} -> dataset.csv", flush=True)
 sh([sys.executable, "-m", "pip", "install", "-q", "-r", REQUIREMENTS], cwd=root)
-env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1"}
+env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1",
+       "ER_COHORT_TAG": COHORT if COHORT != "full" else ""}
 sh([sys.executable, "-u", "-m", "training.prepare_all",
     "--tracks-config", "config/model_tracks.yaml"], cwd=root, env=env)
 runs = sorted((root / "results" / "training_prep").glob("*/all_tracks_inputs.tar.zst"),
@@ -590,7 +591,8 @@ if receipt.get("archive_sha256") and sha256_file(archive_path) != receipt["archi
 
 root = clone_pinned()
 env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1",
-       "WANDB_MODE": "disabled"}
+       "WANDB_MODE": "disabled",
+       "ER_COHORT_TAG": receipt.get("cohort", "") or ""}
 
 # Install the prepared package exactly where the archive declares members,
 # then verify the suite preflight contract file landed at TRAIN_ROOT

@@ -1447,6 +1447,10 @@ class BalancedAugmentationSpec(BaseModel):
     counts: AugmentationCounts = Field(default_factory=lambda: AugmentationCounts(
         minted_negatives=0, masked_minted_negatives=0, masked_positives=0, vendor_variation_positives=0))
     sample_counts: AugmentationCounts | None = None
+    # Cohort-tagged counts (additive): the remote bundle kernel tags its run
+    # via ER_COHORT_TAG; a cohort without an entry uses `counts` unchanged and
+    # the exact-equality coverage contract still holds for every cohort.
+    cohort_counts: dict[str, AugmentationCounts] = {}
     original_objective_share: float = Field(default=.5, ge=.3, lt=1)
     min_attribute_pairs: int = Field(default=10, ge=1)
     donor_attempts: int = Field(default=64, ge=1)
