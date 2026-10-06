@@ -485,7 +485,15 @@ class AttributeUniverse(BaseModel):
                 "same_gtin_pairs_both_populated": pair_both,
                 "conflict_pairs": pair_conflict,
                 "conflict_rate": round(pair_conflict / pair_both, 4) if pair_both else 0.0,
-                "top_sets": [[sorted(value), count] for value, count in top[:10]],
+                # top_sets carries the top sets for DISPLAY + support
+                # counting only (no consumer reads the value payloads —
+                # grep-verified; support counting uses the counts). SET_NUMERIC
+                # keys hold float ml values (delegate_volume), so the payload
+                # is STRING-SERIALIZED at the producer boundary to satisfy
+                # the census contract (top_sets = list[(list[str], count)]).
+                # Shape stays [value_list, count]; only the elements map to str.
+                "top_sets": [[sorted(map(str, value)), count]
+                             for value, count in top[:10]],
             }
 
         bucket = {}

@@ -244,6 +244,26 @@ def data_cfg() -> DataConfig:
     return _DATA_CFG
 
 
+def dataset_is_partial_cohort() -> bool:
+    """True when the mounted raw export is the 50%-cohort accommodation.
+
+    Owner directive 2026-10-06: live-data oracles are validated on the FULL
+    dataset only ("only the full dataset should be tested"). dataset_50pct.csv
+    is the partial cohort's staged export; when dataset.csv is byte-identical
+    to it, cohort-specific live-data expectations (measured on a different
+    universe) SKIP instead of failing. A tree without the partial file (e.g.
+    a fresh clone) is treated as full. Cheap: size compare first, sha only
+    on a size match.
+    """
+    if not DATA_PATH.is_file():
+        return False
+    partial = DATA_PATH.with_name("dataset_50pct.csv")
+    if not partial.is_file() or partial.stat().st_size != DATA_PATH.stat().st_size:
+        return False
+    from core.manifest import sha256_file
+    return sha256_file(DATA_PATH) == sha256_file(partial)
+
+
 def category_macros() -> dict[str, str]:
     """SSOT accessor for the category -> macro bucket taxonomy
     (config/paths.yaml category_macros:).

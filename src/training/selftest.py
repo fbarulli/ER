@@ -456,7 +456,7 @@ def oracle_cleaning() -> None:
 
 
 def oracle_number_reference() -> None:
-    from core.common import DATA_DIR, F
+    from core.common import DATA_DIR, F, dataset_is_partial_cohort
 
     ref = pd.read_csv(DATA_DIR / F["number_reference"], dtype={"token": str})
     v = ref.set_index("token")["verdict"]
@@ -470,17 +470,20 @@ def oracle_number_reference() -> None:
             check(f"reference verdict {tok!r} == {want}", v[tok] == want, f"got {v.get(tok)}")
         else:
             check(f"reference verdict {tok!r} == {want}", False, "token missing")
+    partial = dataset_is_partial_cohort()
     check(
-        "reference row count 1,755",
-        # RE-PINNED 2026-09-30. The census runs over dataset_deduped.csv, and
-        # the T3 identity partition added 1,549 rows back (264 products that
-        # had been deleted), so the reference legitimately grew: 1,743 ->
-        # 1,755 digit tokens. The stale value 1,745 never matched the
-        # committed file either (1,743) — a third unexplained number, now
-        # replaced by the value build_reference.py --verify reproduces
-        # byte-exactly.
-        len(ref) == 1755,
-        f"got {len(ref)}",
+        "reference row count matches its measured value (skipped on the "
+        "partial cohort)",
+        # Cohort-gated 2026-10-06 (owner directive: only the full dataset
+        # is tested). The reference census is a function of
+        # dataset_deduped.csv, so the row count is cohort-specific; the
+        # historical values are 1,743 -> 1,745 -> 1,755 (2026-09-30 T3
+        # identity partition). On the 50%-cohort accommodation the count
+        # legitimately differs (measured 1,223) — skip, never fail, and
+        # never re-pin per cohort.
+        partial or len(ref) == 1755,
+        f"got {len(ref)}"
+        + (" (partial cohort mounted — skipped)" if partial else ""),
     )
 
 
@@ -1818,6 +1821,11 @@ def oracle_round3_pins() -> None:
         "volume_consistency": 1.0,
         "pack_consistency": 1.0,
         "mode_flavor": "",
+        # affirmative identity evidence for pair_policy.assess_pair (the
+        # 2026-10-02 JEV full-evidence lanes): a proceed now REQUIRES a
+        # positive-identity signal, not merely the absence of conflicts.
+        # Matching canonical names supply it — same product, both sides.
+        "canonical": "coca_cola_classic",
     }
     _same = dict(_attrs, volume_set={505.0})  # inside ±5% tolerance
     _no_vol = dict(_attrs, volume_set={5000.0})  # outside tolerance

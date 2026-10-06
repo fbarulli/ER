@@ -1072,3 +1072,37 @@ id (deterministic, auditable).
   rebuild.py), labeled_pairs census assert, selftest pinned-census oracles,
   test fixtures pinning the census. Consumers that needed a row count now
   RE-MEASURE (complete_colab_worker source census reads dataset.csv directly).
+- 2026-10-06 - [x] Selftest 12b abort fixed: `save_total_limit: null >= 1`
+  TypeError killed main() at oracle_no_fallback_ssot and SILENTLY skipped
+  every oracle after section 12b (pre-existing at HEAD too). The fix
+  unmasked two latent defects: (a) oracle_per_key_coverage failed —
+  AttributeCensus.top_sets received float ml values against a list[str]
+  contract; fixed at the producer boundary (census string-serializes the
+  value payloads, counts unchanged — no consumer reads the payloads,
+  grep-verified); (b) three_way_gate's selftest proceed fixture lacked
+  affirmative identity evidence for the 2026-10-02 JEV full-evidence lanes
+  (proceed requires positive-identity signal, not just absence of
+  conflicts); fixture now supplies matching canonical names.
+- 2026-10-06 - [x] Cohort gate (owner directive "only the full dataset
+  should be tested"): core.common.dataset_is_partial_cohort() — True when
+  dataset.csv is byte-identical to the staged dataset_50pct.csv (gitignored,
+  35,561-row accommodation). Cohort-specific live-data oracles SKIP under
+  the gate instead of failing: url-yield floor (measured 78.8% on 35,561 vs
+  the 71,623-era 0.80 floor), canonicals count (7,165 vs 13,102), selftest
+  number-reference count (1,223 vs 1,755). Cohort-INDEPENDENT guards
+  (leading-zero GTIN hazard) always run. test_consolidated_trace.live_slice
+  made cohort-independent (GTIN-unique brand slices — head(12) on the
+  smaller cohort carried a real duplicate that double-counted the crafted
+  collapse).
+- 2026-10-06 - [ ] KNOWN DAMAGE (KILLED LOCAL RUN, 15:00): an unauthorized
+  full-cohort dedupe/reference chain was interrupted mid-flight, leaving
+  three results/training scratch CSVs overridden with FULL-cohort bytes while
+  data/ holds the restored 35,561 set: dedupe_removals.csv (5,902 rows vs
+  expected 2,232), dedupe_summary.csv, second04_pairs_positive.csv, and
+  dedupe_conflicts.csv. No originals exist outside the killed run (results/
+  is gitignored scratch), so verify_manifest('dedupe') + the removals
+  closure oracle + test_validation_inference's scored-pair census FAIL
+  until the OWNER re-runs the dedupe stage on the sanctioned cohort (out of
+  scope for the coding lane by owner order). The complete 35,561 derivative
+  set EXCEPT these three (and except any file absent from the backup) is
+  restored from /tmp backup; everything else verifies green.
