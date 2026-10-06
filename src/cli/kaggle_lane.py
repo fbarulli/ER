@@ -484,6 +484,7 @@ REQUIREMENTS = "@REQUIREMENTS@"
 RUN_TAG = "@RUN_TAG@"
 SUITE_CONFIG = "@SUITE_CONFIG@"
 BUNDLE_KERNEL_SLUG = "@BUNDLE_KERNEL_SLUG@"
+BUNDLE_DATASET_NAME = "@BUNDLE_DATASET_NAME@"
 
 WORKING = Path("/kaggle/working")
 INPUTS = Path("/kaggle/input")
@@ -523,9 +524,14 @@ def sha256_file(path):
 
 def locate_input_archive():
     """Locate the attached bundle output (receipt + archive) under /kaggle/input."""
-    candidates = list(INPUTS.rglob(BUNDLE_RECEIPT))
+    candidates = sorted(INPUTS.rglob(BUNDLE_RECEIPT))
+    # Kernel-output mounts may hold a stale (stop-stub) version while a
+    # bundle dataset stays immutable: prefer the dataset mount when present.
+    dataset = next((c for c in candidates
+                    if BUNDLE_DATASET_NAME in c.parts), None)
+    candidates = [dataset] if dataset is not None else candidates
     if not candidates:
-        raise SystemExit("attached kernel output contained no " + BUNDLE_RECEIPT)
+        raise SystemExit("attached outputs contained no " + BUNDLE_RECEIPT)
     receipt_dir = candidates[0].parent
     archive = receipt_dir / BUNDLE_ARCHIVE
     if not archive.is_file():
@@ -924,6 +930,9 @@ def stage_gpu_kernel(*, kind: str, slug: str | None = None,
         metadata["dataset_sources"] = [request_dataset]
     else:
         metadata["kernel_sources"] = [bundle_slug]
+        bundle_dataset = spec.bundle_dataset_slug
+        if bundle_dataset:
+            metadata["dataset_sources"] = [bundle_dataset]
     template = TRAIN_KERNEL_SHARED + body
     script = (template
               .replace("@REPOSITORY@", spec.repository)
@@ -931,6 +940,8 @@ def stage_gpu_kernel(*, kind: str, slug: str | None = None,
               .replace("@REVISION@", pinned)
               .replace("@CHECKOUT_PATHS@",
                        json.dumps(checkout_members(checkout_paths or spec.checkout_paths, lane="training")))
+              .replace("@BUNDLE_DATASET_NAME@",
+                       (spec.bundle_dataset_slug or "").rsplit("/", 1)[-1])
               .replace("@RUNTIME_PREFLIGHT@", "\n".join(
                   "    " + line for line in checkout_preflight_script(
                       checkout_inventory(checkout_paths or spec.checkout_paths, lane="training")).splitlines()))
