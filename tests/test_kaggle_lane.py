@@ -265,3 +265,192 @@ def test_submission_packaging_rejects_missing_columns(tmp_path, monkeypatch):
     pd.DataFrame({"sku": ["S1"], "item": ["I1"]}).to_csv(predictions, index=False)
     with pytest.raises(ValueError, match="missing required column"):
         kaggle_lane.package_submission(predictions, tmp_path / "out.csv")
+
+
+# ── remote bundle-generation kernel (owner ruling 2026-10-06: CPU-only) ─────
+
+def _kernel_spec(tmp_path, monkeypatch, **updates):
+    from core.schemas import KaggleSpec
+
+    values = {"staging_dir": "kaggle_stage", "username": "owner",
+              "cpu_kernel_slug": "owner/er-bundle-cpu"}
+    values.update(updates)
+    spec = KaggleSpec(**values)
+    monkeypatch.setattr(kaggle_lane, "_spec", lambda: spec)
+    monkeypatch.setattr(kaggle_lane, "TRAIN_ROOT", tmp_path)
+    monkeypatch.setattr(kaggle_lane, "staging_dir",
+                        lambda: (tmp_path / "kaggle_stage").resolve())
+    return spec
+
+
+def test_credentials_dry_run_never_writes(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    target = tmp_path / "home" / ".kaggle" / "kaggle.json"
+    monkeypatch.setattr(kaggle_lane, "CREDENTIALS_PATH", target)
+    monkeypatch.setenv("KAGGLE_API_KEY", "token-abc")
+    plan = kaggle_lane.write_credentials(execute=False)
+    assert plan["mode"] == "dry-run" and plan["key_present"] is True
+    assert plan["username"] == "owner"
+    assert not target.exists()
+
+
+def test_credentials_execute_writes_0600_and_fail_loud(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    target = tmp_path / "home" / ".kaggle" / "kaggle.json"
+    monkeypatch.setattr(kaggle_lane, "CREDENTIALS_PATH", target)
+    monkeypatch.setenv("KAGGLE_API_KEY", "token-abc")
+    plan = kaggle_lane.write_credentials(execute=True)
+    assert plan["written"] is True
+    document = json.loads(target.read_text())
+    assert document == {"username": "owner", "key": "token-abc"}
+    assert target.stat().st_mode & 0o777 == 0o600
+    monkeypatch.setenv("KAGGLE_API_KEY", "")
+    with pytest.raises(RuntimeError, match="empty or unset"):
+        kaggle_lane.write_credentials(execute=True)
+
+
+def test_credentials_require_configured_username(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, username=None)
+    with pytest.raises(RuntimeError, match="kaggle.username is unset"):
+        kaggle_lane.write_credentials(execute=False)
+
+
+def test_stage_bundle_kernel_pins_revision_and_metadata(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
+    receipt = kaggle_lane.stage_bundle_kernel()
+    stage = tmp_path / "kaggle_stage" / "bundle_kernel"
+    metadata = json.loads((stage / "kernel-metadata.json").read_text())
+    assert metadata["id"] == "owner/er-bundle-cpu"
+    assert metadata["enable_gpu"] is False
+    assert metadata["enable_internet"] is True
+    assert metadata["kernel_type"] == "script"
+    assert metadata["code_file"] == "bundle_cpu.py"
+    script = (stage / "bundle_cpu.py").read_text()
+    assert 'REVISION = "abc123def"' in script
+    assert "training.prepare_all" in script
+    assert '"src"' in script and "artifacts/models" in script
+    assert "all_tracks_inputs.tar.zst" in script
+    assert receipt["revision"] == "abc123def" and receipt["gpu"] is False
+
+
+def test_stage_bundle_kernel_requires_slug(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, cpu_kernel_slug=None)
+    with pytest.raises(RuntimeError, match="cpu_kernel_slug is unset"):
+        kaggle_lane.stage_bundle_kernel()
+
+
+def test_push_bundle_kernel_invokes_cli_with_staged_dir(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    stage = tmp_path / "kaggle_stage" / "bundle_kernel"
+    stage.mkdir(parents=True)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    result = kaggle_lane.push_bundle_kernel(stage)
+    assert result["pushed"] is True
+    assert Path(calls[0][0]).name == "kaggle"
+    assert calls[0][1:3] == ["kernels", "push"]
+    assert str(stage) in calls[0]
+
+
+def test_kernel_status_parses_state(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command, 0, stdout='owner/er-bundle-cpu status is "running"\n', stderr="")
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    status = kaggle_lane.kernel_status()
+    assert status["status"] == "running"
+
+
+def test_fetch_bundle_output_verifies_sha_and_installs(tmp_path, monkeypatch):
+    import hashlib
+
+    _kernel_spec(tmp_path, monkeypatch)
+    archive_bytes = b"fake archive bytes"
+
+    def fake_run(command, **kwargs):
+        stage = Path(command[command.index("-p") + 1])
+        bundle = stage / "bundle"
+        bundle.mkdir(parents=True)
+        (bundle / "all_tracks_inputs.tar.zst").write_bytes(archive_bytes)
+        receipt = {"revision": "abc123", "branch": "kaggle-lane", "run_dir": "r",
+                   "archive": "all_tracks_inputs.tar.zst",
+                   "archive_bytes": len(archive_bytes),
+                   "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}
+        (bundle / "bundle.receipt.json").write_text(json.dumps(receipt))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    plan = kaggle_lane.fetch_bundle_output(execute=True)
+    assert plan["verified"] is True and plan["cohort"] == "full"
+    installed = tmp_path / "kaggle_stage" / "full" / "bundle" / "all_tracks_inputs.tar.zst"
+    assert installed.read_bytes() == archive_bytes
+
+
+def test_fetch_bundle_output_rejects_sha_drift(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+
+    def fake_run(command, **kwargs):
+        stage = Path(command[command.index("-p") + 1])
+        bundle = stage / "bundle"
+        bundle.mkdir(parents=True)
+        (bundle / "all_tracks_inputs.tar.zst").write_bytes(b"tampered")
+        receipt = {"archive": "all_tracks_inputs.tar.zst", "archive_sha256": "0" * 64}
+        (bundle / "bundle.receipt.json").write_text(json.dumps(receipt))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+        kaggle_lane.fetch_bundle_output(execute=True)
+
+
+def test_fetch_bundle_output_dry_run_never_touches_network(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    called = []
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **kw: called.append(a) or pytest.fail("network"))
+    plan = kaggle_lane.fetch_bundle_output(execute=False)
+    assert plan["mode"] == "dry-run"
+    assert not called
+
+
+def test_kernel_slugs_tracked_in_config():
+    # Owner ruling 2026-10-06: the GPU training kernel stays tracked via the
+    # config SSOT even while only the CPU bundle kernel is live.
+    cfg = common.training_cfg()
+    assert cfg.kaggle.cpu_kernel_slug == "fbarulli/er-bundle-cpu"
+    assert cfg.kaggle.gpu_kernel_slug == "fbarulli/er-train-gpu"
+
+
+def test_kernel_status_resolves_gpu_slug(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="queued", stderr="")
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    status = kaggle_lane.kernel_status(which="gpu")
+    assert status["kernel"] == "owner/er-train-gpu"
+    assert "owner/er-train-gpu" in calls[0]
+
+
+def test_kernel_status_fail_loud_without_slug(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug=None)
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    with pytest.raises(RuntimeError, match="gpu_kernel_slug is unset"):
+        kaggle_lane.kernel_status(which="gpu")

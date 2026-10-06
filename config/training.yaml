@@ -192,6 +192,25 @@ kaggle:
   # The lane drives the kaggle CLI via this executable name; credentials stay:
   # credentials live in ~/.kaggle/kaggle.json, never in this file.
   kaggle_executable: "kaggle"
+  # ── remote bundle-generation kernel (owner ruling 2026-10-06: CPU-only) ──
+  # Bundle generation is CPU-only and runs on a Kaggle CPU session, not
+  # locally; the GPU session only trains. Kernels clone `branch` at a
+  # revision pinned at staging time (partial + sparse checkout of
+  # checkout_paths; cone mode always keeps root-level files, so dataset.csv,
+  # requirements.txt and pyproject.toml arrive with the clone).
+  username: "fbarulli"
+  # Environment variable holding the API token — never the token itself.
+  api_key_env: "KAGGLE_API_KEY"
+  repository: "https://github.com/fbarulli/ER.git"
+  branch: "kaggle-lane"
+  cpu_kernel_slug: "fbarulli/er-bundle-cpu"
+  # GPU training kernel — tracked now, launched after the CPU bundle lands:
+  # it attaches the CPU kernel output, restores the package into the pinned
+  # clone, and runs model_tracks.run under ER_GPU_TRAINING_ONLY=1 (train,
+  # checkpoint, export forwards only — no CPU prep).
+  gpu_kernel_slug: "fbarulli/er-train-gpu"
+  checkout_paths: ["src", "scripts", "config", "requirements", "artifacts/models"]
+  bundle_requirements: "requirements/graph_tracks.txt"
 # ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
 # Production code lives in src/cli/colab_data_bundle_prep.py: this block is
 # consumed ONLY by that lane and its thin passthroughs in cli.colab; no

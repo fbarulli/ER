@@ -2816,6 +2816,29 @@ class KaggleSpec(BaseModel):
     submission_id_columns: tuple[str, str] = ("sku_id", "item_id")
     kaggle_executable: str = "kaggle"
 
+    # ── remote bundle-generation kernel (owner ruling 2026-10-06) ──────────
+    # Bundle generation is CPU-only and runs on a Kaggle CPU session, not
+    # locally; the GPU session only trains. The kernels clone `branch` at a
+    # revision pinned at staging time (partial + sparse checkout of
+    # `checkout_paths`; cone mode always keeps root-level files, so the raw
+    # cohort export and requirements.txt arrive with the clone).
+    # Kaggle account that owns the kernels (an identifier, not a secret).
+    username: str | None = None
+    # Environment variable holding the API token — never the token itself,
+    # and never inside this repository.
+    api_key_env: str = "KAGGLE_API_KEY"
+    repository: str = "https://github.com/fbarulli/ER.git"
+    branch: str = "kaggle-lane"
+    # Kernel slugs ("owner/slug"); null keeps every push fail-loud until the
+    # owner names the target kernel (no silent default account).
+    cpu_kernel_slug: str | None = None
+    gpu_kernel_slug: str | None = None
+    checkout_paths: tuple[str, ...] = (
+        "src", "scripts", "config", "requirements", "artifacts/models",
+    )
+    # Worker requirements the kernels install; torch ships with the image.
+    bundle_requirements: str = "requirements/graph_tracks.txt"
+
     @model_validator(mode="after")
     def _declared_paths_are_portable(self) -> "KaggleSpec":
         def walk(fragment: Any, where: str) -> None:
