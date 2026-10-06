@@ -803,7 +803,7 @@ def stage_gpu_kernel(*, kind: str, slug: str | None = None,
         "enable_gpu": True,
         "enable_internet": True,
         "dataset_sources": [],
-        "kernel_sources": [bundle_slug],
+        "kernel_sources": [],
         "competition_sources": [],
         "is_private": True,
     }
@@ -815,6 +815,8 @@ def stage_gpu_kernel(*, kind: str, slug: str | None = None,
                 "upload the embedding request dataset first (--what package "
                 "--dataset-csv ... ; then set the slug)")
         metadata["dataset_sources"] = [request_dataset]
+    else:
+        metadata["kernel_sources"] = [bundle_slug]
     template = TRAIN_KERNEL_SHARED + body
     script = (template
               .replace("@REPOSITORY@", spec.repository)
