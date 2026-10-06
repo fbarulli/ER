@@ -592,8 +592,11 @@ if receipt.get("archive_sha256") and sha256_file(archive_path) != receipt["archi
 
 root = clone_pinned()
 env = {**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUNBUFFERED": "1",
-       "WANDB_MODE": "disabled",
-       "ER_COHORT_TAG": receipt.get("cohort", "") or ""}
+       "ER_COHORT_TAG": receipt.get("cohort", "") or "",
+       "WANDB_API_KEY": "@WANDB_API_KEY@"}
+# wandb default ON: the key travels with the launch (read locally from .env
+# the same way cli.colab does; never logged). Absent key -> core.wandb_ctx
+# degrades to local artifacts.
 
 # Install the prepared package exactly where the archive declares members,
 # then verify the suite preflight contract file landed at TRAIN_ROOT
@@ -743,6 +746,24 @@ def _run_kaggle(command: list[str]) -> tuple[int, str]:
             f"kaggle command failed (rc={result.returncode}): {printable}\n"
             f"--- kaggle output ---\n{tail}")
     return result.returncode, output
+
+
+def _env_dot_value(name: str) -> str | None:
+    """Read a simple KEY=VALUE from TRAIN_ROOT/.env or its parent .env.
+
+    Same semantics as cli.colab._env_value: no printing (secrets stay out of
+    every log), env-var override first, never cloned into the repo.
+    """
+    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env"):
+        if not env_path.is_file():
+            continue
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == name:
+                value = value.strip().strip('"').strip("'")
+                if value:
+                    return value
+    return None
 
 
 def stage_bundle_kernel(*, revision: str | None = None,
@@ -917,7 +938,8 @@ def stage_gpu_kernel(*, kind: str, slug: str | None = None,
               .replace("@RUN_TAG@", tag)
               .replace("@SUITE_CONFIG@", spec.train_suite_config)
               .replace("@BUNDLE_KERNEL_SLUG@", bundle_slug)
-              .replace("@CHECKPOINT@", resolved_checkpoint))
+              .replace("@CHECKPOINT@", resolved_checkpoint)
+              .replace("@WANDB_API_KEY@", os.environ.get("WANDB_API_KEY") or _env_dot_value("WANDB_API_KEY") or ""))
     atomic_write_json(metadata, stage / "kernel-metadata.json")
     (stage / code_file).write_text(script, encoding="utf-8")
     receipt = {
