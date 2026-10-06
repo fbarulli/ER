@@ -112,7 +112,10 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
                 _, staging_bundle = load_prepared_bundle((TRAIN_ROOT/cfg.text_bundle).resolve())
                 try:
                     from model_tracks.staged_ablation import prepare_suite
-                    prepare_suite(setup, baseline_output/baseline.name,
+                    # baseline must be the local checkpoint DIRECTORY (the
+                    # same anchor package.py passes); the EXPORT file is the
+                    # baseline_output copy only.
+                    prepare_suite(setup, Path(resolve_model(cfg.text_model)),
                                   TRAIN_ROOT/cfg.ablation_config,
                                   composer=_make_composer(), token_cache={},
                                   bundle=staging_bundle)
