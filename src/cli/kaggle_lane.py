@@ -787,10 +787,12 @@ def kernel_status(slug: str | None = None, *, which: str = "cpu") -> dict[str, A
     executable = _require_kaggle_executable(spec.kaggle_executable)
     command = [executable, "kernels", "status", resolved]
     _, output = _run_kaggle(command)
+    # CLI 2.x prints  "KernelWorkerStatus.COMPLETE"; 1.x printed bare words.
+    normalized = output.replace("KernelWorkerStatus.", "")
     status = "unknown"
     for candidate in ("cancelAcknowledged", "cancelRequested", "complete",
                       "running", "queued", "error"):
-        if candidate in output:
+        if candidate in normalized.lower():
             status = candidate
             break
     return {"kernel": resolved, "status": status, "raw": output.strip()}

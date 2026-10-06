@@ -352,6 +352,15 @@ def test_push_bundle_kernel_invokes_cli_with_staged_dir(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch)
     stage = tmp_path / "kaggle_stage" / "bundle_kernel"
     stage.mkdir(parents=True)
+    (stage / "kernel-metadata.json").write_text(
+        json.dumps({"id": "owner/er-bundle-cpu", "code_file": "bundle_cpu.py"}),
+        encoding="utf-8")
+    (stage / "bundle_cpu.py").write_text(
+        "REPOSITORY = 'https://example.invalid/ER.git'\n"
+        "BRANCH = 'kaggle-lane'\n"
+        "REVISION = '0000000000000000000000000000000000000000'\n"
+        "_runtime_files = ()\n",
+        encoding="utf-8")
     calls = []
 
     def fake_run(command, **kwargs):
@@ -360,6 +369,9 @@ def test_push_bundle_kernel_invokes_cli_with_staged_dir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    import importlib
+    monkeypatch.setattr(importlib.import_module("core.runtime_inputs"),
+                        "staged_kernel_preflight", lambda stage_dir: None)
     result = kaggle_lane.push_bundle_kernel(stage)
     assert result["pushed"] is True
     assert Path(calls[0][0]).name == "kaggle"
