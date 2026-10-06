@@ -1,7 +1,23 @@
-# KAGGLE_LANE.md — runbook for the Kaggle dataset/export transport lane
+# Kaggle dataset/export transport lane
 
 Parallel dataset/transport lane to the Colab GPU lanes. Contract + evidence:
-`KAGGLE_LANE_COMPLETION.md`. NEW-files only; the colab lane is untouched.
+[kaggle-lane-completion.md](kaggle-lane-completion.md). NEW-files only; the
+colab lane is untouched.
+
+## Owner ruling 2026-10-06 (training split)
+
+**Bundle generation is CPU-only and runs on a Kaggle CPU session — not
+locally.** The local box is the slow stage (`prepare_all`/`suite_inputs`
+packaging). The split is therefore:
+
+| Stage | Where |
+|---|---|
+| Raw cohort export (`dataset.csv` / `dataset_50pct.csv`) → Kaggle dataset | this lane's package + upload |
+| **Bundle generation (prepare_all/package → prepared inputs)** | **Kaggle CPU session** |
+| Training + embedding forward passes (text/gnn_only/hybrid) | Kaggle GPU session |
+
+The Kaggle CPU session runs the same `PYTHONPATH=src python -m training.prepare_all`
+the colab data-bundle lane runs; GPU never runs CPU-bound prep.
 
 ## Ownership shape
 
