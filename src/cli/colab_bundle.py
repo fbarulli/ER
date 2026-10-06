@@ -15,7 +15,7 @@ untouched):
   remote exec .......... run_sims()'s shape (colab.py:3923): _BOOTSTRAP +
   a plain script string (module-level f-string, _BOOTSTRAP's own
   mechanism, body brace-free so no escaping is needed), then
-  run_colab_exec_stream(SESSION, script, timeout=..., log_name=...).
+  run_colab_exec_stream(SESSION, script, timeout=..., log_name=..., training_output=True).
 
   prepare_all on the VM . subprocess.run([sys.executable, "-m",
   "training.prepare_all"], cwd=root) with NO stderr capture, NO log file
@@ -241,7 +241,13 @@ def run_bundle(
             f"--resume-from {resume_from}",
             flush=True,
         )
-    run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="bundle")
+    # Smoke-lane capture contract (cli.colab:1479): training_output=True so
+    # every streamed unit — including each tqdm \r-update, which
+    # run_colab_exec_stream emits immediately — is durably written to the
+    # dedicated colab_training_log, not just the live console transcript.
+    run_colab_exec_stream(
+        SESSION, script, timeout=4 * 3600, log_name="bundle", training_output=True
+    )
     # Download block copied from download_verified_training_results
     # (cli.colab:2021-2033): the local root is TRAINING_RESULTS / run_id and
     # the SAME run_id goes to _download_file_with_visibility, which resolves
