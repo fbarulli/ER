@@ -56,3 +56,10 @@ transport keys (`slug`, `export_csvs`, `staging_dir`,
 | `kaggle_backend.py` | repo-root shim |
 | `src/core/schemas.py` | `KaggleSpec` (additive) |
 | `tests/test_kaggle_lane.py` | offline pins |
+
+## References
+
+- [Kaggle/kagglehub](https://github.com/Kaggle/kagglehub) — Kaggle's Python hub client (dataset/model access)
+- [Kaggle/kaggle-api](https://github.com/Kaggle/kaggle-api) — the CLI this lane drives (the `kaggle` executable)
+- [Kaggle/docker-python](https://github.com/Kaggle/docker-python) — the notebook image; what is preinstalled (torch, transformers, …)
+- [abhishekkrthakur/mlframework](https://github.com/abhishekkrthakur/mlframework) — community Kaggle/ML framework reference
