@@ -1,5 +1,5 @@
-setup_dir: /tmp/opencode/er-rename/data/prepared/smoke_200
-text_bundle: /tmp/opencode/er-rename/data/prepared/smoke_200/text_prepared.pkl.gz
+setup_dir: data/prepared/smoke_200
+text_bundle: data/prepared/smoke_200/text_prepared.pkl.gz
 text_model: minilm_l6
 epochs: 1
 device: cpu
