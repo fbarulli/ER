@@ -26,7 +26,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from core.run_log import RunLogger
 from core.timing import Timing
+from training.prepare_all_trace import timed
+
+_LOG = RunLogger(__name__)
 
 
 class HandoffLoad(BaseModel):
@@ -170,6 +174,62 @@ def _check_worker_settings(setup_dir, layout, suite, meter: _LoadMeter) -> dict:
     return {'validated_tracks': sorted(summary), **summary}
 
 
+def _validate_frozen_plan_identity(plan, loss) -> dict:
+    """The frozen plan is version 1, keyed to this loss, with healthy folds."""
+    identity = dict(plan.get('identity') or {})
+    if plan.get('version') != 1 or not identity:
+        raise ValueError('prepared objective lacks a valid frozen plan identity')
+    if identity.get('loss') != loss:
+        raise ValueError('frozen objective loss differs from the configured loss; rebuild locally')
+    if plan['inputs'].get('skipped') or not plan['inputs'].get('folds'):
+        raise ValueError('prepared training row plan has failed/skipped folds')
+    return identity
+
+
+def _resolve_batch_sizes(plan, smoke: bool) -> dict[str, int]:
+    """The worker's batch sizes (runtime config), or the smoke-saved ones."""
+    from core.common import runtime
+    batch_sizes = {device: int(runtime('batch_size_' + device))
+                   for device in ('cpu', 'cuda')}
+    if smoke:
+        # Lifecycle smokes retain their saved batch settings, like the worker.
+        saved = plan['inputs']['folds'][0]['objective']['sampler']
+        batch_sizes = {device: saved[device]['batch_size'] for device in batch_sizes}
+    return batch_sizes
+
+
+def _validated_by_note(plan_identity_revalidate: bool) -> list[str]:
+    """Who attested the frozen plan: preflight always, boundary when standalone."""
+    validated_by = ['model_tracks.preflight (suite_inputs, same run and process)',
+                    'training.train_prepared (trainer start, per training run)']
+    if plan_identity_revalidate:
+        validated_by.append('training.handoff (data digest recomputed at this boundary)')
+    return validated_by
+
+
+def _maybe_recompute_plan_digest(prepared, plan, loss, smoke: bool,
+                                 plan_identity_revalidate: bool,
+                                 validated_by: list[str]) -> None:
+    """The digest stays preflight-attested unless this boundary runs standalone."""
+    if not plan_identity_revalidate:
+        return
+    from core.common import SEED
+    from training.run_plan import validate_run_plan
+    validate_run_plan(prepared, plan, loss=loss, train_frac=1., sample=smoke, seed=SEED)
+    validated_by.append('training.handoff (data digest recomputed at this boundary)')
+
+
+def _maybe_check_tokens(timing: Timing, prepared) -> dict[str, Any]:
+    """Validate the native token table when present; surface its policy."""
+    tokens = prepared.get('training_tokens')
+    if tokens is None:
+        return {}
+    from training.token_inputs import validate_training_tokens
+    validate_training_tokens(tokens)
+    timing.mark('tokens')
+    return {'policy': tokens.get('policy'), 'payload_sha256': tokens.get('payload_sha256')}
+
+
 def _attest_loss_batch(prepared, graph: dict, suite, *,
                        plan_identity_revalidate: bool = False):
     """Loss/batch correctness of the frozen objective (the trainer's contract).
@@ -179,7 +239,7 @@ def _attest_loss_batch(prepared, graph: dict, suite, *,
     is attested over the cached plan, and the digest is only recomputed when
     this boundary runs standalone.
     """
-    from core.common import SEED, runtime, training_cfg
+    from core.common import training_cfg
     plan = prepared.get('training_plan')
     smoke = bool(graph.get('smoke', False))
     if plan is None:
@@ -187,38 +247,17 @@ def _attest_loss_batch(prepared, graph: dict, suite, *,
                               'plan during packaging, so a real build cannot reach '
                               'this boundary without it'}
     from training.run_plan import validate_epoch_batches
-    from training.token_inputs import validate_training_tokens
     loss = training_cfg().training.loss
-    identity = dict(plan.get('identity') or {})
-    if plan.get('version') != 1 or not identity:
-        raise ValueError('prepared objective lacks a valid frozen plan identity')
-    if identity.get('loss') != loss:
-        raise ValueError('frozen objective loss differs from the configured loss; rebuild locally')
-    if plan['inputs'].get('skipped') or not plan['inputs'].get('folds'):
-        raise ValueError('prepared training row plan has failed/skipped folds')
-    validated_by = ['model_tracks.preflight (suite_inputs, same run and process)',
-                    'training.train_prepared (trainer start, per training run)']
-    if plan_identity_revalidate:
-        from training.run_plan import validate_run_plan
-        validate_run_plan(prepared, plan, loss=loss, train_frac=1., sample=smoke, seed=SEED)
-        validated_by.append('training.handoff (data digest recomputed at this boundary)')
-    batch_sizes = {device: int(runtime('batch_size_' + device))
-                   for device in ('cpu', 'cuda')}
-    if smoke:
-        # Lifecycle smokes retain their saved batch settings, like the worker.
-        saved = plan['inputs']['folds'][0]['objective']['sampler']
-        batch_sizes = {device: saved[device]['batch_size'] for device in batch_sizes}
+    identity = _validate_frozen_plan_identity(plan, loss)
+    validated_by = _validated_by_note(plan_identity_revalidate)
+    _maybe_recompute_plan_digest(prepared, plan, loss, smoke,
+                                 plan_identity_revalidate, validated_by)
+    batch_sizes = _resolve_batch_sizes(plan, smoke)
     timing = Timing('training.handoff.loss_batch')
     timing.mark('plan_identity')
     validate_epoch_batches(plan, epochs=suite.epochs, batch_sizes=batch_sizes)
     timing.mark('epoch_batches')
-    tokens = prepared.get('training_tokens')
-    token_checks: dict[str, Any] = {}
-    if tokens is not None:
-        validate_training_tokens(tokens)
-        timing.mark('tokens')
-        token_checks = {'policy': tokens.get('policy'),
-                        'payload_sha256': tokens.get('payload_sha256')}
+    token_checks = _maybe_check_tokens(timing, prepared)
     attestation = LossBatchAttestation(
         loss=loss, epochs=suite.epochs, batch_sizes=batch_sizes,
         folds=len(plan['inputs']['folds']), plan_identity=identity,
