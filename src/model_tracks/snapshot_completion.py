@@ -57,7 +57,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
             for relative in inventory:
                 target = snapshot / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(archive.read(relative))
+                archive.extract(relative, snapshot)
             # Root discovery needs project markers; packaging owns all executable
             # source and config above, so this marker carries no runtime settings.
             (snapshot / 'pyproject.toml').write_text(

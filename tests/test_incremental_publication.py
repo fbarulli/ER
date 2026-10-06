@@ -1,5 +1,5 @@
 import threading
-import zipfile
+from core.archive_reader import open_archive, archive_sidecar
 
 import pytest
 
@@ -15,10 +15,10 @@ def test_upload_starts_before_close_and_uses_immutable_snapshot(tmp_path, monkey
     def upload(archive, tag):
         started.set()
         assert release.wait(5)
-        with zipfile.ZipFile(archive) as bundle:
+        with open_archive(archive) as bundle:
             assert bundle.read('checkpoint.pt') == b'completed checkpoint'
         assert tag == 'suite-gnn_only-checkpoint-1'
-        archive.with_suffix('.publication').mkdir()
+        archive_sidecar(archive, '.publication').mkdir()
     monkeypatch.setattr(incremental, 'persist_results', upload)
     publisher = incremental.ArtifactPublisher(tmp_path)
     try:

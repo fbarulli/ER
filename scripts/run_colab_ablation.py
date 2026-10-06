@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import tarfile
+from core.archive_reader import tar_archive
 import tempfile
 import uuid
 from pathlib import Path
@@ -41,25 +42,25 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
                     'the remote clone cannot provide it (no dvc pull in the ablation '
                     'bootstrap) — commit and push it as Git content first')
     folder = request_path.parent
-    package = folder/'inputs.tar.gz'
+    package = folder/'inputs.tar.zst'
     files = runtime_snapshot_files()
     # Catalog/pairs/config/graph checkpoint are shipped through Git in the same tar.
     # Directory text checkpoints stay in the existing clone and are hash checked.
     files.update({name:resolve(name) for name in request['sources'] if resolve(name).is_file()})
     inventory = {name:file_hash(path) for name,path in files.items()}
     if not package.exists():
-        with tarfile.open(package,'x:gz') as archive:
+        with tar_archive(package, 'x') as archive:
             archive.add(request_path,arcname='request.json')
             archive.add(folder/'prepared_inputs.npz',arcname='prepared_inputs.npz')
             archive.add(TRAIN_ROOT/'src/model_tracks/ablation.py',arcname='ablation.py')
             for name,path in files.items():
                 archive.add(path,arcname='runtime/'+name)
-    with tarfile.open(package,'r:gz') as archive:
+    with tar_archive(package) as archive:
         expected = {'prepared_inputs.npz':file_hash(folder/'prepared_inputs.npz'),'request.json':file_hash(request_path),'ablation.py':file_hash(TRAIN_ROOT/'src/model_tracks/ablation.py'),
                     **{'runtime/'+name:sha for name,sha in inventory.items()}}
         import hashlib
         if len(archive.getnames()) != len(expected) or set(archive.getnames()) != set(expected) or any(
-                hashlib.sha256(archive.extractfile(name).read()).hexdigest() != sha for name,sha in expected.items()):
+                hashlib.file_digest(archive.extractfile(name), 'sha256').hexdigest() != sha for name,sha in expected.items()):
             raise ValueError('ablation input package is stale')
     if package.stat().st_size >= 100*1024**2:
         raise ValueError('ablation inputs exceed GitHub file limit; use the existing DVC artifact flow')
@@ -86,10 +87,13 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
         backend.prepare_remote_layout(minimal_runtime=True)
         backend.install_deps(minimal_runtime=True,graph_runtime=True)
         script = ('import hashlib, pathlib, subprocess, sys, tarfile, os, shutil\n'
+            f'sys.path.insert(0, {backend.REMOTE_ROOT + "/src"!r})\n'
+            'from core.archive_reader import tar_archive\n'
+            'from graph_tracks.data import file_hash\n'
             f'root = pathlib.Path({job!r}); root.mkdir(parents=True)\n'
             f'package = pathlib.Path({remote_package!r})\n'
-            f'assert hashlib.sha256(package.read_bytes()).hexdigest() == {file_hash(package)!r}\n'
-            "with tarfile.open(package, 'r:gz') as archive:\n    archive.extractall(root, filter='data')\n"
+            f'assert file_hash(package) == {file_hash(package)!r}\n'
+            "with tar_archive(package) as archive:\n    archive.extractall(root, filter='data')\n"
             f"shutil.copytree(root/'runtime', {backend.REMOTE_ROOT!r}, dirs_exist_ok=True)\n"
             f"os.environ['PYTHONPATH'] = {backend.REMOTE_ROOT + '/src'!r}\n"
             f"os.chdir({backend.REMOTE_ROOT!r})\n"

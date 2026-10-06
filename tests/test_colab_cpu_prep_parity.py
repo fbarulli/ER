@@ -185,7 +185,7 @@ def test_cpu_prep_lane_streams_into_both_transcripts_and_tags_the_cohort(
     # tqdm passthrough: the child's streams are inherited, never captured.
     assert "stderr=" not in script
     assert downloads and downloads[0]["remote"] == (
-        f"{colab.REMOTE_ROOT}/bundle_delivery.tar.gz"
+        f"{colab.REMOTE_ROOT}/bundle_delivery.tar.zst"
     )
     # Cohort tagging: the two owner sessions are identifiable in a transcript.
     terminal = capsys.readouterr().out

@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import uuid
 import tarfile
+from core.archive_reader import tar_archive
 from cli import colab as backend
 from core.common import TRAIN_ROOT, resolve_model, runtime
 from graph_tracks.data import file_hash
@@ -31,7 +32,7 @@ def complete_local_handoff(local, request):
 
 
 def persist_embeddings(local, handoff, publisher=None, *, additional_files=None, namespace="embedding_job", prefix="embeddings"):
-    """Save the verified embedding tar.gz with the existing Git artifact flow."""
+    """Save the verified embedding tar.zst with the existing Git artifact flow."""
     import hashlib
     from model_tracks.publish import push_artifacts
     setup = local.parent
@@ -55,11 +56,11 @@ def persist_embeddings(local, handoff, publisher=None, *, additional_files=None,
     if not archive.exists():
         manifest_path = folder / backend._RESULT_MANIFEST_NAME
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
-        with tarfile.open(archive, 'x:gz') as result:
+        with tar_archive(archive, 'x') as result:
             for key, path in files.items():
                 result.add(path, arcname='worker_1/' + key)
             result.add(manifest_path, arcname=backend._RESULT_MANIFEST_NAME)
-    # Reuse the existing Colab tar.gz extractor and checksum/coverage validator.
+    # Reuse the existing Colab tar.zst extractor and checksum/coverage validator.
     with tempfile.TemporaryDirectory(dir=folder) as temporary:
         verified = backend._extract_result_archive(archive, Path(temporary), run_tag, 1)
         expected = {(item['path'], item['sha256']) for item in manifest['included']}
@@ -67,7 +68,7 @@ def persist_embeddings(local, handoff, publisher=None, *, additional_files=None,
             raise ValueError('existing embedding archive differs from validated result')
     if archive.stat().st_size >= 100 * 1024**2:
         raise ValueError('Embedding archive exceeds the GitHub regular-file limit; use DVC publisher')
-    print(f'[{prefix}/local] saving verified tar.gz to GitHub: {archive}', flush=True)
+    print(f'[{prefix}/local] saving verified tar.zst to GitHub: {archive}', flush=True)
     kind = 'cache' if prefix == 'embeddings' else 'results'
     (publisher or push_artifacts)([archive], f'{prefix}: save verified {kind} {run_tag}')
     print(f'[{prefix}/local] GitHub save complete: {archive}', flush=True)
@@ -155,14 +156,14 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
             request_path = temporary / 'request.json'
             request_path.write_text(json.dumps(request, ensure_ascii=False, sort_keys=True))
             request_digest = file_hash(request_path)
-            package = temporary / 'gpu_inputs.tar.gz'
-            with tarfile.open(package, 'w:gz') as archive:
+            package = temporary / 'gpu_inputs.tar.zst'
+            with tar_archive(package, 'w') as archive:
                 archive.add(request_path, arcname='request.json')
                 archive.add(tokens,arcname='prepared_text.npz')
                 archive.add(TRAIN_ROOT/'src/core/encoding_inputs.py',arcname='encoding_inputs.py')
                 archive.add(TRAIN_ROOT / 'scripts/encode_prepared_embeddings.py', arcname='encode.py')
             from model_tracks.publish import push_artifacts
-            stored = TRAIN_ROOT / 'results/embedding_job/inputs' / f'embeddings-{request_digest[:24]}.tar.gz'
+            stored = TRAIN_ROOT / 'results/embedding_job/inputs' / f'embeddings-{request_digest[:24]}.tar.zst'
             stored.parent.mkdir(parents=True, exist_ok=True)
             import shutil
             shutil.copy2(package, stored)
@@ -184,10 +185,13 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
                 timeout=120, log_name='embedding_directory', retry_safe=True)
             script = (
                 'import hashlib, pathlib, subprocess, sys, tarfile\n'
+                f'sys.path.insert(0, {backend.REMOTE_ROOT + "/src"!r})\n'
+                'from core.archive_reader import tar_archive\n'
+                'from graph_tracks.data import file_hash\n'
                 f'root = pathlib.Path({job!r})\n'
                 f"package = pathlib.Path({remote_package!r})\n"
-                f"assert hashlib.sha256(package.read_bytes()).hexdigest() == {file_hash(package)!r}, 'Git input package checksum mismatch'\n"
-                "with tarfile.open(package, 'r:gz') as archive:\n"
+                f"assert file_hash(package) == {file_hash(package)!r}, 'Git input package checksum mismatch'\n"
+                "with tar_archive(package) as archive:\n"
                 "    archive.extractall(root, filter='data')\n"
                 "subprocess.run([sys.executable, str(root/'encode.py'), '--request', str(root/'request.json'), "
                 f"'--checkpoint', {remote_checkpoint!r}, '--output', str(root/'vectors.npz'), '--device', {device!r}], check=True)\n"

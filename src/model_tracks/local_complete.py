@@ -66,13 +66,14 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         restored_inputs = destination/'local_inputs'
         with open_archive(input_archive) as archive:
             for relative in inputs['files']:
-                if relative.startswith('data/model_tracks/'):
+                if Path(relative).is_relative_to(Path(package_member('suite_package_config')).parent):
                     target = restored_inputs/relative
                     target.parent.mkdir(parents=True,exist_ok=True)
-                    data = archive.read(relative)
-                    if target.exists() and target.read_bytes() != data:
-                        raise ValueError('restored prepared input changed: '+relative)
-                    target.write_bytes(data)
+                    if target.exists():
+                        if file_hash(target) != inputs['files'][relative]:
+                            raise ValueError('restored prepared input changed: '+relative)
+                    else:
+                        archive.extract(relative, restored_inputs)
         return _publish(final, settings, run_tag, ablation_done=True) if publish else final
     marker = destination / 'local_source.json'
     identity = {'training_archive_sha256': file_hash(training_archive),
@@ -100,13 +101,14 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     prepared.mkdir(exist_ok=True)
     with open_archive(input_archive) as archive:
         for relative in inputs['files']:
-            if relative.startswith('data/model_tracks/'):
+            if Path(relative).is_relative_to(Path(package_member('suite_package_config')).parent):
                 target = prepared / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
-                data = archive.read(relative)
-                if target.exists() and target.read_bytes() != data:
-                    raise ValueError(f'local prepared input changed: {relative}')
-                target.write_bytes(data)
+                if target.exists():
+                    if file_hash(target) != inputs['files'][relative]:
+                        raise ValueError(f'local prepared input changed: {relative}')
+                else:
+                    archive.extract(relative, prepared)
         settings = SuiteConfig.model_validate(yaml.safe_load(archive.read(package_member('suite_package_config'))))
     setup = prepared / settings.setup_dir
     baseline = destination/'baseline/shared_minilm__embeddings.npz'

@@ -324,10 +324,10 @@ def package(config: Path, output: Path) -> Path:
     from training.prepared_bundle import load_prepared_bundle
     with trace_step('package.load_bundle', bundle=bundle_path.name):
         _, bundle = load_prepared_bundle(bundle_path)
-    _prepare_shared_population(setup, bundle)
-    gc.collect()
-    _prepare_graph_inputs(setup)
     try:
+        _prepare_shared_population(setup, bundle)
+        gc.collect()
+        _prepare_graph_inputs(setup)
         native_model = _prepare_exports(cfg, setup, bundle)
     finally:
         del bundle

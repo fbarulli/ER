@@ -222,6 +222,7 @@ colab:
       - "PyYAML"
       - "matplotlib"
     prepared:
+      - "backports.zstd"
       - "sentence-transformers"
       - "datasets"
       - "accelerate"
@@ -231,6 +232,7 @@ colab:
       - "hnswlib"
       - "wandb"
     full:
+      - "backports.zstd"
       - "sentence-transformers"
       - "datasets"
       - "accelerate"
@@ -298,7 +300,7 @@ colab:
   remote_upload_max_backoff_seconds: 30
   checkpoint_manifest_name: "checkpoint_manifest.json"
   latest_best_marker: "latest_best.json"
-  result_archive_name: "result_bundle.tar.gz"
+  result_archive_name: "result_bundle.tar.zst"
   result_manifest_name: "result_bundle_manifest.json"
   result_download_excluded_dirs:
     - ".dvc-cache"

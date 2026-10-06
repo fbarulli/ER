@@ -35,11 +35,11 @@ untouched):
 
   delivery archive ..... the member list copied verbatim from the previous
   attempt in git history (git show 8ddc614:src/cli/colab.py, run_bundle
-  remote section): remote tar at REMOTE_ROOT/bundle_delivery.tar.gz.
+  remote section): remote tar at REMOTE_ROOT/bundle_delivery.tar.zst.
 
   resume ................. upload, extract, prep pattern (same
   _upload_with_retries call shape as the raw export, colab.py:3856): the
-  frozen state uploads to REMOTE_ROOT/resume_state.tar.gz and is extracted
+  frozen state uploads to REMOTE_ROOT/resume_state.tar.zst and is extracted
   with tarfile.extractall(REMOTE_ROOT) BEFORE the pin re-write; prepare_all
   then runs --run-dir REMOTE_ROOT/results/training_prep/<frozen id>
   --resume-from <choice> (runtime values injected via @placeholders@, never
@@ -80,11 +80,11 @@ from cli.colab import (
 
 # The delivery archive keeps the VM-side fixed name from the 8ddc614 lane; a
 # rerun on a live VM overwrites it (the download consumes it per invocation).
-_ARCHIVE_NAME = "bundle_delivery.tar.gz"
+_ARCHIVE_NAME = "bundle_delivery.tar.zst"
 
 # Resume uploads keep a fixed VM-side name too (extracted before the pin
 # re-write, then the prepare_all CLI continues the frozen run in place).
-_RESUME_STATE_ARCHIVE = "resume_state.tar.gz"
+_RESUME_STATE_ARCHIVE = "resume_state.tar.zst"
 
 # prepare_all's own argparse choices (src/training/prepare_all.py main());
 # copied locally so @RESUME_FROM@ substitution can never bend the emitted
@@ -110,8 +110,9 @@ _RESUME_EXTRACT_SEGMENT = f"""
 # resume: extract the owner-built frozen state BEFORE the pin re-write
 # (derived CSVs + second04 pairs + data_prep/labeled_pairs stage manifests,
 # REMOTE_ROOT-relative inside the tarball).
-with tarfile.open(root + "/resume_state.tar.gz") as tar:
-    tar.extractall(root)
+from core.archive_reader import tar_archive
+with tar_archive(root + "/resume_state.tar.zst") as tar:
+    tar.extractall(root, filter="data")
 print("[resume] frozen state extracted at " + root, flush=True)
 """
 _PIN_SEGMENT = f"""
@@ -166,8 +167,9 @@ if rc != 0:
 _DELIVERY_SEGMENT = f"""
 # delivery: run dir + regenerated data artifacts (list from the 8ddc614 lane).
 run_dir = sorted(glob.glob(root + "/results/training_prep/*"))[-1]
-delivery = root + "/bundle_delivery.tar.gz"
-with tarfile.open(delivery, "w:gz") as tar:
+delivery = root + "/bundle_delivery.tar.zst"
+from core.archive_reader import tar_archive
+with tar_archive(delivery, "w") as tar:
     tar.add(run_dir, arcname="training_prep/" + os.path.basename(run_dir))
     for rel in ("data/canonical_records.csv", "data/gate_results.csv",
                 "data/dataset_deduped.csv", "data/labeled_pairs.csv",
@@ -210,7 +212,7 @@ def run_bundle(
     """Upload the export, re-pin, prepare on the VM CPU, download the delivery.
 
     With --resume-from/--resume-run-id/--resume-state the frozen state tarball
-    is uploaded as REMOTE_ROOT/resume_state.tar.gz and extracted at REMOTE_ROOT
+    is uploaded as REMOTE_ROOT/resume_state.tar.zst and extracted at REMOTE_ROOT
     BEFORE the pin re-write, and prepare_all continues the frozen run via
     --run-dir/--resume-from; the delivery/download flow is unchanged.
     """
@@ -265,7 +267,7 @@ def run_bundle(
     _result_event(run_id, "download", "started", workers=1)
     local = local_base / _ARCHIVE_NAME
     _download_file_with_visibility(
-        remote=f"{REMOTE_ROOT}/bundle_delivery.tar.gz",
+        remote=f"{REMOTE_ROOT}/bundle_delivery.tar.zst",
         local=local,
         worker=None,
         index=1,

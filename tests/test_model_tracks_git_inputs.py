@@ -1,5 +1,5 @@
 import hashlib
-import tarfile
+from core.archive_reader import tar_archive
 
 import pytest
 
@@ -18,7 +18,7 @@ def test_suite_inputs_use_verified_git_tar_and_reuse_it(tmp_path,monkeypatch):
     def publish(paths,message):
         published.append(paths[0])
     transport = prepare_git_inputs(archive,'run',publisher=publish)
-    with tarfile.open(transport,'r:gz') as package:
+    with tar_archive(transport) as package:
         assert package.getnames() == ['inputs.tar.zst']
         assert package.extractfile('inputs.tar.zst').read() == archive.read_bytes()
     digest = hashlib.sha256(transport.read_bytes()).hexdigest()

@@ -68,7 +68,7 @@ class PreparationState(BaseModel):
 @timed
 def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Path) -> dict[str, str]:
     """Pin source, owning configs, raw input and baseline checkpoint content."""
-    from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH, TRAIN_ROOT
+    from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH, TRAIN_ROOT, artifact
     from graph_tracks.text_cache import checkpoint_hash
     paths = set((root / 'src').rglob('*.py')) | set((root / 'scripts').rglob('*.py'))
     paths.update(path for path in (root / 'config').rglob('*')
@@ -78,7 +78,7 @@ def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Pat
     # Measured-evidence inputs the pipeline consumes fail-loud: they are
     # tracked build inputs, so any regeneration must regenerate everything.
     paths.update([TRAIN_ROOT / 'artifacts/evidence/attribute_universe_census.json',
-                  TRAIN_ROOT / 'artifacts/evidence/semantics/family_registry.json'])
+                  artifact('semantic_family_registry')])
     identity = {}
     for path in sorted(paths):
         if path.resolve() == Path(TRAINING_CONFIG_PATH).resolve():

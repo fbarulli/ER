@@ -5,6 +5,7 @@ import os
 import shutil
 
 from core.portable_archive import write_archive
+from core.archive_reader import archive_sidecar, archive_settings
 from model_tracks.publish import persist_results
 
 
@@ -17,7 +18,7 @@ def _publish(archive, tag):
     receipt = persist_results(archive, tag)
     # Verified remote storage and the receipt retain the generation; avoid
     # accumulating duplicate checkpoint bytes on the Colab disk.
-    shutil.rmtree(archive.with_suffix('.publication'))
+    shutil.rmtree(archive_sidecar(archive, '.publication'))
     archive.unlink()
     return receipt
 
@@ -43,7 +44,7 @@ class ArtifactPublisher:
                     files[item.relative_to(self.output).as_posix()] = item
         # Snapshot before returning: checkpoint rotation and mutable reports
         # cannot change the bytes read by the background DVC publisher.
-        archive = write_archive(directory / f'{tag}.zip', files,
+        archive = write_archive(directory / f'{tag}.{archive_settings().format}', files,
                                 manifest_name='suite_bundle_manifest.json', metadata={'run_tag': tag})
         self.futures.append(self.executor.submit(_publish, archive, tag))
 

@@ -5,7 +5,6 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal
-from zipfile import ZipFile
 from core.archive_reader import open_archive
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from core.portable_archive import Digest, RuntimeSnapshot
@@ -65,7 +64,7 @@ def validate_training_binding(document: dict[str, Any], inputs: dict[str, Any],
     return binding
 
 
-def validate_archived_track(bundle: ZipFile, manifest: dict[str, Any], track: Track,
+def validate_archived_track(bundle, manifest: dict[str, Any], track: Track,
                             *, postprocess_complete: bool) -> TrackInventory:
     """One completion contract for downloaded and recovered worker generations."""
     inventory = TrackInventory.model_validate_json(bundle.read(track + '/track_inventory.json'))

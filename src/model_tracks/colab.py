@@ -1,13 +1,12 @@
 """All-track adapter; provisioning, locks, polling and teardown stay in cli.colab."""
 import json
 from pathlib import Path
-import tarfile
 import hashlib
 
 from core.portable_archive import verify_archive, verified_archive
-from core.archive_reader import open_archive, archive_sidecar
+from core.archive_reader import open_archive, archive_sidecar, tar_archive
 from graph_tracks.data import file_hash
-from model_tracks.package import verify
+from model_tracks.package import verify, package_member
 
 
 def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publisher=None):
@@ -24,20 +23,20 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None, publ
         if not isinstance(original,dict) or any(original.get(key) != metadata.get(key)
                                                for key in ('revision','files')):
             raise ValueError('resume package differs from interrupted suite sources or inputs')
-        files['recovery.zip'] = resume_archive
+        files['recovery.tar.zst'] = resume_archive
     inventory = {name:{'sha256':file_hash(path),'size':path.stat().st_size}
                  for name,path in files.items()}
     identity = hashlib.sha256(json.dumps(inventory,sort_keys=True).encode()).hexdigest()
     folder = TRAIN_ROOT/'results/model_tracks/inputs'
     folder.mkdir(parents=True,exist_ok=True)
-    transport = folder/f'{identity}.tar.gz'
+    transport = folder/f'{identity}.tar.zst'
     if not transport.exists():
         partial = transport.with_suffix('.partial')
-        with tarfile.open(partial,'w:gz',compresslevel=0) as package:
+        with tar_archive(partial, 'x') as package:
             for name,path in files.items():
                 package.add(path,arcname=name,recursive=False)
         partial.replace(transport)
-    with tarfile.open(transport,'r:gz') as package:
+    with tar_archive(transport) as package:
         if set(package.getnames()) != set(files):
             raise ValueError('Git input transport inventory mismatch')
         for name,expected in inventory.items():
@@ -87,7 +86,7 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
     from core.common import RESULTS, TRAIN_ROOT
     with verified_archive(archive, 'model_tracks_package.json') as (source, metadata):
         import yaml
-        settings = yaml.safe_load(source.read('data/model_tracks/suite.yaml'))
+        settings = yaml.safe_load(source.read(package_member('suite_package_config')))
     from model_tracks.config import SuiteConfig
     settings = SuiteConfig.model_validate(settings).model_dump()
     result_suffix = '.' + settings['result_archive_format']
@@ -97,12 +96,12 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
     import re
     if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
         raise ValueError('invalid run tag')
-    recovery_local = RESULTS / 'model_tracks' / f'{run_tag}.recovery.zip'
+    recovery_local = RESULTS / 'model_tracks' / f'{run_tag}.recovery.tar.zst'
     if resume_archive is not None and not resume:
         raise ValueError('recovery archive requires resume')
     if resume and resume_archive is None and recovery_local.exists():
         resume_archive = recovery_local
-    remote_recovery = f'{backend.REMOTE_ROOT}/prepared_training/{run_tag}__recovery.zip'
+    remote_recovery = f'{backend.REMOTE_ROOT}/prepared_training/{run_tag}__recovery.tar.zst'
     remote_zip = f"{backend.REMOTE_ROOT}/prepared_training/{run_tag}__all_tracks.{settings['input_archive_format']}"
     git_inputs = git_inputs or prepare_git_inputs(archive,run_tag,resume_archive=resume_archive)
     remote_inputs = backend.REMOTE_ROOT+'/'+git_inputs.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
@@ -117,18 +116,20 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
     remote_output = f'{backend.REMOTE_ROOT}/results/model_tracks/{run_tag}'
     auth = backend._wandb_env_script()
     script = backend._BOOTSTRAP + auth + f'''
-import hashlib, json, os, pathlib, subprocess, sys, tarfile
+import hashlib, json, os, pathlib, subprocess, sys
+from core.archive_reader import tar_archive
+from graph_tracks.data import file_hash
 root=pathlib.Path({backend.REMOTE_ROOT!r})
 archive_path=pathlib.Path({remote_zip!r})
 transport=pathlib.Path({remote_inputs!r})
-if hashlib.sha256(transport.read_bytes()).hexdigest() != {file_hash(git_inputs)!r}:
+if file_hash(transport) != {file_hash(git_inputs)!r}:
     raise ValueError("cloned Git input transport mismatch")
 archive_path.parent.mkdir(parents=True,exist_ok=True)
-with tarfile.open(transport,'r:gz') as package:
-    expected_members={{'inputs.tar.zst'}} | ({{'recovery.zip'}} if {resume_archive is not None!r} else set())
+with tar_archive(transport) as package:
+    expected_members={{'inputs.tar.zst'}} | ({{'recovery.tar.zst'}} if {resume_archive is not None!r} else set())
     if set(package.getnames()) != expected_members:
         raise ValueError("cloned Git input inventory mismatch")
-    for member_name,destination in [('inputs.tar.zst',archive_path),('recovery.zip',pathlib.Path({remote_recovery!r}))]:
+    for member_name,destination in [('inputs.tar.zst',archive_path),('recovery.tar.zst',pathlib.Path({remote_recovery!r}))]:
         if member_name not in expected_members:
             continue
         member=package.getmember(member_name)
@@ -137,7 +138,7 @@ with tarfile.open(transport,'r:gz') as package:
         with package.extractfile(member) as source,destination.open('wb') as target:
             import shutil
             shutil.copyfileobj(source,target)
-if hashlib.sha256(archive_path.read_bytes()).hexdigest() != {file_hash(archive)!r}:
+if file_hash(archive_path) != {file_hash(archive)!r}:
     raise ValueError("prepared all-track Git input mismatch")
 # The immutable package can predate its transport publication commit. Fetch
 # only that revision: a depth-one branch checkout need not contain its parent.
@@ -165,7 +166,7 @@ if result_archive.exists():
 else:
     if {resume!r} and not output_path.exists():
         raise FileNotFoundError("interrupted suite state is unavailable; refusing to restart under its run tag")
-    command=[sys.executable,"-m","model_tracks.run","--config","data/model_tracks/suite.yaml",
+    command=[sys.executable,"-m","model_tracks.run","--config",{package_member("suite_package_config")!r},
              "--output",{remote_output!r},"--run-tag",{run_tag!r}]
     if {resume!r} and output_path.exists():
         command.append("--resume")
@@ -178,7 +179,7 @@ else:
         # The backend tears down the VM after this returns: collect stopped
         # workers' checkpoints and completed reports first when still reachable.
         try:
-            recovery_remote = remote_output + '.recovery.zip'
+            recovery_remote = remote_output + '.recovery.tar.zst'
             recovery_script = backend._BOOTSTRAP + f'''
 import json, os, pathlib, signal, time
 from model_tracks.package import recovery_package
@@ -227,7 +228,7 @@ destination.with_suffix('.sha256').write_text(file_hash(destination)+'\\n')
                                          log_name='tracks_recovery', retry_safe=True)
             expected_recovery = backend._read_remote_text(str(Path(recovery_remote).with_suffix('.sha256'))).strip()
             recovery_local.parent.mkdir(parents=True, exist_ok=True)
-            partial = recovery_local.with_suffix('.zip.partial')
+            partial = recovery_local.with_name(recovery_local.name + '.partial')
             backend._download_one_remote_file(recovery_remote, partial)
             if file_hash(partial) != expected_recovery:
                 raise ValueError('suite recovery download mismatch')

@@ -31,9 +31,9 @@ def test_bundle_delivery_satisfies_download_relative_to_contract():
     # root TRAINING_RESULTS / run_id IS the delivery directory itself.
     delivery_dir = colab._bundle_delivery_local(RUN_ID)
     assert delivery_dir == colab.TRAINING_RESULTS / delivery_dir.name
-    local = delivery_dir / "bundle_delivery.tar.gz"
+    local = delivery_dir / "bundle_delivery.tar.zst"
     relative = local.relative_to(colab.TRAINING_RESULTS / delivery_dir.name)
-    assert relative == Path("bundle_delivery.tar.gz")
+    assert relative == Path("bundle_delivery.tar.zst")
 
 
 def test_bundle_delivery_call_shape_survives_pure_path_algebra():
@@ -42,10 +42,10 @@ def test_bundle_delivery_call_shape_survives_pure_path_algebra():
     # archive name. Guarded by is_relative_to first so the failure mode is
     # the named contract, not an opaque ValueError.
     run_id = colab._bundle_delivery_local(RUN_ID).name
-    local = colab._bundle_delivery_local(RUN_ID) / "bundle_delivery.tar.gz"
+    local = colab._bundle_delivery_local(RUN_ID) / "bundle_delivery.tar.zst"
     assert local.is_relative_to(colab.TRAINING_RESULTS / run_id)
     assert local.relative_to(colab.TRAINING_RESULTS / run_id) == (
-        Path("bundle_delivery.tar.gz")
+        Path("bundle_delivery.tar.zst")
     )
 
 
@@ -57,7 +57,7 @@ def test_run_retention_never_sweeps_the_bundle_delivery_root(tmp_path):
 
     delivery_dir = tmp_path / colab._bundle_delivery_local(RUN_ID).name
     delivery_dir.mkdir(parents=True)
-    (delivery_dir / "bundle_delivery.tar.gz").write_bytes(b"")
+    (delivery_dir / "bundle_delivery.tar.zst").write_bytes(b"")
     assert not _looks_like_run(delivery_dir)
     assert not delivery_dir.name.startswith("smoke_")
     assert not _looks_like_run(colab._bundle_delivery_local(RUN_ID))
