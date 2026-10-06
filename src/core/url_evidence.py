@@ -91,6 +91,131 @@ def _slug_decimal_pattern():
 
     units = '|'.join(entry.pattern for entry in _unit_spec().volume)
     return re.compile(r'(?<![\w.])(\d{1,3})-(\d{1,2})(?=-?(?:' + units + r')(?![a-z]))', re.I | re.X)
+
+
+@lru_cache(maxsize=1)
+def _slug_volume_scanner():
+    """Every configured volume mention in a slug, as (value, unit-text)."""
+    from core.text import _unit_spec
+
+    units = '|'.join(entry.pattern for entry in _unit_spec().volume)
+    return re.compile(r'(\d+(?:\.\d+)?)\s*-?(' + units + r')(?![a-z])', re.I | re.X)
+
+
+@lru_cache(maxsize=1)
+def _slug_unit_resolvers():
+    """(compiled unit pattern, millilitres) pairs, longest first.
+
+    A dict keyed on the matched text cannot work: the configured patterns
+    include spelled forms (`milli\\s?lit(?:er|re)s?`) that never equal their
+    own match, so resolve by re-matching instead.
+    """
+    from core.text import _unit_spec
+
+    pairs = [(re.compile(entry.pattern, re.I), float(entry.ml_per_unit))
+             for entry in _unit_spec().volume]
+    return sorted(pairs, key=lambda item: -len(item[0].pattern))
+
+
+def _slug_unit_ml(unit_text: str) -> float | None:
+    for pattern, ml in _slug_unit_resolvers():
+        if pattern.fullmatch(unit_text.strip()):
+            return ml
+    return None
+
+
+# How closely a candidate must agree with the slug's OTHER volume mention.
+# Measured on the real corpus, the pack and decimal readings are separated by
+# far more than this: "12-12-fl-oz-355-ml-cans" reads 354.9 ml as a count
+# (0.03% off the stated 355) against 358.4 ml as a decimal (0.97% off), while
+# the confirmed decimals land inside 0.05% ("12-5floz-370mL" -> 369.7,
+# "67-62oz" + "2l" -> 2000.0, "1-75l" -> 1750).
+_SLUG_CORROBORATION_TOLERANCE = 0.005
+
+
+def _reconstruct_slug_decimals(slug: str) -> str:
+    """Resolve `NN-M-unit` against the slug's other volume evidence.
+
+    Retailer slugs use one shape for two different things: `33-8-fl-oz` is a
+    33.8 fl oz bottle, while `12-12-fl-oz-355-ml-cans` is a twelve-pack of
+    12 fl oz cans. Blindly rebuilding the decimal turned the second into
+    12.12 fl oz, which contradicts the 355 ml the same slug states.
+
+    So when the slug carries ANOTHER volume mention, both readings are
+    converted to millilitres and the one that agrees wins. With no second
+    mention there is nothing to test against, so the decimal stands — which
+    is the overwhelmingly common real case and keeps every audited decimal
+    intact. Without this the bad value only ever died later at cross-source
+    merge, so nothing upstream could see it.
+    """
+    pattern = _slug_decimal_pattern()
+    scanner = _slug_volume_scanner()
+    matches = list(pattern.finditer(slug))
+    if not matches:
+        return slug
+    mentioned = [(float(scan.group(1)), scan.start(1), scan.end(1), scan.group(2))
+                 for scan in scanner.finditer(slug)]
+    if len(mentioned) < 2:
+        return pattern.sub(r"\1.\2", slug)
+
+    out: list[str] = []
+    cursor = 0
+    for match in matches:
+        whole_str, tail_str = match.group(1), match.group(2)
+        out.append(slug[cursor:match.start()])
+        cursor = match.end()
+
+        # This match's OWN unit, which the pattern's lookahead guarantees sits
+        # immediately after it. The dash must be INSIDE the alternation:
+        # `-?ltr|lt|l` binds -? to the first branch only, so `-l` (the exact
+        # shape the lookahead allows) matched NO branch — measured: unit=''
+        # killed corroboration for every late-branch unit (iper.it "25-05-l").
+        unit_key = ''
+        for resolver, _ml_per_unit in _slug_unit_resolvers():
+            probe = re.match(r'(?:-?(?:' + resolver.pattern + '))',
+                             slug[match.end():], re.I)
+            if probe:
+                unit_key = probe.group(0).lstrip('-')
+                break
+
+        # Every OTHER mention in the slug, in millilitres. A mention inside
+        # ANOTHER candidate's span is that candidate's own fractional tail
+        # re-scanned as "6 fl oz" / "75 l" — not an independent measurement.
+        # Measured on the real corpus: riteaid "67-6-fl-oz-2-qt-3-6-fl-oz",
+        # aqua "33-8-fl-oz-1-qt-1-8-oz-1-lt" and mathem "1-75l-1-75l" each
+        # matched their SIBLING's tail exactly (gap 0.0) and flipped audited
+        # decimals (67.6->6, 33.8->8, 1.75->75) — cross-candidate self-
+        # corroboration. Sibling-tail mentions are dropped; only free-standing
+        # mentions (355-ml, 2-qt, 1-Gallon) corroborate.
+        others = [
+            value * factor
+            for value, start, end, unit in mentioned
+            if end <= match.start() or start >= match.end()
+            if not any(o.start() <= start < o.end()
+                       for o in matches if o is not match)
+            for factor in (_slug_unit_ml(unit),) if factor is not None
+        ]
+
+        # 7-5 -> 7.5; 33-8 -> 33.8; 12-12 -> 12.12; zero pads survive:
+        # the STRING captures, never the ints ("25-05" is 25.05, not 25.5).
+        decimal_text = f"{whole_str}.{tail_str}"
+        factor = _slug_unit_ml(unit_key)
+        decimal_ml = None if factor is None else float(decimal_text) * factor
+        count_ml = None if factor is None else float(tail_str) * factor
+
+        if others and decimal_ml is not None and count_ml is not None and factor:
+            gap_decimal = min(abs(decimal_ml - other) / max(abs(other), 1e-9)
+                              for other in others)
+            gap_count = min(abs(count_ml - other) / max(abs(other), 1e-9)
+                            for other in others)
+            # If the count reading is a significantly better match for the
+            # other evidence, and is itself a good match (0.5%), use it.
+            if gap_count < gap_decimal and gap_count <= _SLUG_CORROBORATION_TOLERANCE:
+                out.append(tail_str)
+                continue
+        out.append(decimal_text)
+    out.append(slug[cursor:])
+    return ''.join(out)
 _VOWELS = frozenset("aeiou")
 
 
@@ -236,7 +361,7 @@ def url_text(url: object) -> str:
         slug = slug[:-len(basename)]
     slug = _UUID.sub(" ", slug)
     slug = re.sub(r'\bfl-oz\b', 'fl oz', slug, flags=re.I)
-    slug = _slug_decimal_pattern().sub(r"\1.\2", slug)
+    slug = _reconstruct_slug_decimals(slug)
     slug = re.sub(r"[-_+]+", " ", slug)
     slug = normalize_text(slug)
     # A bare retailer id is noise; a number in an explicit measurement or
