@@ -1,7 +1,7 @@
 """One owner for CPU preparation; in-memory artifacts never outlive the run."""
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
 import importlib
 import os
@@ -9,15 +9,23 @@ from pathlib import Path
 import runpy
 import subprocess
 import sys
+import time
 import traceback
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-_ACTIVE: ContextVar[TrainingPreparation | None] = ContextVar('training_preparation', default=None)
+from core.run_log import RunLogger
+from training.prepare_all_trace import timed, trace_step
+
+_ACTIVE: ContextVar[TrainingPreparation | None] = ContextVar(
+    'training_preparation', default=None)
+
+_LOG = RunLogger(__name__)
 
 
 def active_preparation() -> TrainingPreparation | None:
+    """The preparation owning this context, if any (shared-object lookup)."""
     return _ACTIVE.get()
 
 
@@ -36,6 +44,7 @@ class _TeeWriter:
         self._log, self._terminal = log, terminal
 
     def write(self, text):
+        """Append one write to the log, mirroring it to the terminal."""
         self._log.write(text)
         try:
             self._terminal.write(text)
@@ -44,6 +53,7 @@ class _TeeWriter:
         return len(text)
 
     def flush(self):
+        """Flush both the log and the terminal mirror."""
         self._log.flush()
         try:
             self._terminal.flush()
@@ -51,19 +61,44 @@ class _TeeWriter:
             pass
 
     def isatty(self):
+        """Report the terminal's tty status (tqdm enables live bars there)."""
         try:
             return bool(self._terminal.isatty())
         except (OSError, ValueError, AttributeError):
             return False
 
     def fileno(self):
+        """Report the terminal's fd so capture helpers see a real fd."""
         return self._terminal.fileno()
 
     def writable(self):
+        """Both sinks accept writes."""
         return True
 
     def close(self):
+        """Close the log file only; the terminal belongs to its owner."""
         self._log.close()
+
+
+class _StageState:
+    """The saved interpreter state of one in-process stage execution."""
+    __slots__ = ('argv', 'env', 'cwd', 'out', 'err')
+
+    def __init__(self):
+        """Capture everything runpy/importlib and redirectors will touch."""
+        self.argv = sys.argv
+        self.env = os.environ.copy()
+        self.cwd = Path.cwd()
+        self.out = sys.stdout
+        self.err = sys.stderr
+
+    def restore(self):
+        """Put every swapped piece of interpreter state back."""
+        sys.argv = self.argv
+        sys.stdout, sys.stderr = self.out, self.err
+        os.environ.clear()
+        os.environ.update(self.env)
+        os.chdir(self.cwd)
 
 
 class TrainingPreparation(BaseModel):
@@ -77,7 +112,8 @@ class TrainingPreparation(BaseModel):
     run_dir: Path | None = None
     tracks_config: Path | None = None
     resume_from: Literal['dedupe', 'validation', 'full_bundle', 'suite_inputs'] = 'dedupe'
-    negative_supply_run_tag: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]+$')
+    negative_supply_run_tag: str | None = Field(
+        default=None, pattern=r'^[A-Za-z0-9_-]+$')
     _datasets: dict[Path, Any] = PrivateAttr(default_factory=dict)
     _base: dict[str, Any] = PrivateAttr(default_factory=dict)
     _bundles: dict[Path, tuple[Any, dict]] = PrivateAttr(default_factory=dict)
@@ -86,32 +122,45 @@ class TrainingPreparation(BaseModel):
     _token: Any = PrivateAttr(default=None)
 
     def __enter__(self):
+        """Bind this preparation as the run's owner (one per context)."""
         if active_preparation() is not None:
             raise RuntimeError('A preparation run is already active in this context')
         self._token = _ACTIVE.set(self)
         return self
 
     def __exit__(self, *args):
-        self._datasets.clear()
-        self._base.clear()
-        self._bundles.clear()
-        self._objects.clear()
-        self._aliases.clear()
+        """Release every in-memory artifact at the run boundary."""
+        self.clear_shared_state()
         _ACTIVE.reset(self._token)
         self._token = None
 
     def execute(self) -> Path:
+        """Run the whole preparation as one ownership window."""
         from training.prepare_all import _prepare_all
         with self:
-            return _prepare_all(**self.model_dump())
+            _LOG.info(f'[prepare] window open: resume_from={self.resume_from}')
+            return self._execute_timed()
+
+    @timed
+    def _execute_timed(self) -> Path:
+        """The owned _prepare_all call, timed as one unit."""
+        from training.prepare_all import _prepare_all
+        return _prepare_all(**self.model_dump())
+
+    def _drop_matching_keys(self, cache: dict, path: Path) -> list[Path]:
+        """Remove exactly the cache keys under one path; return the dropped keys."""
+        dropped = [key for key in cache
+                   if key == path or key.is_relative_to(path)]
+        for key in dropped:
+            del cache[key]
+        return dropped
 
     def invalidate(self, path: Path) -> None:
+        """Forget one superseded path (and everything derived beneath it)."""
         path = path.resolve()
         self._aliases.pop(path, None)
         for cache in (self._datasets, self._bundles):
-            for key in list(cache):
-                if key == path or key.is_relative_to(path):
-                    del cache[key]
+            self._drop_matching_keys(cache, path)
 
     def release_bundle(self, path: Path) -> None:
         """Release a completed consumer's bundle, preserving path alias identity."""
@@ -120,41 +169,79 @@ class TrainingPreparation(BaseModel):
         self._objects.pop('built_bundle:' + str(key), None)
 
     def bundle_key(self, path: Path) -> Path:
+        """The canonical identity of a bundle path under its registered alias."""
         path = path.resolve()
         return self._aliases.get(path, path)
 
     def alias_bundle(self, source: Path, destination: Path) -> None:
+        """Register a destination path as an alias of an existing bundle."""
         self._aliases[destination.resolve()] = self.bundle_key(source)
 
+    def clear_shared_state(self) -> None:
+        """One owner for the run-boundary cache wipe (used by exit + tests)."""
+        self._datasets.clear()
+        self._base.clear()
+        self._bundles.clear()
+        self._objects.clear()
+        self._aliases.clear()
+
+    @timed
     def run_stage(self, arguments: list[str], *, root: Path, env: dict[str, str], log):
         """Run an existing entry point in this interpreter, restoring CLI state."""
-        saved_argv, saved_env, saved_cwd = sys.argv, os.environ.copy(), Path.cwd()
-        saved_out, saved_err = sys.stdout, sys.stderr
-        command = [sys.executable, *arguments]
-        code = 0
-        try:
+        label = ' '.join(arguments)[:72]
+        with trace_step('run_stage.swap_in'):
+            _LOG.info(f'[stage][start] {label}')
+            state = _StageState()
             os.environ.clear()
             os.environ.update(env)
             os.chdir(root)
-            with redirect_stdout(_TeeWriter(log, saved_out)), \
-                    redirect_stderr(_TeeWriter(log, saved_err)):
-                try:
-                    if arguments[0] == '-m':
-                        sys.argv = [arguments[1], *arguments[2:]]
-                        importlib.import_module(arguments[1]).main()
-                    else:
-                        sys.argv = arguments
-                        runpy.run_path(arguments[0], run_name='__main__')
-                except SystemExit as error:
-                    code = error.code if isinstance(error.code, int) else (1 if error.code else 0)
-                    if error.code and not isinstance(error.code, int):
-                        print(error.code, file=sys.stderr)
-                except Exception:
-                    traceback.print_exc(file=sys.stderr)
-                    code = 1
+        started = time.time()
+        try:
+            code = self._invoke_entry_point(arguments, log=log)
         finally:
-            sys.argv = saved_argv
-            os.environ.clear()
-            os.environ.update(saved_env)
-            os.chdir(saved_cwd)
-        return subprocess.CompletedProcess(command, code)
+            with trace_step('run_stage.restore'):
+                state.restore()
+        elapsed = time.time() - started
+        _LOG.info(f'[stage][done] {label} rc={code} elapsed_seconds={elapsed:.3f}')
+        return subprocess.CompletedProcess([sys.executable, *arguments], code)
+
+    def _invoke_entry_point(self, arguments: list[str], *, log) -> int:
+        """Execute -m module or script path; return a normalizable exit code."""
+        with self._stage_streams(log):
+            try:
+                if arguments[0] == '-m':
+                    self._import_and_run(arguments)
+                    return 0
+                self._script_run(arguments)
+                return 0
+            except SystemExit as error:
+                return self._normalize_exit(error)
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+                return 1
+
+    def _import_and_run(self, arguments: list[str]) -> Any:
+        """Run `python -m <module>` inline against the captured argv."""
+        sys.argv = [arguments[1], *arguments[2:]]
+        importlib.import_module(arguments[1]).main()
+
+    def _script_run(self, arguments: list[str]) -> Any:
+        """Run a script path inline as __main__ against the captured argv."""
+        sys.argv = arguments
+        return runpy.run_path(arguments[0], run_name='__main__')
+
+    def _normalize_exit(self, error: SystemExit) -> int:
+        """Translate one SystemExit into a normalizable integer code."""
+        if isinstance(error.code, int):
+            return error.code
+        if error.code:
+            print(error.code, file=sys.stderr)
+        return 1 if error.code else 0
+
+    @contextmanager
+    def _stage_streams(self, log):
+        """Swap stdout/stderr for tee mirrors, keeping terminal bars live."""
+        from core.run_log import bound_timing_path
+        with redirect_stdout(_TeeWriter(log, sys.stdout)), \
+                redirect_stderr(_TeeWriter(log, sys.stderr)):
+            yield
