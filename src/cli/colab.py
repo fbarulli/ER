@@ -772,8 +772,16 @@ def run_colab_exec_stream(
         # Preserve the fail-fast contract before provisioning the next stage.
         # CLI destructor diagnostics are local stderr, not notebook failures.
         clean_output = re.sub(r'\x1b\[[0-9;]*m', '', ''.join(remote_output))
-        remote_traceback = 'Traceback (most recent call last)' in clean_output
-        if process.returncode == 0 and not remote_traceback:
+        lines = clean_output.splitlines()
+        traceback_heads = [index for index, line in enumerate(lines)
+                           if 'Traceback (most recent call last)' in line]
+        remote_traceback = bool(traceback_heads)
+        recovered_traceback = remote_traceback and all(
+            any(lines[prior].lstrip().startswith('[traceback] ')
+                for prior in range(max(0, index - 3), index))
+            for index in traceback_heads
+        )
+        if process.returncode == 0 and (not remote_traceback or recovered_traceback):
             return
         transient = "connection was lost" in output.lower()
         if retry_safe and transient and attempt < attempts:
