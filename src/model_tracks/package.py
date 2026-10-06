@@ -308,6 +308,16 @@ def _collect_package_sources(cfg, setup: Path, bundle_path: Path) -> dict[str, P
     files.update(_runtime_sources(cfg))
     files[str(_target() / 'text_prepared.pkl.gz')] = bundle_path
     files[str(_target() / 'text_prepared.pkl.gz.json')] = _sidecar(bundle_path)
+    # Ablation cohort staging (GPU suite) rebuilds from the UNPROJECTED clean
+    # gates; the projected setup overrides them, so the immutable clean backup
+    # ships whenever it exists (ER_PACKAGE_SKIP_ABLATION leaves the bundle
+    # without ablation templates, but the clean backup is still prepared by
+    # the suite_inputs projection in shared_graph_data).
+    clean_backup = setup.parent / (setup.name + '__clean_shared_inputs')
+    if clean_backup.is_dir():
+        for path in sorted(clean_backup.rglob('*')):
+            if path.is_file():
+                files[str(_target() / path.relative_to(setup.parent))] = path
     return files
 
 
